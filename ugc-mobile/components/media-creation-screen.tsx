@@ -1451,7 +1451,10 @@ export function MediaCreationScreen({
           />
 
           {guided ? (
-            <GuidedPromptChips tool={activeTool} prompt={currentDraft.prompt} onSelectPrompt={updatePrompt} />
+            <>
+              <GuidedCreatorHint />
+              <GuidedPromptChips tool={activeTool} prompt={currentDraft.prompt} onSelectPrompt={updatePrompt} />
+            </>
           ) : null}
 
           {catalogNotice ? (
@@ -1687,7 +1690,10 @@ export function MediaCreationScreen({
           />
 
           {guided ? (
-            <GuidedPromptChips tool="image" prompt={imageDraft.prompt} onSelectPrompt={updatePrompt} />
+            <>
+              <GuidedCreatorHint />
+              <GuidedPromptChips tool="image" prompt={imageDraft.prompt} onSelectPrompt={updatePrompt} />
+            </>
           ) : null}
 
           {catalogNotice ? (
@@ -2061,6 +2067,29 @@ function CompactCreatorHeader({
   );
 }
 
+/**
+ * What a first-time creator is told before they spend anything. Onboarding's
+ * last act is `router.replace('/(tabs)/creator', { guided: '1' })`, so this is
+ * the first screen of the app's actual job — and until S8 it arrived carrying
+ * nothing but a row of clipped starter pills, because the section written for
+ * this moment (`GuidedCreatorIntro`) sits in a branch that cannot render.
+ *
+ * Generative AI: "Set clear expectations about what your AI-powered feature can
+ * and can't do … If your feature has known limitations, let people know up
+ * front, show them how to get good results." Machine learning/Limitations asks
+ * the same. The starters are the chips' job; this is the part that was lost —
+ * the promise that looking around costs nothing, and one sentence on what a
+ * good prompt contains.
+ */
+function GuidedCreatorHint() {
+  return (
+    <SlimCreatorBanner
+      label="Your first creation"
+      body="Nothing spends credits until you press Generate. Describe subject, setting, lighting and camera in one sentence."
+    />
+  );
+}
+
 function GuidedPromptChips({
   tool,
   prompt,
@@ -2093,7 +2122,11 @@ function GuidedPromptChips({
               opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
-            <Text numberOfLines={1} style={{ color: active ? appTheme.colors.image : appTheme.colors.textSecondary, fontSize: 12, fontWeight: '700' }}>
+            {/* Two lines, not one: a starter is an example of what to write,
+                and "Premium product photo on a cl…" is an example of a third of
+                one. Generative AI asks for "diverse, predefined example inputs
+                that hint at what's possible". */}
+            <Text numberOfLines={2} style={{ color: active ? appTheme.colors.image : appTheme.colors.textSecondary, fontSize: 12, lineHeight: 16, fontWeight: '700' }}>
               {starter}
             </Text>
           </Pressable>

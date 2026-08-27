@@ -52,7 +52,10 @@ const ICON_RAMP = new Set<number>([
  */
 const LEGACY_SIZES: Record<string, number> = {
   'app/(tabs)/showcase.tsx': 0,
-  'app/(tabs)/studio.tsx': 2,
+  // 2 → 4 in S8: the sweep started seeing icons rendered through a local
+  // alias, which is how two 21pt glyphs here had gone uncounted. Pre-existing
+  // sizes, newly visible; S10's pass ratchets them down.
+  'app/(tabs)/studio.tsx': 4,
   'app/auth.tsx': 3,
   'app/help.tsx': 3,
   'app/invite.tsx': 5,
@@ -74,7 +77,9 @@ const LEGACY_SIZES: Record<string, number> = {
   'components/media-creation-screen.tsx': 24,
   'components/media-lightbox.tsx': 2,
   'components/media-preview.tsx': 1,
-  'components/media-template-screens.tsx': 6,
+  // 6 → 8 in S8, same cause: an aliased `OutputIcon` at 42 and `SlotIcon` at
+  // 34. S19's pass ratchets them down.
+  'components/media-template-screens.tsx': 8,
   'components/onboarding-booklet.tsx': 2,
   'components/onboarding-welcome.tsx': 1,
   'components/post-details-page.tsx': 2,
@@ -106,8 +111,33 @@ function lucideNames(source: string) {
   return names;
 }
 
+/**
+ * Local names that stand in for a lucide component — `const Icon = isCreate ?
+ * Sparkles : FilePlus2`, `const Icon = item.icon`, `const SlotIcon = kind ===
+ * 'video' ? Video : ImageIcon`. Twelve places in the tree render an icon this
+ * way, and the sweep below matches on the *tag* name, so before S8 every one of
+ * them was invisible to this ratchet — it was hiding five off-ramp sizes.
+ */
+function aliasedIconNames(source: string, imported: Set<string>) {
+  const names = new Set<string>();
+  const pattern = /const\s+([A-Z][A-Za-z0-9_]*)\s*=\s*([^;\n]+)/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(source))) {
+    const [, name, assignment] = match;
+    if (imported.has(name)) continue;
+    const fromLucide = [...imported].some((icon) => new RegExp(`\\b${icon}\\b`).test(assignment));
+    // `.icon`/`.Icon` catches the indirection through a data table, where the
+    // component never appears by name at the assignment at all.
+    if (fromLucide || /\.(icon|Icon)\b/.test(assignment)) names.add(name);
+  }
+
+  return names;
+}
+
 function offRampSizes(source: string) {
-  const names = lucideNames(source);
+  const imported = lucideNames(source);
+  const names = new Set([...imported, ...aliasedIconNames(source, imported)]);
   const found: number[] = [];
 
   for (const name of names) {
@@ -147,6 +177,20 @@ describe('HIG icon sizes — one ramp, adopted by ratchet', () => {
 
   it('leaves a size that is on the ramp alone', () => {
     const source = "import { Heart } from 'lucide-react-native';\nconst a = <Heart size={20} />;";
+    expect(offRampSizes(source)).toEqual([]);
+  });
+
+  it('sees an icon rendered through a local alias', () => {
+    // The idiom this sweep was blind to until S8 — twelve places in the tree,
+    // hiding five off-ramp sizes.
+    const ternary = "import { Sparkles, FilePlus2 } from 'lucide-react-native';\nconst Icon = isCreate ? Sparkles : FilePlus2;\nconst a = <Icon size={26} />;";
+    expect(offRampSizes(ternary)).toEqual([26]);
+    const table = "import { Heart } from 'lucide-react-native';\nconst Icon = item.icon;\nconst a = <Icon size={21} />;";
+    expect(offRampSizes(table)).toEqual([21]);
+  });
+
+  it('does not treat an aliased icon on the ramp as a violation', () => {
+    const source = "import { Sparkles, FilePlus2 } from 'lucide-react-native';\nconst Icon = isCreate ? Sparkles : FilePlus2;\nconst a = <Icon size={24} />;";
     expect(offRampSizes(source)).toEqual([]);
   });
 

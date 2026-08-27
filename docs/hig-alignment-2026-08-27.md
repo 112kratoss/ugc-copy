@@ -109,8 +109,10 @@ re-read the codebase broadly or ask for past-chat context.
   branch and **deliberately not merged** — `main` does not have F4, F6, N1, N2, N3 or S5. The user's
   call at the Phase 2 boundary was to keep accumulating on the branch, so branch from it rather than
   from `main`, and expect the merge question again at the next boundary. Phase 3 is under way: S5,
-  S6 (+S6a/b/c) and S9 are closed, and the next `todo` on the board is **S8, the create hub** — after
-  which the phase order is S11 → S12 → S10 → S4 → S13/S14.
+  S6 (+S6a/b/c), S9 and S8 are closed, and the next `todo` on the board is **S11, the post composer**
+  — after which the phase order is S12 → S10 → S4 → S13/S14. S11 inherits two things: the Drag and
+  drop chapter, which S9 established belongs wholly to the composer, and the composer's own 21
+  off-ramp icon sizes, the largest budget left in `hig-icon-size.test.ts`.
 - **Device mechanics learned in S6, for whoever drives them next:** the Simulator MCP's `tap` works
   headless on this Mac as well as `swipe`, so iOS is fully drivable; a surface is reachable by post
   id with `magicbooklet:///post/<id>`, and the live data has exactly one multi-media post
@@ -389,7 +391,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S5 showcase feed | 3 | done | 2V/3D/7P | the grid holds still while you read it; the play badge means "not playing" |
 | S6+S6a/b/c viewer & sheets | 3 | done | 3V/2D/3P | the clock survives the picture; the reel can be silenced without leaving it |
 | S9 creation tool | 3 | done | 2V/2D/4P | every spend says its price; the wait says what it is doing and how long it has been |
-| S8 create hub | 3 | todo | — | |
+| S8 create hub | 3 | done | 1V/1D/2P | a first creation is told what it costs; the icon ratchet can see a whole idiom it was blind to |
 | S11 post composer | 3 | todo | — | |
 | S12 post details | 3 | todo | — | |
 | S10 studio | 3 | todo | — | |
@@ -1398,3 +1400,95 @@ spun out as its own change.
   guard that matched it would mean nothing. Left in place deliberately — deleting ~140 lines of JSX
   plus its exclusive components from the app's largest file is a change that deserves its own diff
   rather than riding inside a HIG commit → spun out.
+
+### S8 create hub — audited 2026-08-27 · AND-pass: 2026-08-27
+Chapters read: Menus (`menus`). Carried from this programme's own earlier units rather than re-fetched:
+Generative AI and Machine learning (S9, same day), Collections (S5), Tab bars and Toolbars (N1),
+Modality and Sheets (N2).
+
+**What this surface turned out to be.** `app/(tabs)/creator.tsx` is a 35-line wrapper that renders
+`MediaCreationScreen` with `insideTab`, and `insideTab` now changes only two padding numbers: the
+three things that were meant to make the tab a *hub* rather than the tool — a Templates catalog
+entry, a floating review bar, a status-bar cover — all live below `MediaCreationScreen`'s unreachable
+tail return (S9's last finding). So the create hub is the creation tool plus one menu, and this unit
+is correspondingly short. Two things follow from that, and only one of them is a loss:
+- **Nothing is missing from Templates.** The dead `TemplateCatalogEntry` duplicates an entry point
+  the live composers already draw — a `Templates` button in each of the three compact composers, plus
+  a row in the home side menu. Recorded because it was the second false finding the dead branch
+  nearly produced (the first was "two competing generate bars", in S9).
+- **Something *is* missing from the first run.** See the violation below.
+
+Rules in checkable form, from Menus: label a menu item with a verb or verb phrase · title-style
+capitalization, articles removed · list important or frequently used items first · provide icons for
+all items in a group or none of them · show when an item is unavailable · append an ellipsis when the
+action needs more information before it can complete · be mindful of menu length.
+
+- [V][both] **The app's first creation is told nothing about what it costs.** Onboarding's last act is
+  `router.replace('/(tabs)/creator', { tool: goal, guided: '1' })` — so the guided creator is the
+  first screen of the app's actual job for every new account. The section written for that moment,
+  `GuidedCreatorIntro`, carries the sentence that matters most to someone who has just been given
+  credits — *"Nothing runs or spends credits until you press Generate"* — plus two tips on what a good
+  prompt contains. It renders at line 1889, inside the unreachable tail. What actually arrives is a
+  row of starter pills, clipped to their first third. Confirmed on the simulator before the fix:
+  `Premium product photo on a cl…` / `Bold social campai…`, and nothing else.
+  Generative AI: "Set clear expectations about what your AI-powered feature can and can't do … If your
+  feature has known limitations, let people know up front, show them how to get good results";
+  Machine learning/Limitations asks the same, and names placeholder text and worked examples as the
+  ways to do it. → **fixed**: `GuidedCreatorHint`, mounted on both *live* composer branches, using the
+  existing `SlimCreatorBanner` primitive — the cost promise and one sentence on what to describe.
+  - **Not the whole dead section restored.** Its three large starter buttons would duplicate the live
+    chips, which already do that job. Only the part that was actually lost is back.
+- [D][both] **F4's icon ratchet had never seen an entire rendering idiom.** `hig-icon-size.test.ts`
+  collects the names imported from `lucide-react-native` and then matches on the *tag* — so an icon
+  rendered through a local stand-in (`const Icon = isCreate ? Sparkles : FilePlus2`, `const Icon =
+  item.icon`, `const SlotIcon = kind === 'video' ? Video : ImageIcon`) was invisible to it. Twelve
+  places in the tree render icons that way, and they were hiding **five off-ramp sizes**: 26 here,
+  21 twice in `studio.tsx`, 42 and 34 in `media-template-screens.tsx`. This programme's own session
+  rules say a rule that is not guarded is not adopted; a guard that cannot see a violation is the
+  same failure one level down. → **fixed**: `aliasedIconNames` widens the sweep, with two cases
+  pinning both alias shapes; S8's own icon moved 26 → `appTheme.icon.feature`; and the four newly
+  visible sizes are written into the budgets they belong to (`studio.tsx` 2→4, `media-template-
+  screens.tsx` 6→8) so **S10 and S19 ratchet them down in their own passes**. The ratchet still only
+  turns one way — these are pre-existing sizes becoming countable, not new ones being permitted.
+- [P][both] **A starter showed a third of a starter.** `GuidedPromptChips` clamps to
+  `numberOfLines={1}` in a 230pt pill, so "Premium product photo on a clean studio set with soft
+  natural shadows" arrived as "Premium product photo on a cl…". Generative AI asks for "diverse,
+  predefined example inputs that hint at what's possible"; a clipped example hints at its own
+  beginning → **fixed**: two lines. Verified on both platforms — Android shows the first starter
+  whole, iOS all but the last word.
+- [P][both] Verified clean: **the create menu is a menu, and reads like one.** Two items, `Create`
+  then `Post` — bare verbs, title case, no articles, most important first, an icon on both (Menus:
+  "provide icons for all menu items in a group, or none of them"), each with a body that says where
+  it goes. Neither is ever unavailable. Length is not a concern at two.
+- [P][both] Verified clean: **the ledger's two entries for this surface hold.** DV5 — the tab bar
+  hides on the Create tab — and DV6 — the raised centre control opens a menu rather than switching
+  tabs. Closing the Create tab lands on Home with the bar back, so the tab that presents as a modal
+  still has the way out Modality requires. Hardware back dismisses the menu on Android without
+  popping the screen behind it.
+- **Considered and declined: the ellipsis.** Menus asks you to "append an ellipsis to a menu item's
+  label when the action requires more information before it can complete", and both items qualify —
+  each opens a view where you must supply a prompt or a post. `Create…` and `Post…` were not adopted:
+  the convention belongs to compact list-style menu items, and these are 148pt cards that already
+  carry a full descriptive subtitle ("Image, Video, and Motion" / "Share finished media"), which
+  signals *this continues elsewhere* far more strongly than three dots could. Recorded so a later
+  pass does not re-litigate it.
+
+Guard added: `__tests__/hig-create-hub.test.ts` (8 cases) — the menu's two labels stay bare verbs
+with no articles, in priority order, pointing at the surfaces their bodies promise; both items keep an
+icon, on the ramp; the ways out N2 gave the menu (grabber drag, Close button, Android back) stay;
+onboarding still lands on the guided creator; the cost promise renders on both live composer branches
+and sits beside the starters rather than replacing them; and a starter is no longer clamped to one
+line. `hig-icon-size.test.ts` gains the two alias cases and the widened sweep.
+
+**AND-pass 2026-08-27**. Pixel_9a, dev client on the worktree's Metro. The guided creator shows the
+`YOUR FIRST CREATION` banner with its full body over two lines and the first starter chip whole; the
+create menu renders with both icons at the new size, the grabber, the Close button and a dimmed
+backdrop; hardware back dismisses the menu and leaves Home underneath. `logcat` clear of
+`FATAL`/`SIGSEGV`. Nothing in this unit touches the keyboard, gestures or blur.
+- The tab bar's raised control needed two attempts to hit by `adb`: the first tap, computed from a
+  stale capture, landed on the feed card behind it and opened the viewer. Locate it from a fresh
+  crop of the bar, not from an earlier screenshot of the same screen.
+
+**Open remainder**: the unreachable tail is still there and now has one more reason to go —
+`GuidedCreatorIntro` is redundant as of this unit; the spun-out change covers it. Menu label casing
+and the `Create` control opening a menu whose first item is also `Create` → X3, which owns copy.

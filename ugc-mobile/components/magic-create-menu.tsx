@@ -267,7 +267,7 @@ function MenuActionButton({ action, width, onPress }: { action: CreateMenuAction
           backgroundColor: isCreate ? 'rgba(26,14,10,0.12)' : appTheme.colors.surfaceStrong,
         }}
       >
-        <Icon size={26} color={foreground} />
+        <Icon size={appTheme.icon.feature} color={foreground} />
       </View>
       <View style={{ gap: 4 }}>
         <Text style={{ color: foreground, fontSize: 17, lineHeight: 22, fontWeight: '800' }}>
