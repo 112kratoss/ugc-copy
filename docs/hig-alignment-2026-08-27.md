@@ -402,7 +402,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | F2 color/dark/materials | 1 | done | 0V/0D/1P | elevation ramp verified as the base/elevated story; the last off-palette screen speaks tokens; scrims blessed as DV6 |
 | F3 layout/safe areas | 1 | done | 0V/1D/0P | safe areas verified across all units; alerts regains elastic scroll; the endless rail's exception stands; indicators blessed as DV5 |
 | F4 iconography/images | 1 | done | 1V/3D/4P | one stroke weight app-wide; share glyph per platform; size ramp on a ratchet (S5's four files are at zero) |
-| F5 controls/input | 1 | partial | — | ≥44pt hit regions guarded via lib/hit-target.ts (PR #83); non-geometric rules open |
+| F5 controls/input | 1 | done | 0V/0D/0P | closed by verification: every input traited, Clear control shipped (S15), pickers over typing, validation timing per chapter |
 | F6 branding boundary | 1 | done | 1V/1D/3P | the product now spells its own name one way |
 | N1 tab bar/toolbars/status bar | 2 | done | 3V/2D/5P | Alerts badge; one Back glyph per platform; every view title bounded and static |
 | N2 modality map/sheets/alerts/gestures | 2 | done | 4V/4D/4P | one sheet grabber that actually drags; menus off `Alert`; one Close control |
@@ -2849,3 +2849,18 @@ Chapters read: Layout (`layout`), Scroll views (`scroll-views`).
 - Hidden scroll indicators (32 sites) → intentional, with the compensating peek-past-the-fold rule
   (→ DV5).
 iOS + AND-pass: alerts scroll verified on both; Android overscroll now glows per platform default.
+
+### F5 controls & input — audited 2026-08-28 · AND-pass: continuous
+Chapters read: Text fields (`text-fields`), Entering data (`entering-data`).
+Closed by verification — the per-surface units already did the building: every `AppTextInput` call
+site carries its traits (auth: email keyboard, username/password content types for autofill, go
+return key, secure entry with reveal; onboarding: name/nickname autofill and next/go; delete:
+current-password; invite: no-correct code entry with go); S15's field component supplies the label,
+error, counter, hint and Clear control the chapter asks for; validation timing follows the chapter
+(username before leaving, email on exit); pickers stand in for typing wherever choices are finite
+(models, aspect ratios, goals); progression gates on required data everywhere; drafts and resume
+prefill. The model search field even rides `clearButtonMode`. Raw multiline composers (prompt,
+comments, bio) deliberately follow the reader uncapped — body-tier entry; the F1 cap governs
+single-line fields through `AppTextInput`. No numeric-entry fields exist on mobile, so the
+number-formatter clause is n/a.
+Phase-boundary gate: the full mobile suite passes — 161 files, 1,558 tests.
