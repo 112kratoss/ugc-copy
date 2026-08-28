@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query';
 import { useNavigation, usePreventRemove } from '@react-navigation/native';
-import { Redirect, router, useLocalSearchParams } from 'expo-router';
+import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
 import type { ImagePickerAsset } from 'expo-image-picker';
 import { Check, ChevronDown, ChevronRight, FileText, Globe2, ImageIcon, Link2, Lock, Package, Pencil, Play, Plus, Sparkles, Trash2, Upload, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
@@ -2232,7 +2232,8 @@ export default function NewPostScreen() {
   // and Sheets repeats it for the dismiss gesture. It was an alert, which the
   // Alerts chapter reserves for problems — and its message existed only to
   // explain the three buttons, which the same chapter tells you not to do.
-  usePreventRemove(hasUnsavedChanges && !isNavigationAllowed, ({ data }) => {
+  const preventLeaveWithUnsavedChanges = hasUnsavedChanges && !isNavigationAllowed;
+  usePreventRemove(preventLeaveWithUnsavedChanges, ({ data }) => {
     const leave = (settle: () => Promise<unknown>) => {
       void settle().finally(() => {
         setIsNavigationAllowed(true);
@@ -3162,6 +3163,13 @@ export default function NewPostScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+      {/* On iOS 26 the back swipe completes the pop natively before the
+          usePreventRemove veto can run — the leave sheet then opens over the
+          previous screen and JS/native navigation state desync (upstream:
+          react-navigation#13072). The gesture must therefore not start at all
+          while the veto is armed; the header's Close button stays the way out
+          and raises the same sheet. A clean composer keeps its normal swipe. */}
+      <Stack.Screen options={{ gestureEnabled: !preventLeaveWithUnsavedChanges }} />
       <PostComposerHeader
         step={composerStep}
         isEditMode={isEditMode}

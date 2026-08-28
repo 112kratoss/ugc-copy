@@ -82,6 +82,7 @@ const generationItem = {
 
 vi.mock('expo-router', () => ({
   Redirect: (props: MockProps) => React.createElement('redirect', props),
+  Stack: { Screen: (props: MockProps) => React.createElement('stack-screen', props) },
   router: routerState,
   useLocalSearchParams: () => paramsState.params,
 }));
@@ -306,6 +307,24 @@ describe('mobile external post composer', () => {
     expect(postRoute).toContain("animation: reducedMotion ? 'none' : 'simple_push'");
     expect(postRoute).not.toContain("presentation: 'modal'");
     expect(postRoute).not.toContain('slide_from_bottom');
+  });
+
+  it('disables the native back gesture only while unsaved changes are present', async () => {
+    // On iOS 26 the back swipe pops the screen natively before the
+    // usePreventRemove veto runs (react-navigation#13072), landing the leave
+    // sheet on the previous screen. The gesture must be off while dirty; the
+    // header Close button remains the way out.
+    const tree = await renderScreen();
+    const gestureEnabled = () => (
+      tree.root.findAll((node) => String(node.type) === 'stack-screen')[0]
+        .props.options as { gestureEnabled: boolean }
+    ).gestureEnabled;
+
+    expect(gestureEnabled()).toBe(true);
+
+    renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Neon skyline study'));
+
+    expect(gestureEnabled()).toBe(false);
   });
 
   beforeEach(() => {
