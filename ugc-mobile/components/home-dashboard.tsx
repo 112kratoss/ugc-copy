@@ -102,6 +102,7 @@ import {
   type ShowcaseFeedPageParam,
 } from '@/lib/showcase-feed-query';
 import { formatCreditAmount } from '@/lib/pricing';
+import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type {
@@ -259,7 +260,12 @@ export function HomeDashboard() {
     if (!isFocused) void flushShowcaseFeedEvents();
   }, [isFocused]);
 
+  // Tints the dock from the card nearest it, and hands the neutral dock back
+  // when this screen blurs so a tab with no media of its own inherits it.
+  const reportAmbientMedia = useTabBarAmbientFeed(isFocused);
+
   const onPlaybackViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<HomeFeedCard>> }) => {
+    reportAmbientMedia({ viewableItems });
     const visibleItems = viewableItems
       .filter((token) => token.isViewable && token.item)
       .map((token) => token.item.item);
@@ -269,7 +275,7 @@ export function HomeDashboard() {
         ? current
         : nextVideoIds
     ));
-  }, []);
+  }, [reportAmbientMedia]);
 
   const onQualifiedViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<HomeFeedCard>> }) => {
     if (!feedEventRuntimeRef.current.isFocused) return;
@@ -733,7 +739,10 @@ export function HomeDashboard() {
         showsVerticalScrollIndicator={false}
         viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
         contentInsetAdjustmentBehavior="never"
-        contentContainerStyle={{ paddingTop: topInset, paddingBottom: tabBarMetrics.contentBottomOverlapPadding + 24 }}
+        // Home cards end in real controls and resource banners. Reserve the
+        // raised Create button as well as the pill so the last card can always
+        // scroll completely above the navigation hit area.
+        contentContainerStyle={{ paddingTop: topInset, paddingBottom: tabBarMetrics.contentBottomPadding + 24 }}
         ListHeaderComponent={(
           <View style={{ gap: 18, paddingTop: 10, paddingBottom: 6 }}>
             <View style={{ paddingHorizontal: horizontalPadding }}>

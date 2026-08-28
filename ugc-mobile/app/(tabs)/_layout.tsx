@@ -1,7 +1,4 @@
-import { BlurTargetView } from 'expo-blur';
 import { Tabs } from 'expo-router';
-import { useRef } from 'react';
-import type { View } from 'react-native';
 
 import { MagicTabBar } from '@/components/magic-tab-bar';
 import { useReducedMotion } from '@/lib/motion';
@@ -9,23 +6,15 @@ import { appTheme } from '@/lib/theme';
 
 export default function TabLayout() {
   const reducedMotion = useReducedMotion();
-  // Android's blur has to be told what to sample; it renders nothing without a
-  // target. Everywhere else BlurTargetView is a plain View, so wrapping the
-  // navigator costs nothing off-Android.
-  const blurTarget = useRef<View>(null);
 
   return (
-    <BlurTargetView ref={blurTarget} style={{ flex: 1 }}>
     <Tabs
       backBehavior="history"
       tabBar={(props) => (
-        // The creator tab hides the bar but must not unmount it: remounting
-        // the Android blur surface while the scene fade runs crashes the
-        // renderer (cyclic RenderNode SIGSEGV). MagicTabBar owns the how of
-        // hiding; this just says when.
+        // Keep one stable tab-bar tree across route fades; MagicTabBar owns
+        // invisibility and inertness while the focused creator workspace is up.
         <MagicTabBar
           {...props}
-          blurTarget={blurTarget}
           hidden={props.state.routes[props.state.index]?.name === 'creator'}
         />
       )}
@@ -75,6 +64,5 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
-    </BlurTargetView>
   );
 }

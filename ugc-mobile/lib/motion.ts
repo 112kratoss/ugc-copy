@@ -192,6 +192,51 @@ export function useSpringState(active: boolean) {
   return progress;
 }
 
+/**
+ * Cross-fade progress for a value that changes to arbitrary new values rather
+ * than toggling between two known states — an adaptive colour, say, where there
+ * is no "off" to animate back to.
+ *
+ * Returns the outgoing value, the incoming one, and a 0->1 progress that
+ * restarts on every change. Stack two opaque layers, hold the outgoing value
+ * underneath and fade the incoming one in over it: opacity drives on the native
+ * thread, where an animated `backgroundColor` has to round-trip through JS on
+ * every frame — which is the one thing a colour that changes during a scroll
+ * cannot afford. Reduced motion lands on the new value immediately.
+ */
+export function useCrossFade<T>(value: T) {
+  const reducedMotion = useReducedMotion();
+  const [progress] = useState<Animated.Value | null>(() => createValue(1));
+  const [pair, setPair] = useState({ from: value, to: value });
+
+  // Adjusted during render rather than in an effect: React re-runs the component
+  // before committing, so both layers are always painted from the same frame.
+  // Deferring it would show the incoming value on both layers for one frame, and
+  // the fade would have nothing left to fade from.
+  if (!Object.is(pair.to, value)) setPair({ from: pair.to, to: value });
+
+  useEffect(() => {
+    if (!progress) return;
+
+    progress.stopAnimation();
+    // Nothing to cross-fade on the first commit, and nothing to cross-fade when
+    // the value settles back to what is already on screen.
+    if (reducedMotion || !animatedApi?.timing || Object.is(pair.from, pair.to)) {
+      progress.setValue(1);
+      return;
+    }
+
+    progress.setValue(0);
+    animatedApi.timing(progress, {
+      toValue: 1,
+      duration: appTheme.motion?.duration.state ?? 180,
+      useNativeDriver: true,
+    }).start();
+  }, [pair, progress, reducedMotion]);
+
+  return { from: pair.from, to: pair.to, progress };
+}
+
 /** Animates binary state changes such as a switch thumb; reduced motion updates instantly. */
 export function useAnimatedState(active: boolean) {
   const reducedMotion = useReducedMotion();

@@ -1,19 +1,27 @@
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import type { RefObject } from 'react';
-import { BlurView } from 'expo-blur';
 import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
+import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { Bell, Home, Plus, Users, User } from 'lucide-react-native';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, Animated, Pressable, Text, useWindowDimensions, View } from 'react-native';
+import {
+  AccessibilityInfo,
+  Animated,
+  Pressable,
+  Text,
+  useWindowDimensions,
+  View,
+  type ViewStyle,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MagicCreateMenu } from '@/components/magic-create-menu';
 import { getCreateMenuActionHref, type CreateMenuActionId } from '@/lib/create-menu-view-model';
 import { haptic } from '@/lib/haptics';
-import { usePressMotion, useSpringState } from '@/lib/motion';
+import { useCrossFade, usePressMotion, useSpringState } from '@/lib/motion';
 import { useTabBarBadge } from '@/lib/use-notification-badge';
 import { resolvedBottomInset } from '@/lib/safe-area';
+import { ADAPTIVE_INACTIVE_COLOR, useTabBarAmbientColor } from '@/lib/tab-bar-ambient';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { appTheme } from '@/lib/theme';
 
@@ -33,17 +41,30 @@ const CONTROL_PRESS_SCALE = appTheme.motion?.scale.pressedControl ?? 0.9;
 // carry itself. Darkening the tint instead would just walk back to a flat bar.
 const GLASS_TINT = 'rgba(17,18,21,0.20)';
 const GLASS_BORDER = 'rgba(255,255,255,0.16)';
-const TRANSLUCENT_INACTIVE = 'rgba(255,255,255,0.90)';
-// Android's blur is softer than the iOS material, so it carries a heavier tint
-// than GLASS_TINT while still letting the backdrop through.
-const BLUR_TINT = 'rgba(17,18,21,0.60)';
-// Held at 16 for years because the opaque fill made it invisible; a real blur
-// needs real intensity. Raising this quiets a busy backdrop without making the
-// bar more opaque, which is the trade a heavier tint alone would force.
-const BLUR_INTENSITY = 55;
+// Liquid Glass adapts to its backdrop, but it adapts on brightness, not hue —
+// a warm backdrop still arrives warm, which is why iOS drifted olive over skin
+// tones exactly like Android did. So it gets the same cool lift, at roughly
+// half strength: the material is already doing most of the work, and this
+// branch has the least headroom before a wash starts milking it into a slab.
+const GLASS_FROST_LIFT = 'rgba(236,240,255,0.07)';
+const TRANSLUCENT_INACTIVE = 'rgba(255,255,255,0.88)';
+// The adaptive fill is fully opaque: no pixels, text, or motion from behind the
+// bar show through. What adapts is the colour, sampled from the band of the
+// nearest card the dock actually sits over. `tab-bar-ambient.ts` owns both that
+// sampling and the contrast cap that keeps this label and the coral active tint
+// clear of the fill — which is why the label colour is defined over there.
+const FALLBACK_BORDER = appTheme.colors.border ?? 'rgba(255,248,237,0.12)';
+// Depth, and only depth. A fixed top-light/bottom-shade wash over the tint,
+// held apart from the tint itself so the pill still reads as a raised surface
+// without the gradient having any say in what colour the bar is.
+const ADAPTIVE_SHADE: readonly [string, string] = ['rgba(255,255,255,0.05)', 'rgba(0,0,0,0.16)'];
+// The create disc used to ring itself in opaque panel grey to separate it from
+// the bar. Against a real material that ring reads as a hole punched through
+// the glass, so it borrows the same rim light the surface uses.
+const DISC_RIM = 'rgba(255,255,255,0.18)';
 // Reduce Transparency gets a genuinely opaque bar. This is the one branch that
 // should *not* thin out — those users asked for less see-through, not more.
-const SOLID_FILL = 'rgba(17,18,21,0.96)';
+const SOLID_FILL = '#111215';
 
 // Same swap the create menu uses: the focused component tests mock react-native
 // down to the primitives this file renders, so Animated.View is absent there.
@@ -59,11 +80,15 @@ const VISIBLE_TABS = [
 
 /**
  * Three surfaces, not two. Reduce Transparency and "no Liquid Glass" are
- * different needs that used to share one fallback: Android wants a real blur
- * with a thin tint, while Reduce Transparency wants an opaque bar. Collapsing
- * them means either Android stays flat or accessibility regresses.
+ * different needs: the normal fallback adapts its colour to the media, while
+ * Reduce Transparency gets the deepest no-effect surface.
+ *
+ * `adaptive` is not the Android branch, despite being the one Android always
+ * takes. It is selected by the absence of Liquid Glass, so every iOS device
+ * below 26 lands here too — and should: an opaque dock tinted by the media is
+ * the right answer wherever the material is unavailable, whatever the OS.
  */
-export type TabBarSurfaceMode = 'glass' | 'blur' | 'solid';
+export type TabBarSurfaceMode = 'glass' | 'adaptive' | 'solid';
 
 function useTabBarSurfaceMode(): TabBarSurfaceMode {
   // Availability is fixed for the process (it depends on the OS and the SDK the
@@ -73,9 +98,8 @@ function useTabBarSurfaceMode(): TabBarSurfaceMode {
   const [reduceTransparency, setReduceTransparency] = useState(false);
 
   useEffect(() => {
-    // Read this regardless of glass support: the blur surface is translucent
-    // too, so an Android user with Reduce Transparency on must reach the opaque
-    // branch just like an iOS one does.
+    // Read this regardless of glass support so the accessibility preference
+    // remains authoritative on every platform.
     let active = true;
     AccessibilityInfo.isReduceTransparencyEnabled().then((enabled) => {
       if (active) setReduceTransparency(enabled);
@@ -92,15 +116,14 @@ function useTabBarSurfaceMode(): TabBarSurfaceMode {
   }, []);
 
   if (reduceTransparency) return 'solid';
-  return available ? 'glass' : 'blur';
+  return available ? 'glass' : 'adaptive';
 }
 
 export function MagicTabBar({
   state,
   navigation,
-  blurTarget,
   hidden = false,
-}: BottomTabBarProps & { blurTarget?: RefObject<View | null>; hidden?: boolean }) {
+}: BottomTabBarProps & { hidden?: boolean }) {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const [createMenuVisible, setCreateMenuVisible] = useState(false);
@@ -120,10 +143,17 @@ export function MagicTabBar({
   // whose content has not changed is the dilution HIG warns about.
   const alertsBadge = useTabBarBadge();
   const activeRoute = state.routes[state.index]?.name;
+  // Every tab, not just Home: the store is authoritative, and a surface with no
+  // media to report hands the neutral dock back when it blurs.
+  const fallbackFill = useTabBarAmbientColor();
   const { isCompact, centerSize, barHeight, centerGap, tabIconSize, tabLabelSize } = metrics;
   // Any translucent surface needs the text to carry itself; only the opaque
   // bar is a known enough backdrop for muted grey.
-  const inactiveColor = surfaceMode === 'solid' ? appTheme.colors.muted : TRANSLUCENT_INACTIVE;
+  const inactiveColor = surfaceMode === 'glass'
+    ? TRANSLUCENT_INACTIVE
+    : surfaceMode === 'adaptive'
+      ? ADAPTIVE_INACTIVE_COLOR
+      : appTheme.colors.muted;
 
   const navigateTo = (routeName: string) => {
     const event = navigation.emit({
@@ -224,7 +254,7 @@ export function MagicTabBar({
           backgroundColor: 'transparent',
         }}
       />
-      <TabBarSurface mode={surfaceMode} barHeight={barHeight} blurTarget={blurTarget}>
+      <TabBarSurface mode={surfaceMode} barHeight={barHeight} fallbackFill={fallbackFill}>
         <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: isCompact ? 6 : 8, paddingVertical: isCompact ? 4 : 6 }}>
           <TabButton item={VISIBLE_TABS[0]} active={activeRoute === 'index'} iconSize={tabIconSize} labelSize={tabLabelSize} inactiveColor={inactiveColor} onPress={() => navigateTo('index')} />
           <TabButton item={VISIBLE_TABS[1]} active={activeRoute === 'showcase'} iconSize={tabIconSize} labelSize={tabLabelSize} inactiveColor={inactiveColor} onPress={() => navigateTo('showcase')} />
@@ -264,11 +294,11 @@ export function MagicTabBar({
             alignItems: 'center',
             justifyContent: 'center',
             gap: 1,
-            borderWidth: 2,
-            borderColor: appTheme.colors.panel,
+            borderWidth: 1,
+            borderColor: DISC_RIM,
             backgroundColor: pressed ? PRIMARY_STRONG : PRIMARY,
-            elevation: 5,
-            boxShadow: '0 8px 20px rgba(0,0,0,0.36)',
+            elevation: 3,
+            boxShadow: '0 6px 16px rgba(0,0,0,0.24)',
           })}
         >
           <Plus size={isCompact ? 23 : 25} color={ON_PRIMARY} />
@@ -305,9 +335,9 @@ function TabBadge({ value, iconSize }: { value: string; iconSize: number }) {
       importantForAccessibility="no-hide-descendants"
       style={{
         position: 'absolute',
-        // Centred by the Pressable's `alignItems`, exactly like the indicator
-        // bar, then walked right by half the icon so the oval overlaps the
-        // icon's top-right corner the way the system's badge does.
+        // Centred by the Pressable's `alignItems`, then walked right by half
+        // the icon so the oval overlaps its top-right corner the way the
+        // system's badge does.
         top: 4,
         marginLeft: iconSize,
         minWidth: 17,
@@ -334,12 +364,12 @@ function TabBadge({ value, iconSize }: { value: string; iconSize: number }) {
 function TabBarSurface({
   mode,
   barHeight,
-  blurTarget,
+  fallbackFill,
   children,
 }: {
   mode: TabBarSurfaceMode;
   barHeight: number;
-  blurTarget?: RefObject<View | null>;
+  fallbackFill: string;
   children: ReactNode;
 }) {
   const shape = {
@@ -348,7 +378,7 @@ function TabBarSurface({
     borderRadius: barHeight / 2,
     borderCurve: 'continuous' as const,
     borderWidth: 1,
-    boxShadow: '0 12px 30px rgba(0,0,0,0.34)',
+    boxShadow: '0 8px 24px rgba(0,0,0,0.24)',
   };
 
   if (mode === 'glass') {
@@ -362,6 +392,7 @@ function TabBarSurface({
         tintColor={GLASS_TINT}
         style={{ ...shape, borderColor: GLASS_BORDER }}
       >
+        <FrostLift color={GLASS_FROST_LIFT} />
         {children}
       </GlassView>
     );
@@ -375,19 +406,72 @@ function TabBarSurface({
     );
   }
 
+  return <AdaptiveSurface shape={shape} fill={fallbackFill}>{children}</AdaptiveSurface>;
+}
+
+/**
+ * The adaptive dock. Two opaque tint layers cross-fading under one fixed shade.
+ *
+ * The colour is sampled per visible card, so it changes while a feed is being
+ * scrolled. Swapping a `backgroundColor` outright made the bar flash between
+ * fills; fading a second opaque layer in over the first animates on the native
+ * thread and reads as the bar responding rather than as a repaint.
+ *
+ * The shade sits above both layers and never changes, which is what keeps the
+ * gradient out of the colour decision: it is lighting, not tint. Its
+ * predecessor was a five-stop horizontal ramp with a hard dark stop at 0.52,
+ * landing a shadow directly under the raised Create button.
+ */
+function AdaptiveSurface({
+  shape,
+  fill,
+  children,
+}: {
+  shape: ViewStyle;
+  fill: string;
+  children: ReactNode;
+}) {
+  const { from, to, progress } = useCrossFade(fill);
+
   return (
-    <BlurView
-      intensity={BLUR_INTENSITY}
-      tint="dark"
-      // Android renders nothing without a target to sample, and only gets a real
-      // GPU blur from SDK 31+; below that the method degrades to a plain
-      // semi-transparent view rather than burning RenderScript on old hardware.
-      blurMethod="dimezisBlurViewSdk31Plus"
-      blurTarget={blurTarget}
-      style={{ ...shape, borderColor: GLASS_BORDER, backgroundColor: BLUR_TINT }}
-    >
+    <View testID="tab-bar-adaptive-surface" style={{ ...shape, borderColor: FALLBACK_BORDER, backgroundColor: from }}>
+      <AnimatedView
+        pointerEvents="none"
+        testID="tab-bar-adaptive-fill"
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: to,
+          opacity: progress ?? 1,
+        }}
+      />
+      <LinearGradient
+        testID="tab-bar-adaptive-shade"
+        pointerEvents="none"
+        colors={ADAPTIVE_SHADE}
+        start={{ x: 0.5, y: 0 }}
+        end={{ x: 0.5, y: 1 }}
+        style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+      />
       {children}
-    </BlurView>
+    </View>
+  );
+}
+
+/**
+ * A faint cool lift for Liquid Glass only. The adaptive fallback carries its own
+ * shade inside `AdaptiveSurface` and takes no decorative overlay on top of it.
+ */
+function FrostLift({ color }: { color: string }) {
+  return (
+    <View
+      testID="tab-bar-frost-lift"
+      pointerEvents="none"
+      style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: color }}
+    />
   );
 }
 
@@ -413,9 +497,6 @@ function TabButton({
   const color = active ? PRIMARY : inactiveColor;
   const progress = useSpringState(active);
   const press = usePressMotion(false, { scale: CONTROL_PRESS_SCALE });
-  // `progress` is null under test, where AnimatedView is a plain View; fall back
-  // to the settled value so the rendered tree still reflects the active state.
-  const settled = active ? 1 : 0;
   const iconScale = progress?.interpolate({
     inputRange: [0, 1],
     outputRange: [1, appTheme.motion.scale.selected],
@@ -443,27 +524,11 @@ function TabButton({
         justifyContent: 'center',
         borderRadius: 18,
         borderCurve: 'continuous',
-        // The active tab is the coral icon, label and indicator; a coral pill
-        // behind them too was one accent too many on a bar this small.
+        // Selection lives in the icon and label, matching the iOS reference.
+        // An extra indicator or coral pill makes this small dock feel busier.
         backgroundColor: pressed ? appTheme.colors.surfaceStrong : 'transparent',
       })}
     >
-      <AnimatedView
-        pointerEvents="none"
-        style={{
-          position: 'absolute',
-          top: 2,
-          width: 18,
-          height: 3,
-          borderRadius: 2,
-          backgroundColor: PRIMARY,
-          // Always mounted so the spring has something to drive; scaleX grows it
-          // out of the centre rather than animating width, which the native
-          // driver cannot handle.
-          opacity: progress ?? settled,
-          transform: [{ scaleX: progress ?? settled }],
-        }}
-      />
       {/* A sibling of the content column, not a child of the scaled icon
           wrapper: inside it the badge grew with the selected-state spring, and
           its percentage offset resolved against the whole tab slot rather than
@@ -482,7 +547,7 @@ function TabButton({
           adjustsFontSizeToFit
           minimumFontScale={0.76}
           maxFontSizeMultiplier={1.4}
-          style={{ color, fontSize: labelSize, fontWeight: active ? '800' : '600' }}
+          style={{ color, fontSize: labelSize, fontWeight: active ? '700' : '500' }}
         >
           {item.label}
         </Text>

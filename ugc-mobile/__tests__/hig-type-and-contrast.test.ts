@@ -3,8 +3,14 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { contrastRatio } from '../lib/color-contrast';
 import { MIN_HIT_TARGET_PT } from '../lib/hit-target';
 import { appTheme } from '../lib/theme';
+import {
+  ADAPTIVE_INACTIVE_COLOR,
+  DEFAULT_TAB_BAR_COLOR,
+  getTabBarFillFromThumbhash,
+} from '../lib/tab-bar-ambient';
 
 const mobileRoot = path.resolve(__dirname, '..');
 
@@ -109,23 +115,16 @@ describe('HIG type sizes', () => {
   });
 });
 
-/**
- * WCAG AA, the thresholds Accessibility Inspector reports against:
- * 4.5:1 for text up to 17pt, 3:1 for 18pt+ or bold.
- */
-function relativeLuminance(hex: string) {
-  const channels = [1, 3, 5].map((offset) => {
-    const value = parseInt(hex.slice(offset, offset + 2), 16) / 255;
-    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-  });
-  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
-}
-
-function contrastRatio(foreground: string, background: string) {
-  const a = relativeLuminance(foreground);
-  const b = relativeLuminance(background);
-  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
-}
+/** Real thumbhashes spanning warm, cool, vivid, near-black and near-white media. */
+const MEDIA_FIXTURES = [
+  '1xcCXxB4eHd/h3iGh1iHmIiIhgiYiIAJ',
+  'lzgCXxB4d3dwiIiJeKiIaIiHifhoiI8G',
+  'TLgBBwCIeHiIeHhweIeHeId6iHQHd5gP',
+  '3ScDBwA6WnZ5h3h4d4h4d4h2cH+HeKAF',
+  'GwgCBwB7XId4iId4h3eIh4iHAAAAAAAA',
+  'xAcCBwCIaHd3eHd4eHh3h4hwB2mHAAAA',
+  '+gcCBwB4eId4h4eHdwd4d4dwi19oAAAA',
+];
 
 describe('HIG colour contrast', () => {
   const backgrounds = [appTheme.colors.background, appTheme.colors.panel, appTheme.colors.panelSoft];
@@ -146,6 +145,34 @@ describe('HIG colour contrast', () => {
       .map((background) => ({ name, background, ratio: contrastRatio(colour, background) }))
       .filter(({ ratio }) => ratio < 4.5)
       .map(({ background, ratio }) => `${name} on ${background}: ${ratio.toFixed(2)}:1`));
+
+    expect(failures).toEqual([]);
+  });
+
+  /**
+   * The surfaces above are static, which is the whole reason the adaptive tab
+   * bar slipped past this file: its fill is computed at runtime from whatever
+   * media a creator uploaded, so no palette entry ever described it. Every fill
+   * it emitted from its category palette failed here — coral at 2.44:1 on the
+   * amber dock — while this suite stayed green.
+   *
+   * A surface whose colour is derived rather than declared has to be swept over
+   * its inputs, not looked up. `tab-bar-ambient.test.ts` sweeps the input space
+   * in depth; this is the entry that keeps the dock inside the HIG contract the
+   * rest of the app is held to, so a later derived surface is added beside it
+   * rather than being left to invent its own floor.
+   */
+  it('clears 4.5:1 on the tab-bar fill, which is derived rather than declared', () => {
+    const tabForegrounds: Array<[string, string]> = [
+      ['active tab (primary)', appTheme.colors.primary],
+      ['inactive tab label', ADAPTIVE_INACTIVE_COLOR],
+    ];
+    const fills = [DEFAULT_TAB_BAR_COLOR, ...MEDIA_FIXTURES.map(getTabBarFillFromThumbhash)];
+
+    const failures = tabForegrounds.flatMap(([name, colour]) => fills
+      .map((fill) => ({ name, fill, ratio: contrastRatio(colour, fill) }))
+      .filter(({ ratio }) => ratio < 4.5)
+      .map(({ fill, ratio }) => `${name} on ${fill}: ${ratio.toFixed(2)}:1`));
 
     expect(failures).toEqual([]);
   });

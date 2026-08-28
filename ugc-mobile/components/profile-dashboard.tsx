@@ -69,6 +69,8 @@ import { flattenShowcaseFeedPages } from '@/lib/showcase-feed-query';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { formatCreditAmount } from '@/lib/pricing';
+import { SHOWCASE_PLAYBACK_VIEWABILITY } from '@/lib/showcase-feed-events';
+import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
 import { appTheme } from '@/lib/theme';
 import type {
   GenerationListResponse,
@@ -518,11 +520,23 @@ function ProfileMediaList({
     [onSwipeTab]
   );
 
+  // Focus is read here rather than threaded down from ProfileDashboard: the
+  // grid is the thing that knows which tiles are on screen, so the reset and the
+  // reporting stay in one component.
+  const reportAmbientMedia = useTabBarAmbientFeed(useIsFocused());
+  const viewabilityConfigCallbackPairs = useRef([
+    {
+      viewabilityConfig: SHOWCASE_PLAYBACK_VIEWABILITY,
+      onViewableItemsChanged: reportAmbientMedia,
+    },
+  ]).current;
+
   return (
     <View {...swipeResponder.panHandlers} style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
       <FlashList
         ref={listRef}
         data={isLoading ? [] : cards}
+        viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
         drawDistance={400}
         extraData={activeTab}
         getItemType={(item) => item.mediaKind ?? item.previewKind}

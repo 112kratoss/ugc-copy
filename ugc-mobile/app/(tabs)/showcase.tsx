@@ -33,6 +33,7 @@ import { useAuth } from '@/lib/auth';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
+import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
 import { createSerializedImageLoader } from '@/lib/serialized-image-loader';
 import { isShowcaseCoverVideoStreaming, isShowcaseVideoPreviewCandidate } from '@/lib/showcase-display';
 import {
@@ -306,9 +307,14 @@ export default function ShowcaseScreen() {
     }, SHOWCASE_ASPECT_RATIO_FLUSH_MS);
   }, [applyAspectRatios]);
 
+  // Tints the dock from the card nearest it, and hands the neutral dock back on
+  // blur so a tab with no media of its own inherits it.
+  const reportAmbientMedia = useTabBarAmbientFeed(isFocused);
+
   const onPlaybackViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<ShowcaseMasonryCard>> }) => {
+    reportAmbientMedia({ viewableItems });
     dispatchActivation({ type: 'viewableItemsChanged', items: getVisibleCardItems(viewableItems) });
-  }, [dispatchActivation]);
+  }, [dispatchActivation, reportAmbientMedia]);
   const onQualifiedViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<ShowcaseMasonryCard>> }) => {
     if (!feedEventRuntimeRef.current.isFocused) return;
     for (const token of viewableItems) {
