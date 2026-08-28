@@ -791,6 +791,187 @@ describe('NewPostClient', () => {
     expect(payload).not.toHaveProperty('mediaItems');
   });
 
+  // The recipe manager for an in-app creation post must prefill from the
+  // server-rendered payload the way the mobile composer does: prompt and
+  // reference-media cards from the stored bundle, proof media from the post's
+  // own media items. Every in-app post is generation-backed, so this is the
+  // main manage-unlock path.
+  function createGenerationRecipePost(): EditablePostDraft {
+    return {
+      id: 'post-gen-recipe-1',
+      generationId: 'gen-7',
+      title: 'Untitled post',
+      rawTitle: '',
+      description: '',
+      prompt: 'venom hero shot',
+      body: '',
+      visibility: 'public',
+      category: 'image',
+      postFormat: 'media',
+      sourceKind: 'magicbooklet',
+      sourceTool: 'magicbooklet',
+      sourceToolSlug: 'magicbooklet',
+      sourceTools: [{ toolLabel: 'magicbooklet', toolSlug: 'magicbooklet' }],
+      mediaUrl: 'https://proxy.example.com/generated_images/user-1/gen-7.png',
+      mediaKind: 'image',
+      mediaItems: [{
+        id: 'post-gen-recipe-1:cover',
+        mediaKey: 'm0',
+        url: 'https://proxy.example.com/generated_images/user-1/gen-7.png',
+        mediaKind: 'image',
+        contentType: null,
+        originalName: null,
+      } as never],
+      archivedAt: null,
+      resourceBundle: {
+        accessMode: 'free',
+        resources: {
+          promptText: null,
+          notesMarkdown: null,
+          workflowShareUrl: null,
+          attachments: [],
+          allowRemix: true,
+          sections: [{
+            id: 'recipe-section',
+            title: 'Exact prompt',
+            kind: 'global',
+            description: null,
+            sortOrder: 0,
+          }],
+          items: [
+            {
+              id: 'recipe-prompt',
+              scope: { kind: 'all' },
+              type: 'prompt',
+              role: 'primary',
+              sectionId: 'recipe-section',
+              title: 'Prompt',
+              description: null,
+              textContent: 'venom hero shot, cinematic sparks',
+              externalUrl: null,
+              storagePath: null,
+              contentType: null,
+              sizeBytes: null,
+              workflowSnapshot: null,
+              sortOrder: 0,
+              isPrimary: true,
+              remixUse: 'text_template',
+            },
+            // The owner detail merges the generation's reference media in
+            // server-side (sectionId: null, storagePath only — no URL).
+            {
+              id: 'gen-input-1',
+              scope: { kind: 'all' },
+              type: 'reference_image',
+              role: 'style_reference',
+              sectionId: null,
+              title: 'Reference image 1',
+              description: null,
+              textContent: null,
+              externalUrl: null,
+              storagePath: 'generation_inputs/user-1/gen-7/00-reference_image.jpg',
+              contentType: null,
+              sizeBytes: null,
+              workflowSnapshot: null,
+              sortOrder: 1,
+              isPrimary: false,
+              remixUse: 'none',
+            },
+          ],
+        },
+      },
+      hasPaidOrders: false,
+    };
+  }
+
+  it('prefills recipe cards and proof media for a generation-backed post', async () => {
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        generations: [{
+          id: 'gen-7',
+          output_url: 'https://proxy.example.com/generated_images/user-1/gen-7.png',
+          category: 'image',
+          title: 'Venom hero',
+          description: '',
+          prompt: 'venom hero shot',
+          model: 'nano-banana-2',
+        }],
+      }),
+    });
+
+    render(<NewPostClient initialPost={createGenerationRecipePost()} />);
+
+    expect(screen.getByText('Exact prompt')).toBeInTheDocument();
+    expect(screen.getByText('Reference image 1')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getAllByRole('img').length).toBeGreaterThan(0);
+    });
+    // The display fallback for an empty title must never hydrate the editor —
+    // saving would echo it into a stored title the placeholder gate rejects.
+    expect(screen.queryByDisplayValue('Untitled post')).not.toBeInTheDocument();
+  });
+
+  it('seeds the recipe from the generation when managing an empty package', async () => {
+    searchParamsState.value = new URLSearchParams('resourceMode=paid&focus=price&from=creations');
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        generations: [{
+          id: 'gen-7',
+          output_url: 'https://proxy.example.com/generated_images/user-1/gen-7.png',
+          category: 'image',
+          title: 'Venom hero',
+          description: '',
+          prompt: 'venom hero shot',
+          model: 'nano-banana-2',
+          paywallPrefill: {
+            resourceKinds: ['prompt'],
+            promptText: 'venom hero shot, cinematic sparks',
+            notesMarkdown: null,
+            allowRemix: false,
+            referenceCount: 0,
+            referenceKindCounts: {},
+          },
+        }],
+      }),
+    });
+
+    const post = createGenerationRecipePost();
+    post.resourceBundle = { accessMode: 'none' };
+
+    render(<NewPostClient initialPost={post} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /edit prompt or script/i })).toBeInTheDocument();
+    });
+  });
+
+  it('keeps the server-provided draft when the generations fetch fails', async () => {
+    enqueueResponse({
+      ok: false,
+      status: 500,
+      json: async () => ({ error: 'generations unavailable' }),
+    });
+
+    render(<NewPostClient initialPost={createGenerationRecipePost()} />);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/generations'),
+        expect.anything(),
+      );
+    });
+
+    // The stored bundle and the post's own media are server truths; a failed
+    // enhancement fetch must not blank them.
+    expect(screen.getByText('Exact prompt')).toBeInTheDocument();
+    expect(screen.getByText('Reference image 1')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getAllByRole('img').length).toBeGreaterThan(0);
+    });
+  });
+
   it('keeps an untouched legacy private resource label out of the public title', async () => {
     enqueueResponse({
       ok: true,

@@ -12,6 +12,13 @@ export interface EditablePostDraft {
   id: string;
   generationId: string | null;
   title: string;
+  /**
+   * The stored title without the "Untitled post" display fallback; '' when the
+   * post has none. Editors must hydrate from this — echoing the fallback back
+   * on save trips the marketplace placeholder gate. Optional because older
+   * callers may not supply it; the composer then falls back to `title`.
+   */
+  rawTitle?: string;
   description: string;
   prompt: string;
   body: string;

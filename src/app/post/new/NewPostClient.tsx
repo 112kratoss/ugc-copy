@@ -210,6 +210,12 @@ interface GenerationDraft {
   category: PostMediaCategory;
   model: string;
   paywallPrefill: GenerationPaywallPrefill | null;
+  /**
+   * Edit mode seeds a draft from the server-rendered post before the
+   * generations fetch resolves. The paywall prefill must only conclude
+   * "nothing to apply" from a fetched draft — the seed never carries one.
+   */
+  source: 'seed' | 'fetched';
 }
 
 const BODY_MAX_LENGTH = 2000;
@@ -535,11 +541,11 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const initialResourceAccessMode = normalizePostResourceBundleAccessMode(requestedResourceMode ?? initialBundle.accessMode);
 
   const [proofMode, setProofMode] = useState<ProofMode>(() => getInitialProofMode(initialPost));
+  // Edit mode seeds from the server-rendered post — generation-backed posts
+  // included: their media is display-only here (the submit path never sends
+  // mediaItems for them), and leaving the state empty blanked the proof and
+  // the per-media resource scoping whenever the generations fetch failed.
   const [mediaItems, setMediaItems] = useState<ComposerMediaItem[]>(() => {
-    if (initialPost?.generationId) {
-      return [];
-    }
-
     if (initialPost?.mediaItems?.length) {
       return initialPost.mediaItems.map((item, index) => ({
         id: `existing-${item.id}`,
@@ -574,7 +580,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   });
   const [isDragging, setIsDragging] = useState(false);
   const [draggedMediaId, setDraggedMediaId] = useState<string | null>(null);
-  const [title, setTitle] = useState(initialPost?.title ?? '');
+  // rawTitle, never the display title: the read APIs substitute "Untitled
+  // post" for an empty title, and echoing that back on save trips the
+  // marketplace placeholder gate.
+  const [title, setTitle] = useState(initialPost ? (initialPost.rawTitle ?? initialPost.title ?? '') : '');
   const [description, setDescription] = useState(initialPost?.description ?? '');
   const [body, setBody] = useState(initialPost?.body ?? '');
   const [madeWithRows, setMadeWithRows] = useState<MadeWithRow[]>(() => {
@@ -657,6 +666,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           category: initialCategory,
           model: 'magicbooklet',
           paywallPrefill: null,
+          source: 'seed',
         }
       : null
   );
@@ -873,14 +883,27 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   }, [generationId, isCreationPaywallManagementIntent, isGeneratedPaywallIntent]);
 
   useEffect(() => {
-    if (!isGeneratedPaywallIntent || didApplyGenerationPaywallPrefill || !prefilledGeneration) {
+    // Applies on both explicit recipe entries: publishing a paid generation and
+    // managing an existing creation's recipe. Without the second, opening
+    // "Manage recipe" on a post whose bundle has no stored items showed an
+    // empty package with none of the generation's prompt or notes prefilled.
+    if (
+      !(isGeneratedPaywallIntent || isCreationPaywallManagementIntent)
+      || didApplyGenerationPaywallPrefill
+      || !prefilledGeneration
+    ) {
       return;
     }
 
     const paywallPrefill = prefilledGeneration.paywallPrefill;
     if (!paywallPrefill || !hasUsableGenerationPaywallPrefill(paywallPrefill)) {
-      // Mark this generation as inspected even when it has no usable paywall payload.
-      setDidApplyGenerationPaywallPrefill(true);
+      // Mark this generation as inspected even when it has no usable paywall
+      // payload — but only once the fetched draft has been seen. The edit-mode
+      // seed never carries a prefill, and concluding from it would lock the
+      // real one out.
+      if (prefilledGeneration.source === 'fetched') {
+        setDidApplyGenerationPaywallPrefill(true);
+      }
       return;
     }
 
@@ -913,6 +936,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     setDidApplyGenerationPaywallPrefill(true);
   }, [
     didApplyGenerationPaywallPrefill,
+    isCreationPaywallManagementIntent,
     isGeneratedPaywallIntent,
     prefilledGeneration,
   ]);
@@ -997,6 +1021,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           paywallPrefill: isGenerationPaywallPrefill(generation.paywallPrefill)
             ? generation.paywallPrefill
             : null,
+          source: 'fetched',
         };
 
         setPrefilledGeneration(nextGeneration);
@@ -1010,7 +1035,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       } catch (loadError) {
         if (!cancelled) {
           setGenerationError(loadError instanceof Error ? loadError.message : 'Failed to load generation.');
-          setPrefilledGeneration(null);
+          // Edit mode seeds a draft for this generation from the server-rendered
+          // post; a failed enhancement fetch must not blank it. Only clear data
+          // that belongs to a different generation.
+          setPrefilledGeneration((current) => (current?.id === generationId ? current : null));
         }
       } finally {
         if (!cancelled) {

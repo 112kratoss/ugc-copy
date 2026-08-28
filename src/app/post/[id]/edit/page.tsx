@@ -17,6 +17,7 @@ function toEditablePostDraft(post: NonNullable<Awaited<ReturnType<typeof getOwne
     id: post.id,
     generationId: post.generationId,
     title: post.title,
+    rawTitle: post.rawTitle,
     description: post.description,
     prompt: post.prompt,
     body: post.body,
