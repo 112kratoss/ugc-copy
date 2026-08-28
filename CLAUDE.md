@@ -144,10 +144,11 @@ One Vercel cron (`/api/cron/backend-jobs`, every 10 min, `CRON_SECRET` bearer au
 
 All web unit/integration tests live flat in `src/__tests__/` (~540 files) — never colocated. Notable conventions: `*-migration.test.ts` files assert the SQL content of migrations (add one when you add a migration); contract fixture tests pin the mobile API. E2E lives in `tests/e2e/` and uses an auth bypass (`src/lib/e2e-auth.ts`) that is build-blocked in production. Mobile logic is factored into `ugc-mobile/lib/*-view-model.ts` modules precisely so it can be vitest-tested without rendering.
 
-Two E2E gotchas worth knowing before you debug one:
+Three E2E gotchas worth knowing before you debug one:
 
 - **Playwright's own dev server refuses to start if another `next dev` is already running**, even on a different port, and the failure reads as a config error. Stop any preview/dev server (including one started via `preview_start`) before `npm run test:e2e`.
 - **The auth bypass needs its cookie, not just the env vars.** A spec that only visits an authenticated route lands on `/login`; add `{ name: 'e2e-auth', value: 'workflow-user', url: 'http://127.0.0.1:3100' }` via `context.addCookies` first (see the existing specs).
+- **The dev server reloads open pages behind your back.** `next dev` full-reloads every connected page when Fast Refresh cannot hot-apply an update, and both Playwright workers share one dev server that compiles routes on demand — a parked page self-reloads several times a minute on a cold `.next`. A self-reload landing in the same tick as a spec's own navigation cancels it, surfacing as `net::ERR_ABORTED; maybe frame was detached?`. `tests/e2e/kling-o3-named-subjects.spec.ts` carries the retry helper for it.
 
 ## Conventions and cautions
 

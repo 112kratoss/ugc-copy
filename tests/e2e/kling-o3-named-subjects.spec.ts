@@ -21,6 +21,91 @@ async function attachSubjectImages(page: Page, names: string[]) {
   );
 }
 
+/**
+ * How many subjects the draft store currently holds. Reads localforage's own
+ * layout for `PERSISTED_MEDIA_KEYS.createVideoKlingSubjects` — database
+ * `magicbooklet-persisted-media`, object store `keyvaluepairs` — creating
+ * neither, so probing cannot disturb what the app stores.
+ *
+ * The editor persists fire-and-forget (`void persistKlingSubjects(...)` in
+ * CreateVideoClient), so the DOM settles a beat before IndexedDB does. Waiting
+ * on the store is what makes a reload assertion mean anything: reload mid-write
+ * and the reload tests nothing in particular, while an editor found empty
+ * afterwards may simply not have restored *yet*.
+ */
+async function countPersistedSubjects(page: Page): Promise<number> {
+  try {
+    return await readPersistedSubjectCount(page);
+  } catch (error) {
+    // A dev server reload (see below) can tear the execution context down
+    // mid-read. `expect.poll` re-throws whatever its generator throws, so
+    // answer "unknown" and let the next poll ask the fresh document.
+    if (error instanceof Error && /Execution context was destroyed|frame was detached/.test(error.message)) {
+      return -1;
+    }
+    throw error;
+  }
+}
+
+function readPersistedSubjectCount(page: Page): Promise<number> {
+  return page.evaluate(async () => {
+    const databases = await indexedDB.databases();
+    if (!databases.some((database) => database.name === 'magicbooklet-persisted-media')) return 0;
+
+    return new Promise<number>((resolve, reject) => {
+      const open = indexedDB.open('magicbooklet-persisted-media');
+      open.onerror = () => reject(open.error ?? new Error('could not open the persisted media store'));
+      open.onsuccess = () => {
+        const database = open.result;
+        if (!database.objectStoreNames.contains('keyvaluepairs')) {
+          database.close();
+          resolve(0);
+          return;
+        }
+        const read = database
+          .transaction('keyvaluepairs', 'readonly')
+          .objectStore('keyvaluepairs')
+          .get('create-video:kling-subjects');
+        read.onerror = () => {
+          database.close();
+          reject(read.error ?? new Error('could not read the persisted subjects'));
+        };
+        read.onsuccess = () => {
+          database.close();
+          resolve(Array.isArray(read.result) ? read.result.length : 0);
+        };
+      };
+    });
+  });
+}
+
+/**
+ * Reload, tolerating the dev server reloading the page out from under us.
+ *
+ * `next dev` tells every open page to `window.location.reload()` whenever a
+ * Fast Refresh update cannot be hot-applied, and CI runs two Playwright workers
+ * against one dev server that is still compiling routes on demand — so this
+ * page navigates itself several times a minute through no doing of the test's.
+ * A self-reload that lands in the same tick as ours cancels ours, and Playwright
+ * surfaces that as `page.reload: net::ERR_ABORTED` (Quality run 33009507821).
+ *
+ * Both navigations go to the same URL and this page's state lives in IndexedDB
+ * rather than in memory, so letting the dev server's reload finish and then
+ * reloading again is equivalent to the reload that was cancelled.
+ */
+async function reloadPastDevServerReloads(page: Page) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await page.reload();
+      return;
+    } catch (error) {
+      const wasCancelled = error instanceof Error && error.message.includes('net::ERR_ABORTED');
+      if (!wasCancelled || attempt === 3) throw error;
+      await page.waitForLoadState('load');
+    }
+  }
+}
+
 test.describe('Kling O3 named subjects', () => {
   test.beforeEach(async ({ context }) => {
     await context.addCookies([
@@ -61,8 +146,10 @@ test.describe('Kling O3 named subjects', () => {
     await page.getByPlaceholder('Subject name').fill('Hero creator');
     await attachSubjectImages(page, ['hero-front.png', 'hero-side.png']);
     await expect(page.getByText('2/4 images')).toBeVisible();
+    // Reloading before the group reaches storage would prove nothing about it.
+    await expect.poll(() => countPersistedSubjects(page)).toBe(1);
 
-    await page.reload();
+    await reloadPastDevServerReloads(page);
 
     // The whole group comes back — name, handle, and both images.
     await expect(page.getByPlaceholder('Subject name')).toHaveValue('Hero creator');
@@ -80,8 +167,12 @@ test.describe('Kling O3 named subjects', () => {
     // The subject's own remove control, not the per-image ones.
     await page.getByRole('button', { name: 'Remove Subject 1', exact: true }).click();
     await expect(page.getByPlaceholder('Subject name')).toHaveCount(0);
+    // Forgotten in storage too, not just on screen — and with the store empty
+    // before the reload, an editor that comes back empty can only have stayed
+    // that way, rather than having been asserted a beat ahead of a restore.
+    await expect.poll(() => countPersistedSubjects(page)).toBe(0);
 
-    await page.reload();
+    await reloadPastDevServerReloads(page);
     await expect(page.getByRole('heading', { name: 'Named subjects' })).toBeVisible();
     await expect(page.getByPlaceholder('Subject name')).toHaveCount(0);
   });
