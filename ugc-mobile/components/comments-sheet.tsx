@@ -124,6 +124,10 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   const [pendingRepliesByParent, setPendingRepliesByParent] = useState<Record<string, PostComment[]>>({});
   const [reporting, setReporting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // Decoupled from query fetch state: on iOS a programmatic `refreshing` drags
+  // the list down and can strand it there, so only a refresh the user asked
+  // for may engage the control (see the note in app/(tabs)/showcase.tsx).
+  const [pullRefreshing, setPullRefreshing] = useState(false);
   const restoredReplyIdRef = useRef<string | null>(null);
   const commentsListRef = useRef<FlatList<PostComment>>(null);
   const composerRef = useRef<TextInput>(null);
@@ -629,8 +633,11 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
           {commentsHeader}
         </>
       ) : undefined}
-      onRefresh={enabled && !commentsUnavailable ? () => void commentsQuery.refetch() : undefined}
-      refreshing={enabled && commentsQuery.isRefetching && !commentsQuery.isFetchingNextPage}
+      onRefresh={enabled && !commentsUnavailable ? () => {
+        setPullRefreshing(true);
+        void commentsQuery.refetch().finally(() => setPullRefreshing(false));
+      } : undefined}
+      refreshing={pullRefreshing}
       onEndReachedThreshold={0.4}
       onEndReached={() => {
         if (enabled && commentsQuery.hasNextPage && !commentsQuery.isFetchingNextPage) {
