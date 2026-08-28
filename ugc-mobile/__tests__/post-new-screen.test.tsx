@@ -595,6 +595,9 @@ describe('mobile external post composer', () => {
       'File upload in progress',
       expect.stringContaining('Keep this resource editor open'),
       expect.any(Array),
+      // `showConfirmDialog`'s fallback settles its promise on an Android
+      // dismissal too, so the answer never strands the caller — see `lib/dialog`.
+      expect.any(Object),
     );
     const closeButtons = alertState.alert.mock.calls.at(-1)?.[2] as Array<{ text: string; onPress?: () => void }>;
     await renderer.act(async () => {
@@ -679,9 +682,15 @@ describe('mobile external post composer', () => {
       'Discard resource changes?',
       'This resource has unsaved changes.',
       expect.any(Array),
+      expect.any(Object),
     );
     const buttons = alertState.alert.mock.calls.at(-1)?.[2] as Array<{ text: string; onPress?: () => void }>;
-    renderer.act(() => buttons.find((button) => button.text === 'Discard')?.onPress?.());
+    // The discard runs when the confirmation resolves, a microtask after the
+    // press, so the tick has to be flushed before the card list is read back.
+    await renderer.act(async () => {
+      buttons.find((button) => button.text === 'Discard')?.onPress?.();
+      await Promise.resolve();
+    });
     expect(collectText(tree.root)).not.toContain('1 resource card');
   });
 

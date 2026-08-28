@@ -6,13 +6,14 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { Camera, Check, ImageIcon } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, TextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Linking, Pressable, ScrollView, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { AppText, AppTextInput, PrimaryButton, SecondaryButton, StatusBlock } from '@/components/ui';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
+import { showConfirmDialog } from '@/lib/dialog';
 import {
   PROFILE_BIO_MAX_LENGTH,
   PROFILE_DISPLAY_NAME_MAX_LENGTH,
@@ -223,28 +224,33 @@ export function EditProfileScreen() {
    * is the same shape, minus the draft this screen has nowhere to keep.
    */
   usePreventRemove(hasProfileChanges && !isLeaveAllowed && !isSaving, ({ data }) => {
-    // `Alert`, not the app's action sheet, for two reasons that agree. Alerts
-    // is what one destructive confirmation is for — `lib/action-sheet.ts` says
-    // so itself, and the composer's sheet is a sheet because it has a second
-    // choice (save the draft) that this screen has nowhere to keep. And the
-    // sheet could not appear here anyway: `ActionSheetHost` is an in-window
+    // A confirmation, not the app's action sheet, for two reasons that agree.
+    // Alerts is what one destructive confirmation is for — `lib/action-sheet.ts`
+    // says so itself, and the composer's sheet is a sheet because it has a
+    // second choice (save the draft) that this screen has nowhere to keep. And
+    // the sheet could not appear here anyway: `ActionSheetHost` is an in-window
     // overlay by design (an RN Modal cannot report keyboard height on Android),
     // and this route is `presentation: 'modal'` — a native modal presented
     // above that window. Captured on the simulator: the screen was correctly
     // held, and the sheet was nowhere, which traps a person on the form.
+    //
     // "Keep editing" rather than "Cancel": the control they just pressed is
     // named Cancel, so a Cancel that means *stay* reverses itself (ledger DV8).
-    Alert.alert('Discard your changes?', undefined, [
-      { text: 'Keep editing', style: 'cancel' },
-      {
-        text: 'Discard',
-        style: 'destructive',
-        onPress: () => {
-          setIsLeaveAllowed(true);
-          setTimeout(() => navigation.dispatch(data.action), 0);
-        },
-      },
-    ]);
+    // No message under the question — the title and the two labels already say
+    // the whole thing, and Alerts asks for "a brief title and, optionally, a
+    // short message", not a restatement.
+    void showConfirmDialog({
+      title: 'Discard your changes?',
+      cancelLabel: 'Keep editing',
+      confirmLabel: 'Discard',
+      destructive: true,
+    }).then((discard) => {
+      if (!discard) return;
+      setIsLeaveAllowed(true);
+      // The guard is still armed on this commit; dispatching on the next tick
+      // lets `isLeaveAllowed` land first so the pop is not intercepted again.
+      setTimeout(() => navigation.dispatch(data.action), 0);
+    });
   });
 
   async function pickProfileImage(role: 'avatar' | 'cover') {

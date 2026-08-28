@@ -3,20 +3,7 @@ import { router } from 'expo-router';
 import { MoreHorizontal, SendHorizontal } from 'lucide-react-native';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type React from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Animated,
-  Easing,
-  FlatList,
-  type LayoutChangeEvent,
-  Platform,
-  Pressable,
-  Text,
-  TextInput,
-  View,
-  useWindowDimensions,
-} from 'react-native';
+import { ActivityIndicator, Animated, Easing, FlatList, type LayoutChangeEvent, Platform, Pressable, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CommentListSkeleton } from '@/components/skeleton';
@@ -54,6 +41,7 @@ import { resolvedBottomInset } from '@/lib/safe-area';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { Overlay } from '@/components/overlay-host';
 import { SheetGrabber, useSheetDismissDrag } from '@/components/sheet-chrome';
+import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
 import { appTheme } from '@/lib/theme';
 import type { CommentReportReason } from '@/lib/api-client';
@@ -349,69 +337,64 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
       publishCommentCount(response.commentCount);
     } catch (error) {
       haptic.error();
-      Alert.alert('Could not post comment', error instanceof Error ? error.message : 'Please try again.');
+      showErrorDialog('Could not post comment', error);
     } finally {
       setSubmitting(false);
     }
   }, [api, commentsQuery, commentsQueryKey, draft, postId, publishCommentCount, queryClient, replyTo, requireSignIn, submitting, user?.id]);
 
   const removeComment = useCallback((comment: PostComment, asOwner: boolean) => {
-    Alert.alert(
-      asOwner ? 'Remove this comment?' : 'Delete your comment?',
-      asOwner
+    void showConfirmDialog({
+      title: asOwner ? 'Remove this comment?' : 'Delete your comment?',
+      message: asOwner
         ? 'It will be hidden from everyone viewing your post.'
         : 'Your comment will be replaced with “[deleted]”. Replies to it stay visible.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: asOwner ? 'Remove' : 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const response = await api.deletePostComment(postId, comment.id);
-              if (comment.parentId) {
-                const repliesKey = createPostCommentRepliesQueryKey(postId, comment.parentId, user?.id);
-                queryClient.setQueryData<InfiniteData<PostCommentsResponse>>(
-                  repliesKey,
-                  (current) => suspendCommentPagination(
-                    markCommentRemovedInPages(current, comment.id, response.status, response.commentCount)
-                  )
-                );
-                setPendingRepliesByParent((current) => ({
-                  ...current,
-                  [comment.parentId!]: (current[comment.parentId!] ?? [])
-                    .filter((reply) => reply.id !== comment.id),
-                }));
-                queryClient.setQueryData<InfiniteData<PostCommentsResponse>>(
-                  commentsQueryKey,
-                  (current) => suspendCommentPagination(
-                    incrementParentReplyCountInPages(
-                      current,
-                      comment.parentId!,
-                      -1,
-                      response.commentCount
-                    )
-                  )
-                );
-                void queryClient.invalidateQueries({ queryKey: repliesKey, refetchType: 'active' });
-              } else {
-                queryClient.setQueryData<InfiniteData<PostCommentsResponse>>(
-                  commentsQueryKey,
-                  (current) => suspendCommentPagination(
-                    markCommentRemovedInPages(current, comment.id, response.status, response.commentCount)
-                  )
-                );
-              }
-              void commentsQuery.refetch();
-              publishCommentCount(response.commentCount);
-            } catch (error) {
-              haptic.error();
-              Alert.alert('Could not remove comment', error instanceof Error ? error.message : 'Please try again.');
-            }
-          },
-        },
-      ]
-    );
+      confirmLabel: asOwner ? 'Remove' : 'Delete',
+      destructive: true,
+    }).then(async (confirmed) => {
+      if (!confirmed) return;
+      try {
+        const response = await api.deletePostComment(postId, comment.id);
+        if (comment.parentId) {
+          const repliesKey = createPostCommentRepliesQueryKey(postId, comment.parentId, user?.id);
+          queryClient.setQueryData<InfiniteData<PostCommentsResponse>>(
+            repliesKey,
+            (current) => suspendCommentPagination(
+              markCommentRemovedInPages(current, comment.id, response.status, response.commentCount)
+            )
+          );
+          setPendingRepliesByParent((current) => ({
+            ...current,
+            [comment.parentId!]: (current[comment.parentId!] ?? [])
+              .filter((reply) => reply.id !== comment.id),
+          }));
+          queryClient.setQueryData<InfiniteData<PostCommentsResponse>>(
+            commentsQueryKey,
+            (current) => suspendCommentPagination(
+              incrementParentReplyCountInPages(
+                current,
+                comment.parentId!,
+                -1,
+                response.commentCount
+              )
+            )
+          );
+          void queryClient.invalidateQueries({ queryKey: repliesKey, refetchType: 'active' });
+        } else {
+          queryClient.setQueryData<InfiniteData<PostCommentsResponse>>(
+            commentsQueryKey,
+            (current) => suspendCommentPagination(
+              markCommentRemovedInPages(current, comment.id, response.status, response.commentCount)
+            )
+          );
+        }
+        void commentsQuery.refetch();
+        publishCommentCount(response.commentCount);
+      } catch (error) {
+        haptic.error();
+        showErrorDialog('Could not remove comment', error);
+      }
+    });
   }, [api, commentsQuery, commentsQueryKey, postId, publishCommentCount, queryClient, user?.id]);
 
   const submitReport = useCallback(async (comment: PostComment, reason: CommentReportReason) => {
@@ -419,10 +402,13 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     try {
       await api.reportComment(comment.id, { reason });
       haptic.success();
-      Alert.alert('Thanks for the report', 'Our moderation team will take a look.');
+      showMessageDialog({
+        title: 'Thanks for the report',
+        message: 'Our moderation team will take a look.',
+      });
     } catch (error) {
       haptic.error();
-      Alert.alert('Could not report comment', error instanceof Error ? error.message : 'Please try again.');
+      showErrorDialog('Could not report comment', error);
     } finally {
       setReporting(false);
     }

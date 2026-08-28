@@ -1,10 +1,11 @@
 import { useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { router } from 'expo-router';
-import { Alert, Linking, Modal, Pressable, ScrollView, View } from 'react-native';
+import { Linking, Modal, Pressable, ScrollView, View } from 'react-native';
 
 import { SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { AppText } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
+import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import {
   archivePost as runArchivePost,
   changePostVisibility,
@@ -125,22 +126,16 @@ export function ViewerActionSheet({
     mutation: () => Promise<unknown>,
     destructive = false
   ) => {
-    Alert.alert(title, message, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: confirmLabel,
-        style: destructive ? 'destructive' : 'default',
-        onPress: async () => {
-          try {
-            await mutation();
-            await refreshMedia();
-          } catch {
-            haptic.error();
-            Alert.alert('Could not update media', 'Please try again.');
-          }
-        },
-      },
-    ]);
+    void showConfirmDialog({ title, message, confirmLabel, destructive }).then(async (confirmed) => {
+      if (!confirmed) return;
+      try {
+        await mutation();
+        await refreshMedia();
+      } catch {
+        haptic.error();
+        showMessageDialog({ title: 'Could not update media', message: 'Please try again.' });
+      }
+    });
   };
 
   const updateVisibility = async (post: NonNullable<typeof linkedLifecyclePost>, visibility: 'public' | 'unlisted' | 'private') => {
@@ -173,7 +168,7 @@ export function ViewerActionSheet({
           await refreshMedia();
         } catch {
           haptic.error();
-          Alert.alert('Could not update media', 'Please try again.');
+          showMessageDialog({ title: 'Could not update media', message: 'Please try again.' });
         }
       })();
       return;
@@ -266,7 +261,10 @@ export function ViewerActionSheet({
       if (mediaUrl) {
         void Linking.openURL(mediaUrl);
       } else {
-        Alert.alert('No media file', 'This item does not have an openable media file.');
+        showMessageDialog({
+          title: 'No media file',
+          message: 'This item does not have an openable media file.',
+        });
       }
       return;
     }
@@ -280,114 +278,103 @@ export function ViewerActionSheet({
     }
     if (action === 'report-content' && item.showcasePostId) {
       if (!requireSignedIn()) return;
-      Alert.alert(
-        'Report content?',
-        'Magicbooklet will send this post to the moderation team for a safety review.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Report content',
-            style: 'destructive',
-            onPress: async () => {
-              try {
-                await api.reportPost(item.showcasePostId!, {
-                  reason: 'unsafe_content',
-                  details: 'Reported from the mobile Showcase viewer.',
-                });
-                haptic.success();
-                Alert.alert('Report received', 'Thank you. Our moderation team will review this content.');
-              } catch (error) {
-                haptic.error();
-                Alert.alert('Could not report content', error instanceof Error ? error.message : 'Please try again.');
-              }
-            },
-          },
-        ]
-      );
+      void showConfirmDialog({
+        title: 'Report content?',
+        message: 'Magicbooklet will send this post to the moderation team for a safety review.',
+        confirmLabel: 'Report content',
+        destructive: true,
+      }).then(async (confirmed) => {
+        if (!confirmed) return;
+        try {
+          await api.reportPost(item.showcasePostId!, {
+            reason: 'unsafe_content',
+            details: 'Reported from the mobile Showcase viewer.',
+          });
+          haptic.success();
+          showMessageDialog({
+            title: 'Report received',
+            message: 'Thank you. Our moderation team will review this content.',
+          });
+        } catch (error) {
+          haptic.error();
+          showErrorDialog('Could not report content', error);
+        }
+      });
       return;
     }
     if (action === 'report-user' && item.creatorId) {
       if (!requireSignedIn()) return;
-      Alert.alert(
-        'Report user?',
-        `Magicbooklet will review ${item.creatorLabel} for unsafe or abusive behavior.`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Report user',
-            style: 'destructive',
-            onPress: async () => {
-              try {
-                await api.reportUser(item.creatorId!, {
-                  reason: 'unsafe_content',
-                  sourceSurface: 'showcase-reel',
-                  details: item.showcasePostId ? `Reported from post ${item.showcasePostId}.` : undefined,
-                });
-                haptic.success();
-                Alert.alert('Report received', 'Thank you. Our moderation team will review this user.');
-              } catch (error) {
-                haptic.error();
-                Alert.alert('Could not report user', error instanceof Error ? error.message : 'Please try again.');
-              }
-            },
-          },
-        ]
-      );
+      void showConfirmDialog({
+        title: 'Report user?',
+        message: `Magicbooklet will review ${item.creatorLabel} for unsafe or abusive behavior.`,
+        confirmLabel: 'Report user',
+        destructive: true,
+      }).then(async (confirmed) => {
+        if (!confirmed) return;
+        try {
+          await api.reportUser(item.creatorId!, {
+            reason: 'unsafe_content',
+            sourceSurface: 'showcase-reel',
+            details: item.showcasePostId ? `Reported from post ${item.showcasePostId}.` : undefined,
+          });
+          haptic.success();
+          showMessageDialog({
+            title: 'Report received',
+            message: 'Thank you. Our moderation team will review this user.',
+          });
+        } catch (error) {
+          haptic.error();
+          showErrorDialog('Could not report user', error);
+        }
+      });
       return;
     }
     if (action === 'block-user' && item.creatorId) {
       if (!requireSignedIn()) return;
       const creatorId = item.creatorId;
-      Alert.alert(
-        `Block ${item.creatorLabel}?`,
-        'Their posts will be hidden, and neither of you will be able to follow the other.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Block user',
-            style: 'destructive',
-            onPress: async () => {
-              try {
-                await api.blockUser(creatorId);
-                await refreshMedia();
-                onBlocked?.(creatorId);
-              } catch (error) {
-                haptic.error();
-                Alert.alert('Could not block user', error instanceof Error ? error.message : 'Please try again.');
-              }
-            },
-          },
-        ]
-      );
+      void showConfirmDialog({
+        title: `Block ${item.creatorLabel}?`,
+        message: 'Their posts will be hidden, and neither of you will be able to follow the other.',
+        confirmLabel: 'Block user',
+        destructive: true,
+      }).then(async (confirmed) => {
+        if (!confirmed) return;
+        try {
+          await api.blockUser(creatorId);
+          await refreshMedia();
+          onBlocked?.(creatorId);
+        } catch (error) {
+          haptic.error();
+          showErrorDialog('Could not block user', error);
+        }
+      });
       return;
     }
     if (action === 'report-ai-output' && item.generationId) {
       if (!requireSignedIn()) return;
-      Alert.alert(
-        'Report offensive AI output?',
-        'Send this generated result to the safety team so the model and provider output can be reviewed.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Report AI output',
-            style: 'destructive',
-            onPress: async () => {
-              try {
-                await api.reportGeneration(item.generationId!, {
-                  reason: 'offensive_ai_output',
-                  sourceSurface: 'generation-viewer',
-                  details: 'Reported from the mobile generated-media viewer.',
-                });
-                haptic.success();
-                Alert.alert('Report received', 'Thank you. The generated output was sent to the safety team.');
-              } catch (error) {
-                haptic.error();
-                Alert.alert('Could not report AI output', error instanceof Error ? error.message : 'Please try again.');
-              }
-            },
-          },
-        ]
-      );
+      void showConfirmDialog({
+        title: 'Report offensive AI output?',
+        message: 'Send this generated result to the safety team so the model and provider output can be reviewed.',
+        confirmLabel: 'Report AI output',
+        destructive: true,
+      }).then(async (confirmed) => {
+        if (!confirmed) return;
+        try {
+          await api.reportGeneration(item.generationId!, {
+            reason: 'offensive_ai_output',
+            sourceSurface: 'generation-viewer',
+            details: 'Reported from the mobile generated-media viewer.',
+          });
+          haptic.success();
+          showMessageDialog({
+            title: 'Report received',
+            message: 'Thank you. The generated output was sent to the safety team.',
+          });
+        } catch (error) {
+          haptic.error();
+          showErrorDialog('Could not report AI output', error);
+        }
+      });
       return;
     }
     if (action === 'view-details') {

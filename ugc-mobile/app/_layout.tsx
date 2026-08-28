@@ -15,6 +15,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-url-polyfill/auto';
 
 import { ActionSheetHost } from '@/components/action-sheet';
+import { DialogHost } from '@/components/dialog';
 import { OnboardingServerSync } from '@/components/onboarding-server-sync';
 import { OverlayHost } from '@/components/overlay-host';
 import { setUpgradeRequiredHandler } from '@/lib/api-client';
@@ -117,6 +118,7 @@ function RootLayoutNav() {
                     Android. */}
                 <OverlayHost>
                 <ActionSheetHost />
+                <DialogHost />
                 <Stack
                 screenOptions={{
                   animation: reducedMotion ? 'none' : 'default',

@@ -4,32 +4,14 @@ import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
 import type { ImagePickerAsset } from 'expo-image-picker';
 import { Check, ChevronDown, ChevronRight, FileText, Globe2, ImageIcon, Link2, Lock, Package, Pencil, Play, Plus, Sparkles, Trash2, Upload, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import {
-  AccessibilityInfo,
-  ActivityIndicator,
-  Alert,
-  findNodeHandle,
-  Keyboard,
-  KeyboardAvoidingView,
-  Modal,
-  PanResponder,
-  Platform,
-  Pressable,
-  ScrollView,
-  Share,
-  Text,
-  TextInput,
-  useWindowDimensions,
-  View,
-  type GestureResponderEvent,
-  type TextInputProps,
-} from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, findNodeHandle, Keyboard, KeyboardAvoidingView, Modal, PanResponder, Platform, Pressable, ScrollView, Share, Text, TextInput, useWindowDimensions, View, type GestureResponderEvent, type TextInputProps } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppText, ChoiceChip, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
 import { ComposerMediaLightbox, getComposerMediaLabel } from '@/components/composer-media-lightbox';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
+import { showConfirmDialog } from '@/lib/dialog';
 import { showActionSheet } from '@/lib/action-sheet';
 import { StableMediaImage } from '@/components/media-preview';
 import { ApiError } from '@/lib/api-client';
@@ -3031,14 +3013,15 @@ export default function NewPostScreen() {
 
   const requestCloseResourceSheet = () => {
     if (isPickingResourceFile) {
-      Alert.alert(
-        'File upload in progress',
-        'Keep this resource editor open until the upload finishes, or cancel the upload first.',
-        [
-          { text: 'Keep uploading', style: 'cancel' },
-          { text: 'Cancel upload', style: 'destructive', onPress: cancelResourceFileUpload },
-        ],
-      );
+      void showConfirmDialog({
+        title: 'File upload in progress',
+        message: 'Keep this resource editor open until the upload finishes, or cancel the upload first.',
+        cancelLabel: 'Keep uploading',
+        confirmLabel: 'Cancel upload',
+        destructive: true,
+      }).then((cancelUpload) => {
+        if (cancelUpload) cancelResourceFileUpload();
+      });
       return;
     }
     if (resourceSheetMode !== 'editor' || !resourceEditorCard || !resourceEditorOriginal) {
@@ -3050,14 +3033,15 @@ export default function NewPostScreen() {
       clearResourceEditor();
       return;
     }
-    Alert.alert(
-      'Discard resource changes?',
-      'This resource has unsaved changes.',
-      [
-        { text: 'Keep editing', style: 'cancel' },
-        { text: 'Discard', style: 'destructive', onPress: clearResourceEditor },
-      ],
-    );
+    void showConfirmDialog({
+      title: 'Discard resource changes?',
+      message: 'This resource has unsaved changes.',
+      cancelLabel: 'Keep editing',
+      confirmLabel: 'Discard',
+      destructive: true,
+    }).then((discard) => {
+      if (discard) clearResourceEditor();
+    });
   };
 
   const saveResourceEditor = () => {

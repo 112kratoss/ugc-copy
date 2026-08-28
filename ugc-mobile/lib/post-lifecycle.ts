@@ -1,7 +1,6 @@
-import { Alert } from 'react-native';
-
 import { showActionSheet } from './action-sheet';
 import { ApiError, type MagicbookletApiClient } from './api-client';
+import { showConfirmDialog, showMessageDialog } from './dialog';
 import {
   getPostLifecycleConfirmation,
   type PostLifecycleConfirmation,
@@ -61,17 +60,13 @@ export function toPostLifecyclePost(input: {
   };
 }
 
-/** Native confirmation for a policy decision. */
+/** The app's confirmation, for a policy decision. */
 export function confirmPostLifecycleAction(confirmation: PostLifecycleConfirmation): Promise<boolean> {
-  return new Promise((resolve) => {
-    Alert.alert(confirmation.title, confirmation.message, [
-      { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-      {
-        text: confirmation.confirmLabel,
-        style: confirmation.tone === 'danger' ? 'destructive' : 'default',
-        onPress: () => resolve(true),
-      },
-    ], { cancelable: true, onDismiss: () => resolve(false) });
+  return showConfirmDialog({
+    title: confirmation.title,
+    message: confirmation.message,
+    confirmLabel: confirmation.confirmLabel,
+    destructive: confirmation.tone === 'danger',
   });
 }
 
@@ -109,7 +104,7 @@ export function describePostLifecycleError(error: unknown, fallback: string): st
 }
 
 function reportFailure(title: string, error: unknown, fallback: string) {
-  Alert.alert(title, describePostLifecycleError(error, fallback));
+  showMessageDialog({ title, message: describePostLifecycleError(error, fallback) });
 }
 
 export function isForceDeleteRequired(error: unknown): boolean {

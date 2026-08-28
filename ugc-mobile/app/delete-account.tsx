@@ -1,7 +1,7 @@
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Alert, Platform, View } from 'react-native';
+import { Platform, View } from 'react-native';
 
 import { AppText, AppTextInput, Card, PrimaryButton, SecondaryButton, SectionTitle, StatusBlock, Screen } from '@/components/ui';
 import {
@@ -9,6 +9,7 @@ import {
   useAuth,
   type AccountDeletionReauthentication,
 } from '@/lib/auth';
+import { showMessageDialog } from '@/lib/dialog';
 import { appTheme } from '@/lib/theme';
 
 export default function DeleteAccountScreen() {
@@ -28,11 +29,11 @@ export default function DeleteAccountScreen() {
       // Managing accounts: notify when deletion is finished — and then leave
       // deliberately, rather than stranding the alert over a screen whose
       // account no longer exists.
-      Alert.alert(
-        'Account deleted',
-        'Your Magicbooklet account and personal data were permanently deleted.',
-        [{ text: 'OK', onPress: () => router.replace('/' as never) }],
-      );
+      showMessageDialog({
+        title: 'Account deleted',
+        message: 'Your Magicbooklet account and personal data were permanently deleted.',
+        onDismiss: () => router.replace('/' as never),
+      });
     } catch (nextError) {
       if (isAccountReauthenticationRequired(nextError)) {
         setNeedsReauthentication(true);

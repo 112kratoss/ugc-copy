@@ -175,10 +175,66 @@ describe('HIG S15 — the way out and the way through', () => {
     // swipe-down discards it too — one guard covers the control, the gesture
     // and Android's hardware back.
     expect(screen).toContain('usePreventRemove(');
-    expect(screen).toContain("Alert.alert('Discard your changes?'");
-    expect(screen).toContain("style: 'destructive'");
-    expect(screen).toContain("text: 'Keep editing', style: 'cancel'");
+    expect(screen).toContain('showConfirmDialog({');
+    expect(screen).toContain("title: 'Discard your changes?'");
+    expect(screen).toContain("confirmLabel: 'Discard'");
+    expect(screen).toContain("cancelLabel: 'Keep editing'");
+    expect(screen).toContain('destructive: true');
     expect(file('app/_layout.tsx')).toContain('name="edit-profile" options={{ headerShown: false, presentation: \'modal\'');
+  });
+
+  it('leaves only on the answer that asked to leave', () => {
+    // The confirmation resolves false for Cancel *and* for every other way out,
+    // so the screen can treat "not true" as "stay" — an early build set
+    // `isLeaveAllowed` before reading the answer, which closed the modal with
+    // the edits gone and no confirmation at all.
+    const guard = screen.slice(
+      screen.indexOf('usePreventRemove('),
+      screen.indexOf('async function pickProfileImage')
+    );
+    expect(guard).toContain('if (!discard) return;');
+    expect(guard.indexOf('if (!discard) return;')).toBeLessThan(guard.indexOf('setIsLeaveAllowed(true)'));
+    // Dispatched on the next tick so `isLeaveAllowed` lands first, or the pop
+    // is intercepted a second time by the guard that is still armed.
+    expect(guard).toContain('setTimeout(() => navigation.dispatch(data.action), 0)');
+  });
+
+  it('asks the question in the same shape on both platforms', () => {
+    // Android's `Alert.alert` is Material's dialog — square, left-aligned, two
+    // upper-case text buttons in the corner — which beside the iOS build does
+    // not read as the same product (Design principles/Familiarity). iOS keeps
+    // the system alert, which is already this shape; Android gets a drawn one.
+    const dialog = file('lib/dialog.ts');
+    expect(dialog).toContain("const IS_IOS = optionalNativeExport(() => ReactNative.Platform.OS) === 'ios'");
+    expect(dialog).toContain('if (IS_IOS || !presenter) {');
+    expect(dialog).toContain("style: 'cancel'");
+    expect(dialog).toContain("style: request.destructive ? 'destructive' : 'default'");
+    // The platform check lives there and nowhere else, so no call site can
+    // drift into different copy or a different button order.
+    expect(screen).not.toContain('Alert.alert');
+    expect(screen).not.toContain('Platform.OS');
+  });
+
+  it('leaves the destructive answer unreachable by a stray tap', () => {
+    // Dialogs do not dismiss by tapping outside them on either platform, and
+    // one that did would answer a destructive question by accident. The scrim
+    // blocks touches without being pressable; Android's back key is claimed by
+    // the Modal and means the way out, never the discard.
+    const host = file('components/dialog.tsx');
+    const scrim = host.slice(host.indexOf('A plain view, not a Pressable'), host.indexOf('<MotionView'));
+    expect(scrim).not.toContain('<Pressable');
+    expect(host).toContain('onRequestClose={() => answer(false)}');
+  });
+
+  it('settles the promise every caller is holding, however the dialog closes', () => {
+    // A dialog that closed without settling would leave an
+    // `await showConfirmDialog(...)` pending for the life of the app, and the
+    // screen behind it held by a guard that never hears an answer.
+    const host = file('components/dialog.tsx');
+    const answer = host.slice(host.indexOf('const answer = ('), host.indexOf('return ('));
+    expect(answer).toContain('setPresentation(null)');
+    expect(answer).toContain('presentation.settle(confirmed)');
+    expect(file('lib/dialog.ts')).toContain('onDismiss: () => resolve(false)');
   });
 
   it('keeps the custom action sheet off routes it cannot appear over', () => {
