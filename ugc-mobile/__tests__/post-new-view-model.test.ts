@@ -26,6 +26,7 @@ import {
   getPublishableGenerations,
   hydratePostComposerResourceCards,
   migratePostComposerResourceDraftToCards,
+  sanitizePostComposerResourceCardIds,
   isPostComposerResourceCardReady,
   isTemplateGeneration,
   getPublishGenerationMediaKind,
@@ -874,6 +875,66 @@ describe('post new view model', () => {
     expect(buildPostResourceBundleInput(migrated)?.resources?.items?.[0]).toMatchObject({
       textContent: 'A protected prompt from an older saved draft.',
     });
+  });
+
+  it('reassigns duplicate card ids on a restored draft, preserving contents and order', () => {
+    // Observed on-device: an old build persisted two cards both reading `item-2`.
+    const restoredResource = {
+      ...getDefaultPostComposerDraft().resource,
+      accessMode: 'free' as const,
+      cards: [
+        createPostComposerResourceCard('prompt', {
+          id: 'item-2',
+          title: 'Lighting prompt',
+          textContent: 'Use a large softbox at camera left.',
+        }),
+        createPostComposerResourceCard('reference_media', {
+          id: 'item-2',
+          title: 'Reference stills',
+          attachments: [{ id: 'ref-1', kind: 'file' as const, label: 'still.jpg', storagePath: 'refs/still.jpg' }],
+        }),
+      ],
+    };
+
+    const sanitized = sanitizePostComposerResourceCardIds(restoredResource);
+
+    expect(sanitized.cards.map((card) => card.id)).toEqual(['item-2', 'restored-item-2-2']);
+    expect(sanitized.cards[0]).toMatchObject({
+      type: 'prompt',
+      title: 'Lighting prompt',
+      textContent: 'Use a large softbox at camera left.',
+    });
+    expect(sanitized.cards[1]).toMatchObject({
+      type: 'reference_media',
+      title: 'Reference stills',
+      attachments: [{ id: 'ref-1', label: 'still.jpg' }],
+    });
+  });
+
+  it('never reassigns onto an id the draft already uses, and leaves clean drafts untouched', () => {
+    const cleanResource = {
+      ...getDefaultPostComposerDraft().resource,
+      cards: [
+        createPostComposerResourceCard('prompt', { id: 'item-1' }),
+        createPostComposerResourceCard('guide', { id: 'item-2' }),
+      ],
+    };
+    expect(sanitizePostComposerResourceCardIds(cleanResource)).toBe(cleanResource);
+
+    const crowdedResource = {
+      ...getDefaultPostComposerDraft().resource,
+      cards: [
+        createPostComposerResourceCard('prompt', { id: 'item-2' }),
+        createPostComposerResourceCard('guide', { id: 'item-2' }),
+        createPostComposerResourceCard('guide', { id: 'item-2' }),
+        // A later card already holding the first reassignment candidate.
+        createPostComposerResourceCard('other', { id: 'restored-item-2-2' }),
+      ],
+    };
+
+    const ids = sanitizePostComposerResourceCardIds(crowdedResource).cards.map((card) => card.id);
+    expect(ids).toEqual(['item-2', 'restored-item-2-3', 'restored-item-2-4', 'restored-item-2-2']);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it('requires the author-written package preview instead of accepting a generated fallback', () => {

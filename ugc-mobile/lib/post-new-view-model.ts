@@ -1342,6 +1342,44 @@ export function migratePostComposerResourceDraftToCards(
   };
 }
 
+/**
+ * Drafts persisted by older builds can carry resource cards with colliding ids
+ * (the pre-namespacing hydration bug saved two cards both reading `item-2`).
+ * A card id is the React list key, the target edit/remove handlers resolve, and
+ * the sectionId the save path writes — so duplicates misdirect edits and would
+ * merge both cards into one stored section. The first occurrence keeps its id
+ * because a card standing for a stored section writes that id back on save;
+ * later duplicates move to a `restored-` id, namespaced like `hydrated-` ids so
+ * a reassignment cannot collide with a stored section or item-derived id.
+ */
+export function sanitizePostComposerResourceCardIds(
+  resource: PostComposerResourceDraft,
+): PostComposerResourceDraft {
+  const cards = resource.cards ?? [];
+  const originalIds = new Set(cards.map((card) => card.id));
+  const claimedIds = new Set<string>();
+  let reassigned = false;
+
+  const sanitized = cards.map((card) => {
+    if (!claimedIds.has(card.id)) {
+      claimedIds.add(card.id);
+      return card;
+    }
+
+    let occurrence = 2;
+    let candidateId = `restored-${card.id}-${occurrence}`;
+    while (originalIds.has(candidateId) || claimedIds.has(candidateId)) {
+      occurrence += 1;
+      candidateId = `restored-${card.id}-${occurrence}`;
+    }
+    claimedIds.add(candidateId);
+    reassigned = true;
+    return { ...card, id: candidateId };
+  });
+
+  return reassigned ? { ...resource, cards: sanitized } : resource;
+}
+
 export function getPostComposerPreviewStatusLabel(
   draft: PostComposerDraft,
   selectedGeneration?: GenerationListItem | null

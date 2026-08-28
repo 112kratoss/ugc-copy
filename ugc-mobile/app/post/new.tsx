@@ -83,6 +83,7 @@ import {
   hydratePostComposerAllowRemix,
   hydratePostComposerResourceCards,
   migratePostComposerResourceDraftToCards,
+  sanitizePostComposerResourceCardIds,
   isTemplateGeneration,
   isPostComposerResourceCardReady,
   POST_COMPOSER_CATEGORY_OPTIONS,
@@ -2057,7 +2058,11 @@ export default function NewPostScreen() {
       if (persisted) {
         const restoredDraft: PostComposerDraft = {
           ...persisted.draft,
-          resource: migratePostComposerResourceDraftToCards(persisted.draft.resource),
+          // Drafts saved by older builds can carry duplicate card ids; dedupe
+          // them before they become React keys and edit/remove targets.
+          resource: sanitizePostComposerResourceCardIds(
+            migratePostComposerResourceDraftToCards(persisted.draft.resource),
+          ),
         };
         const details = getPostComposerDetailErrors(restoredDraft, { grandfatheredTitle: initialTitleRef.current });
         const canOpenReview = Object.keys(details).length === 0;
