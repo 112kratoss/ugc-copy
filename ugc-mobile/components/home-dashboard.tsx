@@ -15,19 +15,7 @@ import {
   WandSparkles,
 } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import {
-  AccessibilityInfo,
-  ActivityIndicator,
-  Alert,
-  Linking,
-  Pressable,
-  RefreshControl,
-  Share,
-  Text,
-  useWindowDimensions,
-  View,
-  type ViewStyle,
-} from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Linking, Pressable, RefreshControl, Share, Text, useWindowDimensions, View, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CommentsSheet } from '@/components/comments-sheet';
@@ -69,6 +57,7 @@ import {
 import { getOwnerPostSalesSummary } from '@/lib/home-view-model';
 import { immersiveViewerHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
 import { SHOWCASE_DRAW_DISTANCE, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS } from '@/lib/media-performance';
+import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
 import { MotionView, usePressMotion, useReducedMotion } from '@/lib/motion';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
@@ -102,6 +91,7 @@ import {
   type ShowcaseFeedPageParam,
 } from '@/lib/showcase-feed-query';
 import { formatCreditAmount } from '@/lib/pricing';
+import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type {
@@ -259,7 +249,12 @@ export function HomeDashboard() {
     if (!isFocused) void flushShowcaseFeedEvents();
   }, [isFocused]);
 
+  // Tints the dock from the card nearest it, and hands the neutral dock back
+  // when this screen blurs so a tab with no media of its own inherits it.
+  const reportAmbientMedia = useTabBarAmbientFeed(isFocused);
+
   const onPlaybackViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<HomeFeedCard>> }) => {
+    reportAmbientMedia({ viewableItems });
     const visibleItems = viewableItems
       .filter((token) => token.isViewable && token.item)
       .map((token) => token.item.item);
@@ -269,7 +264,7 @@ export function HomeDashboard() {
         ? current
         : nextVideoIds
     ));
-  }, []);
+  }, [reportAmbientMedia]);
 
   const onQualifiedViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<HomeFeedCard>> }) => {
     if (!feedEventRuntimeRef.current.isFocused) return;
@@ -519,17 +514,24 @@ export function HomeDashboard() {
         router.push(href as never);
       } else if (result.redirectTo) {
         const webUrl = `${env.siteUrl}${result.redirectTo}`;
-        Alert.alert(REMIX_NEEDS_WEB_TITLE, REMIX_NEEDS_WEB_BODY, [
-          { text: 'Not now', style: 'cancel' },
-          { text: 'Open web', onPress: () => { void Linking.openURL(webUrl); } },
-        ]);
+        void showConfirmDialog({
+          title: REMIX_NEEDS_WEB_TITLE,
+          message: REMIX_NEEDS_WEB_BODY,
+          cancelLabel: 'Not now',
+          confirmLabel: 'Open web',
+        }).then((openWeb) => {
+          if (openWeb) void Linking.openURL(webUrl);
+        });
       } else {
         haptic.error();
-        Alert.alert('Could not start remix', 'This post cannot be opened in the creator tools right now.');
+        showMessageDialog({
+          title: 'Could not start remix',
+          message: 'This post cannot be opened in the creator tools right now.',
+        });
       }
     } catch (error) {
       haptic.error();
-      Alert.alert('Could not start remix', error instanceof Error ? error.message : 'Please try again.');
+      showErrorDialog('Could not start remix', error);
     } finally {
       setRemixingItemId(null);
     }
@@ -575,7 +577,10 @@ export function HomeDashboard() {
           queryClient.setQueryData(cachedQueryKey, cachedData);
         });
         haptic.error();
-        Alert.alert('Couldn’t update your feed', 'The post was restored. Check your connection and try again.');
+        showMessageDialog({
+          title: 'Couldn’t update your feed',
+          message: 'The post was restored. Check your connection and try again.',
+        });
       });
   };
 
@@ -590,33 +595,28 @@ export function HomeDashboard() {
     const item = feedbackItem;
     if (!item || !requireModerationSignIn()) return;
     setFeedbackItem(null);
-    Alert.alert(
-      'Report content?',
-      'Magicbooklet will send this post to the moderation team for a safety review.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Report content',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await api.reportPost(item.id, {
-                reason: 'unsafe_content',
-                details: 'Reported from the mobile home feed.',
-              });
-              queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
-                { queryKey: viewerFeedQueryKey },
-                (current) => removeShowcaseFeedItemsFromInfiniteData(current, { postId: item.id })
-              );
-              void AccessibilityInfo.announceForAccessibility('Content reported and removed from your feed.');
-            } catch (error) {
-              haptic.error();
-              Alert.alert('Could not report content', error instanceof Error ? error.message : 'Please try again.');
-            }
-          },
-        },
-      ]
-    );
+    void showConfirmDialog({
+      title: 'Report content?',
+      message: 'Magicbooklet will send this post to the moderation team for a safety review.',
+      confirmLabel: 'Report content',
+      destructive: true,
+    }).then(async (confirmed) => {
+      if (!confirmed) return;
+      try {
+        await api.reportPost(item.id, {
+          reason: 'unsafe_content',
+          details: 'Reported from the mobile home feed.',
+        });
+        queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
+          { queryKey: viewerFeedQueryKey },
+          (current) => removeShowcaseFeedItemsFromInfiniteData(current, { postId: item.id })
+        );
+        void AccessibilityInfo.announceForAccessibility('Content reported and removed from your feed.');
+      } catch (error) {
+        haptic.error();
+        showErrorDialog('Could not report content', error);
+      }
+    });
   };
 
   const reportFeedbackUser = () => {
@@ -624,26 +624,21 @@ export function HomeDashboard() {
     if (!item?.creator.id || !requireModerationSignIn()) return;
     const creatorId = item.creator.id;
     setFeedbackItem(null);
-    Alert.alert(
-      'Report this creator?',
-      'Our moderation team will review their recent activity.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Report user',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await api.reportUser(creatorId, { reason: 'harassment', sourceSurface: 'showcase' });
-              void AccessibilityInfo.announceForAccessibility('Creator reported.');
-            } catch (error) {
-              haptic.error();
-              Alert.alert('Could not report user', error instanceof Error ? error.message : 'Please try again.');
-            }
-          },
-        },
-      ]
-    );
+    void showConfirmDialog({
+      title: 'Report this creator?',
+      message: 'Our moderation team will review their recent activity.',
+      confirmLabel: 'Report user',
+      destructive: true,
+    }).then(async (confirmed) => {
+      if (!confirmed) return;
+      try {
+        await api.reportUser(creatorId, { reason: 'harassment', sourceSurface: 'showcase' });
+        void AccessibilityInfo.announceForAccessibility('Creator reported.');
+      } catch (error) {
+        haptic.error();
+        showErrorDialog('Could not report user', error);
+      }
+    });
   };
 
   const blockFeedbackUser = () => {
@@ -651,30 +646,25 @@ export function HomeDashboard() {
     if (!item?.creator.id || !requireModerationSignIn()) return;
     const creatorId = item.creator.id;
     setFeedbackItem(null);
-    Alert.alert(
-      'Block this creator?',
-      'You will stop seeing their posts and neither of you can follow the other.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Block',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await api.blockUser(creatorId);
-              queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
-                { queryKey: viewerFeedQueryKey },
-                (current) => removeShowcaseFeedItemsFromInfiniteData(current, { creatorId })
-              );
-              void AccessibilityInfo.announceForAccessibility('Creator blocked.');
-            } catch (error) {
-              haptic.error();
-              Alert.alert('Could not block user', error instanceof Error ? error.message : 'Please try again.');
-            }
-          },
-        },
-      ]
-    );
+    void showConfirmDialog({
+      title: 'Block this creator?',
+      message: 'You will stop seeing their posts and neither of you can follow the other.',
+      confirmLabel: 'Block',
+      destructive: true,
+    }).then(async (confirmed) => {
+      if (!confirmed) return;
+      try {
+        await api.blockUser(creatorId);
+        queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
+          { queryKey: viewerFeedQueryKey },
+          (current) => removeShowcaseFeedItemsFromInfiniteData(current, { creatorId })
+        );
+        void AccessibilityInfo.announceForAccessibility('Creator blocked.');
+      } catch (error) {
+        haptic.error();
+        showErrorDialog('Could not block user', error);
+      }
+    });
   };
 
   const renderCard: ListRenderItem<HomeFeedCard> = useCallback(({ item: card, index }) => (
@@ -733,7 +723,10 @@ export function HomeDashboard() {
         showsVerticalScrollIndicator={false}
         viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
         contentInsetAdjustmentBehavior="never"
-        contentContainerStyle={{ paddingTop: topInset, paddingBottom: tabBarMetrics.contentBottomOverlapPadding + 24 }}
+        // Home cards end in real controls and resource banners. Reserve the
+        // raised Create button as well as the pill so the last card can always
+        // scroll completely above the navigation hit area.
+        contentContainerStyle={{ paddingTop: topInset, paddingBottom: tabBarMetrics.contentBottomPadding + 24 }}
         ListHeaderComponent={(
           <View style={{ gap: 18, paddingTop: 10, paddingBottom: 6 }}>
             <View style={{ paddingHorizontal: horizontalPadding }}>

@@ -212,6 +212,34 @@ describe('HIG modality — sheets, alerts and the way out', () => {
     expect(editProfile).toContain('<CloseGlyph');
   });
 
+  it('asks every question through the app\u2019s own dialog, not the system one', () => {
+    /**
+     * `Alert.alert` is two surfaces wearing one name: iOS draws the dark card
+     * with capsule buttons this app wants, Android draws Material's dialog —
+     * square, left-aligned, upper-case buttons in the corner. Side by side the
+     * builds stopped reading as the same product (Design principles:
+     * "once you establish a behavior or appearance for an element, apply it
+     * throughout"). `lib/dialog` owns that difference now, so a new call site
+     * cannot reintroduce the generic box by reaching for `Alert` directly.
+     */
+    const callers = files
+      .filter(({ source }) => /\bAlert\.alert\(/.test(source))
+      .map(({ name }) => name);
+
+    // `lib/action-sheet` keeps one: the degradation when no `ActionSheetHost`
+    // is mounted, which only happens in a focused component test — and a sheet
+    // can carry more buttons than a dialog has room for.
+    expect(callers).toEqual(['lib/action-sheet.ts']);
+  });
+
+  it('mounts the one host every dialog is drawn by', () => {
+    // Without it `showConfirmDialog` silently degrades to the system dialog on
+    // Android, which is the thing this whole split exists to stop.
+    const layout = file('app/_layout.tsx');
+    expect(layout).toContain("import { DialogHost } from '@/components/dialog'");
+    expect(layout).toContain('<DialogHost />');
+  });
+
   it('leaves no menu or picker built out of an alert', () => {
     // The three that were: comment options, the visibility picker, and leaving
     // the composer with unsaved work.

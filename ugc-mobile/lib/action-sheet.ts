@@ -12,9 +12,12 @@ import { Alert } from 'react-native';
  * exact case Action sheets names ("when people cancel the message they're
  * editing in Mail ... an action sheet provides two choices").
  *
- * Alerts stay `Alert.alert`: confirming one destructive action is what the
- * Alerts chapter is for, and the system dialog keeps each platform's own button
- * order, which a custom one would not (decision D2).
+ * Alerts are the other half of that split and live in `lib/dialog` — one
+ * destructive confirmation, or one notice, is what the Alerts chapter is for.
+ * They stopped being `Alert.alert` because Android draws that as Material's
+ * dialog, which does not read as the same product as the iOS one; see that
+ * module. The fallback below stays a system alert on purpose: it fires only
+ * when no host is mounted, and a sheet can carry more buttons than a dialog.
  *
  * Split from the surface that draws it (`components/action-sheet.tsx`) so a
  * renderless module like `post-lifecycle` can present one without importing

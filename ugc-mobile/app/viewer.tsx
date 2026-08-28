@@ -7,7 +7,7 @@ import { useVideoPlayer } from 'expo-video';
 import { Copy, FileText, Globe, Heart, ImageOff, Images, Lock, LockKeyhole, MessageCircle, MoreHorizontal, Play, Repeat2, Volume2, VolumeX, Wand2 } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { cloneElement, useCallback, useEffect, useId, useMemo, useRef, useState, type MutableRefObject, type ReactElement } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Alert, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
@@ -56,6 +56,7 @@ import {
   readCachedProfile,
 } from '@/lib/immersive-preview-source-data';
 import { getProfileHandle } from '@/lib/profile-view-model';
+import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
 import { useReducedMotion } from '@/lib/motion';
 import {
@@ -572,15 +573,19 @@ export default function ImmersivePreviewViewerScreen() {
         if (response.redirectTo) {
           // Leaving the app is the viewer's call, not a silent hand-off.
           const webUrl = `${env.siteUrl}${response.redirectTo}`;
-          Alert.alert(REMIX_NEEDS_WEB_TITLE, REMIX_NEEDS_WEB_BODY, [
-            { text: 'Not now', style: 'cancel' },
-            { text: 'Open web', onPress: () => { void Linking.openURL(webUrl); } },
-          ]);
+          void showConfirmDialog({
+            title: REMIX_NEEDS_WEB_TITLE,
+            message: REMIX_NEEDS_WEB_BODY,
+            cancelLabel: 'Not now',
+            confirmLabel: 'Open web',
+          }).then((openWeb) => {
+            if (openWeb) void Linking.openURL(webUrl);
+          });
           return;
         }
       } catch (error) {
         haptic.error();
-        Alert.alert('Could not start remix', error instanceof Error ? error.message : 'Please try again.');
+        showErrorDialog('Could not start remix', error);
         return;
       } finally {
         setRemixingItemId(null);
@@ -707,10 +712,10 @@ export default function ImmersivePreviewViewerScreen() {
           queryClient.setQueryData(cachedQueryKey, cachedData);
         });
         setActiveIndex(previousActiveIndex);
-        Alert.alert(
-          'Couldn’t update your Showcase',
-          'The post was restored. Check your connection and try again.'
-        );
+        showMessageDialog({
+          title: 'Couldn’t update your Showcase',
+          message: 'The post was restored. Check your connection and try again.',
+        });
         void AccessibilityInfo.announceForAccessibility(
           'Couldn’t update your Showcase. The post was restored.'
         );

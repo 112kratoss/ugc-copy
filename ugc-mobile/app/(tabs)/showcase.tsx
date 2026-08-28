@@ -5,16 +5,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { ImageIcon, MoreVertical, Play, RefreshCw, X } from 'lucide-react-native';
 import { useIsFocused, useScrollToTop } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  AccessibilityInfo,
-  Alert,
-  Pressable,
-  ScrollView,
-  Text,
-  useWindowDimensions,
-  View,
-} from 'react-native';
+import { ActivityIndicator, AccessibilityInfo, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
@@ -33,6 +24,7 @@ import { useAuth } from '@/lib/auth';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
+import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
 import { createSerializedImageLoader } from '@/lib/serialized-image-loader';
 import { isShowcaseCoverVideoStreaming, isShowcaseVideoPreviewCandidate } from '@/lib/showcase-display';
 import {
@@ -89,6 +81,7 @@ import { SHOWCASE_DRAW_DISTANCE, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS } from '@/li
 import { getShowcasePreviewMediaItems, hasShowcasePreviewMedia } from '@/lib/showcase-media';
 import { Reveal } from '@/components/reveal';
 import { SkeletonBone } from '@/components/skeleton';
+import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
 import { MotionView, usePressMotion, useReducedMotion } from '@/lib/motion';
 import { accentColor, appTheme } from '@/lib/theme';
@@ -306,9 +299,14 @@ export default function ShowcaseScreen() {
     }, SHOWCASE_ASPECT_RATIO_FLUSH_MS);
   }, [applyAspectRatios]);
 
+  // Tints the dock from the card nearest it, and hands the neutral dock back on
+  // blur so a tab with no media of its own inherits it.
+  const reportAmbientMedia = useTabBarAmbientFeed(isFocused);
+
   const onPlaybackViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<ShowcaseMasonryCard>> }) => {
+    reportAmbientMedia({ viewableItems });
     dispatchActivation({ type: 'viewableItemsChanged', items: getVisibleCardItems(viewableItems) });
-  }, [dispatchActivation]);
+  }, [dispatchActivation, reportAmbientMedia]);
   const onQualifiedViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<ShowcaseMasonryCard>> }) => {
     if (!feedEventRuntimeRef.current.isFocused) return;
     for (const token of viewableItems) {
@@ -554,10 +552,10 @@ export default function ShowcaseScreen() {
         cachedFeeds.forEach(([cachedQueryKey, cachedData]) => {
           queryClient.setQueryData(cachedQueryKey, cachedData);
         });
-        Alert.alert(
-          'Couldn’t update your Showcase',
-          'The post was restored. Check your connection and try again.'
-        );
+        showMessageDialog({
+          title: 'Couldn’t update your Showcase',
+          message: 'The post was restored. Check your connection and try again.',
+        });
         void AccessibilityInfo.announceForAccessibility(
           'Couldn’t update your Showcase. The post was restored.'
         );
@@ -578,63 +576,53 @@ export default function ShowcaseScreen() {
     const item = feedbackItem;
     if (!item || !requireModerationSignIn()) return;
     setFeedbackItem(null);
-    Alert.alert(
-      'Report content?',
-      'Magicbooklet will send this post to the moderation team for a safety review.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Report content',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await api.reportPost(item.id, {
-                reason: 'unsafe_content',
-                details: 'Reported from the mobile Showcase.',
-              });
-              queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
-                { queryKey: viewerFeedQueryKey },
-                (current) => removeShowcaseFeedItemsFromInfiniteData(current, { postId: item.id })
-              );
-              void AccessibilityInfo.announceForAccessibility('Content reported and removed from your Showcase.');
-            } catch (error) {
-              haptic.error();
-              Alert.alert('Could not report content', error instanceof Error ? error.message : 'Please try again.');
-            }
-          },
-        },
-      ]
-    );
+    void showConfirmDialog({
+      title: 'Report content?',
+      message: 'Magicbooklet will send this post to the moderation team for a safety review.',
+      confirmLabel: 'Report content',
+      destructive: true,
+    }).then(async (confirmed) => {
+      if (!confirmed) return;
+      try {
+        await api.reportPost(item.id, {
+          reason: 'unsafe_content',
+          details: 'Reported from the mobile Showcase.',
+        });
+        queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
+          { queryKey: viewerFeedQueryKey },
+          (current) => removeShowcaseFeedItemsFromInfiniteData(current, { postId: item.id })
+        );
+        void AccessibilityInfo.announceForAccessibility('Content reported and removed from your Showcase.');
+      } catch (error) {
+        haptic.error();
+        showErrorDialog('Could not report content', error);
+      }
+    });
   };
 
   const reportFeedbackUser = () => {
     const item = feedbackItem;
     if (!item?.creator.id || item.creator.id === user?.id || !requireModerationSignIn()) return;
     setFeedbackItem(null);
-    Alert.alert(
-      'Report user?',
-      `Magicbooklet will review ${formatCreatorLabel(item.creator.username || item.creator.name)} for unsafe or abusive behavior.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Report user',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await api.reportUser(item.creator.id!, {
-                reason: 'unsafe_content',
-                sourceSurface: 'showcase',
-                details: `Reported from post ${item.id}.`,
-              });
-              void AccessibilityInfo.announceForAccessibility('User reported to the moderation team.');
-            } catch (error) {
-              haptic.error();
-              Alert.alert('Could not report user', error instanceof Error ? error.message : 'Please try again.');
-            }
-          },
-        },
-      ]
-    );
+    void showConfirmDialog({
+      title: 'Report user?',
+      message: `Magicbooklet will review ${formatCreatorLabel(item.creator.username || item.creator.name)} for unsafe or abusive behavior.`,
+      confirmLabel: 'Report user',
+      destructive: true,
+    }).then(async (confirmed) => {
+      if (!confirmed) return;
+      try {
+        await api.reportUser(item.creator.id!, {
+          reason: 'unsafe_content',
+          sourceSurface: 'showcase',
+          details: `Reported from post ${item.id}.`,
+        });
+        void AccessibilityInfo.announceForAccessibility('User reported to the moderation team.');
+      } catch (error) {
+        haptic.error();
+        showErrorDialog('Could not report user', error);
+      }
+    });
   };
 
   const blockFeedbackUser = () => {
@@ -643,34 +631,29 @@ export default function ShowcaseScreen() {
     setFeedbackItem(null);
     const creatorId = item.creator.id;
     const creatorLabel = formatCreatorLabel(item.creator.username || item.creator.name);
-    Alert.alert(
-      `Block ${creatorLabel}?`,
-      'Their posts will be hidden, and neither of you will be able to follow the other.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Block user',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await api.blockUser(creatorId);
-              queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
-                { queryKey: viewerFeedQueryKey },
-                (current) => removeShowcaseFeedItemsFromInfiniteData(current, { creatorId })
-              );
-              await Promise.all([
-                queryClient.invalidateQueries({ queryKey: ['creator-profile'] }),
-                queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] }),
-              ]);
-              void AccessibilityInfo.announceForAccessibility(`${creatorLabel} blocked.`);
-            } catch (error) {
-              haptic.error();
-              Alert.alert('Could not block user', error instanceof Error ? error.message : 'Please try again.');
-            }
-          },
-        },
-      ]
-    );
+    void showConfirmDialog({
+      title: `Block ${creatorLabel}?`,
+      message: 'Their posts will be hidden, and neither of you will be able to follow the other.',
+      confirmLabel: 'Block user',
+      destructive: true,
+    }).then(async (confirmed) => {
+      if (!confirmed) return;
+      try {
+        await api.blockUser(creatorId);
+        queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
+          { queryKey: viewerFeedQueryKey },
+          (current) => removeShowcaseFeedItemsFromInfiniteData(current, { creatorId })
+        );
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['creator-profile'] }),
+          queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] }),
+        ]);
+        void AccessibilityInfo.announceForAccessibility(`${creatorLabel} blocked.`);
+      } catch (error) {
+        haptic.error();
+        showErrorDialog('Could not block user', error);
+      }
+    });
   };
 
   const openCreator = (item: ShowcaseFeedItem) => {

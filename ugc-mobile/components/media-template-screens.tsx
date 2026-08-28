@@ -16,14 +16,7 @@ import {
   Video,
 } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  AppState,
-  Linking,
-  Pressable,
-  View,
-} from 'react-native';
+import { ActivityIndicator, AppState, Linking, Pressable, View } from 'react-native';
 
 import { MediaPreview } from '@/components/media-preview';
 import {
@@ -37,6 +30,7 @@ import {
   SectionHeader,
   StatusBlock,
 } from '@/components/ui';
+import { showConfirmDialog } from '@/lib/dialog';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import {
@@ -521,10 +515,19 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
             <SecondaryButton
               label="Cancel creation"
               disabled={cancelMutation.isPending}
-              onPress={() => Alert.alert('Cancel this creation?', 'Completed steps remain in your creation history.', [
-                { text: 'Keep creating', style: 'cancel' },
-                { text: 'Cancel creation', style: 'destructive', onPress: () => cancelMutation.mutate() },
-              ])}
+              onPress={() => {
+                void showConfirmDialog({
+                  title: 'Cancel this creation?',
+                  message: 'Completed steps remain in your creation history.',
+                  // The control that opened this is itself named Cancel, so a
+                  // Cancel meaning *stay* would reverse itself (ledger DV8).
+                  cancelLabel: 'Keep creating',
+                  confirmLabel: 'Cancel creation',
+                  destructive: true,
+                }).then((cancel) => {
+                  if (cancel) cancelMutation.mutate();
+                });
+              }}
             />
           ) : null}
         </>
@@ -759,20 +762,24 @@ function RunStepCard({
       && step.estimatedRetryCredits !== null
       && credits < step.estimatedRetryCredits
     ) {
-      Alert.alert(
-        'More credits needed',
-        `This retry costs ${step.estimatedRetryCredits} credits and your balance is ${formatCreditAmount(credits)}.`,
-        [
-          { text: 'Not now', style: 'cancel' },
-          { text: 'Get credits', onPress: () => router.push('/pricing' as never) },
-        ],
-      );
+      void showConfirmDialog({
+        title: 'More credits needed',
+        message: `This retry costs ${step.estimatedRetryCredits} credits and your balance is ${formatCreditAmount(credits)}.`,
+        cancelLabel: 'Not now',
+        confirmLabel: 'Get credits',
+      }).then((topUp) => {
+        if (topUp) router.push('/pricing' as never);
+      });
       return;
     }
-    Alert.alert(`Retry ${step.label.toLowerCase()}?`, `This regenerates only this branch at ${cost}.${balance}`, [
-      { text: 'Keep this result', style: 'cancel' },
-      { text: 'Retry', onPress: onRetry },
-    ]);
+    void showConfirmDialog({
+      title: `Retry ${step.label.toLowerCase()}?`,
+      message: `This regenerates only this branch at ${cost}.${balance}`,
+      cancelLabel: 'Keep this result',
+      confirmLabel: 'Retry',
+    }).then((retry) => {
+      if (retry) onRetry();
+    });
   };
   const statusLabel = successful ? (step.kind === 'approval' ? 'Approved' : 'Complete')
     : awaitingApproval ? 'Review'

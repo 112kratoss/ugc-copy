@@ -367,19 +367,22 @@ describe('ViewerActionSheet permanent delete', () => {
     expect(alertState.alert).toHaveBeenLastCalledWith(
       'Report content?',
       expect.stringContaining('moderation team'),
-      expect.any(Array)
+      expect.any(Array),
+      expect.any(Object)
     );
     renderer.act(() => findPressableByAccessibilityLabel(tree!.root, 'Report user').props.onPress());
     expect(alertState.alert).toHaveBeenLastCalledWith(
       'Report user?',
       expect.stringContaining('@unsafe'),
-      expect.any(Array)
+      expect.any(Array),
+      expect.any(Object)
     );
     renderer.act(() => findPressableByAccessibilityLabel(tree!.root, 'Block user').props.onPress());
     expect(alertState.alert).toHaveBeenLastCalledWith(
       'Block @unsafe?',
       expect.stringContaining('follow'),
-      expect.any(Array)
+      expect.any(Array),
+      expect.any(Object)
     );
   });
 

@@ -120,24 +120,32 @@ describe('marketplace trust helpers', () => {
     },
   );
 
-  it('uses one readiness rule for public posts and a stronger seller rule for unlocks', () => {
+  it('uses one public readiness rule everywhere and never requires an avatar', () => {
     expect(getCreatorPublishReadinessError({
       username: 'creator-a1b2c3d4',
       displayName: 'Launch Maker',
       avatarUrl: 'https://cdn.example.com/avatar.jpg',
-    }, { requiresAvatar: false })).toMatch(/custom handle/i);
+    })).toMatch(/custom handle/i);
 
     expect(getCreatorPublishReadinessError({
       username: 'launchmaker',
       displayName: 'Launch Maker',
       avatarUrl: null,
-    }, { requiresAvatar: false })).toBeNull();
+    })).toBeNull();
+  });
 
-    expect(getCreatorPublishReadinessError({
-      username: 'launchmaker',
-      displayName: 'Launch Maker',
-      avatarUrl: null,
-    }, { requiresAvatar: true })).toMatch(/profile photo/i);
+  it('keeps avatar-less sellers eligible for the marketplace directory', () => {
+    const assessment = assessMarketplaceListingQuality({
+      ...promptListingInput(),
+      resources: {
+        promptText: 'Write a direct product hook with one visual proof point and a short CTA.',
+        attachments: [],
+        allowRemix: false,
+      },
+      seller: { username: 'launchmaker', name: 'Launch Maker', avatarUrl: null },
+    });
+
+    expect(assessment.eligible).toBe(true);
   });
 
   it('accepts useful prompt, workflow, file, notes, and remix listings', () => {

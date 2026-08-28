@@ -522,7 +522,7 @@ describe('PublishToShowcaseModal', () => {
     });
   });
 
-  it('escalates to the seller profile gate only when the recipe is paid', async () => {
+  it('does not require a seller avatar to publish a paid recipe', async () => {
     vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => new Response(
       JSON.stringify(String(url) === '/api/profile'
         ? {
@@ -554,11 +554,19 @@ describe('PublishToShowcaseModal', () => {
     await screen.findByText(/ready for public publishing/i);
     fireEvent.click(screen.getByRole('radio', { name: 'Paid' }));
 
-    expect(await screen.findByText(/seller profile needs attention/i)).toBeInTheDocument();
+    // A missing profile photo never blocks publishing — paid recipes use the
+    // same public gate (handle + display name) as everything else.
+    expect(screen.getByText(/ready for public publishing/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/profile photo/i);
-    expect(vi.mocked(fetch).mock.calls.some(([url]) => url === '/api/showcase/publish')).toBe(false);
+
+    await waitFor(() => {
+      expect(vi.mocked(fetch).mock.calls.some(([url]) => url === '/api/showcase/publish')).toBe(true);
+    });
+
+    expect(JSON.parse(String(getPublishRequest().body))).toMatchObject({
+      resourceBundle: { accessMode: 'paid' },
+    });
   });
 
   it('keeps saved generation references private for media-only publishing', async () => {

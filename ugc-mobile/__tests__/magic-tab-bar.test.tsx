@@ -40,11 +40,6 @@ vi.mock('react-native', () => ({
   },
 }));
 
-vi.mock('expo-blur', () => ({
-  BlurView: ({ children, ...props }: MockProps) =>
-    React.createElement('blur-view', props, children),
-}));
-
 vi.mock('expo-glass-effect', () => ({
   GlassView: ({ children, ...props }: MockProps) =>
     React.createElement('glass-view', props, children),
@@ -163,6 +158,43 @@ async function renderTabBarAsync(activeIndex = 0, options: { hidden?: boolean } 
   return result!;
 }
 
+/**
+ * Alpha of the frost lift inside a translucent surface. Identified by its
+ * geometry — a full-bleed absolute fill — rather than by its colour or its
+ * position among the children, so it stays findable when the palette moves.
+ * The badge oval is absolute too but insets itself, which is what the
+ * four-sided check rules out.
+ */
+function frostLiftAlpha(surface: renderer.ReactTestInstance) {
+  const lift = surface.findByProps({ testID: 'tab-bar-frost-lift' });
+
+  const color = (lift.props.style as Record<string, unknown>).backgroundColor as string;
+  return Number(/rgba\([^)]*,\s*([\d.]+)\)/.exec(color)?.[1]);
+}
+
+function adaptiveFallbacks(tree: ReturnType<typeof renderer.create>) {
+  // Host elements only: the react-native mock renders each primitive through a
+  // function component, so matching on the testID alone counts every surface twice.
+  return tree.root.findAll(
+    (node) => String(node.type) === 'view' && node.props.testID === 'tab-bar-adaptive-surface'
+  );
+}
+
+/**
+ * The dock's colour lives on two stacked opaque layers rather than on one fill:
+ * the outgoing colour paints the surface and the incoming one fades in over it.
+ * Reading both is how a test can tell "the bar is this colour" apart from "the
+ * bar is mid-transition", which a single `backgroundColor` could not express.
+ */
+function adaptiveLayers(tree: ReturnType<typeof renderer.create>) {
+  const [surface] = adaptiveFallbacks(tree);
+  const incoming = surface.findByProps({ testID: 'tab-bar-adaptive-fill' });
+  return {
+    outgoing: (surface.props.style as Record<string, unknown>).backgroundColor as string,
+    incoming: (incoming.props.style as Record<string, unknown>).backgroundColor as string,
+  };
+}
+
 describe('MagicTabBar', () => {
   beforeEach(() => {
     routerState.push.mockClear();
@@ -171,13 +203,10 @@ describe('MagicTabBar', () => {
     badgeValue = null;
   });
 
-  it('hides by going invisible and inert, never by unmounting the blur surface', async () => {
+  it('hides by going invisible and inert without changing the surface tree', async () => {
     const { tree } = await renderTabBarAsync(0, { hidden: true });
 
-    // The blur surface must survive hiding: remounting it mid tab-fade is the
-    // Android RenderNode-cycle crash. Invisibility comes from opacity, and
-    // inertness from pointerEvents plus the accessibility-hidden pair.
-    expect(tree.root.findAll((node) => String(node.type) === 'blur-view')).toHaveLength(1);
+    expect(adaptiveFallbacks(tree)).toHaveLength(1);
 
     const root = tree.root.findAll((node) => String(node.type) === 'view')[0];
     expect((root.props.style as Record<string, unknown>).opacity).toBe(0);
@@ -196,13 +225,13 @@ describe('MagicTabBar', () => {
     expect(root.props.importantForAccessibility).toBe('auto');
   });
 
-  it('swaps the blur surface for Liquid Glass when the OS supports it', async () => {
+  it('swaps the adaptive fallback for Liquid Glass when the OS supports it', async () => {
     glassState.available = true;
 
     const { tree } = await renderTabBarAsync();
 
     expect(tree.root.findAll((node) => String(node.type) === 'glass-view')).toHaveLength(1);
-    expect(tree.root.findAll((node) => String(node.type) === 'blur-view')).toHaveLength(0);
+    expect(adaptiveFallbacks(tree)).toHaveLength(0);
   });
 
   it('leaves the glass surface unpainted so the material is actually visible', async () => {
@@ -222,23 +251,98 @@ describe('MagicTabBar', () => {
 
     const tintAlpha = Number(/rgba\([^)]*,\s*([\d.]+)\)/.exec(glass.props.tintColor as string)?.[1]);
     expect(tintAlpha).toBeLessThan(0.5);
+
+    // Darkening is not the only way to flatten the material. The frost lift
+    // brightens it, and a bright enough lift milks it into the same slab from
+    // the other direction — so it gets bounded here too, and against the tint
+    // rather than a bare number: the pair only reads as glass while the cap
+    // still leads the lift.
+    const liftAlpha = frostLiftAlpha(glass);
+    expect(liftAlpha).toBeGreaterThan(0);
+    expect(liftAlpha).toBeLessThan(tintAlpha);
   });
 
-  it('asks Android for a real blur and gives it a target to sample', async () => {
+  it('uses a fully opaque adaptive panel when Liquid Glass is unavailable', async () => {
     const { tree } = await renderTabBarAsync();
 
-    const blur = tree.root.find((node) => String(node.type) === 'blur-view');
+    expect(tree.root.findAll((node) => String(node.type) === 'blur-view')).toHaveLength(0);
+    const [fallback] = adaptiveFallbacks(tree);
+    expect(fallback).toBeTruthy();
 
-    // Without a method Android renders a plain semi-transparent view, and the
-    // SDK31+ variant skips RenderScript on hardware that would choke on it.
-    expect(blur.props.blurMethod).toBe('dimezisBlurViewSdk31Plus');
+    // Both tint layers are opaque hex. An `rgba` fill on either one would let
+    // the feed show through unblurred, which is the look the opaque dock exists
+    // to avoid — and would put the label contrast beyond anything the cap can
+    // guarantee, since it would then depend on the media rather than the fill.
+    const { outgoing, incoming } = adaptiveLayers(tree);
+    expect(outgoing).toMatch(/^#[\da-f]{6}$/i);
+    expect(incoming).toMatch(/^#[\da-f]{6}$/i);
+    expect(fallback.findAllByProps({ testID: 'tab-bar-frost-lift' })).toHaveLength(0);
+  });
 
-    // Bound rather than pinned: the exact tint is a design call that moved once
-    // already. What must not come back is the opaque fill that made this bar a
-    // flat slab, so the check sits well below that and leaves the design room.
-    const style = blur.props.style as Record<string, unknown>;
-    const tintAlpha = Number(/rgba\([^)]*,\s*([\d.]+)\)/.exec(style.backgroundColor as string)?.[1]);
-    expect(tintAlpha).toBeLessThan(0.8);
+  it('paints both cross-fade layers the same colour when nothing is adapting', async () => {
+    const { tree } = await renderTabBarAsync();
+    const { outgoing, incoming } = adaptiveLayers(tree);
+
+    expect(outgoing).toBe('#1f1f24');
+    expect(incoming).toBe(outgoing);
+  });
+
+  /**
+   * The shade is lighting, never tint. Its predecessor was a five-stop
+   * horizontal ramp built from the media colour with a hard dark stop at 0.52,
+   * which landed a shadow directly under the raised Create button and read as a
+   * rendering artifact. Keeping it vertical and free of any opaque stop is what
+   * stops the gradient having a say in what colour the bar is.
+   */
+  it('keeps the depth shade vertical, translucent and independent of the tint', async () => {
+    const { tree } = await renderTabBarAsync();
+    const shade = tree.root.findByProps({ testID: 'tab-bar-adaptive-shade' });
+
+    expect(shade.props.start).toEqual({ x: 0.5, y: 0 });
+    expect(shade.props.end).toEqual({ x: 0.5, y: 1 });
+    expect((shade.props.colors as string[]).every((color) => color.startsWith('rgba('))).toBe(true);
+  });
+
+  it('keeps the fallback background uniform across the complete pill', async () => {
+    const { tree } = await renderTabBarAsync();
+
+    const [fallback] = adaptiveFallbacks(tree);
+    const style = fallback.props.style as Record<string, unknown>;
+    expect(style.borderWidth).toBe(1);
+    expect(style.borderColor).toBe('rgba(255,248,237,0.12)');
+    expect(fallback.findAll((node) => typeof node.props.onLayout === 'function')).toHaveLength(0);
+    expect(tree.root.findAll((node) => String(node.type) === 'linear-gradient')).toHaveLength(1);
+  });
+
+  it('keeps the area around the floating adaptive surface transparent', async () => {
+    const adaptiveMode = await renderTabBarAsync();
+    const gradients = adaptiveMode.tree.root.findAll((node) => String(node.type) === 'linear-gradient');
+    expect(gradients).toHaveLength(1);
+
+    glassState.available = true;
+    const glassMode = await renderTabBarAsync();
+    expect(
+      glassMode.tree.root.findAll((node) => String(node.type) === 'linear-gradient')
+    ).toHaveLength(0);
+
+    glassState.reduceTransparency = true;
+    const solidMode = await renderTabBarAsync();
+    expect(
+      solidMode.tree.root.findAll((node) => String(node.type) === 'linear-gradient')
+    ).toHaveLength(0);
+  });
+
+  it('uses only icon and label colour to mark the selected tab', async () => {
+    const { tree } = await renderTabBarAsync();
+    const home = tree.root.findByProps({ accessibilityLabel: 'Home' });
+
+    expect(home.findByType('home-icon' as never).props.color).toBe('#FF7A59');
+    expect(
+      home.findAll((node) => {
+        const style = node.props.style as Record<string, unknown> | undefined;
+        return style?.width === 18 && style?.height === 3 && style?.backgroundColor === '#FF7A59';
+      })
+    ).toHaveLength(0);
   });
 
   it('brightens the inactive labels on translucent surfaces only', async () => {
@@ -259,7 +363,7 @@ describe('MagicTabBar', () => {
     // translucent the backdrop is whatever post scrolled past, so the label has
     // to carry itself.
     expect(solidIcon.props.color).toBe('#a1a1aa');
-    expect(glassIcon.props.color).toBe('rgba(255,255,255,0.90)');
+    expect(glassIcon.props.color).toBe('rgba(255,255,255,0.88)');
   });
 
   it('drops to a genuinely opaque bar when Reduce Transparency is on', async () => {
@@ -271,11 +375,11 @@ describe('MagicTabBar', () => {
     // Neither effect surface should render: this branch exists for users who
     // asked for less see-through, so it must not quietly stay translucent.
     expect(tree.root.findAll((node) => String(node.type) === 'glass-view')).toHaveLength(0);
-    expect(tree.root.findAll((node) => String(node.type) === 'blur-view')).toHaveLength(0);
+    expect(adaptiveFallbacks(tree)).toHaveLength(0);
 
     const opaque = tree.root.findAll((node) => {
       const style = node.props.style as Record<string, unknown> | undefined;
-      return node.type === 'view' && style?.backgroundColor === 'rgba(17,18,21,0.96)';
+      return node.type === 'view' && style?.backgroundColor === '#111215';
     });
     expect(opaque).toHaveLength(1);
   });
@@ -283,7 +387,7 @@ describe('MagicTabBar', () => {
   it('keeps the bottom safe-area continuation transparent under the restored nav', () => {
     const { tree } = renderTabBar();
 
-    expect(tree.root.findAll((node) => String(node.type) === 'blur-view')).toHaveLength(1);
+    expect(adaptiveFallbacks(tree)).toHaveLength(1);
 
     const opaqueBottomFillers = tree.root.findAll((node) => {
       const style = node.props.style as Record<string, unknown> | undefined;

@@ -6,16 +6,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, router } from 'expo-router';
 import { ChevronRight, ExternalLink, FileText, Globe, Heart, ImageIcon, Layers3, Lock, MapPin, MoreVertical, Pencil, Play, Repeat2, UserCheck, UserPlus } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Linking,
-  Pressable,
-  Share,
-  Text,
-  useWindowDimensions,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Linking, Pressable, Share, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
@@ -23,6 +14,7 @@ import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { AppText, SecondaryButton, StatusBlock } from '@/components/ui';
 import { showActionSheet } from '@/lib/action-sheet';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
+import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
 import { useAuth } from '@/lib/auth';
 import {
@@ -191,60 +183,53 @@ export function CreatorProfileScreen({
 
   const handleReportUser = () => {
     if (!data || data.viewer.isOwner || !requireSafetySignIn()) return;
-    Alert.alert(
-      'Report user?',
-      `Magicbooklet will review @${data.profile.username} for unsafe or abusive behavior.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Report user',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await api.reportUser(data.profile.id, {
-                reason: 'unsafe_content',
-                sourceSurface: 'creator-profile',
-                details: `Reported from @${data.profile.username}'s mobile creator profile.`,
-              });
-              haptic.success();
-              Alert.alert('Report received', 'Thank you. Our moderation team will review this user.');
-            } catch (error) {
-              haptic.error();
-              Alert.alert('Could not report user', error instanceof Error ? error.message : 'Please try again.');
-            }
-          },
-        },
-      ]
-    );
+    void showConfirmDialog({
+      title: 'Report user?',
+      message: `Magicbooklet will review @${data.profile.username} for unsafe or abusive behavior.`,
+      confirmLabel: 'Report user',
+      destructive: true,
+    }).then(async (confirmed) => {
+      if (!confirmed) return;
+      try {
+        await api.reportUser(data.profile.id, {
+          reason: 'unsafe_content',
+          sourceSurface: 'creator-profile',
+          details: `Reported from @${data.profile.username}'s mobile creator profile.`,
+        });
+        haptic.success();
+        showMessageDialog({
+          title: 'Report received',
+          message: 'Thank you. Our moderation team will review this user.',
+        });
+      } catch (error) {
+        haptic.error();
+        showErrorDialog('Could not report user', error);
+      }
+    });
   };
 
   const handleBlockUser = () => {
     if (!data || data.viewer.isOwner || !requireSafetySignIn()) return;
-    Alert.alert(
-      `Block @${data.profile.username}?`,
-      'Their posts will be hidden, and neither of you will be able to follow the other.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Block user',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await api.blockUser(data.profile.id);
-              await Promise.all([
-                queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
-                queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] }),
-                queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] }),
-              ]);
-              router.replace('/(tabs)/showcase' as never);
-            } catch (error) {
-              haptic.error();
-              Alert.alert('Could not block user', error instanceof Error ? error.message : 'Please try again.');
-            }
-          },
-        },
-      ]
-    );
+    void showConfirmDialog({
+      title: `Block @${data.profile.username}?`,
+      message: 'Their posts will be hidden, and neither of you will be able to follow the other.',
+      confirmLabel: 'Block user',
+      destructive: true,
+    }).then(async (confirmed) => {
+      if (!confirmed) return;
+      try {
+        await api.blockUser(data.profile.id);
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
+          queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] }),
+          queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] }),
+        ]);
+        router.replace('/(tabs)/showcase' as never);
+      } catch (error) {
+        haptic.error();
+        showErrorDialog('Could not block user', error);
+      }
+    });
   };
 
   /**

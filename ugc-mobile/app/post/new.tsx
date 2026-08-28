@@ -1,35 +1,17 @@
 import { useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query';
 import { useNavigation, usePreventRemove } from '@react-navigation/native';
-import { Redirect, router, useLocalSearchParams } from 'expo-router';
+import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
 import type { ImagePickerAsset } from 'expo-image-picker';
 import { Check, ChevronDown, ChevronRight, FileText, Globe2, ImageIcon, Link2, Lock, Package, Pencil, Play, Plus, Sparkles, Trash2, Upload, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import {
-  AccessibilityInfo,
-  ActivityIndicator,
-  Alert,
-  findNodeHandle,
-  Keyboard,
-  KeyboardAvoidingView,
-  Modal,
-  PanResponder,
-  Platform,
-  Pressable,
-  ScrollView,
-  Share,
-  Text,
-  TextInput,
-  useWindowDimensions,
-  View,
-  type GestureResponderEvent,
-  type TextInputProps,
-} from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, findNodeHandle, Keyboard, KeyboardAvoidingView, Modal, PanResponder, Platform, Pressable, ScrollView, Share, Text, TextInput, useWindowDimensions, View, type GestureResponderEvent, type TextInputProps } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppText, ChoiceChip, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
 import { ComposerMediaLightbox, getComposerMediaLabel } from '@/components/composer-media-lightbox';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
+import { showConfirmDialog } from '@/lib/dialog';
 import { showActionSheet } from '@/lib/action-sheet';
 import { StableMediaImage } from '@/components/media-preview';
 import { ApiError } from '@/lib/api-client';
@@ -2232,7 +2214,8 @@ export default function NewPostScreen() {
   // and Sheets repeats it for the dismiss gesture. It was an alert, which the
   // Alerts chapter reserves for problems — and its message existed only to
   // explain the three buttons, which the same chapter tells you not to do.
-  usePreventRemove(hasUnsavedChanges && !isNavigationAllowed, ({ data }) => {
+  const preventLeaveWithUnsavedChanges = hasUnsavedChanges && !isNavigationAllowed;
+  usePreventRemove(preventLeaveWithUnsavedChanges, ({ data }) => {
     const leave = (settle: () => Promise<unknown>) => {
       void settle().finally(() => {
         setIsNavigationAllowed(true);
@@ -3030,14 +3013,15 @@ export default function NewPostScreen() {
 
   const requestCloseResourceSheet = () => {
     if (isPickingResourceFile) {
-      Alert.alert(
-        'File upload in progress',
-        'Keep this resource editor open until the upload finishes, or cancel the upload first.',
-        [
-          { text: 'Keep uploading', style: 'cancel' },
-          { text: 'Cancel upload', style: 'destructive', onPress: cancelResourceFileUpload },
-        ],
-      );
+      void showConfirmDialog({
+        title: 'File upload in progress',
+        message: 'Keep this resource editor open until the upload finishes, or cancel the upload first.',
+        cancelLabel: 'Keep uploading',
+        confirmLabel: 'Cancel upload',
+        destructive: true,
+      }).then((cancelUpload) => {
+        if (cancelUpload) cancelResourceFileUpload();
+      });
       return;
     }
     if (resourceSheetMode !== 'editor' || !resourceEditorCard || !resourceEditorOriginal) {
@@ -3049,14 +3033,15 @@ export default function NewPostScreen() {
       clearResourceEditor();
       return;
     }
-    Alert.alert(
-      'Discard resource changes?',
-      'This resource has unsaved changes.',
-      [
-        { text: 'Keep editing', style: 'cancel' },
-        { text: 'Discard', style: 'destructive', onPress: clearResourceEditor },
-      ],
-    );
+    void showConfirmDialog({
+      title: 'Discard resource changes?',
+      message: 'This resource has unsaved changes.',
+      cancelLabel: 'Keep editing',
+      confirmLabel: 'Discard',
+      destructive: true,
+    }).then((discard) => {
+      if (discard) clearResourceEditor();
+    });
   };
 
   const saveResourceEditor = () => {
@@ -3162,6 +3147,13 @@ export default function NewPostScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+      {/* On iOS 26 the back swipe completes the pop natively before the
+          usePreventRemove veto can run — the leave sheet then opens over the
+          previous screen and JS/native navigation state desync (upstream:
+          react-navigation#13072). The gesture must therefore not start at all
+          while the veto is armed; the header's Close button stays the way out
+          and raises the same sheet. A clean composer keeps its normal swipe. */}
+      <Stack.Screen options={{ gestureEnabled: !preventLeaveWithUnsavedChanges }} />
       <PostComposerHeader
         step={composerStep}
         isEditMode={isEditMode}

@@ -17,19 +17,7 @@ import {
   X,
 } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  AppState,
-  Modal,
-  Pressable,
-  ScrollView,
-  Switch,
-  Text,
-  TextInput,
-  useWindowDimensions,
-  View,
-} from 'react-native';
+import { ActivityIndicator, AppState, Modal, Pressable, ScrollView, Switch, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
@@ -40,6 +28,7 @@ import {
   PrimaryButton,
   SecondaryButton,
 } from '@/components/ui';
+import { showConfirmDialog } from '@/lib/dialog';
 import { useAuth } from '@/lib/auth';
 import { clearPersistedCreationDrafts, loadPersistedCreationDrafts, persistCreationDrafts } from '@/lib/creation-draft-resume';
 import { SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
@@ -3140,16 +3129,16 @@ function ReferenceDetailsOverlay({
   };
 
   const confirmRemove = () => {
-    Alert.alert(
-      'Remove reference?',
-      handleUsedInPrompt && media.handle
+    void showConfirmDialog({
+      title: 'Remove reference?',
+      message: handleUsedInPrompt && media.handle
         ? `${accessibleName} and ${media.handle} will be removed from this draft.`
         : `${accessibleName} will be removed from this draft.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Remove', style: 'destructive', onPress: onRemove },
-      ],
-    );
+      confirmLabel: 'Remove',
+      destructive: true,
+    }).then((remove) => {
+      if (remove) onRemove();
+    });
   };
 
   return (

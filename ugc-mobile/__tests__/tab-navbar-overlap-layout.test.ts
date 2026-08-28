@@ -7,6 +7,13 @@ function readSource(path: string) {
 }
 
 describe('tab navbar overlap layout', () => {
+  it('lets the last Home card clear the raised Create control', () => {
+    const source = readSource('components/home-dashboard.tsx');
+
+    expect(source).toMatch(/paddingBottom:\s*tabBarMetrics\.contentBottomPadding \+ 24/);
+    expect(source).not.toMatch(/paddingBottom:\s*tabBarMetrics\.contentBottomOverlapPadding \+ 24/);
+  });
+
   it('lets the Feed list render behind the floating navbar', () => {
     const source = readSource('app/(tabs)/showcase.tsx');
 
@@ -28,13 +35,11 @@ describe('tab navbar overlap layout', () => {
     expect(source).not.toContain('getMagicTabBarMetrics');
   });
 
-  it('hides the global tab bar on the creator route without unmounting it', () => {
+  it('hides the global tab bar on the creator route without changing its tree', () => {
     const source = readSource('app/(tabs)/_layout.tsx');
 
-    // The bar must stay mounted on creator: remounting the Android BlurView
-    // while the tab fade runs builds a cyclic RenderNode graph and hwui
-    // crashes with a stack-overflow SIGSEGV. Hiding is MagicTabBar's job via
-    // the `hidden` prop; a null branch here reintroduces the crash.
+    // Hiding is MagicTabBar's job via the `hidden` prop so route fades keep one
+    // stable navigation tree and do not reset the create menu's local state.
     expect(source).toContain(
       "hidden={props.state.routes[props.state.index]?.name === 'creator'}"
     );

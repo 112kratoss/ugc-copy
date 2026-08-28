@@ -82,6 +82,7 @@ const generationItem = {
 
 vi.mock('expo-router', () => ({
   Redirect: (props: MockProps) => React.createElement('redirect', props),
+  Stack: { Screen: (props: MockProps) => React.createElement('stack-screen', props) },
   router: routerState,
   useLocalSearchParams: () => paramsState.params,
 }));
@@ -306,6 +307,24 @@ describe('mobile external post composer', () => {
     expect(postRoute).toContain("animation: reducedMotion ? 'none' : 'simple_push'");
     expect(postRoute).not.toContain("presentation: 'modal'");
     expect(postRoute).not.toContain('slide_from_bottom');
+  });
+
+  it('disables the native back gesture only while unsaved changes are present', async () => {
+    // On iOS 26 the back swipe pops the screen natively before the
+    // usePreventRemove veto runs (react-navigation#13072), landing the leave
+    // sheet on the previous screen. The gesture must be off while dirty; the
+    // header Close button remains the way out.
+    const tree = await renderScreen();
+    const gestureEnabled = () => (
+      tree.root.findAll((node) => String(node.type) === 'stack-screen')[0]
+        .props.options as { gestureEnabled: boolean }
+    ).gestureEnabled;
+
+    expect(gestureEnabled()).toBe(true);
+
+    renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Neon skyline study'));
+
+    expect(gestureEnabled()).toBe(false);
   });
 
   beforeEach(() => {
@@ -576,6 +595,9 @@ describe('mobile external post composer', () => {
       'File upload in progress',
       expect.stringContaining('Keep this resource editor open'),
       expect.any(Array),
+      // `showConfirmDialog`'s fallback settles its promise on an Android
+      // dismissal too, so the answer never strands the caller — see `lib/dialog`.
+      expect.any(Object),
     );
     const closeButtons = alertState.alert.mock.calls.at(-1)?.[2] as Array<{ text: string; onPress?: () => void }>;
     await renderer.act(async () => {
@@ -660,9 +682,15 @@ describe('mobile external post composer', () => {
       'Discard resource changes?',
       'This resource has unsaved changes.',
       expect.any(Array),
+      expect.any(Object),
     );
     const buttons = alertState.alert.mock.calls.at(-1)?.[2] as Array<{ text: string; onPress?: () => void }>;
-    renderer.act(() => buttons.find((button) => button.text === 'Discard')?.onPress?.());
+    // The discard runs when the confirmation resolves, a microtask after the
+    // press, so the tick has to be flushed before the card list is read back.
+    await renderer.act(async () => {
+      buttons.find((button) => button.text === 'Discard')?.onPress?.();
+      await Promise.resolve();
+    });
     expect(collectText(tree.root)).not.toContain('1 resource card');
   });
 

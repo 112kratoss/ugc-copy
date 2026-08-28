@@ -1225,10 +1225,16 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       'Remove reference?',
       expect.stringContaining('@hero'),
       expect.any(Array),
+      // `showConfirmDialog`'s fallback settles its promise on an Android
+      // dismissal too, so the answer never strands the caller — see `lib/dialog`.
+      expect.any(Object),
     );
     const buttons = nativeAlertState.alert.mock.calls[0][2] as Array<{ text: string; onPress?: () => void }>;
-    renderer.act(() => {
+    // The removal runs when the confirmation resolves, a microtask after the
+    // press, so the tick has to be flushed before the prompt is read back.
+    await renderer.act(async () => {
       buttons.find((button) => button.text === 'Remove')?.onPress?.();
+      await Promise.resolve();
     });
 
     expect(tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).not.toContain('@hero');
