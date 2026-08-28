@@ -763,7 +763,7 @@ describe('post resource bundle server access', () => {
     })).resolves.toMatch(/custom handle/i);
   });
 
-  it('allows a claimed public profile without an avatar until an unlock is attached', async () => {
+  it('never requires an avatar to publish, even with an unlock attached', async () => {
     const { getMarketplaceQualityErrorForPostBundle } = await import('@/lib/post-resource-bundles-server');
     const profileClient = {
       from() {
@@ -792,12 +792,32 @@ describe('post resource bundle server access', () => {
       bundle: null,
     })).resolves.toBeNull();
 
-    await expect(getMarketplaceQualityErrorForPostBundle({
+    // An empty bundle still fails the recipe quality bar, but the complaint is
+    // about the recipe content — never the missing profile photo.
+    const emptyBundleError = await getMarketplaceQualityErrorForPostBundle({
       supabase: profileClient as never,
       ownerUserId: 'owner-1',
       post: { visibility: 'public', body: 'A useful public post.' },
       bundle: { accessMode: 'free' },
-    })).resolves.toMatch(/profile photo/i);
+    });
+    expect(emptyBundleError).toMatch(/preview or summary/i);
+    expect(emptyBundleError).not.toMatch(/profile photo/i);
+
+    // A complete free recipe from an avatar-less profile publishes cleanly.
+    await expect(getMarketplaceQualityErrorForPostBundle({
+      supabase: profileClient as never,
+      ownerUserId: 'owner-1',
+      post: {
+        title: 'Moody portrait recipe',
+        visibility: 'public',
+        body: 'A useful public post with plenty of helpful detail.',
+      },
+      bundle: {
+        accessMode: 'free',
+        previewText: 'Includes the full prompt and my lighting notes.',
+        resources: { promptText: 'Create a moody editorial portrait with soft window light.' },
+      },
+    })).resolves.toBeNull();
   });
 
   it('distinguishes profile lookup failures from incomplete profiles', async () => {

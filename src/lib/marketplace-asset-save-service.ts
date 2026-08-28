@@ -180,7 +180,7 @@ export async function saveMarketplaceAssetForRoute({
       username: typeof sellerProfile?.username === 'string' ? sellerProfile.username : null,
       displayName: typeof sellerProfile?.display_name === 'string' ? sellerProfile.display_name : null,
       avatarUrl: typeof sellerProfile?.avatar_url === 'string' ? sellerProfile.avatar_url : null,
-    }, { requiresAvatar: true });
+    });
 
     if (profileError) {
       return {

@@ -1577,7 +1577,7 @@ export default function CreationsPage() {
                                         : profileReadiness.sellerReady
                                             ? 'Your selling identity is ready. Add a short bio so visitors understand your work.'
                                             : profileReadiness.publicPublishReady
-                                                ? 'Your public identity is ready. Add an avatar before selling recipes.'
+                                                ? 'Your public identity is ready. Add an avatar so people recognize your work.'
                                                 : 'Choose a custom handle and display name before publishing publicly.',
                                     ready: profileReadiness.profileComplete,
                                 },

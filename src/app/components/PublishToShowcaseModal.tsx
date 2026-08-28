@@ -221,12 +221,10 @@ export default function PublishToShowcaseModal({
   const parsedPriceTokens = parsePriceTokens(priceTokens);
   const isPublishing = publishingVisibility !== null;
   const profileReadiness = getCreatorProfileReadiness(profile);
-  // Only a paid recipe requires the stricter seller profile. A free recipe is a
-  // public post that happens to carry its setup, so it uses the public gate.
-  const willSellRecipe = isPaidRecipe;
-  const isProfileReadyForPublish = willSellRecipe
-    ? profileReadiness.sellerReady
-    : profileReadiness.publicPublishReady;
+  // Publishing never requires a profile photo — free and paid recipes alike use
+  // the public gate (handle + display name). The avatar is only a
+  // profile-completeness nudge, never a blocker.
+  const isProfileReadyForPublish = profileReadiness.publicPublishReady;
   const recipeAccessBadgeLabel = recipeAccess === 'none'
     ? 'No recipe'
     : recipeAccess === 'free'
@@ -394,9 +392,7 @@ export default function PublishToShowcaseModal({
     if (nextVisibility === 'public' && profileLoadState === 'ready' && !isProfileReadyForPublish) {
       setNeedsProfileRepair(true);
       setFormError(
-        willSellRecipe
-          ? 'Complete your profile before selling a recipe: choose a custom handle, add your display name, and upload a profile photo.'
-          : 'Complete your profile before publishing publicly: choose a custom handle and add your display name.'
+        'Complete your profile before publishing publicly: choose a custom handle and add your display name.'
       );
       return;
     }
@@ -603,13 +599,11 @@ export default function PublishToShowcaseModal({
                   : profileLoadState === 'error'
                     ? 'Profile check unavailable'
                     : isProfileReadyForPublish
-                      ? willSellRecipe ? 'Seller profile ready' : 'Ready for public publishing'
-                      : willSellRecipe ? 'Seller profile needs attention' : 'Public profile needs attention'}
+                      ? 'Ready for public publishing'
+                      : 'Public profile needs attention'}
               </p>
               <p className="mt-1 text-xs leading-5 text-zinc-400">
-                {willSellRecipe
-                  ? 'Selling a recipe requires a custom handle, display name, and profile photo.'
-                  : 'Public posts require a custom handle and display name.'}
+                Public posts require a custom handle and display name.
               </p>
               {profileLoadState === 'ready' && !isProfileReadyForPublish ? (
                 <Link

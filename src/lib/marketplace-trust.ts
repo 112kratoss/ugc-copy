@@ -54,9 +54,11 @@ export interface MarketplaceQualityInput {
   } | null;
 }
 
+// A profile photo is never required to publish or sell anywhere — the only
+// publish-blocking identity standard is the public one: a claimed custom
+// handle plus a display name. The avatar stays a profile-completeness nudge.
 export function getCreatorPublishReadinessError(
-  seller: MarketplaceQualityInput['seller'],
-  options: { requiresAvatar: boolean }
+  seller: MarketplaceQualityInput['seller']
 ): string | null {
   const readiness = getCreatorProfileReadiness({
     username: seller?.username,
@@ -66,10 +68,6 @@ export function getCreatorPublishReadinessError(
 
   if (!readiness.publicPublishReady) {
     return `${CREATOR_PROFILE_READINESS_ERROR_PREFIX} publicly: choose a custom handle and add your display name.`;
-  }
-
-  if (options.requiresAvatar && !readiness.sellerReady) {
-    return `${CREATOR_PROFILE_READINESS_ERROR_PREFIX} a recipe: upload a profile photo so customers know who they are buying from.`;
   }
 
   return null;
@@ -171,7 +169,7 @@ export function assessMarketplaceListingQuality(input: MarketplaceQualityInput):
     issues.push({
       code: 'missing_creator_identity',
       field: 'creator',
-      message: 'Choose a custom handle, add your display name, and upload a profile photo before publishing a recipe.',
+      message: 'Choose a custom handle and add your display name before publishing a recipe.',
     });
   }
 
@@ -277,11 +275,13 @@ function isPlaceholderText(value: string): boolean {
 }
 
 function hasCreatorIdentity(seller: MarketplaceQualityInput['seller']): boolean {
+  // The marketplace directory uses the same public identity standard as
+  // publishing: handle + display name. A missing avatar never hides a listing.
   return getCreatorProfileReadiness({
     username: seller?.username,
     displayName: seller?.displayName ?? seller?.name,
     avatarUrl: seller?.avatarUrl ?? seller?.avatar,
-  }).sellerReady;
+  }).publicPublishReady;
 }
 
 function hasUsefulPublicProof(post: NonNullable<MarketplaceQualityInput['post']>): boolean {

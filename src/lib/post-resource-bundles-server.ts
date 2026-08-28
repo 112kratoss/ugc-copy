@@ -1339,9 +1339,7 @@ export async function getMarketplaceQualityErrorForPostBundle(params: {
     displayName: typeof profile?.display_name === 'string' ? profile.display_name : null,
     avatarUrl: typeof profile?.avatar_url === 'string' ? profile.avatar_url : null,
   };
-  const profileReadinessError = getCreatorPublishReadinessError(seller, {
-    requiresAvatar: accessMode !== 'none',
-  });
+  const profileReadinessError = getCreatorPublishReadinessError(seller);
   if (profileReadinessError) {
     return profileReadinessError;
   }
@@ -1375,7 +1373,8 @@ export async function getMarketplaceQualityErrorForPostBundle(params: {
       reviewStatus: params.post.reviewStatus ?? 'visible',
       hasMedia: postHasMedia,
     },
-    seller,
+    // seller is deliberately omitted: the assessment's identity issue repeats
+    // the handle + display name standard already enforced above.
   });
 }
 
