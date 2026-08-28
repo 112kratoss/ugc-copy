@@ -23,6 +23,7 @@ const eslintConfig = defineConfig([
     // Agent worktrees are full repo copies (including a nested ugc-mobile that
     // escapes the ignore above); they lint inside their own checkout.
     ".claude/worktrees/**",
+    ".codex/worktrees/**",
   ]),
   {
     // Backend modules log through the structured logger so production lines are
