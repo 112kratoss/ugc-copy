@@ -246,12 +246,17 @@ export const appTheme = {
   },
   motion: {
     duration: {
-      instant: 0,
-      pressIn: 90,
-      pressOut: 150,
       state: 180,
-      reveal: 240,
+      // What `Reveal` actually ships. The token said 240 while the only
+      // component that reveals anything ran 360, and since nothing consumed
+      // the token the divergence was invisible — so reality wins over the
+      // number nobody used.
+      reveal: 360,
     },
+    // `instant`/`pressIn`/`pressOut` used to live here and were referenced
+    // nowhere. Press feedback is spring-driven (see `spring.pressIn` /
+    // `spring.release`), so duration tokens for it described a system this app
+    // does not have.
     scale: {
       // Press feedback has to clear the perception floor: a 1–2% change reads
       // as nothing under a thumb. Cards travel less than controls because
@@ -272,6 +277,13 @@ export const appTheme = {
       // visible rebound, which is what makes a tap feel physical.
       pressIn: { stiffness: 700, damping: 40, mass: 0.7 },
       release: { stiffness: 420, damping: 17, mass: 0.7 },
+      // Large surfaces that travel their own width — drawers and sheets.
+      // `release` is far too loose here: at a damping ratio near 0.5 it
+      // overshoots roughly a sixth of the step, which on a 360pt drawer throws
+      // the panel ~57pt past its resting edge and opens a visible gap against
+      // the screen. This sits at ~0.88, so the settle is still felt but the
+      // overshoot lands under a pixel.
+      panel: { stiffness: 520, damping: 38, mass: 0.9 },
     },
   },
   shadow: {

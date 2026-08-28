@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Animated, Easing, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { MotionView, useReducedMotion } from '@/lib/motion';
+import { appTheme } from '@/lib/theme';
 
 /**
  * Content arriving, not appearing: the first page of a list fades and rises
@@ -9,7 +10,7 @@ import { MotionView, useReducedMotion } from '@/lib/motion';
  * so a recycled list cell never replays it while scrolling — only cells that
  * mount with `enabled` (the first page) ever move.
  */
-const REVEAL_DURATION_MS = 360;
+const REVEAL_DURATION_MS = appTheme.motion.duration.reveal;
 const REVEAL_STAGGER_MS = 55;
 const REVEAL_MAX_STAGGER_STEPS = 6;
 const REVEAL_RISE = 16;

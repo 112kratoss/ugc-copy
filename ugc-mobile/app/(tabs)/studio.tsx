@@ -408,7 +408,7 @@ function NotificationPreferences({
                 paddingVertical: 12,
                 borderTopWidth: index === 0 ? 0 : 1,
                 borderTopColor: appTheme.colors.borderSubtle,
-                opacity: disabled ? 0.62 : pressed ? 0.78 : 1,
+                opacity: disabled ? 0.62 : pressed ? appTheme.opacity.pressed : 1,
               })}
             >
               <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
@@ -604,7 +604,7 @@ function NotificationRow({ notification, onPress }: { notification: MobileNotifi
         borderColor: notification.isRead ? appTheme.colors.borderSubtle : `${meta.color}66`,
         backgroundColor: notification.isRead ? appTheme.colors.surface : appTheme.colors.selected,
         padding: 14,
-        opacity: pressed ? 0.78 : 1,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
       <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${meta.color}1c`, borderWidth: 1, borderColor: `${meta.color}4a` }}>

@@ -1123,7 +1123,6 @@ function TopSlider({
             activeGenerationCount={activeGenerationCount}
             displayName={displayName}
             previewUrl={item.slide.kind === 'tool' ? slidePreviews[item.slide.accent] ?? null : null}
-            reduceMotion={reduceMotion}
             signedIn={signedIn}
             slide={item.slide}
             width={slideWidth}
@@ -1177,7 +1176,6 @@ function TopSlide({
   activeGenerationCount,
   displayName,
   previewUrl,
-  reduceMotion,
   signedIn,
   slide,
   width,
@@ -1185,11 +1183,16 @@ function TopSlide({
   activeGenerationCount: number;
   displayName: string;
   previewUrl: string | null;
-  reduceMotion: boolean;
   signedIn: boolean;
   slide: HomeFeedSlide;
   width: number;
 }) {
+  // Declared before the per-kind branches below: these are hooks, so they have
+  // to run on every render regardless of which slide this is. `usePressMotion`
+  // handles the reduced-motion preference itself, which is why this component
+  // no longer takes a `reduceMotion` prop.
+  const ctaMotion = usePressMotion();
+  const cardMotion = usePressMotion(false, { scale: appTheme.motion.scale.pressedCard });
   if (slide.kind === 'workspace') {
     const title = signedIn ? `Ready when you are, ${displayName}` : 'Create something worth sharing';
 
@@ -1221,11 +1224,18 @@ function TopSlide({
           </Text>
         </View>
 
+        {/* The scale lives on a MotionView so it can spring. Inline in the
+            style callback it was an un-animated snap of 1.5%, which the theme
+            itself calls out as below the perception floor — it cost a
+            re-render per press and returned nothing visible. */}
+        <MotionView style={ctaMotion.animatedStyle}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Create new project"
           accessibilityHint="Opens the creator tools"
           onPress={() => router.push(slide.href as never)}
+          onPressIn={ctaMotion.onPressIn}
+          onPressOut={ctaMotion.onPressOut}
           style={({ pressed }) => ({
             minHeight: 44,
             borderRadius: 14,
@@ -1234,13 +1244,13 @@ function TopSlide({
             alignItems: 'center',
             justifyContent: 'center',
             gap: 8,
-            opacity: pressed ? 0.84 : 1,
-            transform: reduceMotion ? undefined : [{ scale: pressed ? 0.985 : 1 }],
+            opacity: pressed ? appTheme.opacity.pressed : 1,
           })}
         >
           <WandSparkles size={appTheme.icon.compact} color={appTheme.colors.onPrimary} />
           <Text style={{ color: appTheme.colors.onPrimary, fontSize: 14, fontWeight: '800' }}>{slide.ctaLabel}</Text>
         </Pressable>
+        </MotionView>
       </View>
     );
   }
@@ -1251,7 +1261,7 @@ function TopSlide({
         accessibilityRole="button"
         accessibilityLabel={slide.title}
         onPress={() => router.push(slide.href as never)}
-        style={({ pressed }) => ({ width, opacity: pressed ? 0.86 : 1 })}
+        style={({ pressed }) => ({ width, opacity: pressed ? appTheme.opacity.pressed : 1 })}
       >
         <View
           style={{
@@ -1281,14 +1291,19 @@ function TopSlide({
   const Icon = slide.id === 'image' ? ImageIcon : slide.id === 'video' ? Play : slide.id === 'motion' ? Rocket : Sparkles;
 
   return (
+    // `width` sits on the wrapper, not the Pressable. This is a FlashList item
+    // and the carousel scrolls by offsets computed from `slideWidth`, so the
+    // element the list measures has to keep exactly the width it had. The
+    // scale is a transform, which is visual only and never affects that.
+    <MotionView style={[{ width }, cardMotion.animatedStyle]}>
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={slide.title}
       onPress={() => router.push(slide.href as never)}
+      onPressIn={cardMotion.onPressIn}
+      onPressOut={cardMotion.onPressOut}
       style={({ pressed }) => ({
-        width,
-        opacity: pressed ? 0.82 : 1,
-        transform: reduceMotion ? undefined : [{ scale: pressed ? 0.99 : 1 }],
+        opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
       <View
@@ -1320,6 +1335,7 @@ function TopSlide({
         </View>
       </View>
     </Pressable>
+    </MotionView>
   );
 }
 

@@ -149,11 +149,13 @@ function springBack(dragY: ReactNative.Animated.Value | null) {
     dragY?.setValue(0);
     return;
   }
+  // These were the literals 190/13 — numerically the theme's tension/friction,
+  // copied by hand. At a damping ratio near 0.47 they also overshot, which on a
+  // bottom-anchored sheet lifts it off the screen edge on the way back.
   animatedApi.spring(dragY, {
     toValue: 0,
     useNativeDriver: true,
-    tension: 190,
-    friction: 13,
+    ...appTheme.motion.spring.panel,
   }).start();
 }
 

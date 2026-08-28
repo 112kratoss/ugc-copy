@@ -124,6 +124,7 @@ import {
   resolveNeighbourShift,
   resolveRowContentWidth,
 } from '@/lib/media-reorder';
+import { useReducedMotion } from '@/lib/motion';
 import { BackGlyph, CloseGlyph } from '@/lib/platform-glyphs';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme, type ToolAccent } from '@/lib/theme';
@@ -645,7 +646,7 @@ function PostResourcesPage({
           backgroundColor: draft.resource.accessMode === 'none'
             ? appTheme.colors.surfaceStrong
             : pressed ? appTheme.colors.surface : 'transparent',
-          opacity: pressed ? 0.78 : 1,
+          opacity: pressed ? appTheme.opacity.pressed : 1,
         })}
       >
         <AppText variant="label" color={draft.resource.accessMode === 'none' ? 'text' : 'muted'}>
@@ -785,7 +786,7 @@ function PostResourcesPage({
               <Pressable
                 accessibilityRole="button"
                 onPress={() => onResourceChange({ previewText: buildResourcePreviewFromCards(draft.resource.cards) })}
-                style={({ pressed }) => ({ alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center', opacity: pressed ? 0.7 : 1 })}
+                style={({ pressed }) => ({ alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
               >
                 <AppText variant="caption" color="primary">Use suggested preview</AppText>
               </Pressable>
@@ -853,7 +854,7 @@ function ResourceAccessChoice({
         borderColor: active ? `${color}99` : appTheme.colors.border,
         backgroundColor: active ? `${color}18` : pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surface,
         padding: 14,
-        opacity: pressed ? 0.86 : 1,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
       <View style={{ width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: `${color}20` }}>
@@ -984,7 +985,7 @@ function ResourceCardRow({
         accessibilityRole="button"
         accessibilityLabel={`Edit ${card.title || typeLabel}`}
         onPress={onEdit}
-        style={({ pressed }) => ({ flex: 1, minWidth: 0, gap: 3, opacity: pressed ? 0.72 : 1 })}
+        style={({ pressed }) => ({ flex: 1, minWidth: 0, gap: 3, opacity: pressed ? appTheme.opacity.pressed : 1 })}
       >
         <AppText variant="label" numberOfLines={1}>{card.title.trim() || typeLabel}</AppText>
         <AppText variant="caption" color="muted" numberOfLines={1}>{`${typeLabel} · ${contentLabel}`}</AppText>
@@ -995,7 +996,7 @@ function ResourceCardRow({
         accessibilityLabel={`Remove ${card.title || typeLabel}`}
         hitSlop={6}
         onPress={onRemove}
-        style={({ pressed }) => ({ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', opacity: pressed ? 0.65 : 1 })}
+        style={({ pressed }) => ({ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
       >
         <Trash2 size={18} color={appTheme.colors.danger} />
       </Pressable>
@@ -1173,7 +1174,7 @@ function PostComposerFooter({
               gap: 8,
               borderRadius: 17,
               backgroundColor: appTheme.colors.primary,
-              opacity: disabled || loading ? appTheme.opacity.disabled : pressed ? 0.88 : 1,
+              opacity: disabled || loading ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
             })}
           >
             {loading ? <ActivityIndicator size="small" color={appTheme.colors.onPrimary} /> : null}
@@ -1204,8 +1205,9 @@ function VisibilitySheet({
     { id: 'private', label: 'Private', body: 'Only you can see it in Studio.' },
   ];
   const drag = useSheetDismissDrag({ onDismiss: onClose, visible });
+  const reducedMotion = useReducedMotion();
   return (
-    <Modal visible={visible} transparent animationType="fade" presentationStyle="overFullScreen" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType={reducedMotion ? 'none' : 'fade'} presentationStyle="overFullScreen" onRequestClose={onClose}>
       <View style={{ flex: 1, justifyContent: 'flex-end' }}>
         <Pressable accessible={false} onPress={onClose} style={{ position: 'absolute', inset: 0, backgroundColor: appTheme.colors.overlayStrong }} />
         <SheetPanel
@@ -1317,9 +1319,10 @@ function ResourceComposerSheet({
   // the unsaved-changes confirmation runs either way (Modality: get
   // confirmation before closing a modal view, gesture or button).
   const drag = useSheetDismissDrag({ onDismiss: onRequestClose, visible });
+  const reducedMotion = useReducedMotion();
 
   return (
-    <Modal visible={visible} transparent animationType="slide" presentationStyle="overFullScreen" onRequestClose={onRequestClose}>
+    <Modal visible={visible} transparent animationType={reducedMotion ? 'none' : 'slide'} presentationStyle="overFullScreen" onRequestClose={onRequestClose}>
       <KeyboardAvoidingArea iosScrollViewAdjustsInsets style={{ justifyContent: 'flex-end' }}>
         <Pressable accessible={false} onPress={onRequestClose} style={{ position: 'absolute', inset: 0, backgroundColor: appTheme.colors.overlayStrong }} />
         <SheetPanel
@@ -1516,7 +1519,7 @@ function ResourceComposerSheet({
                             accessibilityRole="button"
                             accessibilityLabel="Cancel resource upload"
                             onPress={onCancelUpload}
-                            style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', opacity: pressed ? 0.7 : 1 })}
+                            style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
                           >
                             <AppText variant="caption" color="danger">Cancel</AppText>
                           </Pressable>
@@ -1549,7 +1552,7 @@ function ResourceComposerSheet({
                             accessibilityRole="button"
                             accessibilityLabel="Retry resource upload"
                             onPress={onRetryUpload}
-                            style={({ pressed }) => ({ alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center', opacity: pressed ? 0.7 : 1 })}
+                            style={({ pressed }) => ({ alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
                           >
                             <AppText variant="caption" color="primary">Retry upload</AppText>
                           </Pressable>
@@ -1580,7 +1583,7 @@ function ResourceComposerSheet({
                     justifyContent: 'center',
                     borderRadius: 17,
                     backgroundColor: appTheme.colors.primary,
-                    opacity: !isReady || isUploading ? appTheme.opacity.disabled : pressed ? 0.86 : 1,
+                    opacity: !isReady || isUploading ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
                   })}
                 >
                   <AppText variant="button" color="onPrimary">Save resource</AppText>
@@ -1652,7 +1655,7 @@ function ResourceScopePicker({
               style={({ pressed }) => ({
                 width: 72,
                 gap: 5,
-                opacity: pressed ? 0.78 : 1,
+                opacity: pressed ? appTheme.opacity.pressed : 1,
               })}
             >
               <View style={{ height: 82, borderRadius: 13, overflow: 'hidden', borderWidth: selected ? 2 : 1, borderColor: selected ? appTheme.colors.image : appTheme.colors.border, backgroundColor: appTheme.colors.surfaceInset }}>
@@ -3725,7 +3728,7 @@ function MobileCreatablePicker({
             width: appTheme.touch.compact,
             alignItems: 'center',
             justifyContent: 'center',
-            opacity: pressed ? 0.72 : disabled ? 0.38 : 1,
+            opacity: pressed ? appTheme.opacity.pressed : disabled ? 0.38 : 1,
           })}
         >
           <ChevronDown size={16} color="rgba(255,255,255,0.58)" />
@@ -5077,7 +5080,7 @@ function MediaGalleryCard({
               backgroundColor: 'rgba(0,0,0,0.58)',
               alignItems: 'center',
               justifyContent: 'center',
-              opacity: pressed ? 0.72 : 1,
+              opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
             <X size={15} color="#fff" />
@@ -5147,7 +5150,7 @@ function SecondaryPickButton({ icon, label, loading, onPress }: { icon: React.Re
         justifyContent: 'center',
         flexDirection: 'row',
         gap: 8,
-        opacity: pressed ? 0.75 : loading ? 0.58 : 1,
+        opacity: pressed ? appTheme.opacity.pressed : loading ? 0.58 : 1,
       })}
     >
       {loading ? <ActivityIndicator color="#fff" /> : icon}
@@ -5234,7 +5237,7 @@ function UnlockFields({
             alignItems: 'center',
             justifyContent: 'space-between',
             paddingHorizontal: 13,
-            opacity: pressed ? 0.76 : 1,
+            opacity: pressed ? appTheme.opacity.pressed : 1,
           })}
         >
           <Text style={{ color: resource.allowRemix ? appTheme.colors.primary : appTheme.colors.muted, fontSize: 13, fontWeight: '700' }}>Include remix access</Text>

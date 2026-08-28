@@ -1092,7 +1092,7 @@ function MasonryPin({
             flexDirection: 'row',
             alignItems: 'center',
             gap: 7,
-            opacity: pressed ? 0.68 : 1,
+            opacity: pressed ? appTheme.opacity.pressed : 1,
           })}
         >
           <CreatorAvatar uri={card.creatorAvatar} name={creatorLabel} />

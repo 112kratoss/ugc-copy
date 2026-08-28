@@ -1388,7 +1388,7 @@ function ImmersiveSlide({
                 gap: 9,
                 flexShrink: 1,
                 minHeight: CREATOR_ROW_HEIGHT,
-                opacity: pressed ? 0.72 : canOpenCreator ? 1 : 0.86,
+                opacity: pressed ? appTheme.opacity.pressed : canOpenCreator ? 1 : 0.86,
               })}
             >
               <ViewerCreatorAvatar item={item} size={34} />
@@ -2102,7 +2102,7 @@ function ViewerCreatorAvatar({
         borderRadius: size / 2,
         padding: 1.5,
         backgroundColor: 'rgba(255,255,255,0.9)',
-        opacity: pressed ? 0.76 : onPress ? 1 : 0.9,
+        opacity: pressed ? appTheme.opacity.pressed : onPress ? 1 : 0.9,
       })}
     >
       <View style={{ flex: 1, overflow: 'hidden', borderRadius: innerSize / 2, alignItems: 'center', justifyContent: 'center', backgroundColor: '#27272a' }}>
@@ -2163,7 +2163,7 @@ function FollowPill({ following, pending, onPress }: { following: boolean; pendi
         borderColor: following ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.92)',
         backgroundColor: 'rgba(0,0,0,0.18)',
         paddingHorizontal: 12,
-        opacity: pending ? 0.6 : pressed ? 0.72 : 1,
+        opacity: pending ? 0.6 : pressed ? appTheme.opacity.pressed : 1,
       })}
     >
       <Text style={{ color: following ? 'rgba(255,255,255,0.8)' : '#fff', fontSize: 13, lineHeight: 16, fontWeight: '700' }}>

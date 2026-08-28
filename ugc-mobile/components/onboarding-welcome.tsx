@@ -1,6 +1,6 @@
 import { Image } from 'expo-image';
 import { useEffect, useRef } from 'react';
-import { Animated, Pressable, Text, View } from 'react-native';
+import { Animated, Easing, Pressable, Text, View } from 'react-native';
 
 import { AppText, PrimaryButton } from '@/components/ui';
 import { OnboardingHeader } from '@/components/onboarding-header';
@@ -45,6 +45,10 @@ export function OnboardingWelcome({
     Animated.timing(reveal, {
       toValue: 1,
       duration: 520,
+      // Without this React Native falls back to a symmetric `easeInOut`, whose
+      // slow start reads as the app hesitating on the very first screen it
+      // shows. Decelerating into rest is what makes the hero arrive.
+      easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start();
   }, [reducedMotion, reveal]);

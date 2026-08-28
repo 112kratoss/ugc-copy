@@ -427,7 +427,7 @@ export function EditProfileScreen() {
                 borderWidth: 1,
                 borderColor: fieldErrors.coverUrl ? appTheme.colors.danger : appTheme.colors.border,
                 backgroundColor: appTheme.colors.panel,
-                opacity: pressed ? 0.86 : 1,
+                opacity: pressed ? appTheme.opacity.pressed : 1,
               })}
             >
               {coverDraftUri || form.coverUrl ? (
@@ -465,7 +465,7 @@ export function EditProfileScreen() {
                   borderWidth: 2,
                   borderColor: appTheme.colors.primary,
                   backgroundColor: appTheme.colors.background,
-                  opacity: pressed ? 0.86 : 1,
+                  opacity: pressed ? appTheme.opacity.pressed : 1,
                 })}
               >
                   <View style={{ flex: 1, overflow: 'hidden', borderRadius: 38, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.panelSoft }}>

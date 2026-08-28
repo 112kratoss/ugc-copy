@@ -221,7 +221,7 @@ function CloseMenuButton({ onPress }: { onPress: () => void }) {
         borderWidth: 1,
         borderColor: appTheme.colors.border,
         backgroundColor: pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surface,
-        opacity: pressed ? 0.78 : 1,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
       <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
@@ -254,7 +254,7 @@ function MenuActionButton({ action, width, onPress }: { action: CreateMenuAction
         backgroundColor: isCreate
           ? (pressed ? PRIMARY_STRONG : PRIMARY)
           : (pressed ? appTheme.colors.surfaceStrong : appTheme.colors.panelSoft),
-        opacity: pressed ? 0.9 : 1,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
       <View

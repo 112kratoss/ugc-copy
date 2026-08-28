@@ -49,6 +49,8 @@ const PRIMARY_PRESSED = appTheme.colors.pressed;
 const ON_PRIMARY = appTheme.colors.onPrimary;
 /** Below this the drag is still ambiguous with a tap or a vertical scroll. */
 const DRAWER_DRAG_CLAIM_DISTANCE = 8;
+// Keeps the panel's drop shadow past the screen edge while it is closed.
+const DRAWER_HIDDEN_SLOP = 64;
 const IS_TEST_ENVIRONMENT = typeof process !== 'undefined' && process.env.NODE_ENV === 'test';
 const FallbackModal = ({ children, visible }: ModalProps) => (
   visible ? <>{children}</> : null
@@ -163,7 +165,10 @@ export function HomeSideMenu({
         return;
       }
       if (dragX && Animated?.spring) {
-        Animated.spring(dragX, { toValue: 0, useNativeDriver: true, tension: 190, friction: 13 }).start();
+        // Same surface, same spring as the entrance. These were the literals
+        // 190/13 — numerically the theme's tension/friction, copied by hand,
+        // so they looked correct while tracking nothing.
+        Animated.spring(dragX, { toValue: 0, useNativeDriver: true, ...appTheme.motion.spring.panel }).start();
       } else {
         dragX?.setValue(0);
       }
@@ -176,11 +181,17 @@ export function HomeSideMenu({
   const backdropOpacity = progress
     ? progress.interpolate({ inputRange: [0, 1], outputRange: [0, 0.64] })
     : 0.64;
-  const drawerOpacity = progress
-    ? progress.interpolate({ inputRange: [0, 1], outputRange: [0.86, 1] })
-    : 1;
+  // No opacity ramp on the panel itself. The old 0.86 -> 1 fade existed to
+  // paper over a drawer that barely moved; a surface that slides in from the
+  // edge should not also dissolve into place. The backdrop still fades.
   const entryTranslateX = progress
-    ? progress.interpolate({ inputRange: [0, 1], outputRange: [-40, 0] })
+    ? progress.interpolate({
+        inputRange: [0, 1],
+        // Its own width plus slop for the shadow. The panel casts
+        // `16px 0 40px`, so parking it at exactly -drawerWidth would leave
+        // roughly 56pt of shadow spilling across the closed screen.
+        outputRange: [-(drawerWidth + DRAWER_HIDDEN_SLOP), 0],
+      })
     : 0;
   // Folded into one transform entry rather than stacked: a JS-driven value
   // beside a native-driven one on the same view does not compose.
@@ -220,7 +231,6 @@ export function HomeSideMenu({
             borderRightWidth: 1,
             borderRightColor: appTheme.colors.border,
             backgroundColor: appTheme.colors.background,
-            opacity: drawerOpacity,
             transform: [{ translateX: drawerTranslateX }],
             boxShadow: '16px 0 40px rgba(0,0,0,0.34)',
           }}
@@ -253,7 +263,7 @@ export function HomeSideMenu({
                   borderWidth: 1,
                   borderColor: appTheme.colors.border,
                   backgroundColor: pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surface,
-                  opacity: pressed ? 0.76 : 1,
+                  opacity: pressed ? appTheme.opacity.pressed : 1,
                 })}
               >
                 <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
@@ -272,7 +282,7 @@ export function HomeSideMenu({
                 borderColor: pressed ? appTheme.colors.primaryStrong : appTheme.colors.border,
                 padding: 14,
                 backgroundColor: pressed ? appTheme.colors.pressed : appTheme.colors.panel,
-                opacity: pressed ? 0.86 : 1,
+                opacity: pressed ? appTheme.opacity.pressed : 1,
               })}
             >
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
@@ -329,7 +339,7 @@ export function HomeSideMenu({
                 justifyContent: 'space-between',
                 gap: 12,
                 backgroundColor: pressed ? 'rgba(245,158,11,0.08)' : appTheme.colors.panel,
-                opacity: pressed ? 0.84 : 1,
+                opacity: pressed ? appTheme.opacity.pressed : 1,
               })}
             >
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, minWidth: 0, flex: 1 }}>
@@ -398,7 +408,7 @@ export function HomeSideMenu({
                 backgroundColor: user
                   ? (pressed ? appTheme.colors.surfaceStrong : appTheme.semantic.danger.background)
                   : (pressed ? PRIMARY_STRONG : PRIMARY),
-                opacity: pressed ? 0.84 : 1,
+                opacity: pressed ? appTheme.opacity.pressed : 1,
               })}
             >
               {user ? <LogOut size={20} color={appTheme.colors.danger} /> : <LogIn size={20} color={ON_PRIMARY} />}
@@ -434,7 +444,7 @@ function MenuRow({
         gap: 12,
         paddingHorizontal: 12,
         backgroundColor: pressed ? PRIMARY_PRESSED : appTheme.colors.surface,
-        opacity: pressed ? 0.86 : 1,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
       <View style={{ width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.surfaceStrong }}>
@@ -453,22 +463,31 @@ function createAnimatedValue(initialValue: number): Animated.Value | null {
   return new Animated.Value(initialValue);
 }
 
+/**
+ * Drive the drawer's entrance and exit.
+ *
+ * A spring, not a timing. The previous `Animated.timing` passed no `easing`,
+ * so it fell back to React Native's default `easeInOut` — a symmetric curve
+ * that starts slow, which reads as lag on a surface the user just tapped for,
+ * and then arrives with no settle at all. That is the whole of why this drawer
+ * felt harsh next to the rest of the app.
+ */
 function animateProgress(
   progress: Animated.Value | null,
   toValue: number,
   reduceMotionEnabled: boolean,
   onComplete: () => void
 ) {
-  if (!progress || !Animated?.timing || reduceMotionEnabled) {
+  if (!progress || !Animated?.spring || reduceMotionEnabled) {
     progress?.setValue(toValue);
     onComplete();
     return;
   }
 
   progress.stopAnimation();
-  Animated.timing(progress, {
+  Animated.spring(progress, {
     toValue,
-    duration: toValue === 1 ? 220 : 180,
+    ...appTheme.motion.spring.panel,
     useNativeDriver: true,
   }).start(({ finished }) => {
     if (finished) onComplete();

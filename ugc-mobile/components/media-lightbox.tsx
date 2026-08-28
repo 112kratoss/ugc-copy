@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { StableMediaImage } from '@/components/media-preview';
 import { AppText } from '@/components/ui';
+import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
 
@@ -38,12 +39,15 @@ export function MediaLightbox({
   onNavigate: (index: number) => void;
 }) {
   const isOpen = activeIndex !== null && activeIndex >= 0 && activeIndex < items.length;
+  const reducedMotion = useReducedMotion();
 
   return (
     <Modal
       visible={isOpen}
       transparent
-      animationType="fade"
+      // Every other sheet in the app gates its Modal transition on the OS
+      // setting; this one animated regardless of it.
+      animationType={reducedMotion ? 'none' : 'fade'}
       presentationStyle="overFullScreen"
       onRequestClose={onClose}
     >

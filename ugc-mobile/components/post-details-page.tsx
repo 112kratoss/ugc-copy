@@ -557,7 +557,7 @@ function DetailActionButton({
         gap: 8,
         borderRadius: 22,
         backgroundColor: primary ? primaryColor : appTheme.colors.surfaceStrong,
-        opacity: disabled ? 0.45 : pressed ? 0.76 : 1,
+        opacity: disabled ? 0.45 : pressed ? appTheme.opacity.pressed : 1,
         paddingHorizontal: 15,
       })}
     >

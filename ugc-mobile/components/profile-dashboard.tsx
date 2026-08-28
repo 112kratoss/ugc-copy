@@ -667,7 +667,7 @@ function SignedOutCard() {
           backgroundColor: PROFILE_COLORS.coral,
           alignItems: 'center',
           justifyContent: 'center',
-          opacity: pressed ? 0.84 : 1,
+          opacity: pressed ? appTheme.opacity.pressed : 1,
         })}
       >
         <Text style={{ color: '#111114', fontSize: 15, fontWeight: '800' }}>Sign in</Text>
@@ -733,7 +733,7 @@ function ProfileHeroCard({
               justifyContent: 'center',
               gap: 8,
               paddingHorizontal: 16,
-              opacity: pressed ? 0.78 : 1,
+              opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
             <Pencil size={appTheme.icon.sm} color="#111114" />
@@ -821,7 +821,7 @@ function BalanceCard({
         alignItems: 'center',
         gap: 10,
         paddingHorizontal: 12,
-        opacity: pressed ? 0.8 : 1,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
       <View style={{ width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: PROFILE_COLORS.surfaceRaised }}>
@@ -853,7 +853,7 @@ function SellerDashboardButton() {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
-        opacity: pressed ? 0.82 : 1,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
       <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: PROFILE_COLORS.coralSoft, alignItems: 'center', justifyContent: 'center' }}>
@@ -885,7 +885,7 @@ function InviteAndEarnButton() {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
-        opacity: pressed ? 0.82 : 1,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
       <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: `${appTheme.colors.commerce}1f`, alignItems: 'center', justifyContent: 'center' }}>
@@ -1004,7 +1004,7 @@ function ProfileSegment({ value, onChange }: { value: ProfileMediaTab; onChange:
               backgroundColor: active ? PROFILE_COLORS.coral : 'transparent',
               alignItems: 'center',
               justifyContent: 'center',
-              opacity: pressed ? 0.78 : 1,
+              opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
             <Text numberOfLines={1} style={{ color: active ? '#111114' : PROFILE_COLORS.muted, fontSize: 12, fontWeight: '800' }}>{tab}</Text>
@@ -1048,7 +1048,7 @@ function ProfilePostsScopeControl({
               backgroundColor: active ? 'rgba(255, 122, 89, 0.14)' : PROFILE_COLORS.surface,
               alignItems: 'center',
               justifyContent: 'center',
-              opacity: pressed ? 0.78 : 1,
+              opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
             <Text numberOfLines={1} style={{ color: active ? PROFILE_COLORS.coral : PROFILE_COLORS.muted, fontSize: 12, fontWeight: '800' }}>

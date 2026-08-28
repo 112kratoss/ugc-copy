@@ -217,7 +217,7 @@ function AuthHeader() {
           alignItems: 'center',
           justifyContent: 'center',
           backgroundColor: appTheme.colors.panelSoft,
-          opacity: pressed ? 0.74 : 1,
+          opacity: pressed ? appTheme.opacity.pressed : 1,
         })}
       >
         <CloseGlyph size={appTheme.icon.feature} color={workspace.text} />
@@ -445,7 +445,7 @@ function AuthPanel({
               minHeight: THIRD_PARTY_BUTTON_HEIGHT,
               alignItems: 'center',
               justifyContent: 'center',
-              opacity: !isAuthConfigured || isGoogleSubmitting ? appTheme.opacity.disabled : pressed ? 0.78 : 1,
+              opacity: !isAuthConfigured || isGoogleSubmitting ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
             })}
           >
             {isGoogleSubmitting ? (
@@ -530,7 +530,7 @@ function ModeTabs({ mode, onChange }: { mode: 'login' | 'signup'; onChange: (mod
               alignItems: 'center',
               justifyContent: 'center',
               backgroundColor: active ? workspace.primary : 'transparent',
-              opacity: pressed ? 0.78 : 1,
+              opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
             <Text numberOfLines={1} style={{ color: active ? workspace.onPrimary : workspace.muted, fontSize: 13, fontWeight: '700' }}>
