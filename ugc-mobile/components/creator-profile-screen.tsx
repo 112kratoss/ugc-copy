@@ -293,15 +293,20 @@ export function CreatorProfileScreen({
     requestNextPage();
   }, [requestNextPage]);
 
+  // Decoupled from query fetch state: on iOS a programmatic `refreshing` drags
+  // the list down and can strand it there, so only a refresh the user asked
+  // for may engage the control (see the note in app/(tabs)/showcase.tsx).
+  const [pullRefreshing, setPullRefreshing] = useState(false);
   const handleRefresh = () => {
     haptic.light();
+    setPullRefreshing(true);
     lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
     queryClient.setQueryData<InfiniteData<CreatorProfileResponse>>(queryKey, (current) => {
       if (!current?.pages.length) return current;
       return { pages: current.pages.slice(0, 1), pageParams: current.pageParams.slice(0, 1) };
     });
-    void profileQuery.refetch();
+    void profileQuery.refetch().finally(() => setPullRefreshing(false));
   };
 
   const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<CreatorListItem>> }) => {
@@ -422,7 +427,7 @@ export function CreatorProfileScreen({
         overrideItemLayout={(layout, item) => {
           if (item.kind !== 'post') layout.span = 2;
         }}
-        refreshing={profileQuery.isRefetching && !profileQuery.isFetchingNextPage}
+        refreshing={pullRefreshing}
         renderItem={renderItem}
         showsVerticalScrollIndicator={false}
         stickyHeaderIndices={[1]}

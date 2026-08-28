@@ -332,8 +332,14 @@ export function ProfileDashboard({
   }, []);
   // Collapse back to a single page before refetching, otherwise React Query refetches every
   // page the user has scrolled through.
+  // `pullRefreshing` keeps the RefreshControl off query fetch state: on iOS a
+  // programmatic `refreshing` drags the list down and can strand it there, so
+  // only a refresh the user asked for may engage the control (see the note in
+  // app/(tabs)/showcase.tsx). Background refetches update the grid silently.
+  const [pullRefreshing, setPullRefreshing] = useState(false);
   const refreshActiveMedia = () => {
     haptic.light();
+    setPullRefreshing(true);
     loadingMoreRef.current = false;
     lastLoadMoreAtRef.current = 0;
     lastLoadMorePageCountRef.current = null;
@@ -343,7 +349,7 @@ export function ProfileDashboard({
         ['profile-saved-media', user?.id],
         truncateInfiniteDataToFirstPage
       );
-      void savedQuery.refetch();
+      void savedQuery.refetch().finally(() => setPullRefreshing(false));
       return;
     }
     if (activeTab === 'Creations') {
@@ -351,14 +357,14 @@ export function ProfileDashboard({
         ['profile-generations', user?.id],
         truncateInfiniteDataToFirstPage
       );
-      void generationsQuery.refetch();
+      void generationsQuery.refetch().finally(() => setPullRefreshing(false));
       return;
     }
     queryClient.setQueryData<InfiniteData<OwnerPostsResponse>>(
       ['profile-owner-posts', user?.id],
       truncateInfiniteDataToFirstPage
     );
-    void postsQuery.refetch();
+    void postsQuery.refetch().finally(() => setPullRefreshing(false));
   };
 
   useEffect(() => {
@@ -441,7 +447,7 @@ export function ProfileDashboard({
       isFetchNextPageError={activeIsFetchNextPageError}
       isFetchingNextPage={activeIsFetchingNextPage}
       isLoading={isMediaLoading}
-      isRefreshing={activeMediaIsFetching && !activeIsFetchingNextPage}
+      isRefreshing={pullRefreshing}
       mediaError={mediaError}
       onEndReached={requestNextPage}
       onRetryNextPage={retryNextPage}
