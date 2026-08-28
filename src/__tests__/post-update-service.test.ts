@@ -464,6 +464,31 @@ describe('updateOwnerPostForRoute', () => {
                 isPrimary: false,
                 remixUse: 'none',
               },
+              // A legacy recipe merges the creator's own generated output as a
+              // reference, and a persisted composer draft can echo the signed
+              // URL form — both shapes must be recognised as derived.
+              {
+                id: 'gen-input-2',
+                type: 'reference_image',
+                role: 'style_reference',
+                sectionId: null,
+                title: 'Workflow input',
+                storagePath: 'generated_images/user-1/workflow-input-b.jpeg',
+                sortOrder: 2,
+                isPrimary: false,
+                remixUse: 'none',
+              },
+              {
+                id: 'gen-input-3',
+                type: 'reference_image',
+                role: 'style_reference',
+                sectionId: null,
+                title: 'Signed reference',
+                storagePath: 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/gen-7/01-reference_image.jpg?token=abc',
+                sortOrder: 3,
+                isPrimary: false,
+                remixUse: 'none',
+              },
             ],
           },
         },
@@ -475,7 +500,7 @@ describe('updateOwnerPostForRoute', () => {
     const atomicCall = dependencies.updatePostWithResourceBundleAtomically.mock.calls[0]?.[0];
     const persistedItems = atomicCall?.bundle?.resources?.items ?? [];
     expect(persistedItems.map((item) => item.id)).toEqual(['recipe-prompt']);
-    expect(persistedItems.some((item) => item.storagePath?.startsWith('generation_inputs/'))).toBe(false);
+    expect(persistedItems.some((item) => item.storagePath)).toBe(false);
   });
 
   // Both composers already refuse to edit a sold package, but that is a rule

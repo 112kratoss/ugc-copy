@@ -1,7 +1,7 @@
 import type { SerializedWorkflowCanvasGraph } from '@/lib/workflow-canvas';
 import { normalizePostMediaKey } from '@/lib/post-media-key';
 import { resolveRemixTool } from '@/lib/remix-tools';
-import { parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
+import { getCanonicalStoredMediaLocation, parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
 
 export const POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS = 10;
 export const POST_RESOURCE_PRICE_INCREMENT_USD_CENTS = 10;
@@ -709,13 +709,35 @@ export function normalizePostResourceItems(
  * reject the save on the file-ownership check: they are re-derived on every
  * read and are never stored.
  */
+/**
+ * The buckets a derived reference item's path can point into: durable inputs,
+ * and the source buckets legacy generations reference directly (an old recipe
+ * merges its creator's uploads or generated outputs as reference media).
+ * `post_resource_files` is deliberately absent — genuinely stored resource
+ * files are always bare owner-prefixed paths, never bucket-prefixed, so a
+ * bucket-prefixed path in these buckets is always a derived echo.
+ */
+const DERIVED_REFERENCE_SOURCE_BUCKETS = [
+  'generation_inputs',
+  'uploads',
+  'generated_images',
+  'generated_videos',
+  'generated_audio',
+] as const;
+
 export function isDerivedGenerationReferenceResourceItem(
   item: { storagePath?: string | null },
 ): boolean {
-  const storagePath = typeof item.storagePath === 'string'
-    ? item.storagePath.trim().replace(/^\/+/, '')
-    : '';
-  return storagePath.startsWith('generation_inputs/');
+  if (typeof item.storagePath !== 'string') return false;
+  const storagePath = item.storagePath.trim().replace(/^\/+/, '');
+  if (!storagePath) return false;
+  // Editors round-trip the path in more than one representation: the bare
+  // bucket-prefixed path from a fresh read, and the signed storage-object URL
+  // a persisted composer draft captured. The bucket-aware parser recognises
+  // both.
+  return getCanonicalStoredMediaLocation(storagePath, {
+    allowedBuckets: DERIVED_REFERENCE_SOURCE_BUCKETS,
+  }) !== null;
 }
 
 /**
