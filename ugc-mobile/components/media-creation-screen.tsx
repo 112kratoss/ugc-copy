@@ -7,6 +7,7 @@ import {
   Layers,
   Plus,
   Play,
+  RefreshCw,
   Search,
   Settings2,
   Sparkles,
@@ -75,6 +76,7 @@ import {
   getMotionDuration,
   REMIX_RESTORE_WARNING_MESSAGE,
   renameMediaDraft,
+  replaceMediaDraftMedia,
   type CreationDraft,
   type ImageCreationDraft,
   type ImageModelId,
@@ -368,6 +370,10 @@ function renameMediaInList(items: MediaDraft[], id: string, displayName: string)
   return items.map((media) => (media.id === id ? renameMediaDraft(media, displayName) : media));
 }
 
+function replaceMediaInList(items: MediaDraft[], id: string, upload: Parameters<typeof replaceMediaDraftMedia>[1]) {
+  return items.map((media) => (media.id === id ? replaceMediaDraftMedia(media, upload) : media));
+}
+
 function hasStartedCreationDraft(draft: CreationDraft) {
   if (draft.prompt.trim()) return true;
   if (draft.tool === 'image') return draft.references.length > 0;
@@ -438,6 +444,7 @@ export function MediaCreationScreen({
     prompt: initialTool === 'motion' ? initialPrompt ?? '' : '',
   }));
   const [isUploading, setIsUploading] = useState(false);
+  const [replacingReferenceId, setReplacingReferenceId] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [enhanceLevel, setEnhanceLevel] = useState<'cinematic' | 'faithful'>('cinematic');
@@ -826,6 +833,35 @@ export function MediaCreationScreen({
       setMessage(error instanceof Error ? error.message : 'Upload failed.');
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  // Replaces one image reference's media in place, keeping its name and
+  // @handle so prompt mentions stay valid — the alternative was remove,
+  // re-pick, re-name, and re-mention.
+  const replaceImageReference = async (tool: 'image' | 'video', id: string) => {
+    setMessage(null);
+    setPromptMessage(null);
+    setReplacingReferenceId(id);
+    try {
+      const picked = await pickMedia('image');
+      if (!picked) return;
+      const uploaded = await uploadPickedMedia(picked.uri, {
+        api,
+        fileName: picked.fileName,
+        mimeType: picked.mimeType,
+        kind: 'image',
+        sizeBytes: picked.fileSize ?? null,
+      });
+      if (tool === 'image') {
+        setImageDraft((draft) => ({ ...draft, references: replaceMediaInList(draft.references, id, uploaded) }));
+      } else {
+        setVideoDraft((draft) => ({ ...draft, references: replaceMediaInList(draft.references, id, uploaded) }));
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Upload failed.');
+    } finally {
+      setReplacingReferenceId(null);
     }
   };
 
@@ -1243,6 +1279,10 @@ export function MediaCreationScreen({
               onUploadEnd={() => uploadSingleImage('end')}
               onUploadVideo={() => uploadReferenceVideo('video')}
               onUploadAudio={uploadReferenceAudio}
+              onReplaceReference={(id) => {
+                void replaceImageReference('video', id);
+              }}
+              replacingReferenceId={replacingReferenceId}
               onReferenceNotice={setReferenceNotice}
               onFocus={() => setIsPromptFocused(true)}
               onBlur={() => setIsPromptFocused(false)}
@@ -1492,6 +1532,10 @@ export function MediaCreationScreen({
                 references: renameMediaInList(draft.references, id, displayName),
               };
             })}
+            onReplaceReference={(id) => {
+              void replaceImageReference('image', id);
+            }}
+            replacingReferenceId={replacingReferenceId}
             onRemoveReference={(id) => {
               const removedReference = imageDraft.references.find((media) => media.id === id);
               const handleWasUsed = promptContainsHandle(imageDraft.prompt, removedReference?.handle);
@@ -1816,6 +1860,8 @@ function ImagePromptComposer({
   onUndoEnhance,
   onUploadReferences,
   onRenameReference,
+  onReplaceReference,
+  replacingReferenceId,
   onRemoveReference,
   onFocus,
   onBlur,
@@ -1834,6 +1880,8 @@ function ImagePromptComposer({
   onUndoEnhance: () => void;
   onUploadReferences: () => void;
   onRenameReference: (id: string, displayName: string) => void;
+  onReplaceReference: (id: string) => void;
+  replacingReferenceId: string | null;
   onRemoveReference: (id: string) => void;
   onFocus: () => void;
   onBlur: () => void;
@@ -2090,6 +2138,10 @@ function ImagePromptComposer({
           insertReferenceHandle(handle, lastPromptSelectionRef.current, 280);
           setReferenceId(null);
         }}
+        onReplace={() => {
+          if (selectedReference) onReplaceReference(selectedReference.id);
+        }}
+        isReplacing={selectedReference != null && replacingReferenceId === selectedReference.id}
         onRemove={() => {
           if (selectedReference) onRemoveReference(selectedReference.id);
           setReferenceId(null);
@@ -2295,6 +2347,8 @@ function VideoCreatorComposer({
   onUploadEnd,
   onUploadVideo,
   onUploadAudio,
+  onReplaceReference,
+  replacingReferenceId,
   onReferenceNotice,
   onFocus,
   onBlur,
@@ -2318,6 +2372,8 @@ function VideoCreatorComposer({
   onUploadEnd: () => void;
   onUploadVideo: () => void;
   onUploadAudio: () => void;
+  onReplaceReference: (id: string) => void;
+  replacingReferenceId: string | null;
   onReferenceNotice: (message: string | null) => void;
   onFocus: () => void;
   onBlur: () => void;
@@ -2709,6 +2765,10 @@ function VideoCreatorComposer({
               setReferenceId(null);
             }
           : undefined}
+        onReplace={selectedReference && draft.references.some((media) => media.id === selectedReference.id)
+          ? () => onReplaceReference(selectedReference.id)
+          : undefined}
+        isReplacing={selectedReference != null && replacingReferenceId === selectedReference.id}
         onRemove={removeSelectedReference}
       />
     </View>
@@ -3037,6 +3097,8 @@ function ReferenceDetailsOverlay({
   onClose,
   onRename,
   onUseHandle,
+  onReplace,
+  isReplacing,
   onRemove,
 }: {
   media: MediaDraft | null;
@@ -3044,6 +3106,9 @@ function ReferenceDetailsOverlay({
   onClose: () => void;
   onRename: (displayName: string) => void;
   onUseHandle?: (handle: string) => void;
+  /** Swap the underlying media while keeping the name and @handle. */
+  onReplace?: () => void;
+  isReplacing?: boolean;
   onRemove: () => void;
 }) {
   const reducedMotion = useReducedMotion();
@@ -3118,6 +3183,21 @@ function ReferenceDetailsOverlay({
             ) : null}
           </View>
           {media.handle && onUseHandle ? <SecondaryButton label={`Insert ${media.handle}`} onPress={() => onUseHandle(media.handle!)} /> : null}
+          {onReplace ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Replace ${accessibleName}`}
+              accessibilityState={{ disabled: Boolean(isReplacing) }}
+              disabled={isReplacing}
+              onPress={onReplace}
+              style={({ pressed }) => ({ minHeight: 52, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: appTheme.colors.borderStrong, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, opacity: isReplacing ? 0.55 : pressed ? appTheme.opacity.pressed : 1 })}
+            >
+              {isReplacing ? <ActivityIndicator size="small" color={appTheme.colors.text} /> : <RefreshCw size={16} color={appTheme.colors.text} />}
+              <Text style={{ color: appTheme.colors.text, fontSize: 13, fontWeight: '800' }}>
+                {isReplacing ? 'Replacing…' : `Replace media${media.handle ? ` · keeps ${media.handle}` : ''}`}
+              </Text>
+            </Pressable>
+          ) : null}
           <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${accessibleName}`} onPress={confirmRemove} style={({ pressed }) => ({ minHeight: 52, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: 'rgba(251,113,133,0.34)', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
             <Trash2 size={17} color={appTheme.colors.danger} />
             <Text style={{ color: appTheme.colors.danger, fontSize: 13, fontWeight: '800' }}>Remove reference</Text>

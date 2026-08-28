@@ -117,6 +117,7 @@ vi.mock('lucide-react-native', () => ({
   Layers: (props: MockProps) => React.createElement('layers-icon', props),
   Plus: (props: MockProps) => React.createElement('plus-icon', props),
   Play: (props: MockProps) => React.createElement('play-icon', props),
+  RefreshCw: (props: MockProps) => React.createElement('refresh-icon', props),
   Search: (props: MockProps) => React.createElement('search-icon', props),
   Sparkles: (props: MockProps) => React.createElement('sparkles-icon', props),
   Settings2: (props: MockProps) => React.createElement('settings-icon', props),

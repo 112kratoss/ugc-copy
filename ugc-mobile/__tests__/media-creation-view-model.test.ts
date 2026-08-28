@@ -15,6 +15,7 @@ import {
   getVisibleGenerationCheckMessages,
   hydrateCreationDraftFromRemixSource,
   renameMediaDraft,
+  replaceMediaDraftMedia,
   validateCreationDraft,
   VIDEO_MODELS,
   type MediaDraft,
@@ -149,6 +150,34 @@ describe('media creation view model', () => {
     expect(renameMediaDraft(imageReference(), '')).toMatchObject({
       displayName: '',
       handle: undefined,
+    });
+  });
+
+  it('replaces a reference media in place while keeping its identity', () => {
+    const original = imageReference({ sourceGenerationId: 'gen-1' });
+
+    const replaced = replaceMediaDraftMedia(original, {
+      signedUrl: 'https://cdn.example.com/swapped.jpg',
+      storagePath: 'uploads/user/swapped.jpg',
+      mimeType: 'image/jpeg',
+      fileName: 'swapped.jpg',
+      kind: 'image',
+      sizeBytes: 2048,
+    });
+
+    // Identity survives: id, name, and the @handle prompt mentions point at.
+    expect(replaced.id).toBe(original.id);
+    expect(replaced.displayName).toBe(original.displayName);
+    expect(replaced.handle).toBe(original.handle);
+    // The media itself is swapped, and the generation provenance is cleared —
+    // the new file is a fresh upload, not a copy of a generation.
+    expect(replaced).toMatchObject({
+      url: 'https://cdn.example.com/swapped.jpg',
+      storagePath: 'uploads/user/swapped.jpg',
+      mimeType: 'image/jpeg',
+      fileName: 'swapped.jpg',
+      sizeBytes: 2048,
+      sourceGenerationId: null,
     });
   });
 

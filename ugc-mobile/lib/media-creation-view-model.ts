@@ -838,6 +838,26 @@ export function renameMediaDraft(media: MediaDraft, displayName: string): MediaD
   };
 }
 
+/**
+ * Swaps a reference's media in place while keeping its identity: the draft id
+ * (list keys and the open details sheet stay on the same entry), the display
+ * name, and the handle — an @mention already written into the prompt keeps
+ * pointing at the same slot, now backed by the new file.
+ */
+export function replaceMediaDraftMedia(media: MediaDraft, upload: UploadedMediaInput): MediaDraft {
+  return {
+    ...media,
+    url: upload.signedUrl,
+    storagePath: upload.storagePath,
+    mimeType: upload.mimeType,
+    fileName: upload.fileName,
+    durationSeconds: upload.durationSeconds ?? null,
+    sizeBytes: upload.sizeBytes ?? null,
+    // The swapped-in file is a fresh upload, not a copy of a generation.
+    sourceGenerationId: null,
+  };
+}
+
 export function createDefaultCreationDraft(tool: 'image'): ImageCreationDraft;
 export function createDefaultCreationDraft(tool: 'video'): VideoCreationDraft;
 export function createDefaultCreationDraft(tool: 'motion'): MotionCreationDraft;
