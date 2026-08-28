@@ -1211,6 +1211,12 @@ export interface OwnerPostBundleSummary {
 export interface OwnerPostListItem {
   id: string;
   title: string;
+  /**
+   * The stored title without the "Untitled post" display fallback; '' when the
+   * post has none. Editors must hydrate from this — echoing the fallback back
+   * on save trips the server's marketplace placeholder gate.
+   */
+  rawTitle?: string;
   createdAt: string;
   visibility: string;
   mediaUrl: string | null;

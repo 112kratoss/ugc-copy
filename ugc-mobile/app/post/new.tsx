@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient, type InfiniteData, type QueryCli
 import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import type { ImagePickerAsset } from 'expo-image-picker';
-import { Check, ChevronDown, ChevronRight, FileText, Globe2, ImageIcon, Link2, Lock, Package, Play, Plus, Sparkles, Trash2, Upload, X } from 'lucide-react-native';
+import { Check, ChevronDown, ChevronRight, FileText, Globe2, ImageIcon, Link2, Lock, Package, Pencil, Play, Plus, Sparkles, Trash2, Upload, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import {
   AccessibilityInfo,
@@ -67,6 +67,7 @@ import {
   applyCreationPromptResource,
   createPostComposerResourceCard,
   createMadeWithRow,
+  deriveCreationPackageFromResourceCards,
   getDefaultPostComposerDraft,
   getPostComposerDetailErrors,
   getPostComposerPublishActions,
@@ -110,6 +111,7 @@ import {
   type ComposerUndoEntry,
 } from '@/lib/composer-undo';
 import { env } from '@/lib/env';
+import { verticalHitSlop } from '@/lib/hit-target';
 import {
   MEDIA_CARD_GAP,
   MEDIA_CARD_STEP,
@@ -542,6 +544,7 @@ function PostResourcesPage({
   onAddResource,
   onEditResource,
   onRemoveResource,
+  onEditDetails,
 }: {
   draft: PostComposerDraft;
   selectedGeneration: GenerationListItem | null;
@@ -555,6 +558,7 @@ function PostResourcesPage({
   onAddResource: () => void;
   onEditResource: (id: string) => void;
   onRemoveResource: (id: string) => void;
+  onEditDetails: () => void;
 }) {
   const resourceActive = draft.resource.accessMode !== 'none';
   const priceTokens = getPostComposerPriceTokens(draft.resource);
@@ -581,7 +585,7 @@ function PostResourcesPage({
   if (isTemplateBacked) {
     return (
       <View style={{ gap: 16 }}>
-        <PostPublishSummary draft={draft} selectedGeneration={selectedGeneration} validation={publishValidation} />
+        <PostPublishSummary draft={draft} selectedGeneration={selectedGeneration} validation={publishValidation} onEditTitle={onEditDetails} />
         <StatusBlock
           title="Ready to publish"
           body="This template result shares final media only. Its private recipe remains protected."
@@ -596,7 +600,7 @@ function PostResourcesPage({
     const packageDescription = `${draft.resource.accessMode === 'paid' ? `${getPostComposerPriceTokens(draft.resource)} token paid package` : 'Resource package'} · ${resourceCount} ${resourceCount === 1 ? 'resource' : 'resources'}`;
     return (
       <View style={{ gap: 16 }}>
-        <PostPublishSummary draft={draft} selectedGeneration={selectedGeneration} validation={publishValidation} />
+        <PostPublishSummary draft={draft} selectedGeneration={selectedGeneration} validation={publishValidation} onEditTitle={onEditDetails} />
         <StatusBlock
           title="Purchased resources are protected"
           body="People have already unlocked this package, so its access mode, price, and contents cannot be changed. Visibility changes still apply to the post."
@@ -609,7 +613,7 @@ function PostResourcesPage({
 
   return (
     <View style={{ gap: 18 }}>
-      <PostPublishSummary draft={draft} selectedGeneration={selectedGeneration} validation={publishValidation} />
+      <PostPublishSummary draft={draft} selectedGeneration={selectedGeneration} validation={publishValidation} onEditTitle={onEditDetails} />
       <View style={{ gap: 8 }}>
         <AppText heading variant="sectionTitle">Optional resources</AppText>
         <AppText variant="bodySm" color="muted">
@@ -872,12 +876,14 @@ function PostPublishSummary({
   draft,
   selectedGeneration,
   validation,
+  onEditTitle,
 }: {
   draft: PostComposerDraft;
   selectedGeneration: GenerationListItem | null;
   validation: PostComposerValidationResult;
+  onEditTitle?: () => void;
 }) {
-  const title = draft.title.trim() || 'Your post';
+  const title = draft.title.trim() || (onEditTitle ? 'Add a title' : 'Your post');
   const cover = draft.mediaItems[0]?.previewUrl
     || draft.mediaItems[0]?.uri
     || selectedGeneration?.previewUrl
@@ -920,7 +926,32 @@ function PostPublishSummary({
             {ready ? <Check size={17} color={appTheme.colors.success} /> : null}
             <AppText variant="label">{ready ? 'Ready to publish' : 'Needs attention'}</AppText>
           </View>
-          <AppText variant="bodySm" numberOfLines={1}>{title}</AppText>
+          {onEditTitle ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Edit title"
+              onPress={onEditTitle}
+              hitSlop={verticalHitSlop(20)}
+              style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 6,
+                opacity: pressed ? appTheme.opacity.pressed : 1,
+              })}
+            >
+              <AppText
+                variant="bodySm"
+                numberOfLines={1}
+                color={draft.title.trim() ? 'text' : 'muted'}
+                style={{ flexShrink: 1 }}
+              >
+                {title}
+              </AppText>
+              <Pencil size={16} color={appTheme.colors.textSecondary} />
+            </Pressable>
+          ) : (
+            <AppText variant="bodySm" numberOfLines={1}>{title}</AppText>
+          )}
           <AppText variant="caption" color="muted" numberOfLines={2}>
             {ready
               ? draft.mode === 'text'
@@ -1899,12 +1930,20 @@ export default function NewPostScreen() {
       const post = postQuery.data.post;
       const resourceBundleInput = post.resourceBundleInput;
       const mode = post.postFormat === 'text' ? 'text' : post.generationId ? 'creation' : 'upload';
+      const hydratedResourceCards = resourceBundleInput
+        ? hydratePostComposerResourceCards(resourceBundleInput)
+        : [];
+      // rawTitle, never the display title: the read API substitutes "Untitled
+      // post" for an empty title, and echoing that back on save trips the
+      // marketplace placeholder gate. A '' grandfathered title also tells
+      // validation the post may stay untitled until its author names it.
+      const loadedTitle = post.rawTitle ?? (post.title || '');
 
-      initialTitleRef.current = post.title || null;
+      initialTitleRef.current = post.rawTitle ?? (post.title || null);
       setDraft({
         mode,
         proofMode: mode === 'text' ? 'text' : 'media',
-        title: post.title || '',
+        title: loadedTitle,
         description: post.description || '',
         contentText: mode === 'text' ? post.body || '' : '',
         caption: mode === 'text' ? '' : post.body || post.description || '',
@@ -1955,7 +1994,10 @@ export default function NewPostScreen() {
                 existingId: `${post.id}:cover`,
               }]
             : [],
-        creationPackage: getDefaultPostComposerDraft().creationPackage,
+        // Read the toggle state back out of the loaded bundle — resetting it
+        // to defaults showed "Include exact prompt" OFF for a post already
+        // sharing its prompt, and flipping that toggle deleted the card.
+        creationPackage: deriveCreationPackageFromResourceCards(hydratedResourceCards),
         resource: resourceBundleInput ? {
           accessMode: resourceBundleInput.accessMode || 'none',
           cardAuthoringMode: 'cards',
@@ -1979,7 +2021,7 @@ export default function NewPostScreen() {
           })),
           organizeSections: Boolean(resourceBundleInput.resources?.sections?.length),
           sections: [],
-          cards: hydratePostComposerResourceCards(resourceBundleInput),
+          cards: hydratedResourceCards,
           allowRemix: hydratePostComposerAllowRemix(resourceBundleInput),
           summary: resourceBundleInput.summary || '',
           previewText: resourceBundleInput.previewText || '',
@@ -3210,6 +3252,7 @@ export default function NewPostScreen() {
             }}
             onEditResource={openResourceCard}
             onRemoveResource={removeResourceCard}
+            onEditDetails={() => setComposerStep('details')}
           />
         )}
       </ScrollView>

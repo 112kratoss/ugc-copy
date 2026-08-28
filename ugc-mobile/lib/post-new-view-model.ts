@@ -756,6 +756,29 @@ export function getDefaultCreationPackageDraft(): PostComposerCreationPackageDra
   };
 }
 
+/**
+ * Reads the "From this creation" toggle state back out of a loaded bundle.
+ *
+ * The edit prefill used to reset the creation package to defaults, so a post
+ * that already shared its exact prompt showed "Include exact prompt" OFF —
+ * and flipping the mislabeled toggle once deleted the very card the post was
+ * sharing. The prompt toggle round-trips through the card the toggle itself
+ * creates (section id `creation-prompt`); reference attachment is recognised
+ * by any reference-media card carrying files, which covers both the copies
+ * attached at publish time and the server-merged generation references.
+ */
+export function deriveCreationPackageFromResourceCards(
+  cards: PostComposerResourceCardDraft[] | null | undefined,
+): PostComposerCreationPackageDraft {
+  const list = cards ?? [];
+  return {
+    attachPromptResource: list.some((card) => card.id === 'creation-prompt'),
+    attachGenerationReferences: list.some((card) => (
+      card.type === 'reference_media' && card.attachments.length > 0
+    )),
+  };
+}
+
 export function getDefaultPostComposerDraft(): PostComposerDraft {
   return {
     mode: 'text',
@@ -979,7 +1002,12 @@ export function getPostComposerDetailErrors(
   // title the post already had when it exceeded that limit.
   const trimmedTitle = draft.title.trim();
   if (!trimmedTitle) {
-    errors.title = 'Add a title for your post.';
+    // A grandfathered '' means the post was loaded without a title: it may be
+    // saved that way again, exactly as the server accepts it. New posts carry
+    // no grandfathered title and still require one.
+    if (options.grandfatheredTitle !== '') {
+      errors.title = 'Add a title for your post.';
+    }
   } else if (
     trimmedTitle.length > TITLE_MAX_LENGTH
     && trimmedTitle !== (options.grandfatheredTitle ?? '').trim()

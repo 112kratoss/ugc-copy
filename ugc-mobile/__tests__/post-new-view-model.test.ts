@@ -9,6 +9,7 @@ import {
   buildPublishGenerationPostPayload,
   buildUpdatePostPayload,
   createPostComposerResourceCard,
+  deriveCreationPackageFromResourceCards,
   getPostComposerPublishActions,
   applyCreationPromptResource,
   getDefaultPostComposerDraft,
@@ -311,6 +312,81 @@ describe('post new view model', () => {
     // A new post grandfathers nothing.
     expect(getPostComposerDetailErrors(draft)).toMatchObject({
       title: `Titles are limited to ${TITLE_MAX_LENGTH} characters.`,
+    });
+  });
+
+  // The read APIs substitute "Untitled post" for an empty title, so a legacy
+  // post is loaded with rawTitle '' — it may be saved that way again, exactly
+  // as the server accepts the unchanged value. Requiring a title here re-broke
+  // the post the moment the poisoned fallback hydration was fixed.
+  it('grandfathers an absent title the post was loaded with', () => {
+    const draft = {
+      ...getDefaultPostComposerDraft(),
+      mode: 'text' as const,
+      proofMode: 'text' as const,
+      contentText: 'A reusable breakdown for product hooks.',
+      category: 'text' as const,
+      title: '',
+    };
+
+    expect(getPostComposerDetailErrors(draft, { grandfatheredTitle: '' }).title).toBeUndefined();
+    // Typing a title and clearing it again keeps the exemption: the loaded
+    // state was titleless, so saving titleless stays legal.
+    expect(getPostComposerDetailErrors({ ...draft, title: '  ' }, { grandfatheredTitle: '' }).title).toBeUndefined();
+    // New posts (nothing grandfathered) still require one.
+    expect(getPostComposerDetailErrors(draft)).toMatchObject({
+      title: 'Add a title for your post.',
+    });
+    expect(getPostComposerDetailErrors(draft, { grandfatheredTitle: null })).toMatchObject({
+      title: 'Add a title for your post.',
+    });
+  });
+
+  // The "From this creation" toggles must read their state back out of the
+  // loaded bundle: resetting them to defaults showed "Include exact prompt"
+  // OFF for a post already sharing its prompt, and flipping that toggle
+  // deleted the very card the post was sharing.
+  it('derives the creation package toggles from hydrated resource cards', () => {
+    const promptCard = createPostComposerResourceCard('prompt', {
+      id: 'creation-prompt',
+      title: 'Exact generation prompt',
+      textContent: 'venom hero shot',
+    });
+    const referenceCard = createPostComposerResourceCard('reference_media', {
+      id: 'hydrated-item-gen-input-1',
+      title: 'Reference image 1',
+      attachments: [{
+        id: 'gen-input-1',
+        kind: 'file',
+        label: 'Reference image 1',
+        url: '',
+        storagePath: 'generation_inputs/user-1/gen-7/00-reference_image.jpg',
+        contentType: 'image/jpeg',
+        sizeBytes: null,
+        resourceType: 'reference_image',
+        role: 'style_reference',
+        remixUse: 'none',
+      }],
+    });
+
+    expect(deriveCreationPackageFromResourceCards([promptCard, referenceCard])).toEqual({
+      attachPromptResource: true,
+      attachGenerationReferences: true,
+    });
+    expect(deriveCreationPackageFromResourceCards([referenceCard])).toEqual({
+      attachPromptResource: false,
+      attachGenerationReferences: true,
+    });
+    // A hand-authored prompt card is not the creation-package card.
+    expect(deriveCreationPackageFromResourceCards([
+      createPostComposerResourceCard('prompt', { textContent: 'my own prompt' }),
+    ])).toEqual({
+      attachPromptResource: false,
+      attachGenerationReferences: false,
+    });
+    expect(deriveCreationPackageFromResourceCards([])).toEqual({
+      attachPromptResource: false,
+      attachGenerationReferences: false,
     });
   });
 
