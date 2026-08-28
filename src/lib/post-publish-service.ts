@@ -16,6 +16,7 @@ import {
 import {
   normalizePostResourceAttachments,
   normalizePostResourceItems,
+  stripDerivedGenerationReferenceItems,
   type PostResourceBundleStatus,
 } from '@/lib/post-resource-bundles';
 import { insertPostSourceTools, PostSourceToolsWriteError } from '@/lib/post-source-tools-server';
@@ -136,7 +137,7 @@ export async function publishPreparedPost({
   adminSupabase,
   ownerUserId,
   postId,
-  submission,
+  submission: submittedSubmission,
   dependencies,
 }: {
   adminSupabase: SupabaseClient;
@@ -146,6 +147,14 @@ export async function publishPreparedPost({
   dependencies?: PostPublishDependencies;
 }): Promise<PostPublishResult> {
   const resolvedDependencies = resolveDependencies(dependencies);
+  // Editors echo the read payload back, and reads merge generation-derived
+  // reference items in. Those are re-derived on every read, so drop them here
+  // instead of failing the file-ownership check on their generation_inputs
+  // paths.
+  const submission: PostCreationSubmission = {
+    ...submittedSubmission,
+    resourceBundle: stripDerivedGenerationReferenceItems(submittedSubmission.resourceBundle ?? null),
+  };
   const safetyViolation = submission.visibility !== 'private'
     ? getPublicUgcSafetyViolation({
         title: submission.title,

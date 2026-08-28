@@ -401,6 +401,83 @@ describe('updateOwnerPostForRoute', () => {
     });
   });
 
+  // Owner reads merge the linked generation's reference media into
+  // resources.items with generation_inputs paths, and both composers echo the
+  // hydrated items back on save. Those derived items must be dropped, not
+  // bounced off the file-ownership check — rejecting them made every save of a
+  // recipe post fail with "Resource files must belong to the authenticated
+  // user".
+  it('drops re-echoed generation-derived reference items instead of rejecting the save', async () => {
+    const { client } = createSupabaseMock({
+      bundle: { id: 'bundle-1', access_mode: 'free', status: 'draft' },
+    });
+    const dependencies = {
+      listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+      getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+      updatePostWithResourceBundleAtomically: vi.fn<
+        NonNullable<PostUpdateDependencies['updatePostWithResourceBundleAtomically']>
+      >(async () => ({
+        postId: 'post-1',
+        visibility: 'private' as const,
+        bundleId: 'bundle-1',
+        bundleStatus: 'draft' as const,
+      })),
+      replacePostSourceTools: vi.fn(async () => undefined),
+      replacePostMediaItems: vi.fn(async () => undefined),
+      createPostMediaPreview: vi.fn(async () => null),
+    } satisfies PostUpdateDependencies;
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        visibility: 'private',
+        resourceBundle: {
+          accessMode: 'free',
+          resources: {
+            promptText: null,
+            notesMarkdown: null,
+            workflowShareUrl: null,
+            attachments: [],
+            allowRemix: true,
+            items: [
+              {
+                id: 'recipe-prompt',
+                type: 'prompt',
+                role: 'primary',
+                sectionId: null,
+                title: 'Prompt',
+                textContent: 'A useful reusable prompt.',
+                sortOrder: 0,
+                isPrimary: true,
+                remixUse: 'text_template',
+              },
+              {
+                id: 'gen-input-1',
+                type: 'reference_image',
+                role: 'style_reference',
+                sectionId: null,
+                title: 'Reference image 1',
+                storagePath: 'generation_inputs/user-1/gen-7/00-reference_image.jpg',
+                sortOrder: 1,
+                isPrimary: false,
+                remixUse: 'none',
+              },
+            ],
+          },
+        },
+      },
+      dependencies,
+    });
+
+    expect(result.ok).toBe(true);
+    const atomicCall = dependencies.updatePostWithResourceBundleAtomically.mock.calls[0]?.[0];
+    const persistedItems = atomicCall?.bundle?.resources?.items ?? [];
+    expect(persistedItems.map((item) => item.id)).toEqual(['recipe-prompt']);
+    expect(persistedItems.some((item) => item.storagePath?.startsWith('generation_inputs/'))).toBe(false);
+  });
+
   // Both composers already refuse to edit a sold package, but that is a rule
   // about what buyers paid for, so a stale client or a direct API call must not
   // be able to rewrite, reprice, or retire it either.

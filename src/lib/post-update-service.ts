@@ -14,6 +14,7 @@ import {
   isPostResourceBundleAccessMode,
   normalizePostResourceAttachments,
   normalizePostResourceItems,
+  stripDerivedGenerationReferenceItems,
   validatePostResourceBundleInput,
   type PostResourceBundleInput,
 } from '@/lib/post-resource-bundles';
@@ -1197,8 +1198,12 @@ export async function updateOwnerPostForRoute({
       return createSoldResourceBundleLockedResult();
     }
 
+    // Editors echo the read payload back, and reads merge generation-derived
+    // reference items in. Those are re-derived on every read, so drop them
+    // before validation instead of failing the file-ownership checks on their
+    // generation_inputs paths.
     const { bundle: resourceBundle, error: resourceBundleError } = parseBundleInput(
-      body.resourceBundle,
+      stripDerivedGenerationReferenceItems(body.resourceBundle),
       ownerUserId,
       availableMediaKeys
     );

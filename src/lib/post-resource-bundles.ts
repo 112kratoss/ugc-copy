@@ -701,6 +701,50 @@ export function normalizePostResourceItems(
   return legacyItems;
 }
 
+/**
+ * Owner and entitled reads merge the linked generation's reference media into
+ * `resources.items` with their `generation_inputs/...` storage paths. Editors
+ * hydrate cards from those reads and echo the whole item list back on save, so
+ * the write paths must recognise the derived items and drop them rather than
+ * reject the save on the file-ownership check: they are re-derived on every
+ * read and are never stored.
+ */
+export function isDerivedGenerationReferenceResourceItem(
+  item: { storagePath?: string | null },
+): boolean {
+  const storagePath = typeof item.storagePath === 'string'
+    ? item.storagePath.trim().replace(/^\/+/, '')
+    : '';
+  return storagePath.startsWith('generation_inputs/');
+}
+
+/**
+ * Accepts the raw client payload, so it can run before bundle validation —
+ * which is where the derived items would otherwise be rejected.
+ */
+export function stripDerivedGenerationReferenceItems<T>(bundle: T): T {
+  if (!bundle || typeof bundle !== 'object') return bundle;
+  const resources = (bundle as { resources?: unknown }).resources;
+  if (!resources || typeof resources !== 'object') return bundle;
+  const items = (resources as { items?: unknown }).items;
+  if (!Array.isArray(items) || items.length === 0) return bundle;
+
+  const keptItems = items.filter((item) => !(
+    item
+    && typeof item === 'object'
+    && isDerivedGenerationReferenceResourceItem(item as { storagePath?: string | null })
+  ));
+  if (keptItems.length === items.length) return bundle;
+
+  return {
+    ...bundle,
+    resources: {
+      ...resources,
+      items: keptItems,
+    },
+  } as T;
+}
+
 export function formatUsdCents(amountUsdCents: number): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',

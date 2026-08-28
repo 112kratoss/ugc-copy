@@ -35,6 +35,7 @@ import {
   type GenerationShowcaseCategory,
 } from '@/lib/generation-post-media';
 import {
+  stripDerivedGenerationReferenceItems,
   validatePostResourceBundleInput,
   type PostResourceBundleInput,
 } from '@/lib/post-resource-bundles';
@@ -497,7 +498,12 @@ export async function publishGenerationToShowcaseForRoute({
   const effectiveShareInputMediaForRemix = effectiveIsPublic && requestBody.shareInputMediaForRemix === true;
   const hasRequestedResourceBundlePayload = !isCanonicalTemplateResult
     && Object.prototype.hasOwnProperty.call(requestBody, 'resourceBundle');
-  const requestedResourceBundle = isCanonicalTemplateResult ? null : requestBody.resourceBundle ?? null;
+  // Editors echo owner reads back, and reads merge generation-derived
+  // reference items in with generation_inputs paths. They are re-derived on
+  // every read, so drop them before validation rather than reject the publish.
+  const requestedResourceBundle = isCanonicalTemplateResult
+    ? null
+    : stripDerivedGenerationReferenceItems(requestBody.resourceBundle ?? null);
   const requestedAccessMode = requestedResourceBundle?.accessMode ?? 'none';
   const shouldIncludeGenerationReferences = requestBody.includeGenerationReferences === true;
   let effectiveResourceBundle: PostResourceBundleInput | null = requestedResourceBundle;
