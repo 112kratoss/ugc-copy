@@ -1,5 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { Stack, router, useLocalSearchParams } from 'expo-router';
+import { Stack, router } from 'expo-router';
 import {
   AccessibilityInfo,
   ActivityIndicator,
@@ -19,6 +19,7 @@ import { isNetworkRequestFailedError } from '@/lib/supabase-auth-recovery';
 import { useAuth } from '@/lib/auth';
 import { useReducedMotion } from '@/lib/motion';
 import { trackOnboardingEvent, useOnboarding } from '@/lib/onboarding';
+import { resolveOnboardingDestination } from '@/lib/onboarding-destination';
 import { appTheme } from '@/lib/theme';
 import type { OnboardingGoal, ProfileResponse, WelcomeCreditResponse } from '@/lib/types';
 import { AppText, AppTextInput, Card, Kicker, PrimaryButton, SecondaryButton } from '@/components/ui';
@@ -65,10 +66,6 @@ const GOALS: BookletGoal[] = [
   },
 ];
 
-function firstParam(value: string | string[] | undefined) {
-  return Array.isArray(value) ? value[0] : value;
-}
-
 function isClaimedIdentity(profile: ProfileResponse | null) {
   const username = profile?.username?.trim() ?? '';
   return /^[a-z0-9-]{3,24}$/.test(username)
@@ -97,15 +94,17 @@ function profileUpdatePayload(profile: ProfileResponse, username: string, displa
 }
 
 export default function OnboardingScreen() {
-  const params = useLocalSearchParams<{ resume?: string | string[] }>();
-  const resume = firstParam(params.resume);
   const { api, user, refreshProfile, updateCredits } = useAuth();
   const { state, update, skip, complete } = useOnboarding();
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const reducedMotion = useReducedMotion();
-  const [step, setStep] = useState(state.lastStep === 0 ? 0 : 1);
-  const [stage, setStage] = useState<'intro' | 'loading' | 'identity' | 'reward'>('intro');
+  const [step, setStep] = useState(state.introStep);
+  // A signed-in creator never belongs on the guest intro, so open straight into
+  // `loading` and let the resolver pick the real stage. Seeding `intro` here is
+  // what put an account holder on the welcome card while the profile fetch was
+  // still in flight.
+  const [stage, setStage] = useState<'intro' | 'loading' | 'identity' | 'reward'>(user ? 'loading' : 'intro');
   const [goal, setGoal] = useState<OnboardingGoal>(state.goal);
   const [profile, setProfile] = useState<ProfileResponse | null>(null);
   const [welcome, setWelcome] = useState<WelcomeCreditResponse | null>(null);
@@ -119,6 +118,7 @@ export default function OnboardingScreen() {
   const [isCelebrating, setIsCelebrating] = useState(false);
   const rewardScale = useRef(new Animated.Value(1)).current;
   const authSucceededTracked = useRef(false);
+  const previousUserRef = useRef<string | null>(user?.id ?? null);
   const rewardViewedTracked = useRef(false);
   const handleRef = useRef<TextInput | null>(null);
   const cardWidth = Math.min(520, width - 32);
@@ -139,28 +139,54 @@ export default function OnboardingScreen() {
       setWelcome(nextWelcome);
       setDisplayName(nextProfile.displayName?.trim() || authDisplayName(user.user_metadata) || user.email?.split('@')[0] || 'Creator');
       setUsername(/^creator-[a-f0-9]{8}$/.test(nextProfile.username ?? '') ? '' : nextProfile.username ?? '');
-      const identityComplete = isClaimedIdentity(nextProfile);
-      const nextStage = identityComplete ? 'reward' : 'identity';
-      setStage(nextStage);
-      await update({ status: 'in_progress', lastStep: identityComplete ? 5 : 4, goal });
-      await api.updateOnboardingState({ status: 'in_progress', goal }).catch(() => undefined);
-      if (resume === 'identity' && !authSucceededTracked.current) {
-        authSucceededTracked.current = true;
-        void trackOnboardingEvent(api, 'auth_succeeded', { goal, step: 'auth' });
+      // Resolved once, on entry. Re-deriving as state changes would eject
+      // someone the instant `claimCredits` flips `eligible` to `claimed` —
+      // mid-celebration, with the credits counter still animating.
+      const destination = resolveOnboardingDestination({
+        hasUser: true,
+        welcome: nextWelcome,
+        local: state,
+      });
+      if (destination === 'none') {
+        // Nothing outstanding. Reaching here means a deep link or a stale card,
+        // not a flow to walk.
+        router.replace('/(tabs)' as never);
+        return;
       }
+      setStage(destination === 'reward' ? 'reward' : 'identity');
+      // Only the goal. Sending `status: 'in_progress'` here is what demoted a
+      // finished run one second after it completed — the server keeps its own
+      // guard now, but the fix belongs at the source too.
+      await update({ goal });
+      await api.updateOnboardingState({ goal }).catch(() => undefined);
     } catch (error) {
       setMessage(isNetworkRequestFailedError(error)
         ? 'You appear to be offline. Check your connection and try again.'
         : 'We could not load your creator setup. Try again, or skip it for now — you can finish from Home.');
       setStage('loading');
     }
-  }, [api, goal, resume, update, user]);
+  }, [api, goal, state, update, user]);
 
   useEffect(() => {
-    if (user && (resume === 'identity' || state.lastStep >= 4)) {
-      void loadAuthenticatedStage();
+    // Being signed in is the whole condition. This used to also require
+    // `state.lastStep >= 4` — an install-local cursor — so the same account
+    // entered the authenticated stages on one device and the guest welcome
+    // screen on another.
+    if (user) void loadAuthenticatedStage();
+  }, [loadAuthenticatedStage, user]);
+
+  useEffect(() => {
+    // `auth_succeeded` used to key off a `resume=identity` param. Delivery of
+    // that param to an already-mounted screen was never guaranteed —
+    // `completeAuthScreen` prefers `router.dismissTo()` — so watch the session
+    // transition instead, which is what the event actually means.
+    const hadUser = previousUserRef.current;
+    previousUserRef.current = user?.id ?? null;
+    if (!hadUser && user && !authSucceededTracked.current) {
+      authSucceededTracked.current = true;
+      void trackOnboardingEvent(api, 'auth_succeeded', { goal, step: 'auth' });
     }
-  }, [loadAuthenticatedStage, resume, state.lastStep, user]);
+  }, [api, goal, user]);
 
   useEffect(() => {
     if (stage !== 'intro') return;
@@ -200,18 +226,24 @@ export default function OnboardingScreen() {
 
   const moveToStep = async (nextStep: number) => {
     setStep(nextStep);
-    await update({ status: 'in_progress', lastStep: nextStep, goal });
+    await update({ status: 'in_progress', introStep: nextStep, goal });
   };
 
   /**
    * Leave onboarding without finishing it.
    *
-   * `skip()` marks the flow skipped rather than complete, which is what keeps
-   * the "Finish your creator setup" card on Home and in Settings — so stepping
-   * out here is deferring the step, not losing it.
+   * `skip()` marks the flow skipped rather than complete, so the entry points
+   * can still offer the flow later — stepping out is deferring, not losing.
+   *
+   * Leaving the identity stage records the deferral. Without it the resolver
+   * sends an unclaimed handle straight back to this same stage on the next
+   * render, which is the old loop wearing a different hat: "later" has to mean
+   * later. Settings still opens the flow whenever they want it.
    */
   const leaveForNow = async (fromStep: string) => {
-    await skip();
+    await (fromStep === 'identity'
+      ? update({ status: 'skipped', identityDeferredAt: new Date().toISOString() })
+      : skip());
     void trackOnboardingEvent(api, 'skipped', { goal, step: fromStep });
     router.replace('/(tabs)' as never);
   };
@@ -219,16 +251,23 @@ export default function OnboardingScreen() {
   const exploreAsGuest = () => leaveForNow(stage === 'intro' ? (step === 0 ? 'welcome' : 'goal') : stage);
 
   const continueToAuth = async () => {
-    await update({ status: 'in_progress', lastStep: 4, goal });
+    await update({ status: 'in_progress', introStep: 1, goal });
+    // Already signed in — the sign-up screen has nothing to ask. It used to be
+    // pushed anyway and bounced straight back out, which read as a flash of a
+    // stranger's screen on the way to the identity step.
+    if (user) {
+      await loadAuthenticatedStage();
+      return;
+    }
     void trackOnboardingEvent(api, 'auth_started', { goal, step: 'auth' });
     router.push({
       pathname: '/auth',
-      params: { mode: 'signup', returnTo: '/onboarding?resume=identity' },
+      params: { mode: 'signup', returnTo: '/onboarding' },
     } as never);
   };
 
   const signInFromWelcome = async () => {
-    await update({ status: 'in_progress', lastStep: 0, goal });
+    await update({ status: 'in_progress', introStep: 0, goal });
     void trackOnboardingEvent(api, 'auth_started', { goal, step: 'welcome-sign-in' });
     router.push({
       pathname: '/auth',
@@ -257,10 +296,18 @@ export default function OnboardingScreen() {
       setProfile(updatedProfile);
       setWelcome(nextWelcome);
       await refreshProfile();
-      await update({ status: 'in_progress', lastStep: 5, goal });
-      await api.updateOnboardingState({ status: 'in_progress', goal }).catch(() => undefined);
+      await update({ goal });
+      await api.updateOnboardingState({ goal }).catch(() => undefined);
       void trackOnboardingEvent(api, 'username_saved', { goal, step: 'identity' });
-      setStage('reward');
+      // The reward stage is for people who can actually claim. Anyone else —
+      // most often an account that predates the grant program — has now
+      // finished everything the flow can offer, so end it rather than show a
+      // Creator Pack figure they will never receive.
+      if (nextWelcome.status === 'eligible') {
+        setStage('reward');
+      } else {
+        await startCreating();
+      }
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
         setUsernameState('error');
@@ -341,7 +388,10 @@ export default function OnboardingScreen() {
 
   const claimReady = welcome?.status === 'eligible';
   const claimed = welcome?.status === 'claimed' || welcome?.status === 'already_claimed';
-  const legacy = welcome?.status === 'legacy_ineligible';
+  // The figure is only meaningful to someone who is about to receive it or just
+  // did. For everyone else `amount` falls back to the program default, which is
+  // how an account holding 26,831 credits was shown a headline "25".
+  const showAmount = claimReady || claimed;
 
   return (
     <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
@@ -395,7 +445,7 @@ export default function OnboardingScreen() {
               availableWidth={cardWidth}
               onSelect={(nextGoal) => {
                 setGoal(nextGoal);
-                void update({ goal: nextGoal, status: 'in_progress', lastStep: 1 });
+                void update({ goal: nextGoal, status: 'in_progress', introStep: 1 });
               }}
               onContinue={() => void continueToAuth()}
               onBack={() => void moveToStep(0)}
@@ -495,25 +545,31 @@ export default function OnboardingScreen() {
                   </View>
                   <View style={{ alignItems: 'center', gap: 8 }}>
                     <Kicker color="primary">Creator Pack</Kicker>
-                    <AppText heading variant="pageTitle" style={{ textAlign: 'center' }}>Your Creator Pack is ready</AppText>
+                    <AppText heading variant="pageTitle" style={{ textAlign: 'center' }}>
+                      {claimed ? 'Your Creator Pack is ready' : 'Claim your Creator Pack'}
+                    </AppText>
                     <AppText variant="bodySm" color="muted" style={{ textAlign: 'center' }}>
-                      {legacy
-                        ? 'Your existing welcome credits are already in your balance.'
-                        : claimed
-                          ? 'Your creation credits are ready for your first project.'
-                          : 'Claim creation-only credits for images, video, and motion.'}
+                      {claimed
+                        ? 'Your creation credits are ready for your first project.'
+                        : 'Claim creation-only credits for images, video, and motion.'}
                     </AppText>
                   </View>
-                  <View accessible accessibilityLiveRegion="polite" accessibilityLabel={`${isCelebrating ? animatedCredits : welcome?.amount ?? 25} creation credits`} style={{ alignItems: 'center' }}>
-                    <AppText variant="display" color="primary" style={{ fontVariant: ['tabular-nums'], fontSize: 52, lineHeight: 60 }}>{isCelebrating ? animatedCredits : welcome?.amount ?? 25}</AppText>
-                    <AppText variant="label" color="textSecondary">creation credits</AppText>
-                  </View>
+                  {showAmount ? (
+                    <View accessible accessibilityLiveRegion="polite" accessibilityLabel={`${isCelebrating ? animatedCredits : welcome?.amount} creation credits`} style={{ alignItems: 'center' }}>
+                      <AppText variant="display" color="primary" style={{ fontVariant: ['tabular-nums'], fontSize: 52, lineHeight: 60 }}>{isCelebrating ? animatedCredits : welcome?.amount}</AppText>
+                      <AppText variant="label" color="textSecondary">creation credits</AppText>
+                    </View>
+                  ) : null}
                   <AppText variant="caption" color="faint" style={{ textAlign: 'center' }}>Creation credits cannot be used for marketplace purchases.</AppText>
                 </Card>
               </Animated.View>
               {message ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.danger, textAlign: 'center' }}>{message}</Text> : null}
-              {claimReady ? <PrimaryButton label={`Claim ${welcome?.amount ?? 25} credits`} loading={busy} onPress={() => void claimCredits()} /> : null}
+              {claimReady ? <PrimaryButton label={`Claim ${welcome?.amount} credits`} loading={busy} onPress={() => void claimCredits()} /> : null}
               {!claimReady || claimed ? <PrimaryButton label="Start creating" onPress={() => void startCreating()} /> : null}
+              {/* An explicit way out. "Start creating" used to be the only exit
+                  from this stage, and the route disables the back gesture, so
+                  anyone who wanted neither the pack nor the guided creator was
+                  held here. */}
               {claimReady ? <SecondaryButton label="Claim later" onPress={() => void startCreating()} /> : null}
             </View>
           ) : null}

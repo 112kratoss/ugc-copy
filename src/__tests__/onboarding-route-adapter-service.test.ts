@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   getWelcomeCreditsRouteResponse,
+  patchOnboardingStateRouteResponse,
   postWelcomeCreditsClaimRouteResponse,
 } from '@/lib/onboarding-route-adapter-service';
 
@@ -195,5 +196,150 @@ describe('onboarding route adapter service', () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ status: 'requires_account' });
+  });
+});
+
+describe('persisting onboarding state', () => {
+  const user = {
+    id: '28677503-bfbe-4e99-9105-b8f0c7e0e507',
+    created_at: '2026-03-25T14:45:00.000Z',
+    is_anonymous: false,
+  };
+
+  /**
+   * A `mobile_onboarding_states` table stub that records what was upserted.
+   *
+   * The existing `queryResult` helper only covers `select/eq/maybeSingle`; the
+   * PATCH path also reads the current row and then writes through
+   * `upsert().select().single()`.
+   */
+  function patchHarness(existing: unknown, profile: unknown = { username: 'batman', display_name: 'Sassy23b' }) {
+    const upsert = vi.fn();
+    const states = {
+      select: vi.fn(),
+      eq: vi.fn(),
+      maybeSingle: vi.fn(async () => ({ data: existing, error: null })),
+      upsert,
+      single: vi.fn(async () => ({ data: existing, error: null })),
+    };
+    states.select.mockReturnValue(states);
+    states.eq.mockReturnValue(states);
+    upsert.mockReturnValue(states);
+    const admin = {
+      from: vi.fn((table: string) => {
+        if (table === 'mobile_onboarding_states') return states;
+        if (table === 'profiles') return queryResult(profile);
+        throw new Error(`Unexpected table: ${table}`);
+      }),
+      rpc: vi.fn(async () => ({ data: null, error: null })),
+    } as unknown as SupabaseClient;
+    const userClient = {
+      auth: { getUser: vi.fn(async () => ({ data: { user }, error: null })) },
+    } as unknown as SupabaseClient;
+    return { upsert, admin, userClient };
+  }
+
+  function patchRequest(body: Record<string, unknown>) {
+    return new Request('https://app.example/api/onboarding/state', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  function dependencies(harness: ReturnType<typeof patchHarness>) {
+    return {
+      createUserClient: vi.fn(() => harness.userClient),
+      createServiceClient: vi.fn(() => harness.admin),
+      enforceBackendRateLimit: vi.fn(async () => ({
+        allowed: true, limit: 30, remaining: 29, retryAfterSeconds: 0,
+        resetAt: '2026-08-28T07:00:00.000Z',
+      })),
+    };
+  }
+
+  it('never demotes a finished run', async () => {
+    // The production row this pins: `completed_at` was written, then an
+    // `in_progress` PATCH one second later walked the status back — so the app
+    // re-offered onboarding to someone who had already finished it.
+    const harness = patchHarness({
+      status: 'completed',
+      completed_at: '2026-08-28T06:50:51.761Z',
+      username_completed_at: '2026-08-16T08:27:09.326Z',
+    });
+    const response = await patchOnboardingStateRouteResponse({
+      request: patchRequest({ status: 'in_progress', goal: 'image' }),
+      dependencies: dependencies(harness),
+    });
+
+    expect(response.status).toBe(200);
+    expect(harness.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'completed', completed_at: '2026-08-28T06:50:51.761Z' }),
+      expect.anything(),
+    );
+  });
+
+  it('treats a completion stamp as final even when the stored status disagrees', async () => {
+    const harness = patchHarness({
+      status: 'in_progress',
+      completed_at: '2026-08-28T06:50:51.761Z',
+      username_completed_at: null,
+    });
+    await patchOnboardingStateRouteResponse({
+      request: patchRequest({ status: 'skipped' }),
+      dependencies: dependencies(harness),
+    });
+
+    expect(harness.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'completed' }),
+      expect.anything(),
+    );
+  });
+
+  it('does not demote an existing row through a goal-only update', async () => {
+    // `body.status ?? 'in_progress'` meant a PATCH that carried nothing but a
+    // goal still rewrote the status, so simply opening the flow undid progress.
+    const harness = patchHarness({
+      status: 'skipped', completed_at: null, username_completed_at: null,
+    });
+    await patchOnboardingStateRouteResponse({
+      request: patchRequest({ goal: 'video' }),
+      dependencies: dependencies(harness),
+    });
+
+    expect(harness.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'skipped', goal: 'video' }),
+      expect.anything(),
+    );
+  });
+
+  it('keeps the moment the handle was actually claimed', async () => {
+    // This was unconditionally `now`, so every later PATCH overwrote the claim
+    // time with the timestamp of the most recent write.
+    const harness = patchHarness({
+      status: 'in_progress', completed_at: null,
+      username_completed_at: '2026-08-16T08:27:09.326Z',
+    });
+    await patchOnboardingStateRouteResponse({
+      request: patchRequest({ goal: 'image' }),
+      dependencies: dependencies(harness),
+    });
+
+    expect(harness.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ username_completed_at: '2026-08-16T08:27:09.326Z' }),
+      expect.anything(),
+    );
+  });
+
+  it('stamps completion the first time a run finishes', async () => {
+    const harness = patchHarness(null);
+    await patchOnboardingStateRouteResponse({
+      request: patchRequest({ status: 'completed', goal: 'image' }),
+      dependencies: dependencies(harness),
+    });
+
+    const [payload] = harness.upsert.mock.calls[0] as [Record<string, unknown>];
+    expect(payload.status).toBe('completed');
+    expect(typeof payload.completed_at).toBe('string');
   });
 });

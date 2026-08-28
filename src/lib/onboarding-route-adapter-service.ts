@@ -249,15 +249,38 @@ export async function patchOnboardingStateRouteResponse({
       .maybeSingle();
     if (profileError) throw profileError;
 
+    const { data: existingRow, error: existingError } = await admin
+      .from('mobile_onboarding_states')
+      .select('status,completed_at,username_completed_at')
+      .eq('user_id', user.id)
+      .eq('flow_version', ONBOARDING_FLOW_VERSION)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    const existing = existingRow as Pick<OnboardingStateRow, 'status' | 'completed_at' | 'username_completed_at'> | null;
+
     const now = new Date().toISOString();
-    const status = (body.status ?? 'in_progress') as OnboardingStatus;
+    // Defaulting an absent status to `in_progress` meant a PATCH that only
+    // carried a goal silently walked an existing row backwards. Fall back to
+    // what is already stored instead.
+    const requested = (body.status ?? existing?.status ?? 'in_progress') as OnboardingStatus;
+    // A finished run is terminal, and `completed_at` is the signal — not
+    // `status`, which every writer could previously demote. Rows in production
+    // already contradict themselves this way: a set `completed_at` beside an
+    // `in_progress` status, written one second apart.
+    const settled = existing?.status === 'completed' || existing?.completed_at != null;
+    const status: OnboardingStatus = settled ? 'completed' : requested;
+    const completedAt = existing?.completed_at ?? (status === 'completed' ? now : null);
     const payload = {
       user_id: user.id,
       flow_version: ONBOARDING_FLOW_VERSION,
       status,
       ...(body.goal !== undefined ? { goal: body.goal as OnboardingGoal | null } : {}),
-      ...(profile && hasClaimedCreatorIdentity(profile) ? { username_completed_at: now } : {}),
-      ...(status === 'completed' ? { completed_at: now } : {}),
+      // Was unconditionally `now`, so every later PATCH overwrote the moment the
+      // handle was actually claimed with the time of the most recent write.
+      ...(profile && hasClaimedCreatorIdentity(profile)
+        ? { username_completed_at: existing?.username_completed_at ?? now }
+        : {}),
+      ...(completedAt ? { completed_at: completedAt } : {}),
     };
     const { data, error } = await admin
       .from('mobile_onboarding_states')

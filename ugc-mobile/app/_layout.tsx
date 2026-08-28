@@ -15,6 +15,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-url-polyfill/auto';
 
 import { ActionSheetHost } from '@/components/action-sheet';
+import { OnboardingServerSync } from '@/components/onboarding-server-sync';
 import { OverlayHost } from '@/components/overlay-host';
 import { setUpgradeRequiredHandler } from '@/lib/api-client';
 import { AuthProvider, useAuth } from '@/lib/auth';
@@ -102,6 +103,7 @@ function RootLayoutNav() {
       <AuthProvider>
         <OnboardingProvider>
           <NotificationResponseCoordinator />
+          <OnboardingServerSync />
           <StartupCoordinator />
           <UpgradeRequiredCoordinator />
           <SafeAreaProvider>

@@ -8,7 +8,9 @@ import {
   mergeInstallOnboardingState,
   ONBOARDING_STORAGE_KEY,
   parseInstallOnboardingState,
+  reconcileInstallOnboardingState,
   type InstallOnboardingState,
+  type RemoteOnboardingState,
 } from './onboarding-state';
 import type { OnboardingEventName, OnboardingGoal } from './types';
 
@@ -19,6 +21,7 @@ type OnboardingContextValue = {
   update: (value: Partial<InstallOnboardingState>) => Promise<InstallOnboardingState>;
   skip: () => Promise<InstallOnboardingState>;
   complete: () => Promise<InstallOnboardingState>;
+  reconcileFromServer: (remote: RemoteOnboardingState) => Promise<InstallOnboardingState>;
 };
 
 const OnboardingContext = createContext<OnboardingContextValue | null>(null);
@@ -62,14 +65,33 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     return next;
   }, []);
 
+  /**
+   * Fold the account's server state in. Promote-only, and a no-op when nothing
+   * changed — this runs on every app foreground, so an unconditional write here
+   * would churn AsyncStorage and re-render the whole navigator for nothing.
+   */
+  const reconcileFromServer = useCallback(async (remote: RemoteOnboardingState) => {
+    const next = reconcileInstallOnboardingState(stateRef.current, remote);
+    if (next === stateRef.current) return next;
+    stateRef.current = next;
+    setState(next);
+    try {
+      await AsyncStorage.setItem(ONBOARDING_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      setStorageAvailable(false);
+    }
+    return next;
+  }, []);
+
   const contextValue = useMemo<OnboardingContextValue>(() => ({
     state,
     isHydrated,
     storageAvailable,
     update,
     skip: () => update({ status: 'skipped' }),
-    complete: () => update({ status: 'completed', lastStep: 6 }),
-  }), [isHydrated, state, storageAvailable, update]);
+    complete: () => update({ status: 'completed' }),
+    reconcileFromServer,
+  }), [isHydrated, reconcileFromServer, state, storageAvailable, update]);
 
   return <OnboardingContext.Provider value={contextValue}>{children}</OnboardingContext.Provider>;
 }
