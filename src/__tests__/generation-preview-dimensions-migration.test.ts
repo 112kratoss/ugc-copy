@@ -60,11 +60,15 @@ describe('the columns are actually produced and consumed', () => {
     expect(preview).toMatch(/export async function uploadGenerationPreview/);
   });
 
-  it('reads them in the showcase feed and hands them to the grid', () => {
-    const feed = read('src/lib/showcase-feed.ts');
+  it('reads them in the shared preview-info loader the feed and owner surfaces hydrate from', () => {
+    // The query and the size rule moved into generation-preview-info.ts when the
+    // owner post surfaces started grafting the same preview as the feed.
+    const previewInfo = read('src/lib/generation-preview-info.ts');
 
-    expect(feed).toContain('preview_url, preview_width, preview_height');
-    expect(feed).toContain('toUsablePreviewSize(generation.preview_width, generation.preview_height)');
+    expect(previewInfo).toContain('preview_url, preview_width, preview_height');
+    expect(previewInfo).toContain('toUsablePreviewSize(generation.preview_width, generation.preview_height)');
+    expect(read('src/lib/showcase-feed.ts')).toContain('loadGenerationPreviewInfoMap');
+    expect(read('src/lib/owner-posts.ts')).toContain('loadGenerationPreviewInfoMap');
   });
 
   it('has a backfill for the rows whose preview already exists', () => {

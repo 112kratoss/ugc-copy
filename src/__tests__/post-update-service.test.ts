@@ -317,6 +317,90 @@ describe('updateOwnerPostForRoute', () => {
     expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
   });
 
+  // The owner read APIs substitute "Untitled post"/"Untitled note" for an empty
+  // title, and both composers PATCH the whole hydrated draft back. Without the
+  // echo shim the fallback becomes the stored title, which the marketplace
+  // placeholder gate then rejects on every public save — the post is stuck.
+  describe('fallback title echo', () => {
+    function createDependencies() {
+      return {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn(async ({ patch }: { patch: Record<string, unknown> }) => ({
+          postId: 'post-1',
+          visibility: patch.visibility as 'public',
+          bundleId: 'bundle-1',
+          bundleStatus: 'published' as const,
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      } satisfies PostUpdateDependencies;
+    }
+
+    it('treats a fallback title echoed over an empty stored title as unchanged', async () => {
+      const { client } = createSupabaseMock({
+        post: {
+          id: 'post-1',
+          user_id: 'user-1',
+          generation_id: null,
+          visibility: 'private',
+          title: null,
+          description: null,
+          prompt: null,
+          body: 'A useful note about the recipe.',
+          category: 'text',
+          post_format: 'text',
+          source_tool: null,
+          source_tool_slug: null,
+          source_kind: 'manual',
+          archived_at: null,
+          showcase_asset_path: null,
+          output_url: null,
+          review_status: 'visible',
+        },
+        bundle: { id: 'bundle-1', access_mode: 'free', status: 'draft' },
+      });
+      const dependencies = createDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { visibility: 'public', title: 'Untitled post' },
+        dependencies,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(dependencies.getMarketplaceQualityErrorForPostBundle).toHaveBeenCalledWith(
+        expect.objectContaining({ post: expect.objectContaining({ title: null }) })
+      );
+      expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(
+        expect.objectContaining({ patch: expect.objectContaining({ title: null }) })
+      );
+    });
+
+    it('keeps a deliberate rename to a fallback string when a real title is stored', async () => {
+      const { client } = createSupabaseMock({
+        bundle: { id: 'bundle-1', access_mode: 'free', status: 'draft' },
+      });
+      const dependencies = createDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { visibility: 'private', title: 'Untitled note' },
+        dependencies,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(
+        expect.objectContaining({ patch: expect.objectContaining({ title: 'Untitled note' }) })
+      );
+    });
+  });
+
   // Both composers already refuse to edit a sold package, but that is a rule
   // about what buyers paid for, so a stale client or a direct API call must not
   // be able to rewrite, reprice, or retire it either.

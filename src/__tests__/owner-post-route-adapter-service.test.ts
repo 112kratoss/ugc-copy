@@ -19,6 +19,7 @@ const ownerPostFixture = {
   mediaKind: null,
   mediaItems: [],
   title: 'Draft post',
+  rawTitle: 'Draft post',
   description: '',
   prompt: '',
   body: '',

@@ -21,6 +21,7 @@ import {
   getMarketplaceQualityErrorForPostBundle,
   updatePostWithResourceBundleAtomically,
 } from '@/lib/post-resource-bundles-server';
+import { isOwnerPostTitleFallback } from '@/lib/owner-post-title-fallback';
 import { PostSourceToolsWriteError, replacePostSourceTools } from '@/lib/post-source-tools-server';
 import { TITLE_MAX_LENGTH, isMissingPostResourceBundlesSchemaError } from '@/lib/posts-server';
 import {
@@ -1249,7 +1250,15 @@ export async function updateOwnerPostForRoute({
         : Object.prototype.hasOwnProperty.call(body, 'category') && isShowcaseItemCategory(body.category as string)
           ? body.category
           : post.category;
-    const nextTitle = Object.prototype.hasOwnProperty.call(body, 'title') ? normalizeText(body.title) : post.title;
+    const submittedTitle = Object.prototype.hasOwnProperty.call(body, 'title') ? normalizeText(body.title) : post.title;
+    // The owner read APIs substitute "Untitled post"/"Untitled note" for an
+    // empty title, and both composers PATCH the whole hydrated draft back, so
+    // the display fallback round-trips into a stored title — which the
+    // marketplace placeholder gate then rejects on every public save. An exact
+    // fallback echoed over an empty stored title means "unchanged".
+    const nextTitle = submittedTitle && !normalizeText(post.title) && isOwnerPostTitleFallback(submittedTitle)
+      ? post.title
+      : submittedTitle;
     // Grandfathered: the cap applies only when this request actually changes the
     // title. Both composers PATCH the whole draft rather than a sparse patch, so
     // without the equality check a post written before the limit existed would

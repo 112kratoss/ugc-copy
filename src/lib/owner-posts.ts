@@ -27,6 +27,12 @@ import {
   loadPostMediaItemsMap,
   type PostMediaSummary,
 } from '@/lib/post-media';
+import {
+  graftGenerationPreviewOntoCover,
+  loadGenerationPreviewInfoMap,
+  type GenerationPreviewInfo,
+} from '@/lib/generation-preview-info';
+import { getOwnerPostTitleFallback } from '@/lib/owner-post-title-fallback';
 import { createServiceClient } from '@/lib/server-helpers';
 import type { SourceToolSelection } from '@/lib/source-tools';
 import {
@@ -109,6 +115,8 @@ export interface OwnerPostListItem {
   mediaKind: ShowcaseMediaKind | null;
   mediaItems: PostMediaSummary[];
   title: string;
+  /** The stored title without the display fallback; '' when the post has none. */
+  rawTitle: string;
   description: string;
   prompt: string;
   body: string;
@@ -456,13 +464,22 @@ async function toOwnerPostListItem(
   row: OwnerPostRow,
   bundleMap: Map<string, BundleSummaryRow>,
   sourceToolsMap: Map<string, SourceToolSelection[]>,
-  mediaItemsMap: Map<string, PostMediaSummary[]>
+  mediaItemsMap: Map<string, PostMediaSummary[]>,
+  generationPreviewMap: Map<string, GenerationPreviewInfo>
 ) {
-  const mediaItems = mediaItemsMap.get(row.id) ?? await buildLegacyPostMediaItems({
+  const rawMediaItems = mediaItemsMap.get(row.id) ?? await buildLegacyPostMediaItems({
     supabase: adminSupabase,
     postId: row.id,
     row,
   });
+  // A post without `post_media` rows gets a synthesised cover with no poster,
+  // which clients render as a blank plate. The showcase feed grafts the linked
+  // generation's preview onto that cover; the owner surface must do the same —
+  // it also serves private creation posts, whose derivative rows are removed.
+  const mediaItems = graftGenerationPreviewOntoCover(
+    rawMediaItems,
+    row.generation_id ? generationPreviewMap.get(row.generation_id) : null,
+  );
   const coverMedia = mediaItems[0] ?? null;
   const mediaUrl = coverMedia?.url ?? await resolvePostMediaUrl(adminSupabase, row);
   const mediaKind = coverMedia?.mediaKind ?? getPostMediaKind(row.category, row.post_format);
@@ -484,7 +501,11 @@ async function toOwnerPostListItem(
     title:
       row.title?.trim() ||
       deriveTitleFromBody(row.body) ||
-      (row.post_format === 'text' ? 'Untitled note' : 'Untitled post'),
+      getOwnerPostTitleFallback(row.post_format),
+    // Editors must hydrate from this, never from `title`: PATCHing the display
+    // fallback back turns it into a stored title the marketplace placeholder
+    // gate rejects, leaving the post unsavable.
+    rawTitle: row.title?.trim() || '',
     description: row.description?.trim() || '',
     prompt: row.prompt?.trim() || '',
     body: row.body?.trim() || '',
@@ -535,10 +556,14 @@ export async function getOwnerPostList(
     visibility,
   });
   const postIds = rows.map((row) => row.id);
-  const [bundleMap, sourceToolsMap, mediaItemsMap] = await Promise.all([
+  const [bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap] = await Promise.all([
     loadBundleMap(adminSupabase, postIds),
     loadSourceToolsMap(adminSupabase, postIds),
     loadPostMediaItemsMap(adminSupabase, postIds),
+    loadGenerationPreviewInfoMap(
+      adminSupabase,
+      rows.flatMap((row) => (row.generation_id ? [row.generation_id] : [])),
+    ),
   ]);
   const filteredRows = rows.filter((row) => {
     if (visibility === 'archived') {
@@ -553,7 +578,7 @@ export async function getOwnerPostList(
   });
 
   return Promise.all(filteredRows.map((row) =>
-    toOwnerPostListItem(adminSupabase, row, bundleMap, sourceToolsMap, mediaItemsMap)
+    toOwnerPostListItem(adminSupabase, row, bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap)
   ));
 }
 
@@ -570,12 +595,13 @@ export async function getOwnerPostDetail(
     return null;
   }
 
-  const [bundleMap, sourceToolsMap, mediaItemsMap] = await Promise.all([
+  const [bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap] = await Promise.all([
     loadBundleMap(adminSupabase, [row.id]),
     loadSourceToolsMap(adminSupabase, [row.id]),
     loadPostMediaItemsMap(adminSupabase, [row.id]),
+    loadGenerationPreviewInfoMap(adminSupabase, row.generation_id ? [row.generation_id] : []),
   ]);
-  const listItem = await toOwnerPostListItem(adminSupabase, row, bundleMap, sourceToolsMap, mediaItemsMap);
+  const listItem = await toOwnerPostListItem(adminSupabase, row, bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap);
   const bundleDetail = await getPostResourceBundleDetailByPostId(postId, {
     viewerUserId: userId,
     countryCode: options?.countryCode ?? null,
