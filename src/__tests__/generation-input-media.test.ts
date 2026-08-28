@@ -58,6 +58,56 @@ describe('generation input media persistence', () => {
     }));
   });
 
+  // A remixed reference keeps the original creator's storagePath (for lineage)
+  // while its resolved sourceUrl points at the caller-owned copy imported at
+  // dispatch time. The durable snapshot must download that copy from storage —
+  // the signed URL's host is not on the remote-media allowlist.
+  it('persists a remixed reference from the caller-owned imported copy', async () => {
+    const { persistGenerationInputMedia } = await import('@/lib/generation-input-media');
+
+    const download = vi.fn(async () => ({
+      data: new Blob(['imported-copy'], { type: 'image/jpeg' }),
+      error: null,
+    }));
+    const upload = vi.fn(async () => ({ error: null }));
+    const insert = vi.fn(async () => ({ error: null }));
+    const supabase = {
+      storage: {
+        from: vi.fn((bucket: string) => {
+          expect(bucket).toBe('generation_inputs');
+          return { download, upload };
+        }),
+      },
+      from: vi.fn(() => ({ insert })),
+    };
+
+    await persistGenerationInputMedia({
+      supabase: supabase as never,
+      generationId: 'gen-1',
+      userId: 'user-1',
+      candidates: [{
+        mediaType: 'image',
+        role: 'reference_image',
+        label: 'Reference image',
+        sourceStoragePath: 'generation_inputs/creator-1/gen-9/00-reference_image.jpg',
+        sourceUrl: 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/remix-imports/gen-9/00-reference_image.jpg?token=copy',
+      }],
+    });
+
+    expect(download).toHaveBeenCalledWith('user-1/remix-imports/gen-9/00-reference_image.jpg');
+    expect(upload).toHaveBeenCalledWith(
+      'user-1/gen-1/00-reference_image.jpg',
+      expect.any(Blob),
+      expect.objectContaining({ contentType: 'image/jpeg' })
+    );
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({
+      storage_path: 'generation_inputs/user-1/gen-1/00-reference_image.jpg',
+      metadata: expect.objectContaining({
+        sourceStoragePath: 'generation_inputs/creator-1/gen-9/00-reference_image.jpg',
+      }),
+    }));
+  });
+
   it('does not read a storage path outside the authenticated user prefix', async () => {
     const { persistGenerationInputMedia } = await import('@/lib/generation-input-media');
     const download = vi.fn();

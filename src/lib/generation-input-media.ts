@@ -209,7 +209,20 @@ async function loadCandidateMedia(
   sourceName: string | null;
   consumptionClaim: UploadConsumptionClaim | null;
 } | null> {
-  const storageLocation = normalizeStoragePath(candidate.sourceStoragePath, userId);
+  let storageLocation = normalizeStoragePath(candidate.sourceStoragePath, userId);
+
+  // A remixed reference's storagePath still names the original creator's
+  // object, but its resolved sourceUrl is the caller-owned copy imported at
+  // dispatch time. Recognise that copy so the durable snapshot downloads from
+  // storage instead of failing the remote-host allowlist below. Restricted to
+  // generation_inputs: the other buckets carry upload-consumption bookkeeping
+  // that must keep keying off an explicitly submitted storage path.
+  if (!storageLocation) {
+    const sourceUrlLocation = normalizeStoragePath(candidate.sourceUrl, userId);
+    if (sourceUrlLocation && sourceUrlLocation.bucket === GENERATION_INPUTS_BUCKET) {
+      storageLocation = sourceUrlLocation;
+    }
+  }
 
   if (storageLocation && isStorageObjectOwnedByUser(storageLocation.filePath, userId)) {
     let consumptionClaim: UploadConsumptionClaim | null = null;

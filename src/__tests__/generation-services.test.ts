@@ -1,6 +1,14 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Foreign references stay rejected by default; individual tests opt into an
+// authorized shared-media import.
+const sharedImportMocks = vi.hoisted(() => ({
+  importSharedGenerationInputMedia: vi.fn(async () => ({ outcome: 'not-eligible' as const })),
+}));
+
+vi.mock('@/lib/generation-input-media-import', () => sharedImportMocks);
+
 type GenerationRow = {
   id: string;
   user_id: string;
@@ -918,6 +926,63 @@ describe('generation services', () => {
         handle: '@hero',
       }),
     });
+  });
+
+  it('imports an authorized shared remix reference and dispatches the caller-owned copy', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-image-remix-import-1' } }),
+      } as Response;
+    });
+
+    const foreignReference =
+      'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-2/gen-9/00-reference_image.jpg?token=orig';
+    const importedSignedUrl =
+      'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/remix-imports/gen-9/00-reference_image.jpg?token=copy';
+    sharedImportMocks.importSharedGenerationInputMedia.mockResolvedValueOnce({
+      outcome: 'imported',
+      storagePath: 'generation_inputs/user-1/remix-imports/gen-9/00-reference_image.jpg',
+      signedUrl: importedSignedUrl,
+    } as never);
+
+    const { supabase } = createSupabaseMock();
+    await startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Remix of a shared look.',
+      model: 'nano-banana-2',
+      imageUrls: [foreignReference],
+    });
+
+    expect(sharedImportMocks.importSharedGenerationInputMedia).toHaveBeenCalledWith({
+      source: foreignReference,
+      viewerUserId: 'user-1',
+    });
+    expect(providerBody).toMatchObject({
+      input: { image_input: [importedSignedUrl] },
+    });
+  });
+
+  it('still rejects foreign references the share layers do not authorize', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+
+    const { supabase, rpcCalls } = createSupabaseMock();
+    await expect(startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Remix attempt on private media.',
+      model: 'nano-banana-2',
+      imageUrls: [
+        'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-2/gen-9/00-reference_image.jpg?token=orig',
+      ],
+    })).rejects.toThrow('Media references must belong to the authenticated user.');
+    expect(rpcCalls.map((call) => call.fn)).not.toContain('start_generation');
   });
 
   it('skips durable input snapshots when a trusted template run marks inputs ephemeral', async () => {

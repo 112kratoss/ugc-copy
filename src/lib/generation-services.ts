@@ -51,6 +51,7 @@ import {
   persistGenerationInputMedia,
   type PersistGenerationInputCandidate,
 } from '@/lib/generation-input-media';
+import { importSharedGenerationInputMedia } from '@/lib/generation-input-media-import';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
 import { buildKieWebhookCallbackUrl } from '@/lib/kie-webhook';
@@ -1026,6 +1027,23 @@ async function resolveGenerationMediaSource(
 
   const resolved = await resolveOwnedStoredMediaUrl(supabase, source, userId);
   if (!resolved) {
+    // A remix (or an unlocked recipe) hands the caller the original creator's
+    // shared input media, whose path fails the ownership check above. Import a
+    // caller-owned copy when that sharing is authorized — decided server-side
+    // from the storage path, never from the client's signed URL.
+    const imported = await importSharedGenerationInputMedia({
+      source,
+      viewerUserId: userId,
+    });
+    if (imported.outcome === 'imported') {
+      return imported.signedUrl;
+    }
+    if (imported.outcome === 'failed') {
+      throw new GenerationServiceError(
+        'We could not prepare the shared reference media. Please try again.',
+        500,
+      );
+    }
     throw new GenerationServiceError(
       'Media references must belong to the authenticated user.',
       400,
