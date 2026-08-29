@@ -3,4 +3,6 @@ export type GradleProperty =
   | { type: 'comment'; value: string };
 
 export function setReleaseSafetyProperties(properties: GradleProperty[]): GradleProperty[];
-export function setReleaseProguardSafety(buildGradle: string): string;
+export function setReleaseProguardOptimization(buildGradle: string): string;
+export function setMaterialComponentsVersion(buildGradle: string): string;
+export function setReactNativeBuildFromSource(settingsGradle: string): string;

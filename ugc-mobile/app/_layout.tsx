@@ -111,7 +111,7 @@ function RootLayoutNav() {
             <ThemeProvider value={navigationTheme}>
               <GestureHandlerRootView style={{ flex: 1 }}>
               <View style={{ flex: 1, backgroundColor: appTheme.colors.app }}>
-                <StatusBar style="light" backgroundColor={appTheme.colors.background} translucent={false} />
+                <StatusBar style="light" />
                 {/* Above the navigator so a hosted surface can cover the tab
                     bar, and inside the app's own window so keyboard avoidance
                     reaches it — which a React Native Modal cannot offer on

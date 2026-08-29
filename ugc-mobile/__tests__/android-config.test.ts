@@ -8,8 +8,10 @@ import {
   setManifestCleartextPlaceholder,
 } from '../plugins/withAndroidLocalCleartextDebug';
 import {
+  setMaterialComponentsVersion,
+  setReactNativeBuildFromSource,
   setReleaseSafetyProperties,
-  setReleaseProguardSafety,
+  setReleaseProguardOptimization,
 } from '../plugins/withAndroidReleaseSafety';
 import {
   DEVELOPMENT_ONLY_NATIVE_MODULES,
@@ -33,23 +35,27 @@ describe('Android native network config', () => {
     expect(appJson.expo.plugins).toContain('./plugins/withAndroidLocalCleartextDebug');
   });
 
-  it('disables unsafe R8 optimization for regenerated release builds', () => {
+  it('enables full R8 optimization for regenerated release builds', () => {
     const appJson = JSON.parse(readFileSync(join(projectRoot, 'app.json'), 'utf8'));
     const properties = setReleaseSafetyProperties([
       { type: 'property', key: 'android.enableMinifyInReleaseBuilds', value: 'true' },
     ]);
 
     expect(appJson.expo.plugins).toContain('./plugins/withAndroidReleaseSafety');
-    expect(appJson.expo.plugins).not.toContain('./plugins/withAndroidReleaseOptimization');
     expect(properties).toContainEqual({
       type: 'property',
       key: 'android.enableMinifyInReleaseBuilds',
-      value: 'false',
+      value: 'true',
     });
     expect(properties).toContainEqual({
       type: 'property',
       key: 'android.enableShrinkResourcesInReleaseBuilds',
-      value: 'false',
+      value: 'true',
+    });
+    expect(properties).toContainEqual({
+      type: 'property',
+      key: 'android.r8.optimizedResourceShrinking',
+      value: 'true',
     });
     expect(properties).toContainEqual({
       type: 'property',
@@ -57,13 +63,78 @@ describe('Android native network config', () => {
       value: '-Xmx3072m -XX:MaxMetaspaceSize=1536m',
     });
 
-    const optimizedBuildGradle = `release {
-      proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+    const unoptimizedBuildGradle = `release {
+      proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
     }`;
-    const safeBuildGradle = setReleaseProguardSafety(optimizedBuildGradle);
-    expect(safeBuildGradle).toContain('getDefaultProguardFile("proguard-android.txt")');
-    expect(safeBuildGradle).not.toContain('getDefaultProguardFile("proguard-android-optimize.txt")');
-    expect(setReleaseProguardSafety(safeBuildGradle)).toBe(safeBuildGradle);
+    const optimizedBuildGradle = setReleaseProguardOptimization(unoptimizedBuildGradle);
+    expect(optimizedBuildGradle).toContain(
+      'getDefaultProguardFile("proguard-android-optimize.txt")'
+    );
+    expect(optimizedBuildGradle).not.toContain('getDefaultProguardFile("proguard-android.txt")');
+    expect(setReleaseProguardOptimization(optimizedBuildGradle)).toBe(optimizedBuildGradle);
+  });
+
+  it('pins the Android Material release that handles API 35 system bars', () => {
+    const buildGradle = `android {}
+
+dependencies {
+    implementation("com.facebook.react:react-android")
+}`;
+    const updatedBuildGradle = setMaterialComponentsVersion(buildGradle);
+
+    expect(updatedBuildGradle).toContain(
+      'implementation("com.google.android.material:material:1.14.0")'
+    );
+    expect(setMaterialComponentsVersion(updatedBuildGradle)).toBe(updatedBuildGradle);
+  });
+
+  it('builds the patched React Native Android runtime from source', () => {
+    const settingsGradle = `rootProject.name = 'Magic Booklet'
+include ':app'`;
+    const updatedSettings = setReactNativeBuildFromSource(settingsGradle);
+
+    expect(updatedSettings).toContain("includeBuild('../node_modules/react-native')");
+    expect(updatedSettings).toContain(
+      "substitute(module('com.facebook.react:react-android')).using(project(':packages:react-native:ReactAndroid'))"
+    );
+    expect(updatedSettings).not.toContain("substitute(module('com.facebook.react:hermes-android'))");
+    expect(updatedSettings).not.toContain("substitute(module('com.facebook.react:hermes-engine'))");
+    expect(setReactNativeBuildFromSource(updatedSettings)).toBe(updatedSettings);
+  });
+
+  it('does not lock the Android app to portrait on large screens', () => {
+    const appJson = JSON.parse(readFileSync(join(projectRoot, 'app.json'), 'utf8'));
+
+    expect(appJson.expo.orientation).toBeUndefined();
+    expect(appJson.expo.ios.infoPlist.UISupportedInterfaceOrientations).toEqual([
+      'UIInterfaceOrientationPortrait',
+    ]);
+  });
+
+  it('removes Android 15 deprecated system-bar calls from the React Native runtime', () => {
+    const statusBarModule = readFileSync(
+      join(
+        projectRoot,
+        'node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/modules/statusbar/StatusBarModule.kt'
+      ),
+      'utf8'
+    );
+    const windowUtil = readFileSync(
+      join(
+        projectRoot,
+        'node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/view/WindowUtil.kt'
+      ),
+      'utf8'
+    );
+    const appLayout = readFileSync(join(projectRoot, 'app/_layout.tsx'), 'utf8');
+
+    expect(statusBarModule).not.toMatch(/window\??\.statusBarColor/);
+    expect(windowUtil).not.toContain('statusBarColor =');
+    expect(windowUtil).not.toContain('navigationBarColor =');
+    expect(windowUtil).not.toContain('LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES');
+    expect(windowUtil).not.toContain('LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT');
+    expect(appLayout).not.toMatch(/<StatusBar[^>]+backgroundColor=/);
+    expect(appLayout).not.toMatch(/<StatusBar[^>]+translucent=/);
   });
 
   it('excludes RevenueCat Amazon billing code from the Google Play-only binary', () => {

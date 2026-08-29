@@ -3,7 +3,6 @@
     "name": "Magic Booklet",
     "slug": "magicbooklet-mobile",
     "version": "0.1.1",
-    "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "magicbooklet",
     "userInterfaceStyle": "dark",
@@ -28,7 +27,13 @@
       ],
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSPhotoLibraryUsageDescription": "Magic Booklet uses your photo library so you can choose product photos, profile images, and reference images for your creations."
+        "NSPhotoLibraryUsageDescription": "Magic Booklet uses your photo library so you can choose product photos, profile images, and reference images for your creations.",
+        "UISupportedInterfaceOrientations": [
+          "UIInterfaceOrientationPortrait"
+        ],
+        "UISupportedInterfaceOrientations~ipad": [
+          "UIInterfaceOrientationPortrait"
+        ]
       },
       "privacyManifests": {
         "NSPrivacyTracking": false,

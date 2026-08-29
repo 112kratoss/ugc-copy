@@ -1,33 +1,292 @@
+diff --git a/node_modules/react-native/ReactAndroid/build.gradle.kts b/node_modules/react-native/ReactAndroid/build.gradle.kts
+index 20e38a9..e89acbc 100644
+--- a/node_modules/react-native/ReactAndroid/build.gradle.kts
++++ b/node_modules/react-native/ReactAndroid/build.gradle.kts
+@@ -601,9 +601,6 @@ android {
+       )
+   tasks.getByName("generateCodegenSchemaFromJavaScript").dependsOn(buildCodegenCLI)
+   prepareKotlinBuildScriptModel.dependsOn("preBuild")
+-  prepareKotlinBuildScriptModel.dependsOn(
+-      ":packages:react-native:ReactAndroid:hermes-engine:preBuild"
+-  )
+
+   sourceSets.getByName("main") {
+     res.setSrcDirs(
+@@ -701,7 +698,9 @@ dependencies {
+
+   // It's up to the consumer to decide if hermes or other engines should be included or not.
+   // Therefore hermes-engine is a compileOnly dependencies.
+-  compileOnly(project(":packages:react-native:ReactAndroid:hermes-engine"))
++  // Compile the patched React Android sources while consuming the matching published Hermes
++  // artifact. Building Hermes itself from source is unnecessary for these Java/Kotlin changes.
++  compileOnly("com.facebook.hermes:hermes-android:0.14.1")
+
+   testImplementation(libs.junit)
+   testImplementation(libs.assertj)
+diff --git a/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/modules/statusbar/StatusBarModule.kt b/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/modules/statusbar/StatusBarModule.kt
+index 1e773ba..9b55ff4 100644
+--- a/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/modules/statusbar/StatusBarModule.kt
++++ b/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/modules/statusbar/StatusBarModule.kt
+@@ -7,15 +7,11 @@
+
+ package com.facebook.react.modules.statusbar
+
+-import android.animation.ArgbEvaluator
+-import android.animation.ValueAnimator
+ import android.os.Build
+ import android.view.View
+ import android.view.WindowInsetsController
+-import android.view.WindowManager
+ import com.facebook.common.logging.FLog
+ import com.facebook.fbreact.specs.NativeStatusBarManagerAndroidSpec
+-import com.facebook.react.bridge.GuardedRunnable
+ import com.facebook.react.bridge.NativeModule
+ import com.facebook.react.bridge.ReactApplicationContext
+ import com.facebook.react.bridge.UiThreadUtil
+@@ -23,8 +19,6 @@ import com.facebook.react.common.ReactConstants
+ import com.facebook.react.module.annotations.ReactModule
+ import com.facebook.react.uimanager.DisplayMetricsHolder.getStatusBarHeightPx
+ import com.facebook.react.uimanager.PixelUtil
+-import com.facebook.react.views.view.isEdgeToEdgeFeatureFlagOn
+-import com.facebook.react.views.view.setStatusBarTranslucency
+ import com.facebook.react.views.view.setStatusBarVisibility
+
+ /** [NativeModule] that allows changing the appearance of the status bar. */
+@@ -32,80 +26,25 @@ import com.facebook.react.views.view.setStatusBarVisibility
+ internal class StatusBarModule(reactContext: ReactApplicationContext?) :
+     NativeStatusBarManagerAndroidSpec(reactContext) {
+
+-  @Suppress("DEPRECATION")
+   override fun getTypedExportedConstants(): Map<String, Any> {
+     val currentActivity = reactApplicationContext.currentActivity
+-    val statusBarColor =
+-        currentActivity?.window?.statusBarColor?.let { color ->
+-          String.format("#%06X", 0xFFFFFF and color)
+-        } ?: "black"
+     return mapOf(
+         HEIGHT_KEY to PixelUtil.toDIPFromPixel(getStatusBarHeightPx(currentActivity).toFloat()),
+-        DEFAULT_BACKGROUND_COLOR_KEY to statusBarColor,
++        DEFAULT_BACKGROUND_COLOR_KEY to "black",
+     )
+   }
+
+-  @Suppress("DEPRECATION")
+   override fun setColor(colorDouble: Double, animated: Boolean) {
+-    val color = colorDouble.toInt()
+-    val activity = reactApplicationContext.getCurrentActivity()
+-    if (activity == null) {
+-      FLog.w(
+-          ReactConstants.TAG,
+-          "StatusBarModule: Ignored status bar change, current activity is null.",
+-      )
+-      return
+-    }
+-    if (isEdgeToEdgeFeatureFlagOn) {
+-      FLog.w(
+-          ReactConstants.TAG,
+-          "StatusBarModule: Ignored status bar change, current activity is edge-to-edge.",
+-      )
+-      return
+-    }
+-    UiThreadUtil.runOnUiThread(
+-        object : GuardedRunnable(reactApplicationContext) {
+-          override fun runGuarded() {
+-            val window = activity.window ?: return
+-            window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+-            if (animated) {
+-              val curColor = window.statusBarColor
+-              val colorAnimation = ValueAnimator.ofObject(ArgbEvaluator(), curColor, color)
+-              colorAnimation.addUpdateListener { animator ->
+-                activity.window?.statusBarColor = (animator.animatedValue as Int)
+-              }
+-              colorAnimation.setDuration(300).startDelay = 0
+-              colorAnimation.start()
+-            } else {
+-              window.statusBarColor = color
+-            }
+-          }
+-        }
++    FLog.w(
++        ReactConstants.TAG,
++        "StatusBarModule: Ignored status bar color change because this app is edge-to-edge.",
+     )
+   }
+
+   override fun setTranslucent(translucent: Boolean) {
+-    val activity = reactApplicationContext.getCurrentActivity()
+-    if (activity == null) {
+-      FLog.w(
+-          ReactConstants.TAG,
+-          "StatusBarModule: Ignored status bar change, current activity is null.",
+-      )
+-      return
+-    }
+-    if (isEdgeToEdgeFeatureFlagOn) {
+-      FLog.w(
+-          ReactConstants.TAG,
+-          "StatusBarModule: Ignored status bar change, current activity is edge-to-edge.",
+-      )
+-      return
+-    }
+-    UiThreadUtil.runOnUiThread(
+-        object : GuardedRunnable(reactApplicationContext) {
+-          override fun runGuarded() {
+-            activity.window?.setStatusBarTranslucency(translucent)
+-          }
+-        }
++    FLog.w(
++        ReactConstants.TAG,
++        "StatusBarModule: Ignored status bar translucency change because this app is edge-to-edge.",
+     )
+   }
+
+diff --git a/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/view/WindowUtil.kt b/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/view/WindowUtil.kt
+index 0cff3bc..6e2f537 100644
+--- a/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/view/WindowUtil.kt
++++ b/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/view/WindowUtil.kt
+@@ -74,9 +74,6 @@ private fun Window.statusBarHide() {
+     }
+   } else {
+     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+-      // Ensure the content extends into the cutout area
+-      attributes.layoutInDisplayCutoutMode =
+-          WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+       setDecorFitsSystemWindows(false)
+     }
+     addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+@@ -93,8 +90,6 @@ private fun Window.statusBarShow() {
+     }
+   } else {
+     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+-      attributes.layoutInDisplayCutoutMode =
+-          WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+       setDecorFitsSystemWindows(true)
+     }
+     addFlags(WindowManager.LayoutParams.FLAG_FORCE_NOT_FULLSCREEN)
+@@ -113,25 +108,13 @@ internal fun Window.enableEdgeToEdge() {
+     isNavigationBarContrastEnforced = true
+   }
+
+-  statusBarColor = Color.TRANSPARENT
+-  navigationBarColor =
+-      when {
+-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> Color.TRANSPARENT
+-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !isDarkMode -> LightNavigationBarColor
+-        else -> DarkNavigationBarColor
+-      }
+-
+   WindowInsetsControllerCompat(this, decorView).run {
+     isAppearanceLightNavigationBars = !isDarkMode
+   }
+
+-  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
++  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+     attributes.layoutInDisplayCutoutMode =
+-        when {
+-          Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ->
+-              WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+-          else -> WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+-        }
++        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+   }
+ }
+
 diff --git a/node_modules/react-native/scripts/cocoapods/new_architecture.rb b/node_modules/react-native/scripts/cocoapods/new_architecture.rb
+index 8c7508b..846f1f5 100644
 --- a/node_modules/react-native/scripts/cocoapods/new_architecture.rb
 +++ b/node_modules/react-native/scripts/cocoapods/new_architecture.rb
-@@ -6 +6,2 @@
+@@ -4,6 +4,7 @@
+ # LICENSE file in the root directory of this source tree.
+
  require 'json'
 +require 'shellwords'
-@@ -168 +169 @@ class NewArchitectureHelper
+
+ require_relative "./utils.rb"
+ require_relative "./helpers.rb"
+@@ -165,7 +166,7 @@ class NewArchitectureHelper
+         excluded_info_plist = ["/Pods", "Tests", "metainternal", ".bundle", "build/", "DerivedData/", ".xcframework", ".framework", "watchkitapp", "today-extention"]
+         projectPaths.each do |projectPath|
+             projectFolderPath = File.dirname(projectPath)
 -            infoPlistFiles = `find #{projectFolderPath} -name "Info.plist"`
 +            infoPlistFiles = `find #{Shellwords.escape(projectFolderPath)} -name "Info.plist"`
+             infoPlistFiles = infoPlistFiles.split("\n").map { |f| f.strip }
+
+             infoPlistFiles.each do |infoPlistFile|
 diff --git a/node_modules/react-native/scripts/cocoapods/rncore.rb b/node_modules/react-native/scripts/cocoapods/rncore.rb
+index 9aeb449..c394ec5 100644
 --- a/node_modules/react-native/scripts/cocoapods/rncore.rb
 +++ b/node_modules/react-native/scripts/cocoapods/rncore.rb
-@@ -89 +89 @@ class ReactNativeCoreUtils
+@@ -86,7 +86,7 @@ class ReactNativeCoreUtils
+         if ENV["RCT_TESTONLY_RNCORE_TARBALL_PATH"]
+             abort_if_use_local_rncore_with_no_file()
+             rncore_log("Using local xcframework at #{ENV["RCT_TESTONLY_RNCORE_TARBALL_PATH"]}")
 -            return {:http => "file://#{ENV["RCT_TESTONLY_RNCORE_TARBALL_PATH"]}" }
 +            return {:http => URI::File.build(path: URI::DEFAULT_PARSER.escape(ENV["RCT_TESTONLY_RNCORE_TARBALL_PATH"])).to_s }
-@@ -146 +146 @@ class ReactNativeCoreUtils
+         end
+
+         if ENV["RCT_USE_PREBUILT_RNCORE"] == "1"
+@@ -143,7 +143,7 @@ class ReactNativeCoreUtils
+         rncore_log("  #{Pathname.new(destinationDebug).relative_path_from(Pathname.pwd).to_s}")
+         rncore_log("  #{Pathname.new(destinationRelease).relative_path_from(Pathname.pwd).to_s}")
+
 -        return {:http => URI::File.build(path: destinationDebug).to_s }
 +        return {:http => URI::File.build(path: URI::DEFAULT_PARSER.escape(destinationDebug)).to_s }
-@@ -182 +182 @@ class ReactNativeCoreUtils
+     end
+
+     def self.podspec_source_download_prebuilt_nightly_tarball()
+@@ -179,7 +179,7 @@ class ReactNativeCoreUtils
+         rncore_log("Resolved nightly ReactNativeCore-prebuilt version:")
+         rncore_log("  #{Pathname.new(destinationDebug).relative_path_from(Pathname.pwd).to_s}")
+         rncore_log("  #{Pathname.new(destinationRelease).relative_path_from(Pathname.pwd).to_s}")
 -        return {:http => URI::File.build(path: destinationDebug).to_s }
 +        return {:http => URI::File.build(path: URI::DEFAULT_PARSER.escape(destinationDebug)).to_s }
+     end
+
+     def self.process_dsyms(frameworkTarball, dSymsTarball)
 diff --git a/node_modules/react-native/scripts/cocoapods/rndependencies.rb b/node_modules/react-native/scripts/cocoapods/rndependencies.rb
+index 24ebaa5..a7d8be9 100644
 --- a/node_modules/react-native/scripts/cocoapods/rndependencies.rb
 +++ b/node_modules/react-native/scripts/cocoapods/rndependencies.rb
-@@ -73 +73 @@ class ReactNativeDependenciesUtils
+@@ -70,7 +70,7 @@ class ReactNativeDependenciesUtils
+         if ENV["RCT_USE_LOCAL_RN_DEP"]
+             abort_if_use_local_rndeps_with_no_file()
+             rndeps_log("Using local xcframework at #{ENV["RCT_USE_LOCAL_RN_DEP"]}")
 -            return {:http => "file://#{ENV["RCT_USE_LOCAL_RN_DEP"]}" }
 +            return {:http => URI::File.build(path: URI::DEFAULT_PARSER.escape(ENV["RCT_USE_LOCAL_RN_DEP"])).to_s }
-@@ -164 +164 @@ class ReactNativeDependenciesUtils
+         end
+
+         if ENV["RCT_USE_RN_DEP"] && ENV["RCT_USE_RN_DEP"] == "1"
+@@ -161,7 +161,7 @@ class ReactNativeDependenciesUtils
+         destinationDebug = download_stable_rndeps(@@react_native_path, @@react_native_version, :debug)
+         download_stable_rndeps(@@react_native_path, @@react_native_version, :release)
+
 -        return {:http => URI::File.build(path: destinationDebug).to_s }
 +        return {:http => URI::File.build(path: URI::DEFAULT_PARSER.escape(destinationDebug)).to_s }
-@@ -231 +231 @@ class ReactNativeDependenciesUtils
+     end
+
+     def self.release_tarball_url(version, build_type)
+@@ -228,7 +228,7 @@ class ReactNativeDependenciesUtils
+         destinationDebug = download_nightly_rndeps(@@react_native_path, @@react_native_version, :debug)
+         download_nightly_rndeps(@@react_native_path, @@react_native_version, :release)
+
 -        return {:http => URI::File.build(path: destinationDebug).to_s }
 +        return {:http => URI::File.build(path: URI::DEFAULT_PARSER.escape(destinationDebug)).to_s }
+         return {:http => url}
+     end
+
+diff --git a/node_modules/react-native/settings.gradle.kts b/node_modules/react-native/settings.gradle.kts
+index 62527f0..0dbdbc8 100644
+--- a/node_modules/react-native/settings.gradle.kts
++++ b/node_modules/react-native/settings.gradle.kts
+@@ -25,11 +25,6 @@ include(":packages:react-native:ReactAndroid")
+
+ project(":packages:react-native:ReactAndroid").projectDir = file("ReactAndroid/")
+
+-include(":packages:react-native:ReactAndroid:hermes-engine")
+-
+-project(":packages:react-native:ReactAndroid:hermes-engine").projectDir =
+-    file("ReactAndroid/hermes-engine/")
+-
+ // Since Gradle 9.0, all the projects in the path must have an existing folder.
+ // As we build :packages:react-native:ReactAndroid, we need to declare the folders
+ // for :packages and :packages:react-native as well as otherwise the build from
