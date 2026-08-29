@@ -369,6 +369,12 @@ export const SHOWCASE_FEED_READ_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const PUBLIC_SEARCH_READ_RATE_LIMIT = {
+  scope: 'public-search:read',
+  limit: 180,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const SHOWCASE_POST_DETAIL_READ_RATE_LIMIT = {
   scope: 'showcase-post:read',
   limit: 300,

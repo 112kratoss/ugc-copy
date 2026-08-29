@@ -35,7 +35,7 @@ export type GenerationShareSourceSurface = (typeof SHARE_SOURCE_SURFACES)[number
 export type ProfileShareSourceSurface = (typeof PROFILE_SHARE_SOURCE_SURFACES)[number];
 export type GenerationShareChannel = (typeof SHARE_CHANNELS)[number];
 export type GenerationShareEventType = 'share_click' | 'share_visit';
-type ShowcaseReturnSource = 'community' | 'unlocks' | 'creator' | 'seller' | 'studio' | 'profile' | 'home';
+type ShowcaseReturnSource = 'community' | 'unlocks' | 'creator' | 'seller' | 'studio' | 'profile' | 'home' | 'search';
 
 export interface ShowcaseDetailPathOptions {
   from?: ShowcaseReturnSource | string | null;
@@ -57,6 +57,7 @@ const SHOWCASE_RETURN_SOURCES: ShowcaseReturnSource[] = [
   'studio',
   'profile',
   'home',
+  'search',
 ];
 
 const SHOWCASE_RETURN_LABELS: Record<ShowcaseReturnSource, string> = {
@@ -67,6 +68,7 @@ const SHOWCASE_RETURN_LABELS: Record<ShowcaseReturnSource, string> = {
   studio: 'Back to My Studio',
   profile: 'Back to Your Profile',
   home: 'Back to Home',
+  search: 'Back to Search',
 };
 
 const SHOWCASE_RETURN_FALLBACKS: Record<ShowcaseReturnSource, string> = {
@@ -77,6 +79,7 @@ const SHOWCASE_RETURN_FALLBACKS: Record<ShowcaseReturnSource, string> = {
   studio: '/creations?view=posts',
   profile: '/profile?tab=posts',
   home: '/',
+  search: '/search',
 };
 
 export function isGenerationShareSourceSurface(value: string): value is GenerationShareSourceSurface {
@@ -166,6 +169,10 @@ function inferShowcaseReturnSource(returnTo: string | null | undefined): Showcas
 
   if (returnTo.startsWith('/profile')) {
     return 'profile';
+  }
+
+  if (returnTo.startsWith('/search')) {
+    return 'search';
   }
 
   return 'community';

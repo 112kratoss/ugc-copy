@@ -9,6 +9,7 @@ import type {
   MobileCommerceSyncResponse,
   MobileCompatibilityErrorResponse,
   MobileNotificationsResponse,
+  PublicSearchResponse,
 } from '../../ugc-mobile/lib/types';
 
 type MobileApiContractEndpoint<Response> = {
@@ -33,6 +34,7 @@ type MobileApiContractFixture = {
       entitlements: MobileCommerceSyncResponse[];
     }>;
     mobileNotifications: MobileApiContractEndpoint<MobileNotificationsResponse>;
+    searchPublicContent: MobileApiContractEndpoint<PublicSearchResponse>;
   };
 };
 
@@ -54,6 +56,7 @@ const expectedEndpointKeys = [
   'getMotionGeneration',
   'enhancePrompt',
   'getShowcaseFeed',
+  'searchPublicContent',
   'getSavedMedia',
   'getShowcasePost',
   'listPostComments',

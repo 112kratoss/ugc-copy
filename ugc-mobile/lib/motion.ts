@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useSyncExternalStore, type ComponentProps } from 'react';
-import { AccessibilityInfo, Animated, View, type ViewStyle } from 'react-native';
+import { AccessibilityInfo, Animated, Easing, View, type ViewStyle } from 'react-native';
 
 import { appTheme } from '@/lib/theme';
 
@@ -235,6 +235,69 @@ export function useCrossFade<T>(value: T) {
   }, [pair, progress, reducedMotion]);
 
   return { from: pair.from, to: pair.to, progress };
+}
+
+/**
+ * Timing for a full-screen overlay entering and leaving. Entrances use a
+ * strong ease-out so the surface reads as immediate; exits are shorter so
+ * dismissal never lingers. Reduced motion collapses both to an instant cut.
+ */
+export function getOverlayPresenceSpec(reducedMotion: boolean) {
+  return reducedMotion
+    ? { enterDurationMs: 0, exitDurationMs: 0, enterScaleFrom: 1 }
+    : { enterDurationMs: 320, exitDurationMs: 220, enterScaleFrom: 0.97 };
+}
+
+const overlayEnterEasing = optionalNativeExport(() => Easing.bezier(0.23, 1, 0.32, 1));
+const overlayExitEasing = optionalNativeExport(() => Easing.in(Easing.quad));
+
+/**
+ * Mount-and-fade presence for a full-screen overlay: fades and settles from a
+ * slight scale on open, and keeps the subtree mounted just long enough to fade
+ * back out on close — an overlay that appears or vanishes in a single frame
+ * reads as broken rather than fast. Reduced motion (and the minimal
+ * react-native mocks tests use) snap between states instantly.
+ */
+export function useOverlayPresence(visible: boolean) {
+  const reducedMotion = useReducedMotion();
+  const [mounted, setMounted] = useState(visible);
+  const [progress] = useState<Animated.Value | null>(() => createValue(visible ? 1 : 0));
+
+  useEffect(() => {
+    if (visible) setMounted(true);
+
+    if (!progress || reducedMotion || !animatedApi?.timing) {
+      progress?.setValue(visible ? 1 : 0);
+      if (!visible) setMounted(false);
+      return;
+    }
+
+    const spec = getOverlayPresenceSpec(reducedMotion);
+    progress.stopAnimation();
+    animatedApi.timing(progress, {
+      toValue: visible ? 1 : 0,
+      duration: visible ? spec.enterDurationMs : spec.exitDurationMs,
+      easing: (visible ? overlayEnterEasing : overlayExitEasing) ?? undefined,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (!visible && finished) setMounted(false);
+    });
+  }, [progress, reducedMotion, visible]);
+
+  return {
+    mounted,
+    animatedStyle: progress
+      ? ({
+          opacity: progress,
+          transform: [{
+            scale: progress.interpolate({
+              inputRange: [0, 1],
+              outputRange: [getOverlayPresenceSpec(false).enterScaleFrom, 1],
+            }),
+          }],
+        } as Animated.WithAnimatedValue<ViewStyle>)
+      : undefined,
+  };
 }
 
 /** Animates binary state changes such as a switch thumb; reduced motion updates instantly. */

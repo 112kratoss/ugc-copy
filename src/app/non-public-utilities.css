@@ -36,6 +36,7 @@
 @source "./privacy";
 @source "./profile";
 @source "./r";
+@source "./search";
 @source "./template-runs";
 @source "./templates";
 @source "./terms";
@@ -55,6 +56,9 @@
 @source "./components/StudioOverflowMenu.tsx";
 @source "./components/StudioModelPicker.tsx";
 @source "./components/enhancePromptClient.ts";
+@source "./components/search/CreatorSearchResult.tsx";
+@source "./components/search/SearchField.tsx";
+@source "./components/search/SearchStateBlock.tsx";
 @source "./components/templates/CreateTemplateRunClient.tsx";
 @source "./components/templates/TemplateCatalogClient.tsx";
 @source "./components/templates/TemplateDetailClient.tsx";

@@ -828,6 +828,61 @@ export interface ShowcaseFeedResponse {
   };
 }
 
+export type PublicSearchType = 'top' | 'creators' | 'posts' | 'recipes';
+
+export interface CreatorSearchResult {
+  id: string;
+  username: string;
+  displayName: string;
+  bio: string | null;
+  avatarUrl: string | null;
+  publicPostCount: number;
+  isFollowing: boolean;
+}
+
+export interface RecipeSearchResult {
+  id: string;
+  postId: string;
+  title: string;
+  summary: string;
+  previewText: string;
+  accessMode: 'free' | 'paid';
+  priceUsdCents: number;
+  salesCount: number;
+  allowRemix: boolean;
+  resourceKinds: string[];
+  createdAt: string;
+  seller: ShowcaseCreator;
+  post: {
+    id: string;
+    title: string;
+    body: string;
+    mediaUrl: string | null;
+    mediaPreviewUrl: string | null;
+    mediaKind: 'image' | 'video' | null;
+  } | null;
+  priceQuote: {
+    formatted: string;
+    currency: string;
+    amountSubunits: number;
+    note?: string | null;
+  };
+}
+
+export interface PublicSearchPage<T> {
+  items: T[];
+  nextCursor: string | null;
+}
+
+export interface PublicSearchResponse {
+  query: string;
+  normalizedQuery: string;
+  type: PublicSearchType;
+  creators: PublicSearchPage<CreatorSearchResult>;
+  posts: PublicSearchPage<ShowcaseFeedItem>;
+  recipes: PublicSearchPage<RecipeSearchResult>;
+}
+
 export interface ShowcasePostResponse {
   success: boolean;
   item: ShowcaseFeedItem;

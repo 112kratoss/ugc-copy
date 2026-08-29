@@ -141,6 +141,11 @@
       "path": "/api/showcase/feed",
       "auth": "optional"
     },
+    "searchPublicContent": {
+      "method": "GET",
+      "path": "/api/search",
+      "auth": "optional"
+    },
     "recordShowcaseFeedEvent": {
       "method": "POST",
       "path": "/api/showcase/feed/events",

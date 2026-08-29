@@ -5,9 +5,11 @@ import {
   HelpCircle,
   Menu,
   Plus,
+  Search,
   WandSparkles,
   X,
 } from 'lucide-react';
+import Form from 'next/form';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -31,7 +33,7 @@ import DeferredAppShellAccount from './DeferredAppShellAccount';
 
 const NAV_GROUPS = [
   { label: 'Create', ids: ['home', 'create', 'studio', 'showcase'] },
-  { label: 'Explore', ids: ['marketplace', 'workflow'] },
+  { label: 'Explore', ids: ['search', 'marketplace', 'workflow'] },
   { label: 'Account', ids: ['invite', 'alerts', 'profile'] },
 ] as const;
 
@@ -565,7 +567,40 @@ export default function AppShellClient({ children }: { children: React.ReactNode
             </div>
           </div>
 
+          {activeItem?.id !== 'search' ? (
+            <Form
+              action="/search"
+              className="mx-auto hidden w-full max-w-md items-center gap-2.5 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 transition focus-within:border-[var(--ui-border-strong)] focus-within:bg-[var(--ui-surface-3)] md:flex"
+            >
+              <button
+                type="submit"
+                aria-label="Search"
+                className="ui-focus-ring -ml-2 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--ui-text-faint)] transition hover:text-[var(--ui-text-primary)]"
+              >
+                <Search className="h-4 w-4" aria-hidden />
+              </button>
+              <input
+                type="search"
+                name="q"
+                placeholder="Search Magicbooklet"
+                aria-label="Search creators, posts, and recipes"
+                autoComplete="off"
+                className="h-12 min-w-0 flex-1 bg-transparent text-sm text-[var(--ui-text-primary)] outline-none placeholder:text-[var(--ui-text-faint)]"
+              />
+            </Form>
+          ) : null}
+
           <div className="ml-auto flex min-w-0 items-center gap-2 sm:gap-3">
+            {activeItem?.id !== 'search' ? (
+              <Link
+                href="/search"
+                prefetch={false}
+                aria-label="Search creators, posts, and recipes"
+                className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)] md:hidden"
+              >
+                <Search className="h-[18px] w-[18px]" aria-hidden />
+              </Link>
+            ) : null}
             <Link
               href="/notifications"
               prefetch={false}

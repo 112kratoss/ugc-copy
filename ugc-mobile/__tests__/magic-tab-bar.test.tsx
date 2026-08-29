@@ -61,11 +61,11 @@ vi.mock('lucide-react-native', () => ({
   Share: (props: Record<string, unknown>) => React.createElement('glyph-icon', props),
   Share2: (props: Record<string, unknown>) => React.createElement('glyph-icon', props),
   Bell: (props: Record<string, unknown>) => React.createElement('bell-icon', props),
+  Users: (props: Record<string, unknown>) => React.createElement('users-icon', props),
   FilePlus2: (props: Record<string, unknown>) => React.createElement('file-plus-icon', props),
   Home: (props: Record<string, unknown>) => React.createElement('home-icon', props),
   Plus: (props: Record<string, unknown>) => React.createElement('plus-icon', props),
   Sparkles: (props: Record<string, unknown>) => React.createElement('sparkles-icon', props),
-  Users: (props: Record<string, unknown>) => React.createElement('users-icon', props),
   User: (props: Record<string, unknown>) => React.createElement('user-icon', props),
   X: (props: Record<string, unknown>) => React.createElement('x-icon', props),
 }));

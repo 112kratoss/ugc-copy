@@ -67,6 +67,8 @@ import type {
   ViewerUnlockDetailResponse,
   GenerationShareSourceSurface,
   ProfileShareSourceSurface,
+  PublicSearchResponse,
+  PublicSearchType,
   ShareChannel,
 } from './types';
 import {
@@ -619,6 +621,17 @@ export function createApiClient({
         ...(options.auth === false ? { cacheTtlMs: CONTENT_CACHE_TTL_MS } : {}),
         ...options,
       }),
+    searchPublicContent: (params: {
+      query: string;
+      type?: PublicSearchType;
+      cursor?: string | null;
+      limit?: number;
+    }, signal?: AbortSignal) => request<PublicSearchResponse>('/api/search' + buildQuery({
+      q: params.query,
+      type: params.type ?? 'top',
+      cursor: params.cursor,
+      limit: params.limit,
+    }), { signal }, { auth: true }),
     recordShowcaseFeedEvent: (body: ShowcaseFeedEventRequest) =>
       request<ShowcaseFeedEventResponse>('/api/showcase/feed/events', {
         method: 'POST',

@@ -4,6 +4,7 @@ import {
   Home,
   Layers3,
   MessagesSquare,
+  Search,
   Sparkles,
   Store,
   UserRound,
@@ -13,7 +14,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 
 export interface AppNavItem {
-  id: 'home' | 'feed' | 'create' | 'studio' | 'showcase' | 'marketplace' | 'workflow' | 'profile' | 'alerts' | 'invite';
+  id: 'home' | 'feed' | 'create' | 'studio' | 'showcase' | 'search' | 'marketplace' | 'workflow' | 'profile' | 'alerts' | 'invite';
   label: string;
   shortLabel: string;
   href: string;
@@ -104,6 +105,15 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
       !isPostDetailPath(pathname) &&
       !isCreatorProfilePath(pathname) &&
       (isExactOrChild(pathname, '/showcase') || isExactOrChild(pathname, '/creators')),
+  },
+  {
+    id: 'search',
+    label: 'Search',
+    shortLabel: 'Search',
+    href: '/search',
+    description: 'Find creators, public posts, and reusable recipes',
+    icon: Search,
+    match: (pathname) => isExactOrChild(pathname, '/search'),
   },
   {
     id: 'marketplace',

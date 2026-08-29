@@ -34,6 +34,14 @@ describe('app shell navigation', () => {
     expect(getAppShellTitle('/creators/sassy23bh')).toBe('Creator');
   });
 
+  it('gives public search its own Explore entry and title', () => {
+    expect(getActiveAppNavItem('/search')?.id).toBe('search');
+    expect(getAppShellTitle('/search')).toBe('Search');
+    // A query string never reaches usePathname, but the bare path must not be
+    // claimed by any neighbouring section.
+    expect(getActiveAppNavItem('/showcase')?.id).toBe('showcase');
+  });
+
   it('keeps template discovery and runs in the Create section', () => {
     expect(getActiveAppNavItem('/templates')?.id).toBe('create');
     expect(getActiveAppNavItem('/templates/ghost-rider')?.id).toBe('create');

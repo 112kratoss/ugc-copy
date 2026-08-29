@@ -356,6 +356,72 @@
         }
       }
     },
+    "searchPublicContent": {
+      "method": "GET",
+      "path": "/api/search",
+      "auth": "optional",
+      "cacheControl": "private, no-store",
+      "response": {
+        "query": "Neon product",
+        "normalizedQuery": "Neon product",
+        "type": "top",
+        "creators": {
+          "items": [
+            {
+              "id": "creator-1",
+              "username": "luna-studio",
+              "displayName": "Luna Studio",
+              "bio": "Cinematic product artist",
+              "avatarUrl": null,
+              "publicPostCount": 3,
+              "isFollowing": false
+            }
+          ],
+          "nextCursor": null
+        },
+        "posts": {
+          "items": [],
+          "nextCursor": null
+        },
+        "recipes": {
+          "items": [
+            {
+              "id": "bundle-1",
+              "postId": "post-1",
+              "title": "Neon product recipe",
+              "summary": "Prompt and workflow for neon product shots",
+              "previewText": "Neon-lit hero shots",
+              "accessMode": "paid",
+              "priceUsdCents": 900,
+              "salesCount": 12,
+              "allowRemix": true,
+              "resourceKinds": ["prompt"],
+              "createdAt": "2026-08-12T00:00:00.000Z",
+              "seller": {
+                "id": "creator-1",
+                "username": "luna-studio",
+                "name": "Luna Studio",
+                "avatar": null
+              },
+              "post": {
+                "id": "post-1",
+                "title": "Neon product reveal",
+                "body": "A premium campaign frame",
+                "mediaUrl": "https://cdn.example.test/post-1.png",
+                "mediaPreviewUrl": "https://cdn.example.test/post-1-preview.png",
+                "mediaKind": "image"
+              },
+              "priceQuote": {
+                "formatted": "$9.00",
+                "currency": "USD",
+                "amountSubunits": 900
+              }
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
     "getSavedMedia": {
       "method": "GET",
       "path": "/api/showcase/saved-media",

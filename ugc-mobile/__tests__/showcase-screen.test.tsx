@@ -91,7 +91,12 @@ vi.mock('lucide-react-native', () => ({
   MoreVertical: (props: MockProps) => React.createElement('more-vertical-icon', props),
   Play: (props: MockProps) => React.createElement('play-icon', props),
   RefreshCw: (props: MockProps) => React.createElement('refresh-icon', props),
+  Search: (props: MockProps) => React.createElement('search-icon', props),
   X: (props: MockProps) => React.createElement('x-icon', props),
+}));
+
+vi.mock('@/components/explore-search-overlay', () => ({
+  ExploreSearchOverlay: (props: MockProps) => React.createElement('explore-search-overlay', props),
 }));
 
 vi.mock('@/components/showcase-media-preview', () => ({

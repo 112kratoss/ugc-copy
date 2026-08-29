@@ -2,7 +2,7 @@ import { FlashList, type FlashListRef, type ListRenderItem, type ViewToken } fro
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ImageIcon, MoreVertical, Play, RefreshCw, X } from 'lucide-react-native';
+import { ImageIcon, MoreVertical, Play, RefreshCw, Search, X } from 'lucide-react-native';
 import { useIsFocused, useScrollToTop } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AccessibilityInfo, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
@@ -10,6 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
+import { ExploreSearchOverlay } from '@/components/explore-search-overlay';
 import { FeedMediaPlate } from '@/components/feed-media-plate';
 import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { TopScrim } from '@/components/top-scrim';
@@ -175,6 +176,7 @@ export default function ShowcaseScreen() {
   const visibleActiveVideoIds = isFocused ? activeVideoIds : NO_ACTIVE_VIDEO_IDS;
   const [isSwipingMedia, setIsSwipingMedia] = useState(false);
   const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
+  const [searchVisible, setSearchVisible] = useState(false);
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
   const lastLoadMorePageCountRef = useRef<number | null>(null);
@@ -740,13 +742,18 @@ export default function ShowcaseScreen() {
                 <Text accessibilityRole="header" selectable style={{ flex: 1, color: appTheme.colors.text, ...appTheme.type.pageTitle }}>
                   Showcase
                 </Text>
-                <IconButton
-                  disabled={showcaseQuery.isFetching && !showcaseQuery.isFetchingNextPage}
-                  label="Refresh Showcase"
-                  onPress={handleRefresh}
-                >
-                  <RefreshCw size={appTheme.icon.default} color={appTheme.colors.text} />
-                </IconButton>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <IconButton label="Search creators, posts, and recipes" onPress={() => setSearchVisible(true)}>
+                    <Search size={appTheme.icon.default} color={appTheme.colors.text} />
+                  </IconButton>
+                  <IconButton
+                    disabled={showcaseQuery.isFetching && !showcaseQuery.isFetchingNextPage}
+                    label="Refresh Showcase"
+                    onPress={handleRefresh}
+                  >
+                    <RefreshCw size={appTheme.icon.default} color={appTheme.colors.text} />
+                  </IconButton>
+                </View>
               </View>
 
               <ScrollView
@@ -817,6 +824,8 @@ export default function ShowcaseScreen() {
         />
 
         <TopScrim topInset={topInset} />
+
+        <ExploreSearchOverlay api={api} visible={searchVisible} onClose={() => setSearchVisible(false)} />
 
         <FeedFeedbackSheet
           creatorLabel={feedbackItem ? formatCreatorLabel(feedbackItem.creator.username || feedbackItem.creator.name) : '@creator'}

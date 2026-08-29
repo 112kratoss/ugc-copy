@@ -190,6 +190,7 @@ const PUBLIC_ROUTES = [
   '/api/source-tools',
   '/api/seedance-assets',
   '/api/creators/[username]',
+  '/api/search',
   '/api/showcase/feed',
   '/api/showcase/feed/events',
   '/api/showcase/posts/[postId]',

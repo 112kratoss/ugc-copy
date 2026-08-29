@@ -1467,6 +1467,48 @@ export async function getShowcaseFeedItemById(options: {
   return sanitizedFeed.items[0] ?? null;
 }
 
+/**
+ * Hydrates an already-ranked list of public post ids through the same media,
+ * creator, resource, pricing, saved-state and block policy as Showcase.
+ * Search and other discovery surfaces should use this instead of rebuilding a
+ * lighter result shape that can drift from the canonical public contract.
+ */
+export async function getShowcaseFeedItemsByPostIds(options: {
+  postIds: string[];
+  viewerUserId?: string | null;
+  countryCode?: string | null;
+}): Promise<ShowcaseFeedItem[]> {
+  const uniquePostIds = Array.from(new Set(options.postIds.filter(Boolean)));
+  if (uniquePostIds.length === 0) return [];
+
+  const adminSupabase = createServiceClient();
+  const rows = await fetchPostRowsByIds(uniquePostIds, adminSupabase);
+  if (!rows) return [];
+
+  const items = await resolvePostRowsToFeedItems(rows, adminSupabase);
+  const rankedItemById = new Map(items.map((item) => [item.id, item]));
+  const rankedItems = uniquePostIds.flatMap((postId) => {
+    const item = rankedItemById.get(postId);
+    return item ? [item] : [];
+  });
+  const baseFeed: ShowcaseFeedPage = {
+    items: rankedItems,
+    pageInfo: {
+      hasMore: false,
+      nextOffset: null,
+      limit: rankedItems.length,
+      offset: 0,
+    },
+  };
+  const pricedFeed = await attachLocalizedAssetPrices(baseFeed, options.countryCode ?? null);
+  const viewerFeed = await attachViewerStateToFeed(
+    pricedFeed,
+    options.viewerUserId ?? null,
+    adminSupabase,
+  );
+  return sanitizeShowcaseFeedPage(viewerFeed).items;
+}
+
 async function attachLocalizedAssetPrices(
   feed: ShowcaseFeedPage,
   countryCode?: string | null

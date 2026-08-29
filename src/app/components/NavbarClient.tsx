@@ -11,6 +11,7 @@ import { supabase } from '@/lib/supabase';
 
 const COMMUNITY_LINKS = [
   { href: '/showcase', label: 'Community' },
+  { href: '/search', label: 'Search' },
   { href: '/marketplace', label: 'Marketplace' },
   { href: '/blog', label: 'Blog' },
 ];
