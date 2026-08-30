@@ -7,6 +7,8 @@ import {
   extractEasSubmissionId,
   verifyEasStoreBuild,
 } from '../scripts/verify-eas-store-build.mjs';
+import { findBundledEnvProblems } from '../scripts/verify-bundled-client-env.mjs';
+import { getMissingProductionClientEnv } from '../app.config';
 
 const mobileRoot = path.resolve(__dirname, '..');
 const repoRoot = path.resolve(mobileRoot, '..');
@@ -57,6 +59,59 @@ describe('mobile production release contracts', () => {
     expect(easJson.submit.staging.android.releaseStatus).toBe('completed');
     expect(validator).toContain('EAS_BUILD_GIT_COMMIT_HASH');
     expect(validator).not.toContain('SENTRY');
+  });
+
+  it('refuses every production bundle when public mobile configuration is incomplete', () => {
+    const complete = {
+      EXPO_PUBLIC_SITE_URL: 'https://magicbooklet.com',
+      EXPO_PUBLIC_API_BASE_URL: 'https://magicbooklet.com',
+      EXPO_PUBLIC_WEB_API_BASE_URL: 'https://magicbooklet.com',
+      EXPO_PUBLIC_SUPABASE_URL: 'https://project.supabase.co',
+      EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_example',
+      EXPO_PUBLIC_REVENUECAT_IOS_API_KEY: 'appl_example',
+      EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY: 'goog_example',
+    };
+
+    expect(getMissingProductionClientEnv(complete)).toEqual([]);
+    expect(
+      getMissingProductionClientEnv({
+        ...complete,
+        EXPO_PUBLIC_SUPABASE_URL: '',
+        EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY: '   ',
+      }),
+    ).toEqual([
+      'EXPO_PUBLIC_SUPABASE_URL',
+      'EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY',
+    ]);
+
+    const appConfig = read('ugc-mobile/app.config.ts');
+    expect(appConfig).toContain("process.env.NODE_ENV === 'production'");
+    expect(appConfig).toContain("process.env.EAS_BUILD_PROFILE === 'production'");
+  });
+
+  it('rejects a store artifact whose bundle lost the inlined client configuration', () => {
+    const expected = {
+      EXPO_PUBLIC_SUPABASE_URL: 'https://project.supabase.co',
+      EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_example',
+      EXPO_PUBLIC_REVENUECAT_IOS_API_KEY: 'appl_example',
+      EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY: 'goog_example',
+    };
+    const carriesEverything = Object.values(expected).join(' ');
+
+    expect(findBundledEnvProblems(carriesEverything, expected)).toEqual([]);
+
+    // The shipped 0.1.1 Android bundle: valid, signed, and silently unusable.
+    const problems = findBundledEnvProblems('https://magicbooklet.com', expected);
+    expect(problems).toHaveLength(4);
+    expect(problems[0]).toContain('EXPO_PUBLIC_SUPABASE_URL');
+    expect(problems[0]).toContain('not inlined');
+
+    // An expected value we cannot even name is a failure, never a silent pass.
+    expect(
+      findBundledEnvProblems(carriesEverything, { ...expected, EXPO_PUBLIC_SUPABASE_URL: '  ' }),
+    ).toEqual([
+      expect.stringContaining('EXPO_PUBLIC_SUPABASE_URL has no expected value'),
+    ]);
   });
 
   it('builds only an exact green main SHA and submits only to protected tester tracks', () => {

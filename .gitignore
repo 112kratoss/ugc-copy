@@ -50,6 +50,8 @@ yarn-error.log*
 .env*
 !.env.example
 !ugc-mobile/.env.example
+# Public client values only; see the header in the file itself.
+!ugc-mobile/.env.production
 .mcp.json
 
 # vercel
