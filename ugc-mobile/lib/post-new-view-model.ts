@@ -1488,7 +1488,6 @@ export function applyCreationPromptResource(
         createPostComposerResourceCard('prompt', {
           id: 'creation-prompt',
           title: 'Exact generation prompt',
-          preview: 'The reusable prompt used for this creation.',
           textContent: prompt,
         }),
       ],

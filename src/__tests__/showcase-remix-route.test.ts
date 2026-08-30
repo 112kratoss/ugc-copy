@@ -157,15 +157,14 @@ describe('/api/showcase/remix route', () => {
     expect(createUserClientMock).toHaveBeenCalledTimes(1);
     expect(rawCreateClientMock).not.toHaveBeenCalled();
     expect(userFromMock).not.toHaveBeenCalled();
-    expect(serviceRpcMock).toHaveBeenCalledWith('increment_post_remix_count', {
-      p_post_id: 'post-1',
-    });
-    expect(notifyPostSocialActivityMock).toHaveBeenCalledWith(expect.anything(), {
-      type: 'post_remixed',
-      recipientUserId: 'creator-1',
-      actorUserId: 'user-1',
-      postId: 'post-1',
-    });
+    // Opening the editor is not a completed remix. The public count and the
+    // creator's notification both wait for a settled generation, so a reader
+    // who opens the editor and closes it leaves no trace on either.
+    expect(serviceRpcMock).not.toHaveBeenCalledWith(
+      'increment_post_remix_count',
+      expect.anything(),
+    );
+    expect(notifyPostSocialActivityMock).not.toHaveBeenCalled();
   });
 
   it('returns 429 before parsing the remix body when remix capacity is exhausted', async () => {

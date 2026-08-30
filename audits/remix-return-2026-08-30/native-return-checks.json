@@ -1,0 +1,54 @@
+{
+  "manualCycles": 2,
+  "automatedCycles": [
+    {
+      "cycle": 3,
+      "detailsBack": 1,
+      "viewerExit": 0,
+      "post": "ghost rider"
+    },
+    {
+      "cycle": 4,
+      "detailsBack": 1,
+      "viewerExit": 0,
+      "post": "ghost rider"
+    },
+    {
+      "cycle": 5,
+      "detailsBack": 1,
+      "viewerExit": 0,
+      "post": "ghost rider"
+    },
+    {
+      "cycle": 6,
+      "detailsBack": 1,
+      "viewerExit": 0,
+      "post": "ghost rider"
+    },
+    {
+      "cycle": 7,
+      "detailsBack": 1,
+      "viewerExit": 0,
+      "post": "ghost rider"
+    },
+    {
+      "cycle": 8,
+      "detailsBack": 1,
+      "viewerExit": 0,
+      "post": "ghost rider"
+    },
+    {
+      "cycle": 9,
+      "detailsBack": 1,
+      "viewerExit": 0,
+      "post": "ghost rider"
+    },
+    {
+      "cycle": 10,
+      "detailsBack": 1,
+      "viewerExit": 0,
+      "post": "ghost rider"
+    }
+  ],
+  "publicRemixCount": 10
+}

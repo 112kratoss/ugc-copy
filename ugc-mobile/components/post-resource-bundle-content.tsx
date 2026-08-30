@@ -1,5 +1,4 @@
 import {
-  Check,
   Copy,
   Download,
   ExternalLink,
@@ -9,12 +8,15 @@ import {
   Repeat2,
   Settings2,
 } from 'lucide-react-native';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 
+import { ResourceAction } from '@/components/resource-action';
+import { ResourcePrompt } from '@/components/resource-prompt';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { PostResourceReferences, getReferenceResourceItems } from '@/components/post-resource-references';
 import {
+  creatorAuthoredDescription,
   formatItemCount,
   getResourceGroupSubtitle,
   parseGenerationSetupNotes,
@@ -340,7 +342,8 @@ function UnlockedResourceGroup({
     ? loneSetup.title
     : card.title;
   // Settings are not "Guide or notes" to the reader, whatever type stored them.
-  const subtitle = loneSetup ? '' : getResourceGroupSubtitle(group);
+  const subtitle = loneSetup || card.resourceType === 'prompt' ? '' : getResourceGroupSubtitle(group);
+  const description = creatorAuthoredDescription(card.resourceType, card.description);
 
   return (
     <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.borderSubtle, backgroundColor: appTheme.colors.surface, padding: appTheme.spacing.card, gap: 12 }}>
@@ -355,9 +358,9 @@ function UnlockedResourceGroup({
               {subtitle}
             </Text>
           ) : null}
-          {card.description?.trim() ? (
+          {description?.trim() ? (
             <Text selectable style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>
-              {card.description.trim()}
+              {description.trim()}
             </Text>
           ) : null}
         </View>
@@ -445,6 +448,8 @@ function ResourceItemRow({
       ) : null}
       {setup ? (
         <GenerationSetupList entries={setup.entries} />
+      ) : textContent && item.type === 'prompt' ? (
+        <ResourcePrompt text={textContent} onCopy={onCopy} />
       ) : textContent ? (
         <Text selectable style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>
           {textContent}
@@ -457,7 +462,7 @@ function ResourceItemRow({
       ) : null}
       {hasActions ? (
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-          {textContent && onCopy ? (
+          {textContent && onCopy && item.type !== 'prompt' ? (
             <ResourceAction
               confirmLabel="Copied"
               icon={<Copy size={appTheme.icon.xs} color={appTheme.colors.success} />}
@@ -507,71 +512,6 @@ function GenerationSetupList({ entries }: { entries: GenerationSetup['entries'] 
   );
 }
 
-/** How long a completed action keeps saying so before the pill reads as itself again. */
-const CONFIRM_MS = 1800;
-
-/**
- * The one small bordered pill for "do something with this text or file".
- *
- * `confirmLabel` is how a press that leaves no trace on screen proves it
- * happened: copying used to fire a haptic and change nothing, which HIG
- * Feedback rules out for anyone who has silenced the phone, looked away, or is
- * listening to VoiceOver. The pill wears the result for a moment instead.
- */
-export function ResourceAction({
-  confirmLabel,
-  icon,
-  label,
-  onPress,
-}: {
-  confirmLabel?: string;
-  icon: React.ReactNode;
-  label: string;
-  onPress: () => Promise<void> | void;
-}) {
-  const [confirmed, setConfirmed] = useState(false);
-  const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => () => {
-    if (confirmTimer.current) clearTimeout(confirmTimer.current);
-  }, []);
-
-  const press = async () => {
-    await onPress();
-    if (!confirmLabel) return;
-    setConfirmed(true);
-    if (confirmTimer.current) clearTimeout(confirmTimer.current);
-    confirmTimer.current = setTimeout(() => setConfirmed(false), CONFIRM_MS);
-  };
-
-  const showConfirmed = Boolean(confirmLabel) && confirmed;
-
-  return (
-    <Pressable
-      accessibilityLabel={showConfirmed ? confirmLabel : label}
-      accessibilityRole="button"
-      onPress={() => void press()}
-      style={({ pressed }) => ({
-        minHeight: 44,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 6,
-        borderRadius: appTheme.radii.pill,
-        borderWidth: 1,
-        borderColor: showConfirmed ? appTheme.semantic.success.border : appTheme.colors.border,
-        backgroundColor: showConfirmed ? appTheme.semantic.success.background : appTheme.colors.surface,
-        opacity: pressed ? appTheme.opacity.pressed : 1,
-        paddingHorizontal: 12,
-      })}
-    >
-      {showConfirmed ? <Check size={appTheme.icon.xs} color={appTheme.colors.success} /> : icon}
-      <Text style={{ color: appTheme.colors.text, ...appTheme.type.caption, fontWeight: '800' }}>
-        {showConfirmed ? confirmLabel : label}
-      </Text>
-    </Pressable>
-  );
-}
 
 function ScopeSummary({ mediaItems, scope }: { mediaItems: ShowcaseMediaItem[]; scope: PostResourceItemScope | undefined }) {
   const normalizedScope = normalizeScope(scope);

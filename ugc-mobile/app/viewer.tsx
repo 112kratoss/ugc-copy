@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanst
 import * as Clipboard from 'expo-clipboard';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer } from 'expo-video';
 import { Copy, FileText, Globe, Heart, ImageOff, Images, Lock, LockKeyhole, MessageCircle, MoreHorizontal, Play, Repeat2, Volume2, VolumeX, Wand2 } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
@@ -104,6 +104,7 @@ import {
 import type { PostLifecycleVisibility } from '@/lib/post-lifecycle-policy';
 import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
 import { verticalHitSlop } from '@/lib/hit-target';
+import { changeViewerPage, resolveViewerPosition, settleViewerItem, slidePageKey, type ViewerPosition } from '@/lib/viewer-position';
 
 /** The creator byline reads as a single line of text; its reach is widened rather than its height. */
 const CREATOR_ROW_HEIGHT = 34;
@@ -163,9 +164,8 @@ export default function ImmersivePreviewViewerScreen() {
     void hydrateViewerAudioMuted();
   }, []);
   const listRef = useRef<FlatList<ImmersivePreviewItem>>(null);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [savedPosition, setSavedPosition] = useState<ViewerPosition | null>(null);
   const [initialPositionReady, setInitialPositionReady] = useState(false);
-  const [detailsPageOpenItemId, setDetailsPageOpenItemId] = useState<string | null>(null);
   // The slide under the finger. Only it is ever driven from up here — back
   // and the ⋮ sheet act on what the reader is looking at, never on a neighbour
   // the list keeps mounted off-screen.
@@ -240,6 +240,42 @@ export default function ImmersivePreviewViewerScreen() {
     router.push(`/creators/${encodeURIComponent(item.creatorUsername)}` as never);
   }, []);
   const initialIndex = useMemo(() => getImmersiveInitialIndex(items, initialId), [items, initialId]);
+  const position = useMemo(
+    () => resolveViewerPosition(items, savedPosition, initialId),
+    [items, savedPosition, initialId]
+  );
+  const activeIndex = Math.max(0, items.findIndex((item) => item.id === position?.itemId));
+  const detailsPageOpenItemId = position?.pageKey === 'details' ? position.itemId : null;
+  const setActiveIndex = useCallback((next: number | ((current: number) => number)) => {
+    setSavedPosition((saved) => {
+      const current = resolveViewerPosition(items, saved, initialId);
+      const index = Math.max(0, items.findIndex((item) => item.id === current?.itemId));
+      const target = items[typeof next === 'function' ? next(index) : next];
+      return target ? settleViewerItem(current, target) : current;
+    });
+  }, [items, initialId]);
+  const changePage = useCallback((itemId: string, pageKey: string) => {
+    setSavedPosition((saved) => {
+      const current = resolveViewerPosition(items, saved, initialId);
+      return current ? changeViewerPage(current, itemId, pageKey) : current;
+    });
+  }, [items, initialId]);
+  // Returning from a pushed screen may refresh/reorder the feed. Follow the
+  // post's identity, including its Details page, rather than the old row index.
+  // Where the native list already sits, so a page the reader just landed on
+  // themselves is never re-scrolled — a second flick that starts inside the
+  // same frame would otherwise be yanked back to the page they just left.
+  const nativeRowRef = useRef<{ index: number; height: number } | null>(null);
+  useEffect(() => {
+    if (!initialPositionReady) return;
+    if (nativeRowRef.current?.index === activeIndex && nativeRowRef.current.height === height) return;
+    const frame = requestAnimationFrame(() => {
+      nativeRowRef.current = { index: activeIndex, height };
+      listRef.current?.scrollToOffset({ offset: height * activeIndex, animated: false });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeIndex, height, initialPositionReady]);
+
   const overlayOpenItemId = getImmersiveVideoBlockerId({
     actionsOpenItemId,
     commentsOpenItemId,
@@ -565,6 +601,7 @@ export default function ImmersivePreviewViewerScreen() {
           redirectTo: response.redirectTo,
           recreateTool: item.recreateTool,
           prompt: response.prefill?.prompt ?? item.recreatePrompt,
+          context: { postId: item.showcasePostId, title: item.title, creatorLabel: item.creatorLabel, thumbnailUrl: item.mediaKind === 'image' ? item.mediaUrl : null },
         });
         if (nativeHref) {
           router.push(nativeHref as never);
@@ -595,6 +632,7 @@ export default function ImmersivePreviewViewerScreen() {
     const fallbackHref = getNativeRemixCreateHref({
       recreateTool: item.recreateTool,
       prompt: item.recreatePrompt,
+      context: { postId: item.showcasePostId, title: item.title, creatorLabel: item.creatorLabel, thumbnailUrl: item.mediaKind === 'image' ? item.mediaUrl : null },
     });
     router.push((fallbackHref ?? `/create/${item.recreateTool}`) as never);
   };
@@ -759,6 +797,7 @@ export default function ImmersivePreviewViewerScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: '#000' }}>
+      <Stack.Screen options={{ gestureEnabled: !detailsOpenForActive, fullScreenGestureEnabled: false }} />
       <FlatList
         ref={listRef}
         data={items}
@@ -775,8 +814,11 @@ export default function ImmersivePreviewViewerScreen() {
           // detents rather than sliding freely. Soft so it can repeat at
           // browsing speed without nagging.
           if (clampedIndex !== activeIndex) haptic.soft();
+          // The reader put the list here, so the alignment effect has nothing
+          // to correct.
+          nativeRowRef.current = { index: clampedIndex, height };
+          if (clampedIndex === activeIndex) return;
           setActiveIndex(clampedIndex);
-          setDetailsPageOpenItemId(null);
           setActionsOpenItemId(null);
           setUnlockRemixOpenItemId(null);
         }}
@@ -808,7 +850,9 @@ export default function ImmersivePreviewViewerScreen() {
               setCommentsOpenItemId(item.id);
             } : undefined}
             onCreatorOpen={openCreatorProfile}
-            onDetailsPageOpenChange={(open) => setDetailsPageOpenItemId(open ? item.id : null)}
+            pageKey={index === activeIndex ? position?.pageKey : undefined}
+            mediaPageKey={index === activeIndex ? position?.mediaPageKey : undefined}
+            onPageChange={changePage}
             onHorizontalScrollToggle={setIsHorizontalScrolling}
             onOwnerAction={(action) => runOwnerAction(action, item)}
             onRecreate={recreateItem}
@@ -1027,7 +1071,9 @@ function ImmersiveSlide({
   onActionsOpen,
   onComments,
   onCreatorOpen,
-  onDetailsPageOpenChange,
+  pageKey,
+  mediaPageKey,
+  onPageChange,
   onOwnerAction,
   onRecreate,
   onSave,
@@ -1051,7 +1097,9 @@ function ImmersiveSlide({
   onActionsOpen: () => void;
   onComments?: () => void;
   onCreatorOpen: (item: ImmersivePreviewItem) => void;
-  onDetailsPageOpenChange: (open: boolean) => void;
+  pageKey?: string;
+  mediaPageKey?: string;
+  onPageChange: (itemId: string, pageKey: string) => void;
   onOwnerAction?: (action: string) => void;
   onRecreate: (item: ImmersivePreviewItem) => void;
   onSave: SaveItemHandler;
@@ -1065,14 +1113,15 @@ function ImmersiveSlide({
   onHorizontalScrollToggle?: (scrolling: boolean) => void;
 }) {
   const horizontalRef = useRef<FlatList<ImmersiveSlidePage>>(null);
-  const [currentHorizontalIndex, setCurrentHorizontalIndex] = useState(0);
+  const reducedMotion = useReducedMotion();
+
   // The settled index drives what the *reel* believes — which page blocks video,
   // which one hardware back returns from — so it may only move once a page has
   // landed. The counter is feedback for the finger and has to answer sooner;
   // Gestures asks for feedback that "helps them predict its results".
   const [draggedPageIndex, setDraggedPageIndex] = useState(0);
   const [saveHeartPopTrigger, setSaveHeartPopTrigger] = useState(0);
-  const prevActiveRef = useRef(active);
+  const nativePageRef = useRef<{ index: number; width: number } | null>(null);
   const doubleTapHeart = useDoubleTapSaveHeartAnimation({ height, width });
   const { user } = useAuth();
   const followTarget = getReelFollowTarget(item, user?.id ?? null);
@@ -1094,26 +1143,29 @@ function ImmersiveSlide({
   }, [authReturnTo, toggleFollow, user]);
 
   const pages = useMemo(() => buildImmersiveSlidePages(item), [item]);
+  const currentHorizontalIndex = Math.max(0, pages.findIndex((page) => slidePageKey(page) === pageKey));
   const currentPageIsDetails = isImmersiveDetailsSlidePageIndex(pages, currentHorizontalIndex);
   const canOpenCreator = Boolean(item.creatorUsername);
   const updateCurrentHorizontalIndex = useCallback((pageIndex: number) => {
-    setCurrentHorizontalIndex(pageIndex);
+    if (!active || !pages[pageIndex]) return;
+    nativePageRef.current = { index: pageIndex, width };
     setDraggedPageIndex(pageIndex);
-    onDetailsPageOpenChange(isImmersiveDetailsSlidePageIndex(pages, pageIndex));
-  }, [onDetailsPageOpenChange, pages]);
+    onPageChange(item.id, slidePageKey(pages[pageIndex]));
+  }, [active, item.id, onPageChange, pages, width]);
 
   const openDetailsPage = useCallback(() => {
     const detailsIndex = pages.findIndex((page) => page.type === 'details');
     if (detailsIndex < 0) return;
 
     updateCurrentHorizontalIndex(detailsIndex);
-    horizontalRef.current?.scrollToIndex({ index: detailsIndex, animated: true });
-  }, [pages, updateCurrentHorizontalIndex]);
+    horizontalRef.current?.scrollToIndex({ index: detailsIndex, animated: !reducedMotion });
+  }, [pages, reducedMotion, updateCurrentHorizontalIndex]);
 
   const showMediaPage = useCallback(() => {
-    updateCurrentHorizontalIndex(0);
-    horizontalRef.current?.scrollToIndex({ index: 0, animated: true });
-  }, [updateCurrentHorizontalIndex]);
+    const index = Math.max(0, pages.findIndex((page) => slidePageKey(page) === mediaPageKey));
+    updateCurrentHorizontalIndex(index);
+    horizontalRef.current?.scrollToIndex({ index, animated: !reducedMotion });
+  }, [mediaPageKey, pages, reducedMotion, updateCurrentHorizontalIndex]);
 
   // Only the active slide answers the reel. A neighbour that the list keeps
   // mounted must never be scrolled from outside: its native views may be
@@ -1128,22 +1180,14 @@ function ImmersiveSlide({
   }, [active, activeSlideRef, openDetailsPage, showMediaPage]);
 
   useEffect(() => {
-    if (!active) {
-      prevActiveRef.current = active;
-      return;
-    }
-
-    const becameActive = !prevActiveRef.current;
-    prevActiveRef.current = active;
-
-    if (becameActive && currentHorizontalIndex !== 0) {
-      const frame = requestAnimationFrame(() => {
-        updateCurrentHorizontalIndex(0);
-        horizontalRef.current?.scrollToIndex({ index: 0, animated: false });
-      });
-      return () => cancelAnimationFrame(frame);
-    }
-  }, [active, currentHorizontalIndex, updateCurrentHorizontalIndex]);
+    if (nativePageRef.current?.index === currentHorizontalIndex && nativePageRef.current.width === width) return;
+    const frame = requestAnimationFrame(() => {
+      nativePageRef.current = { index: currentHorizontalIndex, width };
+      setDraggedPageIndex(currentHorizontalIndex);
+      horizontalRef.current?.scrollToIndex({ index: currentHorizontalIndex, animated: false });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [active, currentHorizontalIndex, width]);
 
   const mediaCount = item.mediaItems?.length ?? 0;
   const isTextPost = item.previewKind === 'text';
@@ -1437,7 +1481,7 @@ function ImmersiveSlide({
 
   if (pages.length <= 1) {
     return (
-      <View style={{ width, height }}>
+      <View accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'} style={{ width, height }}>
         <MediaSlidePage
           active={videoPlaybackActive}
           bottomInset={bottomInset}
@@ -1465,7 +1509,7 @@ function ImmersiveSlide({
   }
 
   return (
-    <View style={{ width, height, backgroundColor: '#000' }}>
+    <View accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'} style={{ width, height, backgroundColor: '#000' }}>
       <FlatList
         ref={horizontalRef}
         data={pages}
@@ -1473,8 +1517,8 @@ function ImmersiveSlide({
         getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
         horizontal
         initialNumToRender={IMMERSIVE_HORIZONTAL_LIST_TUNING.initialNumToRender}
-        initialScrollIndex={0}
-        keyExtractor={(page, index) => page.type === 'media' ? `media-${page.mediaItem.id}` : `${page.type}-${index}`}
+        initialScrollIndex={currentHorizontalIndex}
+        keyExtractor={slidePageKey}
         maxToRenderPerBatch={IMMERSIVE_HORIZONTAL_LIST_TUNING.maxToRenderPerBatch}
         onScroll={(event) => {
           const page = Math.round(event.nativeEvent.contentOffset.x / width);
@@ -1496,6 +1540,7 @@ function ImmersiveSlide({
         pagingEnabled
         removeClippedSubviews={Platform.OS === 'android'}
         renderItem={({ item: page, index: pageIndex }) => (
+          <View accessibilityElementsHidden={!active || currentHorizontalIndex !== pageIndex} importantForAccessibility={active && currentHorizontalIndex === pageIndex ? 'auto' : 'no-hide-descendants'} style={{ width, height }}>
           <MediaSlidePage
             active={active && currentHorizontalIndex === pageIndex && (page.type !== 'media' || videoPlaybackActive)}
             bottomInset={bottomInset}
@@ -1515,6 +1560,7 @@ function ImmersiveSlide({
             topInset={topInset}
             width={width}
           />
+          </View>
         )}
         scrollEnabled={active}
         showsHorizontalScrollIndicator={false}

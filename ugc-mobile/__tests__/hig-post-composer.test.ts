@@ -63,8 +63,18 @@ describe('S11 — the reorder can finish', () => {
     expect(route.slice(0, route.indexOf('/>'))).not.toContain('gestureEnabled: false');
   });
 
+  /**
+   * The option removes a system gesture, so it is not a default to sprinkle.
+   * Two routes have earned it: this composer, whose reorder the pan terminated,
+   * and `create/[tool]`, whose exit has to flush an unsaved draft that a native
+   * pop would skip. Naming them makes a third use argue for itself here.
+   */
   it('leaves every other route on the platform default', () => {
-    expect(layout.match(/fullScreenGestureEnabled:/g)).toHaveLength(1);
+    const guarded = [...layout.matchAll(/fullScreenGestureEnabled:/g)].map((match) => {
+      const before = layout.slice(0, match.index);
+      return before.slice(before.lastIndexOf('name="')).match(/name="([^"]+)"/)?.[1];
+    });
+    expect(guarded.sort()).toEqual(['create/[tool]', 'post/new']);
   });
 });
 

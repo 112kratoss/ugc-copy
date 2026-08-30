@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Redirect, router, useLocalSearchParams } from 'expo-router';
+import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
 import { FileText, Heart, MessageCircle, MoreVertical, Repeat2 } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -284,6 +284,7 @@ export default function PostScreen() {
           way off the screen — came after the post and every one of its
           comments. The details page carries its own header and its own way
           back to the post, so the arrow steps aside there. */}
+      <Stack.Screen options={{ gestureEnabled: !onDetailsPage, fullScreenGestureEnabled: false }} />
       {onDetailsPage ? null : <BackControl topInset={topInset} />}
 
       <FlatList

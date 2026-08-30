@@ -13,6 +13,9 @@ function resolvePressableStyle(style: unknown) {
     : style;
 }
 
+const draftStorage = vi.hoisted(() => ({ getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() }));
+vi.mock('@react-native-async-storage/async-storage', () => ({ default: draftStorage }));
+
 const routerState = vi.hoisted(() => ({
   push: vi.fn(),
 }));
@@ -155,6 +158,7 @@ vi.mock('@/lib/use-generation-model-catalog', () => ({
   useGenerationModelCatalog: () => catalogState,
 }));
 
+import { createDefaultCreationDraft } from '../lib/media-creation-view-model';
 import { MediaCreationScreen } from '../components/media-creation-screen';
 import { pickMedia, pickMediaList, uploadPickedMedia } from '../lib/media';
 import { createTestGenerationModelCatalog, remoteImageModel } from './fixtures/generation-model-catalog';
@@ -218,6 +222,9 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
   });
 
   beforeEach(() => {
+    draftStorage.getItem.mockReset().mockResolvedValue(null);
+    draftStorage.setItem.mockReset().mockResolvedValue(undefined);
+    draftStorage.removeItem.mockReset().mockResolvedValue(undefined);
     routerState.push.mockClear();
     authState.updateCredits.mockClear();
     authState.credits = 999;
@@ -512,7 +519,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     vi.useRealTimers();
   });
 
-  it('offers a visible exit and anchors the persistent controls to the safe area in the focused tab workspace', () => {
+  it('offers a visible exit and anchors the persistent controls to the safe area in the focused tab workspace', async () => {
     const onClose = vi.fn();
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
@@ -520,8 +527,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     const close = tree!.root.findByProps({ accessibilityLabel: 'Close creator' });
-    expect(close.props.accessibilityHint).toContain('Your draft is saved');
-    renderer.act(() => close.props.onPress());
+    expect(close.props.accessibilityHint).toContain('Saves your changes');
+    await renderer.act(async () => { close.props.onPress(); });
     expect(onClose).toHaveBeenCalledTimes(1);
 
     const persistentBar = tree!.root.find((node) => (
@@ -556,6 +563,51 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(actionColumns).toHaveLength(3);
     const referenceRail = tree!.root.findByProps({ testID: 'image-reference-rail' });
     expect(referenceRail.props.style).not.toEqual(expect.objectContaining({ borderTopWidth: expect.any(Number) }));
+  });
+
+  it('flushes the last keystroke before Close, without waiting for the autosave delay', async () => {
+    const onClose = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await renderer.act(async () => { tree = renderer.create(<MediaCreationScreen initialTool="image" initialPrompt="seed" onClose={onClose} />); });
+    renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('last keystroke'); });
+    await renderer.act(async () => { tree.root.findByProps({ accessibilityLabel: 'Close creator' }).props.onPress(); });
+    expect(JSON.parse(draftStorage.setItem.mock.lastCall![1]).image.prompt).toBe('last keystroke');
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(draftStorage.setItem.mock.invocationCallOrder[0]).toBeLessThan(onClose.mock.invocationCallOrder[0]);
+  });
+
+  // The route hangs the native back gesture off this: a pop that beats the
+  // close guard would skip the flush, so an edited session has to say so.
+  it('reports the first edit, and says nothing for a session only looked at', async () => {
+    const onDirtyChange = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await renderer.act(async () => { tree = renderer.create(<MediaCreationScreen initialTool="image" initialPrompt="seed" onClose={vi.fn()} onDirtyChange={onDirtyChange} />); });
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+    await renderer.act(async () => { tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('an edit'); });
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+  });
+
+  it('closes an untouched editor without a storage write or discard prompt', async () => {
+    draftStorage.setItem.mockRejectedValue(new Error('disk full'));
+    const onClose = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await renderer.act(async () => { tree = renderer.create(<MediaCreationScreen initialTool="image" initialPrompt="seed" onClose={onClose} />); });
+    await renderer.act(async () => { tree.root.findByProps({ accessibilityLabel: 'Close creator' }).props.onPress(); });
+    expect(draftStorage.setItem).not.toHaveBeenCalled();
+    expect(nativeAlertState.alert).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays in the editor when saving fails and the reader keeps editing', async () => {
+    draftStorage.setItem.mockRejectedValue(new Error('disk full'));
+    nativeAlertState.alert.mockImplementation((_title, _message, actions) => actions[0].onPress());
+    const onClose = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await renderer.act(async () => { tree = renderer.create(<MediaCreationScreen initialTool="image" initialPrompt="seed" onClose={onClose} />); });
+    renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('unsaved work'); });
+    await renderer.act(async () => { tree.root.findByProps({ accessibilityLabel: 'Close creator' }).props.onPress(); });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(collectText(tree.root)).toContain('Draft not saved');
   });
 
   it('hydrates remix prompt and references from the remix-source bundle', async () => {
@@ -678,6 +730,34 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     const settled = collectText(tree!.root);
     expect(settled).toContain('1 / 14');
     expect(settled).not.toContain('Restoring the original prompt, settings, and references…');
+  });
+
+  it('preserves edits saved before a previous source restore finished', async () => {
+    draftStorage.getItem.mockResolvedValue(JSON.stringify({
+      image: { ...createDefaultCreationDraft('image'), prompt: 'Saved while the source was loading' },
+      video: createDefaultCreationDraft('video'), motion: createDefaultCreationDraft('motion'),
+      remixRestored: false, remixEditedKeys: { image: ['prompt'] }, updatedAt: '2026-08-30T00:00:00Z',
+    }));
+    authState.api.getRemixSourceBundle.mockResolvedValue({ generation: { id: 'gen-1', title: 'Source', prompt: 'Source prompt', category: 'image', model: 'nano-banana-2' }, result: null, inputs: { image: { elements: [] } }, workflowSettings: { model: 'nano-banana-2' }, restoreIssues: [] });
+    let tree!: renderer.ReactTestRenderer;
+    await renderer.act(async () => { tree = renderer.create(<MediaCreationScreen initialTool="image" remixSource={{ generationId: 'gen-1', postId: 'post-1' }} />); });
+    expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
+    expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('Saved while the source was loading');
+  });
+
+  it('restarts a cancelled restore when the catalog refreshes, instead of hanging', async () => {
+    const source = { generation: { id: 'gen-1', title: 'Source', prompt: 'Restored prompt', category: 'image', model: 'nano-banana-2' }, result: null, inputs: { image: { elements: [] } }, workflowSettings: { model: 'nano-banana-2' }, restoreIssues: [] };
+    authState.api.getRemixSourceBundle.mockReturnValueOnce(new Promise(() => {})).mockResolvedValue(source);
+    let tree!: renderer.ReactTestRenderer;
+    await renderer.act(async () => { tree = renderer.create(<MediaCreationScreen initialTool="image" remixSource={{ generationId: 'gen-1', postId: 'post-1' }} />); });
+    expect(collectText(tree.root)).toContain('Restoring the original prompt, settings, and references…');
+    await renderer.act(async () => {
+      catalogState.catalog = createTestGenerationModelCatalog();
+      tree.update(<MediaCreationScreen initialTool="image" remixSource={{ generationId: 'gen-1', postId: 'post-1' }} />);
+    });
+    expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(2);
+    expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('Restored prompt');
+    expect(collectText(tree.root)).not.toContain('Restoring the original prompt, settings, and references…');
   });
 
   it('prefills prompt-only create deep links without remix hydration', async () => {

@@ -4,7 +4,9 @@ import { Copy, FileText, Lock, MessageCircle, MoreVertical, Repeat2 } from 'luci
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, Text, View } from 'react-native';
 
-import { PostResourceBundleContent, ResourceAction } from '@/components/post-resource-bundle-content';
+import { ResourcePrompt } from '@/components/resource-prompt';
+import { PostResourceBundleContent } from '@/components/post-resource-bundle-content';
+import { ResourceAction } from '@/components/resource-action';
 import { CreatorAvatar, Pill } from '@/components/ui';
 import { SaveHeart } from '@/components/save-heart';
 import { useAuth } from '@/lib/auth';
@@ -295,7 +297,7 @@ export function PostDetailsPage({
 
         <DetailSection title="Prompt">
           {details.prompt ? (
-            <CopyableText text={details.prompt} onCopy={copyText} />
+            <ResourcePrompt text={details.prompt} onCopy={copyText} />
           ) : null}
         </DetailSection>
 

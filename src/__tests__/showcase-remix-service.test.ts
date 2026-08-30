@@ -1,5 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { notifyPostSocialActivity } from '@/lib/mobile-notifications';
+
+vi.mock('@/lib/mobile-notifications', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/mobile-notifications')>(),
+  notifyPostSocialActivity: vi.fn(),
+}));
+
+beforeEach(() => { vi.mocked(notifyPostSocialActivity).mockClear(); });
 
 import {
   remixShowcasePostForRoute,
@@ -88,14 +96,11 @@ function createDependencies(
   return {
     findPublicPostReferenceByIdOrGenerationId: vi.fn(async () => post),
     isUserRelationshipBlocked: vi.fn(async () => false),
-    // `null`, not `undefined`: the real notifier returns null when it declines
-    // to send (missing recipient or actor), and never returns undefined.
-    notifyPostSocialActivity: vi.fn(async () => null),
   } satisfies Partial<ShowcaseRemixServiceDependencies>;
 }
 
 describe('remixShowcasePostForRoute', () => {
-  it('reads the linked generation service-role, increments the count, and returns prefill data', async () => {
+  it('reads the linked generation service-role and returns prefill without counting or notifying', async () => {
     const serviceClient = createServiceClientMock();
     const dependencies = createDependencies();
 
@@ -126,20 +131,8 @@ describe('remixShowcasePostForRoute', () => {
       'id, user_id, is_public, share_input_media_for_remix, category, model, prompt, workflow_settings',
     );
     expect(serviceClient.eqMock).toHaveBeenCalledWith('id', 'gen-1');
-    expect(serviceClient.rpcMock).toHaveBeenCalledWith('increment_post_remix_count', {
-      p_post_id: 'post-1',
-    });
-    // The counter must only move after the generation is confirmed remixable —
-    // incrementing first was how failed taps inflated remix counts.
-    expect(serviceClient.maybeSingleMock.mock.invocationCallOrder[0]).toBeLessThan(
-      serviceClient.rpcMock.mock.invocationCallOrder[0],
-    );
-    expect(dependencies.notifyPostSocialActivity).toHaveBeenCalledWith(serviceClient.client, {
-      type: 'post_remixed',
-      recipientUserId: 'creator-1',
-      actorUserId: 'user-1',
-      postId: 'post-1',
-    });
+    expect(serviceClient.rpcMock).not.toHaveBeenCalled();
+    expect(notifyPostSocialActivity).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -207,7 +200,7 @@ describe('remixShowcasePostForRoute', () => {
       expect(result.ok ? null : result.body.error).toBe('Audio creations cannot be remixed yet');
       // A refusal must not inflate the creator's remix count or ping them.
       expect(serviceClient.rpcMock).not.toHaveBeenCalled();
-      expect(dependencies.notifyPostSocialActivity).not.toHaveBeenCalled();
+      expect(notifyPostSocialActivity).not.toHaveBeenCalled();
     }
   );
 
@@ -253,7 +246,7 @@ describe('remixShowcasePostForRoute', () => {
     });
     expect(serviceClient.rpcMock).not.toHaveBeenCalled();
     expect(serviceClient.fromMock).not.toHaveBeenCalled();
-    expect(dependencies.notifyPostSocialActivity).not.toHaveBeenCalled();
+    expect(notifyPostSocialActivity).not.toHaveBeenCalled();
   });
 
   it('rejects blocked creator interactions before remix counters, media reads, or notifications', async () => {
@@ -275,7 +268,7 @@ describe('remixShowcasePostForRoute', () => {
     });
     expect(serviceClient.rpcMock).not.toHaveBeenCalled();
     expect(serviceClient.fromMock).not.toHaveBeenCalled();
-    expect(dependencies.notifyPostSocialActivity).not.toHaveBeenCalled();
+    expect(notifyPostSocialActivity).not.toHaveBeenCalled();
   });
 
   it('rejects posts that are not backed by a generation before incrementing remix count', async () => {
@@ -304,10 +297,10 @@ describe('remixShowcasePostForRoute', () => {
     });
     expect(serviceClient.rpcMock).not.toHaveBeenCalled();
     expect(serviceClient.fromMock).not.toHaveBeenCalled();
-    expect(dependencies.notifyPostSocialActivity).not.toHaveBeenCalled();
+    expect(notifyPostSocialActivity).not.toHaveBeenCalled();
   });
 
-  it('keeps remix available when the best-effort remix counter fails', async () => {
+  it('opens the editor without invoking the retired counter', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const serviceClient = createServiceClientMock({
       rpcError: { message: 'rpc unavailable' },
@@ -322,9 +315,8 @@ describe('remixShowcasePostForRoute', () => {
     });
 
     expect(result.ok).toBe(true);
-    const remixLog = JSON.parse(consoleError.mock.calls[0][0] as string);
-    expect(remixLog.msg).toBe('error_incrementing_remix_count');
-    expect(remixLog.errorMessage).toBe('rpc unavailable');
+    expect(serviceClient.rpcMock).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
 
     consoleError.mockRestore();
   });
@@ -350,7 +342,7 @@ describe('remixShowcasePostForRoute', () => {
       body: { error: 'Linked generation not found' },
     });
     expect(serviceClient.rpcMock).not.toHaveBeenCalled();
-    expect(dependencies.notifyPostSocialActivity).not.toHaveBeenCalled();
+    expect(notifyPostSocialActivity).not.toHaveBeenCalled();
 
     consoleError.mockRestore();
   });
@@ -367,7 +359,7 @@ describe('remixShowcasePostForRoute', () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(serviceClient.rpcMock).toHaveBeenCalled();
+    expect(serviceClient.rpcMock).not.toHaveBeenCalled();
   });
 
   it('rejects a cross-user remix once the generation is no longer public', async () => {
@@ -389,7 +381,7 @@ describe('remixShowcasePostForRoute', () => {
       body: { error: 'Linked generation not found' },
     });
     expect(serviceClient.rpcMock).not.toHaveBeenCalled();
-    expect(dependencies.notifyPostSocialActivity).not.toHaveBeenCalled();
+    expect(notifyPostSocialActivity).not.toHaveBeenCalled();
   });
 
   it('lets the owner remix their own generation even when it is private', async () => {
