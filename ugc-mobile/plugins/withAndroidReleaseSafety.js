@@ -6,12 +6,22 @@ const {
 } = require('expo/config-plugins');
 
 const PLUGIN_NAME = 'withAndroidReleaseSafety';
-const PLUGIN_VERSION = '2.0.0';
+const PLUGIN_VERSION = '3.0.0';
 const MATERIAL_COMPONENTS_VERSION = '1.14.0';
+// R8 is off, deliberately. expo-modules-core converts every JS options object
+// into a Kotlin record by reflection, and R8's optimization passes strip the
+// metadata that depends on. With minification on, `expo-secure-store` rejected
+// every getValueWithKeyAsync ("The 2nd argument cannot be cast to type
+// SecureStoreOptions") which put the app in a permanent sign-out loop, and
+// `expo-image` could not set `source` or `contentPosition`, so no image ever
+// mounted. Both shipped in 0.1.2 (build 62) and made the alpha unusable.
+//
+// Turning this back on requires -keep rules for expo.modules.** and Kotlin
+// metadata, verified on a device — not just a green build. A missing rule fails
+// exactly like this: silently, at runtime, in whichever module is unlucky.
 const RELEASE_PROPERTIES = {
-  'android.enableMinifyInReleaseBuilds': 'true',
-  'android.enableShrinkResourcesInReleaseBuilds': 'true',
-  'android.r8.optimizedResourceShrinking': 'true',
+  'android.enableMinifyInReleaseBuilds': 'false',
+  'android.enableShrinkResourcesInReleaseBuilds': 'false',
   'org.gradle.jvmargs': '-Xmx3072m -XX:MaxMetaspaceSize=1536m',
 };
 
@@ -23,7 +33,7 @@ function withAndroidReleaseSafety(config) {
 
   const configWithAppBuildGradle = withAppBuildGradle(configWithReleaseProperties, (nextConfig) => {
     nextConfig.modResults.contents = setMaterialComponentsVersion(
-      setReleaseProguardOptimization(nextConfig.modResults.contents)
+      setReleaseProguardSafety(nextConfig.modResults.contents)
     );
     return nextConfig;
   });
@@ -49,18 +59,24 @@ function setReleaseSafetyProperties(properties) {
   return nextProperties;
 }
 
-function setReleaseProguardOptimization(buildGradle) {
-  const optimizedDefault = 'getDefaultProguardFile("proguard-android-optimize.txt")';
-  if (/getDefaultProguardFile\((["'])proguard-android-optimize\.txt\1\)/.test(buildGradle)) {
+/**
+ * Pin the release build to the plain ProGuard default. `proguard-android-optimize.txt`
+ * adds the optimization passes that break expo-modules-core's reflection, so it
+ * is reverted here even while minification is off — the two were turned on
+ * together and must not drift back apart independently.
+ */
+function setReleaseProguardSafety(buildGradle) {
+  const safeDefault = 'getDefaultProguardFile("proguard-android.txt")';
+  if (/getDefaultProguardFile\((["'])proguard-android\.txt\1\)/.test(buildGradle)) {
     return buildGradle;
   }
 
-  const unoptimizedDefault = /getDefaultProguardFile\((["'])proguard-android\.txt\1\)/g;
-  if (!unoptimizedDefault.test(buildGradle)) {
+  const optimizedDefault = /getDefaultProguardFile\((["'])proguard-android-optimize\.txt\1\)/g;
+  if (!optimizedDefault.test(buildGradle)) {
     throw new Error('Could not locate the Android release ProGuard default configuration.');
   }
 
-  return buildGradle.replace(unoptimizedDefault, optimizedDefault);
+  return buildGradle.replace(optimizedDefault, safeDefault);
 }
 
 function setMaterialComponentsVersion(buildGradle) {
@@ -104,6 +120,6 @@ const plugin = createRunOncePlugin(
 module.exports = plugin;
 module.exports.setMaterialComponentsVersion = setMaterialComponentsVersion;
 module.exports.setReactNativeBuildFromSource = setReactNativeBuildFromSource;
-module.exports.setReleaseProguardOptimization = setReleaseProguardOptimization;
+module.exports.setReleaseProguardSafety = setReleaseProguardSafety;
 module.exports.setReleaseSafetyProperties = setReleaseSafetyProperties;
 module.exports.withAndroidReleaseSafety = withAndroidReleaseSafety;

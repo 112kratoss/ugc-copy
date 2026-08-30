@@ -18,12 +18,12 @@ function read(relativePath: string) {
 }
 
 describe('mobile production release contracts', () => {
-  it('keeps every mobile release manifest aligned to version 0.1.1', () => {
+  it('keeps every mobile release manifest aligned to version 0.1.2', () => {
     const appJson = JSON.parse(read('ugc-mobile/app.json'));
     const packageJson = JSON.parse(read('ugc-mobile/package.json'));
     const packageLock = JSON.parse(read('ugc-mobile/package-lock.json'));
 
-    expect(appJson.expo.version).toBe('0.1.1');
+    expect(appJson.expo.version).toBe('0.1.2');
     expect(packageJson.version).toBe(appJson.expo.version);
     expect(packageLock.version).toBe(appJson.expo.version);
     expect(packageLock.packages[''].version).toBe(appJson.expo.version);
@@ -131,7 +131,7 @@ describe('mobile production release contracts', () => {
     expect(workflow).toContain('actions/workflows/production-release.yml/runs?head_sha=');
     expect(workflow).toContain('/api/app-version?release=${EXPECTED_SHA}');
     expect(workflow.match(/body\.buildId !== process\.env\.EXPECTED_SHA/g)).toHaveLength(2);
-    expect(workflow).toContain('test "$app_version" = "0.1.1"');
+    expect(workflow).toContain('test "$app_version" = "0.1.2"');
     expect(workflow).toContain('verify-eas-store-build.mjs');
     expect(workflow).toContain('EXPECTED_APP_VERSION');
     expect(workflow).toContain('TESTFLIGHT_INTERNAL_GROUP: ${{ vars.TESTFLIGHT_INTERNAL_GROUP }}');

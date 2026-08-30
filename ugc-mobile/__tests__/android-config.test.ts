@@ -11,7 +11,7 @@ import {
   setMaterialComponentsVersion,
   setReactNativeBuildFromSource,
   setReleaseSafetyProperties,
-  setReleaseProguardOptimization,
+  setReleaseProguardSafety,
 } from '../plugins/withAndroidReleaseSafety';
 import {
   DEVELOPMENT_ONLY_NATIVE_MODULES,
@@ -35,7 +35,16 @@ describe('Android native network config', () => {
     expect(appJson.expo.plugins).toContain('./plugins/withAndroidLocalCleartextDebug');
   });
 
-  it('enables full R8 optimization for regenerated release builds', () => {
+  it('keeps R8 off so expo-modules-core can still build its records', () => {
+    // 0.1.2 (build 62) shipped with minification on and reached testers unusable.
+    // expo-modules-core builds Kotlin records from JS options by reflection, and
+    // R8's optimization passes strip what that needs, so the failure lands at
+    // runtime in whichever module is unlucky rather than at build time:
+    // expo-secure-store rejected every read ("The 2nd argument cannot be cast to
+    // type SecureStoreOptions"), which trapped the app in a sign-out loop, and
+    // expo-image could not set `source`, so no image mounted. A green build
+    // proves nothing here, which is why this is pinned rather than left to
+    // judgement.
     const appJson = JSON.parse(readFileSync(join(projectRoot, 'app.json'), 'utf8'));
     const properties = setReleaseSafetyProperties([
       { type: 'property', key: 'android.enableMinifyInReleaseBuilds', value: 'true' },
@@ -45,33 +54,32 @@ describe('Android native network config', () => {
     expect(properties).toContainEqual({
       type: 'property',
       key: 'android.enableMinifyInReleaseBuilds',
-      value: 'true',
+      value: 'false',
     });
     expect(properties).toContainEqual({
       type: 'property',
       key: 'android.enableShrinkResourcesInReleaseBuilds',
-      value: 'true',
+      value: 'false',
     });
-    expect(properties).toContainEqual({
-      type: 'property',
-      key: 'android.r8.optimizedResourceShrinking',
-      value: 'true',
-    });
+    // The optimized-resource-shrinking flag is meaningless without shrinking and
+    // was added by the same change; it must not linger as a half-reverted state.
+    expect(properties.map((entry) => entry.type === 'property' && entry.key))
+      .not.toContain('android.r8.optimizedResourceShrinking');
     expect(properties).toContainEqual({
       type: 'property',
       key: 'org.gradle.jvmargs',
       value: '-Xmx3072m -XX:MaxMetaspaceSize=1536m',
     });
 
-    const unoptimizedBuildGradle = `release {
-      proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+    const optimizedBuildGradle = `release {
+      proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
     }`;
-    const optimizedBuildGradle = setReleaseProguardOptimization(unoptimizedBuildGradle);
-    expect(optimizedBuildGradle).toContain(
+    const safeBuildGradle = setReleaseProguardSafety(optimizedBuildGradle);
+    expect(safeBuildGradle).toContain('getDefaultProguardFile("proguard-android.txt")');
+    expect(safeBuildGradle).not.toContain(
       'getDefaultProguardFile("proguard-android-optimize.txt")'
     );
-    expect(optimizedBuildGradle).not.toContain('getDefaultProguardFile("proguard-android.txt")');
-    expect(setReleaseProguardOptimization(optimizedBuildGradle)).toBe(optimizedBuildGradle);
+    expect(setReleaseProguardSafety(safeBuildGradle)).toBe(safeBuildGradle);
   });
 
   it('pins the Android Material release that handles API 35 system bars', () => {
