@@ -3,6 +3,7 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { retainPurchasedUnlockFiles } from '@/lib/account-deletion-resource-retention';
+import { recordClaimedIdentityFingerprints } from '@/lib/account-identity-fingerprint';
 import { parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
 import { iterateStorageObjectsV2, StorageListV2Error } from '@/lib/storage-list-v2';
 
@@ -74,6 +75,7 @@ type ExecuteInitialAccountDeletionOptions = {
   userId: string;
   onNonFatalError?: (message: string, error: unknown) => void;
   retainPurchasedFiles?: typeof retainPurchasedUnlockFiles;
+  recordClaimedFingerprints?: typeof recordClaimedIdentityFingerprints;
 };
 
 type ProcessAccountDeletionResweepsOptions = {
@@ -85,6 +87,7 @@ type ProcessAccountDeletionResweepsOptions = {
 
 type ProcessAccountDeletionInitialRetriesOptions = ProcessAccountDeletionResweepsOptions & {
   retainPurchasedFiles?: typeof retainPurchasedUnlockFiles;
+  recordClaimedFingerprints?: typeof recordClaimedIdentityFingerprints;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -458,6 +461,7 @@ export async function executeInitialAccountDeletion({
   userId,
   onNonFatalError,
   retainPurchasedFiles = retainPurchasedUnlockFiles,
+  recordClaimedFingerprints = recordClaimedIdentityFingerprints,
 }: ExecuteInitialAccountDeletionOptions): Promise<InitialAccountDeletionResult> {
   const preparation = await prepareAccountDeletion(admin, userId);
   if (preparation.alreadyCompleted) {
@@ -518,6 +522,13 @@ export async function executeInitialAccountDeletion({
       storage,
     };
   }
+
+  // The durable claim ledger is written while the auth rows still exist:
+  // credit_grants cascades away with auth.users, and identifiers changed since
+  // the claim (a swapped email, a newly linked provider) only exist on the live
+  // rows. Idempotent, so the resweep retry path repeats it safely; a failure
+  // throws and leaves the job retryable rather than deleting Auth unrecorded.
+  await recordClaimedFingerprints(admin, preparation.manifest.ownerUserIds);
 
   const authDeletingStatus = await markAccountDeletionStage(admin, userId, 'auth_deleting');
   if (authDeletingStatus === 'already_completed' || authDeletingStatus === 'resweep_pending') {
@@ -794,6 +805,7 @@ export async function processAccountDeletionInitialRetries({
   limit = ACCOUNT_DELETION_RESWEEP_BATCH_LIMIT,
   leaseSeconds = ACCOUNT_DELETION_RESWEEP_LEASE_SECONDS,
   retainPurchasedFiles = retainPurchasedUnlockFiles,
+  recordClaimedFingerprints = recordClaimedIdentityFingerprints,
 }: ProcessAccountDeletionInitialRetriesOptions): Promise<AccountDeletionInitialRetrySummary> {
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
     throw new Error('Account deletion retry limit must be between 1 and 100.');
@@ -893,6 +905,10 @@ export async function processAccountDeletionInitialRetries({
       if (!claim.manifest) {
         throw new Error('Account deletion storage manifest is invalid.');
       }
+      // Same ledger write as the immediate pass: a job that crashed before the
+      // Auth step lands here with its auth rows still present, so the retry
+      // must record fingerprints before it deletes them.
+      await recordClaimedFingerprints(admin, claim.manifest.ownerUserIds);
       await deleteLinkedAuthUsersGuestFirst(
         admin,
         claim.userId,

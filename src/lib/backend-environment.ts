@@ -36,6 +36,7 @@ export const BACKEND_ENVIRONMENT_REQUIREMENTS = [
   { id: 'revenuecat-api', keys: ['REVENUECAT_SECRET_API_KEY', 'REVENUECAT_REST_API_KEY'] },
   { id: 'revenuecat-webhook-auth', keys: ['REVENUECAT_WEBHOOK_AUTH_TOKEN'] },
   { id: 'referral-attribution-hash', keys: ['REFERRAL_ATTRIBUTION_HASH_SECRET'] },
+  { id: 'account-identity-fingerprint-hash', keys: ['ACCOUNT_IDENTITY_FINGERPRINT_SECRET'] },
   { id: 'apple-app-links', keys: ['APPLE_TEAM_ID'] },
   { id: 'android-app-links', keys: ['ANDROID_APP_SHA256_FINGERPRINTS'] },
 ] as const;

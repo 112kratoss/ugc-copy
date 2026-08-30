@@ -53,7 +53,7 @@ export default function DeleteAccountPage() {
                 <section className="mt-8 rounded-3xl border border-rose-400/20 bg-rose-400/[0.06] p-6">
                     <h2 className="text-xl font-semibold text-rose-200">What permanent deletion removes</h2>
                     <ul className="mt-4 list-disc space-y-2 pl-5 text-zinc-300">
-                        <li>Your profile, authentication account, and sign-in identifiers.</li>
+                        <li>Your profile, authentication account, and sign-in identifiers (a one-way digest of those identifiers is kept — see below).</li>
                         <li>Your private creations, uploaded source media, saved items, templates, and account preferences.</li>
                         <li>Your remaining credits and purchase-linked access recorded on the account.</li>
                         <li>Push-notification tokens and other device associations connected to the account.</li>
@@ -67,6 +67,12 @@ export default function DeleteAccountPage() {
                         obligations may be retained only for the period required by applicable law. These limited records
                         are isolated from the deleted account and are not used to keep the account active. Backup copies may
                         remain for a limited recovery cycle before being overwritten.
+                    </p>
+                    <p className="mt-4 leading-7 text-zinc-300">
+                        To prevent repeat claims of one-time promotions, we also retain a one-way cryptographic digest of the
+                        sign-in identifiers the deleted account used. The digest cannot be reversed into an email address or
+                        identity, is not linked to the deleted account&apos;s content or activity, and is used only to detect
+                        re-registration abuse of one-time offers.
                     </p>
                 </section>
 

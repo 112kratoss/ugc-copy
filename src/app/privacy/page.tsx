@@ -99,6 +99,9 @@ export default function PrivacyPolicy() {
                         <p className="mt-4">
                             Raw onboarding interaction events use a pseudonymous installation identifier and are retained for up to 90 days. They do not include your prompts, uploaded media, email address, or arbitrary profile content; longer-term reporting uses aggregated results.
                         </p>
+                        <p className="mt-4">
+                            One-time promotional credits (such as the welcome bonus) are recorded against a one-way cryptographic digest of your sign-in identifiers so each promotion is granted once per person. The digest cannot be reversed into your email address or identity, contains no profile content, and is retained after account deletion solely to prevent repeat claims through re-registration.
+                        </p>
                     </section>
 
                     <section>

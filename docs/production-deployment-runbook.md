@@ -58,6 +58,7 @@ and applies a 15-second timeout to the signed Vercel forward.
 - RevenueCat: `REVENUECAT_SECRET_API_KEY` or `REVENUECAT_REST_API_KEY`, plus `REVENUECAT_WEBHOOK_AUTH_TOKEN`. Both are production-validated: backend health reports invalid commerce config when either is unset, which fails release verification.
 - Creator payouts: `CREATOR_PAYOUT_DETAILS_ENCRYPTION_KEY` (base64 of 32 random bytes, `openssl rand -base64 32`). Encrypts `creator_payout_requests.payout_details` at rest. Deliberately not deploy-blocking, but payout requests fail closed in production until it is set.
 - Invite attribution hashing: `REFERRAL_ATTRIBUTION_HASH_SECRET` set to a dedicated long random secret.
+- One-time promotion claim ledger: `ACCOUNT_IDENTITY_FINGERPRINT_SECRET` set to a dedicated long random secret and then never rotated — the digests are durable, and rotation resets the ledger's memory of past welcome-credit claims (the service-role-derived fallback works but ties that memory to the service-role key). Use the same value when running `npm run backfill:welcome-credit-fingerprints`.
 - Verified iOS links: `APPLE_TEAM_ID` and `IOS_BUNDLE_ID`.
 - Verified Android links: `ANDROID_APP_SHA256_FINGERPRINTS` and `ANDROID_PACKAGE_NAME`.
 - Release identity: `RELEASE_GIT_SHA` is injected by the production release

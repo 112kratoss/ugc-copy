@@ -7,7 +7,7 @@ import { ArrowRight, Gift, Loader2, Sparkles } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
 type WelcomeCreditResponse = {
-  status: 'eligible' | 'claimed' | 'already_claimed' | 'legacy_ineligible' | 'requires_account' | 'not_eligible' | 'unavailable';
+  status: 'eligible' | 'claimed' | 'already_claimed' | 'legacy_ineligible' | 'requires_account' | 'identity_already_claimed' | 'not_eligible' | 'unavailable';
   amount: number;
   credits: number;
   promotionalCredits: number;
@@ -129,6 +129,10 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
   const claimed = welcome?.status === 'claimed' || welcome?.status === 'already_claimed';
   const legacy = welcome?.status === 'legacy_ineligible';
   const requiresAccount = welcome?.status === 'requires_account';
+  // A sign-in identifier on this account already claimed the pack on a previous
+  // (since deleted) account. Nothing was paid out here, so no celebration and
+  // no headline number — both would announce credits that do not exist.
+  const identityAlreadyClaimed = welcome?.status === 'identity_already_claimed';
   const displayedCredits = animatedCredits ?? welcome?.amount ?? 25;
 
   return (
@@ -139,9 +143,11 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
             <Sparkles className="h-9 w-9" aria-hidden />
           </div>
           <div className="mt-6 text-xs font-black uppercase tracking-[0.2em] text-[var(--ui-primary)]">Creator Pack</div>
-          <h1 className="mt-3 text-3xl font-extrabold tracking-tight text-[var(--ui-text-primary)] sm:text-4xl">Your Creator Pack is ready</h1>
+          <h1 className="mt-3 text-3xl font-extrabold tracking-tight text-[var(--ui-text-primary)] sm:text-4xl">{identityAlreadyClaimed ? 'Creator Pack already claimed' : 'Your Creator Pack is ready'}</h1>
           <p className="mx-auto mt-3 max-w-lg text-sm leading-7 text-[var(--ui-text-secondary)]">
-            {legacy
+            {identityAlreadyClaimed
+              ? 'This sign-in already received the one-time Creator Pack on a previous account, so it cannot be claimed again.'
+              : legacy
               ? 'Your existing welcome credits are already active.'
               : requiresAccount
                 ? 'Create an account to unlock your Creator Pack. Guest sessions cannot hold a welcome reward.'
@@ -154,7 +160,7 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
             <div className="mt-10 flex items-center justify-center gap-3 text-sm font-bold text-[var(--ui-text-muted)]">
               <Loader2 className="h-5 w-5 animate-spin" aria-hidden /> Checking your reward…
             </div>
-          ) : (
+          ) : identityAlreadyClaimed ? null : (
             <div className="mt-8">
               <div className={`welcome-reward-count relative inline-block${celebrating ? ' is-celebrating' : ''}`}>
                 {celebrating ? (

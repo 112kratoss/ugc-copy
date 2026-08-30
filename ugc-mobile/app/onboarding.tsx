@@ -363,7 +363,12 @@ export default function OnboardingScreen() {
           ? 'Your Creator Pack is temporarily unavailable. You can continue and claim it from Home.'
           : result.status === 'requires_account'
             ? 'Create an account to unlock your Creator Pack.'
-            : 'Finish your creator name before claiming this reward.');
+            // The one-time pack was already claimed by a previous (since
+            // deleted) account using this sign-in. Nothing was added, so this
+            // branch must never reach celebrateCredits/updateCredits.
+            : result.status === 'identity_already_claimed'
+              ? 'This sign-in already received the one-time Creator Pack on a previous account.'
+              : 'Finish your creator name before claiming this reward.');
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not claim credits.');

@@ -217,6 +217,7 @@ const COMPLETE_BACKEND_ENVIRONMENT = {
   REVENUECAT_SECRET_API_KEY: 'revenuecat-key',
   REVENUECAT_WEBHOOK_AUTH_TOKEN: 'Bearer revenuecat-webhook-secret',
   REFERRAL_ATTRIBUTION_HASH_SECRET: 'referral-hash-secret',
+  ACCOUNT_IDENTITY_FINGERPRINT_SECRET: 'account-identity-fingerprint-secret',
   APPLE_TEAM_ID: 'TEAM123456',
   ANDROID_APP_SHA256_FINGERPRINTS: 'AA:BB',
 } satisfies NodeJS.ProcessEnv;

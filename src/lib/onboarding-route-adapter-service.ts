@@ -5,6 +5,10 @@ import { logBackendRouteError } from '@/lib/backend-logger';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
 
+import {
+  ACCOUNT_IDENTITY_FINGERPRINT_TABLE,
+  deriveAccountIdentityFingerprints,
+} from '@/lib/account-identity-fingerprint';
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import {
   BackendRateLimitError,
@@ -33,6 +37,7 @@ import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 type Dependencies = {
   createServiceClient?: () => SupabaseClient;
   createUserClient?: typeof createUserClient;
+  deriveAccountIdentityFingerprints?: typeof deriveAccountIdentityFingerprints;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
   logError?: typeof logBackendRouteError;
 };
@@ -75,6 +80,8 @@ function resolveDependencies(dependencies?: Dependencies) {
   return {
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
+    deriveAccountIdentityFingerprints:
+      dependencies?.deriveAccountIdentityFingerprints ?? deriveAccountIdentityFingerprints,
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
     logError: dependencies?.logError ?? logBackendRouteError,
   };
@@ -126,7 +133,44 @@ function serializeState(row: OnboardingStateRow | null) {
   };
 }
 
-async function loadWelcomeCreditStatus(admin: SupabaseClient, user: User) {
+/**
+ * Digests of the account's durable sign-in identifiers, derived from an
+ * admin-fetched user: the request-scoped `User` can arrive via the
+ * identity-admission assertion path, which strips `identities` entirely.
+ */
+async function loadAccountIdentityFingerprints(
+  admin: SupabaseClient,
+  userId: string,
+  resolved: ReturnType<typeof resolveDependencies>,
+): Promise<string[]> {
+  const { data, error } = await admin.auth.admin.getUserById(userId);
+  if (error || !data?.user) {
+    throw error ?? new Error('Could not load the account identity for fingerprinting.');
+  }
+  return resolved.deriveAccountIdentityFingerprints(data.user);
+}
+
+async function hasClaimedIdentityFingerprint(
+  admin: SupabaseClient,
+  fingerprints: string[],
+): Promise<boolean> {
+  if (fingerprints.length === 0) return false;
+  const { data, error } = await admin
+    .from(ACCOUNT_IDENTITY_FINGERPRINT_TABLE)
+    .select('fingerprint')
+    .eq('program_key', WELCOME_CREDIT_PROGRAM_KEY)
+    .in('fingerprint', fingerprints)
+    .limit(1);
+  if (error) throw error;
+  return (data ?? []).length > 0;
+}
+
+async function loadWelcomeCreditStatus(
+  admin: SupabaseClient,
+  user: User,
+  resolved: ReturnType<typeof resolveDependencies>,
+  precomputedFingerprints?: string[],
+) {
   const [{ data: program, error: programError }, { data: grant, error: grantError }, { data: profile, error: profileError }] = await Promise.all([
     admin
       .from('credit_grant_programs')
@@ -176,6 +220,23 @@ async function loadWelcomeCreditStatus(admin: SupabaseClient, user: User) {
     status = 'not_eligible';
   } else {
     status = 'eligible';
+  }
+
+  if (status === 'eligible' || status === 'not_eligible') {
+    // The only two branches a recycled account can reach: no grant row,
+    // registered, created after activation. The ledger read costs an admin auth
+    // lookup, so it runs only here — never for guests, legacy accounts, or
+    // settled claims. Fail open on lookup errors: this status is advisory, and
+    // the claim RPC is the enforcement that fails closed.
+    try {
+      const fingerprints = precomputedFingerprints
+        ?? await loadAccountIdentityFingerprints(admin, user.id, resolved);
+      if (await hasClaimedIdentityFingerprint(admin, fingerprints)) {
+        status = 'identity_already_claimed';
+      }
+    } catch (error) {
+      resolved.logError('Welcome credit fingerprint status check failed:', error);
+    }
   }
 
   return {
@@ -322,7 +383,7 @@ export async function getWelcomeCreditsRouteResponse({
   try {
     const user = await authenticate(request, resolved);
     if (!user) return privateJson(request, { error: 'Unauthorized' }, 401);
-    const status = await loadWelcomeCreditStatus(resolved.createServiceClient(), user);
+    const status = await loadWelcomeCreditStatus(resolved.createServiceClient(), user, resolved);
     return privateJson(request, status);
   } catch (error) {
     resolved.logError('Welcome credits GET failed:', error);
@@ -360,13 +421,23 @@ export async function postWelcomeCreditsClaimRouteResponse({
     const limited = await rateLimit(request, admin, resolved, WELCOME_CREDIT_CLAIM_RATE_LIMIT, user.id);
     if (limited) return limited;
 
+    // Digests for the durable claim ledger, derived after the rate limit so a
+    // scripted attempt stays cheap. Fail closed: a claim that cannot be checked
+    // against the ledger must not pay out, so a failed lookup or an account
+    // with no derivable identity signals surfaces as the generic 500 below.
+    const fingerprints = await loadAccountIdentityFingerprints(admin, user.id, resolved);
+    if (fingerprints.length === 0) {
+      throw new Error('Account produced no identity fingerprints for the welcome claim.');
+    }
+
     const { data, error } = await admin.rpc('claim_credit_grant_program', {
       p_user_id: user.id,
       p_program_key: WELCOME_CREDIT_PROGRAM_KEY,
       p_source_surface: sourceSurface,
+      p_identity_fingerprints: fingerprints,
     });
     if (error) throw error;
-    const refreshed = await loadWelcomeCreditStatus(admin, user);
+    const refreshed = await loadWelcomeCreditStatus(admin, user, resolved, fingerprints);
     const rpcStatus = data && typeof data === 'object' && 'status' in data
       ? String(data.status)
       : null;

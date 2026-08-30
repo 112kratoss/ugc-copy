@@ -18,6 +18,22 @@ function queryResult(data: unknown) {
   return query;
 }
 
+/** The fingerprint-ledger read: `select().eq().in().limit()` resolving rows. */
+function ledgerResult(rows: unknown[]) {
+  const query = {
+    select: vi.fn(),
+    eq: vi.fn(),
+    in: vi.fn(),
+    limit: vi.fn(async () => ({ data: rows, error: null })),
+  };
+  query.select.mockReturnValue(query);
+  query.eq.mockReturnValue(query);
+  query.in.mockReturnValue(query);
+  return query;
+}
+
+const FINGERPRINT = 'f'.repeat(64);
+
 describe('onboarding route adapter service', () => {
   it('returns the camel-case welcome-credit contract after an atomic claim', async () => {
     const user = {
@@ -48,6 +64,10 @@ describe('onboarding route adapter service', () => {
       data: { status: 'claimed', promotional_amount: 25 },
       error: null,
     }));
+    const getUserById = vi.fn(async () => ({
+      data: { user: { ...user, email: 'new-creator@example.invalid', identities: [] } },
+      error: null,
+    }));
     const admin = {
       from: vi.fn((table: string) => {
         if (table === 'credit_grant_programs') return program;
@@ -55,6 +75,7 @@ describe('onboarding route adapter service', () => {
         if (table === 'profiles') return profile;
         throw new Error(`Unexpected table: ${table}`);
       }),
+      auth: { admin: { getUserById } },
       rpc,
     } as unknown as SupabaseClient;
     const userClient = {
@@ -72,6 +93,7 @@ describe('onboarding route adapter service', () => {
       dependencies: {
         createUserClient: vi.fn(() => userClient),
         createServiceClient: vi.fn(() => admin),
+        deriveAccountIdentityFingerprints: vi.fn(() => [FINGERPRINT]),
         enforceBackendRateLimit: vi.fn(async () => ({
           allowed: true,
           limit: 10,
@@ -98,7 +120,11 @@ describe('onboarding route adapter service', () => {
       p_user_id: user.id,
       p_program_key: 'welcome_credits_v1',
       p_source_surface: 'mobile',
+      p_identity_fingerprints: [FINGERPRINT],
     });
+    // The claim derived fingerprints once and reused them for the refreshed
+    // status — no second admin auth lookup.
+    expect(getUserById).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a guest, even one that has set a username', async () => {
@@ -196,6 +222,220 @@ describe('onboarding route adapter service', () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ status: 'requires_account' });
+  });
+
+  // The recycling loop the fingerprint ledger closes: credit_grants cascades
+  // away with auth.users, so delete-account → re-register → claim paid 25
+  // credits per cycle. The tests below pin the app-side half of the guard;
+  // the RPC half lives in welcome_credit_identity_fingerprints.test.sql.
+  describe('identity fingerprint guard', () => {
+    const registered = {
+      id: '7d2e9b4c-5a6f-4e8d-9c1b-3f5a7e9d2b4c',
+      created_at: '2026-08-20T10:00:00.000Z',
+      is_anonymous: false,
+    };
+    const program = () => queryResult({
+      program_key: 'welcome_credits_v1',
+      amount: 25,
+      promotional_amount: 25,
+      enabled: true,
+      activated_at: '2026-08-11T00:00:00.000Z',
+    });
+    const completeProfile = () => queryResult({
+      credits: 0,
+      promotional_credits: 0,
+      username: 'returning-creator',
+      display_name: 'Returning Creator',
+    });
+
+    function adminWith({ grantRow, ledgerRows, getUserById, rpc }: {
+      grantRow: unknown;
+      ledgerRows: unknown[];
+      getUserById?: ReturnType<typeof vi.fn>;
+      rpc?: ReturnType<typeof vi.fn>;
+    }) {
+      return {
+        from: vi.fn((table: string) => {
+          if (table === 'credit_grant_programs') return program();
+          if (table === 'credit_grants') return queryResult(grantRow);
+          if (table === 'profiles') return completeProfile();
+          if (table === 'credit_grant_identity_fingerprints') return ledgerResult(ledgerRows);
+          throw new Error(`Unexpected table: ${table}`);
+        }),
+        auth: {
+          admin: {
+            getUserById: getUserById ?? vi.fn(async () => ({
+              data: { user: { ...registered, email: 'returning@example.invalid', identities: [] } },
+              error: null,
+            })),
+          },
+        },
+        rpc: rpc ?? vi.fn(),
+      } as unknown as SupabaseClient;
+    }
+
+    const userClientFor = (user: unknown) => ({
+      auth: { getUser: vi.fn(async () => ({ data: { user }, error: null })) },
+    } as unknown as SupabaseClient);
+
+    const allowRateLimit = () => vi.fn(async () => ({
+      allowed: true, limit: 20, remaining: 19, retryAfterSeconds: 0,
+      resetAt: '2026-08-20T10:10:00.000Z',
+    }));
+
+    it('reports identity_already_claimed for a recycled identity, before any claim', async () => {
+      // A would-be `eligible` account whose sign-in digest is already in the
+      // ledger: the status must say so up front, not after the user finishes
+      // onboarding and hits a refusal.
+      const admin = adminWith({ grantRow: null, ledgerRows: [{ fingerprint: FINGERPRINT }] });
+
+      const response = await getWelcomeCreditsRouteResponse({
+        request: new Request('https://app.example/api/credits/welcome'),
+        dependencies: {
+          createUserClient: vi.fn(() => userClientFor(registered)),
+          createServiceClient: vi.fn(() => admin),
+          deriveAccountIdentityFingerprints: vi.fn(() => [FINGERPRINT]),
+          enforceBackendRateLimit: vi.fn(),
+        },
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ status: 'identity_already_claimed' });
+    });
+
+    it('skips the admin identity lookup once a grant row settles the status', async () => {
+      // The ledger read costs an admin auth call, so it runs only on the
+      // branches a recycled account can reach — never for settled claims.
+      const getUserById = vi.fn();
+      const admin = adminWith({
+        grantRow: {
+          amount: 25,
+          promotional_amount: 25,
+          credits_balance_after: 25,
+          promotional_credits_balance_after: 25,
+          claimed_at: '2026-08-20T10:05:00.000Z',
+        },
+        ledgerRows: [],
+        getUserById,
+      });
+
+      const response = await getWelcomeCreditsRouteResponse({
+        request: new Request('https://app.example/api/credits/welcome'),
+        dependencies: {
+          createUserClient: vi.fn(() => userClientFor(registered)),
+          createServiceClient: vi.fn(() => admin),
+          enforceBackendRateLimit: vi.fn(),
+        },
+      });
+
+      await expect(response.json()).resolves.toMatchObject({ status: 'already_claimed' });
+      expect(getUserById).not.toHaveBeenCalled();
+    });
+
+    it('fails open on the status endpoint when the identity lookup breaks', async () => {
+      // Status is advisory; the claim RPC is the enforcement. A broken admin
+      // lookup must not take down onboarding, so the base status survives.
+      const logError = vi.fn();
+      const admin = adminWith({
+        grantRow: null,
+        ledgerRows: [],
+        getUserById: vi.fn(async () => ({ data: { user: null }, error: new Error('auth is down') })),
+      });
+
+      const response = await getWelcomeCreditsRouteResponse({
+        request: new Request('https://app.example/api/credits/welcome'),
+        dependencies: {
+          createUserClient: vi.fn(() => userClientFor(registered)),
+          createServiceClient: vi.fn(() => admin),
+          enforceBackendRateLimit: vi.fn(),
+          logError,
+        },
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ status: 'eligible' });
+      expect(logError).toHaveBeenCalled();
+    });
+
+    it('fails the claim closed when the identity lookup breaks', async () => {
+      // A claim that cannot be checked against the ledger must not pay out.
+      const rpc = vi.fn();
+      const admin = adminWith({
+        grantRow: null,
+        ledgerRows: [],
+        getUserById: vi.fn(async () => ({ data: { user: null }, error: new Error('auth is down') })),
+        rpc,
+      });
+
+      const response = await postWelcomeCreditsClaimRouteResponse({
+        request: new Request('https://app.example/api/credits/welcome/claim', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sourceSurface: 'web' }),
+        }),
+        dependencies: {
+          createUserClient: vi.fn(() => userClientFor(registered)),
+          createServiceClient: vi.fn(() => admin),
+          enforceBackendRateLimit: allowRateLimit(),
+        },
+      });
+
+      expect(response.status).toBe(500);
+      expect(rpc).not.toHaveBeenCalled();
+    });
+
+    it('fails the claim closed when no identity signals are derivable', async () => {
+      const rpc = vi.fn();
+      const admin = adminWith({ grantRow: null, ledgerRows: [], rpc });
+
+      const response = await postWelcomeCreditsClaimRouteResponse({
+        request: new Request('https://app.example/api/credits/welcome/claim', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sourceSurface: 'web' }),
+        }),
+        dependencies: {
+          createUserClient: vi.fn(() => userClientFor(registered)),
+          createServiceClient: vi.fn(() => admin),
+          deriveAccountIdentityFingerprints: vi.fn(() => []),
+          enforceBackendRateLimit: allowRateLimit(),
+        },
+      });
+
+      expect(response.status).toBe(500);
+      expect(rpc).not.toHaveBeenCalled();
+    });
+
+    it('passes the refused RPC status through as identity_already_claimed', async () => {
+      const rpc = vi.fn(async () => ({
+        data: { status: 'identity_already_claimed', amount: 25, promotional_amount: 25 },
+        error: null,
+      }));
+      const admin = adminWith({ grantRow: null, ledgerRows: [{ fingerprint: FINGERPRINT }], rpc });
+
+      const response = await postWelcomeCreditsClaimRouteResponse({
+        request: new Request('https://app.example/api/credits/welcome/claim', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sourceSurface: 'web' }),
+        }),
+        dependencies: {
+          createUserClient: vi.fn(() => userClientFor(registered)),
+          createServiceClient: vi.fn(() => admin),
+          deriveAccountIdentityFingerprints: vi.fn(() => [FINGERPRINT]),
+          enforceBackendRateLimit: allowRateLimit(),
+        },
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.status).toBe('identity_already_claimed');
+      // No payout happened, so no balances from a grant row leak into the body.
+      expect(body.credits).toBe(0);
+      expect(rpc).toHaveBeenCalledWith('claim_credit_grant_program', expect.objectContaining({
+        p_identity_fingerprints: [FINGERPRINT],
+      }));
+    });
   });
 });
 

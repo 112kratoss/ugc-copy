@@ -216,17 +216,24 @@ describe('account deletion cleanup service', () => {
         calls.push('retain-purchased-files');
         return { revisionsRetained: 1, filesRetained: 2 };
       }),
+      recordClaimedFingerprints: vi.fn(async () => {
+        calls.push('record-claimed-fingerprints');
+        return { usersWithGrants: 0, fingerprintRows: 0 };
+      }),
     })).resolves.toMatchObject({
       alreadyCompleted: false,
       authUserAlreadyMissing: false,
       cleanupPending: true,
     });
+    // The claim ledger is written while the auth rows still exist — after the
+    // storage sweep settles, strictly before the destructive Auth stage.
     expect(calls).toEqual([
       'prepare_account_deletion:',
       'mark_account_deletion_stage:storage_deleting',
       'mark_account_deleted_upload_reservations:',
       'retain-purchased-files',
       'mark_account_deletion_stage:storage_deleted',
+      'record-claimed-fingerprints',
       'mark_account_deletion_stage:auth_deleting',
       `delete:${USER_ID}`,
       'mark_account_deletion_stage:completed',
@@ -307,6 +314,7 @@ describe('account deletion cleanup service', () => {
       }),
     };
 
+    const fingerprintedOwners: string[][] = [];
     await executeInitialAccountDeletion({
       admin: admin as never,
       userId: USER_ID,
@@ -315,7 +323,15 @@ describe('account deletion cleanup service', () => {
         retainedOwners.push(ownerUserId);
         return { revisionsRetained: 0, filesRetained: 0 };
       }),
+      recordClaimedFingerprints: vi.fn(async (_admin, ownerUserIds: string[]) => {
+        fingerprintedOwners.push(ownerUserIds);
+        return { usersWithGrants: 0, fingerprintRows: 0 };
+      }),
     });
+
+    // Guests cannot claim, but the ledger pass receives every linked identity
+    // and filters by actual grants itself.
+    expect(fingerprintedOwners).toEqual([[USER_ID, GUEST_ID]]);
 
     expect(retainedOwners).toEqual([USER_ID, GUEST_ID]);
     expect(mockStorage.removed).toContainEqual({
@@ -510,6 +526,7 @@ describe('account deletion cleanup service', () => {
         events.push('retain-purchased-files');
         return { revisionsRetained: 0, filesRetained: 0 };
       }),
+      recordClaimedFingerprints: vi.fn(async () => ({ usersWithGrants: 0, fingerprintRows: 0 })),
     })).resolves.toEqual({
       claimed: 1,
       storageSwept: 1,
@@ -623,6 +640,7 @@ describe('account deletion cleanup service', () => {
       admin: admin as never,
       workerId: 'account-deletion-worker:test',
       limit: 1,
+      recordClaimedFingerprints: vi.fn(async () => ({ usersWithGrants: 0, fingerprintRows: 0 })),
     })).resolves.toMatchObject({
       claimed: 1,
       retryScheduled: 1,

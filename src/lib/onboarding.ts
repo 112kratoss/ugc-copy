@@ -40,6 +40,15 @@ export type WelcomeCreditStatus =
    * route, so it gets its own status and its own copy.
    */
   | 'requires_account'
+  /**
+   * A sign-in identifier on this account already claimed the program on a
+   * previous (since deleted) account. `credit_grants` cascades away with
+   * `auth.users`, so the durable record is the identity-fingerprint ledger
+   * (20260829120000); this status is its user-facing shape. Distinct from
+   * `already_claimed` because clients celebrate that one — it means "your
+   * credits are active", while this means "this identity was already paid".
+   */
+  | 'identity_already_claimed'
   | 'not_eligible'
   | 'unavailable';
 

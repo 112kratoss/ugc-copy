@@ -89,6 +89,17 @@ describe('account deletion route', () => {
           auth: { getUser: vi.fn(async () => ({ data: { user: authenticatedUser() }, error: null })) },
         })) as never,
         createServiceClient: (() => ({
+          // The real fingerprint recorder runs inside the deletion flow; with
+          // no credit_grants rows it exits before touching auth or the ledger.
+          from: vi.fn((table: string) => {
+            if (table !== 'credit_grants') throw new Error(`Unexpected table: ${table}`);
+            const query = {
+              select: vi.fn(),
+              in: vi.fn(async () => ({ data: [], error: null })),
+            };
+            query.select.mockReturnValue(query);
+            return query;
+          }),
           auth: { admin: { deleteUser, signOut } },
           rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
             calls.push(`rpc:${name}:${String(args.p_status ?? '')}`);
@@ -214,6 +225,17 @@ describe('account deletion route', () => {
           auth: { getUser: vi.fn(async () => ({ data: { user: authenticatedUser() }, error: null })) },
         })) as never,
         createServiceClient: (() => ({
+          // The real fingerprint recorder runs inside the deletion flow; with
+          // no credit_grants rows it exits before touching auth or the ledger.
+          from: vi.fn((table: string) => {
+            if (table !== 'credit_grants') throw new Error(`Unexpected table: ${table}`);
+            const query = {
+              select: vi.fn(),
+              in: vi.fn(async () => ({ data: [], error: null })),
+            };
+            query.select.mockReturnValue(query);
+            return query;
+          }),
           auth: { admin: { deleteUser } },
           rpc: vi.fn(async (name: string) => {
             if (name !== 'prepare_account_deletion') throw new Error(`Unexpected rpc: ${name}`);
@@ -258,6 +280,17 @@ describe('account deletion route', () => {
           auth: { getUser: vi.fn(async () => ({ data: { user: authenticatedUser() }, error: null })) },
         })) as never,
         createServiceClient: (() => ({
+          // The real fingerprint recorder runs inside the deletion flow; with
+          // no credit_grants rows it exits before touching auth or the ledger.
+          from: vi.fn((table: string) => {
+            if (table !== 'credit_grants') throw new Error(`Unexpected table: ${table}`);
+            const query = {
+              select: vi.fn(),
+              in: vi.fn(async () => ({ data: [], error: null })),
+            };
+            query.select.mockReturnValue(query);
+            return query;
+          }),
           auth: { admin: { deleteUser, signOut } },
           rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
             if (name === 'prepare_account_deletion') {
@@ -334,6 +367,17 @@ describe('account deletion route', () => {
           auth: { getUser: vi.fn(async () => ({ data: { user: authenticatedUser() }, error: null })) },
         })) as never,
         createServiceClient: (() => ({
+          // The real fingerprint recorder runs inside the deletion flow; with
+          // no credit_grants rows it exits before touching auth or the ledger.
+          from: vi.fn((table: string) => {
+            if (table !== 'credit_grants') throw new Error(`Unexpected table: ${table}`);
+            const query = {
+              select: vi.fn(),
+              in: vi.fn(async () => ({ data: [], error: null })),
+            };
+            query.select.mockReturnValue(query);
+            return query;
+          }),
           auth: {
             admin: {
               deleteUser,
