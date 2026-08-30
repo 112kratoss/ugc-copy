@@ -162,8 +162,15 @@ describe('abandoned reclaim rollout gate', () => {
       .toBe(false);
   });
 
-  it('keeps the gate disabled with the current code-controlled minimum', () => {
-    expect(isAbandonedIntentReclaimEnabled({ MEDIA_UPLOAD_RECLAIM_ABANDONED: 'true' })).toBe(false);
+  it('opens the gate at the current code-controlled minimum only with the flag', () => {
+    // The code-controlled floor now sits at the safe minimum, so the operator
+    // flag is the remaining key. Both are still required: dropping the floor
+    // back below 0.0.5 closes the gate again even with the flag set, which the
+    // rollback test above pins.
+    expect(isAbandonedIntentReclaimEnabled({ MEDIA_UPLOAD_RECLAIM_ABANDONED: 'true' })).toBe(true);
+    expect(isAbandonedIntentReclaimEnabled({})).toBe(false);
+    expect(isAbandonedIntentReclaimEnabled({ MEDIA_UPLOAD_RECLAIM_ABANDONED: 'false' })).toBe(false);
+    expect(isAbandonedIntentReclaimEnabled({ MEDIA_UPLOAD_RECLAIM_ABANDONED: '1' })).toBe(false);
   });
 
   it('withholds never-consumed rows while the gate is closed', async () => {

@@ -10,7 +10,15 @@ export const MOBILE_CLIENT_HEADERS = {
 export const MOBILE_CLIENT_COMPATIBILITY_POLICY = {
   currentApiVersion: 1,
   minimumApiVersion: 1,
-  minimumAppVersion: '0.0.1',
+  // 0.0.5 is the first build that verifies a restored draft's staged objects
+  // still exist before publishing. Older builds restore a composer draft
+  // without that check, so reclaiming its media fails the publish with no
+  // recovery path. Raising the floor retires them: an identified client below
+  // it receives 426 MOBILE_UPDATE_REQUIRED and can never reach that state,
+  // which is what unlocks abandoned staged-upload reclaim. Rolling this back
+  // below 0.0.5 disables that reclaim again even if the environment flag
+  // stays set -- see media-upload-reclaim-policy.ts.
+  minimumAppVersion: '0.0.5',
   supportedCatalogSchemaVersions: [1, 2, 3],
   unversionedClientsUseApiVersion: 1,
 } as const;

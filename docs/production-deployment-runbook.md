@@ -356,6 +356,17 @@ Raising the reclaim TTL is *not* a substitute for waiting. Those builds refresh 
 draft's expiry every time the composer is opened, so a draft can outlive its
 media by an unbounded margin. The fix is client-side or nothing.
 
+**The flag is not the only path to deletion.** It governs the intent sweep in
+`media-upload-reclaim`. The reservation sweep in `operational-data-retention`
+carries its own carve-out: `mayReclaimExplicitAbandon` treats a row whose client
+explicitly finalized the upload and then never consumed it for
+`RECLAIM_AFTER_HOURS` as known-abandoned, and stops protecting it regardless of
+`MEDIA_UPLOAD_RECLAIM_ABANDONED`. Those objects are therefore reachable by
+deletion while the gate still reads closed, which is why the compatibility floor
+— not the flag — is the control that actually protects a resumed draft. Raise
+the floor before, or in the same change as, any fix that restores reservation
+sweep throughput.
+
 ### Legacy generation references
 
 `persistGenerationInputMedia` catches per-candidate failures and only logs them,
@@ -532,7 +543,7 @@ migrations over destructive rollback.
 | `ORPHANED_MEDIA_SHELL_POSTS` | Any media/mixed post older than 1 hour with no `post_media` rows | Publishing creates the post private, writes media, then promotes; a failed media write triggers a compensating `posts.delete()` whose own failure is only warned. Read `failed_to_remove_post_after_media_failure` / `failed_to_remove_post_after_source_tool_metadata_failure` logs for the underlying cause. Each row is private with zero media and unreachable by any reader. Before deleting, confirm the matching `failed_to_remove_*` log line exists — a media post from the gallery migration's own release window (2026-06-09) can be a legacy single-asset post rather than a shell. Then delete the `posts` rows — no storage sweep is needed. |
 | `SHELL_POST_PROBE_FAILED` | The shell-post probe read could not run | Check grants and policies on `public.posts` and `public.post_media`; the probe reads through a `post_media!left(id)` anti-join and a revoke on either table breaks it. |
 | Moderation queue age or volume | Oldest report reaches 4 hours, or 10 reports remain open | Page the staffed moderation role, review the oldest/highest-risk reports first, and follow `docs/moderation-operations.md`. A 24-hour-old report or 25 open reports is degraded. |
-| `UPLOAD_RECLAIM_BACKLOG` | Eligible-but-unreclaimed rows reach 24h (warning) or 48h (degraded), 20,000 rows, or the sample cap | Age is measured from when a row became **actionable** (`greatest(expires_at, reclaim_after)`), not from when its signed URL expired — the two are ~46 hours apart for a never-consumed reservation. Confirm `media-upload-reclaim` is running daily and not skipping, then read `media_upload_reclaim_*` logs. Two whole daily runs have to pass before this degrades. |
+| `UPLOAD_RECLAIM_BACKLOG` | Eligible-but-unreclaimed rows reach 24h (warning) or 48h (degraded), 20,000 rows, or the sample cap | Age is measured from when a row became **actionable** (`greatest(expires_at, reclaim_after)`), not from when its signed URL expired — the two are ~46 hours apart for a never-consumed reservation. Two whole daily runs have to pass before this degrades. **Count the right table with the right job:** this alert reads `upload_byte_reservations` via `get_upload_reclaim_health`, which `reclaimExpiredUploadReservations` drains inside **`operational-data-retention`** — *not* `media-upload-reclaim`, which sweeps `media_upload_intents`. A reclaim job that reports `skipped: no_reclaimable_media_uploads` every night is consistent with this alert firing, and is not evidence the backlog has no consumer. Read the retention run's `expiredUploadReservationFailures` against `expiredUploadReservationsHandled` first: equal non-zero numbers with `expiredUploadObjectsDeleted: 0` mean every claim is being rejected, and `upload_reservation_state_transition_failed` logs carry the database's reason. Reservations stuck in `finalized`/`consumed` with `reclaim_not_before` still NULL have never passed a first claim. |
 | `UPLOAD_RECLAIM_WITHHELD` | Any eligible never-consumed staged upload while abandoned reclaim is not effective | Not an incident and never self-clearing: `MEDIA_UPLOAD_RECLAIM_ABANDONED` plus the code-controlled minimum app version deliberately withhold these rows from the sweep, so no run can collect them. The number is the storage cost of leaving the gate closed. Clear it only by completing the rollout in [Staged Upload Reclaim](#staged-upload-reclaim) — never by widening the health query. |
 | Missing environment capability | Any item in backend health `environment.missing` | Treat as a release blocker for the affected capability and restore the production variable. |
 | Spend anomaly | Daily provider spend or failed paid cost exceeds its configured budget | Disable new paid work for the affected provider, preserve reconciliation, and investigate pricing or abuse. |
