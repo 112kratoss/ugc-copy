@@ -92,14 +92,46 @@ export function describePasswordSignInError(error: unknown): AuthNotice {
 }
 
 /**
+ * Compact rendering of whatever actually failed, for the temporary diagnostic
+ * below. Reads the fields Supabase and expo-web-browser errors carry before
+ * falling back to the message, and caps the length so a long provider string
+ * cannot push the recovery sentence off screen.
+ */
+function describeProviderFailureCause(error: unknown): string {
+  if (error && typeof error === 'object') {
+    const parts: string[] = [];
+    for (const key of ['code', 'status', 'name'] as const) {
+      const value = (error as Record<string, unknown>)[key];
+      if (value !== undefined && value !== null && value !== '') parts.push(`${key}=${String(value)}`);
+    }
+    const message = 'message' in error ? String((error as { message: unknown }).message ?? '') : '';
+    if (message) parts.push(message);
+    if (parts.length > 0) return parts.join(' · ').slice(0, 240);
+  }
+  if (typeof error === 'string' && error) return error.slice(0, 240);
+  return 'no error detail available';
+}
+
+/**
  * `provider` is the name the button already uses, so the recovery sentence
  * points at a control the person can see rather than at "the provider".
+ *
+ * TEMPORARY DIAGNOSTIC (added 2026-08-31, remove once the cause is known).
+ * Google sign-in fails on the 0.1.2 Android alpha and this catch-all is what
+ * hides why: five distinct client-side faults — no URL from signInWithOAuth, a
+ * browser session that never returns, a provider error on the callback, a
+ * callback with no code, and a failed code exchange — all render this one
+ * sentence, and none of them is logged. The server chain verifies healthy end
+ * to end (Supabase /authorize accepts the redirect, Google accepts the client),
+ * so the fault is only observable on the device. Appending the cause is the
+ * cheapest way to name it once. It contradicts this module's own rule about
+ * never leaking raw strings, which is exactly why it must not outlive the fix.
  */
 export function describeProviderSignInError(error: unknown, provider: 'Apple' | 'Google'): AuthNotice {
   if (isNetworkRequestFailedError(error)) return OFFLINE;
 
   return {
     title: `Could not finish with ${provider}`,
-    body: 'Try again, or sign in with your email and password.',
+    body: `Try again, or sign in with your email and password. — Diagnostic: ${describeProviderFailureCause(error)}`,
   };
 }
