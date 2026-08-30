@@ -250,7 +250,7 @@ describe('PostResourceBundleContent', () => {
     ]));
 
     await renderer.act(async () => {
-      await pressable(tree, 'Copy').props.onPress();
+      await pressable(tree, 'Copy prompt').props.onPress();
       await pressable(tree, 'Open workflow').props.onPress();
       await pressable(tree, 'Open remix').props.onPress();
       await pressable(tree, 'Open file').props.onPress();

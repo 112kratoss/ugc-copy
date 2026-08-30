@@ -144,7 +144,13 @@ function RootLayoutNav() {
                     contentStyle: { backgroundColor: appTheme.colors.background },
                   }}
                 />
-                <Stack.Screen name="create/[tool]" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'simple_push' }} />
+                {/* Same iOS 26 full-screen back pan as `post/new` below, and
+                    the same static off — here because the editor holds unsaved
+                    prompt/reference edits, and a native pop completes before
+                    the route's close guard is ever consulted. The route itself
+                    withdraws the remaining edge swipe while the draft is
+                    dirty. */}
+                <Stack.Screen name="create/[tool]" options={{ headerShown: false, fullScreenGestureEnabled: false, animation: reducedMotion ? 'none' : 'simple_push' }} />
                 <Stack.Screen name="templates/index" options={{ title: 'Templates', animation: reducedMotion ? 'none' : 'simple_push' }} />
                 <Stack.Screen name="templates/[slug]" options={{ title: 'Template', animation: reducedMotion ? 'none' : 'simple_push' }} />
                 <Stack.Screen name="template-runs/[runId]" options={{ title: 'Template Run', animation: reducedMotion ? 'none' : 'simple_push' }} />

@@ -6,6 +6,30 @@ import type { PostResourceItem, PostResourceItemType } from './types';
  * as settings rather than as a paragraph.
  */
 
+/**
+ * The line older composers wrote for the prompt card the app attaches on the
+ * creator's behalf. It only restates the card's own title, so it is filler
+ * above the prompt rather than anything the creator meant to say.
+ *
+ * Nothing writes it any more, and the backend now strips it from what it stores
+ * and serves. This stays as the last guard, for the window where an app built
+ * before that change is still talking to a backend built before it too — the
+ * two ship separately, so that pairing is real. `composer-prompt-boilerplate`
+ * on the web side pins this string against the backend's copy.
+ */
+export const COMPOSER_PROMPT_CARD_PREVIEW = 'The reusable prompt used for this creation.';
+
+/** The creator's own words, or nothing when all we have is our own boilerplate. */
+export function creatorAuthoredDescription(
+  resourceType: PostResourceItemType | undefined,
+  description: string | null | undefined
+) {
+  const trimmed = description?.trim();
+  if (!trimmed) return null;
+  if (resourceType === 'prompt' && trimmed === COMPOSER_PROMPT_CARD_PREVIEW) return null;
+  return trimmed;
+}
+
 export function resourceTypeLabel(type: PostResourceItemType) {
   if (type === 'prompt') return 'Prompt or script';
   if (type === 'workflow') return 'Workflow or project';

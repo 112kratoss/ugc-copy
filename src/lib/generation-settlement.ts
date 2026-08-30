@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { notifyCompletedRemix } from '@/lib/completed-remix-notification';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
@@ -17,8 +18,9 @@ import {
  * reviewable without reading the start paths: the money decision is 86 lines,
  * not a region of a 3,300-line file.
  *
- * Behaviour is unchanged by the extraction — same RPCs, same status mapping,
- * same errors. The 33 pgTAP assertions covering `settle_generation_failed`,
+ * Credit behavior remains owned by the same RPCs, status mapping, and errors.
+ * Successful settlement also attempts deduplicated completed-remix notification
+ * delivery; delivery failure cannot reverse settled credits. The 33 pgTAP assertions covering `settle_generation_failed`,
  * `settle_generation_succeeded`, and `settle_generation_start_failed` continue
  * to be the proof that the RPCs behind these are single-effect under replay.
  */
@@ -97,7 +99,10 @@ export async function settleGenerationSucceeded(
   }
 
   const status = typeof data.status === 'string' ? data.status : null;
-  if (status === 'succeeded' || status === 'already_succeeded') return 'succeeded';
+  if (status === 'succeeded' || status === 'already_succeeded') {
+    await notifyCompletedRemix(settlementSupabase, params.predictionId);
+    return 'succeeded';
+  }
   if (status === 'already_failed') return 'failed';
 
   if (status === 'missing') {

@@ -7,7 +7,6 @@ import { sanitizeWorkflowSettingsForRemix } from '@/lib/generation-input-media';
 import { isAudioModel } from '@/lib/models';
 import { remixCreatePathForCategory } from '@/lib/remix-tools';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
-import { notifyPostSocialActivity } from '@/lib/mobile-notifications';
 import { findPublicPostReferenceByIdOrGenerationId } from '@/lib/posts-server';
 
 type PostReference = {
@@ -31,7 +30,6 @@ type GenerationRow = {
 export type ShowcaseRemixServiceDependencies = {
   findPublicPostReferenceByIdOrGenerationId: typeof findPublicPostReferenceByIdOrGenerationId;
   isUserRelationshipBlocked: typeof isUserRelationshipBlocked;
-  notifyPostSocialActivity: typeof notifyPostSocialActivity;
 };
 
 export type ShowcaseRemixResponseBody = {
@@ -63,7 +61,6 @@ function resolveDependencies(
     findPublicPostReferenceByIdOrGenerationId:
       dependencies?.findPublicPostReferenceByIdOrGenerationId ?? findPublicPostReferenceByIdOrGenerationId,
     isUserRelationshipBlocked: dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked,
-    notifyPostSocialActivity: dependencies?.notifyPostSocialActivity ?? notifyPostSocialActivity,
   };
 }
 
@@ -179,21 +176,8 @@ export async function remixShowcasePostForRoute({
     };
   }
 
-  const { error: rpcError } = await serviceClient.rpc('increment_post_remix_count', {
-    p_post_id: post.id,
-  });
-
-  if (rpcError) {
-    logBackendError('error_incrementing_remix_count', { error: rpcError });
-  }
-
-  await resolvedDependencies.notifyPostSocialActivity(serviceClient, {
-    type: 'post_remixed',
-    recipientUserId: post.user_id,
-    actorUserId,
-    postId: post.id,
-  });
-
+  // Opening an editor is not a completed remix. The generation completion
+  // ledger counts successful outputs and settlement sends the notification.
   const redirectPath = remixCreatePathForCategory(generationRow.category ?? post.category);
   const rawSettings =
     generationRow.workflow_settings && typeof generationRow.workflow_settings === 'object'

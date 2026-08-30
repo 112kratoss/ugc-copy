@@ -419,6 +419,20 @@ function normalizeResourceSectionId(value: unknown, fallbackIndex: number, usedI
   return candidate;
 }
 
+/**
+ * The line the mobile composer writes for the prompt card it attaches on the
+ * creator's behalf. It only restates the card's own title, so it is filler
+ * wherever it is shown, and it is not the creator's writing to preserve.
+ *
+ * Dropped in the one funnel every read and every write passes through, which is
+ * what makes it disappear from stored rows on the way out, never reach a new
+ * one, and read the same on web and mobile — including from app versions still
+ * writing it, since those reach phones only on the next store release.
+ *
+ * `composer-prompt-boilerplate.test.ts` pins this against the mobile copy.
+ */
+export const COMPOSER_PROMPT_CARD_PREVIEW = 'The reusable prompt used for this creation.';
+
 export function normalizePostResourceSections(value: unknown): PostResourceSection[] {
   if (!Array.isArray(value)) {
     return [];
@@ -436,15 +450,19 @@ export function normalizePostResourceSections(value: unknown): PostResourceSecti
       const title = normalizeTextValue(item.title) ?? `Section ${index + 1}`;
       const kindValue = normalizeTextValue(item.kind);
       const resourceTypeValue = normalizeTextValue(item.resourceType);
+      const resourceType = isPostResourceItemType(resourceTypeValue) ? resourceTypeValue : null;
+      const description = normalizeTextValue(item.description);
 
       return {
         id,
         title,
         kind: isPostResourceSectionKind(kindValue) ? kindValue : 'other',
-        description: normalizeTextValue(item.description),
+        description: resourceType === 'prompt' && description === COMPOSER_PROMPT_CARD_PREVIEW
+          ? null
+          : description,
         sortOrder: normalizeNonNegativeNumber(item.sortOrder) ?? index,
         publicTitle: normalizeTextValue(item.publicTitle),
-        resourceType: isPostResourceItemType(resourceTypeValue) ? resourceTypeValue : null,
+        resourceType,
         scope: normalizePostResourceItemScope(item.scope),
       };
     })

@@ -72,6 +72,9 @@ describe('backend-owned RPC security migration', () => {
     expect(saveService).toContain("serviceClient.rpc('toggle_showcase_save'");
     expect(remixRoute).toContain('postShowcaseRemixRouteResponse');
     expect(remixRouteAdapter).toContain('remixShowcasePostForRoute');
-    expect(remixService).toContain("serviceClient.rpc('increment_post_remix_count'");
+    // Remix has no mutation left to route: the completed-remix ledger counts
+    // finished generations in the database, so the service must not reach for
+    // the legacy start counter even though the grant above still allows it.
+    expect(remixService).not.toContain('increment_post_remix_count');
   });
 });

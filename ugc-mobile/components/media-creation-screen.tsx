@@ -30,7 +30,8 @@ import {
 } from '@/components/ui';
 import { showConfirmDialog } from '@/lib/dialog';
 import { useAuth } from '@/lib/auth';
-import { clearPersistedCreationDrafts, loadPersistedCreationDrafts, persistCreationDrafts } from '@/lib/creation-draft-resume';
+import { clearPersistedCreationDrafts, loadPersistedCreationDrafts, persistCreationDrafts, remixDraftScope } from '@/lib/creation-draft-resume';
+import { createDraftSaveQueue } from '@/lib/draft-save-queue';
 import { SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
@@ -399,6 +400,8 @@ export function MediaCreationScreen({
   remixSource,
   guided = false,
   onClose,
+  registerBeforeClose,
+  onDirtyChange,
 }: {
   initialTool?: CreatorToolId;
   insideTab?: boolean;
@@ -406,9 +409,16 @@ export function MediaCreationScreen({
   remixSource?: {
     generationId?: string | null;
     postId?: string | null;
+    title?: string | null;
+    creatorLabel?: string | null;
+    thumbnailUrl?: string | null;
   };
   guided?: boolean;
   onClose?: () => void;
+  registerBeforeClose?: (guard: (() => Promise<boolean>) | null) => void;
+  /** Reports the first edit of the session, so the route can take the native
+   *  pop gesture away from a screen whose exit now has to save something. */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -446,6 +456,31 @@ export function MediaCreationScreen({
   const [advancedExpanded, setAdvancedExpanded] = useState(false);
   const [guidedReferencesExpanded, setGuidedReferencesExpanded] = useState(false);
   const [draftsHydrated, setDraftsHydrated] = useState(false);
+  const [draftLoadError, setDraftLoadError] = useState(false);
+  const [draftLoadAttempt, setDraftLoadAttempt] = useState(0);
+  const [draftSaveError, setDraftSaveError] = useState<string | null>(null);
+  const [isClosing, setIsClosing] = useState(false);
+  const closingRef = useRef(false);
+  const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resumedRemixRef = useRef(false);
+  const remixResolvedRef = useRef(false);
+  const [remixRetry, setRemixRetry] = useState(0);
+  const [remixRestoreFailed, setRemixRestoreFailed] = useState(false);
+  const draftScope = remixDraftScope(identityUserId, remixSource);
+  const draftWriter = useMemo(() => createDraftSaveQueue((drafts: { image: ImageCreationDraft; video: VideoCreationDraft; motion: MotionCreationDraft; remixRestored?: boolean; remixEditedKeys?: Partial<Record<CreatorToolId, string[]>> }) => persistCreationDrafts(drafts, draftScope)), [draftScope]);
+  const [dirty, setDirty] = useState(false);
+  const latestDrafts = useRef({ image: imageDraft, video: videoDraft, motion: motionDraft });
+  // The timers, the background flush and the close guard all need the newest
+  // drafts without being rebuilt for each keystroke. An effect hands them over
+  // early enough for every one of those — all of which run after paint — and
+  // keeps rendering free of the side effect a bare assignment here would be.
+  useEffect(() => {
+    latestDrafts.current = { image: imageDraft, video: videoDraft, motion: motionDraft };
+  }, [imageDraft, videoDraft, motionDraft]);
+  const remixBaseline = useRef(latestDrafts.current);
+  const savedRemixEdits = useRef<Partial<Record<CreatorToolId, string[]>>>({});
+  const lastSavedFingerprint = useRef(JSON.stringify(latestDrafts.current));
+
   const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [promptMessage, setPromptMessage] = useState<string | null>(null);
@@ -482,33 +517,104 @@ export function MediaCreationScreen({
 
   useEffect(() => {
     let active = true;
-    if (initialPrompt || remixSource?.generationId) {
-      setDraftsHydrated(true);
-      return () => {
-        active = false;
-      };
-    }
-    void loadPersistedCreationDrafts().then((persisted) => {
+    setDraftsHydrated(false);
+    setDraftLoadError(false);
+    resumedRemixRef.current = false;
+    remixResolvedRef.current = false;
+    // A prompt-only entry has its own seed; a remix can resume its own session.
+    const load = initialPrompt && !draftScope ? Promise.resolve(null) : loadPersistedCreationDrafts(draftScope);
+    void load.then((persisted) => {
       if (!active) return;
       if (persisted) {
         setImageDraft(persisted.image);
         setVideoDraft(persisted.video);
         setMotionDraft(persisted.motion);
+        resumedRemixRef.current = Boolean(draftScope && persisted.remixRestored);
+        remixResolvedRef.current = resumedRemixRef.current;
+        savedRemixEdits.current = persisted.remixEditedKeys ?? {};
       }
+      lastSavedFingerprint.current = JSON.stringify(persisted ? { image: persisted.image, video: persisted.video, motion: persisted.motion } : latestDrafts.current);
       setDraftsHydrated(true);
-    });
-    return () => {
-      active = false;
-    };
-  }, [initialPrompt, remixSource?.generationId]);
+    }).catch(() => { if (active) setDraftLoadError(true); });
+    return () => { active = false; };
+  }, [draftScope, initialPrompt, draftLoadAttempt]);
+
+  const saveLatestDraft = async () => {
+    if (!draftsHydrated) return;
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+    autosaveTimer.current = null;
+    // If a keystroke lands during a slow write, flush that newer snapshot too.
+    let saved: typeof latestDrafts.current;
+    do {
+      saved = latestDrafts.current;
+      const fingerprint = JSON.stringify(saved);
+      if (fingerprint === lastSavedFingerprint.current) return;
+      const remixEditedKeys = Object.fromEntries((['image', 'video', 'motion'] as const).map((tool) => [tool,
+        Object.keys(saved[tool]).filter((key) => JSON.stringify((saved[tool] as unknown as Record<string, unknown>)[key]) !== JSON.stringify((remixBaseline.current[tool] as unknown as Record<string, unknown>)[key])),
+      ]));
+      await draftWriter.save({ ...saved, remixRestored: remixResolvedRef.current, remixEditedKeys });
+      lastSavedFingerprint.current = fingerprint;
+    } while (saved.image !== latestDrafts.current.image || saved.video !== latestDrafts.current.video || saved.motion !== latestDrafts.current.motion);
+  };
+  const saveLatestDraftRef = useRef(saveLatestDraft);
+  useEffect(() => { saveLatestDraftRef.current = saveLatestDraft; });
+
+  useEffect(() => {
+    if (!draftsHydrated || isRestoringRemix || closingRef.current) return;
+    // Sticky: from the first edit onward this session's exit has something to
+    // save, and the route keeps the native pop gesture off until it closes.
+    if (!dirty && JSON.stringify({ image: imageDraft, video: videoDraft, motion: motionDraft }) !== lastSavedFingerprint.current) {
+      setDirty(true);
+    }
+    autosaveTimer.current = setTimeout(() => {
+      void saveLatestDraftRef.current().then(() => setDraftSaveError(null), () => setDraftSaveError('Your latest changes could not be saved. Retry before closing.'));
+    }, 350);
+    return () => { if (autosaveTimer.current) clearTimeout(autosaveTimer.current); };
+  }, [dirty, draftsHydrated, imageDraft, motionDraft, videoDraft, isRestoringRemix]);
+
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
 
   useEffect(() => {
     if (!draftsHydrated) return;
-    const timer = setTimeout(() => {
-      void persistCreationDrafts({ image: imageDraft, video: videoDraft, motion: motionDraft });
-    }, 350);
-    return () => clearTimeout(timer);
-  }, [draftsHydrated, imageDraft, motionDraft, videoDraft]);
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') {
+        void saveLatestDraftRef.current().catch(() => setDraftSaveError('Your latest changes could not be saved. Retry before closing.'));
+      }
+    });
+    return () => subscription.remove();
+  }, [draftsHydrated]);
+
+  const prepareClose = async (): Promise<boolean> => {
+    if (closingRef.current) return false;
+    closingRef.current = true;
+    setIsClosing(true);
+    try {
+      if (draftsHydrated) await saveLatestDraft();
+      return true;
+    } catch {
+      setDraftSaveError('Your latest changes could not be saved. Retry before closing.');
+      const discard = await showConfirmDialog({
+        title: 'Could not save your draft',
+        message: 'Stay to retry, or close without saving the latest changes.',
+        cancelLabel: 'Keep editing', confirmLabel: 'Close without saving', destructive: true,
+      });
+      return discard;
+    } finally {
+      closingRef.current = false;
+      setIsClosing(false);
+    }
+  };
+
+  const closeGuardRef = useRef(prepareClose);
+  useEffect(() => { closeGuardRef.current = prepareClose; });
+  useEffect(() => {
+    registerBeforeClose?.(() => closeGuardRef.current());
+    return () => registerBeforeClose?.(null);
+  }, [registerBeforeClose]);
+  const closeCreator = async () => {
+    if (registerBeforeClose) onClose?.(); // The route guard also covers native gestures.
+    else if (await prepareClose()) onClose?.();
+  };
 
   useEffect(() => {
     if (!catalog) return;
@@ -656,7 +762,7 @@ export function MediaCreationScreen({
   // beneath the opaque status-bar scrim below, which is what keeps that band
   // readable.
   const contentTopPadding = topInset + (insideTab ? 10 : 8);
-  const generateDisabled = isGenerating || pollingInterrupted || isUploading || !catalog || activeQuote.status !== 'ready' || validation.errors.length > 0;
+  const generateDisabled = !draftsHydrated || isRestoringRemix || remixRestoreFailed || isClosing || isGenerating || pollingInterrupted || isUploading || !catalog || activeQuote.status !== 'ready' || validation.errors.length > 0;
   const openAuthForCurrentDraft = () => {
     router.push({
       pathname: '/auth',
@@ -715,7 +821,7 @@ export function MediaCreationScreen({
 
   useEffect(() => {
     const generationId = remixSource?.generationId?.trim();
-    if (!generationId || !catalog || remixHydrationKeyRef.current === generationId) return;
+    if (!generationId || !catalog || !draftsHydrated || resumedRemixRef.current || remixHydrationKeyRef.current === generationId) return;
     if (!user) {
       setRemixRestoreWarning('Sign in to restore remix source media.');
       return;
@@ -724,16 +830,18 @@ export function MediaCreationScreen({
     const targetTool = isTool(initialTool) ? initialTool : 'image';
     let isCancelled = false;
     setRemixRestoreWarning(null);
+    setRemixRestoreFailed(false);
     setMessage(null);
     setPromptMessage(null);
     remixHydrationKeyRef.current = generationId;
     setIsRestoringRemix(true);
+    remixResolvedRef.current = false;
     const promptWhenRemixStarted = draftPromptsRef.current[targetTool];
+    const draftWhenRemixStarted = latestDrafts.current[targetTool];
 
     void api.getRemixSourceBundle(generationId, { postId: remixSource?.postId ?? null })
       .then((bundle) => {
         if (isCancelled) return;
-        setActiveTool(targetTool);
         const baseDraft = targetTool === 'image'
           ? createDefaultCreationDraft('image')
           : targetTool === 'video'
@@ -744,14 +852,29 @@ export function MediaCreationScreen({
         const prompt = hasCreatorEditedPromptDuringRemix(creatorPrompt, promptWhenRemixStarted)
           ? creatorPrompt
           : restored.draft.prompt;
-        if (restored.draft.tool === 'image') setImageDraft({ ...restored.draft, prompt });
-        if (restored.draft.tool === 'video') setVideoDraft({ ...restored.draft, prompt });
-        if (restored.draft.tool === 'motion') setMotionDraft({ ...restored.draft, prompt });
+        // Preserve every field edited during restoration, including model and references.
+        const current = latestDrafts.current[targetTool];
+        const edits = Object.fromEntries(Object.entries(current).filter(([key, value]) => (
+          savedRemixEdits.current[targetTool]?.includes(key)
+          || JSON.stringify(value) !== JSON.stringify((draftWhenRemixStarted as unknown as Record<string, unknown>)[key])
+        )));
+        const restoredPrompt = savedRemixEdits.current[targetTool]?.includes('prompt') ? current.prompt : prompt;
+        // A model chosen while loading keeps its compatible settings as a unit.
+        const merged = 'model' in edits
+          ? { ...current, sourceGenerationId: restored.draft.sourceGenerationId }
+          : { ...restored.draft, ...edits, prompt: restoredPrompt };
+        remixBaseline.current = { ...remixBaseline.current, [targetTool]: restored.draft };
+        lastSavedFingerprint.current = JSON.stringify(remixBaseline.current);
+        if (restored.draft.tool === 'image') setImageDraft(merged as ImageCreationDraft);
+        if (restored.draft.tool === 'video') setVideoDraft(merged as VideoCreationDraft);
+        if (restored.draft.tool === 'motion') setMotionDraft(merged as MotionCreationDraft);
+        remixResolvedRef.current = true;
         setRemixRestoreWarning(restored.warning);
       })
       .catch((error) => {
         if (isCancelled) return;
         remixHydrationKeyRef.current = null;
+        setRemixRestoreFailed(true);
         setRemixRestoreWarning(error instanceof Error ? error.message : REMIX_RESTORE_WARNING_MESSAGE);
       })
       .finally(() => {
@@ -761,8 +884,13 @@ export function MediaCreationScreen({
 
     return () => {
       isCancelled = true;
+      // Catalog/auth refresh can cancel an in-flight restore. Let the next
+      // effect retry instead of leaving the editor permanently "restoring".
+      if (!remixResolvedRef.current && remixHydrationKeyRef.current === generationId) {
+        remixHydrationKeyRef.current = null;
+      }
     };
-  }, [api, catalog, initialTool, remixSource?.generationId, remixSource?.postId, user]);
+  }, [api, catalog, draftsHydrated, initialTool, remixSource?.generationId, remixSource?.postId, remixRetry, user]);
 
   const updatePrompt = (prompt: string) => {
     if (activeTool === 'image') setImageDraft((draft) => ({ ...draft, prompt }));
@@ -1034,7 +1162,7 @@ export function MediaCreationScreen({
 
     setMessage(null);
     haptic.success();
-    void clearPersistedCreationDrafts();
+    void clearPersistedCreationDrafts(draftScope).catch(() => undefined);
     if (guided) {
       setShowNotificationPrompt(true);
       void trackOnboardingEvent(api, 'first_generation_succeeded', { goal: tool, step: 'creator' });
@@ -1179,7 +1307,7 @@ export function MediaCreationScreen({
     const activeGenerationStatus = generationTool === activeTool ? status : null;
     const activeOutputUrl = generationTool === activeTool ? outputUrl : null;
     const parameterSummary = creatorParameterSummary(currentDraft, selectedCreatorModel);
-    const visibleValidationError = validation.errors.find((error) => (
+    const visibleValidationError = isRestoringRemix ? undefined : validation.errors.find((error) => (
       !isReferenceMentionActive || !error.startsWith('Unknown element mention:')
     ));
     const blocker = (promptMessage
@@ -1221,8 +1349,19 @@ export function MediaCreationScreen({
             modelDisabled={!selectedCreatorModel}
             onChangeTool={changeTool}
             onOpenModels={() => setModelPickerVisible(true)}
-            onClose={onClose}
+            onClose={onClose ? () => void closeCreator() : undefined}
+            closing={isClosing}
+            remix={Boolean(remixSource)}
           />
+          {remixSource ? (
+            <View accessibilityLabel="Remix source post" style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              {remixSource.thumbnailUrl ? <StableMediaImage url={remixSource.thumbnailUrl} cacheKey={`remix-source:${remixSource.postId ?? remixSource.generationId}`} style={{ width: 40, height: 40, borderRadius: 10 }} /> : null}
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>{remixSource.title || 'Source creation'}</Text>
+                <Text numberOfLines={1} style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>{remixSource.creatorLabel ? `By ${remixSource.creatorLabel}` : 'Make your own version'}</Text>
+              </View>
+            </View>
+          ) : null}
 
           {guided ? (
             <>
@@ -1242,8 +1381,16 @@ export function MediaCreationScreen({
             />
           ) : null}
           {remixRestoreWarning ? (
-            <SlimCreatorBanner label="Remix source" body={remixRestoreWarning} onDismiss={() => setRemixRestoreWarning(null)} />
+            <View style={{ gap: 8 }}>
+              <SlimCreatorBanner label="Remix source" body={remixRestoreWarning} />
+              <View style={{ flexDirection: 'row', gap: 12 }}>
+                <SecondaryButton label="Retry restore" onPress={() => { remixHydrationKeyRef.current = null; setRemixRetry((value) => value + 1); }} />
+                <SecondaryButton label="Use available inputs" onPress={() => { remixResolvedRef.current = true; setRemixRestoreFailed(false); setRemixRestoreWarning(null); }} />
+              </View>
+            </View>
           ) : null}
+          {draftLoadError ? <View style={{ gap: 8 }}><SlimCreatorBanner label="Draft unavailable" body="Your saved draft could not be read. Retry to continue without overwriting it." /><SecondaryButton label="Retry loading draft" onPress={() => setDraftLoadAttempt((value) => value + 1)} /></View> : null}
+          {draftSaveError ? <View style={{ gap: 8 }}><SlimCreatorBanner label="Draft not saved" body={draftSaveError} /><SecondaryButton label="Retry saving draft" onPress={() => { void saveLatestDraft().then(() => setDraftSaveError(null), () => undefined); }} /></View> : null}
           {referenceNotice ? (
             <SlimCreatorBanner label="Reference updated" body={referenceNotice} onDismiss={() => setReferenceNotice(null)} />
           ) : null}
@@ -1422,7 +1569,7 @@ export function MediaCreationScreen({
       .filter((value) => typeof value === 'string' && value.length > 0)
       .map((value) => String(value).toUpperCase())
       .join(' · ');
-    const visibleValidationError = validation.errors.find((error) => (
+    const visibleValidationError = isRestoringRemix ? undefined : validation.errors.find((error) => (
       !isReferenceMentionActive || !error.startsWith('Unknown element mention:')
     ));
     const blocker = (promptMessage
@@ -1464,8 +1611,19 @@ export function MediaCreationScreen({
             modelDisabled={!selectedImageModel}
             onChangeTool={changeTool}
             onOpenModels={() => setModelPickerVisible(true)}
-            onClose={onClose}
+            onClose={onClose ? () => void closeCreator() : undefined}
+            closing={isClosing}
+            remix={Boolean(remixSource)}
           />
+          {remixSource ? (
+            <View accessibilityLabel="Remix source post" style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              {remixSource.thumbnailUrl ? <StableMediaImage url={remixSource.thumbnailUrl} cacheKey={`remix-source:${remixSource.postId ?? remixSource.generationId}`} style={{ width: 40, height: 40, borderRadius: 10 }} /> : null}
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>{remixSource.title || 'Source creation'}</Text>
+                <Text numberOfLines={1} style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>{remixSource.creatorLabel ? `By ${remixSource.creatorLabel}` : 'Make your own version'}</Text>
+              </View>
+            </View>
+          ) : null}
 
           {guided ? (
             <>
@@ -1485,8 +1643,16 @@ export function MediaCreationScreen({
             />
           ) : null}
           {remixRestoreWarning ? (
-            <SlimCreatorBanner label="Remix source" body={remixRestoreWarning} onDismiss={() => setRemixRestoreWarning(null)} />
+            <View style={{ gap: 8 }}>
+              <SlimCreatorBanner label="Remix source" body={remixRestoreWarning} />
+              <View style={{ flexDirection: 'row', gap: 12 }}>
+                <SecondaryButton label="Retry restore" onPress={() => { remixHydrationKeyRef.current = null; setRemixRetry((value) => value + 1); }} />
+                <SecondaryButton label="Use available inputs" onPress={() => { remixResolvedRef.current = true; setRemixRestoreFailed(false); setRemixRestoreWarning(null); }} />
+              </View>
+            </View>
           ) : null}
+          {draftLoadError ? <View style={{ gap: 8 }}><SlimCreatorBanner label="Draft unavailable" body="Your saved draft could not be read. Retry to continue without overwriting it." /><SecondaryButton label="Retry loading draft" onPress={() => setDraftLoadAttempt((value) => value + 1)} /></View> : null}
+          {draftSaveError ? <View style={{ gap: 8 }}><SlimCreatorBanner label="Draft not saved" body={draftSaveError} /><SecondaryButton label="Retry saving draft" onPress={() => { void saveLatestDraft().then(() => setDraftSaveError(null), () => undefined); }} /></View> : null}
           {referenceNotice ? (
             <SlimCreatorBanner label="Reference updated" body={referenceNotice} onDismiss={() => setReferenceNotice(null)} />
           ) : null}
@@ -1660,6 +1826,8 @@ function CompactCreatorHeader({
   onChangeTool,
   onOpenModels,
   onClose,
+  closing = false,
+  remix = false,
 }: {
   activeTool: CreatorToolId;
   modelName: string;
@@ -1667,6 +1835,8 @@ function CompactCreatorHeader({
   onChangeTool: (tool: CreatorToolId) => void;
   onOpenModels: () => void;
   onClose?: () => void;
+  closing?: boolean;
+  remix?: boolean;
 }) {
   const modelAccent = accentColor(TOOL_META[activeTool].accent);
   return (
@@ -1676,8 +1846,10 @@ function CompactCreatorHeader({
           {onClose ? (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Close creator"
-              accessibilityHint="Returns to the previous tab. Your draft is saved."
+              accessibilityLabel={remix ? "Close remix" : "Close creator"}
+              accessibilityHint={remix ? "Saves your changes and returns to the source post." : "Saves your changes and returns to the previous screen."}
+              disabled={closing}
+              accessibilityState={{ busy: closing }}
               onPress={onClose}
               style={({ pressed }) => ({
                 width: 48,
@@ -1692,7 +1864,7 @@ function CompactCreatorHeader({
               <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.textSecondary} />
             </Pressable>
           ) : null}
-          <AppText variant="pageTitle">Create</AppText>
+          <AppText variant="pageTitle">{remix ? 'Remix' : 'Create'}</AppText>
         </View>
         <Pressable
           accessibilityRole="button"

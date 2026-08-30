@@ -45,11 +45,22 @@ export function getNativeRemixCreateHref({
   redirectTo,
   recreateTool,
   prompt,
+  context,
 }: {
   redirectTo?: string | null;
   recreateTool: CreatorToolId;
   prompt?: string | null;
+  context?: { postId?: string | null; title: string; creatorLabel: string; thumbnailUrl?: string | null };
 }) {
+  const withContext = (href: string | null) => {
+    if (!href || !context) return href;
+    const url = new URL(href, 'https://magicbooklet.local');
+    if (context.postId) url.searchParams.set('remixPost', context.postId);
+    url.searchParams.set('sourceTitle', context.title);
+    url.searchParams.set('sourceCreator', context.creatorLabel);
+    if (context.thumbnailUrl) url.searchParams.set('sourceThumbnail', context.thumbnailUrl);
+    return `${url.pathname}${url.search}`;
+  };
   if (redirectTo) {
     try {
       const url = new URL(redirectTo, 'https://magicbooklet.local');
@@ -59,14 +70,14 @@ export function getNativeRemixCreateHref({
         const params = new URLSearchParams({ remix: remixId });
         const remixPost = url.searchParams.get('remixPost');
         if (remixPost) params.set('remixPost', remixPost);
-        return `/create/${nativeTool}?${params.toString()}`;
+        return withContext(`/create/${nativeTool}?${params.toString()}`);
       }
     } catch {
-      return createPromptHref(recreateTool, prompt);
+      return withContext(createPromptHref(recreateTool, prompt));
     }
   }
 
-  return createPromptHref(recreateTool, prompt);
+  return withContext(createPromptHref(recreateTool, prompt));
 }
 
 /**

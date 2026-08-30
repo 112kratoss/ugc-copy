@@ -18,6 +18,7 @@ const read = (name: string) => readFileSync(path.join(mobileRoot, name), 'utf8')
 const postRoute = read('app/post/[id].tsx');
 const detailsPage = read('components/post-details-page.tsx');
 const bundleContent = read('components/post-resource-bundle-content.tsx');
+const resourceAction = read('components/resource-action.tsx');
 const clipboard = read('lib/copy-to-clipboard.ts');
 const ui = read('components/ui.tsx');
 
@@ -113,9 +114,9 @@ describe('copying says that it copied', () => {
   });
 
   it('gives the pill a visible result to wear', () => {
-    expect(bundleContent).toContain('showConfirmed ? confirmLabel : label');
-    expect(bundleContent).toContain('accessibilityLabel={showConfirmed ? confirmLabel : label}');
-    expect(bundleContent).toContain('showConfirmed ? <Check');
+    expect(resourceAction).toContain('showConfirmed ? confirmLabel : label');
+    expect(resourceAction).toContain('accessibilityLabel={showConfirmed ? confirmLabel : label}');
+    expect(resourceAction).toContain('showConfirmed ? <Check');
   });
 
   it('asks for that result at every copy control', () => {
@@ -131,8 +132,8 @@ describe('copying says that it copied', () => {
   });
 
   it('lets the confirmation clear itself, and drops the timer with the pill', () => {
-    expect(bundleContent).toContain('const CONFIRM_MS = 1800');
-    expect(bundleContent).toContain('clearTimeout(confirmTimer.current)');
+    expect(resourceAction).toContain('const CONFIRM_MS = 1800');
+    expect(resourceAction).toContain('clearTimeout(confirmTimer.current)');
   });
 });
 
