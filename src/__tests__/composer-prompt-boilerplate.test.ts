@@ -8,10 +8,6 @@ import {
 } from '@/lib/post-resource-bundles';
 
 const projectRoot = process.cwd();
-const migration = fs.readFileSync(path.join(
-  projectRoot,
-  'supabase/migrations/20260830160000_drop_composer_prompt_boilerplate.sql',
-), 'utf8');
 
 function section(overrides: Record<string, unknown>) {
   return { id: 'creation-prompt', title: 'Exact generation prompt', resourceType: 'prompt', ...overrides };
@@ -55,15 +51,37 @@ describe('composer prompt boilerplate', () => {
     expect(mobile).toContain(`export const COMPOSER_PROMPT_CARD_PREVIEW = '${COMPOSER_PROMPT_CARD_PREVIEW}';`);
   });
 
-  it('clears rows that already stored it, in both the live table and its revisions', () => {
-    for (const table of ['public.post_resource_bundles b', 'public.post_resource_bundle_revisions r']) {
-      expect(migration).toContain(`UPDATE ${table}`);
+  /**
+   * Stored rows keep the line until their creator's own next edit rewrites them
+   * through the write path, and that is deliberate.
+   *
+   * A migration was written to clear them and production rejected it:
+   * `post_resource_bundle_revisions` carries an immutability trigger, because a
+   * revision is the record of what a buyer paid for. `post_resource_bundles` is
+   * no better a target — writing it fires `capture_post_resource_bundle_revision`,
+   * which would mint a revision representing no creator action at all, and
+   * `protect_sold_post_resource_bundle_content` guards it besides.
+   *
+   * Reading is where this belongs, and every reader already passes through the
+   * normalizer above — including the purchased revision a buyer sees. So these
+   * two pin that no reader is left out, rather than any stored-row shape.
+   */
+  it('normalizes the live bundle and the purchased revision through the same funnel', () => {
+    const server = fs.readFileSync(path.join(projectRoot, 'src/lib/post-resource-bundles-server.ts'), 'utf8');
+    const purchasedRevision = server.slice(server.indexOf('function toPurchasedRevision'));
+    expect(purchasedRevision.slice(0, purchasedRevision.indexOf('\n}'))).toContain('normalizePostResourceSections');
+    const liveBundle = server.slice(server.indexOf('function normalizeResources'));
+    expect(liveBundle.slice(0, liveBundle.indexOf('\n}'))).toContain('normalizePostResourceSections');
+  });
+
+  it('ships no migration that rewrites bundles or their revisions', () => {
+    const migrations = fs.readdirSync(path.join(projectRoot, 'supabase/migrations'))
+      .filter((name) => name >= '20260830000000' && name.endsWith('.sql'));
+    for (const name of migrations) {
+      const sql = fs.readFileSync(path.join(projectRoot, 'supabase/migrations', name), 'utf8');
+      expect(sql, `${name} must not rewrite bundle rows`).not.toMatch(
+        /UPDATE\s+public\.post_resource_bundle/i,
+      );
     }
-    // The creator's own description, and any non-prompt section, must survive.
-    expect(migration.match(/section->>'resourceType' = 'prompt'/g)).toHaveLength(2);
-    expect(migration.match(new RegExp(`section->>'description' = '${COMPOSER_PROMPT_CARD_PREVIEW}'`, 'g'))).toHaveLength(2);
-    expect(migration.match(/section - 'description'/g)).toHaveLength(2);
-    // Ordering is what the reader sees; aggregating without it would reshuffle.
-    expect(migration.match(/ORDER BY ordinality/g)).toHaveLength(2);
   });
 });
