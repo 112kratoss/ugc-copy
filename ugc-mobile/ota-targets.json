@@ -7,23 +7,29 @@
     "tree against this file and refuses to publish on a mismatch.",
     "",
     "Update this file in the same commit that ships a new binary, and never to",
-    "silence the preflight — a mismatch means the update cannot land, not that",
+    "silence the preflight \u2014 a mismatch means the update cannot land, not that",
     "the record is stale."
   ],
   "targets": {
     "android": {
-      "fingerprint": "9e59d85d97971636150bdcdf3e23768fac861b22",
+      "fingerprint": "b32edbfe04ad627e7f9c059c4f4e4196eccb5139",
       "appVersion": "0.1.2",
-      "buildNumber": 64,
+      "buildNumber": 65,
       "shipped": "2026-08-31",
-      "tracks": ["production", "alpha"]
+      "tracks": [
+        "alpha"
+      ],
+      "$note": "Build 64 (9e59d85d\u2026) is still what production runs. 65 restores OTA reach, which the expo@55.0.31 bump ended; promote it to production to make reach real for everyone."
     },
     "ios": {
       "fingerprint": "14d16064ff6550cb27c3db31d02b17a7b7960790",
       "appVersion": "0.1.2",
       "buildNumber": 46,
       "shipped": "2026-08-31",
-      "tracks": ["testflight"]
+      "tracks": [
+        "testflight"
+      ],
+      "$note": "No reach: build 46 predates dc37fa2, which edited a config plugin hashed for both platforms. Returns when an iOS binary ships from current main."
     }
   }
 }
