@@ -7,23 +7,30 @@
     "tree against this file and refuses to publish on a mismatch.",
     "",
     "Update this file in the same commit that ships a new binary, and never to",
-    "silence the preflight — a mismatch means the update cannot land, not that",
+    "silence the preflight \u2014 a mismatch means the update cannot land, not that",
     "the record is stale."
   ],
   "targets": {
     "android": {
-      "fingerprint": "9e59d85d97971636150bdcdf3e23768fac861b22",
+      "fingerprint": "b32edbfe04ad627e7f9c059c4f4e4196eccb5139",
       "appVersion": "0.1.2",
-      "buildNumber": 64,
+      "buildNumber": 65,
       "shipped": "2026-08-31",
-      "tracks": ["production", "alpha"]
+      "tracks": [
+        "alpha",
+        "production"
+      ],
+      "$note": "Promoted alpha -> production 2026-08-31, full rollout, in review. Reach becomes real per user as Play rolls them onto 65."
     },
     "ios": {
-      "fingerprint": "14d16064ff6550cb27c3db31d02b17a7b7960790",
+      "fingerprint": "27175069a1547b75d6b3456944d3c9c4ba7f0e27",
       "appVersion": "0.1.2",
-      "buildNumber": 46,
+      "buildNumber": 47,
       "shipped": "2026-08-31",
-      "tracks": ["testflight"]
+      "tracks": [
+        "testflight"
+      ],
+      "$note": "Build 46 was pulled from review and replaced: it predated dc37fa2 (a config plugin hashed for both platforms) so it had no OTA reach, and predated the update policy and reload gate entirely. 47 carries all of it. App Store review pending."
     }
   }
 }
