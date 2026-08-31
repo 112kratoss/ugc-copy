@@ -17,19 +17,20 @@
       "buildNumber": 65,
       "shipped": "2026-08-31",
       "tracks": [
-        "alpha"
+        "alpha",
+        "production"
       ],
-      "$note": "Build 64 (9e59d85d\u2026) is still what production runs. 65 restores OTA reach, which the expo@55.0.31 bump ended; promote it to production to make reach real for everyone."
+      "$note": "Promoted alpha -> production 2026-08-31, full rollout, in review. Reach becomes real per user as Play rolls them onto 65."
     },
     "ios": {
-      "fingerprint": "14d16064ff6550cb27c3db31d02b17a7b7960790",
+      "fingerprint": "27175069a1547b75d6b3456944d3c9c4ba7f0e27",
       "appVersion": "0.1.2",
-      "buildNumber": 46,
+      "buildNumber": 47,
       "shipped": "2026-08-31",
       "tracks": [
         "testflight"
       ],
-      "$note": "No reach: build 46 predates dc37fa2, which edited a config plugin hashed for both platforms. Returns when an iOS binary ships from current main."
+      "$note": "Build 46 was pulled from review and replaced: it predated dc37fa2 (a config plugin hashed for both platforms) so it had no OTA reach, and predated the update policy and reload gate entirely. 47 carries all of it. App Store review pending."
     }
   }
 }
