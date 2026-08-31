@@ -4,7 +4,7 @@ This file provides guidance to AI coding agents (Claude Code, Codex, and others)
 
 ## What this is
 
-Magicbooklet — an AI UGC creation platform: image/video/motion generation (provider: Kie.ai), a public showcase feed with a social layer (threaded comments, text posts, follows, saves, post overlay), a creator marketplace with paid resource bundles, templates, and a node-based workflow builder. Product direction: a community around AI media creation, expanding later into the broader marketing space.
+Magicbooklet — an AI UGC creation platform: image/video/motion generation (provider: Kie.ai), a public showcase feed with a social layer (threaded comments, text posts, follows, saves, post overlay), unified public search, a creator marketplace with paid resource bundles, templates, and a node-based workflow builder. Product direction: a community around AI media creation, expanding later into the broader marketing space.
 
 - **Web + API**: Next.js 16 App Router (React 19, Tailwind v4) on Vercel, region `bom1`, production domain `magicbooklet.com`, branch `main`.
 - **Backend of record**: Supabase (Postgres 17, Auth, Storage, RLS, atomic RPCs). Exactly one Deno edge function: `supabase/functions/kie-webhook`.
@@ -18,7 +18,7 @@ Web app (repo root):
 
 ```bash
 npm run dev                # dev server on :3000 (webpack; `npm run dev:turbo` for Turbopack)
-npm run build              # production build
+npm run build              # production build — never while a dev server runs (they share .next)
 npm run build:verify       # assert ffmpeg is resolvable at runtime in the media routes
 npm run lint               # eslint (ugc-mobile is ignored)
 npm run typecheck          # app only — excludes scripts/, src/__tests__/, ugc-mobile/
@@ -27,7 +27,8 @@ npm run typecheck:tests    # separate project for src/__tests__/ (tsconfig.tests
 npm test                   # vitest run — all unit/integration tests in src/__tests__/
 npx vitest run src/__tests__/<file>.test.ts   # single test file
 npm run test:e2e           # Playwright, tests/e2e/ — boots its own dev server on :3100 with E2E auth bypass
-# also available: backfill:* (media/preview backfills) and perf:load / perf:lighthouse harnesses
+# also available: backfill:* (media/preview/fingerprint backfills), perf:load / perf:lighthouse,
+# db:inspect:performance, db:benchmark:scaling, eval:enhancer (prompt-enhancer eval), ops:guest-acceptance
 ```
 
 Mobile app:
@@ -43,7 +44,7 @@ npm run ios | android | start
 Database (local stack requires Docker):
 
 ```bash
-npx supabase start             # local API :54321, DB :54322, Studio :54323
+npx supabase start             # local API :54321, DB :54322, Studio :54323 — pin the CLI at 2.75.0; newer versions hang silently on start
 npx supabase db reset --local  # replay all migrations from clean (must always pass)
 npx supabase test db           # pgTAP tests in supabase/tests/database/
 npm run db:migrations:check    # fail on local/linked migration drift
@@ -58,7 +59,7 @@ npm run admin:credentials              # mint the /admin master credential (prin
 npm run ops:external-gates             # verify prod external config (Supabase auth lints, RevenueCat webhook)
 ```
 
-CI (`.github/workflows/quality.yml`) gates PRs with: web `test → lint → typecheck → typecheck:scripts → typecheck:tests → perf self-tests → build → build:verify`; mobile `expo install --check → expo-doctor → expo prebuild --clean → expo export → test → typecheck`; and a full migration replay from a clean database plus `supabase test db` (Supabase CLI pinned to 2.75.0). Quality also runs a Playwright E2E smoke job. Sibling workflows: `production-release.yml` (production deploys — see Deploys), `performance.yml`, `backend-alert-watchdog.yml`, `mobile-store-release.yml`.
+CI (`.github/workflows/quality.yml`) gates PRs with: web `test → lint → typecheck → typecheck:scripts → typecheck:tests → perf self-tests → build → build:verify`; mobile `expo install --check → expo-doctor → expo prebuild --clean → expo export → test → typecheck`; and a full migration replay from a clean database plus `supabase test db` (Supabase CLI pinned to 2.75.0). Quality also runs a Playwright E2E smoke job. Sibling workflows: `production-release.yml` (production deploys) and `mobile-store-release.yml` (store binaries + OTA) — both covered under Deploys — plus `performance.yml`, `backend-alert-watchdog.yml`, `schema-baseline.yml`, and `repair-migration-ledger.yml`.
 
 ## Local environment
 
@@ -72,7 +73,7 @@ Vercel API routes are the business-logic boundary for both web and mobile. Supab
 
 ### Route → adapter → service layering
 
-`src/lib` is flat (~360 files); naming is the organization, with three layers:
+`src/lib` is flat (~440 files); naming is the organization, with three layers:
 
 1. `src/app/api/**/route.ts` — 2–8 line shells, e.g. `export const { GET, POST } = createPostsRouteHandlers();`
 2. `src/lib/*-route-adapter-service.ts` — HTTP concerns: parsing, auth, rate limits, responses.
@@ -91,7 +92,7 @@ A new endpoint means a new adapter in `src/lib` plus a thin `route.ts`. Orientat
 
 ### Generation pipeline
 
-Start services validate against the model catalog, quote credits, and place a ledger hold → provider (Kie.ai) task created → provider callbacks hit the Supabase edge function `kie-webhook`, which HMAC-signs and forwards to `/api/webhooks/kie` (callbacks never hit Vercel directly) → outputs are imported from allowlisted provider hosts (`MEDIA_IMPORT_HOST_ALLOWLIST`) into Supabase Storage → credits settle or refund idempotently. `ffmpeg-static` is force-bundled into the media-touching routes via `outputFileTracingIncludes` in `next.config.ts`; `npm run build:verify` asserts it.
+Start services validate against the model catalog, quote credits, and place a ledger hold → provider (Kie.ai) task created → provider callbacks hit the Supabase edge function `kie-webhook`, which HMAC-signs and forwards to `/api/webhooks/kie` (callbacks never hit Vercel directly) → outputs are imported from allowlisted provider hosts (`MEDIA_IMPORT_HOST_ALLOWLIST`) into Supabase Storage → credits settle or refund idempotently. `ffmpeg-static` and sharp's native libvips (`@img/sharp-libvips-*`) are force-bundled into the media-touching routes via `outputFileTracingIncludes` in `next.config.ts` — externalizing alone does not trace them, and a green build can otherwise ship without the binaries and 500 at runtime; `npm run build:verify` asserts the ffmpeg half.
 
 ### Generation model catalog (control plane)
 
@@ -99,7 +100,7 @@ Production model definitions, controls, and pricing live in Supabase, released t
 
 ### Web ↔ mobile contract
 
-`contracts/mobile-api-operations-v1.json` is consumed **at runtime** by `src/proxy.ts` (Next middleware) to build the mobile CORS allowlist; `proxy.ts` also enforces mobile client version gating (HTTP 426 with upgrade policy, `/api/app-version` exempt). `contracts/mobile-api-v1.json` and `generation-model-catalog-v1.json` are shared test fixtures imported by both `src/__tests__` and `ugc-mobile/__tests__`, so a breaking API change fails tests on both sides. Changing a mobile-facing route means updating the contract files and both test suites.
+`contracts/` holds six versioned JSON contracts. Three are consumed **at runtime**: `mobile-api-operations-v1.json` by `src/proxy.ts` (Next middleware) to build the mobile CORS allowlist, `universal-links-v1.json` by `src/lib/app-links.ts`, and `post-resource-bundle-authoring-v1.json` by `src/lib/post-composer-resource-cards.ts`. `proxy.ts` also enforces mobile client version gating (HTTP 426 with upgrade policy, `/api/app-version` exempt). The other three (`mobile-api-v1.json`, `generation-model-catalog-v1.json`, `upload-queue-contract-v1.json`) are shared test fixtures imported by both `src/__tests__` and `ugc-mobile/__tests__`, so a breaking API change fails tests on both sides. Changing a mobile-facing route means updating the contract files and both test suites.
 
 ### Admin console (`/admin`)
 
@@ -142,7 +143,7 @@ One Vercel cron (`/api/cron/backend-jobs`, every 10 min, `CRON_SECRET` bearer au
 
 ### Tests
 
-All web unit/integration tests live flat in `src/__tests__/` (~540 files) — never colocated. Notable conventions: `*-migration.test.ts` files assert the SQL content of migrations (add one when you add a migration); contract fixture tests pin the mobile API. E2E lives in `tests/e2e/` and uses an auth bypass (`src/lib/e2e-auth.ts`) that is build-blocked in production. Mobile logic is factored into `ugc-mobile/lib/*-view-model.ts` modules precisely so it can be vitest-tested without rendering.
+All web unit/integration tests live flat in `src/__tests__/` (~730 files; `ugc-mobile/__tests__/` holds ~170 more) — never colocated. Notable conventions: `*-migration.test.ts` files assert the SQL content of migrations (add one when you add a migration); contract fixture tests pin the mobile API. E2E lives in `tests/e2e/` and uses an auth bypass (`src/lib/e2e-auth.ts`) that is build-blocked in production. Mobile logic is factored into `ugc-mobile/lib/*-view-model.ts` modules precisely so it can be vitest-tested without rendering.
 
 Three E2E gotchas worth knowing before you debug one:
 
@@ -157,19 +158,27 @@ Three E2E gotchas worth knowing before you debug one:
   - **The CLI cannot reach production from a developer machine** — neither the direct nor the pooler endpoint answers — so `db push --dry-run --linked` and `migration list --linked` (and therefore `npm run db:migrations:check`) do not work against prod. Ask the parity question with `scripts/schema-fingerprint.sql` instead: run it on production through the Supabase MCP / Management API and on a clean replay via the **Schema baseline** workflow, then compare digests per object class.
   - Production's ledger is what a **preview branch** replays, not these files, so the two must agree. `repair-migration-ledger.yml` (`report` / `apply` / `verify`) rewrites every `supabase_migrations.schema_migrations` row from its file. Run it only from `main` and only **after** the matching commit is pushed — repairing first makes the next release read the repository's own history as pending. `supabase-migration-ledger-ordering.test.ts` pins that rule.
   - Applying DDL to production outside these files leaves the ledger unable to rebuild the database: `supabase migration repair` records a version and a name with **no statements**, which is what broke branching (audit *Finding C*).
+  - New tables are born with the full `service_role` grant set (`arwdDxtm`): an append-only ledger table must explicitly `REVOKE UPDATE, DELETE` in its migration.
+  - pgTAP gotchas: a clean replay lacks the default Data API grants long-lived environments carry, so a local `supabase test db` pass can mask grant drift that fails CI; and fixture inserts into `auth.users` must set `created_at` explicitly — code that branches on account age misreads NULL.
 - **Deploys**: `.github/workflows/production-release.yml` owns production releases after the exact `main` SHA passes Quality. It applies Supabase migrations and the Edge Function, stages a production-configured Vercel deployment without domains, verifies public and authenticated health, rejects stale SHAs, then promotes and verifies the live SHA. Vercel Git integration may create previews but must not auto-promote production. Manual `vercel --prod` is recovery-only. Pre-deploy gates and env contract: `docs/production-deployment-runbook.md`.
+- **Mobile ships separately** — merging to `main` never reaches phones. Store binaries go out via `mobile-store-release.yml` (manual dispatch + store review); do not push to `main` while a store-release run is in flight — the push cancels it at the submit gate. JS-only fixes can ship OTA via expo-updates, but an `eas update` only reaches binaries whose runtime fingerprint matches **exactly** — publishing at any other value reports success and reaches zero devices. `ugc-mobile/ota-targets.json` records the fingerprints of the binaries actually in users' hands, and `ugc-mobile/scripts/verify-ota-target.mjs` refuses a mismatched publish; update that file in the same commit that ships a new binary, never to silence the preflight (`npm ci` in `ugc-mobile` can change the working-tree fingerprint). Android keeps R8/minification **off** (enforced by `ugc-mobile/plugins/withAndroidReleaseSafety.js`) — R8 strips the reflection Expo modules depend on.
 - **Stale docs**: `.agent/workflows/integrate-model.md` describes the old per-page model registries — superseded by the database catalog workflow above. `.agent/workflows/publish.md` is superseded by the production-release workflow; its body now just redirects there. The root `README.md` is untouched create-next-app boilerplate. `design-web.md` and `design-mobile.md` predate the 2026-07 feed/comments/text-posts overhaul — trust tokens and primitives, but verify page patterns against current code (see the note in `design.md`).
 - **Mobile UI is held to Apple's HIG**: check visual and layout changes in `ugc-mobile/` against the Human Interface Guidelines before shipping them. The numeric floors are enforced by `ugc-mobile/__tests__/hig-type-and-contrast.test.ts` — 11pt minimum type, 4.5:1 body contrast on every panel surface, 44pt hit regions (geometry in `ugc-mobile/lib/hit-target.ts`) — so a red guard is a real violation: fix the control, never the threshold. Adopting a further HIG rule means extending those guard tests so every later screen inherits it, not fixing one instance. Reading the guidelines: the HIG pages (developer.apple.com/design/human-interface-guidelines) are client-rendered, so a plain fetch returns only the page title — but the full text of any page is plain JSON at `developer.apple.com/tutorials/data/design/human-interface-guidelines/<page>.json` (curl works), and a rendering browser reads the pages normally. developer.apple.com/design/tips/ is a static one-page summary of the key numbers. Note the full HIG carries nuance the summary lacks — e.g. 44×44pt is the *default* control size on iOS; 28×28pt is the absolute floor.
-- **Design**: start at `design.md`, which indexes `design-web.md` (web) and `design-mobile.md` (mobile). North star: premium dark AI creator studio — shared tokens, Lucide icons, strict spacing, reusable primitives. Shared web UI lives in `src/app/components/` (not a route).
+- **Design**: start at `design.md`, which indexes `design-web.md` (web) and `design-mobile.md` (mobile). North star: premium dark AI creator studio — shared tokens, Lucide icons, strict spacing, reusable primitives. Shared web UI lives in `src/app/components/` (not a route). An in-repo design-engineering skill lives at `.agents/skills/emil-design-eng` (symlinked into `.claude/skills/`).
 - **Path aliases differ**: web `@/*` → `src/*`; mobile `@/*` → `ugc-mobile/*` root.
 - **CSS split**: `globals.css` is public-route CSS; authenticated surfaces add `non-public-utilities.css` via their route layouts (CSS is inlined via `experimental.inlineCss`).
+- **Rewrites defeat route interception**: signed-in `/`, `/feed`, `/showcase`, `/marketplace` are served through `rewrites` in `next.config.ts`, and Next route interception (the post-overlay pattern) never fires on a rewritten path — plan overlay UX accordingly.
+- **Storage uploads must be Blobs**: passing a Node `Buffer` to supabase-js `storage.upload` gets it UTF-8-stringified (~1.8× larger, corrupt). Wrap bytes in a `Blob` first.
+- **Metric queries**: most `profiles` rows are anonymous guest sessions — filter `is_anonymous` before any per-user metric. `profiles.credits` is the **total** spendable balance; `promotional_credits` tracks a subset of it, never add the two. Mobile IAPs double-write (see Admin console).
+- **The paid-bundle paywall is app code, not RLS**: the field allowlist in `hydrateBundleRows` (`src/lib/post-resource-bundles-server.ts`) is the security boundary for unpurchased content — treat any change to bundle reads as security-sensitive.
+- **Mobile runtime gotchas**: sheets and dialogs with text inputs render through `ugc-mobile/components/overlay-host.tsx`, not RN `Modal` (Android reports no keyboard height inside `Modal`). Run the pinned local Expo CLI (`./node_modules/.bin/expo`, as `.claude/launch.json` does) — `npx expo` against an empty `.bin` silently downloads a different major.
 - **Secrets**: the service-role key exists only in trusted server/operator environments — never in manifests, client bundles, command output, or committed files. Ops CLIs deliberately redact provider mappings and prices.
   - **Agents install secrets themselves, outside the conversation.** Never ask the user to paste a secret into chat or to hand-edit `.env.local`, and never print a secret value (no `echo`/`cat` of it — verify presence with `grep -c '^NAME=' .env.local` or a byte count instead). To install a value only the user holds: they copy it to the clipboard and say so, then the agent runs `printf 'NAME=%s\n' "$(pbpaste)" >> .env.local` — the value flows clipboard → file without entering the transcript. To mint a brand-new secret: generate and install in one piped command (`openssl rand -hex 32` into `.env.local` and/or `vercel env add NAME production --sensitive`), never echoed. Vercel "Sensitive" values pull back as empty strings, so retrieval from Vercel is impossible by design — and never rotate a secret that HMACs stored data (e.g. `ACCOUNT_IDENTITY_FINGERPRINT_SECRET`) just to obtain a known value: rows written under the old value become unmatchable.
 - **Blog content** is markdown in `content/blog/*.md` rendered via `src/lib/blog.ts`.
 
 ## Operational runbooks (`docs/`)
 
-`production-deployment-runbook.md` (topology, env contract, gates), `supabase-local-prod-workflow.md`, `generation-model-catalog-operations.md`, `moderation-operations.md` (staffed queue, service-role CLI), `mobile-store-product-catalog.md` (IAP tier provisioning), and `post-resource-bundle-v1.md`. Dated research snapshots (`performance-audit-2026-07-16.md`, `ui-consistency-research-2026-06-14.md`) and agent plans/specs (`docs/superpowers/`) sit alongside the runbooks. `scaling-audit.md` is the active scaling entry point; it links the current finding set and exact-build certificates. Dated audit journals live under `docs/archive/` and must not be treated as current capacity claims.
+`production-deployment-runbook.md` (topology, env contract, gates), `supabase-local-prod-workflow.md`, `generation-model-catalog-operations.md`, `moderation-operations.md` (staffed queue, service-role CLI), `mobile-store-product-catalog.md` (IAP tier provisioning), `post-resource-bundle-v1.md`, `scaling-certification-runbook.md`, and `supabase-performance-inspection.md`. Dated research snapshots (`prompt-enhancer-playbooks-2026-08-24.md`, `model-prompting-deep-research-2026-08-24.md`, `performance-audit-2026-07-16.md`, …) and agent plans/specs (`docs/superpowers/`, `docs/research/`) sit alongside the runbooks. `scaling-audit.md` is the active scaling entry point; it links the current finding set (`scaling-findings-2026-08-22.md`) and exact-build certificates (`scaling-certificates/`). Dated audit journals live under `docs/archive/` and must not be treated as current capacity claims — `docs/scaling-audit-2026-08-08.md` survives only as a compatibility redirect stub.
 
 <!-- BEGIN:nextjs-agent-rules -->
 
