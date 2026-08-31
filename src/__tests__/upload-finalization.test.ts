@@ -6,6 +6,8 @@ import {
   finalizeUploadForConsumption,
   finalizeUploadRequest,
   reclaimExpiredUploadReservations,
+  UPLOAD_RECLAIM_QUIESCENCE_MS,
+  UPLOAD_RECLAIM_TIME_BUDGET_MS,
   type UploadReservationRow,
 } from '@/lib/upload-finalization';
 
@@ -339,8 +341,11 @@ describe('generic upload finalization', () => {
     expect(fake.remove).not.toHaveBeenCalled();
     expect(fake.row).toMatchObject({ finalization_status: 'reclaiming', released_at: null });
 
+    // The second pass has to clear the first pass's quiescence gate, which is
+    // UPLOAD_RECLAIM_FIRST_PASS_MARGIN_MS ahead of the ten-minute interval so
+    // that the database still accepts it after a full sweep's worth of work.
     await expect(reclaimExpiredUploadReservations(fake.client, {
-      now: new Date('2026-08-20T00:11:00.000Z'),
+      now: new Date('2026-08-20T00:16:00.000Z'),
     })).resolves.toEqual({
       scanned: 1,
       handled: 1,
@@ -578,7 +583,7 @@ describe('generic upload finalization', () => {
       now: new Date('2026-08-20T00:00:00.000Z'),
     });
     await reclaimExpiredUploadReservations(fake.client, {
-      now: new Date('2026-08-20T00:11:00.000Z'),
+      now: new Date('2026-08-20T00:16:00.000Z'),
     });
     expect(fake.row).toMatchObject({
       finalization_status: 'consumed',
@@ -617,11 +622,32 @@ describe('generic upload finalization', () => {
       now: new Date('2026-08-20T00:00:00.000Z'),
     });
     await reclaimExpiredUploadReservations(fake.client, {
-      now: new Date('2026-08-20T00:11:00.000Z'),
+      now: new Date('2026-08-20T00:16:00.000Z'),
     });
     expect(fake.remove).toHaveBeenCalledWith(['user-1/reference.png']);
     expect(fake.row).toMatchObject({ finalization_status: 'deleted' });
     expect(fake.row?.released_at).toBeTruthy();
+  });
+
+  it('opens a first-pass quiescence gate the database still accepts after a full sweep', async () => {
+    const fake = createClient({
+      row: reservation({ expires_at: '2026-08-18T00:00:00.000Z' }),
+    });
+    const sweepStart = new Date('2026-08-20T00:00:00.000Z');
+
+    await reclaimExpiredUploadReservations(fake.client, { now: sweepStart });
+
+    expect(fake.row).toMatchObject({ finalization_status: 'reclaiming' });
+    // The lifecycle trigger validates `reclaim_not_before >= now() + 10
+    // minutes` against the database's clock at the instant the UPDATE lands,
+    // which can be a whole time budget later than the timestamp the sweep read
+    // on entry. A gate derived from that entry timestamp alone was already in
+    // the past when it was validated, so every first claim was rejected, no
+    // reservation ever reached a second pass, and the reclaim backlog aged out
+    // of its SLO without a single failing run to point at.
+    const latestPossibleWrite = sweepStart.getTime() + UPLOAD_RECLAIM_TIME_BUDGET_MS;
+    expect(Date.parse(fake.row!.reclaim_not_before!))
+      .toBeGreaterThanOrEqual(latestPossibleWrite + UPLOAD_RECLAIM_QUIESCENCE_MS);
   });
 
   it('binds trusted actual bytes for a protected mobile draft, then releases only after clearing and deletion', async () => {
@@ -639,7 +665,7 @@ describe('generic upload finalization', () => {
       now: new Date('2026-08-20T00:00:00.000Z'),
     });
     await reclaimExpiredUploadReservations(fake.client, {
-      now: new Date('2026-08-20T00:11:00.000Z'),
+      now: new Date('2026-08-20T00:16:00.000Z'),
     });
     expect(fake.row).toMatchObject({
       finalization_status: 'consumed',
@@ -660,8 +686,10 @@ describe('generic upload finalization', () => {
       now: new Date('2026-08-20T00:24:00.000Z'),
     });
     expect(fake.row?.finalization_status).toBe('reclaiming');
+    // Re-entering reclaim opens a fresh quiescence gate, so the releasing pass
+    // has to clear that gate too rather than the original one.
     await reclaimExpiredUploadReservations(fake.client, {
-      now: new Date('2026-08-20T00:35:00.000Z'),
+      now: new Date('2026-08-20T00:40:00.000Z'),
     });
     expect(fake.row).toMatchObject({ finalization_status: 'deleted' });
     expect(fake.remove).toHaveBeenCalledWith(['user-1/reference.png']);

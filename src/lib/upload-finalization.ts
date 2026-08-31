@@ -51,6 +51,36 @@ const RESERVATION_SELECT = [
 export const UPLOAD_RECLAIM_QUIESCENCE_MS = 10 * 60 * 1000;
 export const UPLOAD_RECLAIM_TIME_BUDGET_MS = 4 * 60 * 1000;
 
+/**
+ * Headroom added to the first reclaim pass's quiescence gate.
+ *
+ * The database requires `reclaim_not_before >= now() + 10 minutes`, evaluated
+ * against the *database's* clock at the instant the UPDATE lands. The sweep
+ * reads its own clock once, at entry, and then spends time paging rows,
+ * loading protections and calling Storage before any claim is written -- so a
+ * gate derived from the entry timestamp is always already too late by the time
+ * it is validated, and every first claim is rejected. One sweep cannot outlive
+ * its own time budget, so that budget plus an allowance for host clock skew
+ * bounds the gap. Overshooting is free: the gate only has to be in the past by
+ * the next daily run, and it is immutable once observed.
+ */
+export const UPLOAD_RECLAIM_FIRST_PASS_MARGIN_MS = UPLOAD_RECLAIM_TIME_BUDGET_MS + 60 * 1000;
+
+/**
+ * The `reclaim_not_before` a first claim must write to survive the database's
+ * lifecycle trigger. Quiescence starts no earlier than expiry, exactly as
+ * before; the margin is what makes the bound hold at write time rather than at
+ * sweep-start time.
+ */
+function firstPassReclaimNotBefore(now: Date, expiresAt: string): string {
+  const parsedExpiry = Date.parse(expiresAt);
+  const earliest = now.getTime() + UPLOAD_RECLAIM_FIRST_PASS_MARGIN_MS;
+  return new Date(Math.max(
+    earliest,
+    Number.isFinite(parsedExpiry) ? parsedExpiry : earliest,
+  ) + UPLOAD_RECLAIM_QUIESCENCE_MS).toISOString();
+}
+
 export type UploadReservationRow = {
   id: string;
   user_id: string;
@@ -213,6 +243,20 @@ async function transitionReservationState(
     .is('released_at', null)
     .select(RESERVATION_SELECT)
     .maybeSingle();
+  // Every caller only counts a rejected transition, so the database's reason
+  // has to be recorded here or it is lost. A lifecycle trigger that refuses
+  // each claim otherwise looks exactly like a sweep with nothing to do, and
+  // the reclaim backlog ages past its SLO with no failing run to point at.
+  // A null row without an error is an ordinary lost optimistic-concurrency
+  // race and stays silent.
+  if (error) {
+    logBackendWarning('upload_reservation_state_transition_failed', {
+      error,
+      uploadId: row.id,
+      fromStatus: row.finalization_status,
+      toStatus: values.finalization_status ?? row.finalization_status,
+    });
+  }
   return { row: data as UploadReservationRow | null, error };
 }
 
@@ -1110,10 +1154,7 @@ export async function reclaimExpiredUploadReservations(
         // Only proven absence (or a confirmed deletion of an identity-mismatched
         // replacement) may leave the unknown-outcome state. It still takes the
         // ordinary second pass before capacity is released.
-        const reclaimNotBefore = new Date(Math.max(
-          now.getTime() + UPLOAD_RECLAIM_QUIESCENCE_MS,
-          Date.parse(row.expires_at) + UPLOAD_RECLAIM_QUIESCENCE_MS,
-        )).toISOString();
+        const reclaimNotBefore = firstPassReclaimNotBefore(now, row.expires_at);
         const absentClaim = await transitionReservationState(client, row, {
           finalization_status: 'reclaiming',
           ...(row.reclaim_not_before ? {} : { reclaim_not_before: reclaimNotBefore }),
@@ -1168,12 +1209,7 @@ export async function reclaimExpiredUploadReservations(
         }
 
         if (objectAbsent) {
-          const expiresAt = Date.parse(row.expires_at);
-          const reclaimNotBefore = new Date(Math.max(
-            now.getTime() + UPLOAD_RECLAIM_QUIESCENCE_MS,
-            (Number.isFinite(expiresAt) ? expiresAt : now.getTime())
-              + UPLOAD_RECLAIM_QUIESCENCE_MS,
-          )).toISOString();
+          const reclaimNotBefore = firstPassReclaimNotBefore(now, row.expires_at);
           const absentClaim = await transitionReservationState(client, row, {
             finalization_status: 'reclaiming',
             // A quarantined consumed row starts a fresh two-observation gate;
@@ -1278,11 +1314,7 @@ export async function reclaimExpiredUploadReservations(
           continue;
         }
 
-        const expiresAt = Date.parse(row.expires_at);
-        const notBefore = new Date(Math.max(
-          now.getTime() + UPLOAD_RECLAIM_QUIESCENCE_MS,
-          (Number.isFinite(expiresAt) ? expiresAt : now.getTime()) + UPLOAD_RECLAIM_QUIESCENCE_MS,
-        )).toISOString();
+        const notBefore = firstPassReclaimNotBefore(now, row.expires_at);
         const firstClaim = await transitionReservationState(client, row, {
           finalization_status: 'reclaiming',
           // A consumed object re-entering reclaim needs a fresh database-

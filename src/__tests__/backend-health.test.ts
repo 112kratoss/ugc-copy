@@ -320,7 +320,7 @@ describe('collectBackendHealth', () => {
     });
     expect(health.reclaimPolicy).toEqual({
       abandonedReclaimConfigured: false,
-      minimumAppVersion: '0.0.1',
+      minimumAppVersion: '0.0.5',
       abandonedReclaimEffective: false,
     });
     expect(health.catalog.activeModels).toBeGreaterThan(0);
@@ -1510,7 +1510,7 @@ describe('collectBackendHealth', () => {
     await expect(collectBackendHealth(db.client as never)).rejects.toThrow('database unavailable');
   });
 
-  it('reports a configured abandoned-reclaim flag as ineffective below the safe app floor', async () => {
+  it('reports a configured abandoned-reclaim flag as effective at the safe app floor', async () => {
     const db = createClient({
       backend_job_runs: { error: null, data: [] },
       generations: [
@@ -1531,8 +1531,8 @@ describe('collectBackendHealth', () => {
 
     expect(health.reclaimPolicy).toEqual({
       abandonedReclaimConfigured: true,
-      minimumAppVersion: '0.0.1',
-      abandonedReclaimEffective: false,
+      minimumAppVersion: '0.0.5',
+      abandonedReclaimEffective: true,
     });
   });
 
