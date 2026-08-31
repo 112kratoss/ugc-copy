@@ -1,0 +1,29 @@
+{
+  "$comment": [
+    "The expo-updates fingerprints of the binaries currently in users' hands.",
+    "An `eas update` only reaches a build whose fingerprint matches exactly;",
+    "publishing to any other value reports success and reaches zero devices,",
+    "with no error anywhere. scripts/verify-ota-target.mjs compares the working",
+    "tree against this file and refuses to publish on a mismatch.",
+    "",
+    "Update this file in the same commit that ships a new binary, and never to",
+    "silence the preflight — a mismatch means the update cannot land, not that",
+    "the record is stale."
+  ],
+  "targets": {
+    "android": {
+      "fingerprint": "9e59d85d97971636150bdcdf3e23768fac861b22",
+      "appVersion": "0.1.2",
+      "buildNumber": 64,
+      "shipped": "2026-08-31",
+      "tracks": ["production", "alpha"]
+    },
+    "ios": {
+      "fingerprint": "14d16064ff6550cb27c3db31d02b17a7b7960790",
+      "appVersion": "0.1.2",
+      "buildNumber": 46,
+      "shipped": "2026-08-31",
+      "tracks": ["testflight"]
+    }
+  }
+}
