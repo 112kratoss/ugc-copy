@@ -18,6 +18,8 @@ import { ActionSheetHost } from '@/components/action-sheet';
 import { DialogHost } from '@/components/dialog';
 import { OnboardingServerSync } from '@/components/onboarding-server-sync';
 import { OverlayHost } from '@/components/overlay-host';
+import { CriticalUpdateSheet } from '@/components/critical-update-sheet';
+import { useOtaUpdateGate } from '@/lib/use-ota-update-gate';
 import { setUpgradeRequiredHandler } from '@/lib/api-client';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { notificationBadgeQueryKey } from '@/lib/notification-badge';
@@ -107,6 +109,7 @@ function RootLayoutNav() {
           <OnboardingServerSync />
           <StartupCoordinator />
           <UpgradeRequiredCoordinator />
+          <OtaUpdateCoordinator />
           <SafeAreaProvider>
             <ThemeProvider value={navigationTheme}>
               <GestureHandlerRootView style={{ flex: 1 }}>
@@ -288,6 +291,22 @@ function StartupCoordinator() {
     return <View pointerEvents="none" style={{ position: 'absolute', inset: 0, zIndex: 100, backgroundColor: appTheme.colors.background }} />;
   }
   return null;
+}
+
+function OtaUpdateCoordinator() {
+  // Applies a downloaded OTA update when the policy allows, and owns the one
+  // case that is allowed to say so out loud. Everything routine happens with no
+  // UI at all — see lib/app-update-policy for why, and lib/app-activity for
+  // what stops a reload landing in the middle of someone's work.
+  const { applyNow, criticalPromptVisible, dismissPrompt } = useOtaUpdateGate();
+
+  return (
+    <CriticalUpdateSheet
+      onDismiss={dismissPrompt}
+      onRestart={applyNow}
+      visible={criticalPromptVisible}
+    />
+  );
 }
 
 function UpgradeRequiredCoordinator() {

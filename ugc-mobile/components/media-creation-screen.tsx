@@ -28,6 +28,7 @@ import {
   PrimaryButton,
   SecondaryButton,
 } from '@/components/ui';
+import { acquireActivityLock } from '@/lib/app-activity';
 import { showConfirmDialog } from '@/lib/dialog';
 import { useAuth } from '@/lib/auth';
 import { clearPersistedCreationDrafts, loadPersistedCreationDrafts, persistCreationDrafts, remixDraftScope } from '@/lib/creation-draft-resume';
@@ -460,6 +461,22 @@ export function MediaCreationScreen({
   const [draftLoadAttempt, setDraftLoadAttempt] = useState(0);
   const [draftSaveError, setDraftSaveError] = useState<string | null>(null);
   const [isClosing, setIsClosing] = useState(false);
+  // Hold the app "busy" for as long as this screen has work that a restart
+  // would destroy. An OTA update reloads the JS bundle, which is free at a cold
+  // start and ruinous here: the render survives on the server but the screen
+  // watching it does not, since lastPredictionId is component state. An upload
+  // simply restarts from zero. See lib/app-update-policy — busy vetoes every
+  // reload, critical updates included.
+  useEffect(() => {
+    if (!isGenerating && !pollingInterrupted) return;
+    return acquireActivityLock('generation');
+  }, [isGenerating, pollingInterrupted]);
+
+  useEffect(() => {
+    if (!isUploading) return;
+    return acquireActivityLock('upload');
+  }, [isUploading]);
+
   const closingRef = useRef(false);
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resumedRemixRef = useRef(false);

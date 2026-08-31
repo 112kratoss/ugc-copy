@@ -15,6 +15,7 @@ import type { PurchasesPackage } from 'react-native-purchases';
 
 import { AppText, Card, Kicker, Pill, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
 import { GuestMergeBanner } from '@/components/guest-merge-banner';
+import { acquireActivityLock } from '@/lib/app-activity';
 import { useAuth } from '@/lib/auth';
 import {
   canDeviceMakePayments,
@@ -121,6 +122,15 @@ export default function PricingScreen() {
   const [isConfigured, setIsConfigured] = useState(false);
   const [paymentsAllowed, setPaymentsAllowed] = useState(true);
   const [busyProductId, setBusyProductId] = useState<string | null>(null);
+
+  // A reload mid-purchase drops the flow between the store taking payment and
+  // syncMobilePurchase recording it, which is the one window where a restart
+  // can cost someone real money. Busy vetoes every OTA reload — see
+  // lib/app-update-policy.
+  useEffect(() => {
+    if (!busyProductId) return;
+    return acquireActivityLock('purchase');
+  }, [busyProductId]);
   const [notice, setNotice] = useState<string | null>(null);
   const [noticeTone, setNoticeTone] = useState<'success' | 'danger' | 'neutral'>('neutral');
   const [selectedPlanId, setSelectedPlanId] = useState<PricingPlanId>(DEFAULT_MOBILE_PRICING_PLAN_ID);
