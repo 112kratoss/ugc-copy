@@ -8,9 +8,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   authCallback: null as null | ((event: string, session: unknown) => void),
+  clearLocalPush: vi.fn(),
+  clearPersistedSession: vi.fn(),
+  deleteAccount: vi.fn(),
   getSession: vi.fn(),
   profileResolve: null as null | ((profile: { credits: number }) => void),
-  queryClient: { fetchQuery: vi.fn() },
+  queryClient: { clear: vi.fn(), fetchQuery: vi.fn() },
   sessionResolve: null as null | ((result: unknown) => void),
 }));
 
@@ -37,13 +40,24 @@ vi.mock('../lib/env', () => ({
 }));
 
 vi.mock('../lib/api-client', () => ({
+  ApiError: class ApiError extends Error {},
   createApiClient: (options: { getAccessToken: () => Promise<string | null> }) => ({
+    deleteAccount: state.deleteAccount,
     getAccessTokenForTest: options.getAccessToken,
     getProfile: vi.fn(),
   }),
 }));
 
 vi.mock('../lib/feed-installation-id', () => ({ getFeedInstallationId: vi.fn() }));
+vi.mock('../lib/feed-event-queue', () => ({
+  beginShowcaseFeedEventIdentityTransition: () => ({
+    cancel: vi.fn(),
+    commit: vi.fn(),
+  }),
+  configureFeedEventQueue: vi.fn(),
+  flushShowcaseFeedEvents: vi.fn(async () => undefined),
+  restoreShowcaseFeedEvents: vi.fn(async () => undefined),
+}));
 vi.mock('../lib/guest-merge-ticket-storage', () => ({
   readGuestMergeTicket: vi.fn(async () => null),
   storeGuestMergeTicket: vi.fn(async () => undefined),
@@ -54,6 +68,7 @@ vi.mock('../lib/apple-auth', () => ({ signInWithNativeApple: vi.fn() }));
 vi.mock('../lib/google-auth', () => ({ signInWithGoogleOAuth: vi.fn() }));
 vi.mock('../lib/referral-attribution', () => ({ claimPendingReferral: vi.fn(async () => undefined) }));
 vi.mock('../lib/notifications', () => ({
+  clearLocalMobilePushRegistration: state.clearLocalPush,
   registerForMobilePushNotifications: vi.fn(async () => undefined),
   subscribeToMobilePushTokenChanges: vi.fn(() => vi.fn()),
   unregisterMobilePushNotifications: vi.fn(async () => undefined),
@@ -64,7 +79,7 @@ vi.mock('../lib/supabase-auth-recovery', () => ({
   supabaseNetworkFailureMessage: () => 'Network unavailable',
 }));
 vi.mock('../lib/supabase', () => ({
-  clearPersistedSupabaseAuthSession: vi.fn(async () => undefined),
+  clearPersistedSupabaseAuthSession: state.clearPersistedSession,
   initializeSupabaseAuth: vi.fn(async () => undefined),
   isSupabaseConfigured: true,
   supabase: {
@@ -105,6 +120,10 @@ describe('AuthProvider startup performance', () => {
     state.queryClient.fetchQuery.mockImplementation(() => new Promise((resolve) => {
       state.profileResolve = resolve;
     }));
+    state.clearLocalPush.mockReset().mockResolvedValue(undefined);
+    state.clearPersistedSession.mockReset().mockResolvedValue(undefined);
+    state.deleteAccount.mockReset();
+    state.queryClient.clear.mockReset();
   });
 
   it('reveals the persisted user before profile I/O and deduplicates the auth event refresh', async () => {
@@ -153,6 +172,41 @@ describe('AuthProvider startup performance', () => {
       await Promise.resolve();
     });
     expect(latest.current?.credits).toBe(37);
+
+    renderer.act(() => tree?.unmount());
+  });
+
+  it('keeps local push state on a rejected deletion and clears it only after success', async () => {
+    const latest: { current: ReturnType<typeof useAuth> | null } = { current: null };
+    function Probe() {
+      latest.current = useAuth();
+      return React.createElement('probe');
+    }
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<AuthProvider><Probe /></AuthProvider>);
+    });
+    await renderer.act(async () => {
+      await Promise.resolve();
+    });
+    await renderer.act(async () => {
+      state.sessionResolve?.({ data: { session }, error: null });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    state.deleteAccount.mockRejectedValueOnce(new Error('Reauthentication required'));
+    await expect(latest.current?.deleteAccount()).rejects.toThrow('Reauthentication required');
+    expect(state.clearLocalPush).not.toHaveBeenCalled();
+    expect(state.clearPersistedSession).not.toHaveBeenCalled();
+    expect(state.queryClient.clear).not.toHaveBeenCalled();
+
+    state.deleteAccount.mockResolvedValueOnce({ success: true, deleted: true });
+    await expect(latest.current?.deleteAccount()).resolves.toBeUndefined();
+    expect(state.clearLocalPush).toHaveBeenCalledOnce();
+    expect(state.clearPersistedSession).toHaveBeenCalledOnce();
+    expect(state.queryClient.clear).toHaveBeenCalledOnce();
 
     renderer.act(() => tree?.unmount());
   });

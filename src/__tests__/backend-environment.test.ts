@@ -28,6 +28,9 @@ const COMPLETE_ENVIRONMENT = {
   REFERRAL_ATTRIBUTION_HASH_SECRET: 'referral-hash-secret',
   ACCOUNT_IDENTITY_FINGERPRINT_SECRET: 'account-identity-fingerprint-secret',
   APPLE_TEAM_ID: 'TEAM123456',
+  IOS_BUNDLE_ID: 'com.magicbooklet.mobile',
+  APPLE_SIGN_IN_KEY_ID: 'KEY1234567',
+  APPLE_SIGN_IN_PRIVATE_KEY: 'apple-private-key',
   ANDROID_APP_SHA256_FINGERPRINTS: 'AA:BB',
 } satisfies NodeJS.ProcessEnv;
 
@@ -151,6 +154,9 @@ describe('backend environment contract', () => {
     expect(template).toContain('REFERRAL_ATTRIBUTION_HASH_SECRET=');
     expect(template).toContain('ACCOUNT_IDENTITY_FINGERPRINT_SECRET=');
     expect(template).toContain('APPLE_TEAM_ID=');
+    expect(template).toContain('IOS_BUNDLE_ID=');
+    expect(template).toContain('APPLE_SIGN_IN_KEY_ID=');
+    expect(template).toContain('APPLE_SIGN_IN_PRIVATE_KEY=');
     expect(template).toContain('ANDROID_APP_SHA256_FINGERPRINTS=');
     expect(template).toContain('BACKEND_ALERT_DELIVERY_URL=');
     expect(template).toContain('BACKEND_ALERT_DELIVERY_AUTH_HEADER=');

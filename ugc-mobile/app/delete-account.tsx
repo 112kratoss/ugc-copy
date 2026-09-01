@@ -37,6 +37,11 @@ export default function DeleteAccountScreen() {
     } catch (nextError) {
       if (isAccountReauthenticationRequired(nextError)) {
         setNeedsReauthentication(true);
+        if (reauthentication) {
+          setError(nextError instanceof Error
+            ? nextError.message
+            : 'Apple verification did not complete. Continue with Apple again and retry.');
+        }
         setIsDeleting(false);
         return;
       }
@@ -66,7 +71,7 @@ export default function DeleteAccountScreen() {
         <StatusBlock
           tone="danger"
           title="Account was not deleted"
-          body={`${error} Your account is still active; check your connection and try again.`}
+          body={`${error} Your account is still active. You can retry below.`}
         />
       ) : null}
 

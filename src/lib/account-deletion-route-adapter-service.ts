@@ -15,6 +15,10 @@ import {
   executeInitialAccountDeletion,
   markAccountDeletionStage,
 } from '@/lib/account-deletion-service';
+import {
+  AppleAccountDeletionError,
+  authorizeAppleAccountDeletion,
+} from '@/lib/apple-account-deletion-service';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
@@ -22,6 +26,7 @@ const RECENT_AUTH_MAX_AGE_MS = 15 * 60 * 1000;
 const RECENT_AUTH_FUTURE_SKEW_MS = 60 * 1000;
 
 type AccountDeletionDependencies = {
+  authorizeAppleAccountDeletion?: typeof authorizeAppleAccountDeletion;
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
@@ -39,13 +44,44 @@ function hasRecentAuthentication(lastSignInAt: string | undefined, now: Date) {
   return ageMs >= -RECENT_AUTH_FUTURE_SKEW_MS && ageMs <= RECENT_AUTH_MAX_AGE_MS;
 }
 
-async function parseConfirmation(request: Request) {
+async function parseDeletionRequest(request: Request) {
   try {
-    const body = await request.json() as { confirmation?: unknown };
-    return body.confirmation === 'DELETE';
+    const body = await request.json() as {
+      appleAuthorizationCode?: unknown;
+      confirmation?: unknown;
+    };
+    return {
+      appleAuthorizationCode:
+        typeof body.appleAuthorizationCode === 'string'
+          ? body.appleAuthorizationCode
+          : undefined,
+      confirmed: body.confirmation === 'DELETE',
+    };
   } catch {
-    return false;
+    return { appleAuthorizationCode: undefined, confirmed: false };
   }
+}
+
+function getAppleIdentity(user: {
+  identities?: Array<{
+    id?: unknown;
+    identity_data?: Record<string, unknown>;
+    provider?: unknown;
+    provider_id?: unknown;
+  }> | null;
+}) {
+  const identity = user.identities?.find((candidate) => candidate.provider === 'apple');
+  if (!identity) return null;
+  const subjectCandidates = [
+    identity.provider_id,
+    identity.identity_data?.provider_id,
+    identity.identity_data?.sub,
+    identity.id,
+  ];
+  const subject = subjectCandidates.find(
+    (candidate): candidate is string => typeof candidate === 'string' && Boolean(candidate.trim()),
+  );
+  return { subject: subject?.trim() ?? '' };
 }
 
 function getBearerAccessToken(request: Request): string | undefined {
@@ -63,6 +99,8 @@ export async function deleteAccountRouteResponse({
   request: Request;
 }) {
   const resolved = {
+    authorizeAppleAccountDeletion:
+      dependencies?.authorizeAppleAccountDeletion ?? authorizeAppleAccountDeletion,
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
@@ -90,15 +128,28 @@ export async function deleteAccountRouteResponse({
   }
   const { user } = identity.identity;
   const admin = getAdmin();
+  const deletionRequest = await parseDeletionRequest(request);
 
-  if (!await parseConfirmation(request)) {
+  if (!deletionRequest.confirmed) {
     return applyPrivateNoStoreApiResponseHeaders(
       NextResponse.json({ error: 'Type DELETE to confirm permanent account deletion.' }, { status: 400 }),
       request,
     );
   }
 
-  if (!hasRecentAuthentication(user.last_sign_in_at, resolved.now())) {
+  const appleIdentity = getAppleIdentity(user);
+  if (appleIdentity && !deletionRequest.appleAuthorizationCode?.trim()) {
+    return applyPrivateNoStoreApiResponseHeaders(
+      NextResponse.json({
+        error: 'Continue with Apple before permanently deleting your account.',
+        code: 'APPLE_REAUTH_REQUIRED',
+        reauthenticate: true,
+      }, { status: 403 }),
+      request,
+    );
+  }
+
+  if (!appleIdentity && !hasRecentAuthentication(user.last_sign_in_at, resolved.now())) {
     return applyPrivateNoStoreApiResponseHeaders(
       NextResponse.json({
         error: 'Please sign in again before permanently deleting your account.',
@@ -127,6 +178,37 @@ export async function deleteAccountRouteResponse({
       NextResponse.json({ error: 'Account deletion could not be completed. Please try again.' }, { status: 500 }),
       request,
     );
+  }
+
+  if (appleIdentity) {
+    try {
+      await resolved.authorizeAppleAccountDeletion({
+        authorizationCode: deletionRequest.appleAuthorizationCode as string,
+        expectedAppleSubject: appleIdentity.subject,
+      });
+    } catch (error) {
+      if (error instanceof AppleAccountDeletionError) {
+        if (error.status >= 500) {
+          resolved.logError('Apple account deletion authorization failed:', error);
+        }
+        return applyPrivateNoStoreApiResponseHeaders(
+          NextResponse.json({
+            error: error.message,
+            code: error.code,
+            ...(error.reauthenticate ? { reauthenticate: true } : {}),
+          }, { status: error.status }),
+          request,
+        );
+      }
+      resolved.logError('Apple account deletion authorization failed:', error);
+      return applyPrivateNoStoreApiResponseHeaders(
+        NextResponse.json({
+          error: 'Apple account verification is temporarily unavailable. Your account is still active; please try again later.',
+          code: 'APPLE_REVOCATION_UNAVAILABLE',
+        }, { status: 503 }),
+        request,
+      );
+    }
   }
 
   try {

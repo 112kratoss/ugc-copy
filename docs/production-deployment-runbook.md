@@ -60,6 +60,12 @@ and applies a 15-second timeout to the signed Vercel forward.
 - Invite attribution hashing: `REFERRAL_ATTRIBUTION_HASH_SECRET` set to a dedicated long random secret.
 - One-time promotion claim ledger: `ACCOUNT_IDENTITY_FINGERPRINT_SECRET` set to a dedicated long random secret and then never rotated — the digests are durable, and rotation resets the ledger's memory of past welcome-credit claims (the service-role-derived fallback works but ties that memory to the service-role key). Use the same value when running `npm run backfill:welcome-credit-fingerprints`.
 - Verified iOS links: `APPLE_TEAM_ID` and `IOS_BUNDLE_ID`.
+- Sign in with Apple account deletion: `APPLE_SIGN_IN_KEY_ID` and the sensitive
+  `APPLE_SIGN_IN_PRIVATE_KEY` `.p8` value. The backend uses these with
+  `APPLE_TEAM_ID` and `IOS_BUNDLE_ID` to exchange the native one-time code,
+  bind it to the authenticated Apple identity, and revoke Apple authorization
+  before deleting account data. Never expose the private key through a
+  `NEXT_PUBLIC_` or Expo variable.
 - Verified Android links: `ANDROID_APP_SHA256_FINGERPRINTS` and `ANDROID_PACKAGE_NAME`.
 - Release identity: `RELEASE_GIT_SHA` is injected by the production release
   workflow. Do not configure it manually in Vercel.

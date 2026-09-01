@@ -77,6 +77,38 @@
         "credits": 120
       }
     },
+    "deleteAccount": {
+      "method": "DELETE",
+      "path": "/api/account",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "request": {
+        "confirmation": "DELETE",
+        "appleAuthorizationCode": "fresh-one-time-apple-code"
+      },
+      "response": {
+        "success": true,
+        "deleted": true,
+        "cleanupPending": true
+      },
+      "errors": {
+        "appleReauthenticationRequired": {
+          "status": 403,
+          "response": {
+            "error": "Continue with Apple before permanently deleting your account.",
+            "code": "APPLE_REAUTH_REQUIRED",
+            "reauthenticate": true
+          }
+        },
+        "appleVerificationUnavailable": {
+          "status": 503,
+          "response": {
+            "error": "Apple account verification is temporarily unavailable. Your account is still active; please try again later.",
+            "code": "APPLE_REVOCATION_UNAVAILABLE"
+          }
+        }
+      }
+    },
     "listGenerations": {
       "method": "GET",
       "path": "/api/generations",

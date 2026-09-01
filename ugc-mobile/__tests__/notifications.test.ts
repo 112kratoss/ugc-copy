@@ -298,6 +298,18 @@ describe('mobile notifications helper', () => {
     expect(secureStoreMocks.deleteItemAsync).toHaveBeenCalledWith('magicbooklet.mobileNotifications.expoPushToken');
   });
 
+  it('clears only local push state after the backend has deleted the account', async () => {
+    const { clearLocalMobilePushRegistration } = await import('../lib/notifications');
+
+    await clearLocalMobilePushRegistration();
+
+    expect(secureStoreMocks.getItemAsync).not.toHaveBeenCalled();
+    expect(notificationsMocks.unregisterForNotificationsAsync).toHaveBeenCalledTimes(1);
+    expect(secureStoreMocks.deleteItemAsync).toHaveBeenCalledWith(
+      'magicbooklet.mobileNotifications.expoPushToken',
+    );
+  });
+
   it('re-registers the device when Expo rotates the push token', async () => {
     let listener: ((event: { data: string }) => void) | null = null;
     const remove = vi.fn();

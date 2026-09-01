@@ -40,6 +40,7 @@ import {
 import { GENERATION_MODEL_CATALOG_SCHEMA_VERSION } from './generation-model-catalog';
 import { claimPendingReferral } from './referral-attribution';
 import {
+  clearLocalMobilePushRegistration,
   registerForMobilePushNotifications,
   subscribeToMobilePushTokenChanges,
   unregisterMobilePushNotifications,
@@ -670,9 +671,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    await unregisterMobilePushNotifications(api).catch((error) => {
-      console.warn('Could not unregister push notifications before account deletion', error);
-    });
     try {
       await api.deleteAccount('DELETE', appleAuthorizationCode ? { appleAuthorizationCode } : {});
     } catch (error) {
@@ -680,7 +678,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw error;
     }
     feedIdentityTransition?.commit();
-    await clearPersistedSupabaseAuthSession();
+    await Promise.all([
+      clearLocalMobilePushRegistration().catch((error) => {
+        console.warn('Could not clear local push state after account deletion', error);
+      }),
+      clearPersistedSupabaseAuthSession().catch((error) => {
+        console.warn('Could not clear the local auth session after account deletion', error);
+      }),
+      clearGuestMergeTicket().catch((error) => {
+        console.warn('Could not clear the guest merge ticket after account deletion', error);
+      }),
+    ]);
+    queryClient.clear();
     resetAuthState();
     router.replace('/auth');
   };

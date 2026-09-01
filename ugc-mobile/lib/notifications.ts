@@ -246,6 +246,14 @@ export async function unregisterMobilePushNotifications(api: MagicbookletApiClie
     console.error('Failed to unregister mobile push token', error);
   }
 
+  await clearLocalMobilePushRegistration();
+}
+
+export async function clearLocalMobilePushRegistration() {
+  if (!isNativeMobile()) {
+    return;
+  }
+
   await Notifications.unregisterForNotificationsAsync().catch((error) => {
     console.error('Failed to unregister native push notifications', error);
   });

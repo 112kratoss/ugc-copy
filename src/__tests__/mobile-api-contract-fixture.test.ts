@@ -26,6 +26,17 @@ type MobileApiContractFixture = {
   endpoints: Record<string, MobileApiContractEndpoint<unknown>> & {
     appVersion: MobileApiContractEndpoint<AppVersionResponse>;
     mobileUpdateRequired: MobileApiContractEndpoint<MobileCompatibilityErrorResponse>;
+    deleteAccount: MobileApiContractEndpoint<{
+      success: boolean;
+      deleted: boolean;
+      cleanupPending: boolean;
+    }> & {
+      request: { confirmation: 'DELETE'; appleAuthorizationCode: string };
+      errors: {
+        appleReauthenticationRequired: { status: 403; response: { code: string; reauthenticate: true } };
+        appleVerificationUnavailable: { status: 503; response: { code: string } };
+      };
+    };
     mediaUploadIntent: MobileApiContractEndpoint<MediaUploadIntentResponse>;
     mediaReadUrl: MobileApiContractEndpoint<MediaReadUrlResponse>;
     mobileCommerceSync: MobileApiContractEndpoint<MobileCommerceSyncResponse>;
@@ -45,6 +56,7 @@ const expectedEndpointKeys = [
   'mobileUpdateRequired',
   'getProfile',
   'updateProfile',
+  'deleteAccount',
   'listGenerations',
   'archiveGeneration',
   'restoreGeneration',
@@ -139,6 +151,22 @@ describe('shared mobile API v1 contract fixture', () => {
     });
     expect(contract.endpoints.getMarketplaceResourceDetail.path).toBe('/api/marketplace/resources/:resourceId');
     expect(contract.endpoints.getPostResourceBundle.path).toBe('/api/posts/:postId/resource-bundle');
+    expect(contract.endpoints.deleteAccount).toMatchObject({
+      request: {
+        confirmation: 'DELETE',
+        appleAuthorizationCode: 'fresh-one-time-apple-code',
+      },
+      errors: {
+        appleReauthenticationRequired: {
+          status: 403,
+          response: { code: 'APPLE_REAUTH_REQUIRED', reauthenticate: true },
+        },
+        appleVerificationUnavailable: {
+          status: 503,
+          response: { code: 'APPLE_REVOCATION_UNAVAILABLE' },
+        },
+      },
+    });
     expect(Object.entries(contract.endpoints)
       .filter(([, endpoint]) => endpoint.method !== 'GET')
       .every(([, endpoint]) => endpoint.cacheControl === 'private, no-store')).toBe(true);

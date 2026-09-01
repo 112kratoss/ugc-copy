@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import { deleteAccountRouteResponse } from '@/lib/account-deletion-route-adapter-service';
+import { AppleAccountDeletionError } from '@/lib/apple-account-deletion-service';
 
 function request(body: unknown, authorization = 'Bearer token') {
   return new Request('https://magicbooklet.test/api/account', {
@@ -210,6 +211,157 @@ describe('account deletion route', () => {
     await expect(response.json()).resolves.toMatchObject({
       code: 'RECENT_AUTH_REQUIRED',
       reauthenticate: true,
+    });
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('accepts a fresh Apple deletion authorization for a stale Supabase session', async () => {
+    const calls: string[] = [];
+    const authorizeAppleAccountDeletion = vi.fn(async () => {
+      calls.push('authorize-apple');
+    });
+    const rpc = vi.fn(async (name: string) => {
+      calls.push(`rpc:${name}`);
+      if (name !== 'prepare_account_deletion') throw new Error(`Unexpected rpc: ${name}`);
+      return { data: { status: 'already_completed', storage_manifest: {} }, error: null };
+    });
+    const response = await deleteAccountRouteResponse({
+      request: request({
+        confirmation: 'DELETE',
+        appleAuthorizationCode: 'fresh-one-time-apple-code',
+      }),
+      dependencies: {
+        authorizeAppleAccountDeletion,
+        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        createUserClient: (() => ({
+          auth: {
+            getUser: vi.fn(async () => ({
+              data: {
+                user: {
+                  ...authenticatedUser('2026-07-14T10:00:00.000Z'),
+                  identities: [{ provider: 'apple', provider_id: 'apple-user-1' }],
+                },
+              },
+              error: null,
+            })),
+          },
+        })) as never,
+        createServiceClient: (() => ({ rpc })) as never,
+        enforceBackendRateLimit: vi.fn(async () => {
+          calls.push('rate-limit');
+          return {
+            allowed: true,
+            limit: 3,
+            remaining: 2,
+            retryAfterSeconds: 0,
+            resetAt: new Date().toISOString(),
+          };
+        }),
+        invalidateShowcaseFeedCache: vi.fn(),
+        now: () => NOW,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      success: true,
+      deleted: true,
+    });
+    expect(authorizeAppleAccountDeletion).toHaveBeenCalledWith({
+      authorizationCode: 'fresh-one-time-apple-code',
+      expectedAppleSubject: 'apple-user-1',
+    });
+    expect(rpc).toHaveBeenCalledWith('prepare_account_deletion', { p_user_id: USER_ID });
+    expect(calls).toEqual([
+      'rate-limit',
+      'authorize-apple',
+      'rpc:prepare_account_deletion',
+    ]);
+  });
+
+  it('requires Apple authorization even while the Supabase session is recent', async () => {
+    const authorizeAppleAccountDeletion = vi.fn();
+    const rpc = vi.fn();
+    const response = await deleteAccountRouteResponse({
+      request: request({ confirmation: 'DELETE' }),
+      dependencies: {
+        authorizeAppleAccountDeletion,
+        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        createUserClient: (() => ({
+          auth: {
+            getUser: vi.fn(async () => ({
+              data: {
+                user: {
+                  ...authenticatedUser(),
+                  identities: [{
+                    provider: 'apple',
+                    identity_data: { sub: 'apple-user-1' },
+                  }],
+                },
+              },
+              error: null,
+            })),
+          },
+        })) as never,
+        createServiceClient: (() => ({ rpc })) as never,
+        now: () => NOW,
+      },
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'APPLE_REAUTH_REQUIRED',
+      reauthenticate: true,
+    });
+    expect(authorizeAppleAccountDeletion).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('keeps the account intact when Apple authorizes a different identity', async () => {
+    const rpc = vi.fn();
+    const response = await deleteAccountRouteResponse({
+      request: request({
+        confirmation: 'DELETE',
+        appleAuthorizationCode: 'fresh-one-time-apple-code',
+      }),
+      dependencies: {
+        authorizeAppleAccountDeletion: vi.fn(async () => {
+          throw new AppleAccountDeletionError(
+            'You continued with a different Apple account. Your Magicbooklet account was not deleted.',
+            'ACCOUNT_REAUTH_MISMATCH',
+            403,
+            false,
+          );
+        }),
+        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        createUserClient: (() => ({
+          auth: {
+            getUser: vi.fn(async () => ({
+              data: {
+                user: {
+                  ...authenticatedUser(),
+                  identities: [{ provider: 'apple', provider_id: 'apple-user-1' }],
+                },
+              },
+              error: null,
+            })),
+          },
+        })) as never,
+        createServiceClient: (() => ({ rpc })) as never,
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true,
+          limit: 3,
+          remaining: 2,
+          retryAfterSeconds: 0,
+          resetAt: new Date().toISOString(),
+        })),
+        now: () => NOW,
+      },
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'ACCOUNT_REAUTH_MISMATCH',
     });
     expect(rpc).not.toHaveBeenCalled();
   });

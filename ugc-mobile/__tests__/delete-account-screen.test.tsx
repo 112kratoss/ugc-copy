@@ -92,6 +92,36 @@ describe('DeleteAccountScreen reauthentication', () => {
     ]);
   });
 
+  it('shows a recoverable error instead of silently looping after repeated reauthentication', async () => {
+    authState.deleteAccount.mockReset();
+    authState.deleteAccount
+      .mockRejectedValueOnce(Object.assign(new Error('Sign in again.'), {
+        code: 'RECENT_AUTH_REQUIRED',
+      }))
+      .mockRejectedValueOnce(Object.assign(new Error('Apple verification did not complete.'), {
+        code: 'APPLE_REAUTH_REQUIRED',
+      }));
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<DeleteAccountScreen />);
+    });
+
+    await requestInitialDeletion(tree!);
+    await renderer.act(async () => {
+      tree!.root.findByProps({ accessibilityLabel: 'Continue with Apple and delete' }).props.onPress();
+    });
+
+    const status = tree!.root.findByProps({ title: 'Account was not deleted' });
+    expect(status.props).toMatchObject({
+      tone: 'danger',
+      title: 'Account was not deleted',
+    });
+    expect(status.props.body).toContain(
+      'Apple verification did not complete.',
+    );
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Continue with Apple and delete' })).toBeTruthy();
+  });
+
   it('collects the current password inline and continues deletion', async () => {
     authState.accountReauthenticationMethods = ['password'];
     let tree: renderer.ReactTestRenderer | undefined;

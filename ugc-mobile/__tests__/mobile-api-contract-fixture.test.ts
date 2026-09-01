@@ -11,6 +11,7 @@ type ContractEndpoint = {
   auth: string;
   cacheControl: string;
   status?: number;
+  request?: unknown;
   response: unknown;
 };
 const contract = mobileApiContract as { endpoints: Record<ContractEndpointKey, ContractEndpoint> };
@@ -38,6 +39,9 @@ function clientForEndpoint(endpointKey: ContractEndpointKey) {
     const actualMethod = (init?.method ?? 'GET').toUpperCase();
     expect(actualMethod).toBe(endpoint.method);
     expect(matchesPathTemplate(endpoint.path, url.pathname)).toBe(true);
+    if (endpoint.request) {
+      expect(JSON.parse(String(init?.body))).toEqual(endpoint.request);
+    }
     return jsonResponse(endpoint.response, endpoint.status ?? 200);
   });
 
@@ -55,6 +59,12 @@ const successCases: Array<{
   { key: 'appVersion', call: (api) => api.getAppVersion() },
   { key: 'getProfile', call: (api) => api.getProfile() },
   { key: 'updateProfile', call: (api) => api.updateProfile({ displayName: 'Creator One' }) },
+  {
+    key: 'deleteAccount',
+    call: (api) => api.deleteAccount('DELETE', {
+      appleAuthorizationCode: 'fresh-one-time-apple-code',
+    }),
+  },
   { key: 'listGenerations', call: (api) => api.listGenerations(false) },
   { key: 'archiveGeneration', call: (api) => api.archiveGeneration('generation-1') },
   { key: 'restoreGeneration', call: (api) => api.restoreGeneration('generation-1') },
@@ -223,7 +233,6 @@ const extendedOperationCases: Array<{
       occurredAt: '2026-07-14T12:00:00.000Z',
     }),
   },
-  { key: 'deleteAccount', call: (api) => api.deleteAccount('DELETE') },
   { key: 'getReferralOverview', call: (api) => api.getReferralOverview() },
   { key: 'createReferralLink', call: (api) => api.createReferralLink() },
   { key: 'recordReferralVisit', call: (api) => api.recordReferralVisit({ code: 'CREATOR1', source: 'mobile' }) },
