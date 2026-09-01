@@ -9,7 +9,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(20);
+select plan(21);
 
 -- Seller being erased, a buyer who keeps their entitlement, and a second
 -- frozen creator proving live-owner freeze semantics are unchanged.
@@ -86,6 +86,18 @@ insert into public.post_resource_bundle_purchases (
   'b1000000-0000-4000-8000-00000000000b'::uuid,
   100, 10000, 'INR'
 );
+
+-- Comments on the seller's own post: the auth.users BEFORE DELETE trigger
+-- soft-removes the seller's comments and answers with a comment_count
+-- decrement on the frozen post while the auth row still exists -- the chain
+-- behind the second production failure (2026-09-01 18:40 UTC).
+insert into public.post_comments (post_id, user_id, body) values
+  ('f1000000-0000-4000-8000-00000000000f'::uuid,
+   'a1000000-0000-4000-8000-00000000000a'::uuid,
+   'Seller replying under their own post'),
+  ('f1000000-0000-4000-8000-00000000000f'::uuid,
+   'b1000000-0000-4000-8000-00000000000b'::uuid,
+   'Buyer asking a question');
 
 -- Walk the seller's deletion job to the stage the production failure was in.
 select is(
@@ -210,6 +222,12 @@ select is(
      and revision_id is not null),
   1,
   'the buyer keeps a detached purchase pinned to the surviving revision'
+);
+select is(
+  (select count(*)::integer from public.post_comments
+   where post_id = 'f1000000-0000-4000-8000-00000000000f'::uuid),
+  0,
+  'comments on the erased post are gone with it'
 );
 select is(
   (select status from public.account_deletion_jobs
