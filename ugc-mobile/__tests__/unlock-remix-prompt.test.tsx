@@ -50,6 +50,9 @@ vi.mock('lucide-react-native', () => ({
 }));
 
 vi.mock('react-native', () => ({
+  // lib/haptics.ts reads Platform to pick the Android route; without it the
+  // strict mock throws, fire() swallows that, and the haptic below never fires.
+  Platform: { OS: 'ios' },
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   Modal: ({ children, ...props }: MockProps) => React.createElement('modal', props, children),
   Pressable: ({ children, style, ...props }: MockProps) =>
