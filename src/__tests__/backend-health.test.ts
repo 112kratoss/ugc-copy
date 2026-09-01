@@ -1196,7 +1196,7 @@ describe('collectBackendHealth', () => {
     ]));
   });
 
-  it('warns when a scheduled job has repeated recent failures even after recovery', async () => {
+  it('keeps a recovered job at ok while still reporting its failure count', async () => {
     const db = createClient({
       backend_job_runs: {
         error: null,
@@ -1275,13 +1275,116 @@ describe('collectBackendHealth', () => {
 
     const health = await collectBackendHealth(db.client as never, new Date('2026-06-21T10:00:00.000Z'));
 
-    expect(health.status).toBe('warning');
+    // A success newer than every failure means the flap is over. Warning here
+    // would hold the strictly-ok release gate for the whole 48h lookback —
+    // exactly what stranded releases after the 2026-09-01 deletion retries.
+    // (Overall status still reflects registry jobs this fixture leaves
+    // unseeded, so the job-level status carries the assertion.)
     expect(health.jobs.find((job) => job.name === 'generation-completions')).toMatchObject({
-      status: 'warning',
+      status: 'ok',
       recentFailures: 3,
       latestRun: expect.objectContaining({
         status: 'succeeded',
       }),
+    });
+    expect(health.issues.some((issue) => issue.code === 'JOB_RECENT_FAILURES')).toBe(false);
+  });
+
+  it('still warns when repeated failures have no healthy run after them', async () => {
+    const db = createClient({
+      backend_job_runs: {
+        error: null,
+        data: [
+          {
+            job_name: 'media-preview-repair',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:45:00.000Z',
+            finished_at: '2026-06-21T09:45:02.000Z',
+            duration_ms: 2000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
+            job_name: 'mobile-push-receipts',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:50:00.000Z',
+            finished_at: '2026-06-21T09:50:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
+            job_name: 'operational-data-retention',
+            status: 'succeeded',
+            started_at: '2026-06-21T00:50:00.000Z',
+            finished_at: '2026-06-21T00:50:03.000Z',
+            duration_ms: 3000,
+            skip_reason: null,
+            error_message: null,
+          },
+          // Newest run is an unexpected skip, so the job avoids the
+          // latest-run-failed branch while its failure streak is still the
+          // most recent real outcome: not recovered, so the warning stands.
+          {
+            job_name: 'generation-completions',
+            status: 'skipped',
+            started_at: '2026-06-21T09:58:00.000Z',
+            finished_at: '2026-06-21T09:58:01.000Z',
+            duration_ms: 1000,
+            skip_reason: 'lock_contention',
+            error_message: null,
+          },
+          {
+            job_name: 'generation-completions',
+            status: 'failed',
+            started_at: '2026-06-21T09:50:00.000Z',
+            finished_at: '2026-06-21T09:50:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: 'provider timeout',
+          },
+          {
+            job_name: 'generation-completions',
+            status: 'failed',
+            started_at: '2026-06-21T09:45:00.000Z',
+            finished_at: '2026-06-21T09:45:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: 'provider timeout',
+          },
+          {
+            job_name: 'generation-completions',
+            status: 'failed',
+            started_at: '2026-06-21T09:40:00.000Z',
+            finished_at: '2026-06-21T09:40:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: 'provider timeout',
+          },
+          {
+            job_name: 'generation-completions',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:35:00.000Z',
+            finished_at: '2026-06-21T09:35:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
+        ],
+      },
+      generations: [
+        { error: null, data: [] },
+        { error: null, data: [] },
+        { error: null, data: [] },
+      ],
+    });
+
+    const health = await collectBackendHealth(db.client as never, new Date('2026-06-21T10:00:00.000Z'));
+
+    expect(health.status).toBe('warning');
+    expect(health.jobs.find((job) => job.name === 'generation-completions')).toMatchObject({
+      status: 'warning',
+      recentFailures: 3,
     });
     expect(health.issues).toEqual(expect.arrayContaining([
       expect.objectContaining({

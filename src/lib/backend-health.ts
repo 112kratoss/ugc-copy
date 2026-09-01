@@ -481,7 +481,21 @@ function buildJobHealth(
       message: `${job.name} has not succeeded or reported healthy no-work within ${job.healthExpectedMaxAgeMinutes} minutes.`,
     });
   }
-  if (status === 'ok' && recentFailures >= JOB_RECENT_FAILURE_WARNING_COUNT) {
+  // A flap the job has already recovered from must not hold this status (and
+  // the release gate, which requires strictly ok) for the full lookback
+  // window: 2026-09-01's account-deletion retries left releases refused for
+  // two days after the job went green. The failure count stays on the job
+  // payload either way; only an unrecovered failure streak warns.
+  const recoveredSinceLastFailure = Boolean(
+    lastHealthyRun
+    && latestFailure
+    && Date.parse(lastHealthyRun.started_at) > Date.parse(latestFailure.started_at),
+  );
+  if (
+    status === 'ok'
+    && recentFailures >= JOB_RECENT_FAILURE_WARNING_COUNT
+    && !recoveredSinceLastFailure
+  ) {
     status = 'warning';
     issues.push({
       severity: 'warning',
