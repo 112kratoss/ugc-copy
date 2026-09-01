@@ -22,6 +22,7 @@ import {
   AppleAccountDeletionError,
   authorizeAppleAccountDeletion,
 } from '@/lib/apple-account-deletion-service';
+import { getAuthoritativeAuthUserResult } from '@/lib/server-auth-user';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
@@ -139,7 +140,7 @@ export async function deleteAccountRouteResponse({
   // carry sensitive provider data for every request.
   let user;
   try {
-    const { data, error } = await userClient.auth.getUser();
+    const { data, error } = await getAuthoritativeAuthUserResult(userClient);
     if (error || !data.user || data.user.id !== identity.identity.userId) {
       throw error ?? new Error('Authoritative account identity did not match the admitted user.');
     }

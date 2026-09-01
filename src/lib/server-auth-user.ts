@@ -26,3 +26,21 @@ export async function getVerifiedAuthUserResult<TResult extends PromiseLike<{
   }
   return await client.auth.getUser();
 }
+
+/**
+ * Fetch the complete authoritative Auth user even when middleware supplied a
+ * valid identity-admission assertion.
+ *
+ * Most routes should use `getVerifiedAuthUserResult` and reuse the assertion.
+ * This narrower boundary is for operations that need Auth fields intentionally
+ * excluded from it, such as provider identities and `last_sign_in_at` during
+ * permanent account deletion.
+ */
+export async function getAuthoritativeAuthUserResult<TResult extends PromiseLike<{
+  data: { user: User | null };
+  error: unknown;
+}>>(client: {
+  auth: { getUser: () => TResult };
+}): Promise<Awaited<TResult>> {
+  return await client.auth.getUser();
+}
