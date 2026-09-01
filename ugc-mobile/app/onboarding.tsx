@@ -96,6 +96,7 @@ function profileUpdatePayload(profile: ProfileResponse, username: string, displa
 export default function OnboardingScreen() {
   const { api, user, refreshProfile, updateCredits } = useAuth();
   const { state, update, skip, complete } = useOnboarding();
+  const identityDeferredAt = state.identityDeferredAt;
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const reducedMotion = useReducedMotion();
@@ -145,7 +146,7 @@ export default function OnboardingScreen() {
       const destination = resolveOnboardingDestination({
         hasUser: true,
         welcome: nextWelcome,
-        local: state,
+        local: { identityDeferredAt },
       });
       if (destination === 'none') {
         // Nothing outstanding. Reaching here means a deep link or a stale card,
@@ -165,7 +166,11 @@ export default function OnboardingScreen() {
         : 'We could not load your creator setup. Try again, or skip it for now — you can finish from Home.');
       setStage('loading');
     }
-  }, [api, goal, state, update, user]);
+  // Depend only on the local field that affects routing. `update({ goal })`
+  // always refreshes the state's `updatedAt`; depending on the whole state
+  // object made that write recreate this callback, retrigger the effect below,
+  // and hold signed-in creators in an endless profile/Creator Pack fetch loop.
+  }, [api, goal, identityDeferredAt, update, user]);
 
   useEffect(() => {
     // Being signed in is the whole condition. This used to also require
