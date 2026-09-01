@@ -1,15 +1,24 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import { deleteAccountRouteResponse } from '@/lib/account-deletion-route-adapter-service';
 import { AppleAccountDeletionError } from '@/lib/apple-account-deletion-service';
+import {
+  registerIdentityAdmissionContext,
+  signIdentityAdmission,
+} from '@/lib/identity-admission-assertion';
 
-function request(body: unknown, authorization = 'Bearer token') {
+function request(
+  body: unknown,
+  authorization = 'Bearer token',
+  extraHeaders: Record<string, string> = {},
+) {
   return new Request('https://magicbooklet.test/api/account', {
     method: 'DELETE',
     headers: {
       Authorization: authorization,
       'Content-Type': 'application/json',
+      ...extraHeaders,
     },
     body: JSON.stringify(body),
   });
@@ -18,6 +27,10 @@ function request(body: unknown, authorization = 'Bearer token') {
 const RECENT_SIGN_IN = '2026-07-14T12:00:00.000Z';
 const NOW = new Date('2026-07-14T12:05:00.000Z');
 const USER_ID = '87c4b811-7a50-4e1a-9c38-7ab2693c1182';
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 function authenticatedUser(lastSignInAt = RECENT_SIGN_IN) {
   return { id: USER_ID, last_sign_in_at: lastSignInAt };
@@ -277,6 +290,82 @@ describe('account deletion route', () => {
       'authorize-apple',
       'rpc:prepare_account_deletion',
     ]);
+  });
+
+  it('reloads provider identity omitted by the proxy assertion before Apple deletion', async () => {
+    const authorization = 'Bearer middleware-verified-token';
+    const admissionSecret = 'test-identity-admission-secret-at-least-32-bytes';
+    vi.stubEnv('IDENTITY_ADMISSION_SECRET', admissionSecret);
+    const fullAppleUser = {
+      ...authenticatedUser('2026-07-14T10:00:00.000Z'),
+      aud: 'authenticated',
+      role: 'authenticated',
+      email: 'private-relay@example.test',
+      phone: '',
+      is_anonymous: false,
+      app_metadata: { provider: 'apple', providers: ['apple'] },
+      user_metadata: {},
+      created_at: '2026-07-01T00:00:00.000Z',
+      identities: [{
+        id: 'apple-user-1',
+        provider: 'apple',
+        identity_data: { sub: 'apple-user-1' },
+      }],
+    };
+    const assertion = await signIdentityAdmission({
+      authorization,
+      method: 'DELETE',
+      pathname: '/api/account',
+      state: 'active',
+      user: fullAppleUser as never,
+      secret: admissionSecret,
+    });
+    expect(assertion).toBeTruthy();
+
+    const routeRequest = request({
+      confirmation: 'DELETE',
+      appleAuthorizationCode: 'fresh-one-time-apple-code',
+    }, authorization, {
+      'x-magicbooklet-identity-admission': assertion as string,
+    });
+    const getUser = vi.fn(async () => ({
+      data: { user: fullAppleUser },
+      error: null,
+    }));
+    const userClient = { auth: { getUser } };
+    const authorizeAppleAccountDeletion = vi.fn();
+    const rpc = vi.fn(async (name: string) => {
+      if (name !== 'prepare_account_deletion') throw new Error(`Unexpected rpc: ${name}`);
+      return { data: { status: 'already_completed', storage_manifest: {} }, error: null };
+    });
+
+    const response = await deleteAccountRouteResponse({
+      request: routeRequest,
+      dependencies: {
+        authorizeAppleAccountDeletion,
+        createUserClient: ((incomingRequest: Request) => {
+          registerIdentityAdmissionContext(userClient, incomingRequest);
+          return userClient;
+        }) as never,
+        createServiceClient: (() => ({ rpc })) as never,
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true,
+          limit: 3,
+          remaining: 2,
+          retryAfterSeconds: 0,
+          resetAt: new Date().toISOString(),
+        })),
+        invalidateShowcaseFeedCache: vi.fn(),
+        now: () => NOW,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(getUser).toHaveBeenCalledOnce();
+    expect(authorizeAppleAccountDeletion).toHaveBeenCalledWith({
+      authorizationCode: 'fresh-one-time-apple-code',
+      expectedAppleSubject: 'apple-user-1',
+    });
   });
 
   it('requires Apple authorization even while the Supabase session is recent', async () => {

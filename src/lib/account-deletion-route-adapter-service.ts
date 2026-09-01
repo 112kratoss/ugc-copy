@@ -1,4 +1,7 @@
-import { requireRegisteredUser } from '@/lib/account-identity';
+import {
+  IDENTITY_CHECK_UNAVAILABLE,
+  requireRegisteredUser,
+} from '@/lib/account-identity';
 import 'server-only';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
@@ -126,7 +129,32 @@ export async function deleteAccountRouteResponse({
       request,
     );
   }
-  const { user } = identity.identity;
+
+  // `requireRegisteredUser` normally reuses the proxy's signed identity
+  // admission assertion. That assertion deliberately contains only the user
+  // fields needed by the majority of routes; it omits provider identities and
+  // `last_sign_in_at`. Account deletion needs both to choose and verify the
+  // correct reauthentication path, so perform a fresh authoritative Auth
+  // lookup for this destructive operation instead of making that assertion
+  // carry sensitive provider data for every request.
+  let user;
+  try {
+    const { data, error } = await userClient.auth.getUser();
+    if (error || !data.user || data.user.id !== identity.identity.userId) {
+      throw error ?? new Error('Authoritative account identity did not match the admitted user.');
+    }
+    user = data.user;
+  } catch (error) {
+    resolved.logError('Account deletion authoritative identity lookup failed:', error);
+    return applyPrivateNoStoreApiResponseHeaders(
+      NextResponse.json({
+        error: 'Identity verification is temporarily unavailable. Please try again.',
+        code: IDENTITY_CHECK_UNAVAILABLE,
+      }, { status: 503 }),
+      request,
+    );
+  }
+
   const admin = getAdmin();
   const deletionRequest = await parseDeletionRequest(request);
 
