@@ -10,12 +10,7 @@ type AppleFullName = {
   familyName?: string | null;
 };
 
-async function requestNativeAppleCredential() {
-  const isAvailable = await AppleAuthentication.isAvailableAsync();
-  if (!isAvailable) {
-    throw new Error('Apple sign-in is not available on this device.');
-  }
-
+async function performNativeAppleAuthorization() {
   const rawNonce = `${Crypto.randomUUID()}${Crypto.randomUUID()}`.replace(/-/g, '');
   const hashedNonce = await Crypto.digestStringAsync(
     Crypto.CryptoDigestAlgorithm.SHA256,
@@ -40,6 +35,26 @@ async function requestNativeAppleCredential() {
   }
 
   return { authorizationCode, credential, identityToken, rawNonce };
+}
+
+async function requestNativeAppleCredential() {
+  const isAvailable = await AppleAuthentication.isAvailableAsync();
+  if (!isAvailable) {
+    throw new Error('Apple sign-in is not available on this device.');
+  }
+
+  try {
+    return await performNativeAppleAuthorization();
+  } catch (error) {
+    // Account deletion revokes this app's Apple authorization server-side,
+    // and the device's cached credential state learns that only by failing
+    // the next fast-path attempt (or resolving without tokens). A single
+    // fresh attempt runs the full consent flow and succeeds, so the person
+    // sees the sheet again instead of an error banner. A cancel is a
+    // decision, not a failure, and is never retried.
+    if (isAppleAuthCanceled(error)) throw error;
+    return await performNativeAppleAuthorization();
+  }
 }
 
 function cleanNamePart(value: string | null | undefined) {
