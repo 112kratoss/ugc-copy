@@ -9,7 +9,7 @@ import {
   type ShowcaseMasonryUnlock,
 } from './showcase-feed-view-model';
 
-export type HomeFeedChipId = 'for-you' | 'recent' | 'unlocks';
+export type HomeFeedChipId = 'for-you' | 'recent' | 'unlocks' | 'notes';
 
 export interface HomeFeedChip {
   id: HomeFeedChipId;
@@ -24,6 +24,12 @@ export interface HomeFeedChip {
 
 export const HOME_FEED_CHIPS: HomeFeedChip[] = [
   { id: 'for-you', label: 'For You', filters: { sort: 'for-you' } },
+  /**
+   * Posts with writing. The API's `category=text` lane returns text-only posts
+   * and mixed ones (media with a written body) — home is the surface that
+   * renders a body at all, since the Showcase grid drops text-only posts.
+   */
+  { id: 'notes', label: 'Notes', filters: { sort: 'for-you', category: 'text' } },
   { id: 'recent', label: 'Recent', filters: { sort: 'recent' } },
   { id: 'unlocks', label: 'Unlocks', filters: { sort: 'for-you', unlock: 'with-unlock' } },
 ];
