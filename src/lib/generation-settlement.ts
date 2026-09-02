@@ -31,10 +31,12 @@ export async function settleGenerationFailed(
   creditSupabase: SupabaseClient,
   predictionId: string,
   completedAt?: string | null,
+  errorMessage?: string | null,
 ): Promise<'failed' | 'succeeded'> {
   const { data, error } = await creditSupabase.rpc('settle_generation_failed', {
     p_prediction_id: predictionId,
     p_completed_at: completedAt ?? null,
+    p_error_message: errorMessage ?? null,
   });
 
   if (error || !isRecord(data)) {
