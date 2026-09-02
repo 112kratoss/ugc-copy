@@ -10,7 +10,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(33);
+select plan(39);
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
 values (
@@ -147,6 +147,74 @@ select is(
   (select public.settle_generation_failed('task-succeeded') ->> 'status'),
   'already_succeeded',
   'a succeeded generation refuses a late failure settlement'
+);
+
+-- ─── The provider's failure reason is preserved ──────────────────────────────
+--
+-- The reason is the only thing that distinguishes a content-policy rejection
+-- from a provider outage. Each settlement runs as its own statement: a call
+-- made inside the same SELECT that reads the column would be evaluated against
+-- that statement's snapshot and read the pre-update value.
+--
+-- These rows carry cost 0 so they settle without moving the balance that the
+-- assertions above and below pin.
+
+insert into public.generations (id, user_id, prediction_id, status, cost, category, model, prompt, refunded)
+values
+  (
+    '70000000-0000-4000-8000-0000000000f1'::uuid,
+    '00000000-0000-4000-8000-0000000000b1'::uuid,
+    'task-failure-reason',
+    'processing',
+    0,
+    'video',
+    'seedance-2',
+    'a prompt',
+    false
+  ),
+  (
+    '70000000-0000-4000-8000-0000000000f2'::uuid,
+    '00000000-0000-4000-8000-0000000000b1'::uuid,
+    'task-failure-reason-long',
+    'processing',
+    0,
+    'video',
+    'seedance-2',
+    'a prompt',
+    false
+  );
+
+select lives_ok(
+  $$select public.settle_generation_failed('task-failure-reason', null, 'content policy violation')$$,
+  'a failure settles with the provider reason attached'
+);
+
+select is(
+  (select error_message from public.generations where prediction_id = 'task-failure-reason'),
+  'content policy violation',
+  'the provider failure reason is persisted onto the generation'
+);
+
+select lives_ok(
+  $$select public.settle_generation_failed('task-failure-reason', null, '   ')$$,
+  'a replay carrying no usable reason is safe'
+);
+
+select is(
+  (select error_message from public.generations where prediction_id = 'task-failure-reason'),
+  'content policy violation',
+  'a replay carrying no reason does not erase the one already recorded'
+);
+
+select lives_ok(
+  $$select public.settle_generation_failed('task-failure-reason-long', null, repeat('x', 600))$$,
+  'an oversized provider reason does not abort settlement'
+);
+
+select is(
+  (select length(error_message) from public.generations where prediction_id = 'task-failure-reason-long'),
+  500,
+  'an oversized provider reason is truncated rather than rejected'
 );
 
 -- ─── Start-failure settlement ────────────────────────────────────────────────

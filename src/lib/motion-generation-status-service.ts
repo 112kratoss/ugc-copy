@@ -433,6 +433,7 @@ export async function getMotionGenerationStatusForRoute({
         admin,
         predictionId,
         toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+        error,
       );
     }
 

@@ -306,6 +306,7 @@ export async function getImageGenerationStatusForRoute({
         admin,
         predictionId,
         toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+        error,
       );
       if (localGeneration.id && localGeneration.user_id) {
         await resolvedDependencies.notifyGenerationStatus(admin, {

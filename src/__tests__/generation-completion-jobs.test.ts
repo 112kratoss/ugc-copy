@@ -489,7 +489,15 @@ describe('generation completion jobs', () => {
       failed: 1,
     });
 
-    expect(settleGenerationFailed).toHaveBeenCalledWith(creditSupabase, 'task-1');
+    // The reason must say why the generation was abandoned, not echo the retry
+    // explanation ("Generation is still processing."), which as a stored
+    // failure cause would contradict the row it lands on.
+    expect(settleGenerationFailed).toHaveBeenCalledWith(
+      creditSupabase,
+      'task-1',
+      null,
+      'The provider never reported a final result after 5 completion attempts (last status: Generation is still processing.)',
+    );
     expect(supabase.rpc).toHaveBeenNthCalledWith(2, 'finish_generation_completion_job', {
       p_id: 'job-1',
       p_locked_by: 'worker-1',

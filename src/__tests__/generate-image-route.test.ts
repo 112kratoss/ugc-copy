@@ -838,6 +838,7 @@ describe('/api/generate-image route', () => {
     expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('settle_generation_failed', {
       p_prediction_id: 'task-image-live-failed-1',
       p_completed_at: '2026-04-15T10:01:00.000Z',
+      p_error_message: 'provider failure',
     });
     expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith(
       'refund_generation',

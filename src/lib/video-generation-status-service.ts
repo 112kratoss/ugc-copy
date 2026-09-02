@@ -466,6 +466,7 @@ export async function getVideoGenerationStatusForRoute({
           admin,
           predictionId,
           toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+          error,
         );
       }
     } else {
@@ -524,6 +525,7 @@ export async function getVideoGenerationStatusForRoute({
           admin,
           predictionId,
           toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+          error,
         );
       }
     }
