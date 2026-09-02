@@ -19,7 +19,7 @@ import {
   shouldAutoAdvanceHomeSlides,
   showcaseToHomeFeedCard,
 } from '@/lib/home-feed-view-model';
-import { createShowcaseFeedQueryKey } from '@/lib/showcase-feed-query';
+import { createShowcaseFeedQueryKey, getShowcaseFeedPageParams } from '@/lib/showcase-feed-query';
 import type { ShowcaseFeedItem } from '@/lib/types';
 
 function item(overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFeedItem {
@@ -48,9 +48,21 @@ function item(overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFeedItem {
 describe('home feed view model', () => {
   describe('chips', () => {
     it('maps each chip to feed params the API already supports', () => {
-      expect(HOME_FEED_CHIPS.map((chip) => chip.id)).toEqual(['for-you', 'recent', 'unlocks']);
+      expect(HOME_FEED_CHIPS.map((chip) => chip.id)).toEqual(['for-you', 'notes', 'recent', 'unlocks']);
       expect(getHomeFeedChip('recent').filters).toEqual({ sort: 'recent' });
       expect(getHomeFeedChip('unlocks').filters).toEqual({ sort: 'for-you', unlock: 'with-unlock' });
+      expect(getHomeFeedChip('notes').filters).toEqual({ sort: 'for-you', category: 'text' });
+    });
+
+    it('asks the API for the text category on the notes chip and nothing else', () => {
+      // Home is the only client sending `category=text`; the showcase grid has
+      // no text lane, so this is the contract that keeps the chip working.
+      const params = getShowcaseFeedPageParams(getHomeFeedChip('notes').filters);
+
+      expect(params).toMatchObject({ category: 'text', sort: 'for-you' });
+      expect(params).not.toHaveProperty('unlock');
+      expect(params).not.toHaveProperty('resource');
+      expect(params).not.toHaveProperty('tool');
     });
 
     it('falls back to For You for an unknown chip', () => {
