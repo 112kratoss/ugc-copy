@@ -1,10 +1,10 @@
+import { useIsFocused } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { BookOpen, Clock3, Search, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  BackHandler,
   Keyboard,
   Pressable,
   ScrollView,
@@ -36,6 +36,7 @@ import type {
   RecipeSearchResult,
   ShowcaseFeedItem,
 } from '@/lib/types';
+import { useHardwareBack } from '@/lib/use-hardware-back';
 
 const SEARCH_TYPES: Array<{ id: PublicSearchType; label: string }> = [
   { id: 'top', label: 'Top' },
@@ -203,6 +204,7 @@ export function ExploreSearchOverlay({
 }) {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
+  const isFocused = useIsFocused();
   // The floating tab bar stays mounted above this overlay, so the results list
   // needs the same clearance the feed itself uses or the last row never
   // scrolls out from underneath it.
@@ -235,6 +237,12 @@ export function ExploreSearchOverlay({
     onClose();
   }, [onClose]);
 
+  // Android's back key closes the search only while this screen is the one
+  // showing. A result tap pushes the post over the tabs with the search still
+  // open underneath, and an unfocused claim would run ahead of the navigator,
+  // close the search out of sight, and swallow the press meant for the post.
+  useHardwareBack(visible && isFocused, requestClose);
+
   useEffect(() => {
     if (!visible) {
       requestSequence.current += 1;
@@ -243,15 +251,8 @@ export function ExploreSearchOverlay({
     }
     void readSearchHistory().then(setHistory);
     const focusTimer = setTimeout(() => inputRef.current?.focus(), 120);
-    const backSubscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      requestClose();
-      return true;
-    });
-    return () => {
-      clearTimeout(focusTimer);
-      backSubscription.remove();
-    };
-  }, [requestClose, visible]);
+    return () => clearTimeout(focusTimer);
+  }, [visible]);
 
   const runSearch = useCallback(async (cursor: string | null = null) => {
     if (normalizedQuery.length < 2) return;
