@@ -107,6 +107,34 @@ describe('HIG modality — sheets, alerts and the way out', () => {
     expect(broken).toEqual([]);
   });
 
+  it('lets the whole sheet answer the swipe, not only the pill', () => {
+    // Sheets: "People expect to swipe vertically to dismiss a sheet." Nobody
+    // aims for a 4pt strip; they pull the surface they are looking at. A sheet
+    // that only answers on the grabber leaves the gesture dead everywhere it
+    // is most likely to be tried.
+    const pillOnly = files
+      .filter((entry) => entry.name !== 'components/sheet-chrome.tsx')
+      .filter((entry) => entry.source.includes('<SheetGrabber'))
+      .filter((entry) => !entry.source.includes('.contentPanHandlers}'))
+      .map((entry) => entry.name);
+
+    expect(pillOnly).toEqual([]);
+  });
+
+  it('tells every drag when its sheet is shown', () => {
+    // A drag leaves its offset where the finger let go, which is right for the
+    // exit that follows and wrong for the next opening. Four sheets that stay
+    // mounted while closed left `visible` out and reopened part-way down the
+    // screen until a tap on the grabber sprang them back. The option is
+    // required by type now; this keeps a cast or an `any` from quietly
+    // reopening the hole.
+    const silent = files.flatMap((entry) => [...entry.source.matchAll(/useSheetDismissDrag\(\{([^}]*)\}\)/g)]
+      .filter((call) => !/\bvisible\b/.test(call[1]))
+      .map(() => entry.name));
+
+    expect(silent).toEqual([]);
+  });
+
   it('keeps every alert within three buttons', () => {
     // Alerts: "alerts display a title, optional informative text, and up to
     // three buttons". A longer list is a menu, and belongs in an action sheet.

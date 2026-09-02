@@ -1,7 +1,11 @@
+import { Ban, EyeOff, Flag, ShieldAlert, UserRoundX, type LucideIcon } from 'lucide-react-native';
+import { Children, Fragment } from 'react';
 import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
+import { SheetBackdrop, SheetGrabber, SheetPanel, sheetPanelStyle, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { useReducedMotion } from '@/lib/motion';
+import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
 
 export function FeedFeedbackSheet({
@@ -30,7 +34,10 @@ export function FeedFeedbackSheet({
   visible: boolean;
 }) {
   const reducedMotion = useReducedMotion();
-  const drag = useSheetDismissDrag({ onDismiss: onClose });
+  const insets = useSafeAreaInsets();
+  const bottomInset = resolvedBottomInset(insets.bottom);
+  const drag = useSheetDismissDrag({ onDismiss: onClose, visible });
+  const hasSafetyActions = Boolean(onReportContent || onReportUser || onBlockUser);
 
   return (
     <Modal
@@ -40,32 +47,23 @@ export function FeedFeedbackSheet({
       transparent
       visible={visible}
     >
-      <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.58)' }}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Close Showcase preferences"
-          onPress={onClose}
-          style={{ position: 'absolute', inset: 0 }}
-        />
+      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+        <SheetBackdrop drag={drag} label="Close Showcase preferences" onPress={onClose} />
         <SheetPanel
+          {...drag.contentPanHandlers}
           style={[
-            {
-              maxHeight: '84%',
-              borderTopLeftRadius: appTheme.radii.xl,
-              borderTopRightRadius: appTheme.radii.xl,
-              borderCurve: 'continuous',
-              borderWidth: 1,
-              borderBottomWidth: 0,
-              borderColor: appTheme.colors.borderStrong,
-              backgroundColor: appTheme.colors.panel,
-              paddingBottom: 34,
-            },
+            sheetPanelStyle(),
+            { maxHeight: '84%', paddingBottom: Math.max(bottomInset, appTheme.spacing.panel) },
             drag.dragStyle,
           ]}
         >
           <SheetGrabber drag={drag} />
-          <ScrollView showsVerticalScrollIndicator={false}>
-            <View style={{ gap: 5, paddingHorizontal: appTheme.spacing.panel, paddingBottom: appTheme.spacing.gap }}>
+          <ScrollView
+            {...drag.scrollProps}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingHorizontal: appTheme.spacing.panel, gap: appTheme.spacing.gap }}
+          >
+            <View style={{ gap: 4, paddingBottom: 4 }}>
               <Text accessibilityRole="header" numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}>
                 Shape your Showcase
               </Text>
@@ -73,64 +71,75 @@ export function FeedFeedbackSheet({
                 Choose how you want to manage “{postTitle}” or its creator.
               </Text>
             </View>
-            <FeedbackAction
-              body={sessionOnly
-                ? 'Remove this post from your Showcase for this visit.'
-                : 'Remove this post and show fewer recommendations like it.'}
-              label="Not interested"
-              onPress={onNotInterested}
-            />
-            <FeedbackAction
-              body={hideCreatorDisabled
-                ? 'You cannot hide your own creator profile.'
-                : sessionOnly
-                  ? `Remove posts from ${creatorLabel} for this visit.`
-                  : `Remove posts from ${creatorLabel} from your recommendations.`}
-              disabled={hideCreatorDisabled}
-              label={`Hide ${creatorLabel}`}
-              onPress={onHideCreator}
-            />
-            {onReportContent || onReportUser || onBlockUser ? (
-              <Text
-                accessibilityRole="header"
-                style={{
-                  color: appTheme.colors.faint,
-                  ...appTheme.type.caption,
-                  fontWeight: '800',
-                  letterSpacing: 0.8,
-                  paddingHorizontal: appTheme.spacing.panel,
-                  paddingTop: appTheme.spacing.gap,
-                  textTransform: 'uppercase',
-                }}
-              >
-                Safety
-              </Text>
-            ) : null}
-            {onReportContent ? (
+            <ActionGroup>
               <FeedbackAction
-                body="Send this post to the moderation team for review."
-                label="Report content"
-                onPress={onReportContent}
-                tone="danger"
+                body={sessionOnly
+                  ? 'Remove this post from your Showcase for this visit.'
+                  : 'Remove this post and show fewer recommendations like it.'}
+                icon={EyeOff}
+                label="Not interested"
+                onPress={onNotInterested}
               />
-            ) : null}
-            {onReportUser ? (
               <FeedbackAction
-                body={`Report ${creatorLabel} for unsafe or abusive behavior.`}
+                body={hideCreatorDisabled
+                  ? 'You cannot hide your own creator profile.'
+                  : sessionOnly
+                    ? `Remove posts from ${creatorLabel} for this visit.`
+                    : `Remove posts from ${creatorLabel} from your recommendations.`}
                 disabled={hideCreatorDisabled}
-                label="Report user"
-                onPress={onReportUser}
-                tone="danger"
+                icon={UserRoundX}
+                label={`Hide ${creatorLabel}`}
+                onPress={onHideCreator}
               />
-            ) : null}
-            {onBlockUser ? (
-              <FeedbackAction
-                body={`Hide ${creatorLabel}'s content and prevent future follows between you.`}
-                disabled={hideCreatorDisabled}
-                label="Block user"
-                onPress={onBlockUser}
-                tone="danger"
-              />
+            </ActionGroup>
+            {hasSafetyActions ? (
+              <>
+                <Text
+                  accessibilityRole="header"
+                  style={{
+                    color: appTheme.colors.faint,
+                    ...appTheme.type.caption,
+                    fontWeight: '800',
+                    letterSpacing: 0.8,
+                    paddingTop: appTheme.spacing.compact,
+                    paddingHorizontal: 4,
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  Safety
+                </Text>
+                <ActionGroup>
+                  {onReportContent ? (
+                    <FeedbackAction
+                      body="Send this post to the moderation team for review."
+                      icon={Flag}
+                      label="Report content"
+                      onPress={onReportContent}
+                      tone="danger"
+                    />
+                  ) : null}
+                  {onReportUser ? (
+                    <FeedbackAction
+                      body={`Report ${creatorLabel} for unsafe or abusive behavior.`}
+                      disabled={hideCreatorDisabled}
+                      icon={ShieldAlert}
+                      label="Report user"
+                      onPress={onReportUser}
+                      tone="danger"
+                    />
+                  ) : null}
+                  {onBlockUser ? (
+                    <FeedbackAction
+                      body={`Hide ${creatorLabel}'s content and prevent future follows between you.`}
+                      disabled={hideCreatorDisabled}
+                      icon={Ban}
+                      label="Block user"
+                      onPress={onBlockUser}
+                      tone="danger"
+                    />
+                  ) : null}
+                </ActionGroup>
+              </>
             ) : null}
           </ScrollView>
         </SheetPanel>
@@ -139,19 +148,67 @@ export function FeedFeedbackSheet({
   );
 }
 
+// The icon well and the gap after it: the row dividers start where the text
+// does, the way a grouped list keeps its hairlines out of the icon column.
+const ACTION_ICON_WELL = 40;
+const ACTION_ICON_GAP = 14;
+
+/**
+ * Rows in one rounded group, divided by hairlines that begin at the text.
+ *
+ * Grouping is what makes a list of choices read as choices rather than as
+ * paragraphs: the earlier version drew each action as bare bold text over a
+ * caption, which is the shape of an article, not a menu.
+ */
+function ActionGroup({ children }: { children: React.ReactNode }) {
+  const rows = Children.toArray(children);
+
+  return (
+    <View
+      style={{
+        borderRadius: appTheme.radii.lg,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: appTheme.colors.borderSubtle,
+        backgroundColor: appTheme.colors.panelSoft,
+        overflow: 'hidden',
+      }}
+    >
+      {rows.map((row, index) => (
+        <Fragment key={index}>
+          {index > 0 ? (
+            <View
+              style={{
+                height: 1,
+                marginLeft: appTheme.spacing.card + ACTION_ICON_WELL + ACTION_ICON_GAP,
+                backgroundColor: appTheme.colors.border,
+              }}
+            />
+          ) : null}
+          {row}
+        </Fragment>
+      ))}
+    </View>
+  );
+}
+
 function FeedbackAction({
   body,
   disabled = false,
+  icon: Icon,
   label,
   onPress,
   tone = 'default',
 }: {
   body: string;
   disabled?: boolean;
+  icon: LucideIcon;
   label: string;
   onPress: () => void;
   tone?: 'default' | 'danger';
 }) {
+  const danger = tone === 'danger';
+
   return (
     <Pressable
       accessibilityRole="button"
@@ -162,20 +219,35 @@ function FeedbackAction({
       onPress={onPress}
       style={({ pressed }) => ({
         minHeight: 64,
-        justifyContent: 'center',
-        gap: 3,
-        paddingHorizontal: appTheme.spacing.panel,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: ACTION_ICON_GAP,
+        paddingHorizontal: appTheme.spacing.card,
         paddingVertical: appTheme.spacing.gap,
-        backgroundColor: pressed ? appTheme.colors.surface : 'transparent',
+        backgroundColor: pressed ? appTheme.colors.surfaceStrong : 'transparent',
         opacity: disabled ? appTheme.opacity.disabled : 1,
       })}
     >
-      <Text style={{ color: tone === 'danger' ? appTheme.colors.danger : appTheme.colors.text, ...appTheme.type.body, fontWeight: '800' }}>
-        {label}
-      </Text>
-      <Text style={{ color: appTheme.colors.faint, ...appTheme.type.caption }}>
-        {body}
-      </Text>
+      <View
+        style={{
+          width: ACTION_ICON_WELL,
+          height: ACTION_ICON_WELL,
+          borderRadius: ACTION_ICON_WELL / 2,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: danger ? appTheme.semantic.danger.background : appTheme.colors.surfaceStrong,
+        }}
+      >
+        <Icon size={appTheme.icon.default} color={danger ? appTheme.colors.danger : appTheme.colors.textSecondary} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <Text style={{ color: danger ? appTheme.colors.danger : appTheme.colors.text, ...appTheme.type.body, fontWeight: '700' }}>
+          {label}
+        </Text>
+        <Text style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>
+          {body}
+        </Text>
+      </View>
     </Pressable>
   );
 }

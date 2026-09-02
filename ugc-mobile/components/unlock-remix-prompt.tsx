@@ -4,7 +4,7 @@ import { FileText, Lock } from 'lucide-react-native';
 import { useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, Text, View } from 'react-native';
 
-import { SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
+import { SheetBackdrop, SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { useAuth } from '@/lib/auth';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
@@ -83,14 +83,10 @@ export function UnlockRemixPrompt({
       transparent
       visible={visible}
     >
-      <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.62)' }}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Close unlock prompt"
-          onPress={onClose}
-          style={{ position: 'absolute', inset: 0 }}
-        />
+      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+        <SheetBackdrop drag={drag} color="rgba(0,0,0,0.62)" label="Close unlock prompt" onPress={onClose} />
         <SheetPanel
+          {...drag.contentPanHandlers}
           style={[
             {
               borderTopLeftRadius: appTheme.radii.xl,

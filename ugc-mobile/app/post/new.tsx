@@ -10,7 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText, ChoiceChip, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
 import { ComposerMediaLightbox, getComposerMediaLabel } from '@/components/composer-media-lightbox';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
-import { SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
+import { SheetBackdrop, SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { showConfirmDialog } from '@/lib/dialog';
 import { showActionSheet } from '@/lib/action-sheet';
 import { StableMediaImage } from '@/components/media-preview';
@@ -1223,8 +1223,9 @@ function VisibilitySheet({
   return (
     <Modal visible={visible} transparent animationType={reducedMotion ? 'none' : 'fade'} presentationStyle="overFullScreen" onRequestClose={onClose}>
       <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-        <Pressable accessible={false} onPress={onClose} style={{ position: 'absolute', inset: 0, backgroundColor: appTheme.colors.overlayStrong }} />
+        <SheetBackdrop drag={drag} color={appTheme.colors.overlayStrong} onPress={onClose} />
         <SheetPanel
+          {...drag.contentPanHandlers}
           accessibilityViewIsModal
           style={[
             {
@@ -1338,8 +1339,9 @@ function ResourceComposerSheet({
   return (
     <Modal visible={visible} transparent animationType={reducedMotion ? 'none' : 'slide'} presentationStyle="overFullScreen" onRequestClose={onRequestClose}>
       <KeyboardAvoidingArea iosScrollViewAdjustsInsets style={{ justifyContent: 'flex-end' }}>
-        <Pressable accessible={false} onPress={onRequestClose} style={{ position: 'absolute', inset: 0, backgroundColor: appTheme.colors.overlayStrong }} />
+        <SheetBackdrop drag={drag} color={appTheme.colors.overlayStrong} onPress={onRequestClose} />
         <SheetPanel
+          {...drag.contentPanHandlers}
           accessibilityViewIsModal
           style={[
             {
@@ -1374,6 +1376,7 @@ function ResourceComposerSheet({
 
           {mode === 'type' ? (
             <ScrollView
+              {...drag.scrollProps}
               showsVerticalScrollIndicator={false}
               contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: bottomInset + 20, gap: 9 }}
             >
@@ -1408,6 +1411,7 @@ function ResourceComposerSheet({
           ) : card ? (
             <>
               <ScrollView
+                {...drag.scrollProps}
                 automaticallyAdjustKeyboardInsets
                 keyboardShouldPersistTaps="handled"
                 keyboardDismissMode="interactive"

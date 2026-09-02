@@ -165,6 +165,10 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   // The drag rides on top of the slide translation, which is why this one folds
   // the offset into its own transform instead of appending a second one.
   const sheetDrag = useSheetDismissDrag({ onDismiss: onClose, visible });
+  // The scrim thins as the sheet is pulled away, on top of its own entrance.
+  const backdropOpacity = sheetDrag.backdropOpacity && typeof Animated.multiply === 'function'
+    ? Animated.multiply(slide, sheetDrag.backdropOpacity)
+    : slide;
 
 
   const commentsQueryKey = createPostCommentsQueryKey(postId, sort, user?.id);
@@ -758,10 +762,13 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
       }}
     >
       {presentation === 'sheet' ? (
-        <>
+        // The pull-to-dismiss covers the grabber and the title. Not the list,
+        // which keeps its own scrolling, and not the composer, whose field
+        // needs every touch it gets.
+        <View {...sheetDrag.contentPanHandlers}>
           <SheetGrabber drag={sheetDrag} />
           {commentsHeader}
-        </>
+        </View>
       ) : null}
       {list}
       {composer}
@@ -780,7 +787,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
       style={{ justifyContent: presentation === 'sheet' ? 'flex-end' : 'flex-start' }}
     >
       {presentation === 'sheet' ? (
-        <Animated.View style={{ position: 'absolute', inset: 0, opacity: slide }}>
+        <Animated.View style={{ position: 'absolute', inset: 0, opacity: backdropOpacity }}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Close comments"

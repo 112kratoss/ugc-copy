@@ -1,8 +1,9 @@
 import { useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { Linking, Modal, Pressable, ScrollView, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
+import { SheetBackdrop, SheetGrabber, SheetPanel, sheetPanelStyle, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { AppText } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
@@ -19,6 +20,7 @@ import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
 import { immersiveViewerHref, type ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
 import { haptic } from '@/lib/haptics';
+import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
 import type { OwnerPostsResponse } from '@/lib/types';
 import { getViewerActionGroupLabel, getViewerActionLabel, isDestructiveViewerAction } from '@/lib/viewer-actions';
@@ -55,7 +57,9 @@ export function ViewerActionSheet({
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
   const reducedMotion = useReducedMotion();
-  const drag = useSheetDismissDrag({ onDismiss: onClose });
+  const insets = useSafeAreaInsets();
+  const bottomInset = resolvedBottomInset(insets.bottom);
+  const drag = useSheetDismissDrag({ onDismiss: onClose, visible });
   const canModerateCreator = item.sourceType === 'showcase'
     && Boolean(item.creatorId)
     && item.creatorId !== user?.id;
@@ -384,31 +388,18 @@ export function ViewerActionSheet({
 
   return (
     <Modal animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose} transparent visible={visible}>
-      <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.58)' }}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Close media actions"
-          onPress={onClose}
-          style={{ position: 'absolute', inset: 0 }}
-        />
+      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+        <SheetBackdrop drag={drag} label="Close media actions" onPress={onClose} />
         <SheetPanel
+          {...drag.contentPanHandlers}
           style={[
-            {
-              maxHeight: '62%',
-              borderTopLeftRadius: appTheme.radii.xl,
-              borderTopRightRadius: appTheme.radii.xl,
-              borderCurve: 'continuous',
-              borderWidth: 1,
-              borderBottomWidth: 0,
-              borderColor: appTheme.colors.borderStrong,
-              backgroundColor: appTheme.colors.panel,
-              paddingBottom: 34,
-            },
+            sheetPanelStyle(),
+            { maxHeight: '62%', paddingBottom: Math.max(bottomInset, appTheme.spacing.panel) },
             drag.dragStyle,
           ]}
         >
           <SheetGrabber drag={drag} />
-          <ScrollView showsVerticalScrollIndicator={false}>
+          <ScrollView {...drag.scrollProps} showsVerticalScrollIndicator={false}>
             {groupViewerActions(Array.from(new Set(actions))).map((group) => (
               <View key={group.label} style={{ paddingBottom: appTheme.spacing.compact }}>
                 <AppText

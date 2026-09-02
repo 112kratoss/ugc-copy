@@ -44,7 +44,8 @@ describe('S8 — the create menu', () => {
   it('keeps the way out that N2 gave it', () => {
     // A menu dismisses by tapping outside; this one also has a grabber with a
     // real drag and a Close button, and answers Android's back key.
-    expect(menu).toContain('useSheetDismissDrag({ onDismiss: onClose })');
+    expect(menu).toContain('useSheetDismissDrag({ onDismiss: onClose, visible })');
+    expect(menu).toContain('{...drag.contentPanHandlers}');
     expect(menu).toContain('<SheetGrabber drag={drag} />');
     expect(menu).toContain('accessibilityLabel="Close create menu"');
     expect(menu).toContain("BackHandler.addEventListener('hardwareBackPress'");

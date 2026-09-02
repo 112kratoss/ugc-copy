@@ -1,8 +1,10 @@
-import { Modal, Pressable, Text, View } from 'react-native';
+import { Modal, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
+import { SheetBackdrop, SheetGrabber, SheetPanel, sheetPanelStyle, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { PrimaryButton, SecondaryButton } from '@/components/ui';
 import { useReducedMotion } from '@/lib/motion';
+import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
 
 /**
@@ -34,7 +36,9 @@ export function CriticalUpdateSheet({
   visible: boolean;
 }) {
   const reducedMotion = useReducedMotion();
-  const drag = useSheetDismissDrag({ onDismiss });
+  const insets = useSafeAreaInsets();
+  const bottomInset = resolvedBottomInset(insets.bottom);
+  const drag = useSheetDismissDrag({ onDismiss, visible });
 
   return (
     <Modal
@@ -44,25 +48,13 @@ export function CriticalUpdateSheet({
       transparent
       visible={visible}
     >
-      <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.58)' }}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Dismiss the update prompt"
-          onPress={onDismiss}
-          style={{ position: 'absolute', inset: 0 }}
-        />
+      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+        <SheetBackdrop drag={drag} label="Dismiss the update prompt" onPress={onDismiss} />
         <SheetPanel
+          {...drag.contentPanHandlers}
           style={[
-            {
-              borderTopLeftRadius: appTheme.radii.xl,
-              borderTopRightRadius: appTheme.radii.xl,
-              borderCurve: 'continuous',
-              borderWidth: 1,
-              borderBottomWidth: 0,
-              borderColor: appTheme.colors.borderStrong,
-              backgroundColor: appTheme.colors.panel,
-              paddingBottom: 34,
-            },
+            sheetPanelStyle(),
+            { paddingBottom: Math.max(bottomInset, appTheme.spacing.panel) },
             drag.dragStyle,
           ]}
         >

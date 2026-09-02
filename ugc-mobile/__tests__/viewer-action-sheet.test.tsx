@@ -77,6 +77,14 @@ vi.mock('@/components/ui', () => ({
   AppText: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
 }));
 
+vi.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 24, bottom: 24, left: 0, right: 0 }),
+}));
+
+vi.mock('@/lib/safe-area', () => ({
+  resolvedBottomInset: (value: number) => value,
+}));
+
 vi.mock('@/lib/auth', () => ({
   useAuth: () => authState,
 }));

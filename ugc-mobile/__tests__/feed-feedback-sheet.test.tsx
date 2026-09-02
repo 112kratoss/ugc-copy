@@ -30,6 +30,22 @@ vi.mock('@/lib/motion', () => ({
   useReducedMotion: () => false,
 }));
 
+vi.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 24, bottom: 24, left: 0, right: 0 }),
+}));
+
+vi.mock('@/lib/safe-area', () => ({
+  resolvedBottomInset: (value: number) => value,
+}));
+
+vi.mock('lucide-react-native', () => ({
+  Ban: (props: Record<string, unknown>) => React.createElement('ban-icon', props),
+  EyeOff: (props: Record<string, unknown>) => React.createElement('eye-off-icon', props),
+  Flag: (props: Record<string, unknown>) => React.createElement('flag-icon', props),
+  ShieldAlert: (props: Record<string, unknown>) => React.createElement('shield-alert-icon', props),
+  UserRoundX: (props: Record<string, unknown>) => React.createElement('user-round-x-icon', props),
+}));
+
 function pressable(root: renderer.ReactTestInstance, label: string) {
   const match = root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === label)[0];
   if (!match) throw new Error(`Missing pressable ${label}`);

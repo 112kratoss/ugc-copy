@@ -146,11 +146,18 @@ export function HomeSideMenu({
   // it without touching vertical scrolling or taps.
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-  const dragX = useRef(createAnimatedValue(0)).current;
-
-  useEffect(() => {
-    if (visible) dragX?.setValue(0);
-  }, [dragX, visible]);
+  // A brand-new offset for every opening, the way `useSheetDismissDrag` does
+  // it, rather than one value reset in place. Once the native driver has
+  // touched an `Animated.Value` it carries history across the panel's unmount
+  // — a dropped native node, a read-back of its last native value scheduled at
+  // detach, a JS mirror that read-back overwrites later — and a `setValue(0)`
+  // on it while nothing is attached trusts the order those land in. The sheets
+  // reopened one drag-offset too low about one time in five that way.
+  const [opening, setOpening] = useState(() => ({ visible, dragX: createAnimatedValue(0) }));
+  if (opening.visible !== visible) {
+    setOpening({ visible, dragX: visible ? createAnimatedValue(0) : opening.dragX });
+  }
+  const dragX = opening.dragX;
 
   const closeDrag = useMemo(() => PanResponder?.create?.({
     onMoveShouldSetPanResponderCapture: (_event, gesture) => (

@@ -1,9 +1,16 @@
 import { useEffect, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Animated, Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Overlay } from '@/components/overlay-host';
-import { SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
+import {
+  SHEET_BACKDROP_COLOR,
+  SheetGrabber,
+  SheetPanel,
+  sheetPanelStyle,
+  useSheetDismissDrag,
+  useSheetPresentation,
+} from '@/components/sheet-chrome';
 import {
   orderActionSheetActions,
   registerActionSheetPresenter,
@@ -11,6 +18,7 @@ import {
   type ActionSheetRequest,
 } from '@/lib/action-sheet';
 import { haptic } from '@/lib/haptics';
+import { useReducedMotion } from '@/lib/motion';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
 import { useHardwareBack } from '@/lib/use-hardware-back';
@@ -23,61 +31,102 @@ import { useHardwareBack } from '@/lib/use-hardware-back';
  * (a Modal is a separate window on Android), and because a sheet opened from
  * another sheet has to draw above it — a Modal would draw above the overlay,
  * never the other way round.
+ *
+ * The request outlives its answer by one exit animation: `visible` drops the
+ * moment a row is chosen or the sheet is cancelled, and the request is cleared
+ * once the panel has left the screen. A new request arriving mid-exit simply
+ * turns the same surface around.
  */
 export function ActionSheetHost() {
   const [request, setRequest] = useState<ActionSheetRequest | null>(null);
+  const [visible, setVisible] = useState(false);
 
-  useEffect(() => registerActionSheetPresenter(setRequest), []);
+  useEffect(() => registerActionSheetPresenter((next) => {
+    setRequest(next);
+    setVisible(true);
+  }), []);
 
   return (
     <Overlay visible={Boolean(request)}>
-      {request ? <ActionSheetSurface request={request} onDone={() => setRequest(null)} /> : null}
+      {request ? (
+        <ActionSheetSurface
+          request={request}
+          visible={visible}
+          onAnswered={() => setVisible(false)}
+          onExited={() => setRequest((current) => (current === request ? null : current))}
+        />
+      ) : null}
     </Overlay>
   );
 }
 
-function ActionSheetSurface({ request, onDone }: { request: ActionSheetRequest; onDone: () => void }) {
+function ActionSheetSurface({
+  request,
+  visible,
+  onAnswered,
+  onExited,
+}: {
+  request: ActionSheetRequest;
+  visible: boolean;
+  onAnswered: () => void;
+  onExited: () => void;
+}) {
   const insets = useSafeAreaInsets();
+  const reducedMotion = useReducedMotion();
   const bottomInset = resolvedBottomInset(insets.bottom);
   const cancelLabel = request.cancelLabel ?? 'Cancel';
 
   const cancel = () => {
-    onDone();
+    onAnswered();
     request.onCancel?.();
   };
-  const drag = useSheetDismissDrag({ onDismiss: cancel });
+  const drag = useSheetDismissDrag({ onDismiss: cancel, visible });
+  const presentation = useSheetPresentation({ visible, reducedMotion, onExited });
   // An overlay is an ordinary view: unlike a Modal it has no native claim on
   // Android's back key, so it takes one (Modality: always an obvious way out).
-  useHardwareBack(true, cancel);
+  useHardwareBack(visible, cancel);
 
   const choose = (action: ActionSheetAction) => {
-    onDone();
+    onAnswered();
     haptic.light();
     action.onPress?.();
   };
 
+  // The entrance and the drag share one transform entry, and the scrim thins
+  // for both: a JS-driven value beside a native-driven one on the same view
+  // does not compose.
+  const translateY = drag.translateY && typeof presentation.entryTranslateY !== 'number'
+    ? Animated.add(presentation.entryTranslateY, drag.translateY)
+    : presentation.entryTranslateY;
+  const backdropOpacity = drag.backdropOpacity && typeof presentation.backdropProgress !== 'number'
+    ? Animated.multiply(presentation.backdropProgress, drag.backdropOpacity)
+    : presentation.backdropProgress;
+
   return (
-    <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={cancelLabel}
-        onPress={cancel}
-        style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.58)' }}
-      />
+    // Answered once: while the exit plays the rows are still on screen, and a
+    // second tap must not choose again.
+    <View pointerEvents={visible ? 'auto' : 'none'} style={{ flex: 1, justifyContent: 'flex-end' }}>
+      <Animated.View
+        style={{ position: 'absolute', inset: 0, backgroundColor: SHEET_BACKDROP_COLOR, opacity: backdropOpacity }}
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={cancelLabel}
+          onPress={cancel}
+          style={{ flex: 1 }}
+        />
+      </Animated.View>
       <SheetPanel
+        {...drag.contentPanHandlers}
         accessibilityViewIsModal
+        onLayout={presentation.onPanelLayout}
         style={[
+          sheetPanelStyle(),
           {
-            borderTopLeftRadius: appTheme.radii.xl,
-            borderTopRightRadius: appTheme.radii.xl,
-            borderCurve: 'continuous',
-            borderWidth: 1,
-            borderBottomWidth: 0,
-            borderColor: appTheme.colors.borderStrong,
-            backgroundColor: appTheme.colors.panel,
             paddingBottom: Math.max(bottomInset, appTheme.spacing.panel),
+            opacity: presentation.panelOpacity,
+            transform: [{ translateY }],
           },
-          drag.dragStyle,
         ]}
       >
         <SheetGrabber drag={drag} />

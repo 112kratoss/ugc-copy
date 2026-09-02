@@ -33,7 +33,7 @@ import { showConfirmDialog } from '@/lib/dialog';
 import { useAuth } from '@/lib/auth';
 import { clearPersistedCreationDrafts, loadPersistedCreationDrafts, persistCreationDrafts, remixDraftScope } from '@/lib/creation-draft-resume';
 import { createDraftSaveQueue } from '@/lib/draft-save-queue';
-import { SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
+import { SheetBackdrop, SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { trackOnboardingEvent } from '@/lib/onboarding';
@@ -3290,7 +3290,7 @@ function ReferenceDetailsOverlay({
   onRemove: () => void;
 }) {
   const reducedMotion = useReducedMotion();
-  const drag = useSheetDismissDrag({ onDismiss: onClose });
+  const drag = useSheetDismissDrag({ onDismiss: onClose, visible: media !== null });
   const [renameStatus, setRenameStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const renameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -3332,9 +3332,9 @@ function ReferenceDetailsOverlay({
 
   return (
     <Modal visible transparent statusBarTranslucent animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose}>
-      <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.68)' }}>
-        <Pressable accessible={false} onPress={onClose} style={{ position: 'absolute', inset: 0 }} />
-        <SheetPanel accessibilityViewIsModal style={[{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: appTheme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 30, gap: 14 }, drag.dragStyle]}>
+      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+        <SheetBackdrop drag={drag} color="rgba(0,0,0,0.68)" onPress={onClose} />
+        <SheetPanel {...drag.contentPanHandlers} accessibilityViewIsModal style={[{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: appTheme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 30, gap: 14 }, drag.dragStyle]}>
           <SheetGrabber drag={drag} />
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
             <Text style={{ color: appTheme.colors.text, fontSize: 20, fontWeight: '800' }}>Reference details</Text>
@@ -3480,9 +3480,9 @@ function SearchableModelPickerModal({
 
   return (
     <Modal visible={visible} transparent statusBarTranslucent animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose} onDismiss={() => setQuery('')}>
-      <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.7)' }}>
-        <Pressable accessible={false} onPress={onClose} style={{ position: 'absolute', inset: 0 }} />
-        <SheetPanel accessibilityViewIsModal style={[{ height: '78%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: appTheme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 20, gap: 12 }, drag.dragStyle]}>
+      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+        <SheetBackdrop drag={drag} color="rgba(0,0,0,0.7)" onPress={onClose} />
+        <SheetPanel {...drag.contentPanHandlers} accessibilityViewIsModal style={[{ height: '78%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: appTheme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 20, gap: 12 }, drag.dragStyle]}>
           <SheetGrabber drag={drag} />
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <View style={{ flex: 1, gap: 2 }}>
@@ -3497,7 +3497,7 @@ function SearchableModelPickerModal({
             <Search size={18} color={appTheme.colors.muted} />
             <TextInput accessibilityLabel="Search model names" value={query} onChangeText={setQuery} placeholder="Search models" placeholderTextColor={appTheme.colors.faint} autoCapitalize="none" autoCorrect={false} spellCheck={false} returnKeyType="search" clearButtonMode="while-editing" style={{ flex: 1, color: appTheme.colors.text, fontSize: 14, paddingVertical: 12 }} />
           </View>
-          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 8, paddingBottom: 28 }}>
+          <ScrollView {...drag.scrollProps} keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 8, paddingBottom: 28 }}>
             {filteredItems.map((item) => {
               const selected = item.id === value;
               return (
@@ -3576,9 +3576,9 @@ function CreatorParameterSheet({
     : 'Unavailable';
   return (
     <Modal visible={visible} transparent statusBarTranslucent animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose}>
-      <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.7)' }}>
-        <Pressable accessible={false} onPress={onClose} style={{ position: 'absolute', inset: 0 }} />
-        <SheetPanel testID="creator-parameter-sheet" accessibilityViewIsModal style={[{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: appTheme.colors.panel, paddingTop: 6, paddingBottom: bottomInset + 12 }, drag.dragStyle]}>
+      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+        <SheetBackdrop drag={drag} color="rgba(0,0,0,0.7)" onPress={onClose} />
+        <SheetPanel {...drag.contentPanHandlers} testID="creator-parameter-sheet" accessibilityViewIsModal style={[{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: appTheme.colors.panel, paddingTop: 6, paddingBottom: bottomInset + 12 }, drag.dragStyle]}>
           <SheetGrabber drag={drag} />
           <View style={{ paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <View style={{ flex: 1, gap: 2 }}>
@@ -3589,7 +3589,7 @@ function CreatorParameterSheet({
               <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
             </Pressable>
           </View>
-          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 20, gap: 18 }}>
+          <ScrollView {...drag.scrollProps} keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 20, gap: 18 }}>
             {!catalog || !model ? (
               <View style={{ minHeight: 100, alignItems: 'center', justifyContent: 'center', gap: 10 }}>
                 <ActivityIndicator color={appTheme.colors.image} />

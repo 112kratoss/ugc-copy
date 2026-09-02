@@ -63,7 +63,7 @@ export function MagicCreateMenu({
   const panelWidth = Math.min(520, Math.max(0, width - panelInset * 2));
   const actionWidth = Math.max(116, (panelWidth - 52) / 2);
   const reduceMotionEnabled = useReducedMotion();
-  const drag = useSheetDismissDrag({ onDismiss: onClose });
+  const drag = useSheetDismissDrag({ onDismiss: onClose, visible });
   const [rendered, setRendered] = useState(visible);
   const [sheetHeight, setSheetHeight] = useState(0);
   const progress = useRef(createAnimatedValue(visible ? 1 : 0)).current;
@@ -101,9 +101,14 @@ export function MagicCreateMenu({
 
   // The scrim reaches full strength by the time the panel is 60% of the way in, so the sheet
   // settles onto an already-dimmed screen rather than darkening the world as it arrives.
-  const backdropOpacity = progress
+  const entryBackdropOpacity = progress
     ? progress.interpolate({ inputRange: [0, 0.6, 1], outputRange: [0, 0.72, 0.72] })
     : 0.72;
+  // The scrim also thins as the sheet is dragged away, so a pull reads as the
+  // world coming back rather than a panel sliding over a scrim that stays put.
+  const backdropOpacity = progress && drag.backdropOpacity
+    ? Animated.multiply(entryBackdropOpacity, drag.backdropOpacity)
+    : entryBackdropOpacity;
   // No cross-fade: the travel carries the entrance on its own, and fading a moving panel reads
   // as smearing. Opacity is only used to hold the sheet back for the frame before it is measured.
   const sheetOpacity = progress ? (measured ? 1 : 0) : 1;
@@ -144,6 +149,7 @@ export function MagicCreateMenu({
         </AnimatedView>
 
         <AnimatedView
+          {...drag.contentPanHandlers}
           accessibilityViewIsModal
           importantForAccessibility="yes"
           onLayout={(event) => {
@@ -310,3 +316,4 @@ function animateProgress(
     if (finished) onComplete();
   });
 }
+
