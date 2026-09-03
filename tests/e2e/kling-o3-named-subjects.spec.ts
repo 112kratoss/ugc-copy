@@ -129,7 +129,10 @@ test.describe('Kling O3 named subjects', () => {
 
     await nameField.fill('Hero creator');
     // The @handle is derived from the display name and is what the prompt mentions.
-    await expect(page.getByText('@Hero_creator')).toBeVisible();
+    // The handle now shows in two places: the subjects editor's own chip and the
+    // @-mention quick-insert row beside the prompt, which O3 reaches now that its
+    // reference capacity is no longer reported as zero.
+    await expect(page.getByText('@Hero_creator').first()).toBeVisible();
 
     await attachSubjectImages(page, ['hero-front.png', 'hero-side.png']);
 
@@ -153,7 +156,10 @@ test.describe('Kling O3 named subjects', () => {
 
     // The whole group comes back — name, handle, and both images.
     await expect(page.getByPlaceholder('Subject name')).toHaveValue('Hero creator');
-    await expect(page.getByText('@Hero_creator')).toBeVisible();
+    // The handle now shows in two places: the subjects editor's own chip and the
+    // @-mention quick-insert row beside the prompt, which O3 reaches now that its
+    // reference capacity is no longer reported as zero.
+    await expect(page.getByText('@Hero_creator').first()).toBeVisible();
     await expect(page.getByText('2/4 images')).toBeVisible();
   });
 
