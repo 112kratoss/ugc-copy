@@ -142,7 +142,7 @@ describe('getImageGenerationStatusForRoute', () => {
     // service no longer accepts a user client at all, so this is now enforced by
     // the signature rather than by convention.
     expect(adminClient.selects).toEqual([
-      'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, workflow_settings',
+      'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, workflow_settings, error_message',
     ]);
     expect(adminClient.eqs).toEqual([
       { column: 'prediction_id', value: 'task-image-1' },

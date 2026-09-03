@@ -661,7 +661,7 @@ describe('/api/generate-image route', () => {
       startedAtMs: Date.parse('2026-04-15T10:00:00.000Z'),
       estimatedTotalMs: 145_000,
     });
-    expect(currentSupabaseMock.selects).toContain('id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, workflow_settings');
+    expect(currentSupabaseMock.selects).toContain('id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, workflow_settings, error_message');
     expect(currentSupabaseMock.selects).not.toContain('*');
     expect(currentSupabaseMock.eqs).toEqual(expect.arrayContaining([
       { column: 'prediction_id', value: 'task-image-status-1' },

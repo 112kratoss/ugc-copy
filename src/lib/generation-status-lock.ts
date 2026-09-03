@@ -27,7 +27,30 @@ type StoredGenerationStatusRow = {
   model?: string | null;
   created_at?: unknown;
   completed_at?: unknown;
+  error_message?: unknown;
 };
+
+/**
+ * The reason a terminal generation failed, for the status payloads built from a
+ * stored row rather than a live provider response.
+ *
+ * Both payloads below used to hardcode `error: null`, so a generation settled by
+ * the webhook -- which is the normal case, and lands seconds before the client
+ * polls -- reported its failure with no reason attached even when the provider
+ * had given one. Only a failed row surfaces this: nothing else should carry a
+ * reason, and a stale one on a live row would be worse than silence.
+ */
+function readStoredFailureReason(
+  localGeneration: StoredGenerationStatusRow | null | undefined,
+  appStatus: string,
+): string | null {
+  if (appStatus !== 'failed') {
+    return null;
+  }
+
+  const stored = localGeneration?.error_message;
+  return typeof stored === 'string' && stored.trim() ? stored.trim() : null;
+}
 
 export function getGenerationStatusLockName(predictionId: string) {
   return `generation-status:${predictionId}`;
@@ -82,7 +105,7 @@ export function buildLockedGenerationStatusPayload(
   return {
     status: timing.appStatus,
     output: null,
-    error: null,
+    error: readStoredFailureReason(localGeneration, timing.appStatus),
     timing,
     retryAfterMs,
   };
@@ -104,7 +127,7 @@ export function buildFailedGenerationStatusPayload(
   return {
     status: timing.appStatus,
     output: null,
-    error: null,
+    error: readStoredFailureReason(localGeneration, timing.appStatus),
     timing,
   };
 }

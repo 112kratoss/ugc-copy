@@ -39,7 +39,7 @@ import {
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { describeProviderFailure } from '@/lib/provider-failure-messages';
 
-const MOTION_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration';
+const MOTION_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration, error_message';
 
 type MotionStatusGenerationRow = {
   id: string;
@@ -54,6 +54,7 @@ type MotionStatusGenerationRow = {
   creation_mode?: string | null;
   workflow_settings?: unknown;
   duration?: number | null;
+  error_message?: string | null;
 };
 
 export type MotionGenerationStatusDependencies = {

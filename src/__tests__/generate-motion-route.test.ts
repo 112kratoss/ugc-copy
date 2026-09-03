@@ -559,7 +559,7 @@ describe('/api/generate route', () => {
       phaseLabel: 'Generating motion render',
       startedAtMs: Date.parse('2026-04-15T10:00:00.000Z'),
     });
-    expect(currentSupabaseMock.selects).toContain('id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration');
+    expect(currentSupabaseMock.selects).toContain('id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration, error_message');
     expect(currentSupabaseMock.selects).not.toContain('*');
     expect(currentSupabaseMock.eqs).toEqual(expect.arrayContaining([
       { column: 'prediction_id', value: 'task-motion-status-1' },
