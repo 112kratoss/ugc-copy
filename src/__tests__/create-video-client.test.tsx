@@ -174,6 +174,24 @@ vi.mock('@/lib/generation-model-client', async () => {
             capabilities: {},
             inputs: {},
           },
+          {
+            id: 'seedance-2-5',
+            kind: 'video',
+            displayName: 'Seedance 2.5',
+            description: 'Test multimodal video model',
+            controls: [],
+            capabilities: {},
+            inputs: {},
+          },
+          {
+            id: 'wan-2.7',
+            kind: 'video',
+            displayName: 'Wan 2.7',
+            description: 'Test frame-and-reference combining model',
+            controls: [],
+            capabilities: {},
+            inputs: {},
+          },
         ],
       },
       error: null,
@@ -426,6 +444,58 @@ describe('CreateVideoClient Kling video elements', () => {
     expect(screen.getByText(/add at least 2/i)).toBeInTheDocument();
     // The handle chip is derived from the display name for @mentions.
     expect(screen.getAllByText('@Subject_1').length).toBeGreaterThan(0);
+  });
+
+  it('offers Seedance 2.5 reference video and audio slots with nothing attached', async () => {
+    // The reported bug: the model publishes video and audio reference slots that the page
+    // never rendered, because reaching them needed a mode picker that was itself hidden
+    // until you were already in that mode. Every slot is on screen from a fresh session now.
+    render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+
+    expect(await screen.findByText('Video and audio references')).toBeInTheDocument();
+    expect(screen.getByText('Reference videos')).toBeInTheDocument();
+    // The heading and the @-mention row both carry this label.
+    expect(screen.getAllByText('Reusable image references').length).toBeGreaterThan(0);
+    // Frames stay on screen alongside them.
+    expect(screen.getAllByText(/Start Frame/i).length).toBeGreaterThan(0);
+    // And the run is frame-shaped until a reference is attached.
+    expect(screen.getByText(/takes either frames or references/i)).toBeInTheDocument();
+  });
+
+  it('locks the reference group once a Seedance 2.5 frame is attached, and releases it', async () => {
+    // Kie documents first/last frame and multimodal references as mutually exclusive
+    // scenarios for seedance-2-5, so attaching one greys the other rather than hiding it.
+    const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+
+    const referenceGroup = await waitFor(() => {
+      const found = view.container.querySelector('[aria-disabled]');
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(referenceGroup.getAttribute('aria-disabled')).toBe('false');
+
+    const startInput = view.container.querySelector<HTMLInputElement>('#video-start-frame-input');
+    expect(startInput).not.toBeNull();
+    fireEvent.change(startInput!, {
+      target: { files: [new File(['frame-bytes'], 'start.png', { type: 'image/png' })] },
+    });
+
+    await waitFor(() => {
+      const locked = Array.from(view.container.querySelectorAll('[aria-disabled="true"]'));
+      expect(locked.length).toBeGreaterThan(0);
+    });
+    // The slots are still on screen — greyed, not removed.
+    expect(screen.getByText('Reference videos')).toBeInTheDocument();
+    expect(screen.getByText(/cannot combine references with frames/i)).toBeInTheDocument();
+  });
+
+  it('keeps both input groups live for Wan 2.7, which combines them', async () => {
+    // wan/2-7-r2v takes `first_frame` alongside `reference_image` and `reference_video`,
+    // so Wan must never show the either/or copy the exclusive models get.
+    render(<CreateVideoClient prefill={{ model: 'wan-2.7' }} />);
+
+    expect((await screen.findAllByText('Reusable image references')).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/takes either frames or references/i)).toBeNull();
   });
 
   it('submits uploaded Kling video elements with handles', async () => {
