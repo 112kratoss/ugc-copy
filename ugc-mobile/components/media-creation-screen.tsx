@@ -326,6 +326,23 @@ function catalogInputSupported(
   return Boolean(catalogInputSlot(model, draft, key, referenceMode));
 }
 
+/**
+ * True when a model's reference slots sit behind a reference-mode condition, which is what
+ * makes them exclusive with the frame slots.
+ *
+ * Kling's video elements live in a mode with no conditions at all — deliberately, so they
+ * can be attached alongside a start frame, which is what `kling-3.0/video` accepts
+ * (`image_urls` and `kling_elements` in one request). Testing only "does this model have
+ * any reference slot" locked the frames behind them and told the user "one per run".
+ */
+function modeGatedReferenceSlots(model: CreatorCatalogModel | null) {
+  if (!model?.inputModes) return true;
+  return model.inputModes.some((mode) => (
+    (mode.conditions ?? []).length > 0
+    && mode.slots.some((slot) => slot.role === 'reference')
+  ));
+}
+
 function supportsReusableVideoInputs(
   model: CreatorCatalogModel | null,
   draft: VideoCreationDraft,
@@ -684,7 +701,15 @@ export function MediaCreationScreen({
     reconcile<MotionCreationDraft>('motion', catalog.defaults.motion, setMotionDraft);
   }, [catalog]);
 
-  const currentDraft: CreationDraft = activeTool === 'image' ? imageDraft : activeTool === 'video' ? videoDraft : motionDraft;
+  const rawDraft: CreationDraft = activeTool === 'image' ? imageDraft : activeTool === 'video' ? videoDraft : motionDraft;
+  // Nothing selects a reference mode any more — every slot a model declares is on screen
+  // at once — so the field is derived from what is attached before anything reads it.
+  // validateCatalogCreationDraft, the quote and buildCatalogGenerationPayload all key off
+  // it, and normalizedVideoReferenceMode answers 'frames' for a stale value, which drops
+  // every attached reference from the payload without saying so.
+  const currentDraft: CreationDraft = rawDraft.tool === 'video'
+    ? { ...rawDraft, referenceMode: videoDraftReferenceMode(rawDraft) }
+    : rawDraft;
   const currentCatalogModel = useMemo(
     () => catalog ? getCatalogModel(catalog, currentDraft.model) : null,
     [catalog, currentDraft.model]
@@ -2603,6 +2628,7 @@ function VideoCreatorComposer({
   // run cannot use greys out with the reason above it.
   const framesExcludeReferences = supportsFrames
     && supportsReusable
+    && modeGatedReferenceSlots(model)
     && model?.inputs.combineFramesWithReferences !== true;
   const hasFrameAttachment = Boolean(draft.startFrame || draft.endFrame);
   const hasReferenceAttachment = referenceMode === 'elements';
