@@ -811,14 +811,13 @@ export const VIDEO_MODELS = {
                 noVideo: 63,
                 withVideo: 38,
             },
-            // Kie lists 1080p at 114/68.5, but that is a promotional rate: "Limited-Time
-            // 1080P Offer: 28% OFF until Sep 17, 2026 06:00 UTC". These are the
-            // undiscounted rates (114/0.72, 68.5/0.72) rounded up, so the tier keeps
-            // billing correctly once the offer lapses. The 480p and 720p rates carry no
-            // discount and match Kie exactly.
+            // Every rate here is Kie's listed price, passed through. 1080p currently
+            // carries a "Limited-Time 1080P Offer: 28% OFF until Sep 17, 2026 06:00 UTC"
+            // — when that lapses Kie's listed price rises and this tier must be re-read
+            // from the model page, because nothing here derives it.
             '1080p': {
-                noVideo: 159,
-                withVideo: 96,
+                noVideo: 114,
+                withVideo: 68.5,
             },
         },
     },
@@ -868,9 +867,11 @@ export const VIDEO_MODELS = {
         modeOptions: [] as const,
         // The provider spells these with an uppercase P; the value is sent verbatim.
         resolutions: ['768P', '2K'] as const,
+        // Kie's listed rate. Their "Pricing is 50% of the official price" line is a
+        // standing discount against MiniMax's own API, not a dated offer.
         pricing: {
-            '768P': 16,
-            '2K': 26,
+            '768P': 8,
+            '2K': 13,
         },
     },
 } as const;

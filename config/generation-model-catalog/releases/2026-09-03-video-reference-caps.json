@@ -303,12 +303,12 @@
           "noReference": {
             "480p": 28,
             "720p": 63,
-            "1080p": 159
+            "1080p": 114
           },
           "withReference": {
             "480p": 17,
             "720p": 38,
-            "1080p": 96
+            "1080p": 68.5
           }
         }
       },
@@ -601,8 +601,8 @@
               }
             ],
             "table": {
-              "768P": 16,
-              "2K": 26
+              "768P": 8,
+              "2K": 13
             }
           }
         },
@@ -715,7 +715,7 @@
         "duration": 10
       },
       "inputs": [],
-      "expectedCredits": 1590
+      "expectedCredits": 1140
     },
     {
       "modelId": "seedance-2-5",
@@ -724,7 +724,7 @@
         "duration": 4
       },
       "inputs": [],
-      "expectedCredits": 636
+      "expectedCredits": 456
     },
     {
       "modelId": "seedance-2-5",
@@ -739,7 +739,7 @@
           "durationSeconds": 5
         }
       ],
-      "expectedCredits": 1440
+      "expectedCredits": 1028
     }
   ]
 }

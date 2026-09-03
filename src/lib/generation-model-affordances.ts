@@ -61,7 +61,6 @@ export type VideoInputAffordances = {
   preparedAssets: { voices: number; characters: number } | null;
   /** Condition-filtered constraints; their `message` is the copy the UI should show. */
   activeConstraints: CatalogInputConstraint[];
-  modeControlLabel: string | null;
   /** True when these values came from the descriptor rather than the fallback tables. */
   descriptorDriven: boolean;
 };
@@ -179,7 +178,6 @@ function legacyFallbackAffordances(
     namedVideoElements: { enabled: isKling, max: isKling ? references.videos : 0 },
     preparedAssets: modelId === 'gemini-omni-video' ? { voices: 3, characters: 3 } : null,
     activeConstraints: [],
-    modeControlLabel: null,
     descriptorDriven: false,
   };
 }
@@ -283,7 +281,6 @@ export function getVideoInputAffordances(
         }
       : null,
     activeConstraints,
-    modeControlLabel: descriptor.controls.find((control) => control.key === 'mode')?.label ?? null,
     descriptorDriven: true,
   };
 }
