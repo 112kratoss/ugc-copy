@@ -339,12 +339,12 @@ describe('CreateVideoClient Kling video elements', () => {
   it('persists image elements on upload and removal without prompt-rerender rewrites', async () => {
     const view = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
 
-    await screen.findByText('Reference mode');
-    fireEvent.click(screen.getByRole('button', { name: /Reusable references/i }));
-
     const file = new File(['image-bytes'], 'video-element.png', { type: 'image/png' });
-    const input = view.container.querySelector<HTMLInputElement>('input[type="file"][accept="image/*"][multiple]');
-    expect(input).not.toBeNull();
+    const input = await waitFor(() => {
+      const found = view.container.querySelector<HTMLInputElement>('input[type="file"][accept="image/*"][multiple]');
+      expect(found).not.toBeNull();
+      return found;
+    });
     fireEvent.change(input!, { target: { files: [file] } });
 
     await waitFor(() => {
@@ -412,7 +412,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
     expect(await screen.findByDisplayValue('Hero creator')).toBeInTheDocument();
     expect(screen.getByText('2/4 images')).toBeInTheDocument();
-    expect(screen.getByText('@Hero_creator')).toBeInTheDocument();
+    expect(screen.getAllByText('@Hero_creator').length).toBeGreaterThan(0);
   });
 
   it('shows the named-subjects editor only for Kling O3 and enforces the image range', async () => {
@@ -425,7 +425,7 @@ describe('CreateVideoClient Kling video elements', () => {
     // One subject with zero images is below the 2-image floor.
     expect(screen.getByText(/add at least 2/i)).toBeInTheDocument();
     // The handle chip is derived from the display name for @mentions.
-    expect(screen.getByText('@Subject_1')).toBeInTheDocument();
+    expect(screen.getAllByText('@Subject_1').length).toBeGreaterThan(0);
   });
 
   it('submits uploaded Kling video elements with handles', async () => {

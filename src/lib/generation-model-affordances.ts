@@ -32,8 +32,17 @@ export type AffordanceSettings = {
 export type VideoInputAffordances = {
   /** Which reference mode the descriptor actually honours for these settings. */
   activeMode: 'frames' | 'elements';
-  /** True when the model offers both frame slots and reusable references. */
-  hasModePicker: boolean;
+  /**
+   * True when the provider cannot take frames and references in the same request, so the
+   * two groups must disable each other rather than both accept attachments.
+   *
+   * Kie splits three ways here. Seedance sends every field to one endpoint but documents
+   * frames and references as mutually exclusive scenarios; minimax-h3 and kling-o3 pick a
+   * different endpoint per shape, so their reference endpoints have no frame field at all;
+   * wan-2.7's r2v endpoint genuinely takes `first_frame` alongside `reference_image` and
+   * `reference_video`. Only the last of those may show both groups live at once.
+   */
+  framesExcludeReferences: boolean;
   elements: {
     enabled: boolean;
     /** Total reference images that may be attached. */
@@ -145,7 +154,7 @@ function legacyFallbackAffordances(
     : 'frames';
   return {
     activeMode,
-    hasModePicker: support.enabled && modelId !== 'gemini-omni-video',
+    framesExcludeReferences: support.enabled && modelId !== 'gemini-omni-video' && modelId !== 'wan-2.7',
     elements: {
       enabled: support.enabled,
       maxTotal: support.maxElements,
@@ -202,10 +211,17 @@ export function getVideoInputAffordances(
   conditionSettings.referenceMode = activeMode;
 
   const active = activeSlots(descriptor, conditionSettings);
-  const imageSlot = active.get('imageReferences');
+  // Reference capacity is reported for the mode that can hold references, not the mode
+  // currently showing. Reading it off `active` made the answer depend on the very toggle
+  // it gated: the references mode could only be entered from a control that was hidden
+  // until you were already in it, so every model with a frames/references split reported
+  // zero reference capacity forever. Everything else here still keys off `active`, so
+  // Veo's mode gating and the multi-shot block continue to apply.
+  const reachable = activeSlots(descriptor, { ...conditionSettings, referenceMode: 'elements' });
+  const imageSlot = reachable.get('imageReferences');
   const declaredImageSlot = declared.get('imageReferences');
-  const videoSlot = active.get('videoReferences');
-  const audioSlot = active.get('audioReferences');
+  const videoSlot = reachable.get('videoReferences');
+  const audioSlot = reachable.get('audioReferences');
   const videoElementSlot = active.get('videoElements');
   // Frame slots report DECLARED capability, not activation: callers combine them with
   // `activeMode`/`combineFramesWithReferences` themselves, and a model does not stop
@@ -234,7 +250,9 @@ export function getVideoInputAffordances(
 
   return {
     activeMode,
-    hasModePicker: frameSlotsDeclared && referenceSlotDeclared,
+    framesExcludeReferences: frameSlotsDeclared
+      && referenceSlotDeclared
+      && descriptor.inputs.combineFramesWithReferences !== true,
     elements: {
       enabled: elementsEnabled,
       maxTotal,
