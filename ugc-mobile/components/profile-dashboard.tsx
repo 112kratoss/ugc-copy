@@ -1351,13 +1351,17 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
 }
 
 function ProfileGalleryPreview({ item, height }: { item: ProfileMediaCard; height: number }) {
+  // `previewState` is the whole answer to what a tile draws, so the tile does
+  // not second-guess it. It used to fall through to "any image card can paint
+  // its own media", which reached past a state that had already decided
+  // otherwise: a creation whose poster job failed would pull its full-size
+  // original into a grid cell, which is the egress the 720px derivative exists
+  // to avoid. Where there is no poster there is a plate.
   const previewMediaUrl = item.previewState === 'videoPoster'
     ? item.previewUrl
     : item.previewState === 'image'
       ? item.previewUrl ?? item.mediaUrl
-      : item.mediaKind === 'image'
-        ? item.previewUrl ?? item.mediaUrl
-        : null;
+      : null;
   if (previewMediaUrl) {
     return (
       <View style={{ width: '100%', height, overflow: 'hidden', backgroundColor: '#090914' }}>

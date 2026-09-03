@@ -37,6 +37,7 @@ import {
   withProviderModel,
 } from '@/lib/provider-fetch';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
+import { summarizeMediaToolError } from '@/lib/media-tool-error';
 
 const MOTION_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration';
 
@@ -194,9 +195,7 @@ async function persistMotionOutput({
         });
       } catch (posterError) {
         logBackendError('failed_to_create_motion_generation_preview_poster', { error: posterError });
-        previewError = posterError instanceof Error
-          ? posterError.message.slice(0, 500)
-          : 'Preview generation failed.';
+        previewError = summarizeMediaToolError(posterError, 'Preview generation failed.');
       }
       previewUrl = preview?.previewStoragePath ?? null;
       previewThumbhash = preview?.previewThumbhash ?? null;

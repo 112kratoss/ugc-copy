@@ -34,6 +34,26 @@ export function changeViewerPage(position: ViewerPosition, itemId: string, pageK
   return { ...position, pageKey, mediaPageKey: pageKey === 'details' ? position.mediaPageKey : pageKey };
 }
 
+/**
+ * Whether the details page is currently *covering* something.
+ *
+ * The reel answers an open details page by freezing its vertical scroll and
+ * hiding its own back arrow, on the understanding that the page draws its own
+ * way back to the media underneath. That bargain only holds while there is
+ * something underneath. `buildImmersiveSlidePages` now guarantees a
+ * non-details first page for every slide, so this is a guard rather than a
+ * live case -- but the cost of getting it wrong is a reader locked into a
+ * screen with no scroll, no back arrow and no header button, so the reel
+ * checks instead of assuming.
+ */
+export function isDetailsPageCovering(
+  item: ImmersivePreviewItem | undefined,
+  position: ViewerPosition | null
+) {
+  if (!item || !position || position.pageKey !== 'details' || position.itemId !== item.id) return false;
+  return buildImmersiveSlidePages(item).some((page) => page.type !== 'details');
+}
+
 export function settleViewerItem(position: ViewerPosition | null, item: ImmersivePreviewItem) {
   return position?.itemId === item.id ? position : initialViewerPosition(item);
 }

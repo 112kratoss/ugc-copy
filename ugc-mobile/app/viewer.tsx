@@ -25,6 +25,7 @@ import { env } from '@/lib/env';
 import { TopScrim } from '@/components/top-scrim';
 import {
   getImmersiveInitialIndex,
+  getImmersiveStatusSlide,
   hasImmersiveAudibleMedia,
   hasImmersiveDetailsPage,
   immersiveViewerReturnPath,
@@ -104,7 +105,7 @@ import {
 import type { PostLifecycleVisibility } from '@/lib/post-lifecycle-policy';
 import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
 import { verticalHitSlop } from '@/lib/hit-target';
-import { changeViewerPage, resolveViewerPosition, settleViewerItem, slidePageKey, type ViewerPosition } from '@/lib/viewer-position';
+import { changeViewerPage, isDetailsPageCovering, resolveViewerPosition, settleViewerItem, slidePageKey, type ViewerPosition } from '@/lib/viewer-position';
 
 /** The creator byline reads as a single line of text; its reach is widened rather than its height. */
 const CREATOR_ROW_HEIGHT = 34;
@@ -224,7 +225,7 @@ export default function ImmersivePreviewViewerScreen() {
   }), [profileQuery.data, user]);
 
   const items = useMemo(() => {
-    const builtItems = buildViewerItems(source, sourceQuery.data, ownerInfo);
+    const builtItems = buildViewerItems(source, sourceQuery.data, ownerInfo, initialId);
     if (user || source !== 'showcase-feed') return builtItems;
 
     const visiblePostIds = new Set(
@@ -234,7 +235,7 @@ export default function ImmersivePreviewViewerScreen() {
     return builtItems.filter((item) => (
       !item.showcasePostId || visiblePostIds.has(item.showcasePostId)
     ));
-  }, [source, sourceQuery.data, ownerInfo, user]);
+  }, [source, sourceQuery.data, ownerInfo, initialId, user]);
   const openCreatorProfile = useCallback((item: ImmersivePreviewItem) => {
     if (!item.creatorUsername) return;
     router.push(`/creators/${encodeURIComponent(item.creatorUsername)}` as never);
@@ -245,7 +246,7 @@ export default function ImmersivePreviewViewerScreen() {
     [items, savedPosition, initialId]
   );
   const activeIndex = Math.max(0, items.findIndex((item) => item.id === position?.itemId));
-  const detailsPageOpenItemId = position?.pageKey === 'details' ? position.itemId : null;
+  const detailsPageOpenItemId = isDetailsPageCovering(items[activeIndex], position) ? position?.itemId ?? null : null;
   const setActiveIndex = useCallback((next: number | ((current: number) => number)) => {
     setSavedPosition((saved) => {
       const current = resolveViewerPosition(items, saved, initialId);
@@ -1791,6 +1792,8 @@ function MediaSlidePage({
         />
       ) : page.type === 'text' ? (
         <TextSlide item={item} width={width} height={height} />
+      ) : page.type === 'status' ? (
+        <StatusSlide item={item} width={width} height={height} />
       ) : (
         <ImmersiveMedia
           mediaItem={page.mediaItem}
@@ -2081,6 +2084,47 @@ function ActiveVideo({
         />
         {!isPlaying && hasFrame && !hasError ? <ViewerPlayBadge /> : null}
       </DoubleTapPressable>
+    </View>
+  );
+}
+
+/**
+ * The page a creation with nothing to play sits on. Same plate as `TextSlide`
+ * -- this is the reel's way of drawing a slide that is words rather than media
+ * -- tinted by whether the run failed or is simply not finished.
+ */
+function StatusSlide({ item, width, height }: { item: ImmersivePreviewItem; width: number; height: number }) {
+  const { title, body } = getImmersiveStatusSlide(item);
+  const tone = item.runStatus === 'failed' ? appTheme.semantic.danger : appTheme.semantic.info;
+
+  return (
+    <View
+      style={{ width, height, justifyContent: 'center', paddingLeft: 22, paddingRight: 90, paddingBottom: 120, backgroundColor: appTheme.colors.app }}
+    >
+      <View style={{ borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.border, backgroundColor: appTheme.colors.panel, padding: 20, gap: 13, overflow: 'hidden' }}>
+        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, backgroundColor: tone.foreground }} />
+        <View
+          style={{
+            alignSelf: 'flex-start',
+            borderRadius: 999,
+            backgroundColor: tone.background,
+            borderWidth: 1,
+            borderColor: tone.border,
+            paddingHorizontal: 11,
+            paddingVertical: 6,
+          }}
+        >
+          <Text numberOfLines={1} style={{ color: tone.foreground, fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
+            {item.badge}
+          </Text>
+        </View>
+        <Text numberOfLines={3} style={{ color: '#fff', fontSize: 25, lineHeight: 31, fontWeight: '800' }}>
+          {title}
+        </Text>
+        <Text numberOfLines={6} style={{ color: appTheme.colors.textSecondary, fontSize: 16, lineHeight: 23 }}>
+          {body}
+        </Text>
+      </View>
     </View>
   );
 }

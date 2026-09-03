@@ -110,6 +110,7 @@ import {
   type CatalogGenerationShot,
   type GenericGenerationAdapterOperation,
 } from '@/lib/generation-model-adapters';
+import { summarizeMediaToolError } from '@/lib/media-tool-error';
 
 const PROVIDER_TASK_ATTACH_ATTEMPTS = 3;
 
@@ -1319,7 +1320,7 @@ async function createGenerationPreviewQuietly({
       previewUrl: null,
       previewThumbhash: null,
       previewStatus: 'failed' as const,
-      previewError: error instanceof Error ? error.message.slice(0, 500) : 'Preview generation failed.',
+      previewError: summarizeMediaToolError(error, 'Preview generation failed.'),
     };
   }
 }
@@ -1380,7 +1381,10 @@ export async function persistGeneratedOutput(
         supabase,
       });
 
-      return settleGenerationSucceeded(settlementSupabase, {
+      // Awaited so the staged file outlives the settle. Same trap as
+      // `createVideoPosterBuffer`: a bare `return` completes the try block
+      // immediately and lets the `finally` cleanup run alongside the work.
+      return await settleGenerationSucceeded(settlementSupabase, {
         predictionId: generation.prediction_id!,
         outputUrl: storagePath,
         previewUrl: preview.previewUrl,
@@ -1470,7 +1474,7 @@ export async function persistGeneratedOutputList(
           previewUrl: null,
           previewThumbhash: null,
           previewStatus: 'failed',
-          previewError: error instanceof Error ? error.message.slice(0, 500) : 'Preview generation failed.',
+          previewError: summarizeMediaToolError(error, 'Preview generation failed.'),
         };
       }
     }

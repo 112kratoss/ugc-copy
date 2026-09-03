@@ -29,7 +29,14 @@ export async function createVideoPosterBuffer(body: Blob) {
       Readable.fromWeb(body.stream() as NodeReadableStream<Uint8Array>),
       createWriteStream(inputPath, { flags: 'wx' }),
     );
-    return createVideoPosterBufferFromFile(inputPath);
+    // `await`, not a bare `return`. A `finally` runs when its `try` block
+    // *completes*, and `return someAsyncCall()` completes the block the moment
+    // the call is made rather than when its promise settles -- so the cleanup
+    // below used to delete this directory while ffmpeg was still starting up on
+    // the file inside it. ffmpeg answered `AVERROR(ENOENT)`, which leaves exit
+    // code 254, and three of those retired the row for good: a finished video
+    // permanently without a poster.
+    return await createVideoPosterBufferFromFile(inputPath);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -47,7 +54,9 @@ export async function createVideoPosterBufferFromFile(inputPath: string) {
     }
 
     const frame = await readFile(framePath);
-    return sharp(frame)
+    // Awaited for the same reason as above: the encode has to finish inside the
+    // lifetime of the directory the frame was written to.
+    return await sharp(frame)
       .rotate()
       .resize({
         width: PREVIEW_MAX_SIZE,

@@ -114,6 +114,46 @@ describe('immersive slide pages', () => {
     expect(buildImmersiveSlidePages(generation).map((page) => page.type)).toEqual(['media', 'details']);
   });
 
+  it('gives a media-less generation a status page so details is never the only page', () => {
+    // A details-only slide is a trap: the reel treats an open details page as
+    // an overlay, freezing its scroll and hiding its back arrow on the promise
+    // that there is media underneath to return to.
+    const failed = item({
+      source: 'studio-creations',
+      sourceType: 'generation',
+      showcasePostId: null,
+      generationId: 'gen-failed',
+      mediaUrl: null,
+      mediaKind: null,
+      mediaItems: [],
+      runStatus: 'failed',
+    });
+
+    expect(buildImmersiveSlidePages(failed).map((page) => page.type)).toEqual(['status', 'details']);
+    expect(getImmersiveSlideHint({ item: failed, pages: buildImmersiveSlidePages(failed), currentHorizontalIndex: 0 }))
+      .toBe('Swipe left for details');
+  });
+
+  it('never opens a slide on its own details page', () => {
+    // The invariant behind the reel freezing its scroll and hiding its back
+    // arrow while details is up: there is always something for details to
+    // cover, and always somewhere to go back to.
+    const slides = [
+      item(),
+      item({ mediaItems: [media('a'), media('b', 'video')] }),
+      item({ mediaItems: [], mediaKind: null, previewKind: 'text' }),
+      item({ mediaItems: [], mediaKind: null, runStatus: 'failed' }),
+      item({ mediaItems: [], mediaKind: null, runStatus: 'processing' }),
+      item({ mediaItems: [], mediaKind: null, runStatus: null }),
+    ];
+
+    for (const slide of slides) {
+      const pages = buildImmersiveSlidePages(slide);
+      expect(pages.length).toBeGreaterThan(0);
+      expect(pages[0].type).not.toBe('details');
+    }
+  });
+
   it('blocks active video playback while the details page or the action sheet is open', () => {
     expect(getImmersiveVideoBlockerId({
       detailsPageOpenItemId: 'post-1',

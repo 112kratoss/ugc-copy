@@ -969,7 +969,7 @@ describe('ProfileDashboard media tiles routing', () => {
     )).toHaveLength(1);
   });
 
-  it('hides creation images while their derivative is pending', () => {
+  it('draws a plate for a creation image whose derivative is not ready, without loading the source', () => {
     queryState.generations = [
       {
         id: 'slow-image',
@@ -987,7 +987,7 @@ describe('ProfileDashboard media tiles routing', () => {
       tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
     });
 
-    expect(findViewByTestId(tree!.root, 'profile-art-preview-fallback')).toHaveLength(0);
+    expect(findViewByTestId(tree!.root, 'profile-art-preview-fallback')).toHaveLength(1);
     expect(tree!.root.findAll((node) =>
       String(node.type) === 'stable-media-image' && node.props.url === 'slow-image.jpg'
     )).toHaveLength(0);
@@ -1051,7 +1051,7 @@ describe('ProfileDashboard media tiles routing', () => {
     expect(tree!.root.findAllByProps({ accessibilityLabel: 'Creation, Missing media, Not posted' })).toHaveLength(0);
   });
 
-  it('hides creation videos until a poster is ready', () => {
+  it('draws a play plate for a creation video with no poster, without streaming the clip', () => {
     queryState.generations = [
       {
         id: 'video-without-poster',
@@ -1070,7 +1070,7 @@ describe('ProfileDashboard media tiles routing', () => {
       tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
     });
 
-    expect(findViewByTestId(tree!.root, 'profile-video-preview-fallback')).toHaveLength(0);
+    expect(findViewByTestId(tree!.root, 'profile-video-preview-fallback')).toHaveLength(1);
     expect(tree!.root.findAll((node) => String(node.type) === 'feed-video-preview')).toHaveLength(0);
     expect(tree!.root.findAll((node) =>
       String(node.type) === 'image' && node.props.source?.uri === 'video-without-poster.mp4'

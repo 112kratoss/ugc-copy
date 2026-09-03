@@ -162,6 +162,16 @@ describe('OwnerProfileMediaHub', () => {
             category: 'image',
             title: 'Raw frame',
             linked_post_id: null,
+          }, {
+            id: 'failed-generation',
+            output_url: null,
+            preview_url: null,
+            status: 'failed',
+            created_at: '2026-07-05T00:00:00.000Z',
+            model: 'video-model',
+            category: 'video',
+            title: 'Failed clip',
+            linked_post_id: null,
           }],
           pagination: { hasMore: false, nextCursor: null },
         });
@@ -211,5 +221,23 @@ describe('OwnerProfileMediaHub', () => {
     expect(screen.getByRole('dialog', { name: /raw frame creation preview/i })).toBeInTheDocument();
     expect(screen.queryByRole('dialog', { name: /showcase reel/i })).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByText('Owner-only creation prompt')).toBeInTheDocument());
+  });
+
+  it('keeps failed runs out of the grid but reachable, and never as a dead control', async () => {
+    render(<OwnerProfileMediaHub creator={{ id: 'owner-1', username: 'owner', name: 'Owner', avatar: null }} />);
+
+    await screen.findByRole('button', { name: /open public post/i });
+    fireEvent.click(screen.getByRole('tab', { name: /creations 1/i }));
+
+    expect(screen.getByRole('button', { name: /open raw frame/i })).toBeInTheDocument();
+    expect(screen.queryByText('Failed clip')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /failed runs/i }));
+
+    expect(screen.getByText('Failed clip')).toBeInTheDocument();
+    expect(screen.queryByText('Raw frame')).not.toBeInTheDocument();
+    // No media to open, so the card is a record rather than a control that
+    // does nothing when pressed.
+    expect(screen.queryByRole('button', { name: /open failed clip/i })).not.toBeInTheDocument();
   });
 });

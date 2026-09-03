@@ -20,6 +20,7 @@ import {
   parseCanonicalStorageObjectPath,
 } from '@/lib/storage-ownership';
 import { toStorageUploadBody } from '@/lib/storage-upload-body';
+import { summarizeMediaToolError, truncateMediaToolMessage } from '@/lib/media-tool-error';
 
 const MAX_PREVIEW_ATTEMPTS = 3;
 export const MAX_RENDITION_ATTEMPTS = 3;
@@ -191,7 +192,7 @@ function previewFailure(error: unknown, attemptCount: number) {
   return {
     preview_status: 'failed',
     preview_attempt_count: Math.min(MAX_PREVIEW_ATTEMPTS, attemptCount + 1),
-    preview_error: error instanceof Error ? error.message.slice(0, 500) : 'Preview generation failed.',
+    preview_error: summarizeMediaToolError(error, 'Preview generation failed.'),
   };
 }
 
@@ -433,7 +434,7 @@ async function repairPostMediaRendition(
       }
       : {}),
     ...(teaserOutcome?.status === 'failed'
-      ? { teaser_error: teaserOutcome.error.slice(0, 500) }
+      ? { teaser_error: truncateMediaToolMessage(teaserOutcome.error) }
       : {}),
   });
   try {
@@ -505,7 +506,7 @@ async function repairPostMediaRendition(
     const failure = supabase.from('post_media').update({
       rendition_status: 'failed',
       rendition_attempt_count: Math.min(MAX_RENDITION_ATTEMPTS, attempts + 1),
-      rendition_error: error instanceof Error ? error.message.slice(0, 500) : 'Rendition generation failed.',
+      rendition_error: summarizeMediaToolError(error, 'Rendition generation failed.'),
       // The whole point of teaser-first: a timeout here must not lose the
       // teaser that already uploaded, nor the probed duration.
       ...midFlightSpread(),

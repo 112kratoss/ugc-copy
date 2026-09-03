@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ImmersivePreviewItem } from '../lib/immersive-preview-view-model';
-import { changeViewerPage, resolveViewerPosition, settleViewerItem } from '../lib/viewer-position';
+import { changeViewerPage, isDetailsPageCovering, resolveViewerPosition, settleViewerItem } from '../lib/viewer-position';
 
 function post(id: string) {
   return { id, previewKind: 'media', mediaItems: [{ id: `${id}-1` }, { id: `${id}-2` }], details: { title: id }, availableActions: ['view-details'] } as unknown as ImmersivePreviewItem;
@@ -37,5 +37,19 @@ describe('viewer navigation ownership', () => {
     expect(settleViewerItem(position, post('two')).pageKey).toBe('media:two-1');
     expect(resolveViewerPosition([post('two')], position, 'one')?.itemId).toBe('two');
     expect(resolveViewerPosition([], position, 'one')).toBeNull();
+  });
+
+  it('only calls the details page an overlay while it covers another page', () => {
+    const one = post('one');
+    const openDetails = changeViewerPage(resolveViewerPosition([one], null, 'one')!, 'one', 'details');
+    expect(isDetailsPageCovering(one, openDetails)).toBe(true);
+    expect(isDetailsPageCovering(one, resolveViewerPosition([one], null, 'one'))).toBe(false);
+    // The neighbour's details page is not this slide's overlay.
+    expect(isDetailsPageCovering(post('two'), openDetails)).toBe(false);
+
+    // A creation with no media still has its status page underneath, so its
+    // details page is a real overlay and the reel may freeze behind it.
+    const failedRun = { ...one, mediaItems: [], previewKind: undefined } as unknown as ImmersivePreviewItem;
+    expect(isDetailsPageCovering(failedRun, { itemId: 'one', pageKey: 'details', mediaPageKey: 'status' })).toBe(true);
   });
 });
