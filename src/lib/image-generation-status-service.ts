@@ -36,6 +36,7 @@ import {
   withProviderModel,
 } from '@/lib/provider-fetch';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
+import { describeProviderFailure } from '@/lib/provider-failure-messages';
 
 const IMAGE_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, workflow_settings';
 
@@ -301,7 +302,7 @@ export async function getImageGenerationStatusForRoute({
         logBackendError('error_handling_success_status', { error: handledError });
       }
     } else if (status === 'failed') {
-      error = data.data.failMsg || 'Unknown error';
+      error = describeProviderFailure(data.data.failMsg);
       status = await resolvedDependencies.settleGenerationFailed(
         admin,
         predictionId,
