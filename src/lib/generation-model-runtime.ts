@@ -39,6 +39,40 @@ export const GENERATION_MODEL_VALIDATION_STRATEGIES = [
   'motion-v1',
 ] as const;
 
+/**
+ * Combined reference-video duration ceiling, in seconds, mirroring
+ * `referenceAssetCapSeconds` in generation-model-catalog. Kie enforces these totals
+ * regardless of how many reference files the model accepts.
+ */
+const REFERENCE_VIDEO_SECONDS_CAPS: Record<string, number> = {
+  'seedance-2': 15,
+  'seedance-2-fast': 15,
+  'seedance-2-mini': 15,
+  'seedance-2-5': 30,
+  'minimax-h3': 15,
+};
+
+/**
+ * Reference-image capacity per video model, mirroring `VIDEO_INPUT_LIMITS.images` in
+ * generation-model-catalog. The two tables cannot share a constant — catalog imports
+ * this module, so the dependency only runs one way — so a test pins them in agreement.
+ * A model missing here has its reference mode capped at 0 and cannot attach an image.
+ */
+const VIDEO_REFERENCE_IMAGE_CAPS: Record<string, number> = {
+  'seedance-1.5-pro': 2,
+  'seedance-2': 5,
+  'seedance-2-fast': 5,
+  'seedance-2-mini': 5,
+  'seedance-2-5': 30,
+  'wan-2.7': 5,
+  'happyhorse-1.1': 9,
+  'gemini-omni-video': 7,
+  'veo-3.1': 3,
+  'grok-imagine-video': 1,
+  'kling-o3': 7,
+  'minimax-h3': 9,
+};
+
 export const GENERATION_MODEL_VALIDATION_RULE_TYPES = [
   'control-options',
   'control-range',
@@ -605,20 +639,8 @@ function validationConfigForModel(
     // reference mode is capped at 0 by the else branch below and the quote rejects any
     // run that attaches one — which is exactly how seedance-2-5, kling-o3, and
     // minimax-h3 shipped with their reference support unreachable.
-    if (['seedance-1.5-pro', 'seedance-2', 'seedance-2-fast', 'seedance-2-mini', 'seedance-2-5', 'wan-2.7', 'happyhorse-1.1', 'gemini-omni-video', 'veo-3.1', 'grok-imagine-video', 'kling-o3', 'minimax-h3'].includes(modelId)) {
-      const max = modelId === 'seedance-1.5-pro'
-        ? 2
-        : modelId === 'happyhorse-1.1'
-          ? 9
-          : modelId === 'gemini-omni-video'
-            ? 7
-            : modelId === 'kling-o3'
-              ? 7
-              : modelId === 'veo-3.1'
-                ? 3
-                : modelId === 'grok-imagine-video'
-                  ? 1
-                  : 5;
+    const max = VIDEO_REFERENCE_IMAGE_CAPS[modelId];
+    if (max !== undefined) {
       rules.push({
         type: 'max-slot-count',
         slotKey: 'images',
@@ -711,16 +733,37 @@ function validationConfigForModel(
         },
       );
     }
-    if (['seedance-2', 'seedance-2-fast', 'seedance-2-mini', 'seedance-2-5'].includes(modelId)) {
-      // 2.5 generates up to 30s where the rest of the family stops at 15, so the cap
-      // tracks the model rather than the family name.
-      const max = modelId === 'seedance-2-5' ? 30 : 15;
+    // Kie caps the combined duration of reference videos separately from the file
+    // count, so the extra slots seedance-2-5 and minimax-h3 accept buy more clips, not
+    // more footage. 2.5 reaches 30s; the rest of the Seedance 2 family and minimax-h3
+    // stop at 15.
+    const referenceSeconds = REFERENCE_VIDEO_SECONDS_CAPS[modelId];
+    if (referenceSeconds !== undefined) {
       rules.push({
         type: 'combined-duration',
         slotKeys: ['videoReferences'],
-        max,
+        max: referenceSeconds,
         field: 'videos',
-        message: `Reference videos may be at most ${max} seconds in total.`,
+        message: `Reference videos may be at most ${referenceSeconds} seconds in total.`,
+      });
+    }
+    if (modelId === 'minimax-h3') {
+      // minimax-h3/reference-to-video declares `anyOf: [reference_image_urls,
+      // reference_video_urls]` and spells it out in prose: "reference_audio cannot be
+      // used alone, it must be accompanied by reference_image or reference_video".
+      // Audio alone still routes to the reference endpoint (see the minimax branch in
+      // generation-services), so without this the provider 422s after we have already
+      // quoted the run. Deliberately unconditional on referenceMode: the routing keys
+      // off attached audio, not the mode.
+      rules.push({
+        type: 'forbidden-combination',
+        conditions: [
+          { source: 'inputCount', key: 'audioReferences', operator: 'greaterThan', value: 0 },
+          { source: 'inputCount', key: 'imageReferences', operator: 'equals', value: 0 },
+          { source: 'inputCount', key: 'videoReferences', operator: 'equals', value: 0 },
+        ],
+        field: 'audios',
+        message: 'MiniMax H3 needs a reference image or video alongside reference audio.',
       });
     }
   }

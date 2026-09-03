@@ -163,9 +163,9 @@ function legacyFallbackAffordances(
     },
     referenceVideos: {
       max: isKling ? 0 : references.videos,
-      maxDurationSeconds: modelId.startsWith('seedance-2')
-        ? (modelId === 'seedance-2-5' ? 30 : 15)
-        : null,
+      maxDurationSeconds: modelId === 'seedance-2-5'
+        ? 30
+        : (modelId.startsWith('seedance-2') || modelId === 'minimax-h3' ? 15 : null),
     },
     referenceAudios: { max: references.audios },
     frames: {

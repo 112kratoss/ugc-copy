@@ -47,6 +47,11 @@ Credits are Kie credits 1:1 (1 credit = $0.005).
 
 ## Video models
 
+> **Superseded 2026-09-03 for `seedance-2-5` and `minimax-h3`.** Both sections below
+> understate every reference cap and predate Seedance's 1080p tier. See
+> `video-reference-caps-2026-09-03.md` for the re-verified figures. `kling-o3` is
+> unaffected.
+
 ### `seedance-2-5` → `bytedance/seedance-2-5`
 - Input: `prompt`, `first_frame_url`, `last_frame_url`, `reference_image_urls`,
   `reference_video_urls`, `reference_audio_urls`, `return_last_frame`, `generate_audio`,

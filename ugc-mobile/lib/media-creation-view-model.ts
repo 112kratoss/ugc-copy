@@ -1175,7 +1175,8 @@ export function getVideoElementSupport(model: VideoModelId, options: { mode?: st
   // branch here, so validateVideoDraft rejected every reference they advertised. The web
   // catalog is the source of these numbers; kling-o3's 7 covers 3 named subjects plus
   // plain references.
-  if (model === 'seedance-2-5' || model === 'minimax-h3') return { enabled: true, maxElements: 5, reason: null };
+  if (model === 'seedance-2-5') return { enabled: true, maxElements: 30, reason: null };
+  if (model === 'minimax-h3') return { enabled: true, maxElements: 9, reason: null };
   if (model === 'kling-o3') return { enabled: true, maxElements: 7, reason: null };
   if (model === 'happyhorse-1.1') return { enabled: true, maxElements: 9, reason: null };
   if (model === 'gemini-omni-video') return { enabled: true, maxElements: 7, reason: null };

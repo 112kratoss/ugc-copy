@@ -54,13 +54,16 @@ describe('descriptor-driven affordances', () => {
   });
 
   it('reports Seedance 2.5 reference slots with nothing attached', () => {
-    // The reported case: the model publishes 5 image, 3 video and 3 audio reference slots
-    // and the page rendered none of them.
+    // The reported case: the model publishes its image, video and audio reference slots
+    // and the page rendered none of them. The counts track Kie's schema for
+    // bytedance/seedance-2-5 (reference_image_urls maxItems 30, video and audio 10).
     const fresh = getVideoInputAffordances(descriptorFor('seedance-2-5'), 'seedance-2-5', { referenceMode: 'frames' });
     expect(fresh.elements.enabled).toBe(true);
-    expect(fresh.elements.maxTotal).toBe(5);
-    expect(fresh.referenceVideos.max).toBe(3);
-    expect(fresh.referenceAudios.max).toBe(3);
+    expect(fresh.elements.maxTotal).toBe(30);
+    expect(fresh.referenceVideos.max).toBe(10);
+    expect(fresh.referenceAudios.max).toBe(10);
+    // Ten slots, still thirty seconds of usable footage.
+    expect(fresh.referenceVideos.maxDurationSeconds).toBe(30);
   });
 
   it('marks frames and references exclusive only where the provider forks', () => {
