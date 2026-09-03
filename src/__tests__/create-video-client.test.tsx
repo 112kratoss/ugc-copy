@@ -20,6 +20,10 @@ const setPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
     void _elements;
   }
 ));
+const getPersistedFileMock = vi.hoisted(() => vi.fn(async (_key: string): Promise<File | null> => {
+  void _key;
+  return null;
+}));
 const getPersistedSubjectRecordsMock = vi.hoisted(() => vi.fn(
   async (_key: string): Promise<PersistedSubjectRecord[]> => {
     void _key;
@@ -91,7 +95,7 @@ vi.mock('@/lib/persisted-media', () => ({
     createVideoKlingSubjects: 'create-video:kling-subjects',
     createVideoSeedanceAssets: 'create-video:seedance-assets',
   },
-  getPersistedFile: vi.fn(async () => null),
+  getPersistedFile: getPersistedFileMock,
   getPersistedImageElementRecords: getPersistedImageElementRecordsMock,
   getPersistedMediaRecords: vi.fn(async () => []),
   // Hydration loads every persisted slot in one Promise.all, so a missing mock
@@ -233,6 +237,8 @@ describe('CreateVideoClient Kling video elements', () => {
     queryBuilder.is.mockClear();
     getPersistedImageElementRecordsMock.mockReset();
     getPersistedImageElementRecordsMock.mockResolvedValue([]);
+    getPersistedFileMock.mockReset();
+    getPersistedFileMock.mockResolvedValue(null);
     setPersistedImageElementRecordsMock.mockClear();
 
     let objectUrlSequence = 0;
@@ -487,6 +493,34 @@ describe('CreateVideoClient Kling video elements', () => {
     // The slots are still on screen — greyed, not removed.
     expect(screen.getByText('Reference videos')).toBeInTheDocument();
     expect(screen.getByText(/cannot combine references with frames/i)).toBeInTheDocument();
+  });
+
+  it('never locks both groups at once, even when a draft restores a frame and a reference', async () => {
+    // Before this layout, a draft could legitimately hold both: the old surface kept the
+    // frames while you worked in references ("your start and end frames are still saved").
+    // Those drafts still restore, and locking each group against the other would leave a
+    // panel where nothing can be removed and so nothing can be un-locked.
+    const startFrame = new File(['frame-bytes'], 'start.png', { type: 'image/png' });
+    getPersistedFileMock.mockImplementation(async (key: string) => (
+      key === 'create-video:start-image' ? startFrame : null
+    ));
+    getPersistedImageElementRecordsMock.mockResolvedValue([
+      { id: 'element-1', displayName: 'Hero', handle: '@Hero', file: new File(['ref'], 'hero.png', { type: 'image/png' }), source: 'upload' },
+    ] as never);
+
+    const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+    await screen.findByRole('heading', { name: 'Reference videos' });
+
+    await waitFor(() => {
+      expect(getPersistedImageElementRecordsMock).toHaveBeenCalled();
+    });
+
+    // At least one group has to stay interactive, or the run can never be resolved.
+    await waitFor(() => {
+      const groups = Array.from(view.container.querySelectorAll('[aria-disabled]'));
+      expect(groups.length).toBeGreaterThan(0);
+      expect(groups.every((group) => group.getAttribute('aria-disabled') === 'true')).toBe(false);
+    });
   });
 
   it('keeps both input groups live for Wan 2.7, which combines them', async () => {

@@ -2632,8 +2632,12 @@ function VideoCreatorComposer({
     && model?.inputs.combineFramesWithReferences !== true;
   const hasFrameAttachment = Boolean(draft.startFrame || draft.endFrame);
   const hasReferenceAttachment = referenceMode === 'elements';
-  const framesLockedByReferences = framesExcludeReferences && hasReferenceAttachment;
-  const referencesLockedByFrames = framesExcludeReferences && hasFrameAttachment;
+  // Only ever lock the empty side. A restored draft can hold both — the previous surface
+  // kept the frames while you worked in references — and locking each against the other
+  // leaves a panel where nothing can be removed, so nothing can be unlocked either.
+  const framesLockedByReferences = framesExcludeReferences && hasReferenceAttachment && !hasFrameAttachment;
+  const referencesLockedByFrames = framesExcludeReferences && hasFrameAttachment && !hasReferenceAttachment;
+  const framesAndReferencesConflict = framesExcludeReferences && hasFrameAttachment && hasReferenceAttachment;
   const imageLimit = catalogInputLimit(
     model,
     draft,
@@ -2895,7 +2899,9 @@ function VideoCreatorComposer({
           <View style={{ gap: 2 }}>
             <Text style={{ color: appTheme.colors.text, fontSize: 12, fontWeight: '800' }}>{draft.isMultiShot ? 'Story inputs' : 'Visual inputs'}</Text>
             <Text style={{ color: appTheme.colors.muted, fontSize: 11 }}>
-              {framesLockedByReferences
+              {framesAndReferencesConflict
+                ? `Clear one — this run will use ${reusableModeLabel.toLowerCase()}`
+                : framesLockedByReferences
                 ? `${frameModeLabel} unavailable with references attached`
                 : referencesLockedByFrames
                   ? `${reusableModeLabel} unavailable with frames attached`

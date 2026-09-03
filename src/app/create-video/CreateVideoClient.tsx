@@ -945,8 +945,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     );
     // Providers that cannot take both shapes in one request get a live mutual lock instead
     // of a hidden mode: the other group stays visible, greyed, with the reason on it.
-    const framesLockedByReferences = affordances.framesExcludeReferences && hasReferenceAttachment;
-    const referencesLockedByFrames = affordances.framesExcludeReferences && hasFrameAttachment;
+    // Only ever lock the empty side. A draft can hold both — the previous surface kept the
+    // frames while you worked in references — and locking each against the other leaves a
+    // panel where nothing can be removed, so nothing can be unlocked either.
+    const framesLockedByReferences = affordances.framesExcludeReferences && hasReferenceAttachment && !hasFrameAttachment;
+    const referencesLockedByFrames = affordances.framesExcludeReferences && hasFrameAttachment && !hasReferenceAttachment;
+    const framesAndReferencesConflict = affordances.framesExcludeReferences && hasFrameAttachment && hasReferenceAttachment;
     const videoElementSupport = {
         enabled: affordances.elements.enabled,
         maxElements: affordances.elements.maxTotal,
@@ -3654,11 +3658,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     <div>
                                         <h2 className="text-sm font-semibold text-white">Frames or references</h2>
                                         <p className="mt-1 text-sm text-zinc-400">
-                                            {framesLockedByReferences
-                                                ? `${videoModel.displayName} cannot combine frames with references. Clear your references to define a start or end frame instead.`
-                                                : referencesLockedByFrames
-                                                    ? `${videoModel.displayName} cannot combine references with frames. Clear your frames to use reusable references instead.`
-                                                    : `${videoModel.displayName} takes either frames or references in a single run. Attach one and the other locks until you clear it.`}
+                                            {framesAndReferencesConflict
+                                                ? `${videoModel.displayName} cannot combine frames with references, and this draft holds both. Clear one — as it stands the run will use your references and ignore the frames.`
+                                                : framesLockedByReferences
+                                                    ? `${videoModel.displayName} cannot combine frames with references. Clear your references to define a start or end frame instead.`
+                                                    : referencesLockedByFrames
+                                                        ? `${videoModel.displayName} cannot combine references with frames. Clear your frames to use reusable references instead.`
+                                                        : `${videoModel.displayName} takes either frames or references in a single run. Attach one and the other locks until you clear it.`}
                                         </p>
                                     </div>
                                     <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">

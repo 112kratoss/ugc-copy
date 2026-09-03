@@ -468,6 +468,11 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(tree!.root.findByProps({ testID: 'video-start-frame-slot' })).toBeTruthy();
     expect(tree!.root.findByProps({ testID: 'video-end-frame-slot' })).toBeTruthy();
     expect(tree!.root.findAllByProps({ testID: 'video-reference-mode' })).toHaveLength(0);
+    // Frames and references are no longer an either/or, so nothing claims one shape per
+    // run unless the provider actually forks. (This fixture's catalog is legacy-shaped and
+    // declares no reference slots for the default video model, so the rail itself is
+    // covered by the web E2E and by the simulator check, not here.)
+    expect(collectText(tree!.root)).not.toContain('one per run');
     renderer.act(() => {
       findPressableByLabelPrefix(tree!.root, 'Generation parameters.').props.onPress();
     });
