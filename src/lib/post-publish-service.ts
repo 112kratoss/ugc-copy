@@ -58,6 +58,7 @@ import {
   type UploadConsumptionClaim,
 } from '@/lib/upload-byte-admission';
 import { parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
+import { truncateMediaToolMessage } from '@/lib/media-tool-error';
 
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 const UPLOADS_BUCKET = 'uploads';
@@ -494,7 +495,7 @@ export async function publishPreparedPost({
         teaserStoragePath: teaserOutcome?.status === 'ready' ? teaserOutcome.teaserStoragePath : null,
         teaserBytes: teaserOutcome?.status === 'ready' ? teaserOutcome.teaserBytes : null,
         teaserGeneratedAt: teaserOutcome?.status === 'ready' ? new Date().toISOString() : null,
-        teaserError: teaserOutcome?.status === 'failed' ? teaserOutcome.error.slice(0, 500) : null,
+        teaserError: teaserOutcome?.status === 'failed' ? truncateMediaToolMessage(teaserOutcome.error) : null,
         mediaKind,
         contentType: mediaItem.contentType || mediaBody.type || null,
         originalName: mediaItem.originalName,

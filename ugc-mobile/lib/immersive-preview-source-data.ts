@@ -72,15 +72,43 @@ export function normalizeParam(value: string | string[] | undefined) {
 export function buildViewerItems(
   source: PreviewViewerSource,
   data: ImmersiveSourceData | undefined,
-  owner: { creatorLabel: string; creatorAvatar?: string | null; creatorId?: string | null }
+  owner: { creatorLabel: string; creatorAvatar?: string | null; creatorId?: string | null },
+  initialId?: string | null
 ): ImmersivePreviewItem[] {
   if (isGenerationSource(source)) {
-    return buildImmersiveGenerationItems(source, data?.generations ?? [], owner, data?.ownerPosts ?? []);
+    return filterViewerGenerationItems(
+      buildImmersiveGenerationItems(source, data?.generations ?? [], owner, data?.ownerPosts ?? []),
+      initialId
+    );
   }
   if (source === 'profile-posts') {
     return buildImmersiveOwnerPostItems(source, data?.ownerPosts ?? [], owner);
   }
   return buildImmersiveShowcaseItems(source, data?.showcaseItems ?? []);
+}
+
+/**
+ * The reel holds the same creations the grid it was opened from does.
+ *
+ * `listGenerations` answers with every run, finished or not, while the profile
+ * grid shows only the ones with something to draw. Scrolling the reel could
+ * therefore arrive at a failed run that was never on screen in the grid -- the
+ * reported symptom, and a dead end before the status page existed.
+ *
+ * The one exception is the creation the reader deliberately opened. A "your
+ * video failed" notification deep-links straight to its own run, and it should
+ * land on the run it names and explain itself, not silently open some
+ * unrelated creation because the named one was filtered away.
+ */
+export function filterViewerGenerationItems(
+  items: ImmersivePreviewItem[],
+  initialId?: string | null
+): ImmersivePreviewItem[] {
+  return items.filter((item) => (
+    item.id === initialId
+    || item.previewKind === 'text'
+    || (item.mediaItems?.length ?? 0) > 0
+  ));
 }
 
 export function isGenerationSource(source: PreviewViewerSource) {

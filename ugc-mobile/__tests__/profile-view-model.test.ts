@@ -63,7 +63,7 @@ describe('profile view model media cards', () => {
     });
   });
 
-  it('keeps image generations without a completed derivative out of the grid', () => {
+  it('keeps a finished image generation in the grid without painting the source as its poster', () => {
     const item: GenerationListItem = {
       id: 'gen-image-1',
       output_url: 'https://cdn.example.com/image.jpg',
@@ -77,13 +77,14 @@ describe('profile view model media cards', () => {
     };
 
     expect(generationToProfileMediaCard(item)).toMatchObject({
-      previewUrl: 'https://cdn.example.com/image.jpg',
-      previewState: 'image',
-      isGridReady: false,
+      previewUrl: null,
+      previewState: 'artFallback',
+      previewStatusLabel: 'Tap to view media',
+      isGridReady: true,
     });
   });
 
-  it('does not use the video file as a preview when a poster is missing', () => {
+  it('keeps a finished video in the grid when its poster job failed, without streaming the clip', () => {
     const item: GenerationListItem = {
       id: 'gen-video-missing-poster',
       output_url: 'https://cdn.example.com/video.mp4',
@@ -99,12 +100,47 @@ describe('profile view model media cards', () => {
     expect(generationToProfileMediaCard(item)).toMatchObject({
       previewUrl: null,
       previewState: 'videoFallback',
-      previewStatusLabel: 'Preview unavailable',
-      isGridReady: false,
+      previewStatusLabel: 'Tap to view media',
+      isGridReady: true,
     });
   });
 
-  it('marks failed, processing, archived, and missing-media generations as not grid-ready', () => {
+  it('ignores a poster the route echoed from the source when no derivative is ready', () => {
+    const item: GenerationListItem = {
+      id: 'gen-image-echoed-poster',
+      output_url: 'https://cdn.example.com/image.jpg',
+      preview_url: 'https://cdn.example.com/image.jpg',
+      status: 'succeeded',
+      created_at: '2026-06-10T10:00:00.000Z',
+      completed_at: '2026-06-10T10:01:00.000Z',
+      model: 'nano-banana-2',
+      category: 'image',
+      title: 'Image still',
+      prompt: 'A product still.',
+      media: {
+        id: 'gen-image-echoed-poster',
+        kind: 'image',
+        url: 'https://cdn.example.com/image.jpg',
+        previewUrl: 'https://cdn.example.com/image.jpg',
+        thumbhash: null,
+        cacheKey: 'generated_images/image.jpg',
+        expiresAt: null,
+        width: null,
+        height: null,
+        durationSeconds: null,
+        status: 'failed',
+        gridReady: false,
+      },
+    };
+
+    expect(generationToProfileMediaCard(item)).toMatchObject({
+      previewUrl: null,
+      previewState: 'artFallback',
+      isGridReady: true,
+    });
+  });
+
+  it('keeps failed, processing, archived, and missing-media generations out of the grid', () => {
     const base: GenerationListItem = {
       id: 'gen-base',
       output_url: 'https://cdn.example.com/image.jpg',

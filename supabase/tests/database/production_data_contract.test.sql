@@ -660,8 +660,11 @@ select is(
   '{
     "public": false,
     "limit": 262144000,
-    "mimes": ["video/mp4","video/quicktime","video/webm","video/x-m4v"]
+    "mimes": ["video/mp4","video/quicktime","video/webm","video/x-m4v","image/webp"]
   }'::jsonb,
+  -- image/webp is the poster a video keeps beside itself, and nothing else
+  -- writes an image here. Restricting the bucket to video mime types alone once
+  -- made every video poster upload fail.
   'generated_videos bucket is reproducible and restricted'
 );
 select is(

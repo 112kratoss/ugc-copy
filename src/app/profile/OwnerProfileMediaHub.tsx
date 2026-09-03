@@ -48,6 +48,15 @@ import type {
 
 type ProfileMediaTab = 'posts' | 'saved' | 'creations';
 
+/**
+ * A run that failed produced no media, so its card can only ever be a plate
+ * with a date on it. Keeping those out of the grid by default -- which is what
+ * the mobile app has always done -- leaves the workspace showing work, while
+ * the scope keeps the record reachable: a reader who wants to know what became
+ * of an attempt should not have to take the grid's silence for an answer.
+ */
+type CreationsScope = 'ready' | 'failed';
+
 interface OwnerPost {
   id: string;
   generationId: string | null;
@@ -259,6 +268,7 @@ function MediaCard({
   actionLabel?: string;
 }) {
   const isTextCard = Boolean(textBody && !mediaUrl);
+  const isInteractive = Boolean(href || onClick);
   const content = (
     <>
       <div className="relative aspect-[4/5] overflow-hidden bg-zinc-950">
@@ -308,19 +318,31 @@ function MediaCard({
           {!isTextCard ? <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-white">{title}</h3> : null}
           <div className={`${isTextCard ? '' : 'mt-1'} flex items-center justify-between gap-3`}>
             <p className="min-w-0 truncate text-xs text-zinc-400">{subtitle}</p>
-            <span className="shrink-0 text-[10px] font-bold uppercase tracking-[0.14em] text-white">
-              {actionLabel || (href ? 'Edit' : 'View')}
-            </span>
+            {/* A failed creation has no media to open, so it gets no verb. The
+                card used to print "Preview" over a button wired to nothing. */}
+            {isInteractive ? (
+              <span className="shrink-0 text-[10px] font-bold uppercase tracking-[0.14em] text-white">
+                {actionLabel || (href ? 'Edit' : 'View')}
+              </span>
+            ) : null}
           </div>
         </div>
       </div>
     </>
   );
 
-  const className = 'group block w-full overflow-hidden rounded-[22px] border border-white/8 bg-[#111215] text-left shadow-[0_18px_50px_rgba(0,0,0,0.22)] transition hover:-translate-y-0.5 hover:border-white/16';
+  const className = `group block w-full overflow-hidden rounded-[22px] border border-white/8 bg-[#111215] text-left shadow-[0_18px_50px_rgba(0,0,0,0.22)] transition${
+    isInteractive ? ' hover:-translate-y-0.5 hover:border-white/16' : ''
+  }`;
 
   if (href) {
     return <Link href={href} className={className}>{content}</Link>;
+  }
+
+  // Not a button: a focusable control that does nothing is worse than plain
+  // content, and a failed creation is a record, not an affordance.
+  if (!onClick) {
+    return <div className={className}>{content}</div>;
   }
 
   return <button type="button" onClick={onClick} className={className} aria-label={`Open ${title}`}>{content}</button>;
@@ -347,6 +369,7 @@ export default function OwnerProfileMediaHub({
     return Number.isInteger(value) && value >= 0 ? value : 0;
   });
   const [selectedGeneration, setSelectedGeneration] = useState<OwnerGeneration | null>(null);
+  const [creationsScope, setCreationsScope] = useState<CreationsScope>('ready');
   const [loadingTabs, setLoadingTabs] = useState<Set<ProfileMediaTab>>(() => new Set([initialTab]));
   const [loadedTabs, setLoadedTabs] = useState<Set<ProfileMediaTab>>(() => new Set());
   const [loadingMoreTab, setLoadingMoreTab] = useState<ProfileMediaTab | null>(null);
@@ -598,10 +621,24 @@ export default function OwnerProfileMediaHub({
   const viewerItems = activeTab === 'saved' ? savedSaveState.items : publicPostItems;
   const activeSaveState = activeTab === 'saved' ? savedSaveState : postSaveState;
   const activePageInfo = activeTab === 'saved' ? savedPageInfo : postsPageInfo;
+  const failedGenerations = useMemo(
+    () => generations.filter((generation) => generation.status === 'failed'),
+    [generations]
+  );
+  const readyGenerations = useMemo(
+    () => generations.filter((generation) => generation.status !== 'failed'),
+    [generations]
+  );
+  // The scope control only renders while there are failed runs, so the stored
+  // scope has to fall back on its own when the last one goes. Otherwise
+  // archiving the final failed run leaves the grid empty with the control that
+  // would take you back already gone.
+  const creationsScopeInEffect: CreationsScope = failedGenerations.length > 0 ? creationsScope : 'ready';
+  const visibleGenerations = creationsScopeInEffect === 'failed' ? failedGenerations : readyGenerations;
   const tabs = [
     { id: 'posts' as const, label: 'Posts', count: loadedTabs.has('posts') ? ownerPosts.length : null, icon: Layers3 },
     { id: 'saved' as const, label: 'Saved', count: loadedTabs.has('saved') ? savedSaveState.items.length : null, icon: Heart },
-    { id: 'creations' as const, label: 'Creations', count: loadedTabs.has('creations') ? generations.length : null, icon: Sparkles },
+    { id: 'creations' as const, label: 'Creations', count: loadedTabs.has('creations') ? readyGenerations.length : null, icon: Sparkles },
   ];
 
   const loadMore = async () => {
@@ -646,7 +683,7 @@ export default function OwnerProfileMediaHub({
     ? ownerPosts.length
     : activeTab === 'saved'
       ? savedSaveState.items.length
-      : generations.length;
+      : visibleGenerations.length;
   const hasMore = activeTab === 'creations' ? generationsPageInfo.hasMore : activePageInfo.hasMore;
   const isLoading = loadingTabs.has(activeTab);
 
@@ -708,7 +745,7 @@ export default function OwnerProfileMediaHub({
 
           <dl className="mt-6 grid grid-cols-3 border-t border-white/8 pt-5">
             {[
-              { label: 'Creations', value: loadedTabs.has('creations') ? generations.length : '—' },
+              { label: 'Creations', value: loadedTabs.has('creations') ? readyGenerations.length : '—' },
               { label: 'Posts', value: loadedTabs.has('posts') ? ownerPosts.length : '—' },
               { label: 'Saved by you', value: loadedTabs.has('saved') ? savedSaveState.items.length : '—' },
             ].map((stat, index) => (
@@ -795,6 +832,28 @@ export default function OwnerProfileMediaHub({
         </div>
       </div>
 
+      {activeTab === 'creations' && failedGenerations.length > 0 ? (
+        <div role="group" aria-label="Filter creations" className="flex flex-wrap items-center gap-2 px-4 pt-4 sm:px-6">
+          {([
+            { id: 'ready' as const, label: 'Creations', count: readyGenerations.length },
+            { id: 'failed' as const, label: 'Failed runs', count: failedGenerations.length },
+          ]).map((scope) => (
+            <button
+              key={scope.id}
+              type="button"
+              aria-pressed={creationsScopeInEffect === scope.id}
+              onClick={() => setCreationsScope(scope.id)}
+              className={`ui-focus-ring inline-flex min-h-9 items-center gap-2 rounded-full border px-3.5 text-xs font-semibold transition ${creationsScopeInEffect === scope.id
+                ? 'border-white/20 bg-white/[0.10] text-white'
+                : 'border-white/10 bg-white/[0.02] text-zinc-400 hover:bg-white/[0.06] hover:text-white'}`}
+            >
+              {scope.label}
+              <span className="rounded-full bg-black/30 px-1.5 py-0.5 text-[10px] text-zinc-300">{scope.count}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       <div id={`profile-panel-${activeTab}`} role="tabpanel" aria-labelledby={`profile-tab-${activeTab}`} className="p-4 sm:p-6">
         {isLoading ? (
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4" aria-label="Loading profile media">
@@ -816,8 +875,17 @@ export default function OwnerProfileMediaHub({
             <div className="flex h-14 w-14 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-400">
               {activeTab === 'saved' ? <Heart className="h-6 w-6" /> : activeTab === 'creations' ? <Sparkles className="h-6 w-6" /> : <FileText className="h-6 w-6" />}
             </div>
-            <h3 className="mt-5 text-xl font-semibold text-white">{emptyCopy[activeTab].title}</h3>
-            <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">{errors[activeTab] || emptyCopy[activeTab].body}</p>
+            <h3 className="mt-5 text-xl font-semibold text-white">
+              {activeTab === 'creations' && failedGenerations.length > 0 && creationsScopeInEffect === 'ready'
+                ? 'Nothing finished yet'
+                : emptyCopy[activeTab].title}
+            </h3>
+            <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
+              {errors[activeTab]
+                || (activeTab === 'creations' && failedGenerations.length > 0 && creationsScopeInEffect === 'ready'
+                  ? `Every creation loaded so far failed. Switch to Failed runs to see ${failedGenerations.length === 1 ? 'it' : 'them'}.`
+                  : emptyCopy[activeTab].body)}
+            </p>
             <Link href={emptyCopy[activeTab].href} className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-full bg-white px-4 text-sm font-bold text-black transition hover:bg-zinc-200">
               {emptyCopy[activeTab].cta}
               <ExternalLink className="h-4 w-4" />
@@ -866,8 +934,9 @@ export default function OwnerProfileMediaHub({
                     actionLabel="View"
                   />
                 );
-              }) : generations.map((generation) => {
+              }) : visibleGenerations.map((generation) => {
                 const mediaType = getGenerationMediaType(generation);
+                const failed = generation.status === 'failed';
                 return (
                   <MediaCard
                     key={generation.id}
@@ -877,7 +946,7 @@ export default function OwnerProfileMediaHub({
                     previewUrl={generation.preview_url}
                     mediaKind={mediaType === 'text' ? null : mediaType}
                     badges={[
-                      generation.linked_post_id ? 'Posted' : 'Private creation',
+                      failed ? 'Failed run' : generation.linked_post_id ? 'Posted' : 'Private creation',
                       generation.origin === 'template' ? 'Template' : generation.model,
                     ]}
                     onClick={generation.output_url ? () => void openGeneration(generation) : undefined}

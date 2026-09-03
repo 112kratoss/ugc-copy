@@ -196,21 +196,27 @@ export function generationToProfileMediaCard(item: GenerationListItem): ProfileM
   const mediaKind = getGenerationRenderableMediaKind(kind);
   const mediaUrl = item.media?.url ?? item.output_urls?.[0] ?? item.output_url ?? null;
   const posterUrl = item.media?.previewUrl ?? item.previewUrl ?? item.preview_url ?? null;
-  const previewUrl = mediaKind === 'image' ? posterUrl ?? mediaUrl : posterUrl;
+  // Whether a real derivative exists, as opposed to the source standing in for
+  // one: the route answers an image with no poster yet by echoing its own
+  // `output_url` back as `preview_url`, so a non-null poster proves nothing on
+  // its own.
+  const posterReady = item.media?.gridReady ?? Boolean(posterUrl);
+  const previewUrl = posterReady ? posterUrl : null;
   const previewText = kind === 'text' ? item.prompt || item.description || item.title || 'Saved text generation' : undefined;
-  const previewState = getProfilePreviewState({
-    mediaKind,
-    mediaUrl,
-    previewKind: kind === 'text' ? 'text' : undefined,
-    previewText,
-    previewUrl,
-  });
+  const previewState = getGenerationPreviewState({ kind, mediaKind, mediaUrl, posterReady, posterUrl, previewText });
   const isArchived = Boolean(item.archived_at);
-  const hasGridContent = kind === 'text' ? Boolean(previewText?.trim()) : Boolean(mediaUrl && posterUrl);
-  const derivativeReady = kind === 'text'
-    ? hasGridContent
-    : item.media?.gridReady ?? Boolean(posterUrl);
-  const isGridReady = !isArchived && item.status === 'succeeded' && derivativeReady;
+  // A finished creation earns a tile whether or not its poster job did. The
+  // derivative decides what the tile *draws* -- with one it paints the 720px
+  // poster, without one a plate -- but it cannot decide whether the reader's
+  // own finished work appears in their own library at all. Poster extraction
+  // is a separate pipeline that fails on its own schedule, and a video whose
+  // ffmpeg run gave up used to vanish from the grid while still playing
+  // perfectly in the viewer.
+  //
+  // The grid still never paints the source itself: streaming originals into a
+  // wall of thumbnails is exactly the egress the derivative exists to avoid.
+  const hasRenderableContent = kind === 'text' ? Boolean(previewText?.trim()) : Boolean(mediaUrl);
+  const isGridReady = !isArchived && item.status === 'succeeded' && hasRenderableContent;
   const label = getGenerationLabel(kind);
 
   return {
@@ -228,7 +234,12 @@ export function generationToProfileMediaCard(item: GenerationListItem): ProfileM
     previewKind: kind === 'text' ? 'text' : undefined,
     previewText,
     previewState,
-    previewStatusLabel: previewState === 'videoFallback' ? 'Preview unavailable' : undefined,
+    // "Preview unavailable" is true of the poster and false of the creation:
+    // the media is right there, one tap away. Only a card with no media to
+    // reach keeps the blunt label.
+    previewStatusLabel: previewState === 'videoFallback' || (previewState === 'artFallback' && Boolean(mediaUrl))
+      ? 'Tap to view media'
+      : undefined,
     isGridReady,
     isArchived,
     badge: label,
@@ -377,6 +388,37 @@ function generationStatusLabel(status: string | null | undefined) {
   if (status === 'waiting') return 'Queued';
   if (status === 'failed') return 'Failed';
   return status ? capitalize(status) : 'Draft';
+}
+
+/**
+ * What a creation's tile draws.
+ *
+ * Split from the shared `getProfilePreviewState` because posts and creations
+ * disagree about the source: an image post whose media lives on
+ * `posts.output_url` has no derivative row and is meant to render from the
+ * source, while a creation always has a poster pipeline behind it and must
+ * fall back to a plate instead of pulling a full-size original into a grid
+ * cell.
+ */
+function getGenerationPreviewState({
+  kind,
+  mediaKind,
+  mediaUrl,
+  posterReady,
+  posterUrl,
+  previewText,
+}: {
+  kind: 'image' | 'video' | 'motion' | 'text';
+  mediaKind: 'image' | 'video' | null;
+  mediaUrl: string | null;
+  posterReady: boolean;
+  posterUrl: string | null;
+  previewText?: string;
+}): ProfilePreviewState {
+  if (kind === 'text') return previewText?.trim() ? 'text' : 'artFallback';
+  if (posterReady && posterUrl) return mediaKind === 'video' ? 'videoPoster' : 'image';
+  if (mediaKind === 'video' && mediaUrl) return 'videoFallback';
+  return 'artFallback';
 }
 
 function getProfilePreviewState({

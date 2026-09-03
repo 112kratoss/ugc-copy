@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildImmersiveGenerationItems,
+  getImmersiveStatusSlide,
   buildImmersiveOwnerPostItems,
   buildImmersiveShowcaseItems,
   getImmersiveHorizontalPageIndex,
@@ -15,6 +16,7 @@ import {
   showcaseFeedItemOpenHref,
   textPostViewerHref,
 } from '../lib/immersive-preview-view-model';
+import { getViewerActionSlots } from '../lib/viewer-actions';
 import type { GenerationListItem, OwnerPostListItem, ShowcaseFeedItem } from '../lib/types';
 
 function showcaseItem(overrides: Partial<ShowcaseFeedItem>): ShowcaseFeedItem {
@@ -43,7 +45,8 @@ function showcaseItem(overrides: Partial<ShowcaseFeedItem>): ShowcaseFeedItem {
 function generation(overrides: Partial<GenerationListItem>): GenerationListItem {
   return {
     id: 'gen-1',
-    output_url: null,
+    // A succeeded run has media. Tests that want a run with none say so.
+    output_url: 'https://cdn.example.com/gen-1.jpg',
     status: 'succeeded',
     created_at: '2026-05-13T10:00:00.000Z',
     completed_at: '2026-05-13T10:05:00.000Z',
@@ -595,6 +598,31 @@ describe('immersive preview view model', () => {
       ], { creatorLabel: '@batman' });
       expect(item.availableActions).toEqual(['publish', 'recreate', 'archive', 'share', 'view-details']);
       expect(item.disabledActions).toEqual({});
+    });
+
+    it('offers a failed run another go, and nothing it cannot do', () => {
+      const [item] = buildImmersiveGenerationItems('studio-creations', [
+        generation({ id: 'failed-gen', output_url: null, status: 'failed', linked_post_id: null }),
+      ], { creatorLabel: '@batman' });
+
+      // Nothing came back from the model, so there is nothing to publish or
+      // share -- only the prompt, and another attempt at it.
+      expect(item.availableActions).toEqual(['recreate', 'archive', 'view-details']);
+      // The rail reads canShare directly, and sharing an unposted creation
+      // means publishing it first.
+      expect(item.canShare).toBe(false);
+      expect(getViewerActionSlots(item).map((slot) => slot.id)).toEqual(['details', 'create']);
+      expect(item.runStatus).toBe('failed');
+      expect(item.mediaItems).toEqual([]);
+      expect(getImmersiveStatusSlide(item).title).toBe('This render failed');
+    });
+
+    it('says a run is still going rather than that it failed', () => {
+      const [item] = buildImmersiveGenerationItems('studio-creations', [
+        generation({ id: 'running-gen', output_url: null, status: 'processing' }),
+      ], { creatorLabel: '@batman' });
+
+      expect(getImmersiveStatusSlide(item).title).toBe('Still rendering');
     });
 
     it('returns web-parity actions for a public linked creation with an unlock', () => {

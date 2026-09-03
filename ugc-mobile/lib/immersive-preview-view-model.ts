@@ -104,6 +104,12 @@ export interface ImmersivePreviewItem {
   linkedPostPath?: string | null;
   linkedPostOwnerPath?: string | null;
   archivedAt?: string | null;
+  /**
+   * The generation's own run state. Carried because a slide with no media has
+   * to say *why* it has none, and a failed run and one still rendering are
+   * indistinguishable from an empty `mediaItems` alone.
+   */
+  runStatus?: string | null;
   visibility?: string | null;
   isManualOwnerPost?: boolean;
   availableActions: string[];
@@ -312,6 +318,39 @@ export function hasImmersiveAudibleMedia(item: ImmersivePreviewItem | undefined)
   ));
 }
 
+/**
+ * What a slide with no media says for itself.
+ *
+ * A creation reaches the reel with nothing to play in two ordinary ways: the
+ * run failed, or it has not finished yet. Both used to render as a bare
+ * details page, which said nothing about either and -- because the reel treats
+ * an open details page as an overlay -- could not be scrolled or backed out
+ * of. Saying it plainly is both the honest answer and the thing that gives the
+ * slide a page to sit on.
+ */
+export function getImmersiveStatusSlide(item: ImmersivePreviewItem): { title: string; body: string } {
+  const label = item.badge?.toLowerCase() || 'creation';
+
+  if (item.runStatus === 'failed') {
+    return {
+      title: 'This render failed',
+      body: `No ${label} came back from the model, so there is nothing to play here. The prompt is on the next page — swipe left to read it, or start it again from Create.`,
+    };
+  }
+
+  if (item.runStatus === 'processing' || item.runStatus === 'waiting') {
+    return {
+      title: 'Still rendering',
+      body: `This ${label} is still being made. It will play here once the model returns it.`,
+    };
+  }
+
+  return {
+    title: 'No media to show',
+    body: `This ${label} has no playable file. Swipe left for its details.`,
+  };
+}
+
 export function hasImmersiveDetailsPage(item: ImmersivePreviewItem) {
   // Generations were excluded while they rendered in the separate card screen, which
   // showed their model/cost metadata inline. Now that every source opens the reel,
@@ -492,6 +531,10 @@ function generationToImmersiveItem(
   const linkedPostPath = linkedPost?.publicPath
     ?? (linkedPostId && linkedPostVisibility !== 'private' && !linkedPostArchivedAt ? `/showcase/${linkedPostId}` : null);
   const linkedPostOwnerPath = linkedPost?.ownerPath ?? (linkedPostId ? `/post/${linkedPostId}/edit` : null);
+  // Sharing an unposted creation means publishing it first, which a run that
+  // produced no media cannot do. The rail reads `canShare` rather than
+  // `availableActions`, so the two have to agree.
+  const hasOutput = Boolean(item.output_url || item.output_urls?.length);
 
   return {
     id: item.id,
@@ -514,7 +557,7 @@ function generationToImmersiveItem(
     canComment: false,
     isSaved: true,
     canSave: false,
-    canShare: true,
+    canShare: hasOutput,
     sharePath: null,
     recreateTool: kind === 'motion' ? 'motion' : kind === 'video' ? 'video' : 'image',
     recreatePrompt: item.prompt?.trim() || item.description?.trim() || item.title?.trim() || '',
@@ -548,6 +591,7 @@ function generationToImmersiveItem(
     linkedPostPath,
     linkedPostOwnerPath,
     archivedAt: item.archived_at ?? null,
+    runStatus: item.status ?? null,
     visibility: null,
     availableActions: getGenerationAvailableActions(item, linkedPostId, linkedPostArchivedAt),
     disabledActions: item.archived_at
@@ -574,6 +618,13 @@ function getGenerationAvailableActions(
 ) {
   if (item.archived_at) {
     return ['restore', 'view-details'];
+  }
+
+  // A run that produced nothing has nothing to publish or share. It reaches
+  // the reel when its own "your video failed" notification is tapped, and the
+  // only thing worth offering there is another go at the prompt.
+  if (!item.output_url && !item.output_urls?.length) {
+    return ['recreate', 'archive', 'view-details'];
   }
 
   if (!linkedPostId) {

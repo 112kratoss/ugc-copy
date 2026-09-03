@@ -2,10 +2,26 @@ import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  buildViewerItems,
   loadImmersiveSourceData,
   readCachedImmersiveSourceData,
 } from '../lib/immersive-preview-source-data';
-import type { CreatorProfileResponse, ShowcaseFeedItem } from '../lib/types';
+import type { CreatorProfileResponse, GenerationListItem, ShowcaseFeedItem } from '../lib/types';
+
+function generation(id: string, overrides: Partial<GenerationListItem> = {}): GenerationListItem {
+  return {
+    id,
+    output_url: `https://cdn.example.com/${id}.jpg`,
+    status: 'succeeded',
+    created_at: '2026-09-02T10:00:00.000Z',
+    completed_at: '2026-09-02T10:01:00.000Z',
+    model: 'nano-banana-2',
+    category: 'image',
+    title: id,
+    prompt: 'A prompt.',
+    ...overrides,
+  };
+}
 
 function showcaseItem(id: string): ShowcaseFeedItem {
   return {
@@ -68,6 +84,34 @@ function creatorProfile(items: ShowcaseFeedItem[]): CreatorProfileResponse {
 }
 
 describe('immersive preview source data', () => {
+  const owner = { creatorLabel: '@creator', creatorAvatar: null, creatorId: 'user-1' };
+
+  it('keeps the reel to the creations the grid shows', () => {
+    const items = buildViewerItems('studio-creations', {
+      generations: [
+        generation('ready'),
+        generation('failed', { status: 'failed', output_url: null }),
+        generation('rendering', { status: 'processing', output_url: null }),
+      ],
+    }, owner);
+
+    expect(items.map((item) => item.id)).toEqual(['ready']);
+  });
+
+  it('keeps the creation the reader opened, even when it has nothing to play', () => {
+    // "Your video failed" deep-links straight to its own run. The notification
+    // has to land on the run it names, not on an unrelated creation.
+    const items = buildViewerItems('studio-creations', {
+      generations: [
+        generation('ready'),
+        generation('failed', { status: 'failed', output_url: null }),
+      ],
+    }, owner, 'failed');
+
+    expect(items.map((item) => item.id)).toEqual(['ready', 'failed']);
+    expect(items[1].runStatus).toBe('failed');
+  });
+
   it('bounds generation viewer hydration to the visible preview window', async () => {
     const api = {
       getCreatorProfile: vi.fn(),
