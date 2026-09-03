@@ -82,6 +82,24 @@ The `callBackUrl` parameter allows you to receive automatic notifications when y
 - **Max File Size**: 10MB
 - **Accepted File Types**: image/jpeg, image/png, image/webp, image/jpg
 - **Multiple Files**: Yes
+
+> **Undocumented restriction — reference images may not show a real person.**
+> ByteDance screens every reference image and rejects photographs of real
+> people under a likeness policy. This is not in the vendor docs and there is
+> no parameter that relaxes it: the request is refused whatever the
+> resolution, duration or aspect ratio, and a retry always fails the same way.
+>
+> The task is accepted first (a `taskId` is issued), then fails ~10s later at
+> 0 credits, so it reads like a pipeline error rather than input validation.
+> The two models word the same rejection differently:
+>
+> - `bytedance/seedance-2` — `400`, `"The request failed because the input
+>   image 'content[0]' may contain real person."`
+> - `bytedance/seedance-2-5` — `400`, `"InputImageSensitiveContentDetected.PolicyViolation"`
+>
+> Observed 2026-09-02 across five generations. `describeProviderFailure` in
+> `src/lib/provider-failure-messages.ts` maps both shapes to one creator-facing
+> message; add any further shapes there.
 - **Default Value**: `["https://static.aiquickdraw.com/tools/example/1775188169588_bgwi3VY9.png","https://static.aiquickdraw.com/tools/example/1775188179836_GjU1qcVv.png","https://static.aiquickdraw.com/tools/example/1775188213576_znqR80kS.png","https://static.aiquickdraw.com/tools/example/1775188231228_ddIfzCwT.png","https://static.aiquickdraw.com/tools/example/1775188250101_sZNRBuHh.png"]`
 
 #### reference_video_urls

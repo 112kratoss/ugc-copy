@@ -39,6 +39,7 @@ import {
   withProviderModel,
 } from '@/lib/provider-fetch';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
+import { describeProviderFailure } from '@/lib/provider-failure-messages';
 
 const VIDEO_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration';
 
@@ -461,7 +462,7 @@ export async function getVideoGenerationStatusForRoute({
           }
         }
       } else if (successFlag === 2 || successFlag === 3) {
-        error = data.data?.errorMessage || data.msg || 'Unknown error';
+        error = describeProviderFailure(data.data?.errorMessage || data.msg);
         status = await resolvedDependencies.settleGenerationFailed(
           admin,
           predictionId,
@@ -520,7 +521,7 @@ export async function getVideoGenerationStatusForRoute({
           logBackendError('error_handling_success_status', { error: parseError });
         }
       } else if (status === 'failed') {
-        error = data.data.failMsg || 'Unknown error';
+        error = describeProviderFailure(data.data.failMsg);
         status = await resolvedDependencies.settleGenerationFailed(
           admin,
           predictionId,

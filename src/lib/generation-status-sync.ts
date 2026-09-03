@@ -15,6 +15,7 @@ import {
   settleGenerationFailed,
   settleGenerationSucceeded,
 } from '@/lib/generation-settlement';
+import { describeProviderFailure } from '@/lib/provider-failure-messages';
 import { extractKieWebhookTaskId } from '@/lib/kie-webhook';
 import { enqueueGenerationOutputImportJob } from '@/lib/generation-output-import-jobs';
 import { getGenerationKind, normalizeMarketGenerationTiming, toIsoTimestamp } from '@/lib/generation-timing';
@@ -46,10 +47,11 @@ import {
  */
 
 /**
- * Reads the provider's own failure text off a task payload. The two provider
- * response shapes this module polls disagree on the field name -- the Veo
- * endpoint reports `errorMessage`, the market endpoint `failMsg` -- so both are
- * accepted and the first non-blank one wins.
+ * Reads the provider's own failure text off a task payload and rewrites it for
+ * the person who will read it. The two provider response shapes this module
+ * polls disagree on the field name -- the Veo endpoint reports `errorMessage`,
+ * the market endpoint `failMsg` -- so both are accepted and the first non-blank
+ * one wins.
  */
 function readProviderFailureReason(task: unknown): string | null {
   if (!isRecord(task)) {
@@ -59,7 +61,7 @@ function readProviderFailureReason(task: unknown): string | null {
   for (const key of ['failMsg', 'errorMessage'] as const) {
     const value = task[key];
     if (typeof value === 'string' && value.trim()) {
-      return value.trim();
+      return describeProviderFailure(value);
     }
   }
 
