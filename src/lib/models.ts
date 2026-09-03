@@ -811,13 +811,14 @@ export const VIDEO_MODELS = {
                 noVideo: 63,
                 withVideo: 38,
             },
-            // Every rate here is Kie's listed price, passed through. 1080p currently
-            // carries a "Limited-Time 1080P Offer: 28% OFF until Sep 17, 2026 06:00 UTC"
-            // — when that lapses Kie's listed price rises and this tier must be re-read
-            // from the model page, because nothing here derives it.
+            // 480p and 720p are Kie's listed price passed through. 1080p is not: Kie
+            // currently lists 114 / 68.5 under a "Limited-Time 1080P Offer: 28% OFF until
+            // Sep 17, 2026 06:00 UTC", and we bill the standard rate behind it
+            // (114/0.72, 68.5/0.72, rounded up) so the tier stays correct when the offer
+            // lapses rather than silently under-billing the day it does.
             '1080p': {
-                noVideo: 114,
-                withVideo: 68.5,
+                noVideo: 159,
+                withVideo: 96,
             },
         },
     },

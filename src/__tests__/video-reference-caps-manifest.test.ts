@@ -147,18 +147,19 @@ describe('video reference caps track Kie', () => {
     })).not.toThrow();
   });
 
-  it('prices seedance-2-5 1080p at the rate Kie lists', () => {
-    // Every tier passes Kie's listed credits through unchanged. 1080p currently sits
-    // under a "Limited-Time 1080P Offer: 28% OFF until Sep 17, 2026 06:00 UTC" — nothing
-    // here derives the post-offer rate, so when it lapses this must be re-read from the
-    // model page and released deliberately.
+  it('prices seedance-2-5 1080p at the standard rate, not the offer', () => {
+    // Kie lists 114 / 68.5 under a "Limited-Time 1080P Offer: 28% OFF until Sep 17, 2026
+    // 06:00 UTC". Billing the offer would under-bill every 1080p run from the moment it
+    // lapses, so this tier carries the standard rate behind it (114/0.72 and 68.5/0.72,
+    // rounded up). 480p and 720p carry no offer and pass Kie's listed credits through.
     const quote = quoteGenerationModel({
       kind: 'video',
       modelId: 'seedance-2-5',
       settings: { resolution: '1080p', duration: 10 },
       inputCounts: {},
     });
-    expect(quote.costCredits).toBe(114 * 10);
+    expect(quote.costCredits).toBe(1590);
+    expect(quote.costCredits).toBeGreaterThan(114 * 10);
 
     const withReference = quoteGenerationModel({
       kind: 'video',
@@ -168,7 +169,7 @@ describe('video reference caps track Kie', () => {
       inputMetadata: { slots: { videoReferences: { count: 1, durationsSeconds: [5] } } },
     });
     // Billed on input plus output seconds, per Kie's note on the with-video rate.
-    expect(withReference.costCredits).toBe(Math.ceil((10 + 5) * 68.5));
+    expect(withReference.costCredits).toBe((10 + 5) * 96);
   });
 
   it('leaves the 480p and 720p tiers alone', () => {
