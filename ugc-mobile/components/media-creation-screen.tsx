@@ -74,8 +74,10 @@ import {
   type MediaDraft,
   type MotionCreationDraft,
   type MotionModelId,
+  type ReferenceMode,
   type VideoCreationDraft,
   type VideoModelId,
+  videoDraftReferenceMode,
 } from '@/lib/media-creation-view-model';
 import { assetDurationSeconds, pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia } from '@/lib/media';
 import {
@@ -275,12 +277,19 @@ function catalogDraftInputCounts(
 function activeCatalogInputSlots(
   model: CreatorCatalogModel | null,
   draft: CreationDraft,
+  /**
+   * Which reference shape to ask about. Every slot a model declares is on screen at once,
+   * so each group asks about its own shape: reading both off one "current" mode made the
+   * reference slots report zero capacity until you were already in the reference mode,
+   * which was only reachable from a control that capacity gated.
+   */
+  referenceMode: ReferenceMode = 'frames',
 ) {
   if (!model?.inputModes) return null;
   const settings = {
     ...getCatalogDraftSettings(draft, model),
     ...(draft.tool === 'video'
-      ? { referenceMode: draft.referenceMode, isMultiShot: draft.isMultiShot }
+      ? { referenceMode, isMultiShot: draft.isMultiShot }
       : {}),
   };
   return getActiveCatalogInputSlots(model, settings, catalogDraftInputCounts(model, draft));
@@ -290,8 +299,9 @@ function catalogInputSlot(
   model: CreatorCatalogModel | null,
   draft: CreationDraft,
   key: string,
+  referenceMode: ReferenceMode = 'frames',
 ): CatalogInputSlot | null {
-  return activeCatalogInputSlots(model, draft)?.find((slot) => slot.key === key) ?? null;
+  return activeCatalogInputSlots(model, draft, referenceMode)?.find((slot) => slot.key === key) ?? null;
 }
 
 function catalogInputLimit(
@@ -299,9 +309,10 @@ function catalogInputLimit(
   draft: CreationDraft,
   key: string,
   legacyMax: number,
+  referenceMode: ReferenceMode = 'frames',
 ) {
   if (!model?.inputModes) return legacyMax;
-  return catalogInputSlot(model, draft, key)?.max ?? 0;
+  return catalogInputSlot(model, draft, key, referenceMode)?.max ?? 0;
 }
 
 function catalogInputSupported(
@@ -309,9 +320,10 @@ function catalogInputSupported(
   draft: CreationDraft,
   key: string,
   legacySupported: boolean,
+  referenceMode: ReferenceMode = 'frames',
 ) {
   if (!model?.inputModes) return legacySupported;
-  return Boolean(catalogInputSlot(model, draft, key));
+  return Boolean(catalogInputSlot(model, draft, key, referenceMode));
 }
 
 function supportsReusableVideoInputs(
@@ -320,7 +332,7 @@ function supportsReusableVideoInputs(
 ) {
   if (!model) return false;
   if (model.inputModes) {
-    return (activeCatalogInputSlots(model, draft) ?? []).some((slot) => (
+    return (activeCatalogInputSlots(model, draft, 'elements') ?? []).some((slot) => (
       slot.role === 'reference'
       && ['image', 'video', 'audio', 'character', 'preparedVoice'].includes(slot.kind)
     ));
@@ -2584,36 +2596,52 @@ function VideoCreatorComposer({
   const endFrameSlot = catalogInputSlot(model, draft, 'endFrame');
   const supportsFrames = supportsStartFrame || supportsEndFrame;
   const supportsReusable = !draft.isMultiShot && supportsReusableVideoInputs(model, draft);
-  const referenceMode = supportsFrames && (draft.referenceMode === 'frames' || !supportsReusable) ? 'frames' : 'elements';
+  const referenceMode = videoDraftReferenceMode(draft);
+  // Kie only lets wan-2.7 send a first frame alongside references; Seedance documents the
+  // two as mutually exclusive scenarios, and minimax-h3 and kling-o3 route references to
+  // an endpoint with no frame field. Both groups stay on screen either way — the one the
+  // run cannot use greys out with the reason above it.
+  const framesExcludeReferences = supportsFrames
+    && supportsReusable
+    && model?.inputs.combineFramesWithReferences !== true;
+  const hasFrameAttachment = Boolean(draft.startFrame || draft.endFrame);
+  const hasReferenceAttachment = referenceMode === 'elements';
+  const framesLockedByReferences = framesExcludeReferences && hasReferenceAttachment;
+  const referencesLockedByFrames = framesExcludeReferences && hasFrameAttachment;
   const imageLimit = catalogInputLimit(
     model,
     draft,
     'imageReferences',
     model?.inputs.imageReferences?.max ?? 0,
+    'elements',
   );
   const videoLimit = catalogInputLimit(
     model,
     draft,
     'videoReferences',
     model?.inputs.videoReferences?.max ?? 0,
+    'elements',
   );
   const audioLimit = catalogInputLimit(
     model,
     draft,
     'audioReferences',
     model?.inputs.audioReferences?.max ?? 0,
+    'elements',
   );
   const preparedVoiceLimit = catalogInputLimit(
     model,
     draft,
     'preparedVoices',
     model?.inputs.preparedAudioReferences?.max ?? 0,
+    'elements',
   );
   const characterLimit = catalogInputLimit(
     model,
     draft,
     'characters',
     model?.inputs.characterReferences?.max ?? 0,
+    'elements',
   );
   const frameModeLabel = model?.inputModes?.find((mode) => (
     mode.slots.some((slot) => slot.role === 'startFrame' || slot.role === 'endFrame')
@@ -2841,30 +2869,22 @@ function VideoCreatorComposer({
           <View style={{ gap: 2 }}>
             <Text style={{ color: appTheme.colors.text, fontSize: 12, fontWeight: '800' }}>{draft.isMultiShot ? 'Story inputs' : 'Visual inputs'}</Text>
             <Text style={{ color: appTheme.colors.muted, fontSize: 11 }}>
-              {referenceMode === 'frames' ? draft.isMultiShot ? 'Start frame for the story' : 'Start and end frames' : 'Reusable references'}
+              {framesLockedByReferences
+                ? `${frameModeLabel} unavailable with references attached`
+                : referencesLockedByFrames
+                  ? `${reusableModeLabel} unavailable with frames attached`
+                  : framesExcludeReferences
+                    ? `${frameModeLabel} or ${reusableModeLabel} — one per run`
+                    : draft.isMultiShot ? 'Start frame for the story' : 'Frames and references'}
             </Text>
           </View>
-          {supportsFrames && supportsReusable ? (
-            <View testID="video-reference-mode" style={{ flexDirection: 'row', borderRadius: 14, backgroundColor: appTheme.colors.surfaceStrong, padding: 3 }}>
-              {(['frames', 'elements'] as const).map((mode) => (
-                <Pressable
-                  key={mode}
-                  accessibilityRole="button"
-                  accessibilityLabel={mode === 'frames' ? frameModeLabel : reusableModeLabel}
-                  accessibilityState={{ selected: referenceMode === mode }}
-                  onPress={() => onChange({ ...draft, referenceMode: mode })}
-                  hitSlop={verticalHitSlop(42)}
-                  style={({ pressed }) => ({ minHeight: 42, borderRadius: 11, paddingHorizontal: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: referenceMode === mode ? 'rgba(115,191,242,0.14)' : pressed ? appTheme.colors.pressed : 'transparent', opacity: pressed ? appTheme.opacity.pressed : 1 })}
-                >
-                  <Text style={{ color: referenceMode === mode ? appTheme.colors.text : appTheme.colors.muted, fontSize: 11, fontWeight: '800' }}>{mode === 'frames' ? frameModeLabel : reusableModeLabel}</Text>
-                </Pressable>
-              ))}
-            </View>
-          ) : null}
         </View>
 
-        {referenceMode === 'frames' && supportsFrames ? (
-          <>
+        {supportsFrames ? (
+          <View
+            pointerEvents={framesLockedByReferences ? 'none' : 'auto'}
+            style={{ gap: 6, opacity: framesLockedByReferences ? 0.4 : 1 }}
+          >
             <View testID="video-frame-slots" style={{ flexDirection: 'row', gap: 9 }}>
               {supportsStartFrame ? (
                 <CompactReferenceSlot testID="video-start-frame-slot" title={startFrameSlot?.label ?? 'Start frame'} helper="First visual" media={draft.startFrame} required={(startFrameSlot?.min ?? (model?.id === 'hailuo-2.3' ? 1 : 0)) > 0} isUploading={isUploading} onAdd={onUploadStart} onOpen={() => setReferenceId(draft.startFrame?.id ?? null)} />
@@ -2884,9 +2904,15 @@ function VideoCreatorComposer({
               ) : null}
             </View>
             {frameError ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.amber, fontSize: 11, fontWeight: '700', lineHeight: 15 }}>{frameError}</Text> : null}
-          </>
-        ) : supportsReusable ? (
-          <View testID="video-reusable-reference-rail" style={{ gap: 10 }}>
+          </View>
+        ) : null}
+
+        {supportsReusable ? (
+          <View
+            testID="video-reusable-reference-rail"
+            pointerEvents={referencesLockedByFrames ? 'none' : 'auto'}
+            style={{ gap: 10, opacity: referencesLockedByFrames ? 0.4 : 1 }}
+          >
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingRight: 6 }}>
               {draft.references.map((media) => (
                 <Pressable key={media.id} accessibilityRole="button" accessibilityLabel={`Open details for ${mediaAccessibleName(media)}`} onPress={() => setReferenceId(media.id)} style={({ pressed }) => ({ width: 72, gap: 5, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
@@ -2924,7 +2950,9 @@ function VideoCreatorComposer({
               <PreparedReferenceIds title="Prepared character IDs" accessibilityLabel="Prepared character ID" placeholder="Paste prepared character ID" items={draft.characterIds} max={characterLimit} onChange={(items) => onChange({ ...draft, characterIds: items })} />
             ) : null}
           </View>
-        ) : (
+        ) : null}
+
+        {supportsFrames || supportsReusable ? null : (
           <Text style={{ color: appTheme.colors.muted, fontSize: 11 }}>This model creates from text without reference media.</Text>
         )}
       </View>

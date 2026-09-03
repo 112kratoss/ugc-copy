@@ -37,6 +37,53 @@ describe('descriptor-driven affordances', () => {
     expect(fromDescriptor.namedVideoElements.enabled, `${modelId} namedVideoElements`).toBe(fromFallback.namedVideoElements.enabled);
   });
 
+  it.each(videoModelIds)('%s: reference capacity is reachable from the default state', (modelId) => {
+    // The create surfaces open in the frames shape with nothing attached. Reading capacity
+    // off the slots active for *that* shape reported zero for every model whose references
+    // sit behind a condition, and the control that satisfied the condition was itself gated
+    // on the capacity — so the references were unreachable in a fresh session. Capacity must
+    // answer "can this model take references at all", independent of what is attached now.
+    const settings = { mode: modelId === 'veo-3.1' ? 'veo3_fast' : undefined };
+    const fresh = getVideoInputAffordances(descriptorFor(modelId), modelId, { ...settings, referenceMode: 'frames' });
+    const engaged = getVideoInputAffordances(descriptorFor(modelId), modelId, { ...settings, referenceMode: 'elements' });
+
+    expect(fresh.elements.enabled, `${modelId} elements.enabled`).toBe(engaged.elements.enabled);
+    expect(fresh.elements.maxTotal, `${modelId} elements.maxTotal`).toBe(engaged.elements.maxTotal);
+    expect(fresh.referenceVideos.max, `${modelId} referenceVideos.max`).toBe(engaged.referenceVideos.max);
+    expect(fresh.referenceAudios.max, `${modelId} referenceAudios.max`).toBe(engaged.referenceAudios.max);
+  });
+
+  it('reports Seedance 2.5 reference slots with nothing attached', () => {
+    // The reported case: the model publishes 5 image, 3 video and 3 audio reference slots
+    // and the page rendered none of them.
+    const fresh = getVideoInputAffordances(descriptorFor('seedance-2-5'), 'seedance-2-5', { referenceMode: 'frames' });
+    expect(fresh.elements.enabled).toBe(true);
+    expect(fresh.elements.maxTotal).toBe(5);
+    expect(fresh.referenceVideos.max).toBe(3);
+    expect(fresh.referenceAudios.max).toBe(3);
+  });
+
+  it('marks frames and references exclusive only where the provider forks', () => {
+    // Verified against Kie's live model docs. Seedance sends every field to one endpoint but
+    // documents the two as mutually exclusive scenarios; minimax-h3 and kling-o3 route
+    // references to an endpoint carrying no frame field; wan-2.7's r2v takes `first_frame`
+    // alongside `reference_image` and `reference_video`, so both groups stay live there.
+    const exclusive = (modelId: VideoModelId) => getVideoInputAffordances(
+      descriptorFor(modelId),
+      modelId,
+      { referenceMode: 'frames', mode: modelId === 'veo-3.1' ? 'veo3_fast' : undefined },
+    ).framesExcludeReferences;
+
+    expect(exclusive('seedance-2-5')).toBe(true);
+    expect(exclusive('minimax-h3')).toBe(true);
+    expect(exclusive('kling-o3')).toBe(true);
+    expect(exclusive('wan-2.7')).toBe(false);
+    // No frame slots at all, so there is nothing for references to exclude.
+    expect(exclusive('gemini-omni-video')).toBe(false);
+    // No reference slots, likewise.
+    expect(exclusive('hailuo-2.3')).toBe(false);
+  });
+
   it('caps Kling O3 named subjects below its total reference capacity', () => {
     const affordances = getVideoInputAffordances(descriptorFor('kling-o3'), 'kling-o3', { referenceMode: 'elements' });
     expect(affordances.elements.maxTotal).toBe(7);

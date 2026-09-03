@@ -1147,12 +1147,36 @@ export function hydrateCreationDraftFromRemixSource(
   return hydrateMotionDraftFromRemixSource(baseDraft, bundle);
 }
 
+/**
+ * Which reference shape a run uses, read off what is attached rather than a stored mode.
+ *
+ * The create screen shows every slot a model declares at once, so nothing selects a mode
+ * any more. Deriving it here keeps the answer from drifting away from the attachments the
+ * way a separately persisted `draft.referenceMode` could — and Gemini Omni has no frame
+ * slots at all, so it is always in the reference shape.
+ */
+export function videoDraftReferenceMode(draft: VideoCreationDraft): ReferenceMode {
+  if (draft.model === 'gemini-omni-video') return 'elements';
+  const hasReferences = draft.references.length > 0
+    || draft.referenceVideos.length > 0
+    || draft.referenceAudios.length > 0
+    || draft.preparedAudioIds.length > 0
+    || draft.characterIds.length > 0;
+  return hasReferences ? 'elements' : 'frames';
+}
+
 export function getVideoElementSupport(model: VideoModelId, options: { mode?: string; isMultiShot?: boolean } = {}) {
   if (options.isMultiShot) {
     return { enabled: false, maxElements: 0, reason: 'Reusable references are available in single-shot only.' };
   }
   if (model === 'seedance-1.5-pro') return { enabled: true, maxElements: 2, reason: null };
   if (model === 'seedance-2' || model === 'seedance-2-fast' || model === 'seedance-2-mini' || model === 'wan-2.7') return { enabled: true, maxElements: 5, reason: null };
+  // seedance-2-5, kling-o3 and minimax-h3 shipped publishing reference capacity with no
+  // branch here, so validateVideoDraft rejected every reference they advertised. The web
+  // catalog is the source of these numbers; kling-o3's 7 covers 3 named subjects plus
+  // plain references.
+  if (model === 'seedance-2-5' || model === 'minimax-h3') return { enabled: true, maxElements: 5, reason: null };
+  if (model === 'kling-o3') return { enabled: true, maxElements: 7, reason: null };
   if (model === 'happyhorse-1.1') return { enabled: true, maxElements: 9, reason: null };
   if (model === 'gemini-omni-video') return { enabled: true, maxElements: 7, reason: null };
   if (model === 'veo-3.1') {
@@ -1224,7 +1248,7 @@ function validateImageDraft(draft: ImageCreationDraft): CreationValidationResult
 function validateVideoDraft(draft: VideoCreationDraft): CreationValidationResult {
   const errors: string[] = [];
   const model = bundledVideoModel(draft.model);
-  const usesReusableReferences = draft.referenceMode === 'elements';
+  const usesReusableReferences = videoDraftReferenceMode(draft) === 'elements';
   const activeReferences = usesReusableReferences ? draft.references : [];
   const activeReferenceVideos = usesReusableReferences ? draft.referenceVideos : [];
   const activeReferenceAudios = usesReusableReferences ? draft.referenceAudios : [];
@@ -1264,8 +1288,8 @@ function validateVideoDraft(draft: VideoCreationDraft): CreationValidationResult
   if (unknown.length > 0) {
     errors.push(`Unknown element mention${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}`);
   }
-  if (knownMentions.length > 0 && draft.referenceMode !== 'elements') {
-    errors.push('Switch reference mode to Elements before using @handles.');
+  if (knownMentions.length > 0 && !usesReusableReferences) {
+    errors.push('Attach the reference images your @handles name before generating.');
   }
 
   if (draft.isMultiShot && activeEndFrame) {
@@ -1492,7 +1516,7 @@ function imageReferenceSummary(count: number) {
 }
 
 function videoReferenceSummary(draft: VideoCreationDraft) {
-  if (draft.referenceMode === 'elements') {
+  if (videoDraftReferenceMode(draft) === 'elements') {
     return `Reusable refs · ${draft.references.length === 0 ? 'no image references' : `${draft.references.length} image reference${draft.references.length === 1 ? '' : 's'}`}`;
   }
 
@@ -1557,7 +1581,7 @@ function mediaReadiness(draft: CreationDraft): CreationReadinessItem {
   }
 
   if (draft.tool === 'video') {
-    const attachedCount = draft.referenceMode === 'elements'
+    const attachedCount = videoDraftReferenceMode(draft) === 'elements'
       ? draft.references.length
       : [draft.startFrame, draft.endFrame].filter(Boolean).length;
     return {
@@ -1631,7 +1655,7 @@ export function buildGenerationPayload(draft: CreationDraft): ImageGenerationReq
   }
 
   if (draft.tool === 'video') {
-    const usesReusableReferences = draft.referenceMode === 'elements';
+    const usesReusableReferences = videoDraftReferenceMode(draft) === 'elements';
     const references = namedReferences(usesReusableReferences ? draft.references : []);
     const imageUrls = references.map((reference) => reference.url);
     return {
@@ -1656,7 +1680,7 @@ export function buildGenerationPayload(draft: CreationDraft): ImageGenerationReq
       duration: draft.duration,
       resolution: draft.resolution,
       fixedLens: bundledVideoModel(draft.model).supportsFixedLens ? draft.fixedLens : false,
-      referenceMode: draft.referenceMode,
+      referenceMode: videoDraftReferenceMode(draft),
       seedanceAssets: null,
       sourceGenerationId: draft.sourceGenerationId ?? null,
     };
@@ -1710,7 +1734,7 @@ export function buildPromptEnhancementRequest(
   }
 
   if (draft.tool === 'video') {
-    const usesReusableReferences = draft.referenceMode === 'elements';
+    const usesReusableReferences = videoDraftReferenceMode(draft) === 'elements';
     const references = namedReferences(usesReusableReferences ? draft.references : []);
     const frameImageUrls = enhancerFrameImageUrls(draft, usesReusableReferences);
     return {
@@ -1785,7 +1809,7 @@ export function applyModelDefaults(draft: CreationDraft): CreationDraft {
       referenceVideos: supportsMultimodalVideoReferences(draft.model) ? draft.referenceVideos.slice(0, draft.model === 'gemini-omni-video' ? 1 : draft.model === 'wan-2.7' ? 5 : 3) : [],
       preparedAudioIds: draft.model === 'gemini-omni-video' ? preparedVideoAudioIds(draft).slice(0, 3) : [],
       characterIds: draft.model === 'gemini-omni-video' ? preparedVideoCharacterIds(draft).slice(0, 3) : [],
-      referenceMode: draft.model === 'gemini-omni-video' ? 'elements' : draft.referenceMode,
+      referenceMode: videoDraftReferenceMode(draft),
       references: draft.references.slice(0, getVideoElementSupport(draft.model, { mode: draft.mode, isMultiShot: draft.isMultiShot }).maxElements),
     };
   }
