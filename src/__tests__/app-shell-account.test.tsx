@@ -149,8 +149,19 @@ describe('AppShellAccount', () => {
         },
       });
 
-    act(() => window.dispatchEvent(new Event('credits_updated')));
-    await waitFor(() => expect(mocks.maybeSingle).toHaveBeenCalledTimes(2));
+    // `credits_updated` is a one-shot event and the listener only issues a fetch once
+    // `session` has landed — `refreshCredits` returns early on a falsy `session.user.id`.
+    // Nothing rendered while the menu is closed is derived from `session` alone
+    // (`displayName` and `avatarUrl` both fall back to `profile`), so awaiting the credit
+    // balance above proves `profile` arrived, not that the listener is live yet. Dispatch
+    // until it registers rather than assuming one instant: the listener calls `maybeSingle`
+    // synchronously, so the guard below cannot overshoot two calls.
+    await waitFor(() => {
+      if (mocks.maybeSingle.mock.calls.length < 2) {
+        act(() => window.dispatchEvent(new Event('credits_updated')));
+      }
+      expect(mocks.maybeSingle).toHaveBeenCalledTimes(2);
+    });
 
     const secondSession = {
       ...authenticatedSession,
