@@ -336,12 +336,16 @@ const VIDEO_INPUT_LIMITS: Record<VideoModelId, VideoInputLimits> = {
   'seedance-2': { images: 5, videos: 3, audios: 3, startFrame: true, endFrame: true },
   'seedance-2-fast': { images: 5, videos: 3, audios: 3, startFrame: true, endFrame: true },
   'seedance-2-mini': { images: 5, videos: 3, audios: 3, startFrame: true, endFrame: true },
-  'seedance-2-5': { images: 5, videos: 3, audios: 3, startFrame: true, endFrame: true },
+  // Kie's seedance-2-5 spec caps the reference arrays far above the rest of the family:
+  // 30 images, 10 videos, 10 audios. The 30s combined-duration ceiling on reference
+  // videos is unchanged, so the extra video slots buy more clips, not more footage.
+  'seedance-2-5': { images: 30, videos: 10, audios: 10, startFrame: true, endFrame: true },
   // Kling O3 has no discrete frame slots — image-to-video and reference-to-video both
   // take `image_urls`, so the start frame stands in for the single-image variant.
   'kling-o3': { images: 7, videos: 0, audios: 0, startFrame: true, endFrame: false },
   // MiniMax bills for input images past the first five, so we cap references there.
-  'minimax-h3': { images: 5, videos: 1, audios: 1, startFrame: true, endFrame: true },
+  // minimax-h3/reference-to-video: 9 images, 3 videos (15s combined), 3 audios.
+  'minimax-h3': { images: 9, videos: 3, audios: 3, startFrame: true, endFrame: true },
   'seedance-1.5-pro': { images: 2, videos: 0, audios: 0, startFrame: true, endFrame: true },
   'grok-imagine-video': { images: 1, videos: 0, audios: 0, startFrame: true, endFrame: false },
   'kling-3.0-video': { images: 0, videos: 3, audios: 0, startFrame: true, endFrame: true },
@@ -359,14 +363,25 @@ function getVideoInputLimits(modelId: VideoModelId): VideoInputLimits {
 }
 
 /** Longest reference clip a Seedance model accepts, which tracks its own output ceiling. */
-function seedanceReferenceCapSeconds(modelId: VideoModelId): number {
-  return modelId === 'seedance-2-5' ? 30 : 15;
+/**
+ * Per-asset ceiling for reference video and audio, in seconds. Every model here caps a
+ * single asset at the same figure Kie caps the combined total at, so one number serves
+ * both the slot's `maxDurationSeconds` and its `combined-duration` constraint.
+ * Seedance 2.5 reaches 30s where the rest of the Seedance 2 family stops at 15, and
+ * minimax-h3 caps both its reference arrays at 15s total.
+ */
+function referenceAssetCapSeconds(modelId: VideoModelId): number | undefined {
+  if (modelId === 'seedance-2-5') return 30;
+  if (modelId.startsWith('seedance-2')) return 15;
+  if (modelId === 'minimax-h3') return 15;
+  return undefined;
 }
 
 function videoInputModes(
   modelId: VideoModelId,
   limits: ReturnType<typeof getVideoInputLimits>,
 ): CatalogInputMode[] {
+  const videoCapSeconds = referenceAssetCapSeconds(modelId);
   const modes: CatalogInputMode[] = [];
   const frameSlots: CatalogInputSlot[] = [];
   if (limits.startFrame) {
@@ -428,10 +443,13 @@ function videoInputModes(
       min: 0,
       max: limits.videos,
       ...(isNamedVideoElementSlot ? { supportsNaming: true } : {}),
-      durationMetadata: modelId.startsWith('seedance-2') ? 'required' : 'optional',
-      // Seedance 2.5 shares the `seedance-2` prefix but generates up to 30s, so the
-      // family's 15s reference cap would wrongly truncate it.
-      ...(modelId.startsWith('seedance-2') ? { maxDurationSeconds: seedanceReferenceCapSeconds(modelId) } : {}),
+      // A combined-duration ceiling is only enforceable when every asset reports its
+      // length — a client that stays silent would otherwise sum to zero and sail past
+      // it. So the models that carry one demand the metadata, and the manifest
+      // validator refuses to ship the constraint without it. Seedance additionally
+      // prices on reference-video seconds and could not quote without them.
+      durationMetadata: videoCapSeconds !== undefined ? 'required' : 'optional',
+      ...(videoCapSeconds !== undefined ? { maxDurationSeconds: videoCapSeconds } : {}),
     };
     if (isNamedVideoElementSlot) {
       videoElementSlots.push(videoSlot);
@@ -448,7 +466,7 @@ function videoInputModes(
       min: 0,
       max: limits.audios,
       durationMetadata: 'optional',
-      ...(modelId.startsWith('seedance-2') ? { maxDurationSeconds: seedanceReferenceCapSeconds(modelId) } : {}),
+      ...(videoCapSeconds !== undefined ? { maxDurationSeconds: videoCapSeconds } : {}),
     });
   }
   if (modelId === 'wan-2.7') {
@@ -551,9 +569,10 @@ function videoInputConstraints(modelId: VideoModelId): CatalogInputConstraint[] 
       message: 'Gemini Omni supports seven reference slots; videos use two and characters use one.',
     }];
   }
-  if (modelId.startsWith('seedance-2')) {
-    // Tracks the model's own output ceiling: 2.5 reaches 30s, the rest stop at 15.
-    const max = seedanceReferenceCapSeconds(modelId);
+  // Kie caps the *combined* duration of reference videos independently of how many
+  // files it accepts, so raising a file cap never buys more usable footage.
+  const max = referenceAssetCapSeconds(modelId);
+  if (max !== undefined) {
     return [
       {
         type: 'combined-duration',

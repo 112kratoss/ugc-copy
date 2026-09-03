@@ -37,6 +37,16 @@ async function slugs() {
   console.error(`\n${matches.length} market slugs.`);
 }
 
+/**
+ * Lines that change what a published price MEANS without themselves quoting one.
+ * Seedance 2.5's 1080p tier listed 114 / 68.5 credits/s under "Limited-Time 1080P Offer:
+ * 28% OFF until Sep 17, 2026 06:00 UTC (prices above already reflect the discount)" — no
+ * digit-plus-"credits" anywhere in it, so the credit scan below never printed it and the
+ * figures read as permanent. A catalog release does not reprice itself on a date, so
+ * pinning a discounted rate silently under-bills the moment the offer lapses.
+ */
+const QUALIFIER_PATTERN = /[^"\n]{0,80}(?:limited[- ]time|% off|discount|promotion|promotional|offer ends|until \w+ \d|\d+% of the official)[^"\n]{0,160}/gi;
+
 async function price(slug) {
   const html = (await fetchText(`https://kie.ai/${slug}`)).replaceAll('\\n', '\n');
   const seen = new Set();
@@ -51,6 +61,22 @@ async function price(slug) {
   if (seen.size === 0) {
     console.error('No credit lines found — the model may be unpriced (see PixVerse precedent).');
     process.exitCode = 2;
+  }
+
+  // Scan only this model's own pricingDesc. Scanning the whole page drowns the signal in
+  // the site's i18n bundle, which is full of unrelated discount strings.
+  const qualifiers = new Set();
+  for (const block of html.matchAll(/"pricingDesc":"((?:[^"\\]|\\.)*)"/g)) {
+    const desc = block[1].replaceAll('\\n', '\n').replaceAll('\\"', '"');
+    for (const line of desc.split('\n')) {
+      if (QUALIFIER_PATTERN.test(line.trim())) qualifiers.add(line.trim());
+      QUALIFIER_PATTERN.lastIndex = 0;
+    }
+  }
+  if (qualifiers.size > 0) {
+    console.error('\n!! This model\'s price carries a qualifier. Do NOT pin the figures as-is:');
+    for (const line of qualifiers) console.error(`   ${line}`);
+    console.error('   Work out the undiscounted rate, or confirm the intent, before shipping.');
   }
 }
 

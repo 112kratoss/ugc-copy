@@ -12,11 +12,13 @@ import {
   getCreationReadiness,
   getCreationSectionOrder,
   getCreationSectionSummary,
+  getVideoElementSupport,
   getVisibleGenerationCheckMessages,
   hydrateCreationDraftFromRemixSource,
   renameMediaDraft,
   replaceMediaDraftMedia,
   validateCreationDraft,
+  videoDraftReferenceMode,
   VIDEO_MODELS,
   type MediaDraft,
 } from '../lib/media-creation-view-model';
@@ -836,10 +838,45 @@ describe('media creation view model', () => {
       enhancementLevel: 'faithful',
     });
 
-    // Default level stays implicit, and element mode never leaks frame urls.
+    // Default level stays implicit, and element mode never leaks frame urls. The mode is
+    // derived from what is attached now, so a reference makes the draft elements-shaped —
+    // setting the field alone no longer does.
     const defaultRequest = buildPromptEnhancementRequest(draft);
     expect(defaultRequest.context?.enhancementLevel).toBeUndefined();
-    const elementsDraft = { ...draft, referenceMode: 'elements' as const };
+    const elementsDraft = {
+      ...draft,
+      references: [imageReference({ url: 'https://cdn.example.com/ref.png', storagePath: 'uploads/user/ref.png', displayName: 'Hero', fileName: 'ref.png' })],
+    };
     expect(buildPromptEnhancementRequest(elementsDraft).context?.frameImageUrls).toBeUndefined();
+  });
+
+  it('derives the reference mode from what is attached, and validates the models that had no branch', () => {
+    // seedance-2-5, kling-o3 and minimax-h3 published reference capacity that
+    // getVideoElementSupport had no branch for, so validateVideoDraft rejected every
+    // reference they advertised with "not available for this model yet".
+    for (const model of ['seedance-2-5', 'kling-o3', 'minimax-h3'] as const) {
+      expect(getVideoElementSupport(model).enabled, `${model} element support`).toBe(true);
+      expect(getVideoElementSupport(model).maxElements).toBeGreaterThan(0);
+    }
+
+    const base = { ...createDefaultCreationDraft('video'), prompt: 'A hero turns to camera.', model: 'seedance-2' as const };
+    expect(videoDraftReferenceMode(base)).toBe('frames');
+
+    const withReference = {
+      ...base,
+      references: [imageReference({ url: 'https://cdn.example.com/ref.png', storagePath: 'uploads/user/ref.png', displayName: 'Hero', fileName: 'ref.png' })],
+    };
+    expect(videoDraftReferenceMode(withReference)).toBe('elements');
+    expect(validateCreationDraft(withReference).errors).toEqual([]);
+
+    // A frame alone keeps the run frame-shaped, so the payload still carries it.
+    const withFrame = {
+      ...base,
+      startFrame: imageReference({ url: 'https://cdn.example.com/start.png', storagePath: 'uploads/user/start.png', displayName: 'Start', fileName: 'start.png' }),
+    };
+    expect(videoDraftReferenceMode(withFrame)).toBe('frames');
+
+    // Gemini Omni declares no frame slots, so it is always reference-shaped.
+    expect(videoDraftReferenceMode({ ...base, model: 'gemini-omni-video' as const })).toBe('elements');
   });
 });

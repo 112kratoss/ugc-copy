@@ -800,8 +800,8 @@ export const VIDEO_MODELS = {
             default: 5,
         } as const,
         modeOptions: [] as const,
-        // 2.5 trades the 1080p/4k tiers of Seedance 2 for longer output.
-        resolutions: ['480p', '720p'] as const,
+        // 2.5 reaches 1080p but not the 4k tier of Seedance 2, and generates twice as long.
+        resolutions: ['480p', '720p', '1080p'] as const,
         pricing: {
             '480p': {
                 noVideo: 28,
@@ -810,6 +810,15 @@ export const VIDEO_MODELS = {
             '720p': {
                 noVideo: 63,
                 withVideo: 38,
+            },
+            // 480p and 720p are Kie's listed price passed through. 1080p is not: Kie
+            // currently lists 114 / 68.5 under a "Limited-Time 1080P Offer: 28% OFF until
+            // Sep 17, 2026 06:00 UTC", and we bill the standard rate behind it
+            // (114/0.72, 68.5/0.72, rounded up) so the tier stays correct when the offer
+            // lapses rather than silently under-billing the day it does.
+            '1080p': {
+                noVideo: 159,
+                withVideo: 96,
             },
         },
     },
@@ -859,9 +868,11 @@ export const VIDEO_MODELS = {
         modeOptions: [] as const,
         // The provider spells these with an uppercase P; the value is sent verbatim.
         resolutions: ['768P', '2K'] as const,
+        // Kie's listed rate. Their "Pricing is 50% of the official price" line is a
+        // standing discount against MiniMax's own API, not a dated offer.
         pricing: {
-            '768P': 16,
-            '2K': 26,
+            '768P': 8,
+            '2K': 13,
         },
     },
 } as const;
@@ -892,13 +903,18 @@ export function getVideoElementSupport(
         };
     }
 
-    if (modelId === 'seedance-2' || modelId === 'seedance-2-fast' || modelId === 'seedance-2-mini' || modelId === 'seedance-2-5' || modelId === 'wan-2.7') {
+    if (modelId === 'seedance-2' || modelId === 'seedance-2-fast' || modelId === 'seedance-2-mini' || modelId === 'wan-2.7') {
         return {
             enabled: true,
             maxElements: 5,
             maxNamed: 5,
             reason: null,
         };
+    }
+
+    // 2.5's reference_image_urls takes 30 where the rest of the family stops at 5.
+    if (modelId === 'seedance-2-5') {
+        return { enabled: true, maxElements: 30, maxNamed: 30, reason: null };
     }
 
     // Kling O3 accepts 7 reference images and names at most 3 of them as subjects the
@@ -908,7 +924,7 @@ export function getVideoElementSupport(
     }
 
     if (modelId === 'minimax-h3') {
-        return { enabled: true, maxElements: 5, maxNamed: 5, reason: null };
+        return { enabled: true, maxElements: 9, maxNamed: 9, reason: null };
     }
 
     if (modelId === 'happyhorse-1.1') {

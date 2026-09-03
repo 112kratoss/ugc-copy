@@ -639,7 +639,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [klingVideoElements, setKlingVideoElements] = useState<KlingVideoElementDraft[]>([]);
     const [klingSubjects, setKlingSubjects] = useState<KlingSubjectDraft[]>([]);
     const klingSubjectsRef = useRef<KlingSubjectDraft[]>([]);
-    const [referenceMode, setReferenceMode] = useState<'frames' | 'elements'>('frames');
     const [elementNameDrafts, setElementNameDrafts] = useState<Record<string, string>>({});
     const [klingVideoNameDrafts, setKlingVideoNameDrafts] = useState<Record<string, string>>({});
     const [startImageFile, setStartImageFile] = useState<File | null>(null);
@@ -925,11 +924,33 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     // Capabilities come from the model's catalog descriptor, so what the picker offers
     // and what the server accepts cannot drift apart. Before the catalog loads the
     // module falls back to the previous hardcoded tables, keeping first paint identical.
+    // Every input the model can take is on screen at once; which shape the run uses is
+    // read back off what is attached rather than chosen from a mode toggle. Kie's own
+    // playground lays the fields out flat this way, and a derived mode cannot disagree
+    // with the attachments the way a separately persisted one could.
+    const hasFrameAttachment = Boolean(startImageUrl || startImageFile || endImageUrl || endImageFile);
+    const hasReferenceAttachment = elements.length > 0
+        || referenceVideos.length > 0
+        || referenceAudios.length > 0
+        || preparedAudioIds.length > 0
+        || characterIds.length > 0;
     const affordances = getVideoInputAffordances(
         (videoModel as { catalogDescriptor?: GenerationModelDescriptor }).catalogDescriptor,
         selectedModel,
-        { referenceMode, mode: currentMode, isMultiShot: currentIsMultiShot },
+        {
+            referenceMode: hasReferenceAttachment ? 'elements' : 'frames',
+            mode: currentMode,
+            isMultiShot: currentIsMultiShot,
+        },
     );
+    // Providers that cannot take both shapes in one request get a live mutual lock instead
+    // of a hidden mode: the other group stays visible, greyed, with the reason on it.
+    // Only ever lock the empty side. A draft can hold both — the previous surface kept the
+    // frames while you worked in references — and locking each against the other leaves a
+    // panel where nothing can be removed, so nothing can be unlocked either.
+    const framesLockedByReferences = affordances.framesExcludeReferences && hasReferenceAttachment && !hasFrameAttachment;
+    const referencesLockedByFrames = affordances.framesExcludeReferences && hasFrameAttachment && !hasReferenceAttachment;
+    const framesAndReferencesConflict = affordances.framesExcludeReferences && hasFrameAttachment && hasReferenceAttachment;
     const videoElementSupport = {
         enabled: affordances.elements.enabled,
         maxElements: affordances.elements.maxTotal,
@@ -942,6 +963,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     // quotable regardless of which reference mode is showing.
     const videoElementsSlotActive = affordances.namedVideoElements.enabled;
     const combinesFrameWithReferences = affordances.combineFramesWithReferences;
+    const supportsStartFrame = affordances.frames.start;
     const supportsEndFrame = affordances.frames.end;
     const activeSupportsEndFrame = supportsEndFrame && !combinesFrameWithReferences;
     const referenceVideoLimit = affordances.referenceVideos.max;
@@ -1112,14 +1134,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         })
         : [];
     const showKlingVideoElementEditor = isKlingVideoModel;
-    const showElementEditor = !currentIsMultiShot && canUseVideoElements && activeReferenceMode === 'elements';
-    const showFramesEditor = activeReferenceMode === 'frames' || combinesFrameWithReferences;
-    const hiddenElementDraftCount = activeReferenceMode === 'frames' ? elements.length : 0;
-    const hiddenFrameDraftCount = activeReferenceMode === 'elements' && !combinesFrameWithReferences
-        ? [startImageUrl, endImageUrl].filter(Boolean).length
-        : 0;
-    const showSavedElementNotice = !canUseVideoElements && !currentIsMultiShot && (elements.length > 0 || referenceMode === 'elements');
-    const showMultiShotElementNotice = currentIsMultiShot && (elements.length > 0 || referenceMode === 'elements' || (hasKnownElementMentions && !hasKnownKlingVideoMentions));
+    const showElementEditor = !currentIsMultiShot && canUseVideoElements;
+    const showFramesEditor = supportsStartFrame || supportsEndFrame;
+    const showSavedElementNotice = !canUseVideoElements && !currentIsMultiShot && elements.length > 0;
+    const showMultiShotElementNotice = currentIsMultiShot && (elements.length > 0 || (hasKnownElementMentions && !hasKnownKlingVideoMentions));
     // Enhance-time frame uploads, cached briefly so repeated enhance clicks on
     // the same attached file don't re-upload it every time.
     const enhanceFrameUploadCacheRef = useRef<Map<File, { url: string; at: number }>>(new Map());
@@ -1369,9 +1387,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 if (settings?.sound !== undefined) setSound(settings.sound);
                 if (settings?.resolution) setResolution(settings.resolution);
                 if (settings?.fixedLens !== undefined) setFixedLens(settings.fixedLens);
-                if (settings?.referenceMode === 'frames' || settings?.referenceMode === 'elements') {
-                    setReferenceMode(settings.referenceMode);
-                }
                 setPreparedAudioIds(settings?.preparedAudioIds?.filter((value) => typeof value === 'string' && value.trim()).slice(0, 3) ?? []);
                 setCharacterIds(settings?.characterIds?.filter((value) => typeof value === 'string' && value.trim()).slice(0, 3) ?? []);
                 setMode(nextMode);
@@ -1380,7 +1395,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 const restoredSeedanceAssets = settings?.seedanceAssets ?? null;
 
                 if (isSeedance2VideoModelId(nextModelId)) {
-                    setReferenceMode('elements');
                     const elementSupport = getVideoElementSupport(nextModelId, {
                         mode: nextMode,
                         isMultiShot: nextIsMultiShot,
@@ -1466,8 +1480,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     setEndImageUrl(null);
                     setEndFrameDescriptor(null);
                 } else {
-                    const restoreMode = restoredVideoInputs?.referenceMode === 'elements' ? 'elements' : 'frames';
-                    setReferenceMode(restoreMode);
 	                    commitElements([]);
 	                    commitReferenceVideos([]);
 	                    commitReferenceAudios([]);
@@ -1554,7 +1566,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                    savedStartImage,
 	                    savedEndImage,
 	                    savedElements,
-	                    savedReferenceMode,
 	                    savedReferenceVideos,
 	                    savedReferenceAudios,
 	                    savedKlingVideoElements,
@@ -1564,7 +1575,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                    getPersistedFile(PERSISTED_MEDIA_KEYS.createVideoStartImage),
 	                    getPersistedFile(PERSISTED_MEDIA_KEYS.createVideoEndImage),
 	                    getPersistedImageElementRecords(PERSISTED_MEDIA_KEYS.createVideoElements),
-	                    getPersistedValue<'frames' | 'elements'>(PERSISTED_MEDIA_KEYS.createVideoReferenceMode),
 	                    getPersistedMediaRecords(PERSISTED_MEDIA_KEYS.createVideoReferenceVideos),
 	                    getPersistedMediaRecords(PERSISTED_MEDIA_KEYS.createVideoReferenceAudios),
 	                    getPersistedMediaRecords(PERSISTED_MEDIA_KEYS.createVideoKlingVideoElements),
@@ -1573,10 +1583,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                ]);
 
                 if (!isMounted) return;
-
-                if (savedReferenceMode === 'frames' || savedReferenceMode === 'elements') {
-                    setReferenceMode(savedReferenceMode);
-                }
 
                 if (savedStartImage) {
                     setStartImageFile(savedStartImage);
@@ -1707,17 +1713,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         updateShotMentionState(shot.id, shot.prompt);
     };
 
-    const setReferenceModeWithPersistence = async (nextMode: 'frames' | 'elements') => {
-        setReferenceMode(nextMode);
-        if (remixId) {
-            return;
-        }
-        await setPersistedValue(PERSISTED_MEDIA_KEYS.createVideoReferenceMode, nextMode);
-    };
-
     const persistFrame = async (file: File, type: 'start' | 'end') => {
-        await setReferenceModeWithPersistence('frames');
-
         if (type === 'start') {
             revokeObjectUrl(startImageUrl);
             setStartImageFile(file);
@@ -1757,7 +1753,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         const nextElements = hydrateVideoElements([...currentElements, ...newElements]);
         commitElements(nextElements);
         await persistVideoElements(nextElements);
-        await setReferenceModeWithPersistence('elements');
         await persistSeedanceAssets(nextElements, referenceVideosRef.current, referenceAudiosRef.current);
     };
 
@@ -2143,7 +2138,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         updateMentionState(prompt);
     };
 
-    const handleInsertPromptHandle = (handle: string, kind: 'image' | 'video') => {
+    const handleInsertPromptHandle = (handle: string) => {
         const textarea = promptTextareaRef.current;
         const selectionStart = textarea?.selectionStart ?? prompt.length;
         const selectionEnd = textarea?.selectionEnd ?? prompt.length;
@@ -2155,10 +2150,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             activeMentionQuery
         );
 
-        if (kind === 'image' && !currentIsMultiShot && canUseVideoElements && activeReferenceMode !== 'elements') {
-            void setReferenceModeWithPersistence('elements');
-        }
-
         setPrompt(nextValue.prompt);
         setActiveMentionQuery(null);
 
@@ -2169,7 +2160,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     };
 
     const handleInsertElementHandle = (handle: string) => {
-        handleInsertPromptHandle(handle, 'image');
+        handleInsertPromptHandle(handle);
     };
 
     const handleInsertKlingVideoHandle = (handle: string) => {
@@ -2181,7 +2172,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return;
         }
 
-        handleInsertPromptHandle(handle, 'video');
+        handleInsertPromptHandle(handle);
     };
 
     const handleInsertShotHandle = (shotId: string, handle: string) => {
@@ -3412,11 +3403,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         showWarnings={false}
                                     />
                                     <PromptQualityWarnings warnings={promptQualityWarnings} />
-	                                    {((activeReferenceMode === 'elements' && (canUseVideoElements || elements.length > 0)) || (isKlingVideoModel && promptMentionCandidates.length > 0)) && (
+	                                    {(canUseVideoElements || elements.length > 0 || (isKlingVideoModel && promptMentionCandidates.length > 0)) && (
 	                                        <div className="mb-4 mt-4 space-y-3">
 	                                            <div className="flex items-center justify-between gap-3">
 	                                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-	                                                    {isKlingVideoModel ? 'Prompt references' : 'Reusable image references'}
+	                                                    {isKlingVideoModel || isKlingO3Model ? 'Prompt references' : 'Reusable image references'}
 	                                                </p>
 	                                                <span className="text-xs text-zinc-500">
 	                                                    Type <span className="font-semibold text-zinc-300">@</span> to reference them in the prompt.
@@ -3428,7 +3419,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                        <button
 	                                                            key={`${candidate.kind}-${candidate.id}`}
 	                                                            type="button"
-	                                                            onClick={() => handleInsertPromptHandle(candidate.handle, candidate.kind)}
+	                                                            onClick={() => handleInsertPromptHandle(candidate.handle)}
 	                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
 	                                                        >
 	                                                            <span className="text-zinc-400">{candidate.displayName}</span>
@@ -3490,7 +3481,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                        <button
 	                                                            key={`${candidate.kind}-${candidate.id}`}
 	                                                            type="button"
-	                                                            onClick={() => handleInsertPromptHandle(candidate.handle, candidate.kind)}
+	                                                            onClick={() => handleInsertPromptHandle(candidate.handle)}
 	                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
 	                                                        >
 	                                                            <span className="text-zinc-400">{candidate.displayName}</span>
@@ -3657,7 +3648,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             )}
                         </AnimatePresence>
 
-                        {!currentIsMultiShot && canUseVideoElements && !isGeminiOmniVideoModel && (
+                        {!currentIsMultiShot && canUseVideoElements && affordances.framesExcludeReferences && (
                             <motion.div
                                 initial={{ opacity: 0, y: 16 }}
                                 animate={{ opacity: 1, y: 0 }}
@@ -3665,40 +3656,20 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             >
                                 <div className="flex items-start justify-between gap-4">
                                     <div>
-                                        <h2 className="text-sm font-semibold text-white">Reference mode</h2>
+                                        <h2 className="text-sm font-semibold text-white">Frames or references</h2>
                                         <p className="mt-1 text-sm text-zinc-400">
-                                            Choose whether media controls the opening and ending composition, or stays reusable throughout the scene.
+                                            {framesAndReferencesConflict
+                                                ? `${videoModel.displayName} cannot combine frames with references, and this draft holds both. Clear one — as it stands the run will use your references and ignore the frames.`
+                                                : framesLockedByReferences
+                                                    ? `${videoModel.displayName} cannot combine frames with references. Clear your references to define a start or end frame instead.`
+                                                    : referencesLockedByFrames
+                                                        ? `${videoModel.displayName} cannot combine references with frames. Clear your frames to use reusable references instead.`
+                                                        : `${videoModel.displayName} takes either frames or references in a single run. Attach one and the other locks until you clear it.`}
                                         </p>
                                     </div>
                                     <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">
                                         {videoElementSupport.maxElements} references max
                                     </span>
-                                </div>
-                                <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                                    <button
-                                        type="button"
-                                        onClick={() => void setReferenceModeWithPersistence('frames')}
-                                        className={`rounded-2xl border px-4 py-3 text-left transition ${activeReferenceMode === 'frames' ? 'border-[#ff7a59]/40 bg-[#ff7a59]/15 text-white' : 'border-white/8 bg-black/40 text-zinc-400 hover:border-white/15 hover:text-white'}`}
-                                    >
-                                        <div className="text-sm font-semibold">Start / end frames</div>
-                                        <div className="mt-1 text-xs leading-5 text-inherit/80">
-                                            {isGrokVideoModel
-                                                ? 'Attach one image to animate it, or leave empty for text-to-video.'
-                                                : supportsEndFrame
-                                                    ? 'Animate one start frame, or define both the opening and ending composition.'
-                                                    : 'Animate one start image, or leave it empty for text-to-video.'}
-                                        </div>
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => void setReferenceModeWithPersistence('elements')}
-                                        className={`rounded-2xl border px-4 py-3 text-left transition ${activeReferenceMode === 'elements' ? 'border-[#ff7a59]/40 bg-[#ff7a59]/15 text-white' : 'border-white/8 bg-black/40 text-zinc-400 hover:border-white/15 hover:text-white'}`}
-                                    >
-                                        <div className="text-sm font-semibold">Reusable references</div>
-                                        <div className="mt-1 text-xs leading-5 text-inherit/80">
-                                            Keep characters, products, motion clips, or audio guidance available throughout the generated scene.
-                                        </div>
-                                    </button>
                                 </div>
                             </motion.div>
                         )}
@@ -3883,7 +3854,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
                         {showFramesEditor && (
                             <>
-                                <div className={`grid gap-4 ${!currentIsMultiShot && activeSupportsEndFrame ? 'sm:grid-cols-2' : ''}`}>
+                                <div
+                                    aria-disabled={framesLockedByReferences}
+                                    className={`grid gap-4 ${!currentIsMultiShot && activeSupportsEndFrame ? 'sm:grid-cols-2' : ''} ${framesLockedByReferences ? 'pointer-events-none opacity-40' : ''}`}
+                                >
                                     <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-5 backdrop-blur-sm">
                                         <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3 flex items-center justify-between">
                                             Start Frame <span className="text-[10px] text-zinc-600 normal-case">{selectedModel === 'hailuo-2.3' ? 'required' : 'optional'}</span>
@@ -3982,11 +3956,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         Wan Reference-to-Video can use this first frame together with your reusable images, clips, and voice reference.
                                     </div>
                                 ) : null}
-                                {hiddenElementDraftCount > 0 && !currentIsMultiShot ? (
-                                    <div className="rounded-[22px] border border-white/8 bg-white/[0.03] px-4 py-3 text-sm text-zinc-400">
-                                        {hiddenElementDraftCount} saved reference{hiddenElementDraftCount === 1 ? '' : 's'} will be ready if you switch back to Reusable references.
-                                    </div>
-                                ) : null}
                             </>
                         )}
 
@@ -3994,7 +3963,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             <motion.div
                                 initial={{ opacity: 0, y: 16 }}
                                 animate={{ opacity: 1, y: 0 }}
-                                className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
+                                aria-disabled={referencesLockedByFrames}
+                                className={`rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6 ${referencesLockedByFrames ? 'pointer-events-none opacity-40' : ''}`}
                             >
                                 <div className="mb-4 flex items-start justify-between gap-3">
                                     <div>
@@ -4117,17 +4087,15 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     </label>
                                 )}
 
-                                {hiddenFrameDraftCount > 0 ? (
-                                    <p className="mt-4 text-sm text-zinc-500">
-                                        Your start and end frames are still saved. Switch back to Start / end frames whenever you want to use that transition path again.
-                                    </p>
-                                ) : null}
                             </motion.div>
                         )}
 
-                        {supportsMultimodalReferences && !currentIsMultiShot && activeReferenceMode === 'elements' && (
+                        {supportsMultimodalReferences && !currentIsMultiShot && (referenceVideoLimit > 0 || referenceAudioLimit > 0) && (
                             <>
-                                <div className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(17,17,21,0.98),rgba(8,8,10,0.95))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6">
+                                <div
+                                    aria-disabled={referencesLockedByFrames}
+                                    className={`rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(17,17,21,0.98),rgba(8,8,10,0.95))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6 ${referencesLockedByFrames ? 'pointer-events-none opacity-40' : ''}`}
+                                >
                                     <div className="mb-4 flex items-start justify-between gap-3">
                                         <div>
                                             <h2 className="text-sm font-semibold text-white">{supportsReferenceAudio ? 'Video and audio references' : 'Video references'}</h2>

@@ -175,8 +175,8 @@ describe('Model Pricing', () => {
             expect(o3).toBeLessThan(kling3);
         });
         it('prices minimax h3 from its uppercase resolution enum', () => {
-            expect(getVideoCost('minimax-h3', { resolution: '768P', durationSeconds: 6 })).toBe(96);
-            expect(getVideoCost('minimax-h3', { resolution: '2K', durationSeconds: 6 })).toBe(156);
+            expect(getVideoCost('minimax-h3', { resolution: '768P', durationSeconds: 6 })).toBe(48);
+            expect(getVideoCost('minimax-h3', { resolution: '2K', durationSeconds: 6 })).toBe(78);
         });
         it('never falls through new video models to Veo pricing', () => {
             // getVideoCost has no default branch: an unmatched id silently bills at Veo

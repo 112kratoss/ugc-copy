@@ -440,7 +440,7 @@ export const VIDEO_MODELS = {
     aspectRatios: ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9'] as const,
     durations: [4, 5, 6, 8, 10, 12, 15, 20, 25, 30] as const,
     singleShotDurationRange: { min: 4, max: 30, default: 5 } as const,
-    resolutions: ['480p', '720p'] as const,
+    resolutions: ['480p', '720p', '1080p'] as const,
     modeOptions: [] as const,
   },
   'kling-o3': {
@@ -488,10 +488,12 @@ export function getVideoElementSupport(
     return { enabled: false, maxElements: 0, maxNamed: 0, reason: 'Reusable references are available in single-shot only.' };
   }
   if (modelId === 'seedance-1.5-pro') return { enabled: true, maxElements: 2, maxNamed: 2, reason: null };
-  if (modelId === 'seedance-2' || modelId === 'seedance-2-fast' || modelId === 'seedance-2-mini' || modelId === 'seedance-2-5' || modelId === 'wan-2.7') return { enabled: true, maxElements: 5, maxNamed: 5, reason: null };
+  if (modelId === 'seedance-2' || modelId === 'seedance-2-fast' || modelId === 'seedance-2-mini' || modelId === 'wan-2.7') return { enabled: true, maxElements: 5, maxNamed: 5, reason: null };
+  // 2.5 takes 30 reference images where the rest of the family stops at 5.
+  if (modelId === 'seedance-2-5') return { enabled: true, maxElements: 30, maxNamed: 30, reason: null };
   // 7 reference images, at most 3 of them named as provider-resolved subjects.
   if (modelId === 'kling-o3') return { enabled: true, maxElements: 7, maxNamed: 3, reason: null };
-  if (modelId === 'minimax-h3') return { enabled: true, maxElements: 5, maxNamed: 5, reason: null };
+  if (modelId === 'minimax-h3') return { enabled: true, maxElements: 9, maxNamed: 9, reason: null };
   if (modelId === 'happyhorse-1.1') return { enabled: true, maxElements: 9, maxNamed: 9, reason: null };
   if (modelId === 'gemini-omni-video') return { enabled: true, maxElements: 7, maxNamed: 7, reason: null };
   if (modelId === 'veo-3.1') {
@@ -518,12 +520,15 @@ export function getVideoReferenceSupport(modelId: VideoModelId): { videos: numbe
     case 'seedance-2':
     case 'seedance-2-fast':
     case 'seedance-2-mini':
-    case 'seedance-2-5':
       return { videos: 3, audios: 3 };
+    // 2.5's arrays are far wider than the rest of the family's, though the 30s combined
+    // ceiling on reference videos is unchanged.
+    case 'seedance-2-5':
+      return { videos: 10, audios: 10 };
     case 'wan-2.7':
       return { videos: 5, audios: 1 };
     case 'minimax-h3':
-      return { videos: 1, audios: 1 };
+      return { videos: 3, audios: 3 };
     case 'gemini-omni-video':
       return { videos: 1, audios: 0 };
     // Kling's slot carries named video elements rather than plain reference clips, but
