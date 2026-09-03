@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, router } from 'expo-router';
 import {
@@ -22,6 +23,7 @@ import { trackOnboardingEvent, useOnboarding } from '@/lib/onboarding';
 import { resolveOnboardingDestination } from '@/lib/onboarding-destination';
 import { appTheme } from '@/lib/theme';
 import type { OnboardingGoal, ProfileResponse, WelcomeCreditResponse } from '@/lib/types';
+import { primeWelcomeCredits } from '@/lib/use-onboarding-destination';
 import { AppText, AppTextInput, Card, Kicker, PrimaryButton, SecondaryButton } from '@/components/ui';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import {
@@ -96,6 +98,7 @@ function profileUpdatePayload(profile: ProfileResponse, username: string, displa
 export default function OnboardingScreen() {
   const { api, user, refreshProfile, updateCredits } = useAuth();
   const { state, update, skip, complete } = useOnboarding();
+  const queryClient = useQueryClient();
   const identityDeferredAt = state.identityDeferredAt;
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
@@ -127,6 +130,20 @@ export default function OnboardingScreen() {
   const topPadding = Math.max(insets.top, 16) + 8;
   const bottomPadding = Math.max(insets.bottom, 16) + (isWelcome ? 10 : 16);
 
+  /**
+   * Adopt a welcome response this screen fetched first-hand.
+   *
+   * Also written into the shared `welcome-credits` query, which is what the
+   * Home and Settings cards read. Nothing used to refresh that copy when this
+   * flow changed the answer, so a creator who had just saved a handle walked
+   * back to a card still reading "Finish your creator setup" — and tapping it
+   * re-opened this screen only for it to find nothing to do and leave again.
+   */
+  const adoptWelcome = useCallback((next: WelcomeCreditResponse) => {
+    setWelcome(next);
+    if (user) primeWelcomeCredits(queryClient, user.id, next);
+  }, [queryClient, user]);
+
   const loadAuthenticatedStage = useCallback(async () => {
     if (!user) return;
     setStage('loading');
@@ -137,7 +154,7 @@ export default function OnboardingScreen() {
         api.getWelcomeCredits(),
       ]);
       setProfile(nextProfile);
-      setWelcome(nextWelcome);
+      adoptWelcome(nextWelcome);
       setDisplayName(nextProfile.displayName?.trim() || authDisplayName(user.user_metadata) || user.email?.split('@')[0] || 'Creator');
       setUsername(/^creator-[a-f0-9]{8}$/.test(nextProfile.username ?? '') ? '' : nextProfile.username ?? '');
       // Resolved once, on entry. Re-deriving as state changes would eject
@@ -170,7 +187,7 @@ export default function OnboardingScreen() {
   // always refreshes the state's `updatedAt`; depending on the whole state
   // object made that write recreate this callback, retrigger the effect below,
   // and hold signed-in creators in an endless profile/Creator Pack fetch loop.
-  }, [api, goal, identityDeferredAt, update, user]);
+  }, [adoptWelcome, api, goal, identityDeferredAt, update, user]);
 
   useEffect(() => {
     // Being signed in is the whole condition. This used to also require
@@ -299,7 +316,7 @@ export default function OnboardingScreen() {
       const updatedProfile = await api.updateProfile(payload);
       const nextWelcome = await api.getWelcomeCredits();
       setProfile(updatedProfile);
-      setWelcome(nextWelcome);
+      adoptWelcome(nextWelcome);
       await refreshProfile();
       await update({ goal });
       await api.updateOnboardingState({ goal }).catch(() => undefined);
@@ -358,7 +375,7 @@ export default function OnboardingScreen() {
     setMessage(null);
     try {
       const result = await api.claimWelcomeCredits();
-      setWelcome(result);
+      adoptWelcome(result);
       if (result.status === 'claimed' || result.status === 'already_claimed') {
         updateCredits(result.credits);
         await celebrateCredits(result.amount);

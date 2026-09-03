@@ -1,0 +1,424 @@
+{
+  "manifestVersion": 1,
+  "mode": "clone-active",
+  "release": {
+    "schemaVersion": 2,
+    "revision": "minimax-reference-duration-20260904",
+    "basedOnRevision": "video-reference-caps-20260903",
+    "changeNote": "Bill minimax-h3 on input video seconds as well as output. Kie charges \"Unit Price x (Generated Video Duration + Input Video Duration)\" for minimax-h3, but our config was plain per-second on output only, so every run carrying a reference clip under-billed by the clip's length at the resolution rate - up to 15s x 13 = 195 credits, and the 2026-09-03 move to Kie's listed 8/13 removed the margin that had been absorbing it. The strategy becomes reference-adjustment with referenceDurationSlots [videoReferences] and the same 8/13 table on both sides, since Kie applies one rate either way. Caps, validation, availability, adapters and every other model are unchanged. Residual not modelled: Kie's 4 credits per input image past the first five, bounded at 16 credits by the 9-image cap.",
+    "createdBy": "catalog refresh 2026-09-04 (Claude Code, operator athulsmanjeri@gmail.com)"
+  },
+  "upgrade": {
+    "legacyDescriptorsToV2": true
+  },
+  "expectedModelIds": [
+    "flux-2-pro",
+    "gemini-omni-video",
+    "gpt-image-2",
+    "grok-imagine-image",
+    "grok-imagine-image-2",
+    "grok-imagine-video",
+    "hailuo-2.3",
+    "happyhorse-1.1",
+    "ideogram-character",
+    "ideogram-v3",
+    "imagen-4",
+    "imagen-4-fast",
+    "imagen-4-ultra",
+    "kling-2.6",
+    "kling-3.0",
+    "kling-3.0-turbo",
+    "kling-3.0-video",
+    "kling-o3",
+    "minimax-h3",
+    "nano-banana-2",
+    "nano-banana-2-lite",
+    "nano-banana-pro",
+    "qwen3",
+    "qwen3-pro",
+    "seedance-1.5-pro",
+    "seedance-2",
+    "seedance-2-5",
+    "seedance-2-fast",
+    "seedance-2-mini",
+    "seedream-5-lite",
+    "seedream-5-pro",
+    "veo-3.1",
+    "wan-2.7",
+    "wan-2.7-image",
+    "wan-2.7-image-pro",
+    "z-image"
+  ],
+  "defaults": {
+    "web": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    },
+    "mobile": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    }
+  },
+  "entries": [
+    {
+      "modelId": "minimax-h3",
+      "kind": "video",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "minimax-h3",
+        "kind": "video",
+        "displayName": "MiniMax H3",
+        "description": "Hailuo H3 generation from text, a frame, or references",
+        "badge": null,
+        "recommended": false,
+        "sortOrder": 140,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "21:9",
+            "options": [
+              {
+                "value": "21:9",
+                "label": "21:9"
+              },
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "768P",
+            "options": [
+              {
+                "value": "768P",
+                "label": "768P"
+              },
+              {
+                "value": "2K",
+                "label": "2K"
+              }
+            ]
+          },
+          {
+            "key": "duration",
+            "label": "Duration",
+            "type": "integer",
+            "presentation": "stepper",
+            "defaultValue": 6,
+            "min": 4,
+            "max": 15,
+            "step": 1,
+            "unit": "seconds"
+          },
+          {
+            "key": "referenceMode",
+            "label": "Input mode",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "frames",
+            "options": [
+              {
+                "value": "frames",
+                "label": "Frames"
+              },
+              {
+                "value": "elements",
+                "label": "References"
+              }
+            ],
+            "minClientSchemaVersion": 2
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 9,
+            "supportsNaming": true
+          },
+          "videoReferences": {
+            "max": 3
+          },
+          "audioReferences": {
+            "max": 3
+          },
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": true,
+          "endFrame": true,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "frames",
+            "label": "Frames",
+            "default": true,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ],
+            "slots": [
+              {
+                "key": "startFrame",
+                "kind": "image",
+                "role": "startFrame",
+                "label": "Start frame",
+                "min": 0,
+                "max": 1
+              },
+              {
+                "key": "endFrame",
+                "kind": "image",
+                "role": "endFrame",
+                "label": "End frame",
+                "min": 0,
+                "max": 1
+              }
+            ]
+          },
+          {
+            "key": "references",
+            "label": "Reusable references",
+            "default": false,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 9,
+                "supportsNaming": true
+              },
+              {
+                "key": "videoReferences",
+                "kind": "video",
+                "role": "reference",
+                "label": "Reference videos",
+                "min": 0,
+                "max": 3,
+                "durationMetadata": "required",
+                "maxDurationSeconds": 15
+              },
+              {
+                "key": "audioReferences",
+                "kind": "audio",
+                "role": "reference",
+                "label": "Reference audio",
+                "min": 0,
+                "max": 3,
+                "durationMetadata": "optional",
+                "maxDurationSeconds": 15
+              }
+            ]
+          }
+        ],
+        "inputConstraints": [
+          {
+            "type": "combined-duration",
+            "slotKeys": [
+              "videoReferences"
+            ],
+            "max": 15,
+            "message": "Reference videos may be at most 15 seconds in total."
+          }
+        ]
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "video-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "minimax-h3/text-to-video",
+        "text": "minimax-h3/text-to-video",
+        "image": "minimax-h3/image-to-video",
+        "reference": "minimax-h3/reference-to-video"
+      },
+      "pricingStrategy": "reference-adjustment",
+      "pricingConfig": {
+        "unit": "second",
+        "settingKey": "resolution",
+        "durationSettingKey": "duration",
+        "referenceDurationSlots": [
+          "videoReferences"
+        ],
+        "rounding": "ceil",
+        "rates": {
+          "noReference": {
+            "768P": 8,
+            "2K": 13
+          },
+          "withReference": {
+            "768P": 8,
+            "2K": 13
+          }
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "passthroughSettingKeys": [
+          "referenceMode"
+        ],
+        "normalizedDefaults": {
+          "mode": "",
+          "resolution": "",
+          "sound": false,
+          "fixedLens": false,
+          "referenceMode": "frames"
+        },
+        "rules": [
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 2,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 9,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ]
+          },
+          {
+            "type": "combined-duration",
+            "slotKeys": [
+              "videoReferences"
+            ],
+            "max": 15,
+            "field": "videos",
+            "message": "Reference videos may be at most 15 seconds in total."
+          },
+          {
+            "type": "forbidden-combination",
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "audioReferences",
+                "operator": "greaterThan",
+                "value": 0
+              },
+              {
+                "source": "inputCount",
+                "key": "imageReferences",
+                "operator": "equals",
+                "value": 0
+              },
+              {
+                "source": "inputCount",
+                "key": "videoReferences",
+                "operator": "equals",
+                "value": 0
+              }
+            ],
+            "field": "audios",
+            "message": "MiniMax H3 needs a reference image or video alongside reference audio."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    }
+  ],
+  "acceptanceQuotes": [
+    {
+      "modelId": "minimax-h3",
+      "settings": {
+        "resolution": "768P",
+        "duration": 6
+      },
+      "inputs": [],
+      "expectedCredits": 48
+    },
+    {
+      "modelId": "minimax-h3",
+      "settings": {
+        "resolution": "2K",
+        "duration": 6
+      },
+      "inputs": [],
+      "expectedCredits": 78
+    },
+    {
+      "modelId": "minimax-h3",
+      "settings": {
+        "resolution": "2K",
+        "duration": 10,
+        "referenceMode": "elements"
+      },
+      "inputs": [
+        {
+          "slot": "imageReferences"
+        },
+        {
+          "slot": "videoReferences",
+          "durationSeconds": 10
+        }
+      ],
+      "expectedCredits": 260
+    }
+  ]
+}

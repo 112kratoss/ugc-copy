@@ -1,3 +1,5 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { router } from 'expo-router';
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -145,6 +147,21 @@ vi.mock('@/components/ui', () => ({
 }));
 
 import OnboardingScreen from '../app/onboarding';
+import { welcomeCreditsQueryKey } from '../lib/use-onboarding-destination';
+
+function renderScreen(queryClient: QueryClient) {
+  return renderer.create(
+    <QueryClientProvider client={queryClient}>
+      <OnboardingScreen />
+    </QueryClientProvider>,
+  );
+}
+
+async function settle() {
+  // Enough microtasks for the profile + welcome fetch, the destination
+  // resolution, and the state writes that follow it.
+  for (let tick = 0; tick < 6; tick += 1) await Promise.resolve();
+}
 
 const profile = {
   username: 'creator-1234abcd',
@@ -176,6 +193,7 @@ describe('authenticated onboarding entry', () => {
     harness.api.updateOnboardingState.mockReset();
     harness.api.updateOnboardingState.mockResolvedValue(undefined);
     harness.localUpdates.length = 0;
+    vi.mocked(router.replace).mockClear();
   });
 
   it('loads account state once when a skipped guest resumes after signing in', async () => {
@@ -183,12 +201,11 @@ describe('authenticated onboarding entry', () => {
     harness.api.getProfile.mockResolvedValueOnce(profile).mockReturnValue(never);
     harness.api.getWelcomeCredits.mockResolvedValueOnce(welcome).mockReturnValue(never);
 
+    const queryClient = new QueryClient();
     let tree: renderer.ReactTestRenderer | undefined;
     await act(async () => {
-      tree = renderer.create(<OnboardingScreen />);
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      tree = renderScreen(queryClient);
+      await settle();
     });
 
     expect(harness.api.getProfile).toHaveBeenCalledTimes(1);
@@ -196,6 +213,33 @@ describe('authenticated onboarding entry', () => {
     expect(harness.localUpdates).toEqual([{ goal: 'image' }]);
     expect(JSON.stringify(tree?.toJSON())).toContain('Claim your creator name');
     expect(JSON.stringify(tree?.toJSON())).not.toContain('Preparing your creator setup');
+    // The Home card reads this key. Seeding it here is what keeps the card
+    // and this screen telling the same story.
+    expect(queryClient.getQueryData(welcomeCreditsQueryKey('creator-1'))).toEqual(welcome);
+
+    act(() => tree?.unmount());
+  });
+
+  it('writes what it learned into the shared welcome query before leaving', async () => {
+    // The reported loop: the card kept the welcome response it took at
+    // sign-in (identity incomplete), so it still read "Finish your creator
+    // setup" after the handle was saved. Tapping it re-entered this screen,
+    // which fetched the truth, found nothing to do, and bounced straight out —
+    // and the card stayed until an unrelated refetch happened to land.
+    const settled = { ...welcome, status: 'identity_already_claimed', identityComplete: true };
+    harness.api.getProfile.mockResolvedValue({ ...profile, username: 'tap', displayName: 'Kannan' });
+    harness.api.getWelcomeCredits.mockResolvedValue(settled);
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(welcomeCreditsQueryKey('creator-1'), welcome);
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    await act(async () => {
+      tree = renderScreen(queryClient);
+      await settle();
+    });
+
+    expect(router.replace).toHaveBeenCalledWith('/(tabs)');
+    expect(queryClient.getQueryData(welcomeCreditsQueryKey('creator-1'))).toEqual(settled);
 
     act(() => tree?.unmount());
   });

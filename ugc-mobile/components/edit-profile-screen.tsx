@@ -37,6 +37,7 @@ import { CloseGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
 import type { ProfileResponse } from '@/lib/types';
 import { haptic } from '@/lib/haptics';
+import { invalidateWelcomeCredits } from '@/lib/use-onboarding-destination';
 
 /** Debounce before the availability round trip. The endpoint is rate limited. */
 const USERNAME_CHECK_DELAY_MS = 400;
@@ -191,6 +192,10 @@ export function EditProfileScreen() {
     onSuccess: async () => {
       await refreshProfile();
       await queryClient.invalidateQueries({ queryKey: ['profile'] });
+      // A handle plus a display name completes the creator identity, which
+      // the Home card reads through the welcome-credit query. Left alone, that
+      // card kept prompting "Finish your creator setup" after this save.
+      await invalidateWelcomeCredits(queryClient);
       haptic.success();
       leaveWithChangesSettled();
     },
