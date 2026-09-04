@@ -15,6 +15,7 @@
     "android": "expo run:android",
     "bundle-env:verify": "node ./scripts/verify-bundled-client-env.mjs",
     "eas-build-pre-install": "node ./scripts/verify-production-build-env.mjs",
+    "eas-build-post-install": "node ./scripts/install-android-cmake.mjs",
     "postinstall": "patch-package",
     "profile:android:physical": "node ./scripts/profile-android-physical.mjs",
     "release-env:self-test": "node ./scripts/verify-production-build-env.mjs --self-test",
