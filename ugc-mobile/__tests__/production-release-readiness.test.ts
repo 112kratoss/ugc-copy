@@ -52,6 +52,13 @@ describe('mobile production release contracts', () => {
     expect(packageJson.scripts['eas-build-pre-install']).toContain(
       'verify-production-build-env.mjs',
     );
+    // The Android store build compiles React Native from source, whose native
+    // configure step needs the CMake ReactAndroid pins; the EAS image does not
+    // ship it (build 2efa1903 failed on CXX1300 on 2026-09-04), so the
+    // post-install hook installs it before Gradle runs.
+    expect(packageJson.scripts['eas-build-post-install']).toContain(
+      'install-android-cmake.mjs',
+    );
     expect(easJson.cli.version).toBe('21.2.0');
     expect(easJson.cli.requireCommit).toBe(true);
     expect(easJson.build.production.env.MAGICBOOKLET_INCLUDE_DEV_CLIENT).toBe('false');
