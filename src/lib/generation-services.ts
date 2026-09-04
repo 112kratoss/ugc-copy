@@ -100,10 +100,12 @@ import { isAllowlistedRemoteMediaUrl, type RemoteMediaKind } from '@/lib/remote-
 import { stageAllowlistedRemoteMedia } from '@/lib/staged-remote-media';
 import { loadGenerationModelOperationalConfig } from '@/lib/generation-model-catalog-store';
 import {
+  KLING_26_IMAGE_ORIENTATION_MAX_DURATION_SECONDS,
   resolveProviderModelId,
+  WAN_REFERENCE_MAX_DURATION_SECONDS,
   type GenerationModelOperationalConfig,
 } from '@/lib/generation-model-runtime';
-import type { CatalogPrimitive } from '@/lib/generation-model-catalog';
+import { getVideoInputLimits, type CatalogPrimitive } from '@/lib/generation-model-catalog';
 import {
   buildGenerationProviderRequest,
   type CatalogGenerationInputAsset,
@@ -2225,16 +2227,20 @@ export async function startVideoGeneration(params: {
     );
   }
 
-  if (isSeedance2Family && resolvedReferenceVideoUrls.length > 3) {
+  // Read the clip and audio caps off the same table the descriptor publishes. A literal
+  // 3 here outlived the 2026-09-03 release that gave Seedance 2.5 ten of each, so the
+  // quote accepted a fourth clip and this path refused it after the upload.
+  const videoInputLimits = getVideoInputLimits(model);
+  if (isSeedance2Family && resolvedReferenceVideoUrls.length > videoInputLimits.videos) {
     throw new GenerationServiceError(
-      'Seedance 2 supports up to 3 reference videos per run.',
+      `${selectedModel.displayName} supports up to ${videoInputLimits.videos} reference video${videoInputLimits.videos === 1 ? '' : 's'} per run.`,
       400
     );
   }
 
-  if (isSeedance2Family && resolvedReferenceAudioUrls.length > 3) {
+  if (isSeedance2Family && resolvedReferenceAudioUrls.length > videoInputLimits.audios) {
     throw new GenerationServiceError(
-      'Seedance 2 supports up to 3 reference audio files per run.',
+      `${selectedModel.displayName} supports up to ${videoInputLimits.audios} reference audio file${videoInputLimits.audios === 1 ? '' : 's'} per run.`,
       400
     );
   }
@@ -2334,10 +2340,19 @@ export async function startVideoGeneration(params: {
       )
     : null;
 
-  const frameImageUrls = [
-    resolvedStartImageUrl || resolvedLegacyImageUrls[0] || null,
-    resolvedEndImageUrl || resolvedLegacyImageUrls[1] || null,
-  ].filter((url): url is string => Boolean(url));
+  const startFrameUrl = resolvedStartImageUrl || resolvedLegacyImageUrls[0] || null;
+  const endFrameUrl = resolvedEndImageUrl || resolvedLegacyImageUrls[1] || null;
+  // Every provider reads frames positionally, and all but MiniMax refuse a last frame on
+  // its own (Seedance 2.5: "last_frame_url cannot be passed alone"). Filtering the pair
+  // down to a list used to promote a lone end frame to the first slot, so the run
+  // silently started on the image the user meant it to end on.
+  if (endFrameUrl && !startFrameUrl && model !== 'minimax-h3') {
+    throw new GenerationServiceError(
+      'Add a start frame to use an end frame with this model.',
+      400
+    );
+  }
+  const frameImageUrls = [startFrameUrl, endFrameUrl].filter((url): url is string => Boolean(url));
   const grokVideoImageUrls = model === 'grok-imagine-video'
     ? (
         resolvedReferenceImageUrls.length > 0
@@ -2570,8 +2585,10 @@ export async function startVideoGeneration(params: {
         if (resolvedReferenceVideoUrls.length > 0) input.reference_video_urls = resolvedReferenceVideoUrls;
         if (resolvedReferenceAudioUrls.length > 0) input.reference_audio_urls = resolvedReferenceAudioUrls;
       } else if (frameImageUrls.length > 0) {
-        if (frameImageUrls[0]) input.first_frame_url = frameImageUrls[0];
-        if (frameImageUrls[1]) input.last_frame_url = frameImageUrls[1];
+        // minimax-h3/image-to-video: "Either first_frame_url or last_frame_url must be
+        // provided" — a last-only run is legal here and must keep its field.
+        if (startFrameUrl) input.first_frame_url = startFrameUrl;
+        if (endFrameUrl) input.last_frame_url = endFrameUrl;
       } else {
         input.aspect_ratio = aspectRatio;
       }
@@ -2600,10 +2617,14 @@ export async function startVideoGeneration(params: {
       }
 
       if (resolvedKlingVideoElements.length > 0) {
+        // Kie's kling-3.0/video schema (re-read 2026-09-04) carries one media field per
+        // element, `element_input_urls`, for images and videos alike; the
+        // `element_input_video_urls` name the June capture documented is gone, and
+        // `start_time`/`end_time` window a video element through the same field.
         input.kling_elements = resolvedKlingVideoElements.map((element) => ({
           name: element.handle.replace(/^@/, ''),
           description: element.displayName,
-          element_input_video_urls: [element.url],
+          element_input_urls: [element.url],
         }));
       }
 
@@ -2675,6 +2696,15 @@ export async function startVideoGeneration(params: {
         watermark: false,
       };
       if (effectiveReferenceMode === 'references') {
+        // wan/2-7-r2v stops at 10 s; the shared duration control reaches the 15 s that
+        // text and image-to-video accept, so the ceiling is enforced per mode here and
+        // in the quote rule.
+        if (duration > WAN_REFERENCE_MAX_DURATION_SECONDS) {
+          throw new GenerationServiceError(
+            `Wan 2.7 reference-to-video runs may be at most ${WAN_REFERENCE_MAX_DURATION_SECONDS} seconds.`,
+            400
+          );
+        }
         providerModelId = resolveProviderModelId(runtimeConfig, 'reference', 'wan/2-7-r2v');
         input.aspect_ratio = aspectRatio;
         if (providerReferenceImageUrls.length > 0) input.reference_image = providerReferenceImageUrls;
@@ -3051,6 +3081,19 @@ export async function startMotionGeneration(params: {
   const selectedModel = MOTION_MODELS[model];
   if (!selectedModel) {
     throw new Error(`Unsupported motion model: ${model}`);
+  }
+  // kling-2.6/motion-control caps image-oriented output at 10 s ("max 10s video") where
+  // video orientation reaches 30; the quote rule catches catalog clients and this
+  // catches the rest before a hold is placed.
+  if (
+    model === 'kling-2.6'
+    && characterOrientation === 'image'
+    && duration > KLING_26_IMAGE_ORIENTATION_MAX_DURATION_SECONDS
+  ) {
+    throw new GenerationServiceError(
+      `Kling 2.6 keeps image orientation to ${KLING_26_IMAGE_ORIENTATION_MAX_DURATION_SECONDS} seconds; use video orientation for longer clips.`,
+      400
+    );
   }
   const runtimeConfig = operationalConfig
     ?? await loadGenerationModelOperationalConfig(model, catalogRevision

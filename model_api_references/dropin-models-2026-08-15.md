@@ -1,5 +1,7 @@
 # Drop-in Kie models — verified provider evidence (2026-08-15)
 
+> **Superseded 2026-09-04 for grok-imagine-image-2 (an `image-edit` endpoint taking `image_urls` now exists).** See `reference-audit-2026-09-04.md`.
+
 Captured from `https://docs.kie.ai/market/<slug>.md` (OpenAPI bodies) and `https://kie.ai/<slug>`
 market pages. Method: `curl` with a browser User-Agent — WebFetch gets 403 from Cloudflare.
 Credits are Kie credits 1:1 (1 credit = $0.005).

@@ -358,7 +358,12 @@ const VIDEO_INPUT_LIMITS: Record<VideoModelId, VideoInputLimits> = {
   'veo-3.1': { images: 3, videos: 0, audios: 0, startFrame: true, endFrame: true },
 };
 
-function getVideoInputLimits(modelId: VideoModelId): VideoInputLimits {
+/**
+ * Exported so the start service reads the same clip/audio caps the descriptor
+ * publishes. A hand-written "3" in generation-services is how Seedance 2.5 shipped
+ * advertising ten clip slots its own start path refused.
+ */
+export function getVideoInputLimits(modelId: VideoModelId): VideoInputLimits {
   return VIDEO_INPUT_LIMITS[modelId];
 }
 

@@ -569,7 +569,8 @@ export function isValidVideoDuration(model: VideoModelId, duration: number) {
 export function getImageResolutionOptions(model: ImageModelId, aspectRatio: string): readonly ImageResolution[] {
   if (model === 'grok-imagine-image') return ['1K'];
   if (model !== 'gpt-image-2') return bundledImageModel(model).resolutions;
-  if (aspectRatio === 'auto') return ['1K'];
+  // Kie renders 5:4 and 4:5 at 1K only, like `auto`; mirrors the web helper.
+  if (aspectRatio === 'auto' || aspectRatio === '5:4' || aspectRatio === '4:5') return ['1K'];
   if (aspectRatio === '1:1') return ['1K', '2K'];
   return bundledImageModel(model).resolutions;
 }

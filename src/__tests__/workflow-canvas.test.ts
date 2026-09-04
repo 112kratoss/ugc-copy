@@ -628,12 +628,19 @@ describe('workflow canvas helpers', () => {
       aspectRatio: '4:5',
       resolution: '4K',
     } as never);
+    const landscapeImage = normalizeNodeData('image-generate', {
+      model: 'gpt-image-2',
+      aspectRatio: '16:9',
+      resolution: '4K',
+    } as never);
 
     expect(autoImage.resolution).toBe('1K');
     expect(autoImage.outputFormat).toBe('jpg');
     expect(autoImage.googleSearch).toBe(false);
     expect(squareImage.resolution).toBe('1K');
-    expect(portraitImage.resolution).toBe('4K');
+    // Kie renders 5:4 and 4:5 at 1K only; every other ratio keeps the full ladder.
+    expect(portraitImage.resolution).toBe('1K');
+    expect(landscapeImage.resolution).toBe('4K');
   });
 
   it('enforces Nano Banana 2 image-reference limits and blocks extra connections', () => {

@@ -1,5 +1,7 @@
 # Seedance 2 API Documentation
 
+> **Superseded 2026-09-04 for `reference_image_urls maxItems: 9`.** See `reference-audit-2026-09-04.md`.
+
 > Generate content using the Seedance 2 model
 
 ## Overview

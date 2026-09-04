@@ -98,9 +98,13 @@ describe('Model Pricing', () => {
         it('limits GPT Image 2 auto and square resolution combinations', () => {
             expect(getImageResolutionOptions('gpt-image-2', 'auto')).toEqual(['1K']);
             expect(getImageResolutionOptions('gpt-image-2', '1:1')).toEqual(['1K', '2K']);
-            expect(getImageResolutionOptions('gpt-image-2', '4:5')).toEqual(['1K', '2K', '4K']);
+            // Kie renders 5:4 and 4:5 at 1K only; the other ratios keep the full ladder.
+            expect(getImageResolutionOptions('gpt-image-2', '4:5')).toEqual(['1K']);
+            expect(getImageResolutionOptions('gpt-image-2', '5:4')).toEqual(['1K']);
+            expect(getImageResolutionOptions('gpt-image-2', '16:9')).toEqual(['1K', '2K', '4K']);
             expect(isValidImageResolution('gpt-image-2', '4K', '1:1')).toBe(false);
-            expect(isValidImageResolution('gpt-image-2', '4K', '4:5')).toBe(true);
+            expect(isValidImageResolution('gpt-image-2', '2K', '4:5')).toBe(false);
+            expect(isValidImageResolution('gpt-image-2', '4K', '16:9')).toBe(true);
         });
 
         it('keeps existing image model resolution options unchanged', () => {
@@ -137,6 +141,10 @@ describe('Model Pricing', () => {
         });
         it('seedance 1080p 12s with sound', () => {
             expect(getVideoCost('seedance-1.5-pro', { resolution: '1080p', sound: true, durationSeconds: 12 })).toBe(180);
+        });
+        it('seedance 1.5 480p 12s follows Kie per-second rates (1.75 / 3.5)', () => {
+            expect(getVideoCost('seedance-1.5-pro', { resolution: '480p', sound: false, durationSeconds: 12 })).toBe(21);
+            expect(getVideoCost('seedance-1.5-pro', { resolution: '480p', sound: true, durationSeconds: 12 })).toBe(42);
         });
         it('seedance 2 720p 12s without reference video uses the base tier', () => {
             expect(getVideoCost('seedance-2', { resolution: '720p', durationSeconds: 12 })).toBe(492);
@@ -211,12 +219,13 @@ describe('Model Pricing', () => {
         it('prices Veo Lite and resolution-aware Veo output', () => {
             expect(getVideoCost('veo-3.1', { mode: 'veo3_lite', resolution: '1080p' })).toBe(35);
             expect(getVideoCost('veo-3.1', { mode: 'veo3_fast', resolution: '4k' })).toBe(180);
-            expect(getVideoCost('veo-3.1', { mode: 'veo3', resolution: '4k' })).toBe(380);
+            // Kie lists one 4K quality figure (370) for text-to-video and image-to-video.
+            expect(getVideoCost('veo-3.1', { mode: 'veo3', resolution: '4k' })).toBe(370);
             expect(getVideoCost('veo-3.1', { mode: 'veo3', resolution: '4k', hasReferenceImage: true })).toBe(370);
         });
-        it('grok video scales by duration and resolution', () => {
-            expect(getVideoCost('grok-imagine-video', { resolution: '480p', durationSeconds: 6 })).toBe(10);
-            expect(getVideoCost('grok-imagine-video', { resolution: '720p', durationSeconds: 10 })).toBe(30);
+        it('grok video scales by duration and resolution at Kie\'s 2.4 / 4.5 per-second rates', () => {
+            expect(getVideoCost('grok-imagine-video', { resolution: '480p', durationSeconds: 6 })).toBe(15);
+            expect(getVideoCost('grok-imagine-video', { resolution: '720p', durationSeconds: 10 })).toBe(45);
         });
     });
 

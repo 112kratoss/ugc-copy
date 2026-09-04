@@ -40,9 +40,10 @@ describe('workflow canvas node summaries', () => {
       '2K • PNG • Google Search',
     ]);
     expect(getImageGenerateNodeSummary(proImage)[1]).toBe('1K • JPG');
+    // Kie renders 5:4 and 4:5 at 1K only, so normalization clamps the requested 4K.
     expect(getImageGenerateNodeSummary(gptImage)).toEqual([
       'Aspect 4:5',
-      '4K',
+      '1K',
     ]);
   });
 

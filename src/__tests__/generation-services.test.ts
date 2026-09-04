@@ -1121,7 +1121,7 @@ describe('generation services', () => {
       userId: 'user-1',
       prompt: 'A premium skincare product hero image.',
       model: 'gpt-image-2',
-      aspectRatio: '4:5',
+      aspectRatio: '3:2',
       resolution: '2K',
     });
 
@@ -1130,7 +1130,7 @@ describe('generation services', () => {
       model: 'gpt-image-2-text-to-image',
       input: {
         prompt: 'A premium skincare product hero image.',
-        aspect_ratio: '4:5',
+        aspect_ratio: '3:2',
         resolution: '2K',
       },
     });
@@ -2448,11 +2448,11 @@ describe('generation services', () => {
     });
     expect(rpcCalls[0]).toMatchObject({
       fn: 'start_generation',
-      args: { p_cost: 10 },
+      args: { p_cost: 15 },
     });
     expect(generations[0]).toMatchObject({
       model: 'grok-imagine-video',
-      cost: 10,
+      cost: 15,
       duration: 6,
     });
     expect(generations[0].workflow_settings).toMatchObject({
@@ -2531,6 +2531,27 @@ describe('generation services', () => {
       endImageUrl: 'https://cdn.example.com/end.jpg',
     })).rejects.toThrow('Grok Imagine Video supports up to 1 image reference per run.');
 
+    expect(rpcCalls).toHaveLength(0);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps Kling 2.6 image-oriented motion to the ten seconds Kie allows', async () => {
+    // kling-2.6/motion-control: `character_orientation: image` is "(max 10s video)";
+    // video orientation reaches 30. Kling 3.0 motion carries no such limit.
+    const { startMotionGeneration } = await import('@/lib/generation-services');
+    const { supabase, rpcCalls } = createSupabaseMock();
+    await expect(startMotionGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Match the reference motion.',
+      model: 'kling-2.6',
+      referenceVideoUrl: 'https://cdn.example.com/reference.mp4',
+      characterImageUrl: 'https://cdn.example.com/character.png',
+      duration: 20,
+      characterOrientation: 'image',
+      mode: '720p',
+    })).rejects.toThrow('Kling 2.6 keeps image orientation to 10 seconds');
     expect(rpcCalls).toHaveLength(0);
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -2762,7 +2783,7 @@ describe('generation services', () => {
           {
             name: 'reference_dancer',
             description: 'Reference dancer',
-            element_input_video_urls: ['https://cdn.example.com/ref-dancer.mp4'],
+            element_input_urls: ['https://cdn.example.com/ref-dancer.mp4'],
           },
         ],
       },
@@ -2838,7 +2859,7 @@ describe('generation services', () => {
           {
             name: 'motion_ref',
             description: 'Motion ref',
-            element_input_video_urls: ['asset-video-1'],
+            element_input_urls: ['asset-video-1'],
           },
         ],
       },
@@ -3003,6 +3024,129 @@ describe('generation services', () => {
       },
     });
     expect((providerBodies[0] as { input: Record<string, unknown> }).input).not.toHaveProperty('reference_image_urls');
+  });
+
+  it('lets Seedance 2.5 send every clip and track the catalog publishes', async () => {
+    // The catalog gives 2.5 ten clip and ten audio slots; a literal 3 in the start path
+    // used to refuse the fourth of either after the quote had accepted it.
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return { ok: true, json: async () => ({ code: 200, data: { taskId: 'task-seedance-25-clips' } }) } as Response;
+    });
+
+    const { supabase } = createSupabaseMock();
+    const referenceVideoUrls = [1, 2, 3, 4].map((index) => `https://cdn.example.com/clip-${index}.mp4`);
+    const referenceAudioUrls = [1, 2, 3, 4].map((index) => `https://cdn.example.com/track-${index}.mp3`);
+    await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Cut between the clips to the beat.',
+      model: 'seedance-2-5',
+      duration: 5,
+      aspectRatio: '16:9',
+      resolution: '720p',
+      referenceMode: 'elements',
+      referenceVideoUrls,
+      referenceAudioUrls,
+    });
+
+    expect(providerBody).toMatchObject({
+      model: 'bytedance/seedance-2-5',
+      input: {
+        reference_video_urls: referenceVideoUrls,
+        reference_audio_urls: referenceAudioUrls,
+      },
+    });
+  });
+
+  it('still holds Seedance 2 to its own three clips, naming the model', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    vi.mocked(fetch).mockImplementation(async () => ({ ok: true, json: async () => ({ code: 200, data: { taskId: 'unused' } }) }) as Response);
+    const { supabase } = createSupabaseMock();
+    await expect(startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Cut between the clips.',
+      model: 'seedance-2-fast',
+      duration: 5,
+      aspectRatio: '16:9',
+      resolution: '720p',
+      referenceMode: 'elements',
+      referenceVideoUrls: [1, 2, 3, 4].map((index) => `https://cdn.example.com/clip-${index}.mp4`),
+    })).rejects.toThrow('Seedance 2 Fast supports up to 3 reference videos per run.');
+  });
+
+  it('refuses an end frame without a start frame where the provider reads frames positionally', async () => {
+    // Filtering [start, end] down to a list used to promote a lone end frame into
+    // first_frame_url, so the run silently started on the image it should have ended on.
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    vi.mocked(fetch).mockImplementation(async () => ({ ok: true, json: async () => ({ code: 200, data: { taskId: 'unused' } }) }) as Response);
+    const { supabase } = createSupabaseMock();
+    await expect(startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'End on this composition.',
+      model: 'seedance-2-mini',
+      duration: 6,
+      aspectRatio: '16:9',
+      resolution: '720p',
+      referenceMode: 'frames',
+      endImageUrl: 'https://cdn.example.com/end.jpg',
+    })).rejects.toThrow('Add a start frame to use an end frame with this model.');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it('sends a MiniMax end-only frame as last_frame_url, which its image endpoint allows', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return { ok: true, json: async () => ({ code: 200, data: { taskId: 'task-minimax-last-only' } }) } as Response;
+    });
+
+    const { supabase } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Arrive at this composition.',
+      model: 'minimax-h3',
+      duration: 6,
+      aspectRatio: '16:9',
+      resolution: '768P',
+      referenceMode: 'frames',
+      endImageUrl: 'https://cdn.example.com/end.jpg',
+    });
+
+    expect(providerBody).toMatchObject({
+      model: 'minimax-h3/image-to-video',
+      input: { last_frame_url: 'https://cdn.example.com/end.jpg' },
+    });
+    expect((providerBody as unknown as { input: Record<string, unknown> }).input).not.toHaveProperty('first_frame_url');
+  });
+
+  it('holds Wan 2.7 reference runs to the ten seconds its r2v endpoint accepts', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    vi.mocked(fetch).mockImplementation(async () => ({ ok: true, json: async () => ({ code: 200, data: { taskId: 'unused' } }) }) as Response);
+    const { supabase } = createSupabaseMock();
+    await expect(startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Follow the reference clip.',
+      model: 'wan-2.7',
+      duration: 15,
+      aspectRatio: '16:9',
+      resolution: '720p',
+      referenceMode: 'elements',
+      referenceVideoUrls: ['https://cdn.example.com/ref.mp4'],
+    })).rejects.toThrow('Wan 2.7 reference-to-video runs may be at most 10 seconds.');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 
   it('routes Kling 3 Turbo between text and image endpoints', async () => {

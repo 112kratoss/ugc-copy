@@ -53,6 +53,51 @@ const REFERENCE_VIDEO_SECONDS_CAPS: Record<string, number> = {
 };
 
 /**
+ * Combined reference-audio duration ceiling, in seconds. Seedance 2, Fast and Mini say
+ * "total duration of all audios not exceeding 15 s"; minimax-h3/reference-to-video says
+ * "the total duration of all reference audios cannot exceed 15 seconds". Seedance 2.5
+ * states a per-file range only, so it carries no total. Enforced as a runtime rule, not a
+ * descriptor constraint: audio slots keep optional duration metadata (mobile cannot
+ * measure a picked audio file), so the rule sums what a client reports and stays silent
+ * for a client that reports nothing, rather than refusing every mobile run.
+ */
+const REFERENCE_AUDIO_SECONDS_CAPS: Record<string, number> = {
+  'seedance-2': 15,
+  'seedance-2-fast': 15,
+  'seedance-2-mini': 15,
+  'minimax-h3': 15,
+};
+
+/**
+ * Video models whose provider reads frames positionally and refuses a last frame on its
+ * own — Seedance 2.5 spells it out ("last_frame_url cannot be passed alone; first_frame_url
+ * must be provided together with it"), and Wan, Kling and Veo take `[first, last]` arrays
+ * or paired fields with the same contract. minimax-h3/image-to-video is the exception
+ * ("Either first_frame_url or last_frame_url must be provided"), so it is absent here and
+ * a last-only run travels as `last_frame_url`. Mirrors `VIDEO_INPUT_LIMITS.endFrame` in
+ * generation-model-catalog; a test pins the two in agreement.
+ */
+const END_FRAME_NEEDS_START_FRAME: readonly string[] = [
+  'seedance-1.5-pro',
+  'seedance-2',
+  'seedance-2-fast',
+  'seedance-2-mini',
+  'seedance-2-5',
+  'wan-2.7',
+  'kling-3.0-video',
+  'veo-3.1',
+];
+
+/** wan/2-7-r2v declares `duration: min 2, max 10`; text and image-to-video allow 15. */
+export const WAN_REFERENCE_MAX_DURATION_SECONDS = 10;
+
+/**
+ * kling-2.6/motion-control: `character_orientation: image` is documented as "(max 10s
+ * video)" where the video orientation allows 30. Kling 3.0 motion states no such limit.
+ */
+export const KLING_26_IMAGE_ORIENTATION_MAX_DURATION_SECONDS = 10;
+
+/**
  * Reference-image capacity per video model, mirroring `VIDEO_INPUT_LIMITS.images` in
  * generation-model-catalog. The two tables cannot share a constant — catalog imports
  * this module, so the dependency only runs one way — so a test pins them in agreement.
@@ -452,6 +497,33 @@ function seedanceReferencePricing(
   };
 }
 
+/**
+ * Kie bills minimax-h3 as "Unit Price × (Generated Video Duration + Input Video
+ * Duration)" at one rate per resolution, so both reference-adjustment tables carry the
+ * same figures. Release `minimax-reference-duration-20260904` moved production to this
+ * shape by hand while the code build stayed per-second on output alone; a release emitted
+ * from that code would have put production back on the under-billing path. A manifest
+ * test now pins the September release to this expression.
+ */
+function inputSecondsPricing(
+  model: (typeof VIDEO_MODELS)['minimax-h3'],
+): PricingExpression {
+  return {
+    strategy: 'reference-adjustment',
+    config: {
+      unit: 'second',
+      settingKey: 'resolution',
+      durationSettingKey: 'duration',
+      referenceDurationSlots: ['videoReferences'],
+      rounding: 'ceil',
+      rates: {
+        noReference: cloneJson(model.pricing),
+        withReference: cloneJson(model.pricing),
+      },
+    },
+  };
+}
+
 function videoPricingExpression(model: (typeof VIDEO_MODELS)[VideoModelId]): PricingExpression {
   switch (model.id) {
     case 'kling-3.0-video':
@@ -496,11 +568,12 @@ function videoPricingExpression(model: (typeof VIDEO_MODELS)[VideoModelId]): Pri
           { false: rates.noSound, true: rates.withSound },
         ])),
       ));
+    case 'minimax-h3':
+      return inputSecondsPricing(model);
     case 'kling-3.0-turbo':
     case 'wan-2.7':
     case 'happyhorse-1.1':
     case 'grok-imagine-video':
-    case 'minimax-h3':
       return perSecond(lookup(
         [selector('setting', 'resolution', { defaultValue: model.resolutions[0] })],
         model.pricing,
@@ -613,7 +686,29 @@ function validationConfigForModel(
         ],
         message: 'GPT Image 2 supports 1K or 2K output for square images.',
       },
+      {
+        // Kie: "5:4 and 4:5 aspect ratios only support 1K images" (image-to-image), and
+        // both sit in the list text-to-image cannot render at 2K or 4K.
+        type: 'control-options',
+        key: 'resolution',
+        options: ['1K'],
+        conditions: [
+          { source: 'setting', key: 'aspectRatio', operator: 'in', value: ['5:4', '4:5'] },
+        ],
+        message: 'GPT Image 2 renders 5:4 and 4:5 at 1K only.',
+      },
     );
+  }
+  if (kind === 'motion' && modelId === 'kling-2.6') {
+    rules.push({
+      type: 'forbidden-combination',
+      conditions: [
+        { source: 'setting', key: 'characterOrientation', operator: 'equals', value: 'image' },
+        { source: 'setting', key: 'duration', operator: 'greaterThan', value: KLING_26_IMAGE_ORIENTATION_MAX_DURATION_SECONDS },
+      ],
+      field: 'duration',
+      message: `Kling 2.6 keeps image orientation to ${KLING_26_IMAGE_ORIENTATION_MAX_DURATION_SECONDS} seconds; use video orientation for longer clips.`,
+    });
   }
   if (kind === 'image' && modelId === 'wan-2.7-image-pro') {
     rules.push({
@@ -681,13 +776,39 @@ function validationConfigForModel(
       });
     }
     if (modelId === 'wan-2.7') {
+      rules.push(
+        {
+          type: 'weighted-slot-count',
+          weights: { images: 1, videos: 1, audios: 1 },
+          max: 5,
+          conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' }],
+          field: 'references',
+          message: 'Wan 2.7 supports up to 5 reusable references in total.',
+        },
+        {
+          // The r2v endpoint stops at 10 s where text and image-to-video reach 15; the
+          // shared duration control spans 15, so the ceiling lives here per mode.
+          type: 'control-range',
+          key: 'duration',
+          min: 2,
+          max: WAN_REFERENCE_MAX_DURATION_SECONDS,
+          conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' }],
+          field: 'duration',
+          message: `Wan 2.7 reference-to-video runs may be at most ${WAN_REFERENCE_MAX_DURATION_SECONDS} seconds.`,
+        },
+      );
+    }
+    if (END_FRAME_NEEDS_START_FRAME.includes(modelId)) {
+      // Only clients that report per-slot counts can trip this (the legacy count-only
+      // quote cannot tell an end frame from a start frame); the start service applies
+      // the same rule from the resolved URLs for everything else.
       rules.push({
-        type: 'weighted-slot-count',
-        weights: { images: 1, videos: 1, audios: 1 },
-        max: 5,
-        conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' }],
-        field: 'references',
-        message: 'Wan 2.7 supports up to 5 reusable references in total.',
+        type: 'min-slot-count',
+        slotKey: 'startFrame',
+        min: 1,
+        conditions: [{ source: 'inputCount', key: 'endFrame', operator: 'greaterThan', value: 0 }],
+        field: 'startFrame',
+        message: 'Add a start frame to use an end frame with this model.',
       });
     }
     if (modelId === 'gemini-omni-video') {
@@ -745,6 +866,16 @@ function validationConfigForModel(
         max: referenceSeconds,
         field: 'videos',
         message: `Reference videos may be at most ${referenceSeconds} seconds in total.`,
+      });
+    }
+    const referenceAudioSeconds = REFERENCE_AUDIO_SECONDS_CAPS[modelId];
+    if (referenceAudioSeconds !== undefined) {
+      rules.push({
+        type: 'combined-duration',
+        slotKeys: ['audioReferences'],
+        max: referenceAudioSeconds,
+        field: 'audios',
+        message: `Reference audio may be at most ${referenceAudioSeconds} seconds in total.`,
       });
     }
     if (modelId === 'minimax-h3') {

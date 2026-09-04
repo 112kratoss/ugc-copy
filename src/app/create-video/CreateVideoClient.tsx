@@ -563,35 +563,48 @@ function isSupportedKlingVideoFile(file: File): boolean {
     );
 }
 
-async function readVideoDurationSeconds(file: File): Promise<number | null> {
+async function readMediaDurationSeconds(file: File, kind: 'video' | 'audio'): Promise<number | null> {
     const previewUrl = URL.createObjectURL(file);
 
     try {
         const durationSeconds = await new Promise<number | null>((resolve) => {
-            const previewVideo = document.createElement('video');
+            const previewMedia = document.createElement(kind);
 
             const cleanup = () => {
-                previewVideo.removeAttribute('src');
-                previewVideo.load();
+                previewMedia.removeAttribute('src');
+                previewMedia.load();
             };
 
-            previewVideo.preload = 'metadata';
-            previewVideo.onloadedmetadata = () => {
-                const nextDuration = Number.isFinite(previewVideo.duration) ? previewVideo.duration : null;
+            previewMedia.preload = 'metadata';
+            previewMedia.onloadedmetadata = () => {
+                const nextDuration = Number.isFinite(previewMedia.duration) ? previewMedia.duration : null;
                 cleanup();
                 resolve(nextDuration);
             };
-            previewVideo.onerror = () => {
+            previewMedia.onerror = () => {
                 cleanup();
                 resolve(null);
             };
-            previewVideo.src = previewUrl;
+            previewMedia.src = previewUrl;
         });
 
         return durationSeconds;
     } finally {
         URL.revokeObjectURL(previewUrl);
     }
+}
+
+function readVideoDurationSeconds(file: File): Promise<number | null> {
+    return readMediaDurationSeconds(file, 'video');
+}
+
+/**
+ * Kie caps the combined length of reference audio (15 s on Seedance 2, Fast, Mini and
+ * MiniMax H3) the same way it caps clips, so the quote needs each track's duration to
+ * enforce it before submit instead of the provider rejecting the run afterwards.
+ */
+function readAudioDurationSeconds(file: File): Promise<number | null> {
+    return readMediaDurationSeconds(file, 'audio');
 }
 
 export interface CreateVideoPrefill {
@@ -1018,7 +1031,16 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                         ))
                         : [],
                 },
-                audioReferences: { count: activeReferenceMode === 'elements' ? referenceAudios.length : 0 },
+                audioReferences: {
+                    count: activeReferenceMode === 'elements' ? referenceAudios.length : 0,
+                    durationsSeconds: activeReferenceMode === 'elements'
+                        ? referenceAudios.flatMap((reference) => (
+                            typeof reference.durationSeconds === 'number'
+                                ? [reference.durationSeconds]
+                                : []
+                        ))
+                        : [],
+                },
                 // The videoElements slot is declared inside the elements-conditioned
                 // "references" input mode, but this surface never puts Kling into
                 // elements mode (getVideoElementSupport disables elements for it), so
@@ -1044,7 +1066,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 : [],
         },
         catalogRevision: modelCatalog.catalog.revision,
-    } : null, [activeReferenceMode, activeSupportsEndFrame, characterIds.length, currentAspectRatio, currentFixedLens, currentIsMultiShot, currentMode, currentResolution, currentSound, elements.length, endImageFile, endImageUrl, frameReferenceCount, isGeminiOmniVideoModel, klingSubjects, klingSubjectsActive, klingVideoElements.length, modelCatalog.catalog, videoElementsSlotActive, preparedAudioIds.length, referenceAudios.length, referenceVideos, selectedModel, startImageFile, startImageUrl, totalDuration]);
+    } : null, [activeReferenceMode, activeSupportsEndFrame, characterIds.length, currentAspectRatio, currentFixedLens, currentIsMultiShot, currentMode, currentResolution, currentSound, elements.length, endImageFile, endImageUrl, frameReferenceCount, isGeminiOmniVideoModel, klingSubjects, klingSubjectsActive, klingVideoElements.length, modelCatalog.catalog, videoElementsSlotActive, preparedAudioIds.length, referenceAudios, referenceVideos, selectedModel, startImageFile, startImageUrl, totalDuration]);
     const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token);
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED' && quoteState.error?.code !== 'MODEL_UNAVAILABLE') return;
@@ -1870,12 +1892,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         const filesToAdd = validFiles.slice(0, availableSlots);
         if (filesToAdd.length === 0) return;
 
-        const seeds = filesToAdd.map((file, index) => ({
+        const seeds = await Promise.all(filesToAdd.map(async (file, index) => ({
             displayName: `Audio reference ${referenceAudiosRef.current.length + index + 1}`,
             file,
             previewUrl: '',
             source: 'upload' as const,
-        }));
+            durationSeconds: await readAudioDurationSeconds(file),
+        })));
 
         const nextReferences = [...referenceAudiosRef.current, ...hydrateSeedanceMediaReferences('Audio', seeds)];
         commitReferenceAudios(nextReferences);
