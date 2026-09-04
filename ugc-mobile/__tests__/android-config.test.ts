@@ -8,9 +8,11 @@ import {
   setManifestCleartextPlaceholder,
 } from '../plugins/withAndroidLocalCleartextDebug';
 import {
+  RELEASE_KEEP_RULES,
   setMaterialComponentsVersion,
   setReactNativeBuildFromSource,
   setReleaseSafetyProperties,
+  setReleaseProguardRules,
   setReleaseProguardSafety,
 } from '../plugins/withAndroidReleaseSafety';
 import {
@@ -35,30 +37,46 @@ describe('Android native network config', () => {
     expect(appJson.expo.plugins).toContain('./plugins/withAndroidLocalCleartextDebug');
   });
 
-  it('keeps R8 off so expo-modules-core can still build its records', () => {
+  it('turns R8 on with the safeguards build 62 lacked', () => {
     // 0.1.2 (build 62) shipped with minification on and reached testers unusable.
     // expo-modules-core builds Kotlin records from JS options by reflection, and
-    // R8's optimization passes strip what that needs, so the failure lands at
-    // runtime in whichever module is unlucky rather than at build time:
-    // expo-secure-store rejected every read ("The 2nd argument cannot be cast to
-    // type SecureStoreOptions"), which trapped the app in a sign-out loop, and
-    // expo-image could not set `source`, so no image mounted. A green build
-    // proves nothing here, which is why this is pinned rather than left to
-    // judgement.
+    // that build turned on shrinking, the optimizing ProGuard base and R8 full
+    // mode in one change; something in that set stripped what the record
+    // converter needs, so the failure landed at runtime in whichever module was
+    // unlucky rather than at build time: expo-secure-store rejected every read
+    // ("The 2nd argument cannot be cast to type SecureStoreOptions"), which
+    // trapped the app in a sign-out loop, and expo-image could not set `source`,
+    // so no image mounted. The revert switched everything off together, so the
+    // culprit was never isolated.
+    //
+    // Google Play scores each bundle's obfuscation and warns under 25% (0.1.3
+    // measured 1%, fix by Feb 2027), so R8 is back on - with only the shrink
+    // and rename passes obfuscation needs, in ProGuard-compatible mode, and
+    // with a tracked keep-rules file. This pins that exact shape: a green build
+    // still proves nothing here, so any drift from it must be deliberate and
+    // device-verified, never incidental.
     const appJson = JSON.parse(readFileSync(join(projectRoot, 'app.json'), 'utf8'));
     const properties = setReleaseSafetyProperties([
-      { type: 'property', key: 'android.enableMinifyInReleaseBuilds', value: 'true' },
+      { type: 'property', key: 'android.enableMinifyInReleaseBuilds', value: 'false' },
     ]);
 
     expect(appJson.expo.plugins).toContain('./plugins/withAndroidReleaseSafety');
     expect(properties).toContainEqual({
       type: 'property',
       key: 'android.enableMinifyInReleaseBuilds',
-      value: 'false',
+      value: 'true',
     });
+    // Resource shrinking is a separate failure surface, and Play did not flag it.
     expect(properties).toContainEqual({
       type: 'property',
       key: 'android.enableShrinkResourcesInReleaseBuilds',
+      value: 'false',
+    });
+    // Compat mode keeps ProGuard's implicit keeps for every reflecting library,
+    // not only the ones that ship consumer rules.
+    expect(properties).toContainEqual({
+      type: 'property',
+      key: 'android.enableR8.fullMode',
       value: 'false',
     });
     // The optimized-resource-shrinking flag is meaningless without shrinking and
@@ -71,6 +89,8 @@ describe('Android native network config', () => {
       value: '-Xmx3072m -XX:MaxMetaspaceSize=1536m',
     });
 
+    // The plain base carries -dontoptimize: R8 renames and drops dead code but
+    // runs none of the inlining or class merging that came in with build 62.
     const optimizedBuildGradle = `release {
       proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
     }`;
@@ -80,6 +100,33 @@ describe('Android native network config', () => {
       'getDefaultProguardFile("proguard-android-optimize.txt")'
     );
     expect(setReleaseProguardSafety(safeBuildGradle)).toBe(safeBuildGradle);
+
+    // The tracked keep rules ride on the release proguardFiles after the base
+    // and the generated file, and the plugin refuses a template it cannot place
+    // them in rather than silently building without them.
+    const withRules = setReleaseProguardRules(safeBuildGradle);
+    expect(withRules).toContain(
+      `proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro", "${RELEASE_KEEP_RULES}"`
+    );
+    expect(setReleaseProguardRules(withRules)).toBe(withRules);
+    expect(() => setReleaseProguardRules(optimizedBuildGradle)).toThrow(/proguardFiles/);
+
+    // The entry is relative to android/app and must resolve to the tracked file.
+    const keepRulesPath = join(projectRoot, 'android', 'app', RELEASE_KEEP_RULES);
+    expect(keepRulesPath).toBe(join(projectRoot, 'plugins', 'android-release.pro'));
+    const keepRules = readFileSync(keepRulesPath, 'utf8').split('\n');
+    for (const rule of [
+      '-keep class expo.modules.** { *; }',
+      '-keep class kotlin.Metadata { *; }',
+      '-keep class expo.modules.securestore.** { *; }',
+      '-keep class expo.modules.image.** { *; }',
+    ]) {
+      expect(keepRules).toContain(rule);
+    }
+    expect(keepRules.some((line) => /^-keepattributes .*RuntimeVisible\*Annotations/.test(line)))
+      .toBe(true);
+    // Play scores obfuscation; a stray -dontobfuscate would quietly undo the point.
+    expect(keepRules.some((line) => /^\s*-dontobfuscate/.test(line))).toBe(false);
   });
 
   it('leaves predictive back off so the system back key still reaches JavaScript', () => {
