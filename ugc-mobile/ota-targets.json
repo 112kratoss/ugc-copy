@@ -22,14 +22,14 @@
       "$note": "Submitted to Play closed alpha 2026-09-04 (EAS build 692255d0, submission a54d7333, commit 611374d). Play production promotion pending; until it lands most Android users still run 65. First store binary built with ARM ABIs only (#104) and React Native compiled from source with the EAS CMake hook (#102)."
     },
     "ios": {
-      "fingerprint": "0242bfdeab7bcf259475d7bd90a87709f73caac8",
+      "fingerprint": "f78a828af94230d8a3758701f06c46a082d1e7f9",
       "appVersion": "0.1.3",
-      "buildNumber": 49,
+      "buildNumber": 50,
       "shipped": "2026-09-04",
       "tracks": [
         "testflight"
       ],
-      "$note": "Submitted to the TestFlight internal group 2026-09-04 (EAS build 122f1e51, commit a08933b). App Store review pending; until it lands most iOS users still run 47. NOT reachable by an OTA from main: eas.json is a fingerprint input and #104 changed it after this build, so a clean checkout of main fingerprints iOS to f78a828af94230d8a3758701f06c46a082d1e7f9. Ship an iOS binary from main (build 50) before relying on OTA for iOS."
+      "$note": "Submitted to the TestFlight internal group 2026-09-04 (EAS build e4a31d8d, submission d42a3ff2, commit 0c664ec). Replaces build 49, which was compiled before #104 changed eas.json (a fingerprint input) and so could never receive an update from main; 50 is built from main and matches its fingerprint. App Store review pending; until it lands most iOS users still run 47."
     }
   }
 }
