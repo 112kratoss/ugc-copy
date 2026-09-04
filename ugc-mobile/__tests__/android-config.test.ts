@@ -82,6 +82,53 @@ describe('Android native network config', () => {
     expect(setReleaseProguardSafety(safeBuildGradle)).toBe(safeBuildGradle);
   });
 
+  it('leaves predictive back off so the system back key still reaches JavaScript', () => {
+    // `predictiveBackGestureEnabled: true` writes
+    // `android:enableOnBackInvokedCallback="true"`, and from Android 13 that
+    // opt-in stops the system calling `Activity.onBackPressed()` at all: back is
+    // dispatched to OnBackPressedDispatcher callbacks instead. Nothing in this
+    // app registers one on those OS versions. React Native's own callback --
+    // its only bridge from the system back key to `BackHandler`, and so to
+    // React Navigation -- is gated on `AndroidVersion.isAtLeastTargetSdk36`,
+    // which requires the *device* to be running Android 16; react-native-screens
+    // registers one only for its search bar. With no enabled callback the
+    // dispatcher falls through to the platform default, which finishes the
+    // activity: on Android 13/14/15 the first press of back or the back gesture
+    // closed the app from any screen, while the in-app back arrow kept working
+    // because that is `router.back()` in JS. An Android 16 device hides the bug
+    // completely, which is why this is pinned rather than left to a manual pass.
+    //
+    // Turning it off costs nothing: Android 16 enforces predictive back for
+    // targetSdk 36 whatever this attribute says, and React Native's SDK-36
+    // workaround handles that case.
+    const appJson = JSON.parse(readFileSync(join(projectRoot, 'app.json'), 'utf8'));
+
+    expect(appJson.expo.android.predictiveBackGestureEnabled).not.toBe(true);
+
+    // The reason the flag has to stay off, read from the runtime it depends on.
+    // When React Native registers its callback for every OS version this stops
+    // being true, and the flag can be reconsidered.
+    const androidVersion = readFileSync(
+      join(
+        projectRoot,
+        'node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/util/AndroidVersion.kt'
+      ),
+      'utf8'
+    );
+    const reactActivity = readFileSync(
+      join(
+        projectRoot,
+        'node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/ReactActivity.java'
+      ),
+      'utf8'
+    );
+
+    expect(androidVersion).toContain('Build.VERSION.SDK_INT >= VERSION_CODE_BAKLAVA');
+    expect(reactActivity).toContain(
+      'AndroidVersion.isAtLeastTargetSdk36(this)'
+    );
+  });
+
   it('pins the Android Material release that handles API 35 system bars', () => {
     const buildGradle = `android {}
 
