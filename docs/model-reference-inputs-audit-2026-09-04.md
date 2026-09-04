@@ -321,9 +321,10 @@ that the `price` scan lists every variant's block on a multi-model page in page 
 
 Release manifest: `config/generation-model-catalog/releases/2026-09-04-reference-audit.json`
 (revision `reference-audit-20260904`, based on `minimax-reference-duration-20260904`, twelve
-entries, validated locally). It is not staged or published; the code fixes for findings 2,
-3, 4 and 5 ship with the branch, and the pricing and rules go live only when the manifest is
-published after the code is deployed.
+entries). Staged and published to production on 2026-09-04 at 10:58 UTC after a read-back of
+the shadow rows; every rule type it uses was already supported by the deployed quote engine,
+and all three public projections served the new revision within the minute. The code fixes
+for findings 2, 3, 4 and 5 go live with this branch's deploy (PR #101).
 
 Still open, by choice: finding 7 (a pricing decision), the mobile side of finding 10 (needs
 a way to read audio duration on device), and the opportunities table above.
