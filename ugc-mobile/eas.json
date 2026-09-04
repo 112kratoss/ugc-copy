@@ -30,7 +30,8 @@
       "environment": "production",
       "autoIncrement": true,
       "env": {
-        "MAGICBOOKLET_INCLUDE_DEV_CLIENT": "false"
+        "MAGICBOOKLET_INCLUDE_DEV_CLIENT": "false",
+        "ORG_GRADLE_PROJECT_reactNativeArchitectures": "armeabi-v7a,arm64-v8a"
       },
       "android": {
         "buildType": "app-bundle"

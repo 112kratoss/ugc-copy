@@ -62,6 +62,13 @@ describe('mobile production release contracts', () => {
     expect(easJson.cli.version).toBe('21.2.0');
     expect(easJson.cli.requireCommit).toBe(true);
     expect(easJson.build.production.env.MAGICBOOKLET_INCLUDE_DEV_CLIENT).toBe('false');
+    // The source build of ReactAndroid for four ABIs overran the EAS free plan's
+    // 45-minute limit (build 68 was cancelled in the last native step on
+    // 2026-09-04). Play phones only run the ARM ABIs, so the store build pins
+    // them through a Gradle project property; local and dev builds keep all
+    // four from gradle.properties.
+    expect(easJson.build.production.env.ORG_GRADLE_PROJECT_reactNativeArchitectures)
+      .toBe('armeabi-v7a,arm64-v8a');
     expect(easJson.submit.staging.android.track).toBe('alpha');
     expect(easJson.submit.staging.android.releaseStatus).toBe('completed');
     expect(validator).toContain('EAS_BUILD_GIT_COMMIT_HASH');
