@@ -7,30 +7,29 @@
     "tree against this file and refuses to publish on a mismatch.",
     "",
     "Update this file in the same commit that ships a new binary, and never to",
-    "silence the preflight \u2014 a mismatch means the update cannot land, not that",
+    "silence the preflight — a mismatch means the update cannot land, not that",
     "the record is stale."
   ],
   "targets": {
     "android": {
-      "fingerprint": "b32edbfe04ad627e7f9c059c4f4e4196eccb5139",
-      "appVersion": "0.1.2",
-      "buildNumber": 65,
-      "shipped": "2026-08-31",
+      "fingerprint": "30288aed1e67034363dfc0af137eb93ae3aaae28",
+      "appVersion": "0.1.3",
+      "buildNumber": 69,
+      "shipped": "2026-09-04",
       "tracks": [
-        "alpha",
-        "production"
+        "alpha"
       ],
-      "$note": "Promoted alpha -> production 2026-08-31, full rollout, in review. Reach becomes real per user as Play rolls them onto 65."
+      "$note": "Submitted to Play closed alpha 2026-09-04 (EAS build 692255d0, submission a54d7333, commit 611374d). Play production promotion pending; until it lands most Android users still run 65. First store binary built with ARM ABIs only (#104) and React Native compiled from source with the EAS CMake hook (#102)."
     },
     "ios": {
-      "fingerprint": "27175069a1547b75d6b3456944d3c9c4ba7f0e27",
-      "appVersion": "0.1.2",
-      "buildNumber": 47,
-      "shipped": "2026-08-31",
+      "fingerprint": "0242bfdeab7bcf259475d7bd90a87709f73caac8",
+      "appVersion": "0.1.3",
+      "buildNumber": 49,
+      "shipped": "2026-09-04",
       "tracks": [
         "testflight"
       ],
-      "$note": "Build 46 was pulled from review and replaced: it predated dc37fa2 (a config plugin hashed for both platforms) so it had no OTA reach, and predated the update policy and reload gate entirely. 47 carries all of it. App Store review pending."
+      "$note": "Submitted to the TestFlight internal group 2026-09-04 (EAS build 122f1e51, commit a08933b). App Store review pending; until it lands most iOS users still run 47. NOT reachable by an OTA from main: eas.json is a fingerprint input and #104 changed it after this build, so a clean checkout of main fingerprints iOS to f78a828af94230d8a3758701f06c46a082d1e7f9. Ship an iOS binary from main (build 50) before relying on OTA for iOS."
     }
   }
 }
