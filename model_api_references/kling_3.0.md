@@ -1,5 +1,7 @@
 # Video API Documentation
 
+> **Superseded 2026-09-04 for `kling_elements`: Kie has no `element_input_video_urls`; videos travel in `element_input_urls` with `start_time`/`end_time`, and `mode` gained `4K`.** See `reference-audit-2026-09-04.md`.
+
 > Generate content using the Video model
 
 ## Overview

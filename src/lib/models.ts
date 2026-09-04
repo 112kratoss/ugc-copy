@@ -407,6 +407,12 @@ export type ImageQualityMode = 'standard' | 'turbo' | 'balanced' | 'quality';
 
 const GPT_IMAGE_2_AUTO_RESOLUTIONS = ['1K'] as const satisfies readonly ImageResolution[];
 const GPT_IMAGE_2_SQUARE_RESOLUTIONS = ['1K', '2K'] as const satisfies readonly ImageResolution[];
+/**
+ * Kie renders GPT Image 2 at 5:4 and 4:5 in 1K only ("5:4 and 4:5 aspect ratios only
+ * support 1K images" on image-to-image; text-to-image lists both among the ratios
+ * unsupported at 2K and 4K). Offering 2K/4K there creates a task Kie then fails.
+ */
+const GPT_IMAGE_2_ONE_K_ONLY_ASPECT_RATIOS: readonly string[] = ['auto', '5:4', '4:5'];
 
 export function getImageResolutionOptions(
     modelId: ImageModelId,
@@ -422,7 +428,7 @@ export function getImageResolutionOptions(
         return IMAGE_MODELS[modelId].resolutions;
     }
 
-    if (selectedAspectRatio === 'auto') {
+    if (GPT_IMAGE_2_ONE_K_ONLY_ASPECT_RATIOS.includes(selectedAspectRatio)) {
         return GPT_IMAGE_2_AUTO_RESOLUTIONS;
     }
 
@@ -525,10 +531,13 @@ export const VIDEO_MODELS = {
         durations: [4, 8, 12] as const,
         modeOptions: [] as const,
         resolutions: ['480p', '720p', '1080p'] as const,
+        // Kie prices this model per second (480p 1.75 / 3.5, 720p 3.5 / 7, 1080p 7.5 / 15
+        // credits, no audio / with audio, re-read 2026-09-04); the table is those rates
+        // multiplied out, so 480p 12s is 21 / 42, not the 19 / 38 an older capture listed.
         pricing: {
             '480p': {
-                noSound: { 4: 7, 8: 14, 12: 19 },
-                withSound: { 4: 14, 8: 28, 12: 38 },
+                noSound: { 4: 7, 8: 14, 12: 21 },
+                withSound: { 4: 14, 8: 28, 12: 42 },
             },
             '720p': {
                 noSound: { 4: 14, 8: 28, 12: 42 },
@@ -749,8 +758,11 @@ export const VIDEO_MODELS = {
         pricing: {
             veo3_lite: { '720p': 30, '1080p': 35, '4k': 150 },
             veo3_fast: { '720p': 60, '1080p': 65, '4k': 180 },
+            // Quality mode lists one 4K figure for text-to-video and image-to-video alike
+            // (370, re-read 2026-09-04); the two tables only differ in what "reference"
+            // means to getVideoCost, never in the rate.
             veo3: {
-                text: { '720p': 250, '1080p': 255, '4k': 380 },
+                text: { '720p': 250, '1080p': 255, '4k': 370 },
                 reference: { '720p': 250, '1080p': 255, '4k': 370 },
             },
         },
@@ -777,9 +789,12 @@ export const VIDEO_MODELS = {
             { value: 'normal', label: 'Normal' },
             { value: 'fun', label: 'Fun' },
         ] as const,
+        // Kie raised these from 1.6 / 3 to 2.4 / 4.5 credits per second between the
+        // 2026-04-27 evidence capture and 2026-09-04 (a 1080p tier at 8 exists too, not
+        // exposed here). Passing the old rate through under-billed every run by a third.
         pricing: {
-            '480p': 1.6,
-            '720p': 3,
+            '480p': 2.4,
+            '720p': 4.5,
         },
     },
     'seedance-2-5': {
@@ -812,10 +827,11 @@ export const VIDEO_MODELS = {
                 withVideo: 38,
             },
             // 480p and 720p are Kie's listed price passed through. 1080p is not: Kie
-            // currently lists 114 / 68.5 under a "Limited-Time 1080P Offer: 28% OFF until
-            // Sep 17, 2026 06:00 UTC", and we bill the standard rate behind it
-            // (114/0.72, 68.5/0.72, rounded up) so the tier stays correct when the offer
-            // lapses rather than silently under-billing the day it does.
+            // currently lists 114 / 68.5 under a "Limited-Time 1080P Offer: 28% OFF"
+            // (originally until Sep 17, 2026, extended to Oct 17, 2026 06:00 UTC as of
+            // 2026-09-04), and we bill the standard rate behind it (114/0.72, 68.5/0.72,
+            // rounded up) so the tier stays correct when the offer lapses rather than
+            // silently under-billing the day it does.
             '1080p': {
                 noVideo: 159,
                 withVideo: 96,

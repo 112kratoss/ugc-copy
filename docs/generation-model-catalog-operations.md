@@ -221,3 +221,14 @@ To make the CLI available as an npm command, add this package script:
   "ops:generation-model-catalog": "tsx --env-file-if-exists=.env.local scripts/generation-model-catalog.ts"
 }
 ```
+
+## Every release is emitted, then pinned
+
+Manifests come from `npm run ops:generation-model-catalog:emit` (see the header of
+`scripts/emit-generation-model-catalog-entries.ts`), never from editing JSON by hand, and
+each committed release gets a test under `src/__tests__/*-manifest.test.ts` asserting its
+entries equal the code build (`buildGenerationModelCatalog` and
+`buildCodeGenerationModelOperations`). The 2026-09-04 MiniMax release showed why: its
+pricing strategy was changed in the manifest alone, so the code build still emitted the
+previous shape and the next emitted release would have carried production back to it. A
+pinned test fails the moment a manifest and the code disagree, whichever side moved.

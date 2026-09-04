@@ -249,6 +249,8 @@ export type ImageQualityMode = 'standard' | 'turbo' | 'balanced' | 'quality';
 
 const GPT_IMAGE_2_AUTO_RESOLUTIONS = ['1K'] as const satisfies readonly ImageResolution[];
 const GPT_IMAGE_2_SQUARE_RESOLUTIONS = ['1K', '2K'] as const satisfies readonly ImageResolution[];
+// Mirrors @/lib/models: Kie renders 5:4 and 4:5 at 1K only.
+const GPT_IMAGE_2_ONE_K_ONLY_ASPECT_RATIOS: readonly string[] = ['auto', '5:4', '4:5'];
 
 export function getImageResolutionOptions(
   modelId: ImageModelId,
@@ -257,7 +259,7 @@ export function getImageResolutionOptions(
   const selectedAspectRatio = aspectRatio ?? IMAGE_MODELS[modelId].aspectRatios[0];
   if (modelId === 'grok-imagine-image') return IMAGE_MODELS[modelId].resolutions;
   if (modelId !== 'gpt-image-2') return IMAGE_MODELS[modelId].resolutions;
-  if (selectedAspectRatio === 'auto') return GPT_IMAGE_2_AUTO_RESOLUTIONS;
+  if (GPT_IMAGE_2_ONE_K_ONLY_ASPECT_RATIOS.includes(selectedAspectRatio)) return GPT_IMAGE_2_AUTO_RESOLUTIONS;
   if (selectedAspectRatio === '1:1') return GPT_IMAGE_2_SQUARE_RESOLUTIONS;
   return IMAGE_MODELS[modelId].resolutions;
 }

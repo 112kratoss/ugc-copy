@@ -757,11 +757,21 @@ export function MediaCreationScreen({
             void refetchCatalog();
             setMessage('Model settings changed. Review the refreshed options before generating.');
           }
+          // A 422 carries the specific rule that failed in `fieldErrors` ("Add a start
+          // frame to use an end frame with this model."); the top-level message is the
+          // generic "settings are no longer available", which the web surface already
+          // looks past. Prefer the field message so the user learns what to change.
+          const fieldErrors = details && typeof details === 'object' && 'fieldErrors' in details
+            ? (details as { fieldErrors?: Record<string, unknown> }).fieldErrors
+            : undefined;
+          const fieldMessage = fieldErrors
+            ? Object.values(fieldErrors).find((value): value is string => typeof value === 'string' && value.trim().length > 0)
+            : undefined;
           setQuoteState({
             key: quoteKey,
             status: 'error',
             cost: null,
-            error: error instanceof Error ? error.message : 'Could not calculate generation cost.',
+            error: fieldMessage ?? (error instanceof Error ? error.message : 'Could not calculate generation cost.'),
             normalizedSettings: null,
           });
         });

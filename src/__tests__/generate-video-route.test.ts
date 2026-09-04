@@ -766,7 +766,7 @@ describe('/api/generate-video route', () => {
           {
             name: 'motion_ref',
             description: 'Motion ref',
-            element_input_video_urls: ['asset-video-1'],
+            element_input_urls: ['asset-video-1'],
           },
         ],
       },

@@ -2706,10 +2706,13 @@ export function inspectWorkflowNodeCapabilities(
       });
     }
 
-    if ((isSeedance2Family || isKlingVideoModel) && referenceVideoCount > 3) {
+    // Per model, not a literal: Seedance 2.5 takes ten clips where the rest of the
+    // family and Kling's video elements stop at three.
+    const referenceVideoCap = getVideoReferenceSupport(data.model).videos;
+    if ((isSeedance2Family || isKlingVideoModel) && referenceVideoCount > referenceVideoCap) {
       issues.push({
         code: 'too-many-reference-videos',
-        message: `${model.displayName} supports at most 3 reference videos in a workflow node.`,
+        message: `${model.displayName} supports at most ${referenceVideoCap} reference video${referenceVideoCap === 1 ? '' : 's'} in a workflow node.`,
       });
     }
 
@@ -2726,10 +2729,13 @@ export function inspectWorkflowNodeCapabilities(
         .map((edge) => getKnownWorkflowSourceVideoDurationSeconds(getNodeById(graph, edge.source)))
         .filter((duration): duration is number => typeof duration === 'number' && duration > 0);
 
-      if (referenceVideoDurations.length > 0 && referenceVideoDurations.reduce((total, duration) => total + duration, 0) > 15) {
+      // Kie caps combined reference footage at 30 s on Seedance 2.5 and 15 s on the rest
+      // of the family (mirrors referenceAssetCapSeconds in generation-model-catalog).
+      const referenceVideoSecondsCap = data.model === 'seedance-2-5' ? 30 : 15;
+      if (referenceVideoDurations.length > 0 && referenceVideoDurations.reduce((total, duration) => total + duration, 0) > referenceVideoSecondsCap) {
         issues.push({
           code: 'reference-video-too-long',
-          message: 'Seedance 2 reference videos must stay within the 15-second combined limit.',
+          message: `${model.displayName} reference videos must stay within the ${referenceVideoSecondsCap}-second combined limit.`,
         });
       }
     }

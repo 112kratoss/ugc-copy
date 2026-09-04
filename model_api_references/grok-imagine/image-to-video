@@ -1,5 +1,7 @@
 # Image To Video API Documentation
 
+> **Superseded 2026-09-04 for pricing (now 2.4 / 4.5 / 8 credits per second), `image_urls` up to 7, and the 1080p tier.** See `reference-audit-2026-09-04.md`.
+
 > Generate content using the Image To Video model
 
 ## Overview

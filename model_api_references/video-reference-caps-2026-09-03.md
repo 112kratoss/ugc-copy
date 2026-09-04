@@ -1,5 +1,7 @@
 # Seedance 2.5 and MiniMax H3 — re-verified provider evidence (2026-09-03)
 
+> **Update 2026-09-04:** the Seedance 2.5 1080p offer quoted below was extended from Sep 17 to Oct 17, 2026 06:00 UTC; the pinned undiscounted 159 / 96 is unaffected. See `reference-audit-2026-09-04.md`.
+
 Read from `https://docs.kie.ai/market/bytedance/seedance-2-5.md`,
 `https://docs.kie.ai/market/minimax-h3/reference-to-video.md` and the `pricingDesc` field
 embedded in the `https://kie.ai/<slug>` market pages. Method: `curl` with a browser
