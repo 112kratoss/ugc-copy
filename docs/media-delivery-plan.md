@@ -1,0 +1,102 @@
+# Whole-app media delivery plan
+
+Created: 2026-09-05. Scope: web, Android, iOS, and their shared backend.
+Evidence and repairs from the first pass:
+[media delivery audit](media-delivery-audit-2026-09-05.md).
+
+## September 6 checkpoint and release order
+
+The completed reliability, layout-metadata and teaser-repair changes form an
+independent release checkpoint. Further private-video optimization and broad
+surface verification remain separate work; this checkpoint does not certify the
+entire app. Earlier audit entries describe the working-tree state at that time.
+
+Two migrations accompany the backend changes:
+`20260905192259_admit_legacy_stored_visual_previews.sql` and
+`20260905201219_repair_ready_video_teasers.sql`. Both passed clean local replay
+and the full database test suite. Release them through `production-release.yml`
+after Quality passes for the exact main commit; that workflow applies migrations
+before staging, checking and promoting the backend. Do not apply ad hoc production
+DDL separately. Mobile changes require their own verified OTA/store release.
+Until those workflows run, committed code and migration files are not live.
+
+Objective: reliable first display and playback with bounded transfer, decoding,
+and memory costs across every media surface. Preserve original download quality
+and private-media access controls. This is a defined work sequence; evidence can
+change fix priority, but cannot silently remove surfaces from coverage.
+
+## Work sequence and completion criteria
+
+| Step | Work | Completion evidence | Current status |
+| --- | --- | --- | --- |
+| 1. Inventory and baseline | Map every renderer and caller to its source, preview, rendition, signing, cache, and repair path. Include images, video, audio, avatars, covers, uploaded references, and purchased files. Record current build and device versions. | Complete surface/component map, ownership rules, and comparable cold/warm load measurements. | Partial: 179 static media/player call sites across 65 files inventoried; dynamic paths and runtime baselines pending. |
+| 2. Stored-media integrity | Find missing, corrupt, expired-provider, misclassified, or permanently skipped records. Verify original durability, upload handling, preview writers, and repair eligibility. | Full-decode audit with all rows accounted for; recoverable data repaired; unrecoverable rows explicitly tracked; regression tests for verified writer/repair defects. | Partial: 7 production repairs; 95 previews decode; 66 missing dimension pairs backfilled; 3 unavailable-source records remain. Shared generation/post readback hardening and legacy repair eligibility are tested locally; migration replay passes. |
+| 3. URL and cache lifetime | Trace private signed URLs, refresh/renewal, query cache age, stable object identities, CDN cache behavior, and native disk cache. Verify mobile authentication on fallback paths. | Expired URL, old query cache, failed signing, offline/reconnect, and background/foreground tests recover without request storms or access changes. | Private proxy fallback fixed locally: browser plus Android/iOS images. A genuinely expired storage URL recovered on iOS; offline/background and remaining renderers pending. |
+| 4. Image delivery | Measure preview bytes and decode size against actual rendered size and device pixel ratio. Check thumbnails, original fallback, loading placeholders, prefetch, and duplicate backdrop loads. | Before/after transferred bytes, first-image time, and memory; readable images with no unbounded original downloads in grids. | 720px preview baseline measured; 66 missing dimensions backfilled. iOS grid fixture eliminated 48 separate measurement calls using rendered image metadata; byte/time baselines and smaller variants pending. |
+| 5. Video and audio delivery | Cover published posts and private creations. Check poster continuity, first frame, range requests, codecs, faststart, renditions/teasers, buffering, simultaneous players, release, seeking, and audio source recovery. | Playback and lifecycle tests across slow network, fast scrolling, backgrounding, and failed sources; measured startup, stalls, bytes, and memory. | Ready-video teaser repaired live and played on iOS; automatic repair tested locally. Private original baseline: 14 videos / 187 MB; largest local rendition 93.69% smaller. Private pipeline, audio and device stress checks pending. |
+| 6. Surface integration | Apply verified shared fixes and inspect every applicable surface in the matrix below. Exercise production-like native binaries and web browsers. | Every surface has recorded normal/loading/error/retry and navigation outcomes. Native rendering defects require native reproduction and verification. | Android profile first pass, controlled Android viewer recovery and Android/iOS private-image fallback verified. Broad surface pass pending. |
+| 7. Release and regression control | Run affected tests and required release checks; deploy through existing release workflows. Verify exact live web SHA and actual mobile runtime/build targets. Define delivery measurements and bounded integrity checks. | Exact-release evidence, post-release checks, rollback details, and actionable regression signals. | Data/metadata repairs live; code not released. Web build, both native exports, full unit suites and clean database replay/tests pass locally. Exact deployed-build and broad device checks remain. No automation created. |
+
+Steps 3–5 may produce independent fixes while the legacy-source recovery in step
+2 is unresolved. A missing original must not block other optimization work or be
+silently treated as repaired. Establish measurements in step 1 before choosing
+numeric performance budgets or declaring an optimization successful.
+
+## Surface coverage matrix
+
+“Pending” means runtime behavior has not been audited, even if shared source code
+was read. A shared component pass does not automatically complete its callers.
+Map additional media callers discovered in step 1 into this table.
+
+| Surface family | Web | Android | iOS |
+| --- | --- | --- | --- |
+| Home and feed media, including promotional previews | Pending | Initial observation only | Initial observation only |
+| Showcase/Explore grids, carousels, and saved media | Pending | Pending | Pending |
+| Own profile: Creations, Posts, Saved, archives | Pending | Partial: Creations/Posts; one real 404 and controlled corruption reproduction | Pending |
+| Creator profiles, avatars, and covers | Pending | Pending | Pending |
+| Post details, overlays, full viewers, and lightboxes | Pending | Pending | Pending |
+| Creation inputs, uploads, results, and library/Studio | Pending | Pending | Pending |
+| Motion references and outputs | Pending | Pending | Pending |
+| Workflow node previews, results, and shared workflows | Pending | Map supported consumers | Map supported consumers |
+| Template catalog, details, demos, and run results | Pending | Pending | Pending |
+| Marketplace, resource bundles, unlocks, and downloads | Pending | Pending | Pending |
+| Post composer, drafts, media reorder, and publish results | Pending | Pending | Pending |
+| Remaining image/audio/video/file renderers, including operator surfaces | Inventory pending | Inventory pending | Inventory pending |
+
+## Common test cases
+
+- Cold cache and warm cache, small and large media, legacy and newly created
+  content, public and private content, and actual media with/without derivatives.
+- Slow connection, request failure, source 404, expired signature, decode error,
+  and recovery after reconnect. Keep these failure classes distinguishable.
+- Fast scroll away/back, list recycling, carousel change, viewer open/close,
+  navigation return, app background/foreground, and long sessions.
+- Loading placeholder to first image/frame, poster retention until a frame
+  exists, meaningful error state, and working retry/renewal.
+- Bytes per grid/page/watch, time to image/first frame, playback stalls,
+  concurrent players, decoded image dimensions, and memory before/after repeated
+  navigation. Use physical Android and iOS devices for native performance claims.
+
+## Working rules
+
+1. Reproduce each proposed bug fix at its actual layer before changing behavior.
+   Source-only findings stay identified as such until verified.
+2. Prefer shared delivery fixes, then verify every affected caller. Maintain API
+   contracts and the private/public storage boundary.
+3. Record each finding as reproduced, source-only, fixed locally, verified in
+   production, or blocked on specific evidence. Store repair receipts and avoid
+   overwriting originals.
+4. Update this plan and the audit evidence after each completed part. Do not
+   call the whole app optimized while required surfaces or release checks remain.
+
+## Immediate next action
+
+The reliability and image-measurement part is implemented locally, with native
+reproductions, regression tests and production metadata repairs. The one eligible
+long ready published video now has a verified 8-second teaser (438 KB versus
+2.56 MB full rendition); a bounded automatic teaser repair is implemented and
+tested locally, with its migration still unreleased. Next: private video
+renditions, expiry/background recovery across remaining
+renderers, broad surface verification and physical-device performance baselines.
+Release the verified changes through the existing web/mobile workflows after
+reviewing the remaining runtime coverage and exact mobile targets.

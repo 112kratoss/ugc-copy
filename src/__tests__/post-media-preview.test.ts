@@ -4,10 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 const videoPosterState = vi.hoisted(() => ({
-  createVideoPosterBuffer: vi.fn(async () => Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
-    'base64'
-  )),
+  createVideoPosterBuffer: vi.fn<() => Promise<Buffer>>(),
 }));
 
 vi.mock('@/lib/video-poster', () => {
@@ -23,8 +20,11 @@ import {
 } from '@/lib/post-media-preview';
 
 describe('post media image previews', () => {
-  beforeEach(() => {
-    videoPosterState.createVideoPosterBuffer.mockClear();
+  beforeEach(async () => {
+    videoPosterState.createVideoPosterBuffer.mockReset();
+    videoPosterState.createVideoPosterBuffer.mockResolvedValue(await sharp({
+      create: { width: 60, height: 80, channels: 3, background: '#123456' },
+    }).webp().toBuffer());
   });
 
   it('uses a deterministic sibling WebP path', () => {
@@ -42,7 +42,7 @@ describe('post media image previews', () => {
         background: '#7c3aed',
       },
     }).jpeg().toBuffer();
-    const upload = vi.fn(async (path: string, body: Buffer, options: Record<string, unknown>) => {
+    const upload = vi.fn(async (path: string, body: Blob, options: Record<string, unknown>) => {
       void path;
       void body;
       void options;
@@ -50,7 +50,7 @@ describe('post media image previews', () => {
     });
     const supabase = {
       storage: {
-        from: () => ({ upload }),
+        from: () => ({ upload, download: async () => ({ error: null, data: upload.mock.calls[0]?.[1] }) }),
       },
     };
 
@@ -98,7 +98,7 @@ describe('post media image previews', () => {
   });
 
   it('creates a video poster preview for post media videos', async () => {
-    const upload = vi.fn(async (path: string, body: Buffer, options: Record<string, unknown>) => {
+    const upload = vi.fn(async (path: string, body: Blob, options: Record<string, unknown>) => {
       void path;
       void body;
       void options;
@@ -106,7 +106,7 @@ describe('post media image previews', () => {
     });
     const supabase = {
       storage: {
-        from: () => ({ upload }),
+        from: () => ({ upload, download: async () => ({ error: null, data: upload.mock.calls[0]?.[1] }) }),
       },
     };
     const body = new Blob([Uint8Array.from([1, 2, 3])], { type: 'video/mp4' });

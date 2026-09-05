@@ -1,8 +1,13 @@
+import { buildMediaSource } from '../lib/media-source';
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
+
+vi.mock('@/lib/use-media-source', () => ({
+  useMediaSource: (url: string) => ({ source: buildMediaSource(url, 'https://magicbooklet.com', 'test-session'), requestKey: '' }),
+}));
 
 vi.mock('react-native', () => ({
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),

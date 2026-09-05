@@ -59,4 +59,16 @@ describe('preview image optimization', () => {
       'https://images.example/cover.webp'
     );
   });
+
+  it('keeps authenticated media proxies out of the headerless image optimizer', async () => {
+    const { canOptimizePreviewImage, buildOptimizedPreviewImageUrl } = await import('@/lib/preview-images');
+    for (const source of [
+      '/api/media?bucket=generated_images&path=owner%2Fpreview.webp',
+      '/api/media/?bucket=generated_images&path=owner%2Fpreview.webp',
+      '/images/../api/media?bucket=generated_images&path=owner%2Fpreview.webp',
+    ]) {
+      expect(canOptimizePreviewImage(source)).toBe(false);
+      expect(buildOptimizedPreviewImageUrl(source)).toBe(source);
+    }
+  });
 });

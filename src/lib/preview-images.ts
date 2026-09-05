@@ -36,7 +36,10 @@ export function isGeneratedPreviewImage(src: string): boolean {
 
 export function canOptimizePreviewImage(src: string): boolean {
   if (/^\/(?!\/)/.test(src) && !src.includes('\\')) {
-    return true;
+    // The optimizer fetches without the browser's cookies. Private-media
+    // fallback routes must be fetched directly by the signed-in browser.
+    const pathname = new URL(src, 'https://preview.invalid').pathname;
+    return pathname !== '/api/media' && pathname !== '/api/media/';
   }
 
   if (!supabaseStorageOrigin) {

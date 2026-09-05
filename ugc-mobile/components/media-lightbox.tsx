@@ -7,6 +7,7 @@ import { StableMediaImage } from '@/components/media-preview';
 import { AppText } from '@/components/ui';
 import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
+import { useMediaSource } from '@/lib/use-media-source';
 import { appTheme } from '@/lib/theme';
 
 export interface LightboxMediaItem {
@@ -178,7 +179,8 @@ function MediaLightboxContent({
 }
 
 function LightboxVideo({ url, height }: { url: string; height: number }) {
-  const player = useVideoPlayer(url, (instance) => {
+  const { source } = useMediaSource(url);
+  const player = useVideoPlayer(source, (instance) => {
     instance.loop = true;
     instance.muted = false;
     // Holds the audio session only while it is actually making a sound — see

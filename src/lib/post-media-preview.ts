@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import sharp from 'sharp';
 
+import { assertStoredPreviewIsIntact } from '@/lib/media-preview-integrity';
+
 import { getMediaContentHash, getPreviewThumbhash } from '@/lib/media-preview-metadata';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
 import { toStorageUploadBody } from '@/lib/storage-upload-body';
@@ -66,6 +68,12 @@ export async function createPostMediaImagePreview({
     throw upload.error;
   }
 
+  await assertStoredPreviewIsIntact({
+    supabase,
+    location: { bucket: SHOWCASE_MEDIA_BUCKET, filePath: previewStoragePath },
+    expected: preview,
+  });
+
   return {
     previewStoragePath,
     previewThumbhash: await getPreviewThumbhash(preview),
@@ -115,6 +123,12 @@ export async function createPostMediaPreview({
   if (upload.error) {
     throw upload.error;
   }
+
+  await assertStoredPreviewIsIntact({
+    supabase,
+    location: { bucket: SHOWCASE_MEDIA_BUCKET, filePath: previewStoragePath },
+    expected: poster,
+  });
 
   return {
     previewStoragePath,

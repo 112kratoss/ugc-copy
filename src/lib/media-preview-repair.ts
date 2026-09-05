@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { hasRepairablePostMediaTeasers, repairPostMediaTeasers } from '@/lib/post-media-teaser-repair';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendError } from '@/lib/backend-logger';
@@ -23,6 +24,9 @@ import { toStorageUploadBody } from '@/lib/storage-upload-body';
 import { summarizeMediaToolError, truncateMediaToolMessage } from '@/lib/media-tool-error';
 
 const MAX_PREVIEW_ATTEMPTS = 3;
+// Older motion/image generations can have no category despite a durable visual
+// source. Keep this predicate aligned with claim_generation_preview_repairs.
+const GENERATION_VISUAL_REPAIR_FILTER = String.raw`category.in.(image,video),and(category.is.null,or(output_url.like.generated\_images/*,output_url.like.generated\_videos/*))`;
 export const MAX_RENDITION_ATTEMPTS = 3;
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 /**
@@ -148,7 +152,7 @@ export async function hasRepairableMediaPreviews(supabase: SupabaseClient): Prom
     .from('generations')
     .select('id')
     .eq('status', 'succeeded')
-    .in('category', ['image', 'video'])
+    .or(GENERATION_VISUAL_REPAIR_FILTER)
     .in('preview_status', ['pending', 'failed', 'processing'])
     .lt('preview_attempt_count', MAX_PREVIEW_ATTEMPTS)
     .not('output_url', 'is', null)
@@ -185,7 +189,7 @@ export async function hasRepairableMediaPreviews(supabase: SupabaseClient): Prom
     if (isMissingRenditionColumnError(renditionResult.error)) return false;
     throw renditionResult.error;
   }
-  return hasRows(renditionResult.data);
+  return hasRows(renditionResult.data) || await hasRepairablePostMediaTeasers(supabase);
 }
 
 function previewFailure(error: unknown, attemptCount: number) {
@@ -735,7 +739,7 @@ async function claimGenerationPreviewRows(
     .from('generations')
     .select('id, user_id, output_url, category, preview_attempt_count')
     .eq('status', 'succeeded')
-    .in('category', ['image', 'video'])
+    .or(GENERATION_VISUAL_REPAIR_FILTER)
     .in('preview_status', ['pending', 'failed', 'processing'])
     .lt('preview_attempt_count', MAX_PREVIEW_ATTEMPTS)
     .not('output_url', 'is', null)
@@ -926,8 +930,13 @@ export async function repairMediaPreviews(
     lockedBy: `${lockedBy}:rendition`,
   });
 
-  const completed = results.filter(Boolean).length + templatePosters.completed + renditions.completed;
-  const attempted = results.length + templatePosters.attempted + renditions.attempted;
+  // Teaser-only backfill uses the idle rendition slot, never another full
+  // encode budget after an already busy rendition pass.
+  const teasers = renditions.attempted === 0
+    ? await repairPostMediaTeasers(supabase)
+    : { attempted: 0, completed: 0, failed: 0 };
+  const completed = results.filter(Boolean).length + templatePosters.completed + renditions.completed + teasers.completed;
+  const attempted = results.length + templatePosters.attempted + renditions.attempted + teasers.attempted;
 
   if (completed > 0) {
     (options.invalidateFeedCache ?? invalidateShowcaseFeedCache)();

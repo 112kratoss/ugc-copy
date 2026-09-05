@@ -1,3 +1,4 @@
+import { buildMediaSource } from '../lib/media-source';
 // Define React Native development global
 (global as typeof globalThis & { __DEV__: boolean }).__DEV__ = true;
 
@@ -7,6 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 const imageState = vi.hoisted(() => ({ prefetch: vi.fn(async () => true) }));
+
+vi.mock('@/lib/use-media-source', () => ({
+  useMediaSource: (url: string) => ({ source: buildMediaSource(url, 'https://magicbooklet.com', 'test-session'), requestKey: '' }),
+}));
 
 vi.mock('react-native', () => ({
   Pressable: ({ children, ...props }: MockProps) => React.createElement('pressable', props, children),
@@ -63,6 +68,17 @@ describe('StableMediaImage', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('passes authentication to a private fallback image', () => {
+    let tree: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(<StableMediaImage
+      url="https://magicbooklet.com/api/media?path=private.webp" cacheKey="private" />); });
+    expect(tree!.root.findByType('image').props.source).toEqual({
+      uri: 'https://magicbooklet.com/api/media?path=private.webp',
+      cacheKey: 'private', headers: { Authorization: 'Bearer test-session' },
+    });
+    renderer.act(() => tree.unmount());
   });
 
   it('uses stable storage identity and an asset-derived ThumbHash placeholder', () => {
