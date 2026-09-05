@@ -23,14 +23,15 @@
       "$note": "Built from main 1834d6e (EAS build a36b88ac) and submitted to the Play closed alpha 2026-09-05 (submission bf6781ae); promoted to production the same day (full rollout, in Play review). First binary with R8 on (#107): 80% obfuscation on Play, 23.7 MB install size, down 8.92 MB from 69. Also carries the push-token listener fix (#108) and the 0.1.4 bump (#109). Until the production review lands, most Android users still run 69 at 30288aed1e67034363dfc0af137eb93ae3aaae28."
     },
     "ios": {
-      "fingerprint": "f78a828af94230d8a3758701f06c46a082d1e7f9",
-      "appVersion": "0.1.3",
-      "buildNumber": 50,
-      "shipped": "2026-09-04",
+      "fingerprint": "e2aa6c798f52ce806aa7057841289f385c50a78a",
+      "appVersion": "0.1.4",
+      "buildNumber": 51,
+      "shipped": "2026-09-05",
       "tracks": [
-        "testflight"
+        "testflight",
+        "app-store"
       ],
-      "$note": "Submitted to the TestFlight internal group 2026-09-04 (EAS build e4a31d8d, submission d42a3ff2, commit 0c664ec). Replaces build 49, which was compiled before #104 changed eas.json (a fingerprint input) and so could never receive an update from main; 50 is built from main and matches its fingerprint. App Store review pending; until it lands most iOS users still run 47."
+      "$note": "Built from main 0a24b46 (EAS build 22b925ee) and submitted to the TestFlight internal group 2026-09-05; attached to App Store version 0.1.4 and submitted for review the same day, replacing 0.1.3 (build 50), which was pulled from review to make room. Carries the push-token listener fix (#108) and the 0.1.4 bump (#109); R8 (#107) is Android-only. Until review lands, App Store users still run 0.1.2 (47)."
     }
   }
 }
