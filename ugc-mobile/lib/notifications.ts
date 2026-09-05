@@ -176,6 +176,22 @@ async function configureAndroidChannel() {
   });
 }
 
+/**
+ * Store the token, then tell the API about it. Both registration paths — the
+ * cold-start sync and the rotation listener — go through here, so the stored
+ * value can never drift from the one the backend was given.
+ */
+async function persistAndRegisterExpoPushToken(api: MagicbookletApiClient, expoPushToken: string) {
+  const deviceId = await getStableDeviceId();
+  await SecureStore.setItemAsync(EXPO_PUSH_TOKEN_KEY, expoPushToken);
+  await api.registerMobilePushToken({
+    expoPushToken,
+    platform: Platform.OS === 'ios' ? 'ios' : 'android',
+    deviceId,
+    appVersion: Constants.expoConfig?.version ?? null,
+  });
+}
+
 export async function registerForMobilePushNotifications(
   api: MagicbookletApiClient,
   options: { requestPermission?: boolean } = {}
@@ -215,14 +231,7 @@ export async function registerForMobilePushNotifications(
     throw error;
   }
   const expoPushToken = token.data;
-  const deviceId = await getStableDeviceId();
-  await SecureStore.setItemAsync(EXPO_PUSH_TOKEN_KEY, expoPushToken);
-  await api.registerMobilePushToken({
-    expoPushToken,
-    platform,
-    deviceId,
-    appVersion: Constants.expoConfig?.version ?? null,
-  });
+  await persistAndRegisterExpoPushToken(api, expoPushToken);
 
   return { status: 'registered' as const, expoPushToken };
 }
@@ -373,36 +382,67 @@ export function subscribeToNotificationResponses(options: { handleResponse?: Mob
   return () => subscription.remove();
 }
 
+/**
+ * Exchange a rotated device token for the Expo token the API accepts.
+ *
+ * `addPushTokenListener` delivers a DevicePushToken — the raw FCM string on
+ * Android, the APNs hex on iOS — never an Expo push token. The API rejects
+ * anything but `ExponentPushToken[…]`, so the device token is exchanged with
+ * Expo first, the same way the cold-start path obtains its token. Handing the
+ * rotated token to `getExpoPushTokenAsync` matters: without it the exchange
+ * fetches the device token itself, and both native modules emit that fetch
+ * straight back into this listener.
+ *
+ * Android issues FCM tokens whether or not the reader ever allowed
+ * notifications. The cold-start path registers only once permission is granted,
+ * and this path keeps to the same rule so the backend never counts a device it
+ * cannot reach.
+ */
+async function registerRotatedDevicePushToken(
+  api: MagicbookletApiClient,
+  devicePushToken: Notifications.DevicePushToken
+) {
+  const permissions = withBasePermissionFields(await Notifications.getPermissionsAsync());
+  if (!permissions.granted) {
+    return;
+  }
+
+  const projectId = getProjectId();
+  if (!projectId) {
+    return;
+  }
+
+  const token = await Notifications.getExpoPushTokenAsync({ projectId, devicePushToken });
+
+  // Expo push tokens are stable per installation: a rolled device token is
+  // re-mapped to the same Expo token on Expo's side, so the exchange usually
+  // hands back the token the backend already holds. Registering it again would
+  // only spend the route's 20-per-10-minute allowance — and the listener fires
+  // on every launch, not just on a real rotation (see below).
+  const storedExpoPushToken = await SecureStore.getItemAsync(EXPO_PUSH_TOKEN_KEY).catch(() => null);
+  if (storedExpoPushToken === token.data) {
+    return;
+  }
+
+  await persistAndRegisterExpoPushToken(api, token.data);
+}
+
+/**
+ * Keep the backend current when the push service rolls the device token
+ * mid-session. The listener also fires once per launch, because the cold-start
+ * path's own token fetch is emitted through it; the exchange above turns that
+ * into a no-op unless Expo actually returned a different token.
+ */
 export function subscribeToMobilePushTokenChanges(api: MagicbookletApiClient) {
   if (!isNativeMobile()) {
     return () => undefined;
   }
 
-  const maybeNotifications = Notifications as typeof Notifications & {
-    addPushTokenListener?: (listener: (token: Notifications.DevicePushToken | Notifications.ExpoPushToken) => void) => {
-      remove: () => void;
-    };
-  };
-
-  const subscription = maybeNotifications.addPushTokenListener?.((token) => {
-    void (async () => {
-      const expoPushToken = typeof token.data === 'string' ? token.data : null;
-      if (!expoPushToken) {
-        return;
-      }
-
-      const deviceId = await getStableDeviceId();
-      await SecureStore.setItemAsync(EXPO_PUSH_TOKEN_KEY, expoPushToken);
-      await api.registerMobilePushToken({
-        expoPushToken,
-        platform: Platform.OS === 'ios' ? 'ios' : 'android',
-        deviceId,
-        appVersion: Constants.expoConfig?.version ?? null,
-      });
-    })().catch((error) => {
+  const subscription = Notifications.addPushTokenListener((devicePushToken) => {
+    void registerRotatedDevicePushToken(api, devicePushToken).catch((error) => {
       console.error('Failed to register rotated mobile push token', error);
     });
   });
 
-  return () => subscription?.remove();
+  return () => subscription.remove();
 }
