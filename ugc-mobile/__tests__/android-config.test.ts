@@ -119,11 +119,16 @@ describe('Android native network config', () => {
     const keepRulesPath = join(projectRoot, 'android', 'app', RELEASE_KEEP_RULES);
     expect(keepRulesPath).toBe(join(projectRoot, 'plugins', 'android-release.pro'));
     const keepRules = readFileSync(keepRulesPath, 'utf8').split('\n');
-    // Phase 4a: Expo classes keep their names and members but may be optimized
-    // inside; the plain blanket keep must not come back.
+    // Phase 4b: module code may be dropped, but expo-modules-core's runtime
+    // (expo.modules.kotlin.**) never is - shrinking it reproduced build 62 on a
+    // device on 2026-09-05 with every record class still intact. Neither earlier
+    // blanket form may come back.
     expect(keepRules).not.toContain('-keep class expo.modules.** { *; }');
+    expect(keepRules).not.toContain('-keep,allowoptimization class expo.modules.** { *; }');
+    expect(keepRules.some((line) => /^-keep,allowoptimization,allowshrinking class expo\.modules\.kotlin\.\*\*/.test(line))).toBe(false);
     for (const rule of [
-      '-keep,allowoptimization class expo.modules.** { *; }',
+      '-keep,allowoptimization class expo.modules.kotlin.** { *; }',
+      '-keep,allowoptimization,allowshrinking class expo.modules.** { *; }',
       '-keep class kotlin.Metadata { *; }',
       '-keep class expo.modules.securestore.** { *; }',
       '-keep class expo.modules.image.** { *; }',

@@ -13,12 +13,22 @@
 # is proven necessary on its own. The set is deliberately broad; only launching
 # a release build on a device proves it (a green build proves nothing here).
 
-# Phase 4a: every Expo class keeps its name and its members, and R8 may now
-# inline and merge inside them. expo-modules-core's own consumer rules keep what
-# its reflection needs (records and enumerables with members, Module and
-# ExpoView constructors); this rule is the belt on top of those braces until
-# 4b and 4c take it away one notch at a time.
--keep,allowoptimization class expo.modules.** { *; }
+# expo-modules-core's runtime (expo.modules.kotlin.**) converts JS values into
+# Kotlin records through kotlin-reflect and Unsafe allocation. Shrinking it is
+# what broke build 62: with `allowshrinking` on this package the release
+# reproduced the exact failure on 2026-09-05 (phase 4b, first attempt) - every
+# record class intact, yet "Cannot create a record of the type" and a
+# NullPointerException under every record cast - because the converter's own
+# members and helper classes had been removed as unreachable. Full mode and
+# the optimizer were not the cause. The runtime therefore keeps every class and
+# member (optimizable, never shrinkable).
+-keep,allowoptimization class expo.modules.kotlin.** { *; }
+
+# Phase 4b: the modules themselves (expo.modules.<module>.**) may lose unused
+# code; whatever survives keeps its name and members, and R8 may inline and
+# merge inside it. Their records and enumerables, Module and ExpoView
+# constructors are pinned by expo-modules-core's consumer rules regardless.
+-keep,allowoptimization,allowshrinking class expo.modules.** { *; }
 
 # kotlin-reflect reads @kotlin.Metadata plus runtime annotations and generic
 # signatures. kotlin-reflect.jar bundles the same rules under META-INF, but the
