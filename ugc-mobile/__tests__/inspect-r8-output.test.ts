@@ -17,6 +17,7 @@ import {
   parseSeeds,
   parseUsage,
   readOutputs,
+  summarizeResources,
 } from '../scripts/inspect-r8-output.mjs';
 
 const projectRoot = path.resolve(__dirname, '..');
@@ -212,6 +213,19 @@ class Plain
       'expo.modules.image.records.ContentPosition': 'removed',
     });
     expect(SENTINEL_TYPES).toHaveLength(3);
+  });
+
+  it('reads reachability markings and any removal lines from resources.txt', () => {
+    const summary = summarizeResources(`Marking string:catalyst_reload_error:2131951696 reachable: referenced from classes.dex
+Marking drawable:ic_stat_notify:2131230900 reachable: referenced from AndroidManifest.xml
+    @com.magicbooklet.mobile:attr/colorOnSurface
+Marking drawable:unused_banner:2131230901 reachable: referenced from classes.dex
+Skipped unused resource res/drawable/old_logo.png: 1234 bytes (replaced with small dummy file of size 67 bytes)
+`);
+    expect(summary.reachableCount).toBe(3);
+    expect(summary.reachableByType).toEqual({ drawable: 2, string: 1 });
+    expect(summary.removed).toEqual(['res/drawable/old_logo.png']);
+    expect(summary.removedCount).toBe(1);
   });
 
   it('diffs two builds by expo.modules.* status and configuration flags', () => {

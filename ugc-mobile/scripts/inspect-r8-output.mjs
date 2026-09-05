@@ -290,13 +290,27 @@ export function readOutputs(dir) {
   };
 }
 
+/**
+ * resources.txt. AGP 8.12 writes one `Marking <type>:<name>:<id> reachable: …`
+ * line per kept resource and, on the classic pipeline, says nothing about the
+ * ones it dropped — read removals from the APK's res/ entry count. Older and
+ * newer shrinkers add `Skipped unused resource …` / `Removed unused resource …`
+ * lines, which are counted when present.
+ */
 export function summarizeResources(text) {
   const removed = [];
+  const reachable = new Map();
   for (const line of text.split('\n')) {
-    const match = /^Skipped unused resource (\S+):/.exec(line);
-    if (match) removed.push(match[1]);
+    const kept = /^Marking (\w+):([^:]+):\d+ reachable/.exec(line);
+    if (kept) {
+      reachable.set(kept[1], (reachable.get(kept[1]) ?? 0) + 1);
+      continue;
+    }
+    const dropped = /^(?:Skipped|Removed) unused resource (\S+?):?(?:\s|$)/.exec(line);
+    if (dropped) removed.push(dropped[1]);
   }
-  return { removedCount: removed.length, removed };
+  const reachableCount = [...reachable.values()].reduce((sum, count) => sum + count, 0);
+  return { reachableCount, reachableByType: Object.fromEntries([...reachable.entries()].sort()), removedCount: removed.length, removed };
 }
 
 /**
@@ -369,7 +383,9 @@ export function buildReport(outputs, reflected = collectExpoReflectedTypes()) {
     dir: outputs.dir,
     share: obfuscationShare(outputs.mapping.classes),
     configuration: outputs.configuration,
-    resources: outputs.resources ? { removedCount: outputs.resources.removedCount } : null,
+    resources: outputs.resources
+      ? { reachableCount: outputs.resources.reachableCount, removedCount: outputs.resources.removedCount }
+      : null,
     survivors,
     summary,
     expoClasses,
@@ -431,7 +447,11 @@ export function formatReport(report) {
   } else {
     lines.push('Merged configuration: configuration.txt not found');
   }
-  if (report.resources) lines.push(`Resource shrinking: ${report.resources.removedCount} resources removed`);
+  if (report.resources) {
+    lines.push(
+      `Resource shrinking: ${report.resources.reachableCount} resources marked reachable, ${report.resources.removedCount} listed as removed (AGP 8.12 lists reachability only; count res/ entries in the APK for removals)`
+    );
+  }
   const expoTotal = Object.keys(report.expoClasses).length;
   const expoCounts = Object.values(report.expoClasses).reduce((acc, status) => {
     acc[status] = (acc[status] ?? 0) + 1;

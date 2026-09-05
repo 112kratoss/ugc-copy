@@ -24,7 +24,13 @@ export type Outputs = {
   seeds: { classes: Set<string>; members: Map<string, string[]> } | null;
   usage: { removedClasses: Set<string>; removedMembers: Map<string, string[]> } | null;
   configuration: ConfigurationChecks | null;
-  resources: { removedCount: number; removed: string[] } | null;
+  resources: ResourceSummary | null;
+};
+export type ResourceSummary = {
+  reachableCount: number;
+  reachableByType: Record<string, number>;
+  removedCount: number;
+  removed: string[];
 };
 export type Survivor = {
   name: string;
@@ -37,7 +43,7 @@ export type Report = {
   dir: string;
   share: Share;
   configuration: ConfigurationChecks | null;
-  resources: { removedCount: number } | null;
+  resources: { reachableCount: number; removedCount: number } | null;
   survivors: Survivor[];
   summary: Record<SurvivorStatus, number>;
   expoClasses: Record<string, SurvivorStatus>;
@@ -58,7 +64,7 @@ export function checkConfiguration(text: string): ConfigurationChecks;
 export function findKotlinTypes(source: string): KotlinType[];
 export function collectExpoReflectedTypes(root?: string): ReflectedType[];
 export function readOutputs(dir: string): Outputs;
-export function summarizeResources(text: string): { removedCount: number; removed: string[] };
+export function summarizeResources(text: string): ResourceSummary;
 export function classStatus(name: string, outputs: Outputs): { status: SurvivorStatus; renamed?: string };
 export function buildReport(outputs: Outputs, reflected?: ReflectedType[]): Report;
 export function diffReports(before: Report, after: Report): Diff;
