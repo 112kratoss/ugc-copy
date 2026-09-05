@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
+import { Platform } from 'react-native';
 
 import { maxBackgroundLuminance, relativeLuminance } from '@/lib/color-contrast';
 import { appTheme } from '@/lib/theme';
@@ -445,8 +446,31 @@ export function resetTabBarAmbientColor() {
   setTabBarAmbientSource(null);
 }
 
+/**
+ * Only the iOS surfaces spend this colour: Android's dock is an opaque panel
+ * that never adapts. Leaving the subscription live there is not merely wasted
+ * sampling — the tab bar reads this store, so every viewability change while a
+ * feed scrolls re-rendered the whole bar to arrive at a value it discards.
+ *
+ * The gate is a swapped subscribe/snapshot pair rather than a branch around the
+ * hook, so hook order is identical on both platforms.
+ */
+const TINTS_THE_DOCK = Platform.OS !== 'android';
+
+function subscribeNever() {
+  return () => {};
+}
+
+function getNeutralSnapshot() {
+  return DEFAULT_TAB_BAR_COLOR;
+}
+
 export function useTabBarAmbientColor() {
-  return useSyncExternalStore(subscribe, getSnapshot, () => DEFAULT_TAB_BAR_COLOR);
+  return useSyncExternalStore(
+    TINTS_THE_DOCK ? subscribe : subscribeNever,
+    TINTS_THE_DOCK ? getSnapshot : getNeutralSnapshot,
+    getNeutralSnapshot
+  );
 }
 
 /**
@@ -460,12 +484,17 @@ export function useTabBarAmbientFeed(isFocused: boolean) {
   focused.current = isFocused;
 
   useEffect(() => {
-    if (!isFocused) resetTabBarAmbientColor();
+    if (TINTS_THE_DOCK && !isFocused) resetTabBarAmbientColor();
   }, [isFocused]);
 
-  useEffect(() => () => resetTabBarAmbientColor(), []);
+  useEffect(() => () => {
+    if (TINTS_THE_DOCK) resetTabBarAmbientColor();
+  }, []);
 
   return useCallback(({ viewableItems }: { viewableItems: AmbientViewToken[] }) => {
+    // Nothing downstream of this reads the colour on Android, and the sampling
+    // decodes a thumbhash per scroll, so the handler stops at the door.
+    if (!TINTS_THE_DOCK) return;
     // A viewability callback can land after the screen has blurred; repainting
     // the dock from a feed the user has already left is worse than not adapting.
     if (!focused.current) return;

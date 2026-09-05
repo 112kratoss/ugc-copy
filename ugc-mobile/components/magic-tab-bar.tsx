@@ -99,8 +99,12 @@ function useTabBarSurfaceMode(): TabBarSurfaceMode {
   const [reduceTransparency, setReduceTransparency] = useState(false);
 
   useEffect(() => {
-    // Read this regardless of glass support so the accessibility preference
-    // remains authoritative on every platform.
+    // Android renders its own opaque dock and never consults this mode, so the
+    // preference is read on the platforms whose surfaces answer to it. Reading
+    // it regardless of *glass support* still matters: an iOS device without
+    // Liquid Glass has to honour Reduce Transparency too.
+    if (Platform.OS === 'android') return;
+
     let active = true;
     AccessibilityInfo.isReduceTransparencyEnabled().then((enabled) => {
       if (active) setReduceTransparency(enabled);

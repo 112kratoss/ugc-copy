@@ -18,6 +18,7 @@ const glassState = vi.hoisted(() => ({
   available: false,
   reduceTransparency: false,
   platform: 'ios',
+  listeners: [] as string[],
 }));
 
 vi.mock('expo-router', () => ({
@@ -38,7 +39,10 @@ vi.mock('react-native', () => ({
   useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
   AccessibilityInfo: {
     isReduceTransparencyEnabled: () => Promise.resolve(glassState.reduceTransparency),
-    addEventListener: () => ({ remove: () => {} }),
+    addEventListener: (...args: unknown[]) => {
+      glassState.listeners.push(String(args[0]));
+      return { remove: () => {} };
+    },
   },
 }));
 
@@ -205,6 +209,7 @@ describe('MagicTabBar', () => {
     glassState.available = false;
     glassState.reduceTransparency = false;
     glassState.platform = 'ios';
+    glassState.listeners = [];
     badgeValue = null;
   });
 
@@ -214,6 +219,11 @@ describe('MagicTabBar', () => {
     const { tree, navigation } = await renderTabBarAsync(1);
     expect(tree.root.findByProps({ testID: 'android-navigation-dock' })).toBeTruthy();
     expect(adaptiveFallbacks(tree)).toHaveLength(0);
+    // The iOS surfaces are the only consumers of Reduce Transparency, so the
+    // dock does not subscribe to a preference it cannot spend. Reduce Motion is
+    // a different matter: the capsule and the press swell both answer to it.
+    expect(glassState.listeners).not.toContain('reduceTransparencyChanged');
+    expect(glassState.listeners).toContain('reduceMotionChanged');
     for (const [label, route, key] of [
       ['Home', 'index', 'home-key'],
       ['Explore', 'showcase', 'showcase-key'],
