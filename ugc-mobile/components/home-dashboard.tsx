@@ -15,7 +15,7 @@ import {
   WandSparkles,
 } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Linking, Pressable, RefreshControl, Share, Text, useWindowDimensions, View, type ViewStyle } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Linking, Platform, Pressable, RefreshControl, Share, Text, useWindowDimensions, View, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CommentsSheet } from '@/components/comments-sheet';
@@ -168,7 +168,8 @@ export function HomeDashboard() {
   // Held by the list, not the card: FlashList recycles card views, and local
   // expansion state would follow a recycled view onto an unrelated post.
   const [expandedBodyIds, setExpandedBodyIds] = useState<string[]>([]);
-  const visibleActiveVideoIds = isFocused ? activeVideoIds : [];
+  // FeedVideoPreview owns focus gating; the list only changes for viewability.
+  const visibleActiveVideoIds = activeVideoIds;
 
   const activeChip = HOME_FEED_CHIPS.find((chip) => chip.id === activeChipId) ?? HOME_FEED_CHIPS[0];
   const queryKey = useMemo(
@@ -879,7 +880,7 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: ()
           </View>
         </TopBarControl>
 
-        <TopBarControl
+        {Platform.OS !== 'android' ? <TopBarControl
           accessibilityLabel="Open alerts"
           onPress={() => {
             haptic.light();
@@ -888,7 +889,7 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: ()
           style={{ width: 48 }}
         >
           <Bell size={appTheme.icon.default} color={DASHBOARD_COLORS.text} />
-        </TopBarControl>
+        </TopBarControl> : null}
       </View>
     </View>
   );

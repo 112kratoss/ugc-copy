@@ -1,4 +1,5 @@
 import { Tabs } from 'expo-router';
+import { Platform } from 'react-native';
 
 import { MagicTabBar } from '@/components/magic-tab-bar';
 import { useReducedMotion } from '@/lib/motion';
@@ -19,7 +20,9 @@ export default function TabLayout() {
         />
       )}
       screenOptions={{
-        animation: reducedMotion ? 'none' : 'fade',
+        // Android changes content immediately; the custom dock provides the
+        // transition feedback without making the page wait for a fade.
+        animation: reducedMotion ? 'none' : Platform.OS === 'android' ? 'none' : 'fade',
         headerShown: false,
         headerStyle: { backgroundColor: appTheme.colors.background },
         headerTintColor: appTheme.colors.text,

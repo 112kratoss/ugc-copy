@@ -140,6 +140,12 @@ describe('HIG colour contrast', () => {
     ['warning', appTheme.colors.warning],
   ];
 
+  it('keeps selected navigation labels readable throughout the capsule transition', () => {
+    for (const foreground of [appTheme.colors.primary, appTheme.colors.muted]) {
+      expect(contrastRatio(foreground, appTheme.colors.navigationSelected)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   it('clears 4.5:1 for body text on every panel surface', () => {
     const failures = foregrounds.flatMap(([name, colour]) => backgrounds
       .map((background) => ({ name, background, ratio: contrastRatio(colour, background) }))

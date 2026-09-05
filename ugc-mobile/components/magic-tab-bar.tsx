@@ -2,11 +2,13 @@ import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
-import { Bell, Home, Plus, User, Users } from 'lucide-react-native';
+import { Bell, Compass, Home, Plus, User, Users } from 'lucide-react-native';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   AccessibilityInfo,
   Animated,
+  Easing,
+  Platform,
   Pressable,
   Text,
   useWindowDimensions,
@@ -18,7 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MagicCreateMenu } from '@/components/magic-create-menu';
 import { getCreateMenuActionHref, type CreateMenuActionId } from '@/lib/create-menu-view-model';
 import { haptic } from '@/lib/haptics';
-import { useCrossFade, usePressMotion, useSpringState } from '@/lib/motion';
+import { useCrossFade, usePressMotion, useReducedMotion, useSpringState } from '@/lib/motion';
 import { useTabBarBadge } from '@/lib/use-notification-badge';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { ADAPTIVE_INACTIVE_COLOR, useTabBarAmbientColor } from '@/lib/tab-bar-ambient';
@@ -31,6 +33,7 @@ const ON_PRIMARY = appTheme.colors.onPrimary ?? '#1A0E0A';
 // Read with a fallback like the colours above: the focused tests mock the
 // theme down to a couple of colours and have no motion block at all.
 const CONTROL_PRESS_SCALE = appTheme.motion?.scale.pressedControl ?? 0.9;
+const ANDROID_PRESS_SCALE = 0.96;
 
 // The glass branch drops the opaque panel fill on purpose — a near-solid
 // background cancels the material outright.
@@ -83,10 +86,8 @@ const VISIBLE_TABS = [
  * different needs: the normal fallback adapts its colour to the media, while
  * Reduce Transparency gets the deepest no-effect surface.
  *
- * `adaptive` is not the Android branch, despite being the one Android always
- * takes. It is selected by the absence of Liquid Glass, so every iOS device
- * below 26 lands here too — and should: an opaque dock tinted by the media is
- * the right answer wherever the material is unavailable, whatever the OS.
+ * iOS falls back to `adaptive` when Liquid Glass is unavailable. Android has
+ * its own opaque navigation dock, independent of these iOS surface modes.
  */
 export type TabBarSurfaceMode = 'glass' | 'adaptive' | 'solid';
 
@@ -231,7 +232,7 @@ export function MagicTabBar({
         bottom: 0,
         paddingHorizontal: metrics.horizontalPadding,
         paddingBottom: metrics.bottomPadding,
-        paddingTop: metrics.topPadding,
+        paddingTop: Platform.OS === 'android' ? 0 : metrics.topPadding,
         opacity: hidden ? 0 : 1,
       }}
     >
@@ -254,6 +255,18 @@ export function MagicTabBar({
           backgroundColor: 'transparent',
         }}
       />
+      {Platform.OS === 'android' ? (
+        <AndroidNavigationDock
+          activeRoute={activeRoute}
+          alertsBadge={alertsBadge}
+          menuVisible={createMenuVisible}
+          onNavigate={navigateTo}
+          onCreate={() => {
+            haptic.light();
+            setCreateMenuVisible(true);
+          }}
+        />
+      ) : <>
       <TabBarSurface mode={surfaceMode} barHeight={barHeight} fallbackFill={fallbackFill}>
         <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: isCompact ? 6 : 8, paddingVertical: isCompact ? 4 : 6 }}>
           <TabButton item={VISIBLE_TABS[0]} active={activeRoute === 'index'} iconSize={tabIconSize} labelSize={tabLabelSize} inactiveColor={inactiveColor} onPress={() => navigateTo('index')} />
@@ -311,7 +324,251 @@ export function MagicTabBar({
           </Text>
         </Pressable>
       </AnimatedView>
+      </>}
     </View>
+  );
+}
+
+/** Adjacent destinations glide; crossing Create fades between fixed capsules. */
+function useAndroidTabSelection(activeSlot: number, reducedMotion: boolean) {
+  const previousSlot = useRef(activeSlot);
+  const [motion] = useState(() => IS_TEST_ENVIRONMENT ? null : {
+    position: new Animated.Value(Math.max(0, activeSlot)),
+    opacity: new Animated.Value(activeSlot >= 0 ? 1 : 0),
+    outgoingPosition: new Animated.Value(Math.max(0, activeSlot)),
+    outgoingOpacity: new Animated.Value(0),
+  });
+
+  useEffect(() => {
+    if (!motion) return;
+    const from = previousSlot.current;
+    previousSlot.current = activeSlot;
+    const stop = () => {
+      motion.position.stopAnimation();
+      motion.opacity.stopAnimation();
+      motion.outgoingOpacity.stopAnimation();
+    };
+    stop();
+    motion.outgoingOpacity.setValue(0);
+
+    if (activeSlot < 0) {
+      motion.opacity.setValue(0);
+      return stop;
+    }
+    if (reducedMotion || from < 0 || from === activeSlot) {
+      motion.position.setValue(activeSlot);
+      motion.opacity.setValue(1);
+      return stop;
+    }
+
+    const crossesCreate = (from < 2) !== (activeSlot < 2);
+    if (crossesCreate) {
+      // There are no completion callbacks: a new tap can safely interrupt
+      // either fade without an old animation moving the selection back.
+      motion.outgoingPosition.setValue(from);
+      motion.outgoingOpacity.setValue(1);
+      motion.opacity.setValue(0);
+      motion.position.setValue(activeSlot);
+      Animated.parallel([
+        Animated.timing(motion.outgoingOpacity, { toValue: 0, duration: appTheme.motion.duration.navigation, easing: Easing.linear, useNativeDriver: true }),
+        Animated.timing(motion.opacity, { toValue: 1, duration: appTheme.motion.duration.navigation, easing: Easing.linear, useNativeDriver: true }),
+      ]).start();
+    } else {
+      motion.opacity.setValue(1);
+      Animated.spring(motion.position, {
+        toValue: activeSlot,
+        ...appTheme.motion.spring.panel,
+        useNativeDriver: true,
+      }).start();
+    }
+    return stop;
+  }, [activeSlot, motion, reducedMotion]);
+
+  return motion;
+}
+
+/** Finger-driven elastic feedback: anchored swell, capsule stretch, soft settle. */
+function useAndroidDockPop(reducedMotion: boolean) {
+  const [progress] = useState(() => IS_TEST_ENVIRONMENT ? null : new Animated.Value(0));
+  const animation = useRef<Animated.CompositeAnimation | null>(null);
+
+  useEffect(() => {
+    animation.current?.stop();
+    progress?.setValue(0);
+    return () => { animation.current?.stop(); };
+  }, [progress, reducedMotion]);
+
+  const animate = (pressed: boolean) => {
+    if (!progress) return;
+    animation.current?.stop();
+    if (reducedMotion) {
+      progress.setValue(0);
+      return;
+    }
+    // A short tap still reaches the swell; a held press remains expanded until
+    // release. Interruptions start at the current value without accumulating.
+    animation.current = pressed
+      ? Animated.spring(progress, {
+          toValue: 1,
+          ...appTheme.motion.spring.pressIn,
+          useNativeDriver: true,
+        })
+      : Animated.sequence([
+          Animated.timing(progress, {
+            toValue: 1,
+            duration: appTheme.motion.duration.navigationSwell,
+            easing: Easing.out(Easing.quad),
+            useNativeDriver: true,
+          }),
+          Animated.spring(progress, {
+            toValue: 0,
+            ...appTheme.motion.spring.navigationSettle,
+            useNativeDriver: true,
+          }),
+        ]);
+    animation.current.start();
+  };
+
+  return {
+    onPressIn: () => animate(true),
+    onPressOut: () => animate(false),
+    capsuleScale: progress?.interpolate({ inputRange: [0, 1], outputRange: [1, appTheme.motion.scale.navigationCapsule] }) ?? 1,
+    style: progress ? {
+      transform: [
+        { scaleX: progress.interpolate({ inputRange: [0, 1], outputRange: [1, appTheme.motion.scale.navigationSwellX] }) },
+        { scaleY: progress.interpolate({ inputRange: [0, 1], outputRange: [1, appTheme.motion.scale.navigationSwellY] }) },
+      ],
+    } : undefined,
+  };
+}
+
+/** A graphite dock with inset selection capsules and a central creation action. */
+function AndroidNavigationDock({
+  activeRoute,
+  alertsBadge,
+  menuVisible,
+  onNavigate,
+  onCreate,
+}: {
+  activeRoute: string | undefined;
+  alertsBadge: string | null;
+  menuVisible: boolean;
+  onNavigate: (route: string) => void;
+  onCreate: () => void;
+}) {
+  const press = usePressMotion(false, { scale: ANDROID_PRESS_SCALE });
+  const reducedMotion = useReducedMotion();
+  const dockPop = useAndroidDockPop(reducedMotion);
+  const [trackWidth, setTrackWidth] = useState(0);
+  const activeIndex = VISIBLE_TABS.findIndex((item) => item.route === activeRoute);
+  // The middle slot belongs to Create, so Alerts and Profile sit one slot farther right.
+  const activeSlot = activeIndex >= 2 ? activeIndex + 1 : activeIndex;
+  const selection = useAndroidTabSelection(activeSlot, reducedMotion);
+  const slotWidth = trackWidth / (VISIBLE_TABS.length + 1);
+  const indicatorWidth = Math.max(0, slotWidth);
+  const indicatorStyle = {
+    position: 'absolute' as const,
+    top: 0,
+    bottom: 0,
+    left: 0,
+    width: indicatorWidth,
+    borderRadius: appTheme.radii.pill,
+    backgroundColor: appTheme.colors.navigationSelected,
+  };
+  const indicatorTranslation = (value: Animated.Value | undefined, fallbackSlot: number) => (
+    value?.interpolate({ inputRange: [0, 4], outputRange: [0, slotWidth * 4] })
+    ?? Math.max(0, fallbackSlot) * slotWidth
+  );
+
+  const renderTab = (item: (typeof VISIBLE_TABS)[number]) => (
+    <TabButton
+      key={item.route}
+      item={item.route === 'showcase' ? { ...item, label: 'Explore', Icon: Compass } : item}
+      active={activeRoute === item.route}
+      iconSize={24}
+      labelSize={12}
+      inactiveColor={appTheme.colors.muted}
+      badge={item.route === 'studio' ? alertsBadge : null}
+      onPress={() => onNavigate(item.route)}
+      onDockPressIn={dockPop.onPressIn}
+      onDockPressOut={dockPop.onPressOut}
+      android
+    />
+  );
+
+  return (
+    <AnimatedView
+      testID="android-navigation-dock"
+      style={[{
+        width: '100%',
+        maxWidth: 480,
+        alignSelf: 'center',
+        padding: 4,
+        borderRadius: appTheme.radii.pill,
+        borderWidth: 1,
+        borderColor: appTheme.colors.borderSubtle,
+        borderTopColor: appTheme.colors.border,
+        backgroundColor: appTheme.colors.panel,
+        ...appTheme.shadow?.navigation,
+      }, dockPop.style]}
+    >
+      <LinearGradient
+        pointerEvents="none"
+        colors={['rgba(255,255,255,0.025)', 'rgba(0,0,0,0.08)']}
+        start={{ x: 0.5, y: 0 }}
+        end={{ x: 0.5, y: 1 }}
+        style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: appTheme.radii.pill }}
+      />
+      <View
+        onLayout={(event) => setTrackWidth(event.nativeEvent.layout.width)}
+        style={{ flexDirection: 'row', alignItems: 'center' }}
+      >
+        {slotWidth > 0 && activeIndex >= 0 ? <>
+          <AnimatedView
+            testID="android-tab-selection-outgoing"
+            pointerEvents="none"
+            style={[
+              indicatorStyle,
+              { opacity: selection?.outgoingOpacity ?? 0,
+                transform: [{ translateX: indicatorTranslation(selection?.outgoingPosition, activeSlot) }] },
+            ]}
+          />
+          <AnimatedView
+            testID="android-tab-selection"
+            pointerEvents="none"
+            style={[
+              indicatorStyle,
+              { opacity: selection?.opacity ?? 1,
+                transform: [{ translateX: indicatorTranslation(selection?.position, activeSlot) }, { scaleX: dockPop.capsuleScale }] },
+            ]}
+          />
+        </> : null}
+        {VISIBLE_TABS.slice(0, 2).map(renderTab)}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open create menu"
+          accessibilityHint="Choose whether to create media or publish a post"
+          accessibilityState={{ expanded: menuVisible }}
+          onPress={onCreate}
+          onPressIn={() => { press.onPressIn(); dockPop.onPressIn(); }}
+          onPressOut={() => { press.onPressOut(); dockPop.onPressOut(); }}
+          style={{ flex: 1, alignSelf: 'stretch', minHeight: 58, alignItems: 'center', justifyContent: 'center' }}
+        >
+          <AnimatedView style={[
+            { width: slotWidth > 0 ? Math.max(48, Math.min(60, slotWidth - 6)) : 52, minHeight: 52, paddingVertical: 4, borderRadius: appTheme.radii.pill,
+              backgroundColor: PRIMARY, alignItems: 'center', justifyContent: 'center', gap: 2 },
+            press.animatedStyle,
+          ]}>
+            <Plus size={24} color={ON_PRIMARY} />
+            <Text numberOfLines={1} maxFontSizeMultiplier={1.4}
+              style={{ color: ON_PRIMARY, fontSize: 12, lineHeight: 16, fontWeight: '700' }}>
+              Create
+            </Text>
+          </AnimatedView>
+        </Pressable>
+        {VISIBLE_TABS.slice(2).map(renderTab)}
+      </View>
+    </AnimatedView>
   );
 }
 
@@ -483,8 +740,11 @@ function TabButton({
   inactiveColor,
   badge = null,
   onPress,
+  android = false,
+  onDockPressIn,
+  onDockPressOut,
 }: {
-  item: (typeof VISIBLE_TABS)[number];
+  item: { route: string; label: string; Icon: typeof Home };
   active: boolean;
   iconSize: number;
   labelSize: number;
@@ -492,14 +752,17 @@ function TabButton({
   /** Pre-formatted by `formatBadgeCount`; null draws nothing. */
   badge?: string | null;
   onPress: () => void;
+  android?: boolean;
+  onDockPressIn?: () => void;
+  onDockPressOut?: () => void;
 }) {
   const Icon = item.Icon;
   const color = active ? PRIMARY : inactiveColor;
   const progress = useSpringState(active);
-  const press = usePressMotion(false, { scale: CONTROL_PRESS_SCALE });
+  const press = usePressMotion(false, { scale: android ? ANDROID_PRESS_SCALE : CONTROL_PRESS_SCALE });
   const iconScale = progress?.interpolate({
     inputRange: [0, 1],
-    outputRange: [1, appTheme.motion.scale.selected],
+    outputRange: [1, android ? 1 : appTheme.motion.scale.selected],
   });
 
   return (
@@ -513,20 +776,19 @@ function TabButton({
         haptic.select();
         onPress();
       }}
-      onPressIn={press.onPressIn}
-      onPressOut={press.onPressOut}
+      onPressIn={() => { if (android) onDockPressIn?.(); else press.onPressIn(); }}
+      onPressOut={() => { if (android) onDockPressOut?.(); else press.onPressOut(); }}
       style={({ pressed }) => ({
         position: 'relative',
         flex: 1,
         minWidth: 0,
-        minHeight: 52,
+        minHeight: android ? 58 : 52,
         alignItems: 'center',
         justifyContent: 'center',
-        borderRadius: 18,
+        borderRadius: android ? 29 : 18,
         borderCurve: 'continuous',
-        // Selection lives in the icon and label, matching the iOS reference.
-        // An extra indicator or coral pill makes this small dock feel busier.
-        backgroundColor: pressed ? appTheme.colors.surfaceStrong : 'transparent',
+        // The Android content presses as one unit inside the selection capsule.
+        backgroundColor: pressed && !android ? appTheme.colors.surfaceStrong : 'transparent',
       })}
     >
       {/* A sibling of the content column, not a child of the scaled icon
@@ -534,9 +796,14 @@ function TabButton({
           its percentage offset resolved against the whole tab slot rather than
           the 22pt icon, which parked the oval between two tabs. */}
       {badge ? <TabBadge value={badge} iconSize={iconSize} /> : null}
-      <AnimatedView style={[{ alignItems: 'center', gap: 3 }, press.animatedStyle]}>
-        <AnimatedView style={{ transform: [{ scale: iconScale ?? 1 }] }}>
-          <Icon size={iconSize} color={color} />
+      <AnimatedView style={[{ alignItems: 'center', gap: android ? 2 : 3, ...(android ? { width: '100%' as const, paddingVertical: 4 } : {}) }, press.animatedStyle]}>
+        <AnimatedView style={{
+          ...(android ? { width: 40, height: 32, alignItems: 'center', justifyContent: 'center' } as const : {}),
+          transform: [{ scale: iconScale ?? 1 }],
+        }}>
+          <AnimatedView>
+            <Icon size={iconSize} color={color} fill={android && active ? appTheme.colors.navigationIconFill : 'none'} fillOpacity={0.45} />
+          </AnimatedView>
         </AnimatedView>
         {/* Capped scaling: the bar is a fixed-height row of five slots around a
             raised centre button, so unbounded Dynamic Type ran the labels into
@@ -544,10 +811,10 @@ function TabButton({
             hold — the icon above carries the meaning at extreme sizes. */}
         <Text
           numberOfLines={1}
-          adjustsFontSizeToFit
-          minimumFontScale={0.76}
+          adjustsFontSizeToFit={!android}
+          minimumFontScale={android ? 1 : 0.76}
           maxFontSizeMultiplier={1.4}
-          style={{ color, fontSize: labelSize, fontWeight: active ? '700' : '500' }}
+          style={{ color, fontSize: labelSize, ...(android ? { lineHeight: 16 } : {}), fontWeight: android ? '600' : active ? '700' : '500' }}
         >
           {item.label}
         </Text>

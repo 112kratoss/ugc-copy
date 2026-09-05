@@ -17,6 +17,7 @@ const routerState = vi.hoisted(() => ({
 const glassState = vi.hoisted(() => ({
   available: false,
   reduceTransparency: false,
+  platform: 'ios',
 }));
 
 vi.mock('expo-router', () => ({
@@ -24,6 +25,7 @@ vi.mock('expo-router', () => ({
 }));
 
 vi.mock('react-native', () => ({
+  Platform: { get OS() { return glassState.platform; } },
   Pressable: ({ children, style, ...props }: MockProps) =>
     React.createElement('pressable', {
       ...props,
@@ -60,6 +62,7 @@ vi.mock('lucide-react-native', () => ({
   ChevronLeft: (props: Record<string, unknown>) => React.createElement('glyph-icon', props),
   Share: (props: Record<string, unknown>) => React.createElement('glyph-icon', props),
   Share2: (props: Record<string, unknown>) => React.createElement('glyph-icon', props),
+  Compass: (props: Record<string, unknown>) => React.createElement('compass-icon', props),
   Bell: (props: Record<string, unknown>) => React.createElement('bell-icon', props),
   Users: (props: Record<string, unknown>) => React.createElement('users-icon', props),
   FilePlus2: (props: Record<string, unknown>) => React.createElement('file-plus-icon', props),
@@ -95,6 +98,7 @@ vi.mock('@/lib/theme', () => ({
       onBadge: '#ffffff',
     },
     icon: { feature: 24 },
+    radii: { pill: 999 },
   },
 }));
 
@@ -200,7 +204,48 @@ describe('MagicTabBar', () => {
     routerState.push.mockClear();
     glassState.available = false;
     glassState.reduceTransparency = false;
+    glassState.platform = 'ios';
     badgeValue = null;
+  });
+
+  it('keeps Android navigation opaque and routes every destination through tabPress', async () => {
+    glassState.platform = 'android';
+    badgeValue = '3';
+    const { tree, navigation } = await renderTabBarAsync(1);
+    expect(tree.root.findByProps({ testID: 'android-navigation-dock' })).toBeTruthy();
+    expect(adaptiveFallbacks(tree)).toHaveLength(0);
+    for (const [label, route, key] of [
+      ['Home', 'index', 'home-key'],
+      ['Explore', 'showcase', 'showcase-key'],
+      ['Alerts, 3 unread', 'studio', 'studio-key'],
+      ['Profile', 'profile', 'profile-key'],
+    ]) {
+      const tab = tree.root.findByProps({ accessibilityLabel: label });
+      expect(tab.props.accessibilityState.selected).toBe(route === 'showcase');
+      renderer.act(() => tab.props.onPress());
+      expect(navigation.emit).toHaveBeenLastCalledWith({ type: 'tabPress', target: key, canPreventDefault: true });
+      expect(navigation.navigate).toHaveBeenLastCalledWith(route);
+    }
+    renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Open create menu' }).props.onPress());
+    expect(navigation.jumpTo).not.toHaveBeenCalled();
+    expect(tree.root.findByProps({ accessibilityLabel: 'Post' })).toBeTruthy();
+    renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Create' }).props.onPress());
+    expect(navigation.emit).toHaveBeenLastCalledWith({ type: 'tabPress', target: 'creator-key', canPreventDefault: true });
+    expect(navigation.jumpTo).toHaveBeenCalledWith('creator');
+  });
+
+  it('keeps the Android dock inert when hidden and respects prevented tab presses', async () => {
+    glassState.platform = 'android';
+    const { tree, navigation } = await renderTabBarAsync(0, { hidden: true });
+    const root = tree.root.findAll((node) => String(node.type) === 'view')[0];
+    expect(root.props.pointerEvents).toBe('none');
+    expect(root.props.importantForAccessibility).toBe('no-hide-descendants');
+    navigation.emit.mockReturnValue({ defaultPrevented: true });
+    renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Profile' }).props.onPress());
+    expect(navigation.navigate).not.toHaveBeenCalled();
+    renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Open create menu' }).props.onPress());
+    renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Create' }).props.onPress());
+    expect(navigation.jumpTo).not.toHaveBeenCalled();
   });
 
   it('hides by going invisible and inert without changing the surface tree', async () => {
