@@ -308,7 +308,7 @@ describe('PublishToShowcaseModal', () => {
       />
     );
 
-    expect(screen.getByText(/share it to Showcase or keep it private/i)).toBeInTheDocument();
+    expect(screen.getByText(/share it to Explore or keep it private/i)).toBeInTheDocument();
     expect(screen.queryByText(/saved system package/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/share the prompt and setup/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('radio', { name: 'Paid' })).not.toBeInTheDocument();

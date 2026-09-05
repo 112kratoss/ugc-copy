@@ -11,5 +11,5 @@ import TabLoadingShell from '@/app/components/TabLoadingShell';
  * where the top progress bar covers the wait instead.
  */
 export default function ShowcaseLoading() {
-  return <TabLoadingShell title="Showcase" eyebrow="Community" accent="blue" />;
+  return <TabLoadingShell title="Explore" eyebrow="Community" accent="blue" />;
 }

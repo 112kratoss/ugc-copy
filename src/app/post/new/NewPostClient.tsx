@@ -317,7 +317,7 @@ function getLockedSummary(selectedKinds: PostResourceKind[]): string {
 }
 
 function getVisibilityStatusLabel(v: PostVisibility): string {
-  if (v === 'public') return 'Visible in Showcase';
+  if (v === 'public') return 'Visible in Explore';
   if (v === 'unlisted') return 'Shareable by link only';
   return 'Saved privately in Studio';
 }
@@ -1893,7 +1893,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     }
 
     if (mediaItems.some((item) => item.contentType?.startsWith('audio/'))) {
-      stopWithError('Audio posts are not supported in Showcase yet.', 'post');
+      stopWithError('Audio posts are not supported in Explore yet.', 'post');
       return;
     }
 
@@ -2203,7 +2203,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           ? 'Back to seller dashboard'
           : entrySurface === 'home'
             ? 'Back to home'
-            : 'Back to showcase';
+            : 'Back to Explore';
 
   return (
     <div className="ui-page ui-page-ambient min-h-screen">
@@ -2647,7 +2647,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                               <div className="text-sm font-semibold text-white">
                                 {mediaItems.length > 0 ? `${mediaItems.length} of 5 media added` : 'Upload images or videos'}
                               </div>
-                              <p className="mt-1 text-xs text-zinc-400">The first item is the Showcase cover.</p>
+                              <p className="mt-1 text-xs text-zinc-400">The first item is the Explore cover.</p>
                             </div>
                           </div>
                           <button
@@ -2899,7 +2899,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                   <div>
                     <h2 className="text-lg font-semibold text-white">Story</h2>
                     <p className="mt-1 text-xs text-zinc-400">
-                      The public content visible in Showcase.
+                      The public content visible in Explore.
                     </p>
                   </div>
                   <button
@@ -2907,7 +2907,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                     onClick={() => setIsDetailsOpen((current) => !current)}
                     className="inline-flex items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
                   >
-                    {isDetailsOpen ? 'Hide description' : 'Add Showcase description'}
+                    {isDetailsOpen ? 'Hide description' : 'Add Explore description'}
                   </button>
                 </div>
 
@@ -2940,14 +2940,14 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
                 {isDetailsOpen ? (
                   <label className="mt-5 block">
-                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Showcase description</div>
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Explore description</div>
                     <textarea
                       value={description}
                       onChange={(event) => {
                         setDescription(event.target.value);
                         resetFeedback();
                       }}
-                      placeholder="Optional: give the post a short one-line setup for Showcase and previews."
+                      placeholder="Optional: give the post a short one-line setup for Explore and previews."
                       rows={3}
                       className="w-full rounded-[24px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
                     />
@@ -3288,7 +3288,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         className="ui-focus-ring rounded-2xl bg-[var(--ui-primary)] px-5 py-5 text-left transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-70"
                       >
                         <div className="text-sm font-extrabold text-[var(--ui-primary-on)]">Publish public</div>
-                        <p className="mt-1.5 text-xs leading-5 text-[#5c2c20]">Visible in Showcase.</p>
+                        <p className="mt-1.5 text-xs leading-5 text-[#5c2c20]">Visible in Explore.</p>
                       </button>
                     </div>
                   </div>

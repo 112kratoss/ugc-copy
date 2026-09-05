@@ -291,7 +291,7 @@ describe('ShowcaseClient save actions', () => {
     await waitFor(() => {
       expect(new URLSearchParams(window.location.search).get('post')).toBe('post-1');
     });
-    expect(await screen.findByRole('button', { name: /showcase/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /explore/i })).toBeInTheDocument();
   });
 
   it('keeps the complete initial card actions for authenticated viewers', () => {
@@ -683,7 +683,7 @@ describe('ShowcaseClient save actions', () => {
     });
     expect(pushState).toHaveBeenCalledWith(null, '', '/showcase?post=post-1');
 
-    fireEvent.click(await screen.findByRole('button', { name: /showcase/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /explore/i }));
     expect(back).toHaveBeenCalledTimes(1);
   });
 
@@ -723,7 +723,7 @@ describe('ShowcaseClient save actions', () => {
       expect(params.get('post')).toBe('post-1');
       expect(params.get('media')).toBe('1');
     });
-    expect(await screen.findByRole('button', { name: /showcase/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /explore/i })).toBeInTheDocument();
   });
 
   it('loads a shared post URL that is not present in the first feed page without pushing a duplicate history entry', async () => {
@@ -764,7 +764,7 @@ describe('ShowcaseClient save actions', () => {
     expect((await screen.findAllByRole('heading', { name: 'Shared Campaign' })).length).toBeGreaterThan(1);
     expect(pushState).not.toHaveBeenCalled();
 
-    fireEvent.click(await screen.findByRole('button', { name: /showcase/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /explore/i }));
 
     await waitFor(() => {
       expect(new URLSearchParams(window.location.search).has('post')).toBe(false);

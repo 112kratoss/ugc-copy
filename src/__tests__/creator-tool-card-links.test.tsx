@@ -168,6 +168,6 @@ describe('creator tool card links', () => {
       'href',
       expect.stringContaining('/create-image?')
     );
-    expect(screen.getByText('Explore showcase').closest('a')).toHaveAttribute('href', '/showcase');
+    expect(screen.getByText('Go to Explore').closest('a')).toHaveAttribute('href', '/showcase');
   });
 });

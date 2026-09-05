@@ -13,7 +13,7 @@ export const POST_VISIBILITY_OPTIONS: ReadonlyArray<{
   hint: string;
   Icon: typeof Globe;
 }> = [
-  { value: 'public', label: 'Public', hint: 'In the showcase and feed.', Icon: Globe },
+  { value: 'public', label: 'Public', hint: 'In Explore and the feed.', Icon: Globe },
   { value: 'unlisted', label: 'Unlisted', hint: 'Only people with the link.', Icon: Link2 },
   { value: 'private', label: 'Private', hint: 'Only you.', Icon: LockKeyhole },
 ];

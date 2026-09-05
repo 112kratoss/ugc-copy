@@ -52,7 +52,7 @@ export default function AIVideoGeneratorPage() {
                     href: '/showcase',
                     title: 'Review public examples',
                     description: 'Explore how creators are packaging AI-generated clips for production-ready outputs.',
-                    label: 'See showcase',
+                    label: 'See examples',
                 },
                 {
                     href: '/ai-workflow-builder',

@@ -50,9 +50,9 @@ export default function AIImageGeneratorPage() {
                 },
                 {
                     href: '/showcase',
-                    title: 'Browse public showcase examples',
+                    title: 'Browse public examples',
                     description: 'See how the community is turning AI generations into publishable campaign assets.',
-                    label: 'See showcase',
+                    label: 'See examples',
                 },
                 {
                     href: '/pricing',

@@ -1413,7 +1413,7 @@ export default function ShowcaseReelViewer({
       ref={reelDialogRef}
       role="dialog"
       aria-modal="true"
-      aria-label="Showcase reel viewer"
+      aria-label="Explore reel viewer"
       className="fixed inset-0 z-[90] overflow-hidden bg-[#050506] text-white"
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
@@ -1468,11 +1468,11 @@ export default function ShowcaseReelViewer({
           className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
         >
           <X className="h-4 w-4" />
-          Showcase
+          Explore
         </button>
 
         <div className="min-w-0 text-center">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">Showcase reel</div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">Explore reel</div>
           <div className="text-xs text-zinc-300">
             {selectedIndex + 1}
             {!hasMoreItems && !isLoadingMoreItems ? ` / ${items.length}` : null}

@@ -10,7 +10,7 @@ import { getAuthAvatarUrl, getCreatorDisplayName, getUserInitials } from '@/lib/
 import { supabase } from '@/lib/supabase';
 
 const COMMUNITY_LINKS = [
-  { href: '/showcase', label: 'Community' },
+  { href: '/showcase', label: 'Explore' },
   { href: '/search', label: 'Search' },
   { href: '/marketplace', label: 'Marketplace' },
   { href: '/blog', label: 'Blog' },

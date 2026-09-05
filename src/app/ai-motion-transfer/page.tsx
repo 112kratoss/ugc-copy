@@ -58,7 +58,7 @@ export default function AIMotionTransferPage() {
                     href: '/showcase',
                     title: 'See showcase-ready results',
                     description: 'Browse examples of public creations to benchmark quality and idea framing.',
-                    label: 'See showcase',
+                    label: 'See examples',
                 },
             ]}
             featureList={[

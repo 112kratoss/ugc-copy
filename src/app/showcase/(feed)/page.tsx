@@ -85,7 +85,7 @@ export async function generateMetadata({ searchParams }: ShowcasePageProps): Pro
         offset > 0;
 
     return createMetadata({
-        title: 'Showcase',
+        title: 'Explore',
         description:
             'Browse public magicbooklet creations, creator notes, and production-ready examples of AI images, videos, motion-transfer ads, and reusable workflows.',
         path: '/showcase',

@@ -8,9 +8,9 @@ describe('app shell navigation', () => {
     expect(getActiveAppNavItem('/post/post-1/edit')?.id).toBe('studio');
   });
 
-  it('keeps the community feed itself in the Showcase section', () => {
+  it('keeps the community feed itself in the Explore section', () => {
     expect(getActiveAppNavItem('/showcase')?.id).toBe('showcase');
-    expect(getAppShellTitle('/showcase')).toBe('Showcase');
+    expect(getAppShellTitle('/showcase')).toBe('Explore');
     expect(getActiveAppNavItem('/creators')?.id).toBe('showcase');
   });
 
@@ -22,7 +22,7 @@ describe('app shell navigation', () => {
     expect(getAppShellTitle('/showcase#top')).not.toBe('Post');
   });
 
-  it('treats a post as its own surface rather than part of Showcase', () => {
+  it('treats a post as its own surface rather than part of Explore', () => {
     // Reachable from Home, /feed, Marketplace, Studio or a shared link, so
     // highlighting Showcase would claim a section the viewer is not in.
     expect(getActiveAppNavItem('/showcase/post-1')).toBeNull();
