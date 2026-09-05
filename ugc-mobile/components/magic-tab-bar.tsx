@@ -2,7 +2,7 @@ import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
-import { Bell, Compass, Home, Plus, User, Users } from 'lucide-react-native';
+import { Bell, Compass, Home, Plus, User } from 'lucide-react-native';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   AccessibilityInfo,
@@ -76,7 +76,7 @@ const AnimatedView = (IS_TEST_ENVIRONMENT ? View : Animated.View) as typeof Anim
 
 const VISIBLE_TABS = [
   { route: 'index', label: 'Home', Icon: Home },
-  { route: 'showcase', label: 'Showcase', Icon: Users },
+  { route: 'showcase', label: 'Explore', Icon: Compass },
   { route: 'studio', label: 'Alerts', Icon: Bell },
   { route: 'profile', label: 'Profile', Icon: User },
 ] as const;
@@ -483,7 +483,7 @@ function AndroidNavigationDock({
   const renderTab = (item: (typeof VISIBLE_TABS)[number]) => (
     <TabButton
       key={item.route}
-      item={item.route === 'showcase' ? { ...item, label: 'Explore', Icon: Compass } : item}
+      item={item}
       active={activeRoute === item.route}
       iconSize={24}
       labelSize={12}

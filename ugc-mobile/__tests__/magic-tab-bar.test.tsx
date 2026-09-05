@@ -394,15 +394,15 @@ describe('MagicTabBar', () => {
     glassState.reduceTransparency = true;
     const solid = await renderTabBarAsync();
     const solidIcon = solid.tree.root
-      .findByProps({ accessibilityLabel: 'Showcase' })
-      .findByType('users-icon' as never);
+      .findByProps({ accessibilityLabel: 'Explore' })
+      .findByType('compass-icon' as never);
 
     glassState.reduceTransparency = false;
     glassState.available = true;
     const glass = await renderTabBarAsync();
     const glassIcon = glass.tree.root
-      .findByProps({ accessibilityLabel: 'Showcase' })
-      .findByType('users-icon' as never);
+      .findByProps({ accessibilityLabel: 'Explore' })
+      .findByType('compass-icon' as never);
 
     // Muted grey is safe against a known opaque bar. Once the surface is
     // translucent the backdrop is whatever post scrolled past, so the label has
@@ -494,7 +494,7 @@ function findBadgeOvals(tree: ReturnType<typeof renderer.create>) {
     const { tree, navigation } = renderTabBar();
 
     renderer.act(() => {
-      tree.root.findByProps({ accessibilityLabel: 'Showcase' }).props.onPress();
+      tree.root.findByProps({ accessibilityLabel: 'Explore' }).props.onPress();
     });
 
     expect(navigation.emit).toHaveBeenCalledWith({

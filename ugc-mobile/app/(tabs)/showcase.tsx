@@ -4,7 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { ImageIcon, MoreVertical, Play, RefreshCw, Search, X } from 'lucide-react-native';
 import { useIsFocused, useScrollToTop } from '@react-navigation/native';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, AccessibilityInfo, Platform, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, AccessibilityInfo, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
@@ -506,10 +506,10 @@ export default function ShowcaseScreen() {
     void runtime.api.recordShowcaseFeedEvent(request)
       .then(() => AccessibilityInfo.announceForAccessibility(eventType === 'hide_creator'
         ? user
-          ? `${formatCreatorLabel(item.creator.username || item.creator.name)} hidden from your Showcase.`
+          ? `${formatCreatorLabel(item.creator.username || item.creator.name)} hidden from your feed.`
           : `${formatCreatorLabel(item.creator.username || item.creator.name)} hidden for this visit.`
         : user
-          ? 'Post removed. Your Showcase will adapt.'
+          ? 'Post removed. Your feed will adapt.'
           : 'Post removed for this visit.'))
       .catch(() => {
         if (!user) forgetAnonymousShowcaseFeedRemoval(target);
@@ -517,11 +517,11 @@ export default function ShowcaseScreen() {
           queryClient.setQueryData(cachedQueryKey, cachedData);
         });
         showMessageDialog({
-          title: 'Couldn’t update your Showcase',
+          title: 'Couldn’t update your feed',
           message: 'The post was restored. Check your connection and try again.',
         });
         void AccessibilityInfo.announceForAccessibility(
-          'Couldn’t update your Showcase. The post was restored.'
+          'Couldn’t update your feed. The post was restored.'
         );
       });
   };
@@ -556,7 +556,7 @@ export default function ShowcaseScreen() {
           { queryKey: viewerFeedQueryKey },
           (current) => removeShowcaseFeedItemsFromInfiniteData(current, { postId: item.id })
         );
-        void AccessibilityInfo.announceForAccessibility('Content reported and removed from your Showcase.');
+        void AccessibilityInfo.announceForAccessibility('Content reported and removed from your feed.');
       } catch (error) {
         haptic.error();
         showErrorDialog('Could not report content', error);
@@ -703,7 +703,7 @@ export default function ShowcaseScreen() {
                     supplements a control, it never replaces one. */}
                 <WorkspaceMenuButton />
                 <Text accessibilityRole="header" selectable style={{ flex: 1, color: appTheme.colors.text, ...appTheme.type.pageTitle }}>
-                  {Platform.OS === 'android' ? 'Explore' : 'Showcase'}
+                  Explore
                 </Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                   <IconButton label="Search creators, posts, and recipes" onPress={() => setSearchVisible(true)}>
@@ -711,7 +711,7 @@ export default function ShowcaseScreen() {
                   </IconButton>
                   <IconButton
                     disabled={showcaseQuery.isFetching && !showcaseQuery.isFetchingNextPage}
-                    label={Platform.OS === 'android' ? 'Refresh Explore' : 'Refresh Showcase'}
+                    label="Refresh Explore"
                     onPress={handleRefresh}
                   >
                     <RefreshCw size={appTheme.icon.default} color={appTheme.colors.text} />
@@ -759,10 +759,10 @@ export default function ShowcaseScreen() {
               <View style={{ gap: appTheme.spacing.gap }}>
                 <StatusBlock
                   tone="danger"
-                  title="Could not load Showcase"
+                  title="Could not load Explore"
                   body={showcaseFeedErrorBody(showcaseQuery.error)}
                 />
-                <SecondaryButton label="Retry Showcase" onPress={handleRefresh} />
+                <SecondaryButton label="Retry Explore" onPress={handleRefresh} />
               </View>
             ) : null}
             {isFirstLoad ? <ShowcaseSkeletonGrid layout={gridLayout} /> : null}
@@ -1063,7 +1063,7 @@ const MasonryPin = memo(function MasonryPin({
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Showcase controls for ${card.title}`}
+          accessibilityLabel={`Explore controls for ${card.title}`}
           accessibilityHint="Hide this post or this creator from recommendations"
           hitSlop={4}
           onPress={() => onFeedbackOpen(card.item)}

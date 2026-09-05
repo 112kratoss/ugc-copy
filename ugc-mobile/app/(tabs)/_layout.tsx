@@ -49,7 +49,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="showcase"
         options={{
-          title: 'Showcase',
+          title: 'Explore',
           href: null,
         }}
       />
