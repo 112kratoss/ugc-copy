@@ -132,6 +132,17 @@ data class Position(@Field val top: Double? = null) : Record, java.io.Serializab
 
 enum class Mood : Enumerable { HAPPY }
 
+class Trait<InputType> @PublishedApi internal constructor(
+  val exportImpl: (Int) -> Unit
+) : Base<InputType> {
+  companion object {
+    data class Defaults(@Field val compression: Int = 100) : Record
+  }
+  object Named : Base() {
+    class Deep : Record
+  }
+}
+
 class Plain
 `;
     expect(findKotlinTypes(source)).toEqual([
@@ -140,6 +151,11 @@ class Plain
       { name: 'Position$Inner', kind: 'class', supertypes: 'Record' },
       { name: 'Position$Mode', kind: 'enum', supertypes: 'Enumerable' },
       { name: 'Mood', kind: 'enum', supertypes: 'Enumerable' },
+      { name: 'Trait', kind: 'class', supertypes: 'Base<InputType>' },
+      { name: 'Trait$Companion', kind: 'object', supertypes: '' },
+      { name: 'Trait$Companion$Defaults', kind: 'class', supertypes: 'Record' },
+      { name: 'Trait$Named', kind: 'object', supertypes: 'Base()' },
+      { name: 'Trait$Named$Deep', kind: 'class', supertypes: 'Record' },
       { name: 'Plain', kind: 'class', supertypes: '' },
     ]);
   });
@@ -154,6 +170,8 @@ class Plain
     expect(names).toContain('expo.modules.image.records.ContentPosition');
     expect(types.find((type) => type.name === 'expo.modules.securestore.SecureStoreOptions')?.kind).toBe('record');
     expect(names.some((name) => name.includes('$'))).toBe(true);
+    // A record declared inside a companion object is spelled through it.
+    expect(names).toContain('expo.modules.kotlin.traits.SavableTrait$Companion$SavableBitmapOptions');
     expect(types.filter((type) => type.kind === 'enumerable').length).toBeGreaterThan(0);
     expect(types.length).toBeGreaterThan(50);
   });

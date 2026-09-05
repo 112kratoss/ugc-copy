@@ -159,8 +159,9 @@ const HEADER_END =
 
 /**
  * Class declarations in one Kotlin source file with their supertype list, nested
- * ones as `Outer$Inner` the way mapping.txt spells them. Comments and strings are
- * blanked first; `Foo::class` is not a declaration.
+ * ones as `Outer$Inner` the way mapping.txt spells them — including through
+ * `object` and `companion object` bodies (`Outer$Companion$Inner`). Comments and
+ * strings are blanked first; `Foo::class` is not a declaration.
  */
 export function findKotlinTypes(source) {
   const text = source
@@ -173,7 +174,7 @@ export function findKotlinTypes(source) {
   const enclosing = [];
   let depth = 0;
   let pending = null;
-  const token = /\{|\}|(?<!::)\b(?:(enum) )?class (\w+)/g;
+  const token = /\{|\}|(?<!::)\b(?:(enum) )?class (\w+)|\bcompanion object(?: (\w+))?\b|(?<!::)\bobject (\w+)/g;
   let match;
   while ((match = token.exec(text)) !== null) {
     if (match[0] === '{') {
@@ -190,9 +191,15 @@ export function findKotlinTypes(source) {
       continue;
     }
     pending = null;
-    const qualified = [...enclosing.map((entry) => entry.name), match[2]].join('$');
+    const isObject = match[2] === undefined;
+    const simpleName = match[2] ?? match[4] ?? match[3] ?? 'Companion';
+    const qualified = [...enclosing.map((entry) => entry.name), simpleName].join('$');
     let cursor = match.index + match[0].length;
     cursor = skipBalanced(text, cursor, '<', '>');
+    // `class Foo<T> @PublishedApi internal constructor(...)`: modifiers and
+    // annotations may sit between the type parameters and the constructor.
+    const constructorPrefix = /^(?: @\w+(?:\([^)]*\))?| (?:internal|public|private|protected|constructor))+/.exec(text.slice(cursor));
+    if (constructorPrefix) cursor += constructorPrefix[0].length;
     cursor = skipBalanced(text, cursor, '(', ')');
     const rest = text.slice(cursor);
     let supertypes = '';
@@ -205,9 +212,9 @@ export function findKotlinTypes(source) {
       headerLength = colon[0].length + (end === -1 ? afterColon.length : end);
     }
     const hasBody = rest.slice(headerLength).trimStart().startsWith('{');
-    types.push({ name: qualified, kind: match[1] === 'enum' ? 'enum' : 'class', supertypes });
+    types.push({ name: qualified, kind: isObject ? 'object' : match[1] === 'enum' ? 'enum' : 'class', supertypes });
     if (hasBody) {
-      pending = qualified;
+      pending = simpleName;
       token.lastIndex = cursor + headerLength;
     }
   }
@@ -244,6 +251,7 @@ export function collectExpoReflectedTypes(root = projectRoot) {
       const packageMatch = /^\s*package\s+([\w.]+)/m.exec(source);
       if (!packageMatch) continue;
       for (const type of findKotlinTypes(source)) {
+        if (type.kind === 'object') continue;
         const supertypes = ` ${type.supertypes} `;
         let kind = null;
         if (importsRecord && /[\s,:(]Record[\s,<({]/.test(supertypes)) kind = 'record';

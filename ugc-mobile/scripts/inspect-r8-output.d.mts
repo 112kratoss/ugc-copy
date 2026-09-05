@@ -5,7 +5,7 @@ export type MappingEntry = { original: string; renamed: string };
 export type Share = { total: number; renamed: number; share: number };
 export type SurvivorStatus = 'kept-by-name' | 'renamed' | 'removed' | 'missing';
 export type ReflectedType = { name: string; kind: 'record' | 'enumerable'; package: string; file: string };
-export type KotlinType = { name: string; kind: 'class' | 'enum'; supertypes: string };
+export type KotlinType = { name: string; kind: 'class' | 'enum' | 'object'; supertypes: string };
 export type ConfigurationChecks = {
   recordsKept: boolean;
   enumerablesKept: boolean;
