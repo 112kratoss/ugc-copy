@@ -114,6 +114,11 @@ const expectedEndpointKeys = [
 ] as const;
 
 describe('shared mobile API v1 contract fixture', () => {
+  it('documents bounded preview dimensions in the owner library descriptor', () => {
+    expect(mobileApiContract.endpoints.listGenerations.response.generations[0].media)
+      .toMatchObject({ width: 720, height: 405 });
+  });
+
   it('keeps response fixtures inside the exhaustive mobile operation registry', () => {
     const registeredPaths = new Set([
       ...Object.values(mobileApiOperationsV1.operations).map((operation) => operation.path),

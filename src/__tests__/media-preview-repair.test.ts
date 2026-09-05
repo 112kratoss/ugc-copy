@@ -59,6 +59,7 @@ function createSelectChain(result: { data: unknown[] | null; error: Error | null
       return chain;
     }),
     in: vi.fn(() => chain),
+    or: vi.fn(() => chain),
     is: vi.fn((column: string, value: unknown) => {
       equalities.push([column, value]);
       return chain;
@@ -94,7 +95,8 @@ function createRepairableProbeClient(results: Array<{ data: unknown[] | null; er
   const not = vi.fn(() => ({ limit }));
   const lt = vi.fn(() => ({ not }));
   const inFilter = vi.fn(() => ({ in: inFilter, lt }));
-  const eq = vi.fn(() => ({ in: inFilter }));
+  const or = vi.fn(() => ({ in: inFilter }));
+  const eq = vi.fn(() => ({ in: inFilter, or }));
   const select = vi.fn(() => ({ eq, in: inFilter }));
   const from = vi.fn(() => ({ select }));
 
@@ -102,6 +104,7 @@ function createRepairableProbeClient(results: Array<{ data: unknown[] | null; er
     from,
     select,
     eq,
+    or,
     in: inFilter,
     lt,
     not,
@@ -119,11 +122,11 @@ function createRepairableProbeClient(results: Array<{ data: unknown[] | null; er
 function withAdmissionFallback<T extends object>(client: T) {
   return {
     ...client,
-    rpc: async () => ({
+    rpc: async (name: string) => ({
       data: null,
       error: {
-        message:
-          'Could not find the function public.list_media_rendition_repair_candidates in the schema cache',
+        code: 'PGRST202',
+        message: `Could not find the function public.${name} in the schema cache`,
       },
     }),
   };
@@ -233,7 +236,7 @@ describe('media preview repair retries', () => {
 
     expect(supabase.from).toHaveBeenNthCalledWith(1, 'generations');
     expect(supabase.eq).toHaveBeenCalledWith('status', 'succeeded');
-    expect(supabase.in).toHaveBeenCalledWith('category', ['image', 'video']);
+    expect(supabase.or).toHaveBeenCalledWith(String.raw`category.in.(image,video),and(category.is.null,or(output_url.like.generated\_images/*,output_url.like.generated\_videos/*))`);
     expect(supabase.in).toHaveBeenCalledWith('preview_status', ['pending', 'failed', 'processing']);
     expect(supabase.lt).toHaveBeenCalledWith('preview_attempt_count', 3);
     expect(supabase.not).toHaveBeenCalledWith('output_url', 'is', null);

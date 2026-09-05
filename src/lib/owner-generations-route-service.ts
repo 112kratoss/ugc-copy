@@ -14,6 +14,7 @@ import { classifyVisualMedia } from '@/lib/media-contract';
 import { buildVisualMediaDescriptor, type MediaPreviewStatus } from '@/lib/media-descriptor';
 import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
 import { resolveOwnedStoredMediaUrlMap } from '@/lib/owned-media-url-batch';
+import { toUsablePreviewSize } from '@/lib/preview-dimensions';
 
 export type OwnerGenerationsRouteClient = SupabaseClient;
 
@@ -24,6 +25,8 @@ type GenerationRow = {
   preview_url?: string | null;
   preview_thumbhash?: string | null;
   preview_status?: MediaPreviewStatus;
+  preview_width?: number | null;
+  preview_height?: number | null;
   creation_mode?: 'motion' | null;
   showcase_asset_path?: string | null;
   status: string;
@@ -87,6 +90,8 @@ export function projectGenerationForStudio(
   delete projected.template_run_step_id;
   delete projected.studio_visible;
   delete projected.user_id;
+  delete projected.preview_width;
+  delete projected.preview_height;
   if (isTemplateResult) {
     delete projected.prompt;
     projected.model = 'template-workflow';
@@ -290,7 +295,7 @@ async function fetchOwnerGenerations({
   const baseColumns = `id, user_id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, workflow_settings, archived_at, ${projectionColumns}`;
   const columns = statusOnly
     ? statusColumns
-    : `${baseColumns}, preview_url, preview_thumbhash, preview_status, creation_mode`;
+    : `${baseColumns}, preview_url, preview_thumbhash, preview_status, preview_width, preview_height, creation_mode`;
 
   // `in` over the linked set, not `eq` on the caller. Anything made before the
   // person registered still carries its guest UUID — the financial tables
@@ -537,6 +542,9 @@ export async function listOwnerGenerationsForRoute({
     const previewSource = generation.preview_url || null;
     const previewStatus: MediaPreviewStatus = generation.preview_status
       ?? (previewSource ? 'ready' : 'pending');
+    // The preview preserves the source's aspect ratio. Supply its measured
+    // dimensions for layout, as generation-backed post covers already do.
+    const previewSize = toUsablePreviewSize(generation.preview_width, generation.preview_height);
     const expiresAt = getUserOwnedStoredMediaLocation(
       generation.output_url ?? '',
       generation.user_id ?? userId,
@@ -554,8 +562,8 @@ export async function listOwnerGenerationsForRoute({
         previewThumbhash: generation.preview_thumbhash ?? null,
         previewStatus,
         expiresAt,
-        width: null,
-        height: null,
+        width: previewSize?.width ?? null,
+        height: previewSize?.height ?? null,
         durationSeconds: typeof (generation as GenerationRow & { duration?: unknown }).duration === 'number'
           ? (generation as GenerationRow & { duration: number }).duration
           : null,

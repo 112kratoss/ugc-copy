@@ -1,4 +1,4 @@
-import { Image } from 'expo-image';
+import { Image, type ImageProps } from 'expo-image';
 import { createVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
 import { Play } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -8,6 +8,7 @@ import { FEED_VIDEO_VIEW_PROPS } from '@/components/feed-media-frame';
 import { FeedMediaPlate } from '@/components/feed-media-plate';
 import { StableMediaImage } from '@/components/media-preview';
 import { FEED_PREVIEW_FORWARD_BUFFER_SECONDS } from '@/lib/media-performance';
+import { useMediaSource } from '@/lib/use-media-source';
 import { appTheme } from '@/lib/theme';
 
 const absoluteFill = {
@@ -38,6 +39,7 @@ export function FeedVideoPreview({
   previewUrl,
   previewCacheKey,
   previewThumbhash,
+  onPosterLoad,
   active,
   height,
   radius,
@@ -58,6 +60,7 @@ export function FeedVideoPreview({
   previewUrl?: string | null;
   previewCacheKey?: string;
   previewThumbhash?: string | null;
+  onPosterLoad?: ImageProps['onLoad'];
   active: boolean;
   height: number;
   radius: number;
@@ -65,6 +68,9 @@ export function FeedVideoPreview({
   videoBackdrop?: 'blurred' | 'none';
   videoContentFit?: 'cover' | 'contain';
 }) {
+  const { source: streamSource, requestKey } = useMediaSource(streamUrl || '');
+  const { source: posterSource, requestKey: posterRequestKey } = useMediaSource(previewUrl || '');
+  const playbackIdentity = `${streamUrl}|${requestKey}`;
   const canPlay = active && Boolean(streamUrl);
 
   const [failedPosterUrl, setFailedPosterUrl] = useState<string | null>(null);
@@ -75,8 +81,8 @@ export function FeedVideoPreview({
   const [playerMounted, setPlayerMounted] = useState(canPlay);
 
   const usablePreviewUrl = previewUrl && previewUrl !== failedPosterUrl ? previewUrl : null;
-  const hasFirstFrame = Boolean(streamUrl) && firstFrameUrl === streamUrl;
-  const hasPlaybackError = Boolean(streamUrl) && playbackErrorUrl === streamUrl;
+  const hasFirstFrame = Boolean(streamUrl) && firstFrameUrl === playbackIdentity;
+  const hasPlaybackError = Boolean(streamUrl) && playbackErrorUrl === playbackIdentity;
   const posterVisible = !canPlay || !hasFirstFrame || hasPlaybackError;
   // Nothing to show but the play badge: keep the borderless dark tile this
   // state has always rendered rather than framing an empty box.
@@ -84,7 +90,7 @@ export function FeedVideoPreview({
 
   useEffect(() => {
     setFailedPosterUrl(null);
-  }, [previewUrl, url]);
+  }, [previewUrl, url, posterRequestKey]);
 
   useEffect(() => {
     if (canPlay) {
@@ -100,13 +106,13 @@ export function FeedVideoPreview({
   }, [canPlay]);
 
   const handleFirstFrame = useCallback(() => {
-    setFirstFrameUrl(streamUrl);
+    setFirstFrameUrl(playbackIdentity);
     setPlaybackErrorUrl(null);
-  }, [streamUrl]);
+  }, [playbackIdentity]);
 
   const handlePlaybackError = useCallback((errored: boolean) => {
-    setPlaybackErrorUrl(errored ? streamUrl : null);
-  }, [streamUrl]);
+    setPlaybackErrorUrl(errored ? playbackIdentity : null);
+  }, [playbackIdentity]);
 
   return (
     <View
@@ -125,7 +131,7 @@ export function FeedVideoPreview({
         <>
           {usablePreviewUrl ? (
             <Image
-              source={{ uri: usablePreviewUrl }}
+              source={posterSource}
               contentFit="cover"
               blurRadius={24}
               cachePolicy="memory-disk"
@@ -141,8 +147,8 @@ export function FeedVideoPreview({
 
       {playerMounted && streamUrl ? (
         <FeedVideoPlayerLayer
-          key={streamUrl}
-          url={streamUrl}
+          key={`${streamUrl}:${requestKey}`}
+          source={streamSource}
           contentFit={videoContentFit}
           onFirstFrame={handleFirstFrame}
           onPlaybackError={handlePlaybackError}
@@ -157,6 +163,7 @@ export function FeedVideoPreview({
           // which is the flicker this component exists to avoid.
           cacheKey={previewCacheKey ?? `${url}:poster`}
           thumbhash={previewThumbhash}
+          onLoad={onPosterLoad}
           contentFit={canPlay ? videoContentFit : 'cover'}
           onError={() => setFailedPosterUrl(usablePreviewUrl)}
           style={[absoluteFill, { backgroundColor: 'transparent', opacity: posterVisible ? 1 : 0 }]}
@@ -186,18 +193,18 @@ export function FeedVideoPreview({
 }
 
 function FeedVideoPlayerLayer({
-  url,
+  source,
   contentFit,
   onFirstFrame,
   onPlaybackError,
 }: {
-  url: string;
+  source: { uri: string; headers?: Record<string, string> };
   contentFit: 'cover' | 'contain';
   onFirstFrame: () => void;
   onPlaybackError: (errored: boolean) => void;
 }) {
   const [player] = useState<VideoPlayer>(() => {
-    const instance = createVideoPlayer({ uri: url, useCaching: true });
+    const instance = createVideoPlayer({ ...source, useCaching: true });
     instance.loop = true;
     instance.muted = true;
     instance.volume = 0;

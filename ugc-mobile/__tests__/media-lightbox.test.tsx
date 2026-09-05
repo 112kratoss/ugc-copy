@@ -1,3 +1,4 @@
+import { buildMediaSource } from '../lib/media-source';
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
@@ -9,6 +10,10 @@ function resolvePressableStyle(style: unknown) {
     ? (style as (state: { pressed: boolean }) => unknown)({ pressed: false })
     : style;
 }
+
+vi.mock('@/lib/use-media-source', () => ({
+  useMediaSource: (url: string) => ({ source: buildMediaSource(url, 'https://magicbooklet.com', 'test-session'), requestKey: '' }),
+}));
 
 vi.mock('react-native', () => ({
   Modal: ({ children, visible, ...props }: MockProps) =>
@@ -100,7 +105,7 @@ describe('MediaLightbox', () => {
 
     const video = tree.root.findByType('video-view' as never);
     expect(video.props.nativeControls).toBe(true);
-    expect(video.props.player).toEqual({ url: 'https://cdn.example.com/camera.mp4' });
+    expect(video.props.player).toEqual({ url: { uri: 'https://cdn.example.com/camera.mp4' } });
     expect(tree.root.findAll((node) => String(node.type) === 'stable-image')).toHaveLength(0);
   });
 

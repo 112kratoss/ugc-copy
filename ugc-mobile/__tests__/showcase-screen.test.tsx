@@ -2,6 +2,7 @@
 
 import React from 'react';
 import renderer from 'react-test-renderer';
+import { Image } from 'expo-image';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
@@ -196,6 +197,7 @@ function feedItem() {
 
 describe('Showcase screen', () => {
   beforeEach(() => {
+    vi.mocked(Image.loadAsync).mockClear();
     queryState.fetchNextPage.mockClear();
     queryState.refetch.mockClear();
     queryState.filter = 'all';
@@ -204,6 +206,21 @@ describe('Showcase screen', () => {
     queryState.isFetching = false;
     queryState.isFetchingNextPage = false;
     queryState.pages = [{ items: [], pageInfo: { hasMore: false, nextOffset: null } }];
+  });
+
+  it('does not load every cached preview just to measure missing dimensions', async () => {
+    const base = feedItem();
+    queryState.pages = [{
+      items: Array.from({ length: 48 }, (_, index) => ({
+        ...base, id: `post-${index}`,
+        mediaItems: base.mediaItems.map(media => ({ ...media, width: null, height: null })),
+      })),
+      pageInfo: { hasMore: false, nextOffset: null },
+    }];
+    let tree: renderer.ReactTestRenderer;
+    await renderer.act(async () => { tree = renderer.create(<ShowcaseScreen />); });
+    expect(Image.loadAsync).not.toHaveBeenCalled();
+    renderer.act(() => tree.unmount());
   });
 
   it('balances variable-height cards across two masonry columns', () => {

@@ -130,8 +130,8 @@
               "thumbhash": null,
               "cacheKey": "media:generation-1",
               "expiresAt": null,
-              "width": 1024,
-              "height": 1024,
+              "width": 720,
+              "height": 405,
               "durationSeconds": null,
               "status": "ready",
               "gridReady": true

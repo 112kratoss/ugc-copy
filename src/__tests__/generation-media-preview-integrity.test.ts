@@ -98,6 +98,21 @@ describe('isDecodableWebp', () => {
 });
 
 describe('uploadGenerationPreview integrity check', () => {
+  it('rejects a changed payload even when its length and WebP signature match', async () => {
+    const preview = await encodedPreview();
+    const corrupt = Buffer.from(preview);
+    corrupt.fill(0, 12);
+    expect(corrupt.length).toBe(preview.length);
+    expect(isDecodableWebp(corrupt)).toBe(true);
+    const { supabase } = storageDouble({ stored: corrupt });
+
+    await expect(uploadGenerationPreview({
+      preview,
+      storagePath: 'generated_images/user-1/output.jpg',
+      supabase: supabase as never,
+    })).rejects.toThrow(/does not match the encoded preview/);
+  });
+
   it('returns ready when the stored bytes match what was encoded', async () => {
     const preview = await encodedPreview();
     const { supabase, download } = storageDouble({ stored: preview });
