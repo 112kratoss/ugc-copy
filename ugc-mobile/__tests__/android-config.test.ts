@@ -119,19 +119,30 @@ describe('Android native network config', () => {
     const keepRulesPath = join(projectRoot, 'android', 'app', RELEASE_KEEP_RULES);
     expect(keepRulesPath).toBe(join(projectRoot, 'plugins', 'android-release.pro'));
     const keepRules = readFileSync(keepRulesPath, 'utf8').split('\n');
-    // Phase 4b: module code may be dropped, but expo-modules-core's runtime
-    // (expo.modules.kotlin.**) never is - shrinking it reproduced build 62 on a
-    // device on 2026-09-05 with every record class still intact. Neither earlier
-    // blanket form may come back.
-    expect(keepRules).not.toContain('-keep class expo.modules.** { *; }');
-    expect(keepRules).not.toContain('-keep,allowoptimization class expo.modules.** { *; }');
+    // Phase 4c: no blanket rule over the modules at all; expo-modules-core's
+    // consumer rules pin their records, enumerables and constructors. The runtime
+    // (expo.modules.kotlin.**) is never shrinkable - shrinking it reproduced build
+    // 62 on a device on 2026-09-05 with every record class still intact - and the
+    // classes looked up by name stay named. None of the earlier blanket forms may
+    // come back.
+    for (const retired of [
+      '-keep class expo.modules.** { *; }',
+      '-keep,allowoptimization class expo.modules.** { *; }',
+      '-keep,allowoptimization,allowshrinking class expo.modules.** { *; }',
+      '-keep class expo.modules.securestore.** { *; }',
+      '-keep class expo.modules.image.** { *; }',
+    ]) {
+      expect(keepRules).not.toContain(retired);
+    }
     expect(keepRules.some((line) => /^-keep,allowoptimization,allowshrinking class expo\.modules\.kotlin\.\*\*/.test(line))).toBe(false);
     for (const rule of [
       '-keep,allowoptimization class expo.modules.kotlin.** { *; }',
-      '-keep,allowoptimization,allowshrinking class expo.modules.** { *; }',
+      '-keep,allowoptimization class expo.modules.ExpoModulesPackageList { *; }',
+      '-keepnames class expo.modules.updates.UpdatesPackage',
       '-keep class kotlin.Metadata { *; }',
-      '-keep class expo.modules.securestore.** { *; }',
-      '-keep class expo.modules.image.** { *; }',
+      '-keep,allowoptimization class expo.modules.securestore.** { *; }',
+      '-keep,allowoptimization class expo.modules.image.** { *; }',
+      '-keepclassmembers class com.canhub.cropper.CropImageActivity {',
     ]) {
       expect(keepRules).toContain(rule);
     }
