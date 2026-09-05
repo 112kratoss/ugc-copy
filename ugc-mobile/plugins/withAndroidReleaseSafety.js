@@ -8,10 +8,11 @@ const {
 } = require('expo/config-plugins');
 
 const PLUGIN_NAME = 'withAndroidReleaseSafety';
-const PLUGIN_VERSION = '4.0.0';
+const PLUGIN_VERSION = '5.0.0';
 const MATERIAL_COMPONENTS_VERSION = '1.14.0';
 
-// R8 is on, with the safeguards the first attempt did not have.
+// R8 release shape. Pinned by __tests__/android-config.test.ts; widened one
+// switch per build by docs/android-app-optimization-plan-2026-09-05.md.
 //
 // 0.1.2 (build 62) turned on minification, resource shrinking, the optimizing
 // ProGuard base and - implicitly, as the AGP 8 default - R8 full mode in one
@@ -21,30 +22,40 @@ const MATERIAL_COMPONENTS_VERSION = '1.14.0';
 // type SecureStoreOptions"), which trapped the app in a sign-out loop, and
 // `expo-image` could not set `source`, so no image ever mounted. The revert
 // (dc37fa2) switched everything off together, so which switch broke the record
-// converter was never isolated.
+// converter was never isolated. 0.1.4 (build 70) brought R8 back in the
+// narrowest shape (minify only, plain base, compat mode) and shipped clean.
 //
-// Google Play scores each uploaded bundle's obfuscation and warns under 25%
-// (0.1.3 measured 1%), with a Feb 2027 deadline. Obfuscation only needs R8's
-// shrink and rename passes, so this turns on the minimum:
-//   - minification on; resource shrinking stays off (Play did not flag it,
-//     and it is a separate failure surface);
-//   - the plain `proguard-android.txt` base, which carries -dontoptimize, so
-//     R8 renames and drops dead code but runs no inlining or class merging;
-//   - `android.enableR8.fullMode=false`, so R8 keeps ProGuard-compatible
-//     implicit behaviour (default constructors, member keeps) for every
-//     reflecting library, not only those that ship consumer rules;
-//   - `plugins/android-release.pro`, which keeps all of `expo.modules.**`
-//     and the Kotlin metadata kotlin-reflect reads.
-//
-// None of that is proof. A release build has to be launched on a device and
-// exercised (sign-in, Showcase images, video, paywall) before it reaches the
-// store. A missing rule fails exactly as build 62 did: silently, at runtime,
-// in whichever module is unlucky, behind a green build.
+// From there the plan widens the shape one switch per build, each one launched
+// on a device before the next is touched, because a missing rule fails exactly
+// as build 62 did: silently, at runtime, in whichever module is unlucky, behind
+// a green build. This revision pins:
+//   - minification on;
+//   - the optimizing base `proguard-android-optimize.txt` (phase 1). The plain
+//     `proguard-android.txt` carried -dontoptimize, and AGP 9.0 no longer ships
+//     it at all, so the swap that used to select it is gone;
+//   - `android.enableR8.fullMode=true` (phase 2): R8 keeps nothing implicitly any
+//     more - no default constructors, no members - so every reflecting library
+//     must name what it needs. expo-modules-core's consumer rules do (records,
+//     enumerables, Module `<init>()`, ExpoView constructors) and the blanket
+//     rule below still covers the rest of `expo.modules.**`;
+//   - resource shrinking on R8's optimized pipeline (phase 3b,
+//     `android.r8.optimizedResourceShrinking=true`, the AGP 9 default): resources
+//     join the code reference graph, so one referenced only from dead code goes
+//     with it;
+//   - `plugins/android-release.pro`, which keeps all of `expo.modules.**` and
+//     the Kotlin metadata kotlin-reflect reads (phase 4 narrows it).
 const RELEASE_PROPERTIES = {
   'android.enableMinifyInReleaseBuilds': 'true',
-  'android.enableShrinkResourcesInReleaseBuilds': 'false',
-  'android.enableR8.fullMode': 'false',
+  'android.enableShrinkResourcesInReleaseBuilds': 'true',
+  'android.r8.optimizedResourceShrinking': 'true',
+  'android.enableR8.fullMode': 'true',
   'org.gradle.jvmargs': '-Xmx3072m -XX:MaxMetaspaceSize=1536m',
+  // Phase 5b. React Native's core Image is retired from app code
+  // (__tests__/react-native-image-retired.test.ts), so Fresco's GIF and WebP
+  // add-ons that these flags pull in (android/app/build.gradle) decode for
+  // nobody; expo-image handles both formats through Glide.
+  'expo.gif.enabled': 'false',
+  'expo.webp.enabled': 'false',
 };
 
 // Relative to android/app, which is where Gradle resolves `proguardFiles`.
@@ -59,7 +70,7 @@ function withAndroidReleaseSafety(config) {
 
   const configWithAppBuildGradle = withAppBuildGradle(configWithReleaseProperties, (nextConfig) => {
     nextConfig.modResults.contents = setMaterialComponentsVersion(
-      setReleaseProguardRules(setReleaseProguardSafety(nextConfig.modResults.contents))
+      setReleaseProguardRules(setReleaseProguardBase(nextConfig.modResults.contents))
     );
     return nextConfig;
   });
@@ -86,27 +97,28 @@ function setReleaseSafetyProperties(properties) {
 }
 
 /**
- * Pin the release build to the plain ProGuard default. `proguard-android-optimize.txt`
- * adds the optimization passes that were switched on with build 62; Play's
- * obfuscation score does not need them, so they stay off while R8 is on.
+ * Pin the release build to the optimizing ProGuard base. The plain
+ * `proguard-android.txt` carried -dontoptimize, which the build-62 revert leaned
+ * on and which AGP 9.0 no longer ships; a template that regressed to it is moved
+ * back so the base can never move by accident in either direction.
  */
-function setReleaseProguardSafety(buildGradle) {
-  const safeDefault = 'getDefaultProguardFile("proguard-android.txt")';
-  if (/getDefaultProguardFile\((["'])proguard-android\.txt\1\)/.test(buildGradle)) {
+function setReleaseProguardBase(buildGradle) {
+  const optimizedDefault = 'getDefaultProguardFile("proguard-android-optimize.txt")';
+  if (/getDefaultProguardFile\((["'])proguard-android-optimize\.txt\1\)/.test(buildGradle)) {
     return buildGradle;
   }
 
-  const optimizedDefault = /getDefaultProguardFile\((["'])proguard-android-optimize\.txt\1\)/g;
-  if (!optimizedDefault.test(buildGradle)) {
+  const plainDefault = /getDefaultProguardFile\((["'])proguard-android\.txt\1\)/g;
+  if (!plainDefault.test(buildGradle)) {
     throw new Error('Could not locate the Android release ProGuard default configuration.');
   }
 
-  return buildGradle.replace(optimizedDefault, safeDefault);
+  return buildGradle.replace(plainDefault, optimizedDefault);
 }
 
 /**
  * Append the tracked keep rules to the release `proguardFiles`. Runs after
- * setReleaseProguardSafety, so it only ever sees the plain base; any other
+ * setReleaseProguardBase, so it only ever sees the optimizing base; any other
  * shape means the template changed and the rules would be silently dropped,
  * which is a build-62 failure waiting to happen - so it throws instead.
  */
@@ -121,7 +133,7 @@ function setReleaseProguardRules(buildGradle) {
   }
 
   const proguardFiles =
-    /(proguardFiles\s+getDefaultProguardFile\((["'])proguard-android\.txt\2\),\s*(["'])proguard-rules\.pro\3)/;
+    /(proguardFiles\s+getDefaultProguardFile\((["'])proguard-android-optimize\.txt\2\),\s*(["'])proguard-rules\.pro\3)/;
   if (!proguardFiles.test(buildGradle)) {
     throw new Error('Could not locate the Android release proguardFiles declaration.');
   }
@@ -172,6 +184,6 @@ module.exports.RELEASE_KEEP_RULES = RELEASE_KEEP_RULES;
 module.exports.setMaterialComponentsVersion = setMaterialComponentsVersion;
 module.exports.setReactNativeBuildFromSource = setReactNativeBuildFromSource;
 module.exports.setReleaseProguardRules = setReleaseProguardRules;
-module.exports.setReleaseProguardSafety = setReleaseProguardSafety;
+module.exports.setReleaseProguardBase = setReleaseProguardBase;
 module.exports.setReleaseSafetyProperties = setReleaseSafetyProperties;
 module.exports.withAndroidReleaseSafety = withAndroidReleaseSafety;

@@ -12,8 +12,8 @@ import {
   setMaterialComponentsVersion,
   setReactNativeBuildFromSource,
   setReleaseSafetyProperties,
+  setReleaseProguardBase,
   setReleaseProguardRules,
-  setReleaseProguardSafety,
 } from '../plugins/withAndroidReleaseSafety';
 import {
   DEVELOPMENT_ONLY_NATIVE_MODULES,
@@ -37,7 +37,7 @@ describe('Android native network config', () => {
     expect(appJson.expo.plugins).toContain('./plugins/withAndroidLocalCleartextDebug');
   });
 
-  it('turns R8 on with the safeguards build 62 lacked', () => {
+  it('pins the R8 release shape the optimization plan has reached', () => {
     // 0.1.2 (build 62) shipped with minification on and reached testers unusable.
     // expo-modules-core builds Kotlin records from JS options by reflection, and
     // that build turned on shrinking, the optimizing ProGuard base and R8 full
@@ -49,12 +49,11 @@ describe('Android native network config', () => {
     // so no image mounted. The revert switched everything off together, so the
     // culprit was never isolated.
     //
-    // Google Play scores each bundle's obfuscation and warns under 25% (0.1.3
-    // measured 1%, fix by Feb 2027), so R8 is back on - with only the shrink
-    // and rename passes obfuscation needs, in ProGuard-compatible mode, and
-    // with a tracked keep-rules file. This pins that exact shape: a green build
-    // still proves nothing here, so any drift from it must be deliberate and
-    // device-verified, never incidental.
+    // 0.1.4 (build 70) brought R8 back in the narrowest shape and shipped clean.
+    // docs/android-app-optimization-plan-2026-09-05.md widens it from there one
+    // switch per build, each launched on a device before the next; this pins the
+    // exact shape the plan has reached, so any drift is deliberate, never
+    // incidental. A green build still proves nothing here.
     const appJson = JSON.parse(readFileSync(join(projectRoot, 'app.json'), 'utf8'));
     const properties = setReleaseSafetyProperties([
       { type: 'property', key: 'android.enableMinifyInReleaseBuilds', value: 'false' },
@@ -66,67 +65,97 @@ describe('Android native network config', () => {
       key: 'android.enableMinifyInReleaseBuilds',
       value: 'true',
     });
-    // Resource shrinking is a separate failure surface, and Play did not flag it.
+    // Phase 3: resource shrinking, on R8's optimized pipeline (3b; the AGP 9
+    // default, pinned here so an AGP that flips its default cannot move it).
+    // 3a ran the classic AAPT2 shrinker first, as its own device-verified build.
     expect(properties).toContainEqual({
       type: 'property',
       key: 'android.enableShrinkResourcesInReleaseBuilds',
-      value: 'false',
+      value: 'true',
     });
-    // Compat mode keeps ProGuard's implicit keeps for every reflecting library,
-    // not only the ones that ship consumer rules.
+    expect(properties).toContainEqual({
+      type: 'property',
+      key: 'android.r8.optimizedResourceShrinking',
+      value: 'true',
+    });
+    // Phase 2: full mode. R8 drops ProGuard's implicit keeps (default
+    // constructors, members of kept classes), so every reflecting library has to
+    // name what it needs; expo-modules-core's consumer rules do, and the blanket
+    // rule below covers the rest until phase 4. Pinned explicitly rather than left
+    // to the AGP default so the intent survives an AGP that changes its default.
     expect(properties).toContainEqual({
       type: 'property',
       key: 'android.enableR8.fullMode',
-      value: 'false',
+      value: 'true',
     });
-    // The optimized-resource-shrinking flag is meaningless without shrinking and
-    // was added by the same change; it must not linger as a half-reverted state.
-    expect(properties.map((entry) => entry.type === 'property' && entry.key))
-      .not.toContain('android.r8.optimizedResourceShrinking');
     expect(properties).toContainEqual({
       type: 'property',
       key: 'org.gradle.jvmargs',
       value: '-Xmx3072m -XX:MaxMetaspaceSize=1536m',
     });
+    // Phase 5b: with React Native's core Image retired from app code, Fresco's
+    // GIF and WebP add-ons decode for nobody; expo-image covers both via Glide.
+    expect(properties).toContainEqual({ type: 'property', key: 'expo.gif.enabled', value: 'false' });
+    expect(properties).toContainEqual({ type: 'property', key: 'expo.webp.enabled', value: 'false' });
 
-    // The plain base carries -dontoptimize: R8 renames and drops dead code but
-    // runs none of the inlining or class merging that came in with build 62.
-    const optimizedBuildGradle = `release {
-      proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+    // Phase 1: the optimizing base. The plain `proguard-android.txt` carried
+    // -dontoptimize and AGP 9.0 no longer ships it; a template that regresses to
+    // it is moved back, and the optimize file is left alone.
+    const plainBuildGradle = `release {
+      proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
     }`;
-    const safeBuildGradle = setReleaseProguardSafety(optimizedBuildGradle);
-    expect(safeBuildGradle).toContain('getDefaultProguardFile("proguard-android.txt")');
-    expect(safeBuildGradle).not.toContain(
-      'getDefaultProguardFile("proguard-android-optimize.txt")'
-    );
-    expect(setReleaseProguardSafety(safeBuildGradle)).toBe(safeBuildGradle);
+    const optimizedBuildGradle = setReleaseProguardBase(plainBuildGradle);
+    expect(optimizedBuildGradle).toContain('getDefaultProguardFile("proguard-android-optimize.txt")');
+    expect(optimizedBuildGradle).not.toContain('getDefaultProguardFile("proguard-android.txt")');
+    expect(setReleaseProguardBase(optimizedBuildGradle)).toBe(optimizedBuildGradle);
 
     // The tracked keep rules ride on the release proguardFiles after the base
     // and the generated file, and the plugin refuses a template it cannot place
     // them in rather than silently building without them.
-    const withRules = setReleaseProguardRules(safeBuildGradle);
+    const withRules = setReleaseProguardRules(optimizedBuildGradle);
     expect(withRules).toContain(
-      `proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro", "${RELEASE_KEEP_RULES}"`
+      `proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro", "${RELEASE_KEEP_RULES}"`
     );
     expect(setReleaseProguardRules(withRules)).toBe(withRules);
-    expect(() => setReleaseProguardRules(optimizedBuildGradle)).toThrow(/proguardFiles/);
+    expect(() => setReleaseProguardRules(plainBuildGradle)).toThrow(/proguardFiles/);
 
     // The entry is relative to android/app and must resolve to the tracked file.
     const keepRulesPath = join(projectRoot, 'android', 'app', RELEASE_KEEP_RULES);
     expect(keepRulesPath).toBe(join(projectRoot, 'plugins', 'android-release.pro'));
     const keepRules = readFileSync(keepRulesPath, 'utf8').split('\n');
-    for (const rule of [
+    // Phase 4c: no blanket rule over the modules at all; expo-modules-core's
+    // consumer rules pin their records, enumerables and constructors. The runtime
+    // (expo.modules.kotlin.**) is never shrinkable - shrinking it reproduced build
+    // 62 on a device on 2026-09-05 with every record class still intact - and the
+    // classes looked up by name stay named. None of the earlier blanket forms may
+    // come back.
+    for (const retired of [
       '-keep class expo.modules.** { *; }',
-      '-keep class kotlin.Metadata { *; }',
+      '-keep,allowoptimization class expo.modules.** { *; }',
+      '-keep,allowoptimization,allowshrinking class expo.modules.** { *; }',
       '-keep class expo.modules.securestore.** { *; }',
       '-keep class expo.modules.image.** { *; }',
+    ]) {
+      expect(keepRules).not.toContain(retired);
+    }
+    expect(keepRules.some((line) => /^-keep,allowoptimization,allowshrinking class expo\.modules\.kotlin\.\*\*/.test(line))).toBe(false);
+    for (const rule of [
+      '-keep,allowoptimization class expo.modules.kotlin.** { *; }',
+      '-keep,allowoptimization class expo.modules.ExpoModulesPackageList { *; }',
+      '-keepnames class expo.modules.updates.UpdatesPackage',
+      '-keep class kotlin.Metadata { *; }',
+      '-keep,allowoptimization class expo.modules.securestore.** { *; }',
+      '-keep,allowoptimization class expo.modules.image.** { *; }',
+      '-keepclassmembers class com.canhub.cropper.CropImageActivity {',
     ]) {
       expect(keepRules).toContain(rule);
     }
     expect(keepRules.some((line) => /^-keepattributes .*RuntimeVisible\*Annotations/.test(line)))
       .toBe(true);
-    // Play scores obfuscation; a stray -dontobfuscate would quietly undo the point.
+    // Play scores obfuscation and optimization; a stray global switch in our own
+    // file would quietly undo a phase.
     expect(keepRules.some((line) => /^\s*-dontobfuscate/.test(line))).toBe(false);
+    expect(keepRules.some((line) => /^\s*-dontoptimize/.test(line))).toBe(false);
   });
 
   it('leaves predictive back off so the system back key still reaches JavaScript', () => {

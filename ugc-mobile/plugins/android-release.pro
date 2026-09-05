@@ -1,22 +1,38 @@
 # Magic Booklet release keep rules.
 #
 # Applied by plugins/withAndroidReleaseSafety.js on top of the AGP default
-# (proguard-android.txt) and the generated android/app/proguard-rules.pro.
-# Pinned by __tests__/android-config.test.ts.
+# (proguard-android-optimize.txt) and the generated android/app/proguard-rules.pro.
+# Pinned by __tests__/android-config.test.ts; narrowed one step per
+# device-verified build by docs/android-app-optimization-plan-2026-09-05.md.
 #
 # Why this file exists: 0.1.2 (build 62) shipped with R8 on and reached testers
 # unusable. expo-modules-core turns every JS options object into a Kotlin record
-# through kotlin-reflect, and that path needs the record class, its members and
-# its @kotlin.Metadata to survive R8 untouched. Build 62 flipped several R8
-# switches at once and the revert flipped them all back, so no single rule below
-# is proven necessary on its own. The set is deliberately broad; only launching
-# a release build on a device proves it (a green build proves nothing here).
+# through kotlin-reflect and Unsafe allocation, and that path needs the record
+# class, its members, its @kotlin.Metadata and the converter runtime itself to
+# survive R8. Build 62 flipped several R8 switches at once and the revert
+# flipped them all back; phase 4b of the plan (2026-09-05) isolated the culprit
+# on a device: shrinking expo.modules.kotlin.**. Only launching a release build
+# on a device proves a shape (a green build proves nothing here).
 
-# Every Expo module - records, enumerables, view props, module definitions -
-# stays intact and unrenamed. Play's obfuscation score still clears its 25%
-# threshold on React Native, AndroidX, the Kotlin stdlib, Glide and media3,
-# none of which need this.
--keep class expo.modules.** { *; }
+# expo-modules-core's runtime. Every class and member stays (optimizable, never
+# shrinkable). With `allowshrinking` here the release reproduced build 62
+# exactly - every record class intact, yet "Cannot create a record of the type"
+# and a NullPointerException under every record cast - because the converter's
+# and allocators' members had been removed as unreachable. Full mode and the
+# optimizer were not the cause.
+-keep,allowoptimization class expo.modules.kotlin.** { *; }
+
+# Looked up by name: Class.forName("expo.modules.ExpoModulesPackageList") in
+# expo-modules-core (ExpoModulesHelper, TaskServiceProviderHelper) and in expo
+# (ExpoModulesPackage); ModulePriorities keys expo-updates' package by name.
+-keep,allowoptimization class expo.modules.ExpoModulesPackageList { *; }
+-keepnames class expo.modules.updates.UpdatesPackage
+
+# The modules themselves (expo.modules.<module>.**) carry no blanket rule since
+# phase 4c. expo-modules-core's consumer rules keep their records and
+# enumerables with members, Module and ExpoView constructors, view-event
+# members, ComposeProps and Services; everything else may be shrunk, renamed
+# and optimized.
 
 # kotlin-reflect reads @kotlin.Metadata plus runtime annotations and generic
 # signatures. kotlin-reflect.jar bundles the same rules under META-INF, but the
@@ -25,7 +41,15 @@
 -keepattributes InnerClasses,Signature,RuntimeVisible*Annotations,EnclosingMethod,AnnotationDefault
 -dontwarn kotlin.reflect.jvm.internal.**
 
-# The two modules that failed in build 62, named so a future narrowing of the
-# expo.modules.** rule cannot drop them by accident.
--keep class expo.modules.securestore.** { *; }
--keep class expo.modules.image.** { *; }
+# The two modules that failed in build 62, named so their shape can never move
+# by accident: optimizable, never shrinkable.
+-keep,allowoptimization class expo.modules.securestore.** { *; }
+-keep,allowoptimization class expo.modules.image.** { *; }
+
+# expo-image-picker's crop screen reaches into the cropper library by reflection
+# (ExpoCropImageActivity: getDeclaredField("cropImageOptions") and
+# getDeclaredMethod("setCustomizations")); full mode keeps neither implicitly.
+-keepclassmembers class com.canhub.cropper.CropImageActivity {
+  *** cropImageOptions;
+  *** setCustomizations();
+}
