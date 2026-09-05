@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+/** What `addPushTokenListener` really delivers: a native device token, never an Expo one. */
+type MockDevicePushToken = { type: 'ios' | 'android'; data: string };
+
 const notificationsMocks = vi.hoisted(() => ({
   getPermissionsAsync: vi.fn(),
   requestPermissionsAsync: vi.fn(),
@@ -9,7 +12,7 @@ const notificationsMocks = vi.hoisted(() => ({
   clearLastNotificationResponseAsync: vi.fn(),
   setNotificationChannelAsync: vi.fn(),
   addNotificationResponseReceivedListener: vi.fn(() => ({ remove: vi.fn() })),
-  addPushTokenListener: vi.fn((_listener: (event: { data: string }) => void) => ({ remove: vi.fn() })),
+  addPushTokenListener: vi.fn((_listener: (token: MockDevicePushToken) => void) => ({ remove: vi.fn() })),
   unregisterForNotificationsAsync: vi.fn(),
   setNotificationHandler: vi.fn(),
 }));
@@ -310,38 +313,146 @@ describe('mobile notifications helper', () => {
     );
   });
 
-  it('re-registers the device when Expo rotates the push token', async () => {
-    let listener: ((event: { data: string }) => void) | null = null;
-    const remove = vi.fn();
-    notificationsMocks.addPushTokenListener.mockImplementation((callback: (event: { data: string }) => void) => {
-      listener = callback;
-      return { remove };
-    });
-    secureStoreMocks.getItemAsync.mockResolvedValue('device-1');
-    const api = {
-      registerMobilePushToken: vi.fn(async () => ({ success: true })),
+  describe('device push token rotation', () => {
+    // The shapes the native emitters produce: the APNs hex on iOS, the FCM
+    // registration string on Android. The API accepts neither.
+    const apnsDeviceToken: MockDevicePushToken = {
+      type: 'ios',
+      data: '0f9a3c1e7b2d4c5a6e8f9012a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6',
     };
+    const fcmDeviceToken: MockDevicePushToken = {
+      type: 'android',
+      data: 'e7Kq1ZxTQ0-abc:APA91bFakeFcmRegistrationToken_0123456789',
+    };
+    const EXPO_PUSH_TOKEN_KEY = 'magicbooklet.mobileNotifications.expoPushToken';
 
-    const { subscribeToMobilePushTokenChanges } = await import('../lib/notifications');
-    const unsubscribe = subscribeToMobilePushTokenChanges(api as never);
-    expect(listener).toBeTypeOf('function');
+    function storeHolds(storedExpoPushToken: string | null) {
+      secureStoreMocks.getItemAsync.mockImplementation(async (key: string) => (
+        key === EXPO_PUSH_TOKEN_KEY ? storedExpoPushToken : 'device-1'
+      ));
+    }
 
-    (listener as unknown as (event: { data: string }) => void)({
-      data: 'ExponentPushToken[rotated123]',
-    });
+    async function subscribeAndCaptureListener(api: { registerMobilePushToken: unknown }) {
+      let listener: ((token: MockDevicePushToken) => void) | null = null;
+      const remove = vi.fn();
+      notificationsMocks.addPushTokenListener.mockImplementation((callback: (token: MockDevicePushToken) => void) => {
+        listener = callback;
+        return { remove };
+      });
 
-    await vi.waitFor(() => {
-      expect(api.registerMobilePushToken).toHaveBeenCalledWith(expect.objectContaining({
+      const { subscribeToMobilePushTokenChanges } = await import('../lib/notifications');
+      const unsubscribe = subscribeToMobilePushTokenChanges(api as never);
+      expect(listener).toBeTypeOf('function');
+
+      return { emit: listener as unknown as (token: MockDevicePushToken) => void, remove, unsubscribe };
+    }
+
+    /** The listener's work is fire-and-forget; let its promise chain settle before asserting absence. */
+    const settleListener = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    it('exchanges a rotated device token for an Expo token before registering it', async () => {
+      notificationsMocks.getPermissionsAsync.mockResolvedValue({ granted: true, canAskAgain: true, status: 'granted' });
+      notificationsMocks.getExpoPushTokenAsync.mockResolvedValue({ type: 'expo', data: 'ExponentPushToken[rotated123]' });
+      storeHolds('ExponentPushToken[previous456]');
+      const api = {
+        registerMobilePushToken: vi.fn(async () => ({ success: true })),
+      };
+
+      const { emit, remove, unsubscribe } = await subscribeAndCaptureListener(api);
+      emit(apnsDeviceToken);
+
+      await vi.waitFor(() => {
+        expect(api.registerMobilePushToken).toHaveBeenCalledTimes(1);
+      });
+      // The rotated token must be handed to Expo directly: left out, the
+      // exchange fetches the device token itself, and the native module emits
+      // that fetch straight back into this listener.
+      expect(notificationsMocks.getExpoPushTokenAsync).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        devicePushToken: apnsDeviceToken,
+      });
+      expect(api.registerMobilePushToken).toHaveBeenCalledWith({
         expoPushToken: 'ExponentPushToken[rotated123]',
+        platform: 'ios',
         deviceId: 'device-1',
-      }));
+        appVersion: '1.0.0',
+      });
+      expect(api.registerMobilePushToken).not.toHaveBeenCalledWith(
+        expect.objectContaining({ expoPushToken: apnsDeviceToken.data }),
+      );
+      expect(secureStoreMocks.setItemAsync).toHaveBeenCalledWith(EXPO_PUSH_TOKEN_KEY, 'ExponentPushToken[rotated123]');
+      expect(secureStoreMocks.setItemAsync).not.toHaveBeenCalledWith(EXPO_PUSH_TOKEN_KEY, apnsDeviceToken.data);
+
+      unsubscribe();
+      expect(remove).toHaveBeenCalledTimes(1);
     });
-    expect(secureStoreMocks.setItemAsync).toHaveBeenCalledWith(
-      'magicbooklet.mobileNotifications.expoPushToken',
-      'ExponentPushToken[rotated123]',
-    );
-    unsubscribe();
-    expect(remove).toHaveBeenCalledTimes(1);
+
+    it('leaves the backend alone when the exchange returns the token it already holds', async () => {
+      // The listener fires on every launch, because the cold-start path's own
+      // device-token fetch is emitted through it. Expo maps a rolled device
+      // token back to the same Expo token, so most firings change nothing —
+      // and each registration counts against the route's rate limit.
+      notificationsMocks.getPermissionsAsync.mockResolvedValue({ granted: true, canAskAgain: true, status: 'granted' });
+      notificationsMocks.getExpoPushTokenAsync.mockResolvedValue({ type: 'expo', data: 'ExponentPushToken[same123]' });
+      storeHolds('ExponentPushToken[same123]');
+      const api = {
+        registerMobilePushToken: vi.fn(async () => ({ success: true })),
+      };
+
+      const { emit } = await subscribeAndCaptureListener(api);
+      emit(apnsDeviceToken);
+
+      await vi.waitFor(() => {
+        expect(notificationsMocks.getExpoPushTokenAsync).toHaveBeenCalledTimes(1);
+      });
+      await settleListener();
+      expect(api.registerMobilePushToken).not.toHaveBeenCalled();
+      expect(secureStoreMocks.setItemAsync).not.toHaveBeenCalled();
+    });
+
+    it('ignores a rotated device token while notification permission is not granted', async () => {
+      // Android hands out FCM tokens regardless of the notification permission,
+      // so this is the ordinary case for a reader who declined the prompt.
+      notificationsMocks.getPermissionsAsync.mockResolvedValue({ granted: false, canAskAgain: false, status: 'denied' });
+      const api = {
+        registerMobilePushToken: vi.fn(async () => ({ success: true })),
+      };
+
+      const { emit } = await subscribeAndCaptureListener(api);
+      emit(fcmDeviceToken);
+
+      await vi.waitFor(() => {
+        expect(notificationsMocks.getPermissionsAsync).toHaveBeenCalledTimes(1);
+      });
+      await settleListener();
+      expect(notificationsMocks.getExpoPushTokenAsync).not.toHaveBeenCalled();
+      expect(api.registerMobilePushToken).not.toHaveBeenCalled();
+      expect(secureStoreMocks.setItemAsync).not.toHaveBeenCalled();
+    });
+
+    it('registers nothing when Expo refuses to exchange the rotated device token', async () => {
+      notificationsMocks.getPermissionsAsync.mockResolvedValue({ granted: true, canAskAgain: true, status: 'granted' });
+      notificationsMocks.getExpoPushTokenAsync.mockRejectedValue(new Error('ERR_NOTIFICATIONS_NETWORK_ERROR'));
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+        const api = {
+          registerMobilePushToken: vi.fn(async () => ({ success: true })),
+        };
+
+        const { emit } = await subscribeAndCaptureListener(api);
+        emit(apnsDeviceToken);
+
+        await vi.waitFor(() => {
+          expect(consoleError).toHaveBeenCalledWith('Failed to register rotated mobile push token', expect.any(Error));
+        });
+        // The device token is never a fallback: nothing is registered and the
+        // stored token is left as it was.
+        expect(api.registerMobilePushToken).not.toHaveBeenCalled();
+        expect(secureStoreMocks.setItemAsync).not.toHaveBeenCalled();
+      } finally {
+        consoleError.mockRestore();
+      }
+    });
   });
 });
 
