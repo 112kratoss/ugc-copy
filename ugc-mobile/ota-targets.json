@@ -7,20 +7,20 @@
     "tree against this file and refuses to publish on a mismatch.",
     "",
     "Update this file in the same commit that ships a new binary, and never to",
-    "silence the preflight \u2014 a mismatch means the update cannot land, not that",
+    "silence the preflight — a mismatch means the update cannot land, not that",
     "the record is stale."
   ],
   "targets": {
     "android": {
-      "fingerprint": "17fa2c368e3ed481875b6d43674042f036ea86f7",
+      "fingerprint": "db146ca386f52f78a12416a2077621628eb04300",
       "appVersion": "0.1.4",
-      "buildNumber": 70,
+      "buildNumber": 71,
       "shipped": "2026-09-05",
       "tracks": [
         "alpha",
         "production"
       ],
-      "$note": "Built from main 1834d6e (EAS build a36b88ac) and submitted to the Play closed alpha 2026-09-05 (submission bf6781ae); promoted to production the same day (full rollout, in Play review). First binary with R8 on (#107): 80% obfuscation on Play, 23.7 MB install size, down 8.92 MB from 69. Also carries the push-token listener fix (#108) and the 0.1.4 bump (#109). Until the production review lands, most Android users still run 69 at 30288aed1e67034363dfc0af137eb93ae3aaae28."
+      "$note": "Built from main 62e9f57 (EAS build 21641ad1, workflow run 33969667328) and submitted to the Play closed alpha 2026-09-05 14:07 UTC; a production release 0.1.4 (71) was created from the library the same day and sent for review as a full rollout (which restarted the alpha review). First binary with the full R8 pipeline (#112): optimize base, full mode, optimized resource shrinking, narrowed keeps, React Native core Image retired. Play bundle explorer: App optimization High (70 was Medium), obfuscation 80%, R8 checklist green on Full Mode, Resource Shrinking and Resource Shrinking Optimized (Repackage Classes and AGP 9 outstanding), install size 20.4 MB, -3.27 MB vs 70. Until the production review lands, Android users run 70 at 17fa2c368e3ed481875b6d43674042f036ea86f7."
     },
     "ios": {
       "fingerprint": "e2aa6c798f52ce806aa7057841289f385c50a78a",
@@ -31,7 +31,7 @@
         "testflight",
         "app-store"
       ],
-      "$note": "Built from main 0a24b46 (EAS build 22b925ee) and submitted to the TestFlight internal group 2026-09-05; attached to App Store version 0.1.4 and submitted for review the same day, replacing 0.1.3 (build 50), which was pulled from review to make room. Carries the push-token listener fix (#108) and the 0.1.4 bump (#109); R8 (#107) is Android-only. Until review lands, App Store users still run 0.1.2 (47)."
+      "$note": "Built from main 0a24b46 (EAS build 22b925ee) and submitted to the TestFlight internal group 2026-09-05; attached to App Store version 0.1.4 and submitted for review the same day, replacing 0.1.3 (build 50), which was pulled from review to make room. Carries the push-token listener fix (#108) and the 0.1.4 bump (#109); R8 (#107) is Android-only. Until review lands, App Store users still run 0.1.2 (47). main 62e9f57 (#112) moved the iOS fingerprint as well - Expo hashes every config plugin file into both platforms - so no OTA update from main can reach build 51; the next iOS binary restores it."
     }
   }
 }
