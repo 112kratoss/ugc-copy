@@ -1,8 +1,9 @@
-import { Image } from 'expo-image';
+import { Image, type ImageProps } from 'expo-image';
 import { VideoView, type VideoPlayer } from 'expo-video';
 import type { ReactNode } from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
 
+import { useMediaSource } from '@/lib/use-media-source';
 import { appTheme } from '@/lib/theme';
 import { StableMediaImage } from '@/components/media-preview';
 
@@ -25,6 +26,7 @@ type FeedImageFrameProps = FeedMediaFrameBaseProps & {
   imageBackdrop?: 'blurred' | 'none';
   imageContentFit?: 'cover' | 'contain';
   onImageError?: () => void;
+  onImageLoad?: ImageProps['onLoad'];
   transition?: number;
   url: string;
 };
@@ -62,6 +64,7 @@ export const FEED_VIDEO_VIEW_PROPS = {
 };
 
 export function FeedMediaFrame(props: FeedMediaFrameProps) {
+  const { source: backdropSource } = useMediaSource(props.backdropUrl || (props.kind === 'image' ? props.url : ''));
   const {
     backgroundColor = appTheme.colors.app,
     borderColor,
@@ -91,7 +94,7 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
           {(props.imageBackdrop ?? 'blurred') === 'blurred' ? (
             <>
               <Image
-                source={{ uri: props.backdropUrl || props.url }}
+                source={backdropSource}
                 contentFit="cover"
                 blurRadius={24}
                 cachePolicy="memory-disk"
@@ -109,6 +112,7 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
             thumbhash={props.thumbhash}
             contentFit={props.imageContentFit ?? 'contain'}
             onError={props.onImageError}
+            onLoad={props.onImageLoad}
             transition={props.transition}
             style={[absoluteFill, { backgroundColor: 'transparent' }]}
           />
@@ -117,7 +121,7 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
         <>
           {props.backdropUrl && (props.videoBackdrop ?? 'blurred') === 'blurred' ? (
             <Image
-              source={{ uri: props.backdropUrl }}
+              source={backdropSource}
               contentFit="cover"
               blurRadius={24}
               cachePolicy="memory-disk"

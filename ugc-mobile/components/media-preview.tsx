@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 
 import { imageRetryDelayMs } from '@/lib/media-performance';
+import { useMediaSource } from '@/lib/use-media-source';
 import { appTheme } from '@/lib/theme';
 
 export function MediaPreview({
@@ -20,9 +21,11 @@ export function MediaPreview({
   radius?: number;
   nativeControls?: boolean;
 }) {
+  const { requestKey } = useMediaSource(url || '');
+  const sourceKey = `${url}|${requestKey}`;
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
-  const imageFailed = failedUrl === url;
+  const imageFailed = failedUrl === sourceKey;
 
   if (!url) {
     return <MediaFallback height={height} radius={radius} label="No media" />;
@@ -52,7 +55,7 @@ export function MediaPreview({
       url={url}
       cacheKey={url}
       contentFit="cover"
-      onError={() => setFailedUrl(url)}
+      onError={() => setFailedUrl(sourceKey)}
       style={{
         width: '100%',
         aspectRatio: 4 / 5,
@@ -75,6 +78,7 @@ export function StableMediaImage({
   thumbhash,
   contentFit = 'cover',
   onDisplay,
+  onLoad,
   onError,
   style,
   transition = 120,
@@ -84,6 +88,7 @@ export function StableMediaImage({
   thumbhash?: string | null;
   contentFit?: ImageProps['contentFit'];
   onDisplay?: ImageProps['onDisplay'];
+  onLoad?: ImageProps['onLoad'];
   onError?: ImageProps['onError'];
   style?: ImageProps['style'];
   transition?: number;
@@ -94,7 +99,8 @@ export function StableMediaImage({
   // actually gets attempted. Comparing against the current props (rather than
   // a boolean) keeps recycled list instances from leaking one item's failure
   // onto another.
-  const sourceId = `${cacheKey}|${url}`;
+  const { source, requestKey } = useMediaSource(url);
+  const sourceId = `${cacheKey}|${url}|${requestKey}`;
   const [failedSourceId, setFailedSourceId] = useState<string | null>(null);
   const [retry, setRetry] = useState({ sourceId, attempt: 0 });
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -123,8 +129,8 @@ export function StableMediaImage({
 
   return (
     <Image
-      key={`${cacheKey}:${attempt}`}
-      source={{ uri: url, cacheKey }}
+      key={`${cacheKey}:${attempt}:${requestKey}`}
+      source={{ ...source, cacheKey }}
       placeholder={thumbhash ? { thumbhash } : undefined}
       placeholderContentFit={contentFit}
       contentFit={contentFit}
@@ -132,6 +138,7 @@ export function StableMediaImage({
       recyclingKey={cacheKey}
       transition={transition}
       onDisplay={onDisplay}
+      onLoad={onLoad}
       onError={(event) => {
         const delayMs = imageRetryDelayMs(attempt);
         if (delayMs === null) {
@@ -229,7 +236,8 @@ function VideoPreview({
   radius: number;
   nativeControls: boolean;
 }) {
-  const player = useVideoPlayer(url, (instance) => {
+  const { source } = useMediaSource(url);
+  const player = useVideoPlayer(source, (instance) => {
     instance.loop = true;
     instance.muted = false;
     // Holds the audio session only while it is actually making a sound — see

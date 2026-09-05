@@ -1,3 +1,4 @@
+import { buildMediaSource } from '../lib/media-source';
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,6 +19,10 @@ const videoState = vi.hoisted(() => ({
   createVideoPlayer: vi.fn(),
 }));
 
+vi.mock('@/lib/use-media-source', () => ({
+  useMediaSource: (url: string) => ({ source: buildMediaSource(url, 'https://magicbooklet.com', 'test-session'), requestKey: authRevision.current }),
+}));
+
 vi.mock('expo-video', () => ({
   createVideoPlayer: (source: unknown) => {
     videoState.createVideoPlayer(source);
@@ -29,6 +34,7 @@ vi.mock('expo-video', () => ({
 // Counts mounts, not renders: the poster must survive activation flips, and a
 // remount is exactly what replays the 120ms transition that reads as flicker.
 const imageState = vi.hoisted(() => ({ mounts: 0 }));
+const authRevision = vi.hoisted(() => ({ current: '' }));
 
 vi.mock('expo-image', () => ({
   Image: Object.assign(
@@ -68,6 +74,7 @@ import { FeedVideoPreview } from '../components/feed-video-preview';
 
 describe('FeedVideoPreview', () => {
   beforeEach(() => {
+    authRevision.current = '';
     videoState.player.addListener.mockClear();
     videoState.player.play.mockClear();
     videoState.player.pause.mockClear();
@@ -101,6 +108,22 @@ describe('FeedVideoPreview', () => {
       undefined
     );
   }
+
+  it('authenticates a private stream and restores its poster when credentials renew', () => {
+    let tree: renderer.ReactTestRenderer;
+    const props = { url: 'https://magicbooklet.com/api/media?path=video.mp4',
+      streamUrl: 'https://magicbooklet.com/api/media?path=video.mp4',
+      previewUrl: 'https://cdn.example.com/poster.webp', active: true, height: 300, radius: 10, accent: '#fff' };
+    renderer.act(() => { tree = renderer.create(<FeedVideoPreview {...props} />); });
+    expect(videoState.createVideoPlayer).toHaveBeenCalledWith({ uri: props.streamUrl,
+      useCaching: true, headers: { Authorization: 'Bearer test-session' } });
+    renderer.act(() => tree.root.findByType('video-view' as never).props.onFirstFrameRender());
+    authRevision.current = 'renewed';
+    renderer.act(() => tree.update(<FeedVideoPreview {...props} />));
+    const poster = tree!.root.findAllByType('image').find(node => node.props.onError);
+    expect(poster?.props.style).toEqual(expect.arrayContaining([expect.objectContaining({ opacity: 1 })]));
+    renderer.act(() => tree.unmount());
+  });
 
   it('pauses before releasing the video player after native detach', () => {
     vi.useFakeTimers();

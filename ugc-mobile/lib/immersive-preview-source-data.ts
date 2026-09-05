@@ -55,9 +55,10 @@ export interface ImmersivePreviewApi {
   getShowcasePost: (postId: string) => Promise<ShowcasePostResponse>;
   listGenerations: (
     includeCompleted?: boolean,
-    options?: { limit?: number }
+    options?: { limit?: number; id?: string }
   ) => Promise<GenerationListResponse>;
   listOwnerPosts: (params?: Record<string, QueryValue>) => Promise<OwnerPostsResponse>;
+  getOwnerPost: (postId: string) => Promise<{ success: boolean; post: OwnerPostsResponse['posts'][number] }>;
 }
 
 export function normalizeViewerSource(value: string | string[] | undefined): PreviewViewerSource {
@@ -131,15 +132,28 @@ export async function loadImmersiveSourceData({
       api.listGenerations(true, { limit: 48 }),
       api.listOwnerPosts({ includeArchived: true, limit: 48, visibility: 'all' }),
     ]);
+    let generations = generationResponse.generations;
+    if (initialId && !generations.some((item) => item.id === initialId)) {
+      // A paginated grid can open an older item. Refresh its signed media URLs
+      // with one owner-scoped lookup instead of replacing it with the first page.
+      const detail = await api.listGenerations(true, { id: initialId, limit: 1 });
+      const selected = detail.generations.find((item) => item.id === initialId);
+      if (selected) generations = [selected, ...generations];
+    }
     return {
-      generations: generationResponse.generations,
+      generations,
       ownerPosts: ownerPostResponse.posts,
     };
   }
 
   if (source === 'profile-posts') {
     const response = await api.listOwnerPosts({ includeArchived: true, limit: 48, visibility: 'all' });
-    return { ownerPosts: response.posts };
+    let ownerPosts = response.posts;
+    if (initialId && !ownerPosts.some((item) => item.id === initialId)) {
+      const detail = await api.getOwnerPost(initialId);
+      if (detail.success && detail.post.id === initialId) ownerPosts = [detail.post, ...ownerPosts];
+    }
+    return { ownerPosts };
   }
 
   if (source === 'profile-saved') {
