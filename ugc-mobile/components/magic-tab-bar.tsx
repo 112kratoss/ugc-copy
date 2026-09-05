@@ -232,7 +232,7 @@ export function MagicTabBar({
         bottom: 0,
         paddingHorizontal: metrics.horizontalPadding,
         paddingBottom: metrics.bottomPadding,
-        paddingTop: Platform.OS === 'android' ? 0 : metrics.topPadding,
+        paddingTop: metrics.topPadding,
         opacity: hidden ? 0 : 1,
       }}
     >

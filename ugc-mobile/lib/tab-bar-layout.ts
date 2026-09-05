@@ -1,4 +1,21 @@
+import { Platform } from 'react-native';
+
 const CONTENT_BOTTOM_GAP = 14;
+
+/**
+ * Only iOS raises the Create control above the bar. Android draws it inline in
+ * the dock, so the overhang the raised disc needs — and the matching reserve
+ * every screen inside the tabs keeps for it — is zero there. Deriving that here
+ * rather than at each call site is what stops one screen keeping the gap after
+ * the others lose it.
+ *
+ * Read per call rather than once at import: the value is a single property
+ * lookup, and pinning both geometries in one test file is worth more than the
+ * constant.
+ */
+function hasRaisedCenter() {
+  return Platform.OS !== 'android';
+}
 
 export interface MagicTabBarMetrics {
   isCompact: boolean;
@@ -20,7 +37,7 @@ export function getMagicTabBarMetrics(windowWidth: number, bottomInset: number):
   const centerSize = isCompact ? 58 : 64;
   const barHeight = isCompact ? 62 : 66;
   const bottomPadding = Math.max(bottomInset, 10);
-  const topPadding = Math.round(centerSize * 0.34);
+  const topPadding = hasRaisedCenter() ? Math.round(centerSize * 0.34) : 0;
 
   return {
     isCompact,
