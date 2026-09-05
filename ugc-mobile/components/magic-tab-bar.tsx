@@ -34,6 +34,14 @@ const ON_PRIMARY = appTheme.colors.onPrimary ?? '#1A0E0A';
 // theme down to a couple of colours and have no motion block at all.
 const CONTROL_PRESS_SCALE = appTheme.motion?.scale.pressedControl ?? 0.9;
 const ANDROID_PRESS_SCALE = 0.96;
+// Bounded by the "Create" label sitting under it inside the dock, which the iOS
+// disc does not have to clear (that one carries its own label). The control
+// grows downward from a fixed top while the label is bottom-aligned in the row,
+// so the dock's height sets the ceiling: a 58pt row puts the label's top edge
+// at 65pt from the container's top, leaving 60 as the largest size with air to
+// spare. That holds the control at ~0.88 of the dock's height.
+const ANDROID_CREATE_SIZE = 58;
+const ANDROID_CREATE_COMPACT_SIZE = 52;
 
 // The glass branch drops the opaque panel fill on purpose — a near-solid
 // background cancels the material outright.
@@ -263,10 +271,11 @@ export function MagicTabBar({
         <AndroidNavigationDock
           activeRoute={activeRoute}
           alertsBadge={alertsBadge}
+          isCompact={isCompact}
           menuVisible={createMenuVisible}
           onNavigate={navigateTo}
           onCreate={() => {
-            haptic.light();
+            haptic.medium();
             setCreateMenuVisible(true);
           }}
         />
@@ -450,17 +459,21 @@ function useAndroidDockPop(reducedMotion: boolean) {
 function AndroidNavigationDock({
   activeRoute,
   alertsBadge,
+  isCompact,
   menuVisible,
   onNavigate,
   onCreate,
 }: {
   activeRoute: string | undefined;
   alertsBadge: string | null;
+  isCompact: boolean;
   menuVisible: boolean;
   onNavigate: (route: string) => void;
   onCreate: () => void;
 }) {
   const press = usePressMotion(false, { scale: ANDROID_PRESS_SCALE });
+  const createMotion = usePressMotion(false, { scale: CONTROL_PRESS_SCALE });
+  const createSize = isCompact ? ANDROID_CREATE_COMPACT_SIZE : ANDROID_CREATE_SIZE;
   const reducedMotion = useReducedMotion();
   const dockPop = useAndroidDockPop(reducedMotion);
   const [trackWidth, setTrackWidth] = useState(0);
@@ -489,8 +502,8 @@ function AndroidNavigationDock({
       key={item.route}
       item={item}
       active={activeRoute === item.route}
-      iconSize={24}
-      labelSize={12}
+      iconSize={20}
+      labelSize={11}
       inactiveColor={appTheme.colors.muted}
       badge={item.route === 'studio' ? alertsBadge : null}
       onPress={() => onNavigate(item.route)}
@@ -501,13 +514,14 @@ function AndroidNavigationDock({
   );
 
   return (
+    <>
     <AnimatedView
       testID="android-navigation-dock"
       style={[{
         width: '100%',
         maxWidth: 480,
         alignSelf: 'center',
-        padding: 4,
+        padding: 8,
         borderRadius: appTheme.radii.pill,
         borderWidth: 1,
         borderColor: appTheme.colors.borderSubtle,
@@ -548,31 +562,67 @@ function AndroidNavigationDock({
           />
         </> : null}
         {VISIBLE_TABS.slice(0, 2).map(renderTab)}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Open create menu"
-          accessibilityHint="Choose whether to create media or publish a post"
-          accessibilityState={{ expanded: menuVisible }}
-          onPress={onCreate}
-          onPressIn={() => { press.onPressIn(); dockPop.onPressIn(); }}
-          onPressOut={() => { press.onPressOut(); dockPop.onPressOut(); }}
-          style={{ flex: 1, alignSelf: 'stretch', minHeight: 58, alignItems: 'center', justifyContent: 'center' }}
+        {/* Only the label lives in the row; the control itself is raised out of
+            the dock below. Inert and unannounced on purpose — the raised button
+            is the one accessible target, so a screen reader hears one Create,
+            not two. Bottom-aligned to land on the same baseline as the four
+            labels beside it. */}
+        <View
+          pointerEvents="none"
+          importantForAccessibility="no-hide-descendants"
+          style={{ flex: 1, minHeight: 50, alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 4 }}
         >
-          <AnimatedView style={[
-            { width: slotWidth > 0 ? Math.max(48, Math.min(60, slotWidth - 6)) : 52, minHeight: 52, paddingVertical: 4, borderRadius: appTheme.radii.pill,
-              backgroundColor: PRIMARY, alignItems: 'center', justifyContent: 'center', gap: 2 },
-            press.animatedStyle,
-          ]}>
-            <Plus size={24} color={ON_PRIMARY} />
-            <Text numberOfLines={1} maxFontSizeMultiplier={1.4}
-              style={{ color: ON_PRIMARY, fontSize: 12, lineHeight: 16, fontWeight: '700' }}>
-              Create
-            </Text>
-          </AnimatedView>
-        </Pressable>
+          <Text numberOfLines={1} maxFontSizeMultiplier={1.4}
+            style={{ color: appTheme.colors.text, fontSize: 11, lineHeight: 14, fontWeight: '700' }}>
+            Create
+          </Text>
+        </View>
         {VISIBLE_TABS.slice(2).map(renderTab)}
       </View>
     </AnimatedView>
+
+    {/* Positioned exactly as the iOS disc is: absolute, `top: 0` inside the
+        container whose `paddingTop` reserves the overhang, so the control sits
+        in that strip and overlaps the dock. Keeping it inside those bounds is
+        what makes the part above the dock tappable — Android does not deliver
+        touches to a child drawn outside its parent. */}
+    <AnimatedView
+      style={[
+        { position: 'absolute', top: 0, alignSelf: 'center', width: createSize, height: createSize, zIndex: 2 },
+        createMotion.animatedStyle,
+      ]}
+    >
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Open create menu"
+        accessibilityHint="Choose whether to create media or publish a post"
+        accessibilityState={{ expanded: menuVisible }}
+        onPress={onCreate}
+        onPressIn={createMotion.onPressIn}
+        onPressOut={createMotion.onPressOut}
+        style={{
+          flex: 1,
+          borderRadius: createSize / 2,
+          borderWidth: 1,
+          borderColor: DISC_RIM,
+          alignItems: 'center',
+          justifyContent: 'center',
+          overflow: 'hidden',
+          elevation: 6,
+          ...appTheme.shadow?.navigationCreate,
+        }}
+      >
+        <LinearGradient
+          pointerEvents="none"
+          colors={[appTheme.colors.navigationCreateTop ?? PRIMARY_STRONG, appTheme.colors.navigationCreateBottom ?? PRIMARY]}
+          start={{ x: 0.5, y: 0 }}
+          end={{ x: 0.5, y: 1 }}
+          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+        />
+        <Plus size={appTheme.icon.feature} color="#ffffff" />
+      </Pressable>
+    </AnimatedView>
+    </>
   );
 }
 
@@ -786,10 +836,10 @@ function TabButton({
         position: 'relative',
         flex: 1,
         minWidth: 0,
-        minHeight: android ? 58 : 52,
+        minHeight: android ? 50 : 52,
         alignItems: 'center',
         justifyContent: 'center',
-        borderRadius: android ? 29 : 18,
+        borderRadius: android ? 25 : 18,
         borderCurve: 'continuous',
         // The Android content presses as one unit inside the selection capsule.
         backgroundColor: pressed && !android ? appTheme.colors.surfaceStrong : 'transparent',
@@ -802,7 +852,7 @@ function TabButton({
       {badge ? <TabBadge value={badge} iconSize={iconSize} /> : null}
       <AnimatedView style={[{ alignItems: 'center', gap: android ? 2 : 3, ...(android ? { width: '100%' as const, paddingVertical: 4 } : {}) }, press.animatedStyle]}>
         <AnimatedView style={{
-          ...(android ? { width: 40, height: 32, alignItems: 'center', justifyContent: 'center' } as const : {}),
+          ...(android ? { width: 40, height: 26, alignItems: 'center', justifyContent: 'center' } as const : {}),
           transform: [{ scale: iconScale ?? 1 }],
         }}>
           <AnimatedView>
@@ -818,7 +868,7 @@ function TabButton({
           adjustsFontSizeToFit={!android}
           minimumFontScale={android ? 1 : 0.76}
           maxFontSizeMultiplier={1.4}
-          style={{ color, fontSize: labelSize, ...(android ? { lineHeight: 16 } : {}), fontWeight: android ? '600' : active ? '700' : '500' }}
+          style={{ color, fontSize: labelSize, ...(android ? { lineHeight: 14 } : {}), fontWeight: android ? '600' : active ? '700' : '500' }}
         >
           {item.label}
         </Text>

@@ -32,6 +32,10 @@ const colors = {
   selectedStrong: '#3a2220',
   navigationSelected: '#303033',
   navigationIconFill: '#804331',
+  // The raised create control reads as a lit object: warm at the top where the
+  // light lands, deeper at the bottom. Flat fill made it a sticker.
+  navigationCreateTop: '#FFA463',
+  navigationCreateBottom: '#F4552A',
   pressed: 'rgba(255,122,89,0.13)',
 
   // Semantic colors are deliberately distinct from the brand action.
@@ -297,6 +301,11 @@ export const appTheme = {
   shadow: {
     navigation: {
       boxShadow: '0 6px 16px rgba(0,0,0,0.24)',
+    },
+    // Coloured rather than neutral: the control should look like it is casting
+    // its own light onto the dock, not merely sitting above it.
+    navigationCreate: {
+      boxShadow: '0 8px 22px rgba(244,85,42,0.45)',
     },
     panel: {
       boxShadow: '0 14px 34px rgba(0,0,0,0.30)',

@@ -104,9 +104,7 @@ export function Screen({
   // the overlap variant only clears the bar, which leaves the last control
   // under the Create button — it is opaque and takes the tap regardless of the
   // bar's blur. Feeds want that overlap so media runs to the edge, but `Screen`
-  // is always a gutter-padded container, never edge-to-edge media. On Android
-  // the two are the same number: that dock carries Create inline, so there is
-  // no raised control to clear.
+  // is always a gutter-padded container, never edge-to-edge media.
   const bottomPadding = insideTab
     ? getMagicTabBarMetrics(width, resolvedBottomInset(insets.bottom)).contentBottomPadding
     : 36;
