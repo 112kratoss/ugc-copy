@@ -315,6 +315,11 @@ const legacyOperationAliases: Partial<Record<ContractEndpointKey, RegisteredOper
 };
 
 describe('mobile shared API v1 contract fixture', () => {
+  it('preserves the owner library dimensions for layout', async () => {
+    const result = await clientForEndpoint('listGenerations').listGenerations(true);
+    expect(result.generations[0].media).toMatchObject({ width: 720, height: 405 });
+  });
+
   it('registers every public API client operation in the shared route contract', () => {
     const api = createApiClient({
       baseUrl: 'https://magicbooklet.test',

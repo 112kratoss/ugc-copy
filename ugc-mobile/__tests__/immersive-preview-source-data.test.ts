@@ -118,6 +118,7 @@ describe('immersive preview source data', () => {
       getSavedMedia: vi.fn(),
       getShowcaseFeed: vi.fn(),
       getShowcasePost: vi.fn(),
+      getOwnerPost: vi.fn(),
       listGenerations: vi.fn(async () => ({ generations: [] })),
       listOwnerPosts: vi.fn(async () => ({ success: true, posts: [] })),
     };
@@ -125,7 +126,7 @@ describe('immersive preview source data', () => {
     await loadImmersiveSourceData({
       api,
       source: 'home-creations',
-      initialId: 'generation-1',
+      initialId: '',
     });
 
     expect(api.listGenerations).toHaveBeenCalledWith(true, { limit: 48 });
@@ -136,6 +137,66 @@ describe('immersive preview source data', () => {
     });
   });
 
+  it.each(['profile-creations', 'studio-creations', 'home-creations'] as const)(
+    'recovers an older selected creation for %s without loading the whole library', async (source) => {
+      const selected = generation('older-generation');
+      const recent = Array.from({ length: 48 }, (_, index) => generation(`recent-${index}`));
+      const api = {
+        getCreatorProfile: vi.fn(), getSavedMedia: vi.fn(), getShowcaseFeed: vi.fn(),
+        getShowcasePost: vi.fn(), getOwnerPost: vi.fn(),
+        listGenerations: vi.fn(async (_include?: boolean, options?: { id?: string }) => ({
+          generations: options?.id ? [selected] : recent,
+        })),
+        listOwnerPosts: vi.fn(async () => ({ success: true, posts: [] })),
+      };
+      const data = await loadImmersiveSourceData({ api, source, initialId: selected.id });
+      expect(data.generations).toEqual([selected, ...recent]);
+      expect(api.listGenerations).toHaveBeenNthCalledWith(2, true, { id: selected.id, limit: 1 });
+      expect(api.listGenerations).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it('recovers an older owner post using its authenticated detail endpoint', async () => {
+    const selected = { id: 'older-post' };
+    const recent = [{ id: 'recent-post' }];
+    const api = {
+      getCreatorProfile: vi.fn(), getSavedMedia: vi.fn(), getShowcaseFeed: vi.fn(),
+      getShowcasePost: vi.fn(), listGenerations: vi.fn(),
+      getOwnerPost: vi.fn(async () => ({ success: true, post: selected })),
+      listOwnerPosts: vi.fn(async () => ({ success: true, posts: recent })),
+    };
+    const data = await loadImmersiveSourceData({ api: api as never, source: 'profile-posts', initialId: selected.id });
+    expect(data.ownerPosts).toEqual([selected, ...recent]);
+    expect(api.getOwnerPost).toHaveBeenCalledWith(selected.id);
+    expect(api.getShowcasePost).not.toHaveBeenCalled();
+  });
+
+  it('does not fetch a detail or duplicate an item already on the first page', async () => {
+    const selected = generation('selected');
+    const api = {
+      getCreatorProfile: vi.fn(), getSavedMedia: vi.fn(), getShowcaseFeed: vi.fn(),
+      getShowcasePost: vi.fn(), getOwnerPost: vi.fn(),
+      listGenerations: vi.fn(async () => ({ generations: [selected] })),
+      listOwnerPosts: vi.fn(async () => ({ success: true, posts: [] })),
+    };
+    const data = await loadImmersiveSourceData({ api, source: 'profile-creations', initialId: selected.id });
+    expect(data.generations).toEqual([selected]);
+    expect(api.listGenerations).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets a failed detail refresh retain cached data rather than replacing the selected item', async () => {
+    const api = {
+      getCreatorProfile: vi.fn(), getSavedMedia: vi.fn(), getShowcaseFeed: vi.fn(),
+      getShowcasePost: vi.fn(), getOwnerPost: vi.fn(),
+      listGenerations: vi.fn()
+        .mockResolvedValueOnce({ generations: [generation('recent')] })
+        .mockRejectedValueOnce(new Error('Network unavailable')),
+      listOwnerPosts: vi.fn(async () => ({ success: true, posts: [] })),
+    };
+    await expect(loadImmersiveSourceData({ api, source: 'profile-creations', initialId: 'older' }))
+      .rejects.toThrow('Network unavailable');
+  });
+
   it('loads creator profile source data from the creator profile endpoint', async () => {
     const item = showcaseItem('post-1');
     const api = {
@@ -143,6 +204,7 @@ describe('immersive preview source data', () => {
       getSavedMedia: vi.fn(),
       getShowcaseFeed: vi.fn(),
       getShowcasePost: vi.fn(),
+      getOwnerPost: vi.fn(),
       listGenerations: vi.fn(),
       listOwnerPosts: vi.fn(),
     };

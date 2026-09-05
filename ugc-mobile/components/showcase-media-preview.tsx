@@ -1,5 +1,5 @@
 import { Images } from 'lucide-react-native';
-import { Image } from 'expo-image';
+import { Image, type ImageProps } from 'expo-image';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, Platform, Pressable, Text, View } from 'react-native';
 
@@ -28,6 +28,8 @@ type ShowcaseMediaPreviewProps = {
   mediaItems: ShowcaseMediaItem[];
   onPress?: () => void;
   onScrollToggle?: (scrolling: boolean) => void;
+  /** Layout uses the cover only; carousel pages must not resize the card. */
+  onCoverLoad?: ImageProps['onLoad'];
   radius: number;
   recyclingKey: string;
   videoActivation?: VideoActivation;
@@ -44,6 +46,7 @@ export function ShowcaseMediaPreview({
   mediaItems,
   onPress,
   onScrollToggle,
+  onCoverLoad,
   radius,
   recyclingKey,
   videoActivation = 'never',
@@ -62,6 +65,7 @@ export function ShowcaseMediaPreview({
         accent={accent}
         height={height}
         item={mediaItems[0]}
+        onLoad={onCoverLoad}
         radius={radius}
         recyclingKey={recyclingKey}
         videoActivation={resolvedVideoActivation}
@@ -79,6 +83,7 @@ export function ShowcaseMediaPreview({
       mediaItems={mediaItems}
       onPress={onPress}
       onScrollToggle={onScrollToggle}
+      onCoverLoad={onCoverLoad}
       radius={radius}
       recyclingKey={recyclingKey}
       videoActivation={resolvedVideoActivation}
@@ -95,6 +100,7 @@ function ShowcaseMediaCarousel({
   mediaItems,
   onPress,
   onScrollToggle,
+  onCoverLoad,
   radius,
   recyclingKey,
   videoActivation = 'never',
@@ -123,6 +129,7 @@ function ShowcaseMediaCarousel({
               accent={accent}
               height={height}
               item={mediaItem}
+              onLoad={index === 0 ? onCoverLoad : undefined}
               radius={radius}
               recyclingKey={`${recyclingKey}:${mediaItem.id}`}
               videoActivation={currentIndex === index ? videoActivation : 'never'}
@@ -209,6 +216,7 @@ function ShowcaseMediaSlide({
   accent,
   height,
   item,
+  onLoad,
   radius,
   recyclingKey,
   videoActivation,
@@ -219,6 +227,7 @@ function ShowcaseMediaSlide({
   accent: string;
   height: number;
   item: ShowcaseMediaItem;
+  onLoad?: ImageProps['onLoad'];
   radius: number;
   recyclingKey: string;
   videoActivation: VideoActivation;
@@ -245,6 +254,7 @@ function ShowcaseMediaSlide({
           previewUrl={usablePreviewUrl}
           previewCacheKey={previewCacheKey}
           previewThumbhash={previewThumbhash}
+          onPosterLoad={onLoad}
           active={videoActivation === 'visible' || (videoActivation === 'when-poster-missing' && !usablePreviewUrl)}
           height={height}
           radius={radius}
@@ -309,6 +319,7 @@ function ShowcaseMediaSlide({
       thumbhash={previewThumbhash}
       imageBackdrop="none"
       imageContentFit="cover"
+      onImageLoad={onLoad}
       onImageError={() => {
         if (imageTileSource === 'preview') setFailedPreviewUrl(previewUrl);
       }}

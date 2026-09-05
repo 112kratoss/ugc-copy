@@ -12,6 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
 import { DoubleTapPressable } from '@/components/double-tap-pressable';
+import { useMediaSource } from '@/lib/use-media-source';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { PostDetailsPage } from '@/components/post-details-page';
@@ -1984,7 +1985,8 @@ function ActiveVideo({
   const [hasError, setHasError] = useState(false);
   const reducedMotion = useReducedMotion();
   const audioMuted = useViewerAudioMuted();
-  const player = useVideoPlayer({ uri: url, useCaching: true }, (instance) => {
+  const { source, requestKey } = useMediaSource(url);
+  const player = useVideoPlayer({ ...source, useCaching: true }, (instance) => {
     instance.loop = true;
     instance.muted = isViewerAudioMuted();
     instance.volume = 1.0;
@@ -2018,7 +2020,7 @@ function ActiveVideo({
   useEffect(() => {
     setHasFrame(false);
     setHasError(false);
-  }, [url]);
+  }, [url, requestKey]);
 
   useEffect(() => {
     const subscription = player.addListener('playingChange', (event) => {

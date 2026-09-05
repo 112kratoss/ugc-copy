@@ -1,6 +1,5 @@
 import { FlashList, type FlashListRef, type ListRenderItem, type ViewToken } from '@shopify/flash-list';
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
-import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ImageIcon, MoreVertical, Play, RefreshCw, Search, X } from 'lucide-react-native';
 import { useIsFocused, useScrollToTop } from '@react-navigation/native';
@@ -26,7 +25,6 @@ import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
-import { createSerializedImageLoader } from '@/lib/serialized-image-loader';
 import { isShowcaseCoverVideoStreaming, isShowcaseVideoPreviewCandidate } from '@/lib/showcase-display';
 import {
   INITIAL_SHOWCASE_ACTIVATION_STATE,
@@ -133,12 +131,6 @@ const SHOWCASE_ASPECT_RATIO_FLUSH_MS = 50;
 /** Stable empty list so a blurred feed does not churn `extraData`. */
 const NO_ACTIVE_VIDEO_IDS: string[] = [];
 
-// One loader for the process: the first measurement anywhere warms expo-image's
-// native loader alone, and every later burst from this grid queues behind it.
-const measureShowcaseImage = createSerializedImageLoader(
-  (url: string, options: { maxWidth: number; maxHeight: number }) => Image.loadAsync(url, options)
-);
-
 export default function ShowcaseScreen() {
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
@@ -180,7 +172,6 @@ export default function ShowcaseScreen() {
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
   const lastLoadMorePageCountRef = useRef<number | null>(null);
-  const aspectRatioRequestsRef = useRef(new Set<string>());
   // Which cards have any pixel on screen, and the ratios waiting for them to
   // leave. See `partitionAspectRatioUpdates` for why a measurement cannot be
   // applied to a card the reader is looking at.
@@ -398,33 +389,6 @@ export default function ShowcaseScreen() {
     : activeFilterId === 'all'
       ? "You're all caught up."
       : `You've reached the end of ${activeFilter.label}.`;
-
-  useEffect(() => {
-    if (typeof Image.loadAsync !== 'function') return;
-
-    for (const card of cards) {
-      // `pendingAspectRatios` covers the window between a resolved ratio and
-      // its batched flush, where `resolvedAspectRatios` does not know yet.
-      if (card.aspectRatio || !card.previewUrl
-        || resolvedAspectRatios[card.id] || pendingAspectRatiosRef.current[card.id]) {
-        continue;
-      }
-      const requestKey = `${card.id}:${card.previewUrl}`;
-      if (aspectRatioRequestsRef.current.has(requestKey)) continue;
-      aspectRatioRequestsRef.current.add(requestKey);
-
-      void measureShowcaseImage(card.previewUrl, { maxWidth: 96, maxHeight: 96 })
-        .then((image) => {
-          const aspectRatio = image.width / image.height;
-          if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) return;
-          queueAspectRatio(card.id, aspectRatio);
-        })
-        .catch(() => null)
-        .finally(() => {
-          aspectRatioRequestsRef.current.delete(requestKey);
-        });
-    }
-  }, [cards, resolvedAspectRatios]);
 
   useEffect(() => {
     setActiveFilterId((current) => current === routeFilterId ? current : routeFilterId);
@@ -680,6 +644,7 @@ export default function ShowcaseScreen() {
           layout={gridLayout}
           activeVideoIds={target === 'Cell' ? visibleActiveVideoIds : []}
           resolvedAspectRatio={resolvedAspectRatios[item.id]}
+          onAspectRatio={queueAspectRatio}
           onOpenCreator={openCreator}
           onFeedbackOpen={setFeedbackItem}
           onOpenPost={openPost}
@@ -997,6 +962,7 @@ function MasonryPin({
   layout,
   activeVideoIds,
   resolvedAspectRatio,
+  onAspectRatio,
   onFeedbackOpen,
   onOpenPost,
   onOpenCreator,
@@ -1006,6 +972,7 @@ function MasonryPin({
   layout: ShowcaseGridLayout;
   activeVideoIds: string[];
   resolvedAspectRatio?: number;
+  onAspectRatio: (cardId: string, ratio: number) => void;
   onFeedbackOpen: (item: ShowcaseFeedItem) => void;
   onOpenCreator: (item: ShowcaseFeedItem) => void;
   onOpenPost: (item: ShowcaseFeedItem) => void;
@@ -1056,6 +1023,10 @@ function MasonryPin({
             videoContentFit="cover"
             onPress={() => onOpenPost(card.item)}
             onScrollToggle={onScrollToggle}
+            onCoverLoad={card.aspectRatio || resolvedAspectRatio ? undefined : (event) => {
+              const ratio = event.source.width / event.source.height;
+              if (Number.isFinite(ratio) && ratio > 0) onAspectRatio(card.id, ratio);
+            }}
           />
         ) : (
           isVideoCard ? (

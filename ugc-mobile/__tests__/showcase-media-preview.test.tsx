@@ -103,6 +103,22 @@ function findAllByNodeType(tree: renderer.ReactTestRenderer, type: string) {
 }
 
 describe('ShowcaseMediaPreview', () => {
+  it.each(['image', 'video'] as const)('reports only the %s cover dimensions, not later carousel slides', (kind) => {
+    const onCoverLoad = vi.fn();
+    const cover = media({ id: 'cover', mediaKind: kind, previewUrl: 'https://cdn.example.com/cover.webp' });
+    const tree = renderPreview(<ShowcaseMediaPreview
+      accent="#60a5fa" height={180} width={160} radius={12} recyclingKey="measured-card"
+      mediaItems={[cover, media({ id: 'second', previewUrl: 'https://cdn.example.com/second.webp' })]} onCoverLoad={onCoverLoad}
+    />);
+    const covers = findAllByNodeType(tree, kind === 'video' ? 'feed-video-preview' : 'feed-media-frame');
+    const load = kind === 'video' ? covers[0].props.onPosterLoad : covers[0].props.onImageLoad;
+    const event = { source: { width: 405, height: 720 } };
+    renderer.act(() => load(event));
+    expect(onCoverLoad).toHaveBeenCalledWith(event);
+    expect(findAllByNodeType(tree, 'feed-media-frame').at(-1)!.props.onImageLoad).toBeUndefined();
+    renderer.act(() => tree.unmount());
+  });
+
   it('renders a pending plate without fetching the original image when a preview is unavailable', () => {
     const tree = renderPreview(
       <ShowcaseMediaPreview
