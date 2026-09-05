@@ -65,9 +65,9 @@ describe('Android native network config', () => {
       key: 'android.enableMinifyInReleaseBuilds',
       value: 'true',
     });
-    // Phase 3a: resource shrinking on the classic AAPT2 pipeline. The optimized
-    // pipeline (phase 3b, and the AGP 9 default) is pinned off explicitly so the
-    // two are never switched in one build.
+    // Phase 3: resource shrinking, on R8's optimized pipeline (3b; the AGP 9
+    // default, pinned here so an AGP that flips its default cannot move it).
+    // 3a ran the classic AAPT2 shrinker first, as its own device-verified build.
     expect(properties).toContainEqual({
       type: 'property',
       key: 'android.enableShrinkResourcesInReleaseBuilds',
@@ -76,7 +76,7 @@ describe('Android native network config', () => {
     expect(properties).toContainEqual({
       type: 'property',
       key: 'android.r8.optimizedResourceShrinking',
-      value: 'false',
+      value: 'true',
     });
     // Phase 2: full mode. R8 drops ProGuard's implicit keeps (default
     // constructors, members of kept classes), so every reflecting library has to
