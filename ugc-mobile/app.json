@@ -2,7 +2,7 @@
   "expo": {
     "name": "Magic Booklet",
     "slug": "magicbooklet-mobile",
-    "version": "0.1.3",
+    "version": "0.1.4",
     "icon": "./assets/images/icon.png",
     "scheme": "magicbooklet",
     "userInterfaceStyle": "dark",
