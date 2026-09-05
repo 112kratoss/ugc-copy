@@ -5,7 +5,6 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
-  Bell,
   Crown,
   ImageIcon,
   Play,
@@ -15,7 +14,7 @@ import {
   WandSparkles,
 } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Linking, Platform, Pressable, RefreshControl, Share, Text, useWindowDimensions, View, type ViewStyle } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Linking, Pressable, RefreshControl, Share, Text, useWindowDimensions, View, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CommentsSheet } from '@/components/comments-sheet';
@@ -879,17 +878,6 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: ()
             <Plus size={14} color={DASHBOARD_COLORS.coral} />
           </View>
         </TopBarControl>
-
-        {Platform.OS !== 'android' ? <TopBarControl
-          accessibilityLabel="Open alerts"
-          onPress={() => {
-            haptic.light();
-            router.push('/studio' as never);
-          }}
-          style={{ width: 48 }}
-        >
-          <Bell size={appTheme.icon.default} color={DASHBOARD_COLORS.text} />
-        </TopBarControl> : null}
       </View>
     </View>
   );
