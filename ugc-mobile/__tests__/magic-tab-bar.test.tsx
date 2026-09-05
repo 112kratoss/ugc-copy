@@ -116,6 +116,14 @@ vi.mock('@/lib/use-notification-badge', () => ({
   useUnreadNotificationCount: () => 0,
 }));
 
+// Same seam, same reason: the real hook reaches `useAuth` and boots the native
+// chain behind it, and this file is about what the bar renders.
+let runningGenerations = 0;
+vi.mock('@/lib/use-active-generations', () => ({
+  useTabBarGenerationCount: () => runningGenerations,
+  useActiveGenerationCount: () => runningGenerations,
+}));
+
 import { MagicTabBar } from '../components/magic-tab-bar';
 
 const routes = [
@@ -211,6 +219,7 @@ describe('MagicTabBar', () => {
     glassState.platform = 'ios';
     glassState.listeners = [];
     badgeValue = null;
+    runningGenerations = 0;
   });
 
   it('keeps Android navigation opaque and routes every destination through tabPress', async () => {
@@ -242,6 +251,32 @@ describe('MagicTabBar', () => {
     renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Create' }).props.onPress());
     expect(navigation.emit).toHaveBeenLastCalledWith({ type: 'tabPress', target: 'creator-key', canPreventDefault: true });
     expect(navigation.jumpTo).toHaveBeenCalledWith('creator');
+  });
+
+  it('rings the create control only while runs are in flight, and says so', async () => {
+    glassState.platform = 'android';
+    const idle = await renderTabBarAsync(0);
+    expect(idle.tree.root.findAllByProps({ testID: 'generation-ring' })).toHaveLength(0);
+    expect(idle.tree.root.findByProps({ accessibilityLabel: 'Open create menu' })).toBeTruthy();
+
+    runningGenerations = 2;
+    const busy = await renderTabBarAsync(0);
+    expect(busy.tree.root.findAllByProps({ testID: 'generation-ring' }).length).toBeGreaterThan(0);
+    // A spinning arc with nothing said about it is a decoration; the label is
+    // where the state actually reaches a screen reader.
+    const control = busy.tree.root.findByProps({
+      accessibilityLabel: 'Open create menu, 2 creations in progress',
+    });
+    expect(control.props.accessibilityState.busy).toBe(true);
+  });
+
+  it('counts one run in the singular', async () => {
+    glassState.platform = 'android';
+    runningGenerations = 1;
+    const { tree } = await renderTabBarAsync(0);
+    expect(tree.root.findByProps({
+      accessibilityLabel: 'Open create menu, 1 creation in progress',
+    })).toBeTruthy();
   });
 
   it('keeps the Android dock inert when hidden and respects prevented tab presses', async () => {

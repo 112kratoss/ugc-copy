@@ -21,6 +21,7 @@ import { MagicCreateMenu } from '@/components/magic-create-menu';
 import { getCreateMenuActionHref, type CreateMenuActionId } from '@/lib/create-menu-view-model';
 import { haptic } from '@/lib/haptics';
 import { useCrossFade, usePressMotion, useReducedMotion, useSpringState } from '@/lib/motion';
+import { useTabBarGenerationCount } from '@/lib/use-active-generations';
 import { useTabBarBadge } from '@/lib/use-notification-badge';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { ADAPTIVE_INACTIVE_COLOR, useTabBarAmbientColor } from '@/lib/tab-bar-ambient';
@@ -40,6 +41,12 @@ const ANDROID_PRESS_SCALE = 0.96;
 // so the dock's height sets the ceiling: a 58pt row puts the label's top edge
 // at 65pt from the container's top, leaving 60 as the largest size with air to
 // spare. That holds the control at ~0.88 of the dock's height.
+// The ring rides outside the control rather than on its rim, so the gradient
+// edge stays unbroken and the arc reads as a separate, temporary thing.
+const RING_GAP = 4;
+const RING_WIDTH = 2;
+const RING_COLOR = appTheme.colors.primaryStrong ?? '#FF8A6D';
+
 const ANDROID_CREATE_SIZE = 58;
 const ANDROID_CREATE_COMPACT_SIZE = 52;
 
@@ -155,6 +162,7 @@ export function MagicTabBar({
   // The Alerts tab is the only one with anything to announce; a badge on a tab
   // whose content has not changed is the dilution HIG warns about.
   const alertsBadge = useTabBarBadge();
+  const runningGenerations = useTabBarGenerationCount();
   const activeRoute = state.routes[state.index]?.name;
   // Every tab, not just Home: the store is authoritative, and a surface with no
   // media to report hands the neutral dock back when it blurs.
@@ -272,6 +280,7 @@ export function MagicTabBar({
           activeRoute={activeRoute}
           alertsBadge={alertsBadge}
           isCompact={isCompact}
+          runningGenerations={runningGenerations}
           menuVisible={createMenuVisible}
           onNavigate={navigateTo}
           onCreate={() => {
@@ -350,6 +359,10 @@ function useAndroidTabSelection(activeSlot: number, reducedMotion: boolean) {
     opacity: new Animated.Value(activeSlot >= 0 ? 1 : 0),
     outgoingPosition: new Animated.Value(Math.max(0, activeSlot)),
     outgoingOpacity: new Animated.Value(0),
+    // Rides alongside the position spring rather than being derived from it:
+    // a spring's value tells you where it is, not how hard it is working, and
+    // the stretch wants the latter.
+    travel: new Animated.Value(0),
   });
 
   useEffect(() => {
@@ -360,6 +373,7 @@ function useAndroidTabSelection(activeSlot: number, reducedMotion: boolean) {
       motion.position.stopAnimation();
       motion.opacity.stopAnimation();
       motion.outgoingOpacity.stopAnimation();
+      motion.travel.stopAnimation();
     };
     stop();
     motion.outgoingOpacity.setValue(0);
@@ -371,6 +385,7 @@ function useAndroidTabSelection(activeSlot: number, reducedMotion: boolean) {
     if (reducedMotion || from < 0 || from === activeSlot) {
       motion.position.setValue(activeSlot);
       motion.opacity.setValue(1);
+      motion.travel.setValue(0);
       return stop;
     }
 
@@ -388,16 +403,50 @@ function useAndroidTabSelection(activeSlot: number, reducedMotion: boolean) {
       ]).start();
     } else {
       motion.opacity.setValue(1);
-      Animated.spring(motion.position, {
-        toValue: activeSlot,
-        ...appTheme.motion.spring.panel,
-        useNativeDriver: true,
-      }).start();
+      // Squash and stretch, the oldest trick in the book: the capsule leans
+      // into its travel and recovers on arrival, which reads as weight rather
+      // than as a rectangle being teleported. Scaled by distance so a hop to
+      // the neighbouring slot does not lurch like a run across the dock.
+      const distance = Math.min(Math.abs(activeSlot - from), 3) / 3;
+      motion.travel.setValue(0);
+      Animated.parallel([
+        Animated.spring(motion.position, {
+          toValue: activeSlot,
+          ...appTheme.motion.spring.panel,
+          useNativeDriver: true,
+        }),
+        Animated.sequence([
+          Animated.timing(motion.travel, {
+            toValue: distance,
+            duration: appTheme.motion.duration.navigationSwell,
+            easing: Easing.out(Easing.quad),
+            useNativeDriver: true,
+          }),
+          Animated.spring(motion.travel, {
+            toValue: 0,
+            ...appTheme.motion.spring.navigationSettle,
+            useNativeDriver: true,
+          }),
+        ]),
+      ]).start();
     }
     return stop;
   }, [activeSlot, motion, reducedMotion]);
 
   return motion;
+}
+
+/**
+ * The travel pulse read as scale. Stretching along the direction of travel
+ * while thinning across it conserves the capsule's apparent volume, which is
+ * what stops the lean looking like a size change.
+ */
+function travelStretchX(travel: Animated.Value) {
+  return travel.interpolate({ inputRange: [0, 1], outputRange: [1, appTheme.motion.scale.navigationTravelX] });
+}
+
+function travelSquashY(travel: Animated.Value) {
+  return travel.interpolate({ inputRange: [0, 1], outputRange: [1, appTheme.motion.scale.navigationTravelY] });
 }
 
 /** Finger-driven elastic feedback: anchored swell, capsule stretch, soft settle. */
@@ -455,12 +504,78 @@ function useAndroidDockPop(reducedMotion: boolean) {
   };
 }
 
+/**
+ * An indeterminate ring around the create control while runs are in flight.
+ *
+ * Indeterminate on purpose. `lib/generation-wait.ts` makes the case at length:
+ * the provider reports no progress, only `waiting` then `processing`, so a
+ * determinate arc would be inventing a number. What is true is that something
+ * is working, and a sweeping arc says exactly that and nothing more.
+ *
+ * HIG *Progress indicators*: "When it's not possible to know the duration,
+ * display an indeterminate progress indicator."
+ */
+function GenerationRing({ size, running }: { size: number; running: boolean }) {
+  const reducedMotion = useReducedMotion();
+  const [spin] = useState(() => (IS_TEST_ENVIRONMENT ? null : new Animated.Value(0)));
+
+  useEffect(() => {
+    if (!spin) return;
+    spin.stopAnimation();
+    if (!running || reducedMotion) {
+      spin.setValue(0);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.timing(spin, {
+        toValue: 1,
+        duration: 1100,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [reducedMotion, running, spin]);
+
+  if (!running) return null;
+
+  // Three transparent sides of a border is the whole trick: what is left is a
+  // quarter arc, and rotating it costs one native-driver transform rather than
+  // an SVG and a path animation.
+  const inset = -RING_GAP;
+  return (
+    <AnimatedView
+      testID="generation-ring"
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        top: inset,
+        left: inset,
+        right: inset,
+        bottom: inset,
+        borderRadius: (size + RING_GAP * 2) / 2,
+        borderWidth: RING_WIDTH,
+        borderColor: 'transparent',
+        borderTopColor: RING_COLOR,
+        borderRightColor: reducedMotion ? RING_COLOR : 'transparent',
+        borderBottomColor: reducedMotion ? RING_COLOR : 'transparent',
+        borderLeftColor: reducedMotion ? RING_COLOR : 'transparent',
+        transform: spin
+          ? [{ rotate: spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) }]
+          : undefined,
+      }}
+    />
+  );
+}
+
 /** A graphite dock with inset selection capsules and a central creation action. */
 function AndroidNavigationDock({
   activeRoute,
   alertsBadge,
   isCompact,
   menuVisible,
+  runningGenerations,
   onNavigate,
   onCreate,
 }: {
@@ -468,6 +583,7 @@ function AndroidNavigationDock({
   alertsBadge: string | null;
   isCompact: boolean;
   menuVisible: boolean;
+  runningGenerations: number;
   onNavigate: (route: string) => void;
   onCreate: () => void;
 }) {
@@ -557,7 +673,13 @@ function AndroidNavigationDock({
             style={[
               indicatorStyle,
               { opacity: selection?.opacity ?? 1,
-                transform: [{ translateX: indicatorTranslation(selection?.position, activeSlot) }, { scaleX: dockPop.capsuleScale }] },
+                transform: [
+                  { translateX: indicatorTranslation(selection?.position, activeSlot) },
+                  // Two sources on one axis, so they multiply rather than one
+                  // winning: the press swell and the travel stretch.
+                  { scaleX: selection ? Animated.multiply(dockPop.capsuleScale, travelStretchX(selection.travel)) : dockPop.capsuleScale },
+                  { scaleY: selection ? travelSquashY(selection.travel) : 1 },
+                ] },
             ]}
           />
         </> : null}
@@ -594,9 +716,13 @@ function AndroidNavigationDock({
     >
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Open create menu"
+        // The ring is the only thing carrying this state visually, so the label
+        // carries it too rather than leaving a spinning arc unexplained.
+        accessibilityLabel={runningGenerations > 0
+          ? `Open create menu, ${runningGenerations} ${runningGenerations === 1 ? 'creation' : 'creations'} in progress`
+          : 'Open create menu'}
         accessibilityHint="Choose whether to create media or publish a post"
-        accessibilityState={{ expanded: menuVisible }}
+        accessibilityState={{ expanded: menuVisible, busy: runningGenerations > 0 }}
         onPress={onCreate}
         onPressIn={createMotion.onPressIn}
         onPressOut={createMotion.onPressOut}
@@ -621,6 +747,7 @@ function AndroidNavigationDock({
         />
         <Plus size={appTheme.icon.feature} color="#ffffff" />
       </Pressable>
+      <GenerationRing size={createSize} running={runningGenerations > 0} />
     </AnimatedView>
     </>
   );

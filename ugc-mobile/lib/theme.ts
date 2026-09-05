@@ -276,6 +276,10 @@ export const appTheme = {
       selected: 1.12,
       navigationSwellX: 1.012,
       navigationSwellY: 1.055,
+      // Volume-conserving: the capsule gains along its travel and gives back
+      // across it, so the lean reads as weight rather than as growth.
+      navigationTravelX: 1.16,
+      navigationTravelY: 0.9,
       navigationCapsule: 1.045,
     },
     // Springs rather than eased curves: the settle is the point. Friction is
