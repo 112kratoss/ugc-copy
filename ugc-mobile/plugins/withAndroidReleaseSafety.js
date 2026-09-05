@@ -33,14 +33,18 @@ const MATERIAL_COMPONENTS_VERSION = '1.14.0';
 //   - the optimizing base `proguard-android-optimize.txt` (phase 1). The plain
 //     `proguard-android.txt` carried -dontoptimize, and AGP 9.0 no longer ships
 //     it at all, so the swap that used to select it is gone;
-//   - `android.enableR8.fullMode=false` (phase 2 turns it on);
+//   - `android.enableR8.fullMode=true` (phase 2): R8 keeps nothing implicitly any
+//     more - no default constructors, no members - so every reflecting library
+//     must name what it needs. expo-modules-core's consumer rules do (records,
+//     enumerables, Module `<init>()`, ExpoView constructors) and the blanket
+//     rule below still covers the rest of `expo.modules.**`;
 //   - resource shrinking off (phase 3 turns it on);
 //   - `plugins/android-release.pro`, which keeps all of `expo.modules.**` and
 //     the Kotlin metadata kotlin-reflect reads (phase 4 narrows it).
 const RELEASE_PROPERTIES = {
   'android.enableMinifyInReleaseBuilds': 'true',
   'android.enableShrinkResourcesInReleaseBuilds': 'false',
-  'android.enableR8.fullMode': 'false',
+  'android.enableR8.fullMode': 'true',
   'org.gradle.jvmargs': '-Xmx3072m -XX:MaxMetaspaceSize=1536m',
 };
 

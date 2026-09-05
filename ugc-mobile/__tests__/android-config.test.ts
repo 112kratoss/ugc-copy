@@ -74,12 +74,15 @@ describe('Android native network config', () => {
     });
     expect(properties.map((entry) => entry.type === 'property' && entry.key))
       .not.toContain('android.r8.optimizedResourceShrinking');
-    // Phase 2 turns full mode on; compat mode keeps ProGuard's implicit keeps for
-    // every reflecting library, not only the ones that ship consumer rules.
+    // Phase 2: full mode. R8 drops ProGuard's implicit keeps (default
+    // constructors, members of kept classes), so every reflecting library has to
+    // name what it needs; expo-modules-core's consumer rules do, and the blanket
+    // rule below covers the rest until phase 4. Pinned explicitly rather than left
+    // to the AGP default so the intent survives an AGP that changes its default.
     expect(properties).toContainEqual({
       type: 'property',
       key: 'android.enableR8.fullMode',
-      value: 'false',
+      value: 'true',
     });
     expect(properties).toContainEqual({
       type: 'property',
