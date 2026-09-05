@@ -267,6 +267,16 @@ function normalizeGenerationMediaUrls(root: string, item: GenerationListItem): G
       ...item.media,
       url: absolutizeMediaUrl(root, item.media.url) ?? item.media.url,
       previewUrl: absolutizeMediaUrl(root, item.media.previewUrl),
+      ...(item.media.renditionUrl !== undefined ? {
+        renditionUrl: absolutizeMediaUrl(root, item.media.renditionUrl),
+      } : {}),
+      ...(item.media.teaserUrl !== undefined ? {
+        teaserUrl: absolutizeMediaUrl(root, item.media.teaserUrl),
+      } : {}),
+      // Absent is the old-server fallback; explicit null means poster-only.
+      ...(item.media.feedStreamUrl !== undefined ? {
+        feedStreamUrl: absolutizeMediaUrl(root, item.media.feedStreamUrl),
+      } : {}),
     } : item.media,
     input_media: isTemplateResult
       ? []

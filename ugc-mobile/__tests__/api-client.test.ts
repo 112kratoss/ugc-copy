@@ -612,6 +612,26 @@ describe('mobile api client caching', () => {
     expect(response.pagination).toEqual({ limit: 24, hasMore: false, nextCursor: null });
   });
 
+  it('resolves every creation descriptor media URL against the API origin', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ generations: [{
+      id: 'video-1', output_url: '/api/media?path=original.mp4',
+      media: {
+        url: '/api/media?path=original.mp4', previewUrl: '/api/media?path=poster.webp',
+        renditionUrl: '/api/media?path=playback.mp4', teaserUrl: '/api/media?path=teaser.mp4',
+        feedStreamUrl: null,
+      },
+    }] }));
+    const api = createApiClient({ baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1', fetcher: fetcher as unknown as typeof fetch });
+    const { generations: [item] } = await api.listGenerations(true);
+    expect(item.media).toMatchObject({
+      url: 'https://magicbooklet.test/api/media?path=original.mp4',
+      previewUrl: 'https://magicbooklet.test/api/media?path=poster.webp',
+      renditionUrl: 'https://magicbooklet.test/api/media?path=playback.mp4',
+      teaserUrl: 'https://magicbooklet.test/api/media?path=teaser.mp4', feedStreamUrl: null,
+    });
+  });
+
   it('preserves template attribution while masking private recipe metadata', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       generations: [{
