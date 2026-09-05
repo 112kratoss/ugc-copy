@@ -119,9 +119,11 @@ describe('Android native network config', () => {
     const keepRulesPath = join(projectRoot, 'android', 'app', RELEASE_KEEP_RULES);
     expect(keepRulesPath).toBe(join(projectRoot, 'plugins', 'android-release.pro'));
     const keepRules = readFileSync(keepRulesPath, 'utf8').split('\n');
-    // Phase 4 narrows these; until then every Expo class is held by name.
+    // Phase 4a: Expo classes keep their names and members but may be optimized
+    // inside; the plain blanket keep must not come back.
+    expect(keepRules).not.toContain('-keep class expo.modules.** { *; }');
     for (const rule of [
-      '-keep class expo.modules.** { *; }',
+      '-keep,allowoptimization class expo.modules.** { *; }',
       '-keep class kotlin.Metadata { *; }',
       '-keep class expo.modules.securestore.** { *; }',
       '-keep class expo.modules.image.** { *; }',
