@@ -93,6 +93,10 @@ describe('Android native network config', () => {
       key: 'org.gradle.jvmargs',
       value: '-Xmx3072m -XX:MaxMetaspaceSize=1536m',
     });
+    // Phase 5b: with React Native's core Image retired from app code, Fresco's
+    // GIF and WebP add-ons decode for nobody; expo-image covers both via Glide.
+    expect(properties).toContainEqual({ type: 'property', key: 'expo.gif.enabled', value: 'false' });
+    expect(properties).toContainEqual({ type: 'property', key: 'expo.webp.enabled', value: 'false' });
 
     // Phase 1: the optimizing base. The plain `proguard-android.txt` carried
     // -dontoptimize and AGP 9.0 no longer ships it; a template that regresses to

@@ -1,8 +1,9 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { useState } from 'react';
+import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { PackageOpen } from 'lucide-react-native';
-import { Image, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 
 import { CardListSkeleton } from '@/components/skeleton';
 import { AppText, Card, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
@@ -176,6 +177,9 @@ function UnlockThumbnail({ uri }: { uri: string | null }) {
         <Image
           accessibilityIgnoresInvertColors
           source={{ uri }}
+          contentFit="cover"
+          cachePolicy="memory-disk"
+          recyclingKey={uri}
           onError={() => setFailed(true)}
           style={{ position: 'absolute', inset: 0 }}
         />

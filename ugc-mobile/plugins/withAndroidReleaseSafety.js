@@ -50,6 +50,12 @@ const RELEASE_PROPERTIES = {
   'android.r8.optimizedResourceShrinking': 'true',
   'android.enableR8.fullMode': 'true',
   'org.gradle.jvmargs': '-Xmx3072m -XX:MaxMetaspaceSize=1536m',
+  // Phase 5b. React Native's core Image is retired from app code
+  // (__tests__/react-native-image-retired.test.ts), so Fresco's GIF and WebP
+  // add-ons that these flags pull in (android/app/build.gradle) decode for
+  // nobody; expo-image handles both formats through Glide.
+  'expo.gif.enabled': 'false',
+  'expo.webp.enabled': 'false',
 };
 
 // Relative to android/app, which is where Gradle resolves `proguardFiles`.

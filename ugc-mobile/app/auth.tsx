@@ -1,6 +1,7 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import * as AppleAuthentication from 'expo-apple-authentication';
-import { ActivityIndicator, Image, Linking, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View, type TextInputProps } from 'react-native';
+import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View, type TextInputProps } from 'react-native';
+import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Eye, EyeOff, LockKeyhole, Mail, X } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -453,7 +454,7 @@ function AuthPanel({
             ) : (
               <Image
                 accessibilityIgnoresInvertColors
-                resizeMode="contain"
+                contentFit="contain"
                 source={googleSignInAndroid}
                 style={{
                   width: THIRD_PARTY_BUTTON_HEIGHT * GOOGLE_BUTTON_ASPECT,

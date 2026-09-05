@@ -1,9 +1,9 @@
 import { useId, useState } from 'react';
+import { Image } from 'expo-image';
 import { Link } from 'expo-router';
 import {
   ActivityIndicator,
   Animated,
-  Image,
   Pressable,
   ScrollView,
   Text,
@@ -1313,7 +1313,13 @@ export function CreatorAvatar({
         {initial}
       </Text>
       {uri ? (
-        <Image source={{ uri }} resizeMode="cover" style={{ position: 'absolute', inset: 0 }} />
+        <Image
+          source={{ uri }}
+          contentFit="cover"
+          cachePolicy="memory-disk"
+          recyclingKey={uri}
+          style={{ position: 'absolute', inset: 0 }}
+        />
       ) : null}
     </View>
   );
