@@ -38,12 +38,15 @@ const MATERIAL_COMPONENTS_VERSION = '1.14.0';
 //     must name what it needs. expo-modules-core's consumer rules do (records,
 //     enumerables, Module `<init>()`, ExpoView constructors) and the blanket
 //     rule below still covers the rest of `expo.modules.**`;
-//   - resource shrinking off (phase 3 turns it on);
+//   - resource shrinking on (phase 3a), with the classic AAPT2 pipeline
+//     (`android.r8.optimizedResourceShrinking=false`); phase 3b moves it onto
+//     R8's optimized pipeline, which AGP 9 makes the default;
 //   - `plugins/android-release.pro`, which keeps all of `expo.modules.**` and
 //     the Kotlin metadata kotlin-reflect reads (phase 4 narrows it).
 const RELEASE_PROPERTIES = {
   'android.enableMinifyInReleaseBuilds': 'true',
-  'android.enableShrinkResourcesInReleaseBuilds': 'false',
+  'android.enableShrinkResourcesInReleaseBuilds': 'true',
+  'android.r8.optimizedResourceShrinking': 'false',
   'android.enableR8.fullMode': 'true',
   'org.gradle.jvmargs': '-Xmx3072m -XX:MaxMetaspaceSize=1536m',
 };

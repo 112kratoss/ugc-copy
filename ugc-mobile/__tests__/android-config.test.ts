@@ -65,15 +65,19 @@ describe('Android native network config', () => {
       key: 'android.enableMinifyInReleaseBuilds',
       value: 'true',
     });
-    // Phase 3 turns resource shrinking on; until then it stays pinned off, and the
-    // optimized-shrinking flag (meaningless without shrinking) must not linger.
+    // Phase 3a: resource shrinking on the classic AAPT2 pipeline. The optimized
+    // pipeline (phase 3b, and the AGP 9 default) is pinned off explicitly so the
+    // two are never switched in one build.
     expect(properties).toContainEqual({
       type: 'property',
       key: 'android.enableShrinkResourcesInReleaseBuilds',
+      value: 'true',
+    });
+    expect(properties).toContainEqual({
+      type: 'property',
+      key: 'android.r8.optimizedResourceShrinking',
       value: 'false',
     });
-    expect(properties.map((entry) => entry.type === 'property' && entry.key))
-      .not.toContain('android.r8.optimizedResourceShrinking');
     // Phase 2: full mode. R8 drops ProGuard's implicit keeps (default
     // constructors, members of kept classes), so every reflecting library has to
     // name what it needs; expo-modules-core's consumer rules do, and the blanket
