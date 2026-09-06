@@ -2,7 +2,7 @@
 
 /* eslint-disable @next/next/no-html-link-for-pages -- Native links keep this demand shell independent of Next's interactive router chunk. */
 
-import type { ComponentType } from 'react';
+import type { ComponentType, MouseEvent as ReactMouseEvent } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useAuth } from '@/app/components/AuthProvider';
@@ -116,6 +116,19 @@ function getPriorityPosterUrl(
     return previewUrl ? buildOptimizedPreviewImageUrl(previewUrl) : null;
 }
 
+/**
+ * A plain left click is handled in-page by activating the full client; anything
+ * the browser has its own meaning for — a new tab, a new window, a download,
+ * a middle click — is left alone.
+ */
+function isPlainLeftClick(event: ReactMouseEvent): boolean {
+    return event.button === 0
+        && !event.metaKey
+        && !event.ctrlKey
+        && !event.shiftKey
+        && !event.altKey;
+}
+
 function BootstrapCard({
     item,
     isPriority,
@@ -130,15 +143,27 @@ function BootstrapCard({
     const mediaItems = getItemMediaItems(item);
     const cover = mediaItems.slice().sort((left, right) => left.sortOrder - right.sortOrder)[0];
     const posterUrl = getPriorityPosterUrl(item, cover, priorityPoster);
+    // The canonical detail URL, matching what the sitemap emits — no `from` or
+    // `returnTo` params, so the href a crawler follows is the one being indexed.
+    const detailHref = `/showcase/${encodeURIComponent(item.id)}`;
+    const openInPage = (event: ReactMouseEvent) => {
+        if (!isPlainLeftClick(event)) {
+            return;
+        }
+
+        event.preventDefault();
+        onOpen(item.id);
+    };
+
     return (
         <article
             data-showcase-bootstrap-card="true"
             className="min-w-0 overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]"
         >
             {isTextOnlyPost(item) ? (
-                <button
-                    type="button"
-                    onClick={() => onOpen(item.id)}
+                <a
+                    href={detailHref}
+                    onClick={openInPage}
                     className="ui-focus-ring block min-h-64 w-full bg-[var(--ui-surface-inset)] p-6 text-left"
                     aria-label={`Open ${item.title} in viewer`}
                 >
@@ -151,7 +176,7 @@ function BootstrapCard({
                     <span className="mt-3 line-clamp-5 block text-sm leading-6 text-[var(--ui-text-muted)]">
                         {item.body.trim() || item.prompt.trim()}
                     </span>
-                </button>
+                </a>
             ) : (
                 <div className="relative overflow-hidden bg-black" style={{ aspectRatio: '4 / 5' }}>
                     {isPriority && posterUrl ? (
@@ -174,9 +199,9 @@ function BootstrapCard({
                     <span className="pointer-events-none absolute left-3 top-3 z-[1] rounded-full border border-white/10 bg-black/65 px-2.5 py-1 text-[11px] font-semibold capitalize text-white">
                         {item.category}
                     </span>
-                    <button
-                        type="button"
-                        onClick={() => onOpen(item.id)}
+                    <a
+                        href={detailHref}
+                        onClick={openInPage}
                         className="ui-focus-ring absolute inset-0 z-[2] h-full w-full"
                         aria-label={`Open ${item.title} in viewer`}
                     />
@@ -185,13 +210,13 @@ function BootstrapCard({
 
             <div className="flex items-center justify-between gap-3 px-4 py-3">
                 <div className="min-w-0">
-                    <button
-                        type="button"
-                        onClick={() => onOpen(item.id)}
+                    <a
+                        href={detailHref}
+                        onClick={openInPage}
                         className="ui-focus-ring block max-w-full truncate rounded-sm text-left text-sm font-semibold text-zinc-100"
                     >
                         {item.title}
-                    </button>
+                    </a>
                     {item.creator.username ? (
                         <a
                             href={`/creators/${encodeURIComponent(item.creator.username)}`}

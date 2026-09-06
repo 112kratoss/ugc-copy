@@ -15,7 +15,12 @@ import {
     type ShowcaseFeedPage,
     type ShowcasePriorityPosterData,
 } from '@/lib/showcase';
-import { createMetadata } from '@/lib/seo';
+import { JsonLd } from '@/app/components/JsonLd';
+import {
+    buildBreadcrumbSchema,
+    buildItemListSchema,
+    createMetadata,
+} from '@/lib/seo';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 import { isTextOnlyPost } from '@/lib/post-feed-presentation';
 import { getInlineShowcasePriorityPoster } from '@/lib/showcase-priority-poster';
@@ -136,8 +141,36 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
         }
         : null;
 
+    // Only the default, indexable variant of this page carries an ItemList —
+    // a filtered or paged view is `noIndex`, so listing its members would be
+    // describing a page that is not in the index.
+    const isIndexableVariant = category === 'all'
+        && sort === 'for-you'
+        && offset === 0
+        && !tool
+        && unlock === 'all'
+        && resource === 'all';
+
     return (
         <>
+            {isIndexableVariant && initialFeed.items.length > 0 ? (
+                <JsonLd
+                    data={[
+                        buildItemListSchema(
+                            'magicbooklet showcase',
+                            '/showcase',
+                            initialFeed.items.map((item) => ({
+                                name: item.title,
+                                path: `/showcase/${item.id}`,
+                            }))
+                        ),
+                        buildBreadcrumbSchema([
+                            { name: 'Home', path: '/' },
+                            { name: 'Showcase', path: '/showcase' },
+                        ]),
+                    ]}
+                />
+            ) : null}
             {priorityVideoPoster && !initialPriorityPoster ? (
                 <link
                     rel="preload"
