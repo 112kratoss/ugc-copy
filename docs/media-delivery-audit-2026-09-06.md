@@ -337,3 +337,50 @@ Evidence in ignored `output/media-audit/`: `{android,ios}-template-before.json`,
 `{android,ios}-lightbox-retry.png`, `{android,ios}-lightbox-recovered.{json,png}`,
 `native-fourth-pass-full-checks.log`, `native-fourth-pass-typecheck.log`,
 `native-fourth-pass-export.log`, `native-fourth-pass-env-verification.jsonl`.
+
+## Retained-screen playback and template-run acceptance (local, unreleased)
+
+Reproduced another lifecycle defect on Android API 36 and iOS 26.4: a playing
+template-detail demo remained `playing: true` after pushing the template list.
+The previous screen and VideoView remained mounted, so player release on unmount
+did not stop offscreen playback. This used the actual template route with a
+synthetic API response and a silent two-second local video; it establishes
+unwanted playback, not measured audible sound, CPU, memory or battery cost.
+
+The shared RecoverableVideoPreview now pauses when its owning navigation screen
+loses focus. A player created while hidden cannot autoplay. Returning to the
+screen leaves it paused until requested; source loading and retry still use the
+existing shared implementation. On both platforms, native inspection confirmed
+`playing: false` after navigation and the same paused position on return. A play
+request resumed playback, with visible fixture frames checked in screenshots.
+
+Backgrounding the playing template demo paused the Android player; returning
+retained its paused position and ready state. iOS's inspector did not answer while
+the app was suspended; after returning from Safari, its retained player was ready
+and paused. Both played again on request. This short background/return case does
+not verify long-lived signature expiry, offline recovery or PiP/fullscreen modes.
+No additional AppState policy was added.
+
+The actual `/template-runs/[runId]` result route was then exercised on both
+platforms using an in-memory completed-run response, without creating a run,
+spending credits or writing production data. HTTP 503 produced the visible error
+and Retry video button; retry during continued failure remained actionable.
+After restoring the server, Android's rendered Retry button was tapped through
+ADB and iOS's rendered button handler was invoked through the JS inspector.
+Both reached `readyToPlay`, two-second duration and advancing playback with visible
+frames. Pushing the template list paused each retained result player; returning
+preserved that paused position. This covers the final-result caller, not actual
+generation execution, publishing, intermediate-step previews or original download.
+Development apps were reloaded afterwards to clear the fixture API overrides.
+
+Validation: 184 mobile test files / 1,782 tests and typecheck passed. Two regression
+cases cover retained-screen focus and hidden autoplay. Android/iOS production
+Hermes exports and bundled-environment checks passed. No migration is needed for
+this focus fix, and no deployment or OTA was performed.
+
+Ignored evidence under `output/media-audit/`: `{android,ios}-navigation-*`,
+`android-preview-background.json`, `{android,ios}-preview-foreground.json`,
+`{android,ios}-run-{error,still-failed,recovered,hidden,return}.json`,
+`{android,ios}-run-{error,recovered}.png`, `native-fifth-pass-requests.json`,
+`native-fifth-pass-checks.log`, `native-fifth-pass-export.log` and
+`native-fifth-pass-env-verification.jsonl`.

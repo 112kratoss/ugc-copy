@@ -66,7 +66,7 @@ Map additional media callers discovered in step 1 into this table.
 | Creation inputs, uploads, results, and library/Studio | Partial: Studio rendition playback and original download verified | Pending | Pending |
 | Motion references and outputs | Pending | Pending | Pending |
 | Workflow node previews, results, and shared workflows | Pending | Map supported consumers | Map supported consumers |
-| Template catalog, details, demos, and run results | Pending | Partial: template-detail video failure/retry verified | Partial: template-detail video failure/retry verified |
+| Template catalog, details, demos, and run results | Pending | Partial: detail and final-run video failure/retry/navigation verified with synthetic responses | Partial: detail and final-run video failure/retry/navigation verified with synthetic responses |
 | Marketplace, resource bundles, unlocks, and downloads | Pending | Pending | Pending |
 | Post composer, drafts, media reorder, and publish results | Pending | Pending | Pending |
 | Remaining image/audio/video/file renderers, including operator surfaces | Inventory pending | Inventory pending | Inventory pending |
@@ -118,9 +118,13 @@ source-only concerns distinct from reproduced defects and measured improvements.
 
 
 Shared native `MediaPreview` and `MediaLightbox` now have locally verified
-loading/error/retry behavior on Android and iOS. Template detail was navigated
-with a synthetic API response; lightbox used a native fixture host. Next surface
-priority: verify actual creation/template-run results and composer/reference
-lightbox navigation, then private URL expiry and background audio ownership. Source review found direct result URL consumers in web video/motion
+loading/error/retry behavior on Android and iOS. Template detail and the final
+template-run result route were navigated with synthetic API responses; lightbox
+used a native fixture host. A reproduced retained-screen playback leak is fixed
+locally: detail and final-result players pause on navigation and stay paused on
+return. Short background/return checks passed for detail previews; long expiry,
+offline and physical-device performance checks remain open. Next surface
+priority: creation/motion results, intermediate template steps and composer/reference
+lightbox navigation, then private URL expiry and remaining audio ownership. Source review found direct result URL consumers in web video/motion
 results and workflow previews; their rendition and expiry integration remains
 pending. Keep these findings distinct from the verified full-screen viewer fix.

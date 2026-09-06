@@ -4,13 +4,16 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   initialStatus: 'loading',
+  focused: true,
   players: [] as Array<{
     status: string;
     play: ReturnType<typeof vi.fn>;
+    pause: ReturnType<typeof vi.fn>;
     release: ReturnType<typeof vi.fn>;
     listener?: (event: { status: string }) => void;
   }>,
 }));
+vi.mock('@react-navigation/native', () => ({ useIsFocused: () => state.focused }));
 vi.mock('@/lib/use-media-source', () => ({ useMediaSource: (url: string) => ({ source: { uri: url } }) }));
 vi.mock('@/components/ui', () => ({ SecondaryButton: (props: object) => React.createElement('retry-button', props) }));
 vi.mock('react-native', () => ({
@@ -23,7 +26,7 @@ vi.mock('expo-video', () => ({
   useVideoPlayer: (_source: unknown, setup: (player: unknown) => void) => {
     const [player] = React.useState(() => {
       const instance = {
-        status: state.initialStatus, play: vi.fn(), release: vi.fn(),
+        status: state.initialStatus, play: vi.fn(), pause: vi.fn(), release: vi.fn(),
         listener: undefined as ((event: { status: string }) => void) | undefined,
         addListener: (_name: string, listener: (event: { status: string }) => void) => {
           instance.listener = listener;
@@ -40,7 +43,7 @@ vi.mock('expo-video', () => ({
 }));
 import { RecoverableVideoPreview } from '../components/recoverable-video-preview';
 let tree: renderer.ReactTestRenderer | undefined;
-beforeEach(() => { state.initialStatus = 'loading'; state.players = []; });
+beforeEach(() => { state.initialStatus = 'loading'; state.focused = true; state.players = []; });
 afterEach(() => { renderer.act(() => tree?.unmount()); tree = undefined; });
 function mount(autoPlay = false) {
   renderer.act(() => { tree = renderer.create(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 300 }} autoPlay={autoPlay} />); });
@@ -77,6 +80,23 @@ it('leaves repeated failures actionable and makes no timer-driven attempts', () 
 it('preserves lightbox autoplay', () => {
   mount(true);
   expect(state.players[0].play).toHaveBeenCalledOnce();
+});
+it('pauses a retained screen on blur and does not resume it automatically on return', () => {
+  const view = mount(true);
+  const player = state.players[0];
+  state.focused = false;
+  renderer.act(() => view.update(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 300 }} autoPlay />));
+  expect(player.pause).toHaveBeenCalledOnce();
+  state.focused = true;
+  renderer.act(() => view.update(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 300 }} autoPlay />));
+  expect(state.players).toHaveLength(1);
+  expect(player.play).toHaveBeenCalledOnce();
+});
+it('does not autoplay a replacement source on a hidden screen', () => {
+  state.focused = false;
+  mount(true);
+  expect(state.players[0].play).not.toHaveBeenCalled();
+  expect(state.players[0].pause).toHaveBeenCalledOnce();
 });
 it('does not carry a previous retry autoplay decision into a different result', () => {
   state.initialStatus = 'error';

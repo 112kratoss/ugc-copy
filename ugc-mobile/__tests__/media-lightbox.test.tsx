@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
+vi.mock('@react-navigation/native', () => ({ useIsFocused: () => true }));
+
 function resolvePressableStyle(style: unknown) {
   return typeof style === 'function'
     ? (style as (state: { pressed: boolean }) => unknown)({ pressed: false })
