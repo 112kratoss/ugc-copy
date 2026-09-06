@@ -629,3 +629,36 @@ export const getCreatorProfilePageData = cache(async (
     pageInfo: creatorPageInfo({ hasMore, limit, offset }),
   };
 });
+
+/**
+ * Public post count for a creator, used to decide whether their profile is
+ * worth indexing.
+ *
+ * `getCreatorProfilePageData` already computes this, but it loads the full page
+ * payload; `generateMetadata` needs the number alone and calls with different
+ * options, so it would miss that function's cache and pay for a second heavy
+ * read. This is a `head` count — no rows cross the wire — and is cached per
+ * request, so the metadata pass and any later caller share one query.
+ */
+export const getCreatorPublicPostCount = cache(async (userId: string): Promise<number> => {
+  try {
+    const supabase = createServiceClient();
+    const { count, error } = await supabase
+      .from('posts')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('visibility', 'public')
+      .eq('review_status', 'visible')
+      .is('archived_at', null);
+
+    if (error) {
+      logBackendError('failed_to_count_creator_public_posts', { error });
+      return 0;
+    }
+
+    return count ?? 0;
+  } catch (error) {
+    logBackendError('failed_to_count_creator_public_posts', { error });
+    return 0;
+  }
+});
