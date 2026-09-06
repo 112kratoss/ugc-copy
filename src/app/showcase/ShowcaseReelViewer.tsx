@@ -1,5 +1,8 @@
 'use client';
 
+import InlineMediaAudio from '@/app/components/InlineMediaAudio';
+import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+
 import Link from 'next/link';
 import Script from 'next/script';
 import { useRouter } from 'next/navigation';
@@ -1233,9 +1236,9 @@ export default function ShowcaseReelViewer({
                       className="min-w-0 basis-[180px] overflow-hidden rounded-2xl border border-white/10 bg-black/35 p-3"
                     >
                       {showMediaPreview && fileUrl && isVideo ? (
-                        <video src={fileUrl} controls className="h-full w-full object-contain" />
+                        <InlineMediaVideo src={fileUrl} controls className="h-full w-full object-contain" />
                       ) : showMediaPreview && fileUrl && isAudio ? (
-                        <audio src={fileUrl} controls className="w-full" />
+                        <InlineMediaAudio src={fileUrl} controls className="w-full" />
                       ) : (
                         <div className="text-xs text-zinc-400">{resourceItem.title}</div>
                       )}

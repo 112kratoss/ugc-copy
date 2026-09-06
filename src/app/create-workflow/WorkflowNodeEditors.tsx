@@ -1,5 +1,7 @@
 'use client';
 
+import InlineMediaAudio from '@/app/components/InlineMediaAudio';
+
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import Image from 'next/image';
 import { AlertCircle, Image as ImageIcon, Loader2, Sparkles, Trash2, Upload, Video, Volume2, X } from 'lucide-react';
@@ -2201,7 +2203,7 @@ function NodeEditorContent({
                   }}
                 />
                 {audioInput.audioUrl && (
-                  <audio
+                  <InlineMediaAudio
                     src={getDisplayMediaUrl(audioInput.storagePath || audioInput.audioUrl || '')}
                     className="w-full rounded-2xl border border-white/10"
                     controls

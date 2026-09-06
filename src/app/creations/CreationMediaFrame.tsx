@@ -1,5 +1,7 @@
 'use client';
 
+import InlineMediaAudio from '@/app/components/InlineMediaAudio';
+
 import { useState, type MouseEvent } from 'react';
 import { AlertTriangle, Loader2, UploadCloud, Volume2 } from 'lucide-react';
 
@@ -113,7 +115,7 @@ export default function CreationMediaFrame({
                     <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-emerald-300">
                         <Volume2 className="h-7 w-7" />
                     </div>
-                    <audio
+                    <InlineMediaAudio
                         src={src}
                         controls
                         preload="metadata"

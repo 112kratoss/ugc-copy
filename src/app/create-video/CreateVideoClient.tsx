@@ -1,5 +1,8 @@
 'use client';
 
+import InlineMediaAudio from '@/app/components/InlineMediaAudio';
+import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -3746,7 +3749,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                        {klingVideoElements.map((element) => (
 	                                            <div key={element.id} className="overflow-hidden rounded-[24px] border border-zinc-700/40 bg-black/35">
 	                                                <div className="relative aspect-video bg-black">
-	                                                    <video
+	                                                    <InlineMediaVideo
 	                                                        src={element.previewUrl || element.providerUrl || undefined}
 	                                                        className="h-full w-full object-cover"
 	                                                        controls
@@ -4178,7 +4181,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                                 </button>
                                                             </div>
                                                             {reference.previewUrl || reference.providerUrl ? (
-                                                                <video
+                                                                <InlineMediaVideo
                                                                     src={reference.previewUrl || reference.providerUrl || undefined}
                                                                     className="mt-3 h-40 w-full rounded-2xl border border-white/8 object-cover"
                                                                     controls
@@ -4236,13 +4239,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                                 </button>
                                                             </div>
                                                             {reference.providerUrl ? (
-                                                                <audio
+                                                                <InlineMediaAudio
                                                                     src={reference.providerUrl}
                                                                     className="mt-3 w-full"
                                                                     controls
                                                                 />
                                                             ) : reference.previewUrl ? (
-                                                                <audio
+                                                                <InlineMediaAudio
                                                                     src={reference.previewUrl}
                                                                     className="mt-3 w-full"
                                                                     controls

@@ -1,5 +1,8 @@
 'use client';
 
+import InlineMediaAudio from '@/app/components/InlineMediaAudio';
+import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+
 import Script from 'next/script';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -832,7 +835,7 @@ export default function PostResourceBundlePanel({
 
     if (item.contentType.startsWith('video/')) {
       return (
-        <video
+        <InlineMediaVideo
           src={signedUrl}
           controls
           className="mb-3 max-h-64 w-auto max-w-full rounded-xl border border-white/8"
@@ -842,7 +845,7 @@ export default function PostResourceBundlePanel({
 
     if (item.contentType.startsWith('audio/')) {
       return (
-        <audio
+        <InlineMediaAudio
           src={signedUrl}
           controls
           className="mb-3 w-full"

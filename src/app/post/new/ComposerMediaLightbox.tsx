@@ -1,5 +1,7 @@
 'use client';
 
+import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+
 import { useEffect, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
@@ -151,7 +153,7 @@ function ComposerMediaLightboxDialog({
 
         <div className="relative flex min-h-[220px] w-full items-center justify-center rounded-[24px] border border-white/10 bg-black p-4 sm:min-h-[420px] sm:p-6">
           {activeItem.mediaKind === 'video' ? (
-            <video
+            <InlineMediaVideo
               key={activeItem.id}
               src={activeItem.previewUrl ?? undefined}
               controls

@@ -1,5 +1,7 @@
 'use client';
 
+import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+
 import Link from 'next/link';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -2653,7 +2655,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                             </div>
                           ) : prefilledGeneration?.outputUrl ? (
                             category === 'video' ? (
-                              <video
+                              <InlineMediaVideo
                                 src={prefilledGeneration.outputUrl}
                                 controls
                                 playsInline
@@ -2769,7 +2771,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         <div className="mt-5 rounded-[24px] border border-white/8 bg-black/50 p-3">
                           {coverPreviewItem?.previewUrl ? (
                             coverPreviewItem.mediaKind === 'video' ? (
-                              <video
+                              <InlineMediaVideo
                                 src={coverPreviewItem.previewUrl}
                                 controls
                                 playsInline
@@ -2840,7 +2842,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                               >
                                 <div className="relative aspect-[4/5] overflow-hidden rounded-md bg-black">
                                   {item.mediaKind === 'video' ? (
-                                    <video
+                                    <InlineMediaVideo
                                       src={item.previewUrl ?? undefined}
                                       muted
                                       playsInline

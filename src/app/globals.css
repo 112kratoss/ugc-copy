@@ -25,6 +25,8 @@
 @source "./components/HomeExperience.tsx";
 @source "./components/HomeSlider.tsx";
 @source "./components/HoverVideo.tsx";
+@source "./components/InlineMediaAudio.tsx";
+@source "./components/InlineMediaVideo.tsx";
 @source "./components/JsonLd.tsx";
 @source "./components/NavigationProgress.tsx";
 @source "./components/OptimizedPreviewImage.tsx";
@@ -42,6 +44,7 @@
 @source "./components/app-shell-auth-state.ts";
 @source "./components/app-shell-nav.ts";
 @source "./components/feedback-state.ts";
+@source "./components/useInlineMediaPlayback.ts";
 @source "./components/navigation-progress-state.ts";
 @source "./components/useMediaLoadingPreferences.ts";
 @source "./components/useOptimisticPostSave.ts";

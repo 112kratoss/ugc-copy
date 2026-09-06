@@ -1,5 +1,7 @@
 'use client';
 
+import InlineMediaAudio from '@/app/components/InlineMediaAudio';
+
 import Image from 'next/image';
 import { useEffect, useRef } from 'react';
 import { useAuth } from '@/app/components/AuthProvider';
@@ -160,7 +162,7 @@ function PreviewMediaOverlay({
 
         {preview.kind === 'audio' && (
           <div className="rounded-3xl border border-white/10 bg-black/60 p-8">
-            <audio src={preview.url} controls autoPlay className="w-full" />
+            <InlineMediaAudio src={preview.url} controls autoPlay className="w-full" />
           </div>
         )}
       </div>

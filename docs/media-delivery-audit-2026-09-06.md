@@ -1371,3 +1371,94 @@ The clean Android retry rendered the decoded 40-second fixture and reported
 `viewer-stall-android-recovered-clean.png`. iOS feed reactivation after its native
 error rendered again (`feed-ios-reactivated.png`). Final post-indicator typecheck
 and 47 focused regressions pass in `long-expiry-final-focused.log`.
+
+
+## Remaining web audio and controlled video ownership (2026-09-06)
+
+### Reproduced defects and change
+
+Real Chromium playback of local MP4/WAV fixtures through the actual workflow,
+composer and resource/detail components reproduced three ownership defects:
+
+- Two workflow node audio controls could play together. Opening and playing an
+  audio editor left both node players running (three concurrent audio streams).
+- A resource video and audio could play together; opening audio details left
+  the resource video running underneath the modal.
+- In a 390×700 composer viewport, video continued playing with bounds top -1131
+  and bottom -844.5, completely outside the scrolled editor viewport.
+
+Factored the existing InlineMediaVideo policy into useInlineMediaPlayback with a
+single HTMLMediaElement registry and added InlineMediaAudio. Starting an enrolled
+player pauses the others; viewport/document departure and unmount pause playback.
+Viewport/document return and closing an expanded preview never resume the previous
+player automatically. Audio defaults to preload none; explicit video
+picture-in-picture retains the existing offscreen/background exception.
+
+Integrated audio controls in workflow nodes/editors/overlays, creation outputs,
+video-generation references, resource panels/reel resources and media details.
+Integrated controlled video in composer previews/lightbox, video-generation
+references, resource panels/reel resources and media details. Existing template
+and recoverable inline videos share the same registry. Public/private CSS source
+lists were updated for the new shared component import closure.
+
+### Acceptance evidence and limits
+
+The same workflow fixture now reports only the newly played node active and,
+with the editor playing, both node players paused. Closing the editor leaves both
+nodes paused. Resource video pauses resource audio; opening/playing details pauses
+the resource video; opening the secondary audio preview pauses the primary modal.
+Closing the expanded preview leaves all remaining players paused. Composer video
+now pauses at the same fully offscreen bounds and stays paused on return.
+
+Ignored evidence under output/playwright: workflow-audio-final.log,
+workflow-audio-close-final.log, composer-player-final.log,
+composer-player-return-final.log, resource-player-final.log,
+resource-dialog-open-final.log and resource-dialog-final.log. Fixture setup and
+acceptance scripts live alongside them. API/media routes use synthetic responses
+and local fixtures; resource checks do not certify a purchase/unlock journey.
+The temporary component fixture route was removed; its source is preserved only
+as output/media-audit/resource-player-fixture.tsx.txt.
+
+The attempted workflow pan did not actually move audio offscreen and is not a
+runtime offscreen-audio pass. Three new regressions cover cross audio/video
+ownership, clipping/no-return-resume/default preload, and hidden-document/cleanup;
+the existing six inline-video tests still pass. Browser tab switching kept
+reporting document.visibilityState visible in this automation session, so real
+background acceptance is unverified (player-hidden-final.log). Synthetic hidden
+visibility events pass; they are not counted as real background evidence.
+
+Remaining raw player inventory: CreatorStudio uploaded video and preview modal;
+HoverVideo (hover/near-viewport/reduced-motion/save-data policy); and
+ShowcaseMediaCarousel (feed/detail activation and source policy). These need their
+own runtime audit. Raw videos in MediaDetailsPreviewModal/CreationMediaFrame are
+passive metadata thumbnails; MarketplaceBootstrap's video has a poster and no
+source. They were not converted into active previews. Resource Open file/Download
+already obtains a fresh URL, but inline resource/audio source renewal, actual
+expiry/offline recovery and loading/error UI remain open. No claim of complete
+web or app-wide optimization is made by this checkpoint.
+
+A static search also found three detached video metadata probes (composer,
+workflow input editor and motion reference), with no new Audio/AudioContext player
+constructors under src/app or src/lib. These probes do not play media. Composer
+already has a deadline and object-URL cleanup. The workflow duration Promise has
+load/error cleanup but no deadline; motion cleans up on effect teardown but has
+no metadata deadline. Stalled-probe behavior remains a follow-up to reproduce,
+not a runtime-confirmed defect in this checkpoint.
+
+Final validation: 759 web test files / 5,398 tests pass with four workers; app,
+script and test typechecks pass; production build and build:verify pass (FFmpeg
+resolves in all 9 required routes; libvips is traced in all 38 sharp-using bundles).
+The earlier default-worker repeat had one unrelated generation-services test hit
+its 5-second timeout; that file then passed all 91 tests in isolation and the
+complete four-worker run passed. No timeout threshold or application behavior was
+changed to obtain the pass. An earlier 5,405-test run included unrelated upload
+work temporarily present in this checkout and is not this checkpoint's count.
+
+Application lint passes with `npm run lint -- --ignore-pattern "output/**"`.
+The bare lint command includes git-ignored audit harnesses and reports script
+style violations there; no lint rule or repository config was relaxed. Final logs
+under output/media-audit: remaining-player-verification-final.log,
+remaining-player-stable-build.log and remaining-player-generation-recheck.log.
+The temporary dev server was stopped before building. No mobile runtime code
+changed, so mobile tests/exports were not repeated. No new migration, deployment,
+OTA or remote push was performed for this checkpoint.

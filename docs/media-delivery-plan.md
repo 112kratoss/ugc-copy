@@ -67,8 +67,8 @@ Map additional media callers discovered in step 1 into this table.
 | Motion references and outputs | Partial: result rendition playback, original download and failed-link renewal checked in Chromium fixtures | Partial: result playback/retry/close verified with injected completed state | Partial: result playback/retry/close verified with injected completed state |
 | Workflow node previews, results, and shared workflows | Partial: expanded video/motion rendition playback and renewal verified; generated video/motion cards use batched posters with no video players, including controlled poster failure/reconnect recovery. Input/approval cards now reuse matching posters or an Open video tile; controlled failures and expanded input Retry passed | Map supported consumers | Map supported consumers |
 | Template catalog, details, demos, and run results | Partial: demo/run recovery and optimized run playback verified; new published demo optimization passed local Storage readback/decode/range checks; catalog poster reload and online-event recovery verified | Partial: detail/final/intermediate playback and recovery verified with synthetic API/auth; catalog poster failure and reload verified in emulator | Partial: detail/final/intermediate playback and recovery verified with synthetic API; catalog poster failure and reload verified in simulator |
-| Marketplace, resource bundles, unlocks, and downloads | Pending | Partial: reference image/video renewal and failure recovery in native fixture host; full purchase/unlock journey pending | Partial: reference image/video renewal and failure recovery in native fixture host; full purchase/unlock journey pending |
-| Post composer, drafts, media reorder, and publish results | Pending | Partial: edit-post lightbox poster-as-video bug reproduced/fixed; item switch and close verified | Partial: edit-post lightbox poster-as-video bug reproduced/fixed; item switch and close verified |
+| Marketplace, resource bundles, unlocks, and downloads | Partial: resource audio/video and detail/expanded playback handoff verified in Chromium fixtures; source expiry and purchase/unlock journey pending | Partial: reference image/video renewal and failure recovery in native fixture host; full purchase/unlock journey pending | Partial: reference image/video renewal and failure recovery in native fixture host; full purchase/unlock journey pending |
+| Post composer, drafts, media reorder, and publish results | Partial: fully offscreen video pauses and stays paused on return in narrow Chromium composer; lightbox enrolled in shared policy, full authoring flow pending | Partial: edit-post lightbox poster-as-video bug reproduced/fixed; item switch and close verified | Partial: edit-post lightbox poster-as-video bug reproduced/fixed; item switch and close verified |
 | Remaining image/audio/video/file renderers, including operator surfaces | Inventory pending | Inventory pending | Inventory pending |
 
 ## Common test cases
@@ -99,8 +99,10 @@ Map additional media callers discovered in step 1 into this table.
 
 ## Immediate next action
 
-Continue remaining web audio/video ownership and recovery, then physical-device
-transfer/memory budgets and production-duration credential checks. Native viewer
+Next, check CreatorStudio upload/modal playback and the separate hover/carousel
+policies, then resource/audio expired-link and offline recovery. The controlled
+web player ownership checkpoint below is locally verified. Physical-device
+transfer/memory budgets and production-duration credential checks remain open. Native viewer
 renewal now preserves playback state; real short-lived Storage signatures and a
 20-minute background interval have local acceptance evidence (checkpoint below). Shared native
 preview ownership/offscreen pause, actual Android/iOS background transitions,
@@ -292,3 +294,27 @@ audio player. Feed buffering still follows its existing 8-second preference and
 one-active-preview policy; this is source evidence, not measured memory/bytes.
 Web composer, marketplace/resource players, carousel/studio and audio players
 remain explicit follow-up surfaces. Evidence: `docs/media-delivery-audit-2026-09-06.md`.
+
+
+## Web audio and controlled video ownership (2026-09-06)
+
+Workflow node/editor/expanded audio, creation audio, video-generation reference
+media, composer previews/lightbox and resource/detail audio/video now use shared
+playback ownership. Starting an enrolled player pauses its predecessor. Leaving
+the viewport or hiding the document pauses playback; returning does not resume.
+Audio previews default to preload none. Explicit video picture-in-picture keeps
+its existing background exception. Passive poster/metadata thumbnails are unchanged.
+
+Chromium reproduced simultaneous workflow node/editor audio, resource audio/video
+and resource/detail playback before the change; the same paths now hand off to
+one player. Closing the expanded preview leaves the underlying player paused.
+The narrow composer reproduced continued video playback fully offscreen; the fix
+pauses it and keeps it paused when scrolled back. Hidden-document event tests
+pass, but this automation session continued reporting visible after switching
+tabs, so a real browser-background transition is still unverified.
+
+CreatorStudio upload/modal, HoverVideo and ShowcaseMediaCarousel remain separate
+playback policies requiring runtime checks. Resource/audio expired-source and
+reconnect recovery, full unlock/share/import journeys, and physical-device
+performance are still open. This checkpoint requires no new migration and is not
+deployed. Details and validation: docs/media-delivery-audit-2026-09-06.md.
