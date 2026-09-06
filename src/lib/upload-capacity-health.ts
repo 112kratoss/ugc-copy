@@ -135,14 +135,23 @@ export async function collectUploadCapacityHealth(
     });
   }
 
-  // A warning, never degraded: the operator chose this hold, and no run of the
-  // sweep can clear it. It still costs storage, so it is reported rather than
-  // dropped -- the number is the cost of leaving the gate closed.
+  // A warning, never degraded: both holds are deliberate, and no run of the
+  // sweep can clear either. They still cost storage, so the count is reported
+  // rather than dropped.
+  //
+  // Two different holds land here now -- the rollout gate, and a live draft
+  // whose `media_upload_intents` row has no `storage_cleared_at`. Naming the
+  // wrong one is not harmless: the 2026-08-30 diagnosis lost a day to a
+  // remediation that pointed at the wrong job. The rollout gate is only named
+  // when it can actually be responsible, because a withheld row cannot come
+  // from that arm while the gate is effective.
   if (withheldRows > 0) {
     issues.push({
       severity: 'warning',
       code: 'UPLOAD_RECLAIM_WITHHELD',
-      message: `${withheldRowsCapped ? 'At least ' : ''}${withheldRows} staged upload(s) are eligible for reclaim but withheld because MEDIA_UPLOAD_RECLAIM_ABANDONED is not effective; the sweep cannot collect them.`,
+      message: abandonedReclaimEnabled
+        ? `${withheldRowsCapped ? 'At least ' : ''}${withheldRows} staged upload(s) are withheld from reclaim because they are still live drafts; the sweep preserves them on purpose until their upload intent is cleared.`
+        : `${withheldRowsCapped ? 'At least ' : ''}${withheldRows} staged upload(s) are withheld from reclaim, because MEDIA_UPLOAD_RECLAIM_ABANDONED is not effective or because they are still live drafts; the sweep cannot collect them.`,
     });
   }
 
