@@ -482,3 +482,59 @@ Ignored evidence under `output/media-audit/`: `{android,ios}-motion-*`,
 `reference-requests-seventh-pass.json`, `motion-requests-seventh-pass.json`,
 `mobile-seventh-pass-checks.log`, `native-seventh-pass-export.log`, and
 `native-seventh-pass-env-verification.jsonl`.
+
+## Reference retry renewal and in-lightbox feedback (local, unreleased)
+
+Reproduced failed recovery inside an already-open reference lightbox on Android
+API 36 and iOS 26.4. A controlled URL returned HTTP 403, while the resolver was
+subsequently able to return a working URL. Retry video remounted the player with
+the same rejected URL: the resolver count stayed at three and both players
+remained in `error`, with duration zero. This tests recovery from rejected links;
+it does not establish actual signature expiration during a long playback session.
+
+RecoverableVideoPreview now accepts an optional retry URL resolver, passed through
+MediaLightbox by the reference component to the existing access-checked resource
+endpoint. Retry resolves first, then replaces the failed player. While pending,
+the button reads “Refreshing video…” and repeated presses do not start duplicate
+renewals. Rejection leaves the failed player in place and displays “Couldn’t
+refresh video. Try again.” Changing the selected source or closing the lightbox
+prevents a late response from loading that old source. Callers without a resolver
+retain their existing remount/retry behavior.
+
+Both native platforms showed the renewal-denied message inside the lightbox.
+After allowing renewal, Retry reached `readyToPlay`, duration two seconds, and
+advancing playback. The final Android retry used an ADB screen tap; iOS used the
+rendered handler through the native JS inspector. Screenshots captured the
+failure, pending and recovered states. Delayed renewal completed after closing
+without reopening the lightbox or mounting a VideoView on either platform.
+
+Also reproduced missing feedback when moving to an adjacent reference whose
+renewal fails: the parent received an error but the modal had no visible alert.
+MediaLightbox now displays the navigation failure and pending status in its header.
+The current reference remains selected on failure; the arrow can be retried and
+Close remains available. Duplicate requests for the same pending target are
+suppressed. Both native platforms displayed the alert and pending state, and
+closing during delayed navigation prevented a late reopen. The content area
+reserves space for the message. The existing type/contrast/hit-target guards
+passed; visual checks used the existing iPhone and Android simulator sizes.
+
+Validation: 185 mobile test files / 1,790 tests and typecheck passed. Three new
+retry regression cases failed before implementation; tests also cover navigation
+denial, duplicate pending navigation and closing during resolution. Android/iOS
+production Hermes exports and bundled-environment checks passed. Native fixtures
+used the actual shared components in a temporary host, not the full purchased
+resource journey. Apps were reloaded to clear the fixture overrides. No production
+data, migration, deployment or OTA changed.
+
+Remaining checks include actual JWT expiry during playback, real offline/reconnect,
+image retry renewal, full unlock-to-reference navigation and bounded resolver
+timeouts. There is no new automatic refresh loop or proactive expiry timer.
+
+Ignored evidence in `output/media-audit/`: `{android,ios}-reference-retry-*`,
+`{android,ios}-reference-renewal-denied.png`,
+`{android,ios}-reference-navigation-denied-{before,after}.json`,
+`{android,ios}-reference-navigation-denied-after.png`,
+`{android,ios}-reference-pending*`, `{android,ios}-reference-late-*`,
+`retry-renewal-before.log`, `mobile-eighth-pass-checks.log`,
+`native-eighth-pass-export.log`, `native-eighth-pass-env-verification.jsonl`,
+and `reference-eighth-pass-requests.json`.

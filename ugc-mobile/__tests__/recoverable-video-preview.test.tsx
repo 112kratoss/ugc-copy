@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
   initialStatus: 'loading',
   focused: true,
   players: [] as Array<{
+    source: unknown;
     status: string;
     play: ReturnType<typeof vi.fn>;
     pause: ReturnType<typeof vi.fn>;
@@ -23,9 +24,10 @@ vi.mock('react-native', () => ({
 }));
 vi.mock('expo-video', () => ({
   VideoView: (props: object) => React.createElement('video', props),
-  useVideoPlayer: (_source: unknown, setup: (player: unknown) => void) => {
+  useVideoPlayer: (source: unknown, setup: (player: unknown) => void) => {
     const [player] = React.useState(() => {
       const instance = {
+        source,
         status: state.initialStatus, play: vi.fn(), pause: vi.fn(), release: vi.fn(),
         listener: undefined as ((event: { status: string }) => void) | undefined,
         addListener: (_name: string, listener: (event: { status: string }) => void) => {
@@ -106,4 +108,46 @@ it('does not carry a previous retry autoplay decision into a different result', 
   renderer.act(() => view.update(<RecoverableVideoPreview url="https://media.test/another.mp4" style={{ height: 300 }} />));
   expect(state.players[2].play).not.toHaveBeenCalled();
   expect(view.root.findAllByType('retry-button' as never)).toHaveLength(0);
+});
+
+it('renews once before replacing a failed player and ignores repeated presses while pending', async () => {
+  state.initialStatus = 'error';
+  let finish: (url: string) => void = () => undefined;
+  const resolveRetryUrl = vi.fn(() => new Promise<string>(resolve => { finish = resolve; }));
+  renderer.act(() => { tree = renderer.create(<RecoverableVideoPreview url="https://media.test/expired.mp4" style={{ height: 300 }} resolveRetryUrl={resolveRetryUrl} />); });
+  const press = tree!.root.findByType('retry-button' as never).props.onPress;
+  renderer.act(() => { press(); press(); });
+  expect(resolveRetryUrl).toHaveBeenCalledOnce();
+  expect(state.players).toHaveLength(1);
+  expect(tree!.root.findByType('retry-button' as never).props.disabled).toBe(true);
+  expect(tree!.root.findByType('retry-button' as never).props.label).toBe('Refreshing video…');
+  state.initialStatus = 'readyToPlay';
+  await renderer.act(async () => { finish('https://media.test/renewed.mp4'); });
+  expect(state.players[0].release).toHaveBeenCalledOnce();
+  expect(state.players[1].source).toEqual({ uri: 'https://media.test/renewed.mp4' });
+  expect(state.players[1].play).toHaveBeenCalledOnce();
+});
+
+it('shows renewal failure without replaying the stale source and permits another retry', async () => {
+  state.initialStatus = 'error';
+  const resolveRetryUrl = vi.fn().mockRejectedValueOnce(new Error('Unavailable')).mockResolvedValueOnce('https://media.test/new.mp4');
+  renderer.act(() => { tree = renderer.create(<RecoverableVideoPreview url="https://media.test/expired.mp4" style={{ height: 300 }} resolveRetryUrl={resolveRetryUrl} />); });
+  await renderer.act(async () => { tree!.root.findByType('retry-button' as never).props.onPress(); });
+  expect(state.players).toHaveLength(1);
+  expect(tree!.root.findByProps({ accessibilityRole: 'alert' }).props.children).toBe('Couldn’t refresh video. Try again.');
+  await renderer.act(async () => { tree!.root.findByType('retry-button' as never).props.onPress(); });
+  expect(state.players).toHaveLength(2);
+});
+
+it('ignores renewal completing after the selected source changes', async () => {
+  state.initialStatus = 'error';
+  let finish: (url: string) => void = () => undefined;
+  const resolveRetryUrl = () => new Promise<string>(resolve => { finish = resolve; });
+  renderer.act(() => { tree = renderer.create(<RecoverableVideoPreview url="https://media.test/old.mp4" style={{ height: 300 }} resolveRetryUrl={resolveRetryUrl} />); });
+  renderer.act(() => { tree!.root.findByType('retry-button' as never).props.onPress(); });
+  renderer.act(() => { tree!.update(<RecoverableVideoPreview url="https://media.test/other.mp4" style={{ height: 300 }} />); });
+  await renderer.act(async () => { finish('https://media.test/late.mp4'); });
+  expect(state.players).toHaveLength(2);
+  expect(state.players[1].source).toEqual({ uri: 'https://media.test/other.mp4' });
+  expect(state.players[1].play).not.toHaveBeenCalled();
 });

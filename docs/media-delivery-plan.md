@@ -124,9 +124,12 @@ used a native fixture host. A reproduced retained-screen playback leak is fixed
 locally: detail and final-result players pause on navigation and stay paused on
 return. Short background/return checks passed for detail previews; long expiry,
 offline and physical-device performance checks remain open. Next surface
-priority: intermediate template steps, reference expiry while already open,
-renewal failure feedback inside the lightbox, real offline/reconnect, and remaining
-audio ownership. Reference open/navigation now renews through the resource endpoint
+priority: intermediate template steps, actual expiry during playback, reference
+image retry renewal, real offline/reconnect, and remaining audio ownership.
+Reference video Retry now renews via the resource endpoint; renewal denial and
+pending navigation are visible inside the lightbox. Delayed responses cannot
+reopen a closed preview. These passed controlled native failure/recovery checks
+and remain unreleased. Reference open/navigation also renews through the resource endpoint
 after controlled stale-link failures on both platforms; this used a component
 fixture host and does not certify the purchased-resource journey. Motion result
 playback/retry/close passed with injected completed state. Composer edit

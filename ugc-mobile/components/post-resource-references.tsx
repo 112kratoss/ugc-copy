@@ -27,6 +27,7 @@ export function PostResourceReferences({
   const [fileUrls, setFileUrls] = useState<Record<string, string>>({});
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({});
   const [openingPath, setOpeningPath] = useState<string | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
   const [failedPreviewPaths, setFailedPreviewPaths] = useState<Record<string, boolean>>({});
   // Keyed by item, not by position: signed URLs resolve in any order, so the
   // list of viewable items can grow while the lightbox is open.
@@ -34,6 +35,7 @@ export function PostResourceReferences({
   const requestedPaths = useRef(new Set<string>());
   const mounted = useRef(true);
   const openRequest = useRef(0);
+  const openingTarget = useRef<string | null>(null);
 
   useEffect(() => {
     mounted.current = true;
@@ -79,19 +81,26 @@ export function PostResourceReferences({
       const mediaKind = referenceMediaKind(item);
       const url = item.storagePath ? fileUrls[item.storagePath] : null;
       if (!mediaKind || !url) return [];
-      return [{ id: referenceKey(item, index), url, mediaKind, label: item.title, caption: item.description }];
+      const storagePath = item.storagePath!;
+      return [{ id: referenceKey(item, index), url, mediaKind, label: item.title, caption: item.description,
+        resolveRetryUrl: () => resolveFileUrl(storagePath),
+      }];
     }),
-    [fileUrls, referenceItems]
+    [fileUrls, referenceItems, resolveFileUrl]
   );
   const lightboxIndex = lightboxKey ? lightboxItems.findIndex((item) => item.id === lightboxKey) : -1;
 
   if (!referenceItems.length) return null;
 
   const openItem = async (item: PostResourceItem, index: number) => {
+    const target = referenceKey(item, index);
+    if (openingTarget.current === target) return;
+    openingTarget.current = target;
     const request = ++openRequest.current;
     const storagePath = item.storagePath;
     try {
       setOpeningPath(storagePath ?? null);
+      setOpenError(null);
       if (storagePath && referenceMediaKind(item)) {
         // Preview links expire. An explicit open must renew access through the
         // resource endpoint instead of replaying the URL cached at mount.
@@ -115,10 +124,12 @@ export function PostResourceReferences({
       await onOpenUrl(url);
     } catch (error) {
       if (mounted.current && request === openRequest.current) {
+        setOpenError('Couldn’t open reference. Try again or close the preview.');
         onError?.(error instanceof Error ? error.message : 'Failed to open this reference.');
       }
     } finally {
       if (mounted.current && request === openRequest.current) {
+        openingTarget.current = null;
         setOpeningPath(null);
       }
     }
@@ -209,9 +220,13 @@ export function PostResourceReferences({
       <MediaLightbox
         items={lightboxItems}
         activeIndex={lightboxIndex >= 0 ? lightboxIndex : null}
+        statusMessage={openingPath ? 'Opening reference…' : null}
+        errorMessage={openError}
         onClose={() => {
           openRequest.current++;
+          openingTarget.current = null;
           setOpeningPath(null);
+          setOpenError(null);
           setLightboxKey(null);
         }}
         onNavigate={(index) => {

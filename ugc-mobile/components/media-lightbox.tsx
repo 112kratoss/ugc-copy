@@ -17,6 +17,8 @@ export interface LightboxMediaItem {
   label: string;
   /** A second, quieter line under the heading. */
   caption?: string | null;
+  /** Re-authorize a failed private source on explicit retry. */
+  resolveRetryUrl?: () => Promise<string>;
 }
 
 /**
@@ -32,11 +34,15 @@ export function MediaLightbox({
   activeIndex,
   onClose,
   onNavigate,
+  statusMessage,
+  errorMessage,
 }: {
   items: LightboxMediaItem[];
   activeIndex: number | null;
   onClose: () => void;
   onNavigate: (index: number) => void;
+  statusMessage?: string | null;
+  errorMessage?: string | null;
 }) {
   const isOpen = activeIndex !== null && activeIndex >= 0 && activeIndex < items.length;
   const reducedMotion = useReducedMotion();
@@ -57,6 +63,8 @@ export function MediaLightbox({
           activeIndex={activeIndex}
           onClose={onClose}
           onNavigate={onNavigate}
+          statusMessage={statusMessage}
+          errorMessage={errorMessage}
         />
       ) : null}
     </Modal>
@@ -68,11 +76,15 @@ function MediaLightboxContent({
   activeIndex,
   onClose,
   onNavigate,
+  statusMessage,
+  errorMessage,
 }: {
   items: LightboxMediaItem[];
   activeIndex: number;
   onClose: () => void;
   onNavigate: (index: number) => void;
+  statusMessage?: string | null;
+  errorMessage?: string | null;
 }) {
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
@@ -83,7 +95,7 @@ function MediaLightboxContent({
   const caption = [counter, item.caption?.trim()].filter(Boolean).join(' · ');
 
   // Leaves room for the header row and the safe-area chrome above and below.
-  const stageHeight = Math.max(220, height - insets.top - insets.bottom - 150);
+  const stageHeight = Math.max(220, height - insets.top - insets.bottom - 150 - (statusMessage || errorMessage ? 60 : 0));
 
   return (
     // Opaque, not the usual translucent overlay: the web lightbox leans on a
@@ -112,6 +124,11 @@ function MediaLightboxContent({
               <AppText variant="caption" color="muted" numberOfLines={1}>
                 {caption}
               </AppText>
+            ) : null}
+            {errorMessage ? (
+              <AppText variant="caption" color="danger" accessibilityRole="alert">{errorMessage}</AppText>
+            ) : statusMessage ? (
+              <AppText variant="caption" color="muted" accessibilityLiveRegion="polite">{statusMessage}</AppText>
             ) : null}
           </View>
           <Pressable
@@ -146,7 +163,7 @@ function MediaLightboxContent({
           }}
         >
           {item.mediaKind === 'video' ? (
-            <LightboxVideo key={item.id} url={item.url} height={stageHeight} />
+            <LightboxVideo key={item.id} url={item.url} height={stageHeight} resolveRetryUrl={item.resolveRetryUrl} />
           ) : (
             <StableMediaImage
               key={item.id}
@@ -177,10 +194,11 @@ function MediaLightboxContent({
   );
 }
 
-function LightboxVideo({ url, height }: { url: string; height: number }) {
+function LightboxVideo({ url, height, resolveRetryUrl }: { url: string; height: number; resolveRetryUrl?: () => Promise<string> }) {
   return (
     <RecoverableVideoPreview
       url={url}
+      resolveRetryUrl={resolveRetryUrl}
       autoPlay
       nativeControls
       contentFit="contain"

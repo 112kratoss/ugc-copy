@@ -116,10 +116,33 @@ describe('PostResourceReferences', () => {
     expect(lightbox().props.activeIndex).toBe(1);
     expect(lightbox().props.items[1].url).toBe('https://media.test/renewed.mp4');
     resolveFileUrl.mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
-    renderer.act(() => { lightbox().props.onNavigate(0); });
+    const callsBefore = resolveFileUrl.mock.calls.length;
+    renderer.act(() => { lightbox().props.onNavigate(0); lightbox().props.onNavigate(0); });
+    expect(resolveFileUrl.mock.calls.length).toBe(callsBefore + 1);
+    expect(lightbox().props.statusMessage).toBe('Opening reference…');
     renderer.act(() => { lightbox().props.onClose(); });
     await renderer.act(async () => { finish('https://media.test/late.jpg'); });
     expect(lightbox().props.activeIndex).toBeNull();
+    expect(lightbox().props.statusMessage).toBeNull();
+    renderer.act(() => tree?.unmount());
+  });
+
+  it('keeps the selected reference on navigation denial and exposes the failure inside the lightbox', async () => {
+    const next = { ...referenceImage, id: 'next', sortOrder: 1, storagePath: 'references/next.jpg' };
+    const resolveFileUrl = vi.fn(async (path: string) => `https://media.test/${path}`);
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => {
+      tree = renderer.create(<PostResourceReferences items={[referenceImage, next]} onOpenUrl={vi.fn()} resolveFileUrl={resolveFileUrl} />);
+    });
+    const lightbox = () => tree!.root.findByType('media-lightbox' as never);
+    await renderer.act(async () => { tree!.root.findAllByProps({ accessibilityLabel: 'Open reference @alisa' })[0].props.onPress(); });
+    resolveFileUrl.mockRejectedValueOnce(new Error('Access denied'));
+    await renderer.act(async () => { lightbox().props.onNavigate(1); });
+    expect(lightbox().props.activeIndex).toBe(0);
+    expect(lightbox().props.errorMessage).toBe('Couldn’t open reference. Try again or close the preview.');
+    await renderer.act(async () => { lightbox().props.onNavigate(1); });
+    expect(lightbox().props.activeIndex).toBe(1);
+    expect(lightbox().props.errorMessage).toBeNull();
     renderer.act(() => tree?.unmount());
   });
 
