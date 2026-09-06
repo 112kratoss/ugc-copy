@@ -37,7 +37,7 @@ import {
 } from 'lucide-react';
 
 import { getDisplayMediaUrl } from '@/lib/media-urls';
-import { WorkflowOutputThumbnail } from './WorkflowOutputThumbnails';
+import { WorkflowOutputThumbnail, useWorkflowOutputGenerationId } from './WorkflowOutputThumbnails';
 import { IMAGE_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import type { WorkflowAssistantPreviewState } from '@/lib/workflow-assistant-client';
 import type {
@@ -768,6 +768,7 @@ const ImageInputNode = memo(function ImageInputNode({ data, dragging }: NodeProp
 
 const VideoInputNode = memo(function VideoInputNode({ data, dragging }: NodeProps) {
   const typed = data as unknown as RuntimeWorkflowNodeData<VideoInputNodeData>;
+  const generationId = useWorkflowOutputGenerationId(null, typed.storagePath || typed.videoUrl);
   const runtime = getWorkflowNodeRuntimeData(typed);
   const previewUrl = typed.storagePath
     ? getDisplayMediaUrl(typed.storagePath)
@@ -785,8 +786,8 @@ const VideoInputNode = memo(function VideoInputNode({ data, dragging }: NodeProp
       runtime={runtime}
       minHeight={previewUrl ? undefined : 108}
       preview={previewUrl ? (
-        <PreviewMediaLink href={previewUrl} label="Open video input preview" kind="video" disabled={dragging}>
-          <video src={previewUrl} className="h-28 w-full rounded-xl border border-white/10 object-cover" muted playsInline />
+        <PreviewMediaLink href={previewUrl} label="Open video input preview" kind="video" generationId={generationId} disabled={dragging}>
+          <WorkflowOutputThumbnail generationId={generationId} />
         </PreviewMediaLink>
       ) : undefined}
     >
@@ -1039,6 +1040,7 @@ const SoundEffectsGenerateNode = memo(function SoundEffectsGenerateNode({ data, 
 
 const ApprovalGateNode = memo(function ApprovalGateNode({ data, dragging }: NodeProps) {
   const typed = data as unknown as RuntimeWorkflowNodeData<ApprovalGateNodeData>;
+  const generationId = useWorkflowOutputGenerationId(typed.runState.generationId, typed.runState.outputUrl);
   const runtime = getWorkflowNodeRuntimeData(typed);
   const isImage = typed.mediaKind === 'image';
   const previewUrl = typed.runState.outputUrl ? getDisplayMediaUrl(typed.runState.outputUrl) : null;
@@ -1057,6 +1059,7 @@ const ApprovalGateNode = memo(function ApprovalGateNode({ data, dragging }: Node
           href={previewUrl}
           label={`Review ${typed.mediaKind} approval output`}
           kind={typed.mediaKind}
+          generationId={generationId}
           disabled={dragging}
         >
           {isImage ? (
@@ -1069,7 +1072,7 @@ const ApprovalGateNode = memo(function ApprovalGateNode({ data, dragging }: Node
               className="h-28 w-full rounded-xl border border-violet-400/15 object-cover"
             />
           ) : (
-            <video src={previewUrl} className="h-28 w-full rounded-xl border border-violet-400/15 object-cover" muted playsInline />
+            <WorkflowOutputThumbnail generationId={generationId} />
           )}
         </PreviewMediaLink>
       ) : undefined}

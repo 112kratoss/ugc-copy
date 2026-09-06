@@ -55,6 +55,8 @@ export type TemplateRunStatus =
 export type TemplateRunStepKind = 'generation' | 'approval';
 
 export type TemplateRunStep = {
+  renditionUrl?: string | null;
+  previewUrl?: string | null;
   /** Public run-step UUID. This is never a workflow graph node id. */
   id: string;
   kind: TemplateRunStepKind;
@@ -69,6 +71,8 @@ export type TemplateRunStep = {
 };
 
 export type TemplateRunResult = {
+  renditionUrl?: string | null;
+  previewUrl?: string | null;
   generationId: string;
   kind: TemplateMediaKind;
   url: string;

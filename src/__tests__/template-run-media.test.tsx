@@ -75,3 +75,16 @@ describe('template run media recovery', () => {
     expect(screen.getByRole('button', { name: 'Reload media' })).toBeInTheDocument();
   });
 });
+
+ it('plays and renews the optimized file while publishing the renewed original to downloads', async () => {
+   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({ ...run, result: { ...run.result, renditionUrl: '/fresh-small.mp4', previewUrl: '/fresh.webp' } })));
+   const onResolved = vi.fn();
+   const { container } = render(<TemplateRunMedia {...props} renditionUrl="/small.mp4" previewUrl="/poster.webp" onResolved={onResolved} />);
+   expect(container.querySelector('video')).toHaveAttribute('src', '/small.mp4');
+   expect(container.querySelector('video')).toHaveAttribute('poster', '/poster.webp');
+   fireEvent.error(container.querySelector('video')!);
+   fireEvent.click(screen.getByRole('button', { name: 'Reload media' }));
+   await waitFor(() => expect(container.querySelector('video')).toHaveAttribute('src', '/fresh-small.mp4'));
+   expect(container.querySelector('video')).toHaveAttribute('poster', '/fresh.webp');
+   expect(onResolved).toHaveBeenCalledWith({ outputUrl: '/expired.mp4', url: '/renewed.mp4' });
+ });

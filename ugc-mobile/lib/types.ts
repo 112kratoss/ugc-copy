@@ -375,6 +375,8 @@ export interface TemplateRunInput {
 }
 
 export interface TemplateRunStep {
+  renditionUrl?: string | null;
+  previewUrl?: string | null;
   id: string;
   kind: 'generation' | 'approval';
   mediaKind: 'image' | 'video';
@@ -388,6 +390,8 @@ export interface TemplateRunStep {
 }
 
 export interface TemplateRunResult {
+  renditionUrl?: string | null;
+  previewUrl?: string | null;
   /** The canonical generation selected by the backend as this run's result.
    * It is intentionally nullable for legacy runs and must never be inferred
    * from a workflow step id. */

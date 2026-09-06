@@ -1,6 +1,6 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { WorkflowOutputThumbnail, WorkflowOutputThumbnails } from '@/app/create-workflow/WorkflowOutputThumbnails';
+import { WorkflowOutputThumbnail, WorkflowOutputThumbnails, useWorkflowOutputGenerationId } from '@/app/create-workflow/WorkflowOutputThumbnails';
 import { createStarterGraph, type WorkflowCanvasNode } from '@/lib/workflow-canvas';
 
 vi.mock('@/app/components/AuthProvider', () => ({ useAuth: () => ({ session: { access_token: 'fixture' } }) }));
@@ -83,4 +83,28 @@ describe('workflow output thumbnail delivery', () => {
     await act(async () => { finish(await fixtureResponse(fetchMock.mock.calls[0][0]).json()); });
     expect(container.querySelector('img')).toBeNull();
   });
+});
+
+function SourceThumbnail({ outputUrl }: { outputUrl: string }) {
+  const id = useWorkflowOutputGenerationId(null, outputUrl);
+  return <WorkflowOutputThumbnail generationId={id} />;
+}
+it('reuses an exact generated output for input and approval posters without more requests', async () => {
+  const fetchMock = vi.fn(async (url: string) => fixtureResponse(url));
+  vi.stubGlobal('fetch', fetchMock);
+  const nodes = makeNodes(1);
+  const { container } = render(<WorkflowOutputThumbnails nodes={nodes}>
+    <SourceThumbnail outputUrl="/original-0.mp4" /><SourceThumbnail outputUrl="/original-0.mp4" /><SourceThumbnail outputUrl="/unrelated.mp4" />
+  </WorkflowOutputThumbnails>);
+  await waitFor(() => expect(container.querySelectorAll('img')).toHaveLength(2));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(container.querySelectorAll('video')).toHaveLength(0);
+});
+it('resolves a video approval with its own generation ID even without a generator node', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => fixtureResponse(url)));
+  const node = makeNodes(1)[0];
+  node.type = 'approval-gate';
+  Object.assign(node.data, { mediaKind: 'video' });
+  const { container } = render(<Fixture nodes={[node]} />);
+  await waitFor(() => expect(container.querySelectorAll('img')).toHaveLength(1));
 });

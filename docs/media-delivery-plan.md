@@ -65,8 +65,8 @@ Map additional media callers discovered in step 1 into this table.
 | Post details, overlays, full viewers, and lightboxes | Pending | Partial: creation viewer rendition playback and failed-request retry | Partial: creation viewer rendition playback and failed-request retry via rendered handler |
 | Creation inputs, uploads, results, and library/Studio | Partial: Studio and video result rendition playback/original download verified; result failed-link renewal and initial timeout checked in Chromium fixtures | Partial: video result playback/retry/close verified with injected completed state | Partial: video result playback/retry/close verified with injected completed state |
 | Motion references and outputs | Partial: result rendition playback, original download and failed-link renewal checked in Chromium fixtures | Partial: result playback/retry/close verified with injected completed state | Partial: result playback/retry/close verified with injected completed state |
-| Workflow node previews, results, and shared workflows | Partial: expanded video/motion rendition playback and renewal verified; generated video/motion cards use batched posters with no video players, including controlled poster failure/reconnect recovery. Input/approval thumbnails remain direct video consumers | Map supported consumers | Map supported consumers |
-| Template catalog, details, demos, and run results | Partial: final video and intermediate video/image Reload media verified through owned-run GET fixtures; template rendition/preview metadata still absent | Partial: detail and final-run video failure/retry/navigation verified with synthetic responses | Partial: detail and final-run video failure/retry/navigation verified with synthetic responses |
+| Workflow node previews, results, and shared workflows | Partial: expanded video/motion rendition playback and renewal verified; generated video/motion cards use batched posters with no video players, including controlled poster failure/reconnect recovery. Input/approval cards now reuse matching posters or an Open video tile; controlled failures and expanded input Retry passed | Map supported consumers | Map supported consumers |
+| Template catalog, details, demos, and run results | Partial: final video and intermediate video/image Reload media verified through owned-run GET fixtures; final/intermediate videos now consume owned playback renditions and posters; original download links remain separate | Partial: detail/final-run recovery verified; optimized final/intermediate playback verified in emulator with synthetic API/auth context | Partial: detail/final-run recovery verified; optimized final/intermediate playback verified in simulator with synthetic API responses |
 | Marketplace, resource bundles, unlocks, and downloads | Pending | Partial: reference image/video renewal and failure recovery in native fixture host; full purchase/unlock journey pending | Partial: reference image/video renewal and failure recovery in native fixture host; full purchase/unlock journey pending |
 | Post composer, drafts, media reorder, and publish results | Pending | Partial: edit-post lightbox poster-as-video bug reproduced/fixed; item switch and close verified | Partial: edit-post lightbox poster-as-video bug reproduced/fixed; item switch and close verified |
 | Remaining image/audio/video/file renderers, including operator surfaces | Inventory pending | Inventory pending | Inventory pending |
@@ -99,6 +99,11 @@ Map additional media callers discovered in step 1 into this table.
 
 ## Immediate next action
 
+Audit template catalog/demo playback and the workflow input editor’s explicit
+player next, followed by shared-workflow consumers and viewport player ownership.
+The template-run rendition and canvas input/approval thumbnail checkpoint is
+locally verified; its evidence and release boundaries are recorded below.
+
 The private-video producer, durable metadata, batched owner signing, and
 retention-aware deletion are committed locally in `14eedb0` and have passed local
 database/Storage validation. The native viewer recovery fix in `330dfd6` and subsequent shared preview/lightbox
@@ -116,8 +121,7 @@ select private playback. Result pages also renew failed links on Retry, verified
 in Chromium fixtures. Expanded workflow video/motion previews also resolve the
 generation descriptor. Generated video/motion node thumbnails now use batched
 posters; template final and intermediate media renew on explicit Reload media.
-Template rendition delivery and remaining input/approval thumbnails still need integration review
-before claiming private renditions reach every consumer. Keep all
+Template final/intermediate rendition delivery and input/approval canvas cards now have local acceptance evidence. Catalog/demo media, editor input players and shared-workflow consumers still need their own review before claiming private renditions reach every consumer. Keep all
 source-only concerns distinct from reproduced defects and measured improvements.
 
 
@@ -144,9 +148,9 @@ Upload, publish, real provider completion and motion inputs still need their own
 Web video/motion results and expanded workflow output previews now resolve
 renditions and offer Retry. Generated video/motion node thumbnails now use poster
 images and remain clickable if the poster is unavailable. Video input and approval
-thumbnails still consume direct video URLs. Template run results and intermediate
+cards now avoid loading video for thumbnails, reusing exact-output posters where available. Template run results and intermediate
 steps can reload signed URLs through their owned-run API without regenerating.
-Template rendition delivery remains open. Keep these findings distinct from the
+Template run rendition delivery is locally verified for web, Android and iOS; catalog/demo playback remains open. Keep these findings distinct from the
 verified full-screen viewer fix.
 
 The shared mobile API request now keeps its timeout and caller cancellation active
@@ -178,3 +182,20 @@ continue a 40-second clip from its position and keep hidden players paused.
 Different media items and explicit Retry retain their existing behavior. Mobile
 tests/typecheck and clean production exports passed. Actual expiry-timer and
 authenticated-redirect integration during playback remain separate open checks.
+
+
+Latest checkpoint (template playback and workflow input/approval cards): owned
+run responses now batch-sign source-matched ready playback renditions separately
+from original URLs. Web and mobile consume the optional playback fields; web also
+uses posters. A shared wire fixture covers old responses and mobile relative URLs.
+Chromium final/intermediate playback, failed-link renewal, original download
+selection, and canvas poster/open/retry behavior passed. Android/iOS final and
+intermediate playback passed controlled runtime checks; Android used an in-memory
+synthetic auth context because its development session was signed out. This does
+not certify the real sign-in or paid template execution journey. No deployment or
+new migration was performed for this checkpoint.
+
+Next work: template catalog/demo playback and the workflow input editor's explicit
+player; then shared-workflow media, viewport player ownership and iOS offline
+recovery. Actual long-session expiry during playback and physical-device transfer,
+startup and memory measurements remain required before closing the whole-app audit.

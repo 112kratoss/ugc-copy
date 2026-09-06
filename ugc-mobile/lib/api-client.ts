@@ -318,10 +318,14 @@ function normalizeTemplateRunMediaUrls(root: string, response: TemplateRunRespon
       steps: response.run.steps.map((step) => ({
         ...step,
         outputUrl: absolutizeMediaUrl(root, step.outputUrl),
+        ...(step.renditionUrl !== undefined ? { renditionUrl: absolutizeMediaUrl(root, step.renditionUrl) } : {}),
+        ...(step.previewUrl !== undefined ? { previewUrl: absolutizeMediaUrl(root, step.previewUrl) } : {}),
       })),
       result: response.run.result ? {
         ...response.run.result,
         url: absolutizeMediaUrl(root, response.run.result.url) ?? response.run.result.url,
+        ...(response.run.result.renditionUrl !== undefined ? { renditionUrl: absolutizeMediaUrl(root, response.run.result.renditionUrl) } : {}),
+        ...(response.run.result.previewUrl !== undefined ? { previewUrl: absolutizeMediaUrl(root, response.run.result.previewUrl) } : {}),
       } : null,
     },
   };

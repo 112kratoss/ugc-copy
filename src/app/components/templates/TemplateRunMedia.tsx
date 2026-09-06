@@ -9,6 +9,8 @@ interface Props {
   stepId?: string;
   kind: 'image' | 'video';
   url: string;
+  renditionUrl?: string | null;
+  previewUrl?: string | null;
   token?: string;
   alt: string;
   onResolved?: (value: { outputUrl: string; url: string }) => void;
@@ -25,7 +27,8 @@ function MediaSession(props: Props) {
 
 function MediaAttempt({ renew, onRetry, ...props }: Props & { renew: boolean; onRetry: () => void }) {
   const [request] = useState(props);
-  const [source, setSource] = useState<string | null>(renew ? null : request.url);
+  const [source, setSource] = useState<string | null>(renew ? null : request.kind === 'video' ? request.renditionUrl || request.url : request.url);
+  const [poster, setPoster] = useState(request.previewUrl ?? undefined);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const finishRef = useRef<(status: 'ready' | 'error') => void>(() => {});
 
@@ -54,7 +57,9 @@ function MediaAttempt({ renew, onRetry, ...props }: Props & { renew: boolean; on
           if (!url) throw new Error('Media unavailable');
           if (active && !controller.signal.aborted) {
             request.onResolved?.({ outputUrl: request.url, url });
-            setSource(url);
+            const media = request.stepId ? step : run.result;
+            setPoster(media?.previewUrl ?? undefined);
+            setSource(request.kind === 'video' ? media?.renditionUrl || url : url);
           }
         } catch {
           if (active && !controller.signal.aborted) finishRef.current('error');
@@ -67,7 +72,7 @@ function MediaAttempt({ renew, onRetry, ...props }: Props & { renew: boolean; on
   return (
     <div className="relative h-full min-h-52 w-full bg-black" aria-busy={status === 'loading'}>
       {source && status !== 'error' ? request.kind === 'video' ? (
-        <video src={source} controls playsInline preload="metadata" className="h-full w-full object-contain"
+        <video src={source} poster={poster} controls playsInline preload="metadata" className="h-full w-full object-contain"
           onLoadedMetadata={() => finishRef.current('ready')} onError={() => finishRef.current('error')} />
       ) : (
         // eslint-disable-next-line @next/next/no-img-element

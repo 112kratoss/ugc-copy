@@ -797,7 +797,7 @@ function RunStepCard({
         <Pill label={statusLabel} accent={statusAccent} />
       </View>
       {step.outputUrl ? (
-        <MediaPreview url={step.outputUrl} kind={step.mediaKind} height={step.mediaKind === 'video' ? 300 : 390} />
+        <MediaPreview url={step.mediaKind === 'video' ? step.renditionUrl || step.outputUrl : step.outputUrl} kind={step.mediaKind} height={step.mediaKind === 'video' ? 300 : 390} />
       ) : (
         <View style={{ minHeight: 220, borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: appTheme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
           {failed ? <RefreshCw size={appTheme.icon.hero} color={appTheme.colors.danger} /> : <ActivityIndicator size="large" color={appTheme.colors.primary} />}
@@ -922,7 +922,7 @@ function ResultStage({
         </View>
         <AppText variant="cardTitle">Final {result.kind}</AppText>
       </View>
-      <MediaPreview url={result.url} kind={result.kind} height={440} />
+      <MediaPreview url={result.kind === 'video' ? result.renditionUrl || result.url : result.url} kind={result.kind} height={440} />
       {!safeResultUrl ? (
         <StatusBlock
           title="Result link unavailable"

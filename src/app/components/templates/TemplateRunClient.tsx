@@ -774,6 +774,7 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
           <Surface variant="panel" padding="none" className="overflow-hidden">
             <MediaFrame aspectRatio={result.kind === 'video' ? '16 / 10' : '4 / 5'} className="rounded-none border-0">
               <TemplateRunMedia runId={run.id} kind={result.kind} url={result.url} token={session?.access_token}
+                renditionUrl={result.renditionUrl} previewUrl={result.previewUrl}
                 alt={`${run.templateTitle} result`} onResolved={setResolvedDownload} />
             </MediaFrame>
           </Surface>

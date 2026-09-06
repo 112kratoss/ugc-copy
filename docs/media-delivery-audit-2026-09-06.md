@@ -882,3 +882,75 @@ Validation: final full web run passed 751 files / 5,350 tests. Application and
 test typechecks and changed-file ESLint passed. No production build was run
 alongside the active dev server; exact release Quality remains required.
 No migration, deployment or OTA is included in this checkpoint.
+
+
+## Template playback files and remaining canvas input/approval thumbnails
+
+Status: implemented and verified locally; not deployed. No new migration in this
+checkpoint. The existing private playback migration remains pending production
+release through the exact-main Quality/production-release workflow.
+
+The owned template-run service previously omitted the ready private playback file.
+A service regression test failed before the change (see local
+`output/media-audit/template-rendition-before.log`). It now selects generation
+ownership and derivative metadata, checks owner/run/generation/original-source
+identity, and admits only ready renditions inside that generation's private
+playback directory. Final, generation-step and source-matched approval outputs
+share deduplicated signing batches per bucket. Fixed template inputs retain their
+existing owner resolver. Original URLs stay in `url`/`outputUrl`; optional
+`renditionUrl` and `previewUrl` travel separately. Shared contract fixture:
+`contracts/template-run-media-v1.json`, tested by both clients, including older
+responses and mobile relative-URL normalization. Web uses the playback file and
+poster; native final/intermediate video previews select the playback file. Missing
+or ineligible derivatives retain original playback.
+
+Chromium reproduced two failed embedded video requests from video-input and video
+approval canvas cards (503 input, 403 approval), both with readyState 0/media error
+4 before opening either preview. After the change the same four-node graph had
+zero card video elements, zero original-video requests and three loaded posters
+(two generated cards plus approval); the standalone upload kept an Open video
+tile. Approvals and generated references can reuse an exact original-output match
+within the graph, including its generation ID for expanded playback. An unrelated
+upload gets no guessed poster. Missing posters never trigger a full-video fallback.
+The input editor's explicit controls player is separate from the canvas thumbnail
+and remains a follow-up surface.
+
+Acceptance evidence:
+
+- Web final template video decoded the rendition while paused, used its poster,
+  and kept the download link on the original with zero original playback requests.
+  A real intercepted HTTP 403 on the rendition displayed Reload media; owned-run
+  GET renewal decoded the fresh rendition and renewed the download to the fresh
+  original. Intermediate video approval and image output loaded successfully.
+- Canvas approval opened and decoded the rendition. Standalone video input opened
+  its original only on demand, displayed a visible error for 503, and decoded after
+  explicit Retry when the same source recovered. These are controlled Chromium
+  fixtures, not production/CDN latency measurements.
+- Android emulator and iOS simulator rendered final and intermediate native
+  template previews from the 150,439-byte local worker-produced rendition, with
+  readyToPlay and a visible decoded test pattern. Explicit play ran successfully;
+  backing out removed the active step player and retained the prior final player
+  paused. The fixture server recorded rendition requests only. Its no-store,
+  two-second looping fixture is not a bandwidth benchmark.
+- Native responses were synthetic; Android additionally used a temporary in-memory
+  auth context to reach the renderer from its signed-out development session. This
+  verifies native media selection/rendering, not authentication or paid execution.
+  Local screenshots: `output/media-audit/template-rendition-android.png` and
+  `template-rendition-ios.png`. Runtime fixture state is cleared after acceptance.
+- Read-only local Supabase smoke queried the exact new generation column list and
+  used existing real Storage objects with a synthetic run association. The delivery
+  projection retained the original, matched approval playback and returned HTTP
+  206 with 1,024 requested bytes. No DB writes. Receipt:
+  `output/media-audit/template-media-local-query.json`.
+- Web: 753 files / 5,367 tests pass. Mobile: 186 files / 1,802 tests pass. Web app,
+  web test, script and mobile typechecks pass; focused lint passes. Production web
+  build and ffmpeg/libvips artifact verification pass. Android/iOS production
+  exports and bundled client configuration checks pass. The first build caught a
+  type error in the ignored local query harness; that harness was corrected before
+  the successful rebuild. Regression tests cover
+  ownership/run/source mismatches, pending/foreign rendition paths, batch
+  deduplication, legacy API compatibility and exact-output poster reuse.
+
+Remaining: catalog/demo media, explicit input editor players, shared workflow
+consumers, true template long-session expiry/renewal, physical-device performance
+and the remaining surface matrix. This checkpoint does not close the whole-app audit.

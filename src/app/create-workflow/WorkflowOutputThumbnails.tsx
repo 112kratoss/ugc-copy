@@ -5,7 +5,7 @@ import { Play } from 'lucide-react';
 import { useAuth } from '@/app/components/AuthProvider';
 import type { WorkflowCanvasNode } from '@/lib/workflow-canvas';
 
-const ThumbnailContext = createContext<{ urls: Record<string, string>; revision: number }>({ urls: {}, revision: 0 });
+const ThumbnailContext = createContext<{ urls: Record<string, string>; revision: number; sources: Record<string, string> }>({ urls: {}, revision: 0, sources: {} });
 
 export function WorkflowOutputThumbnails({ nodes, children }: { nodes: WorkflowCanvasNode[]; children: ReactNode }) {
   const { session } = useAuth();
@@ -13,7 +13,8 @@ export function WorkflowOutputThumbnails({ nodes, children }: { nodes: WorkflowC
   // Position/selection changes must not fetch media again. Include the original
   // output identity so a rerun invalidates a poster even if its node is reused.
   const identity = JSON.stringify(nodes
-    .filter((node) => (node.type === 'video-generate' || node.type === 'motion-generate')
+    .filter((node) => (node.type === 'video-generate' || node.type === 'motion-generate'
+      || (node.type === 'approval-gate' && 'mediaKind' in node.data && node.data.mediaKind === 'video'))
       && node.data.runState.generationId && node.data.runState.outputUrl)
     .map((node) => [node.data.runState.generationId, node.data.runState.outputUrl])
     .sort((left, right) => String(left[0]).localeCompare(String(right[0]))));
@@ -77,7 +78,15 @@ export function WorkflowOutputThumbnails({ nodes, children }: { nodes: WorkflowC
     };
   }, [identity, token]);
 
-  return <ThumbnailContext.Provider value={posters.identity === identity && posters.token === token ? posters : { urls: {}, revision: posters.revision }}>{children}</ThumbnailContext.Provider>;
+  const sources = Object.fromEntries((JSON.parse(identity) as [string, string][]).map(([id, output]) => [output, id]));
+  const current = posters.identity === identity && posters.token === token ? posters : { urls: {}, revision: posters.revision };
+  return <ThumbnailContext.Provider value={{ ...current, sources }}>{children}</ThumbnailContext.Provider>;
+}
+
+/** Approvals may omit the generation ID; only reuse an exact output match in this graph. */
+export function useWorkflowOutputGenerationId(generationId: string | null, outputUrl?: string | null) {
+  const { sources } = useContext(ThumbnailContext);
+  return generationId || (outputUrl ? sources[outputUrl] : null) || null;
 }
 
 export function WorkflowOutputThumbnail({ generationId }: { generationId: string | null }) {

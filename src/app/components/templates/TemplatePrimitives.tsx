@@ -370,7 +370,8 @@ export function TemplateSlotUpload({
 
 function StepMedia({ step, mediaRecovery }: { step: TemplateRunStep; mediaRecovery?: { runId: string; token?: string } }) {
   if (step.outputUrl && mediaRecovery) {
-    return <TemplateRunMedia {...mediaRecovery} stepId={step.id} kind={step.mediaKind} url={step.outputUrl} alt={step.label} />;
+    return <TemplateRunMedia {...mediaRecovery} stepId={step.id} kind={step.mediaKind} url={step.outputUrl}
+      renditionUrl={step.renditionUrl} previewUrl={step.previewUrl} alt={step.label} />;
   }
   if (step.outputUrl && step.mediaKind === 'video') {
     return <video src={step.outputUrl} controls playsInline preload="metadata" className="h-full w-full bg-black object-contain" />;
