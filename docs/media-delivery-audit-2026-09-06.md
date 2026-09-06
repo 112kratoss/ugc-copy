@@ -100,11 +100,11 @@ contract or storage permission changed.
 
 | Path | Finding and evidence | Next verification |
 | --- | --- | --- |
-| Private generation encoding and owner API | Measured 14 originals / 187 MB; no durable private rendition metadata or owner descriptor rendition. Largest local encode was 93.69% smaller in the first pass. | Add bounded producer, signing, retention-aware cleanup and original-preserving publication; measure playback on devices. |
-| Web profile/Creations viewers | Source review: generation previews and detail modals receive `output_url`; published posts already use playback resolvers. | Integrate generation playback descriptors and test the browser's selected requests. |
+| Private generation encoding and owner API | Measured 14 originals / 187 MB. Private producer, owner signing and deletion cleanup implemented and locally verified below. | Release migration/code through Quality and the release workflow; measure native playback and backlog drainage. |
+| Web profile/Creations viewers | Generation previews and detail modals now use the descriptor rendition, retaining original downloads. | Browser fixture verification below; expired-signature and reconnect cases remain open. |
 | Creation/motion results, workflows, templates | Source review: direct video elements consume result URLs. No common renewal/rendition integration is established across these callers. | Check expiry, poster continuity, background return and the original/download distinction on each supported surface. |
 | Full-rendition worker interruption | Source review: `claim_media_rendition_repairs` leases without incrementing attempts; the worker increments at terminal updates. A process killed before that update may retain its attempt count. | Reproduce lease-expiry/crash exhaustion locally before changing claim semantics; account for claimed rows deferred by the time budget. |
-| Generation deletion | Source review: single deletion selects original/showcase paths, not preview metadata. Linked posts retain outputs. | Reproduce orphan behavior and audit all references before adding derivative cleanup; no orphan purge has been performed. |
+| Generation deletion | Source review: Private playback cleanup now uses DELETE RETURNING to capture a concurrently published derivative; linked posts retain outputs. Preview cleanup remains source-only. | Continue preview/reference retention audit; no orphan purge has been performed. |
 | Remaining device coverage | Offline/reconnect, background expiry, rapid navigation, audio/resources, avatars/covers and physical-device performance remain incomplete. | Continue the whole-app matrix; do not infer caller coverage from shared unit tests. |
 
 ## Validation and evidence
@@ -114,8 +114,8 @@ contract or storage permission changed.
   configuration verification found no missing required client values.
 - Android native cache reproduction and helper verification passed as described.
 - Production: all 27 selected video objects decoded and passed range checks.
-- No web/backend code or schema changed, so this pass did not repeat their full
-  suites or database replay. Native exports are not store builds or OTA releases.
+- These first second-pass checks preceded the backend implementation below.
+  Native exports are not store builds or OTA releases.
 
 Ignored local evidence in `output/media-audit/`: `private-descriptor-before.log`,
 `private-descriptor-after.log`, `viewer-cache-before.log`,
@@ -124,3 +124,88 @@ Ignored local evidence in `output/media-audit/`: `private-descriptor-before.log`
 `video-integrity-second-pass.json`, `video-integrity-legacy-second-pass.json`,
 and `native-exports-second-pass-verification.jsonl`. Bounded read-only audit and
 synthetic native fixture scripts are kept alongside those receipts.
+
+
+## Private playback producer checkpoint (local, unreleased)
+
+The private-generation pipeline now persists a separate playback object in the
+owner's private `generated_videos/<owner>/playback/<generation>/<hash>.mp4`
+namespace. The original URL and bytes remain unchanged. The owner API batches
+signing with its existing media reads and exposes only the signed rendition URL,
+not its raw path/status columns. It suppresses failed, processing, foreign-owner
+and stale-source metadata. Web Studio and profile use the playback resolver;
+the earlier mobile adapter fix preserves the same descriptor.
+
+Migration `20260905213637_private_generation_playback_renditions.sql` was captured
+from the isolated local schema using Supabase CLI 2.75.0 and replayed cleanly.
+Service-only claim/preflight RPCs admit existing owner-scoped stored videos whose
+recorded size is positive and at most 64 MiB. Each claim consumes one of three
+attempts before I/O, so expired leases cannot retry forever after process kills.
+One video runs only on an otherwise idle preview sweep within its first 30 seconds.
+Encoding uses the existing H.264/AAC fast-start ladder and rejects outputs that
+are not meaningfully smaller. Downloaded size must match the admitted size, and
+stored derivative bytes must match the encoder output before publication.
+
+A 150-second cancellation signal bounds downloads and FFmpeg work, with narrower
+30/15-second source/readback timeouts. The current SDK upload and DB mutations do
+not accept that signal here; this is not a hard end-to-end deadline. Platform
+termination is still covered by the consumed attempt and expiring lease. Busy
+preview/post queues take priority, so private backfill can be delayed.
+
+Deletion now returns the row it actually deleted, capturing a rendition published
+between the initial read and delete. A worker whose generation disappears before
+publication removes only its new derivative. Regression tests reproduce both
+races. Linked-post retention is preserved. A process killed after upload and
+before publication can still leave an unreferenced content-addressed object;
+there is no general orphan purge in this checkpoint. If the original path later
+changes, the API hides the old rendition; automatic requeue is not implemented.
+
+### Local Storage and browser evidence
+
+A synthetic 656 × 1376, two-second original was uploaded as a correctly typed
+Blob to the isolated local Storage service. The real claim, worker, FFmpeg,
+readback and owner-route service produced a 610 × 1280 rendition:
+
+| Measurement | Result |
+| --- | --- |
+| Original | 1,790,943 bytes |
+| Private playback | 150,439 bytes (91.60% smaller) |
+| Original readback | Exact byte equality; original path unchanged |
+| Rendition decode | Full FFmpeg decode passed |
+| Signed Range request | HTTP 206, exactly 1,024 bytes |
+| Unauthenticated public-object request | HTTP 400; no public read |
+| Repeat sweep | No new attempt after ready publication |
+
+Chromium opened the actual Studio page with the local owner API payload supplied
+through request interception. Both the tile and detail player selected the
+private rendition, decoded at 610 × 1280, and reached readyState 4 without a media
+error; the detail player was playing. The download link retained the original.
+The owner profile was also loaded with a real synthetic local Supabase session;
+its creation detail player selected the rendition, decoded at 610 × 1280, reached
+readyState 4 and was playing without a media error. Its inactive grid player had
+not loaded a source, so this does not claim profile-grid autoplay coverage.
+This is synthetic local browser evidence, not production/mobile latency data.
+
+### Backend checkpoint validation
+
+- Full web suite: 747 files / 5,321 tests passed before the final scheduler and
+  cancellation/contract cases; the final affected run passed 7 files / 64 tests.
+- Clean isolated migration replay and full database suite: 62 files / 1,155 tests.
+  Includes lease recovery/exhaustion, owner/size admission, path/ready constraints,
+  and service-only access checks.
+- Web application, script and test typechecks plus lint passed. Production build
+  and runtime FFmpeg/libvips artifact checks passed before formatting/test-only
+  changes; no subsequent production-code behavior changed.
+- Shared contract now includes a private-video response preserving the original
+  and playback URLs. Mobile contract suite: 102 tests passed; mobile typecheck
+  passed. No mobile runtime code changed in this backend checkpoint.
+- This migration and backend code have not been applied to production or released.
+  Quality on the exact release SHA and the normal production workflow remain required.
+
+Local evidence: `private-playback-local-smoke.json`,
+`private-playback-browser-creations.log`, `private-playback-browser-profile.log`,
+`private-playback-web-tests.log`,
+`private-playback-db-suite.log`, `private-playback-build.log`,
+`private-playback-checks-complete.log`, and `private-playback-contract-mobile.log`
+in ignored `output/media-audit/`. All media in this smoke run is synthetic and
+local. Original production media has not been overwritten by this checkpoint.

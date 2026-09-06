@@ -21,9 +21,12 @@ completed successfully, applying migrations
 rechecked during the second audit pass and still reports the full `85c137e` SHA.
 Compatible production OTA updates were published for Android 70/71 and iOS 47/51.
 
-The second pass on `fix/private-video-delivery` contains additional mobile viewer
-fixes under local validation. Those changes are not included in the released
-checkpoint. No new database migration is required for these client fixes.
+The second pass on `fix/private-video-delivery` contains mobile viewer fixes
+committed locally as `043f699`, followed by a locally validated private-video
+producer, owner API signing and web viewer integration. These changes are not
+included in the released checkpoint. The backend work adds migration
+`20260905213637_private_generation_playback_renditions.sql`; it has passed clean
+local replay and has not been applied to production.
 
 Objective: reliable first display and playback with bounded transfer, decoding,
 and memory costs across every media surface. Preserve original download quality
@@ -38,9 +41,9 @@ change fix priority, but cannot silently remove surfaces from coverage.
 | 2. Stored-media integrity | Find missing, corrupt, expired-provider, misclassified, or permanently skipped records. Verify original durability, upload handling, preview writers, and repair eligibility. | Full-decode audit with all rows accounted for; recoverable data repaired; unrecoverable rows explicitly tracked; regression tests for verified writer/repair defects. | Partial: 7 production repairs; 95 previews decode; 66 missing dimension pairs backfilled; 3 unavailable-source records remain. Shared generation/post readback hardening and legacy repair eligibility are released in `85c137e`. |
 | 3. URL and cache lifetime | Trace private signed URLs, refresh/renewal, query cache age, stable object identities, CDN cache behavior, and native disk cache. Verify mobile authentication on fallback paths. | Expired URL, old query cache, failed signing, offline/reconnect, and background/foreground tests recover without request storms or access changes. | Private proxy fallback released: browser plus Android/iOS images. A genuinely expired storage URL recovered on iOS; offline/background and remaining renderers pending. |
 | 4. Image delivery | Measure preview bytes and decode size against actual rendered size and device pixel ratio. Check thumbnails, original fallback, loading placeholders, prefetch, and duplicate backdrop loads. | Before/after transferred bytes, first-image time, and memory; readable images with no unbounded original downloads in grids. | 720px preview baseline measured; 66 missing dimensions backfilled. iOS grid fixture eliminated 48 separate measurement calls using rendered image metadata; Android cache alias reproduced and viewer source-key fix verified locally. Byte/time baselines and smaller variants pending. |
-| 5. Video and audio delivery | Cover published posts and private creations. Check poster continuity, first frame, range requests, codecs, faststart, renditions/teasers, buffering, simultaneous players, release, seeking, and audio source recovery. | Playback and lifecycle tests across slow network, fast scrolling, backgrounding, and failed sources; measured startup, stalls, bytes, and memory. | Ready-video teaser repaired live and played on iOS; automatic repair released. Second pass: all 27 selected stored video objects fully decode and pass range checks; 3 originals lack fast-start. Private original baseline: 14 videos / 187 MB; largest local rendition 93.69% smaller. Private pipeline, audio and device stress checks pending. |
+| 5. Video and audio delivery | Cover published posts and private creations. Check poster continuity, first frame, range requests, codecs, faststart, renditions/teasers, buffering, simultaneous players, release, seeking, and audio source recovery. | Playback and lifecycle tests across slow network, fast scrolling, backgrounding, and failed sources; measured startup, stalls, bytes, and memory. | Ready-video teaser repaired live and played on iOS; automatic repair released. Second pass: all 27 selected stored video objects fully decode and pass range checks; 3 originals lack fast-start. Private original baseline: 14 videos / 187 MB; largest local rendition 93.69% smaller. Private pipeline locally verified with a 91.60% smaller synthetic video, unchanged original and private range reads. Release, audio and device stress checks pending. |
 | 6. Surface integration | Apply verified shared fixes and inspect every applicable surface in the matrix below. Exercise production-like native binaries and web browsers. | Every surface has recorded normal/loading/error/retry and navigation outcomes. Native rendering defects require native reproduction and verification. | Android profile first pass, controlled Android viewer recovery and Android/iOS private-image fallback verified. Broad surface pass pending. |
-| 7. Release and regression control | Run affected tests and required release checks; deploy through existing release workflows. Verify exact live web SHA and actual mobile runtime/build targets. Define delivery measurements and bounded integrity checks. | Exact-release evidence, post-release checks, rollback details, and actionable regression signals. | Reliability checkpoint released: exact live `85c137e` confirmed; Android 70/71 and iOS 47/51 production OTAs published. Second-pass client fixes remain local. Broad device checks remain; no automation created. |
+| 7. Release and regression control | Run affected tests and required release checks; deploy through existing release workflows. Verify exact live web SHA and actual mobile runtime/build targets. Define delivery measurements and bounded integrity checks. | Exact-release evidence, post-release checks, rollback details, and actionable regression signals. | Reliability checkpoint released: exact live `85c137e` confirmed; Android 70/71 and iOS 47/51 production OTAs published. Second-pass client and private playback backend changes remain local. Broad device checks remain; no automation created. |
 
 Steps 3–5 may produce independent fixes while the legacy-source recovery in step
 2 is unresolved. A missing original must not block other optimization work or be
@@ -96,15 +99,16 @@ Map additional media callers discovered in step 1 into this table.
 
 ## Immediate next action
 
-Complete the private-video part with durable owner-scoped rendition metadata,
-bounded encoding, batched private signing, and retention-aware cleanup. The
-second-pass mobile viewer now preserves descriptors and keeps originals out of
-thumbnail cache entries; regression tests and an Android native cache probe
-verify those specific paths. It does not yet have a backend private-rendition
-producer.
+The private-video producer, durable metadata, batched owner signing, and
+retention-aware deletion have passed local database/Storage validation. Chromium
+Studio verifies rendition playback and original download selection. Finish native
+playback/lifecycle checks and exact-release Quality before deploying the migration
+and code through the existing release workflow. Worker upload/DB cancellation,
+crash-orphan reclamation, and source-change requeue remain explicit limitations
+in the September 6 audit.
 
 Continue signed-URL/background recovery and device verification across the
-surface matrix. Web creation/profile viewers, generation result pages, workflow
-previews and template results still need their playback-source integration
-reviewed before claiming private renditions reach every consumer. Keep all
+surface matrix. Web creation/profile viewers now select private playback; generation result
+pages, workflow previews and template results still need integration review
+before claiming private renditions reach every consumer. Keep all
 source-only concerns distinct from reproduced defects and measured improvements.

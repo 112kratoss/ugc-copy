@@ -8,6 +8,7 @@ type GenerationRow = {
   user_id: string;
   output_url: string | null;
   showcase_asset_path: string | null;
+  playback_rendition_path?: string | null;
 };
 
 type IdentityState = 'active' | 'merged' | 'deleting';
@@ -38,6 +39,7 @@ function createAdminSupabaseMock({
   linkedGuestIds = [],
   linkedPosts = [],
   rateLimitAllowed = true,
+  deletedPlaybackPath,
 }: {
   generation?: GenerationRow | null;
   inputMediaRows?: Array<{ user_id: string; storage_path: string | null }>;
@@ -46,6 +48,7 @@ function createAdminSupabaseMock({
   linkedGuestIds?: string[];
   linkedPosts?: Array<{ id: string }>;
   rateLimitAllowed?: boolean;
+  deletedPlaybackPath?: string;
 } = {}) {
   const deletes: string[] = [];
   const ownerFilters: Array<{ operation: 'delete' | 'select'; table: string; values: unknown[] }> = [];
@@ -145,6 +148,9 @@ function createAdminSupabaseMock({
           delete() {
             deletes.push(table);
             const query = {
+              select: async () => ({ data: generation ? [{...generation,
+                ...(deletedPlaybackPath ? {playback_rendition_path:deletedPlaybackPath} : {}),
+              }] : [], error: null }),
               eq() {
                 return query;
               },
@@ -206,6 +212,31 @@ describe('generation delete service', () => {
       status: 401,
     });
     expect(createAdminSupabase).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('cleans private playback only when linked-post retention permits (linked: %s)', async linked => {
+    const admin = createAdminSupabaseMock({
+      generation: { id: 'gen-1', user_id: 'user-1', output_url: 'generated_videos/user-1/original.mp4',
+        showcase_asset_path: null, playback_rendition_path: 'generated_videos/user-1/playback/gen-1/abc.mp4' },
+      linkedPosts: linked ? [{id:'post-1'}] : [], inputMediaRows: [],
+    });
+    createAdminSupabase.mockReturnValueOnce(admin.client);
+    const {deleteOwnerGenerationForRoute} = await import('@/lib/generation-delete-service');
+    const result=await deleteOwnerGenerationForRoute({createAdminSupabase,createUserSupabase,
+      generationId:'gen-1',invalidateFeedCache:vi.fn(),request:new Request('http://localhost/api/generations/gen-1')});
+    expect(result.ok).toBe(true);
+    expect(admin.selects.some(s=>s.includes('playback_rendition_path'))).toBe(true);
+    expect(admin.storageRemovals.some(r=>r.paths.includes('user-1/playback/gen-1/abc.mp4'))).toBe(!linked);
+  });
+
+  it('cleans the rendition published between the initial read and deletion', async () => {
+    const path='generated_videos/user-1/playback/gen-1/finished.mp4';
+    const admin=createAdminSupabaseMock({deletedPlaybackPath:path});
+    createAdminSupabase.mockReturnValueOnce(admin.client);
+    const {deleteOwnerGenerationForRoute}=await import('@/lib/generation-delete-service');
+    await deleteOwnerGenerationForRoute({createAdminSupabase,createUserSupabase,generationId:'gen-1',
+      invalidateFeedCache:vi.fn(),request:new Request('http://localhost/api/generations/gen-1')});
+    expect(admin.storageRemovals).toContainEqual({bucket:'generated_videos',paths:['user-1/playback/gen-1/finished.mp4']});
   });
 
   it('maps rate limits before generation reads, deletes, or storage cleanup', async () => {

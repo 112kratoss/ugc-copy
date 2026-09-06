@@ -91,6 +91,7 @@ interface OwnerPost {
 
 interface OwnerGeneration {
   id: string;
+  media?: { renditionUrl?: string | null } | null;
   output_url: string | null;
   output_urls?: string[] | null;
   preview_url?: string | null;
@@ -943,6 +944,7 @@ export default function OwnerProfileMediaHub({
                     title={getGenerationTitle(generation)}
                     subtitle={`${generation.status} · ${formatShortDate(generation.created_at)}`}
                     mediaUrl={generation.output_url}
+                    renditionUrl={generation.media?.renditionUrl}
                     previewUrl={generation.preview_url}
                     mediaKind={mediaType === 'text' ? null : mediaType}
                     badges={[
@@ -1009,7 +1011,9 @@ export default function OwnerProfileMediaHub({
         isOpen={Boolean(selectedGeneration)}
         onClose={closeGeneration}
         mediaType={selectedGeneration ? getGenerationMediaType(selectedGeneration) : 'image'}
-        src={selectedGeneration?.output_url ?? null}
+        src={selectedGeneration?.output_url ? resolvePlaybackUrl({
+          url: selectedGeneration.output_url, renditionUrl: selectedGeneration.media?.renditionUrl,
+        }) : null}
         alt={selectedGeneration ? getGenerationTitle(selectedGeneration) : 'Creation preview'}
         title={selectedGeneration ? getGenerationTitle(selectedGeneration) : 'Creation preview'}
         prompt={selectedGeneration?.prompt ?? ''}
