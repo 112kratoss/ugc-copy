@@ -1,6 +1,7 @@
 import { MetadataRoute } from 'next';
 
 import { getSortedPostsData } from '@/lib/blog';
+import { listPublicModels, toModelSlug } from '@/lib/model-pages';
 import { siteConfig } from '@/lib/seo';
 import {
     getIndexableCreators,
@@ -22,6 +23,7 @@ const INDEXABLE_ROUTES: Array<{
     { path: '/ai-motion-transfer', changeFrequency: 'weekly', priority: 0.8 },
     { path: '/ai-workflow-builder', changeFrequency: 'weekly', priority: 0.8 },
     { path: '/templates', changeFrequency: 'daily', priority: 0.75 },
+    { path: '/models', changeFrequency: 'weekly', priority: 0.8 },
     { path: '/contact', changeFrequency: 'monthly', priority: 0.55 },
     { path: '/child-safety', changeFrequency: 'yearly', priority: 0.4 },
     { path: '/terms', changeFrequency: 'yearly', priority: 0.3 },
@@ -44,10 +46,11 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     // Independent reads; one round trip rather than three sequential ones. Each
     // resolves to an empty list on failure, so a database problem degrades the
     // sitemap to its static routes instead of failing the response.
-    const [showcasePosts, creators, templates] = await Promise.all([
+    const [showcasePosts, creators, templates, models] = await Promise.all([
         getIndexableShowcasePosts(),
         getIndexableCreators(),
         getIndexableTemplates(),
+        listPublicModels().catch(() => []),
     ]);
 
     return [
@@ -80,6 +83,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
             lastModified: template.updated_at ? new Date(template.updated_at) : now,
             changeFrequency: 'weekly' as const,
             priority: 0.55,
+        })),
+        ...models.map((model) => ({
+            url: `${baseUrl}/models/${toModelSlug(model.id)}`,
+            lastModified: now,
+            changeFrequency: 'weekly' as const,
+            priority: 0.65,
         })),
     ];
 }
