@@ -106,7 +106,7 @@ export async function getIndexableShowcasePosts(): Promise<ShowcaseSitemapRow[]>
 
 export type CreatorSitemapRow = {
     username: string;
-    updated_at: string | null;
+    lastPostedAt: string | null;
 };
 
 /**
@@ -116,6 +116,11 @@ export type CreatorSitemapRow = {
  * the test accounts that are currently indexable, without maintaining a
  * hand-written blocklist of usernames that would go stale the moment someone
  * makes a new one.
+ *
+ * `lastModified` comes from the creator's most recent post rather than from the
+ * profile row: `profiles` has no `updated_at` column, and a profile page's
+ * content is its posts anyway, so the newest one is the honest answer. It costs
+ * nothing extra — the same rows are already being read to count them.
  */
 export async function getIndexableCreators(): Promise<CreatorSitemapRow[]> {
     try {
@@ -123,7 +128,7 @@ export async function getIndexableCreators(): Promise<CreatorSitemapRow[]> {
 
         const { data: postRows, error: postError } = await supabase
             .from('posts')
-            .select('user_id')
+            .select('user_id, created_at')
             .eq('visibility', 'public')
             .eq('review_status', 'visible')
             .is('archived_at', null)
@@ -134,14 +139,22 @@ export async function getIndexableCreators(): Promise<CreatorSitemapRow[]> {
             return [];
         }
 
-        const postCounts = new Map<string, number>();
-        for (const row of (postRows ?? []) as Array<{ user_id: string | null }>) {
+        const stats = new Map<string, { count: number; lastPostedAt: string | null }>();
+        for (const row of (postRows ?? []) as Array<{ user_id: string | null; created_at: string | null }>) {
             if (!row.user_id) continue;
-            postCounts.set(row.user_id, (postCounts.get(row.user_id) ?? 0) + 1);
+            const existing = stats.get(row.user_id);
+            const lastPostedAt = !existing?.lastPostedAt
+                || (row.created_at && row.created_at > existing.lastPostedAt)
+                ? row.created_at ?? existing?.lastPostedAt ?? null
+                : existing.lastPostedAt;
+            stats.set(row.user_id, {
+                count: (existing?.count ?? 0) + 1,
+                lastPostedAt,
+            });
         }
 
-        const publishingUserIds = [...postCounts.entries()]
-            .filter(([, count]) => count >= MIN_PUBLIC_POSTS_FOR_INDEXING)
+        const publishingUserIds = [...stats.entries()]
+            .filter(([, entry]) => entry.count >= MIN_PUBLIC_POSTS_FOR_INDEXING)
             .map(([userId]) => userId)
             .slice(0, CREATOR_URL_LIMIT);
 
@@ -151,7 +164,7 @@ export async function getIndexableCreators(): Promise<CreatorSitemapRow[]> {
 
         const { data, error } = await supabase
             .from('profiles')
-            .select('username, display_name, updated_at')
+            .select('id, username, display_name')
             .in('id', publishingUserIds)
             .not('username', 'is', null)
             .not('display_name', 'is', null);
@@ -161,9 +174,12 @@ export async function getIndexableCreators(): Promise<CreatorSitemapRow[]> {
             return [];
         }
 
-        return ((data ?? []) as Array<{ username: string | null; display_name: string | null; updated_at: string | null }>)
+        return ((data ?? []) as Array<{ id: string; username: string | null; display_name: string | null }>)
             .filter((row) => Boolean(row.username?.trim() && row.display_name?.trim()))
-            .map((row) => ({ username: row.username as string, updated_at: row.updated_at }));
+            .map((row) => ({
+                username: row.username as string,
+                lastPostedAt: stats.get(row.id)?.lastPostedAt ?? null,
+            }));
     } catch (error) {
         logBackendError('failed_to_load_creator_sitemap_entries', { error });
         return [];

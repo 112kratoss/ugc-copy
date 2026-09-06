@@ -74,7 +74,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
         })),
         ...creators.map((creator) => ({
             url: `${baseUrl}/creators/${creator.username}`,
-            lastModified: creator.updated_at ? new Date(creator.updated_at) : now,
+            lastModified: creator.lastPostedAt ? new Date(creator.lastPostedAt) : now,
             changeFrequency: 'weekly' as const,
             priority: 0.5,
         })),

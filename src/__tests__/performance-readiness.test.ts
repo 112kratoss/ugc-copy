@@ -10,12 +10,20 @@ const readProjectFile = (relativePath: string) => (
 );
 
 describe('production performance readiness', () => {
-  it('inlines the scoped public Tailwind stylesheet without pulling in private utilities', () => {
+  it('serves the scoped public Tailwind stylesheet externally, without pulling in private utilities', () => {
     const nextConfig = readProjectFile('next.config.ts');
     const globalCss = readProjectFile('src/app/globals.css');
 
-    expect(nextConfig).toContain('inlineCss: true');
-    expect(nextConfig).toContain('Inline the source-scoped route CSS');
+    // `inlineCss` was on to remove the render-blocking stylesheet round trip.
+    // It is off deliberately: Next inlines the stylesheet twice per response —
+    // once in a <style> tag and once again, escaped, inside the RSC flight
+    // payload — which is a documented limitation of the flag. At a ~327 KB
+    // bundle that took /models from 114 KB of HTML to 868 KB, so even a
+    // first-time visitor with a cold cache received roughly twice the bytes.
+    // Turning it back on is only correct if the CSS bundle shrinks by about an
+    // order of magnitude; re-measure before flipping this.
+    expect(nextConfig).toContain('inlineCss: false');
+    expect(nextConfig).toContain('`inlineCss` is deliberately off');
     expect(globalCss).toContain('@import "tailwindcss" source(none)');
     expect(globalCss).toContain('@source "./showcase"');
     expect(globalCss).toContain('@source "./marketplace"');

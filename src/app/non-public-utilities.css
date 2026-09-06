@@ -30,6 +30,7 @@
 @source "./home";
 @source "./invite";
 @source "./login";
+@source "./models";
 @source "./notifications";
 @source "./post";
 @source "./pricing";

@@ -168,11 +168,29 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: __dirname,
   },
-  // Inline the source-scoped route CSS to remove the render-blocking stylesheet
-  // round trip. Public routes still exclude utilities used only by authenticated
-  // tools; private routes add their supplemental utilities from route layouts.
+  // `inlineCss` is deliberately off.
+  //
+  // It was enabled to remove the render-blocking stylesheet round trip, which is
+  // the right trade when the stylesheet is small. This one is not: the
+  // source-scoped bundle is ~327 KB, and Next inlines it *twice* per response —
+  // once in a <style> tag for SSR and once again, escaped, inside the RSC flight
+  // payload. That duplication is a documented limitation of the flag, not
+  // something callers can opt out of.
+  //
+  // Measured on /models, same commit, production builds:
+  //   on  -> 868 KB of HTML (311 KB inline <style> + 499 KB flight payload)
+  //   off -> 114 KB of HTML + 327 KB of external CSS, cacheable and shared
+  //
+  // So even a first-time visitor with a cold cache receives roughly half the
+  // bytes with it off, in exchange for one round trip; every page after the
+  // first receives 114 KB instead of 868 KB. Re-enabling it only makes sense if
+  // the CSS bundle shrinks by roughly an order of magnitude.
+  //
+  // The route-scoped CSS split it was paired with still stands: public routes
+  // exclude utilities used only by authenticated tools, and private routes add
+  // their supplemental utilities from route layouts.
   experimental: {
-    inlineCss: true,
+    inlineCss: false,
   },
   // ffmpeg-static resolves its binary from `__dirname`. Bundled, Turbopack
   // inlines that as its virtual root ("/ROOT/node_modules/ffmpeg-static") — a
