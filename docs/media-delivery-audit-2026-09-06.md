@@ -1255,3 +1255,119 @@ Remaining audit: long-session expiry during playback/background, physical iOS
 radio-off recovery, physical-device transfer/memory/battery budgets, remaining
 renderer families and the full share/import journey, plus legacy demo/poster
 backfill. The whole-app audit remains open.
+
+
+## Fullscreen viewer expiry continuity and native player inventory (2026-09-06)
+
+The remaining native player constructors are `FeedVideoPlayerLayer`,
+`ActiveVideoAttempt` in the fullscreen viewer and the already audited shared
+`RecoverableVideoPreview`. Native audio references use external opening; the
+reference open handler resolves their file URL again before handing it off.
+There is no native expo-audio/expo-av audio player in these app sources.
+
+### Real signature expiry and background interval
+
+A local-only server uploaded isolated 40-second MP4 fixtures into the private
+`generated_videos` bucket of the Docker audit stack and requested real Storage
+signatures lasting 75 seconds. Native metadata/session fixtures were installed in
+memory through Metro. The existing `useMediaSource` hook and native video players
+were real; local env origins and a fixed local-only authorization token directed
+the replacement `/api/media` request to a fixture signing server. That server
+accepted only its own generated paths and issued fresh 300-second Storage links.
+No production auth, signing, database or Storage was changed. This fixture tests
+client continuity at a real signature boundary; it does not certify the production
+proxy or production account/session expiry. The documented signing API uses an
+expiry duration in seconds: https://supabase.com/docs/reference/javascript/file-buckets-createsignedurl.
+
+Before the fix, an iOS viewer paused at 23 seconds started playing from zero after
+the existing 30-second-early-renewal boundary recreated its player. The viewer's
+player effect requested autoplay for every replacement. Native inspection also
+showed that setting playbackRate after pause can start AVPlayer, so test setup and
+restoration apply the play/pause decision after other settings.
+
+`restoreVideoPlayback` now copies the previous player's time, mute, volume and rate
+before applying its play/pause decision, gated by reduced motion and app state.
+The viewer no longer unconditionally autoplays every replacement. Explicit Retry
+still remounts the attempt and starts a new player. Player replacement also resets
+first-frame/error state, so an old frame does not suppress a new loading poster.
+The background subscription pauses the current player and return does not resume.
+
+Final continuity evidence:
+
+- iOS stayed paused at exactly 23 seconds across the renewal boundary; its native
+  player was ready and its screenshot showed a decoded frame with the play badge.
+- Android samples advanced from 15.06 through 35.13 seconds, looped at the normal
+  40-second end and continued through renewal. Renewal requests occurred about
+  48 seconds after fixture creation; iOS renewed at about 44.6 seconds.
+- Fresh sessions spent roughly 20 minutes backgrounded. Android returned paused
+  at 23 seconds and iOS at 15.312 seconds. Explicit Play resumed both at those
+  positions, confirmed by native state and decoded-frame screenshots.
+- Android's fresh proxy request happened about 1,243.5 seconds after fixture
+  creation, on return; iOS's happened at about 44.8 seconds while backgrounded.
+  Multiple proxy requests included byte ranges; these are native range reads,
+  not repeated app-level renewal timers. No request-storm performance claim.
+- Original signatures that initially returned HTTP 206 later returned HTTP 400
+  after their lifetime. The local error text did not match the word “expired”;
+  the receipt's `expired:false` is that text check, not a still-valid signature.
+  No multi-hour production-lifetime or physical-device certification is implied.
+
+Evidence: ignored `output/media-audit/long-expiry-server.cjs`,
+`native-long-expiry-viewer.js`, `long-expiry-receipts.json`,
+`long-expiry-storage-rejections.json`, `long-expiry-android-playing.json`,
+`long-expiry-ios-paused.json`, `long-expiry-ios-paused-after.png` and
+`long-expiry-{android,ios}-background-after.png`. The video repeats a short visible
+pattern within the 40-second file; the burned-in pattern time is not the player's
+40-second media clock. Native player measurements establish position continuity.
+
+### Remaining native loading and feed checks
+
+On both platforms a real `FeedVideoPreview` played the server-selected stream,
+and deactivation removed every native VideoView. Its existing policy retains
+posters, limits activation through parent viewability, prefers eight seconds of
+forward buffer and pauses before delayed player release. A stalled TCP fixture
+produced native error fallback, rather than an app retry loop. These are component
+fixture checks; a full feed-scroll/memory stress certificate remains open.
+
+The fullscreen viewer's stalled TCP request on Android retried at approximately
+10/21/33 seconds before eventually reporting a native error. It previously had no
+loading indicator/deadline of its own. It now shares the existing recoverable
+preview's 30-second deadline through `useVideoLoadDeadline`, pauses and clears the
+stalled transport, and presents its existing Retry action. Loading also has an
+accessible spinner. Native errors that happen sooner still show Retry immediately.
+On iOS the native error arrived sooner in this run, so its retry acceptance is not
+claimed as a timer-expiry measurement. Explicit retries produced ready 40-second
+players on both platforms after the transport recovered.
+
+Four playback-state regressions and three deadline regressions cover pause/position,
+manual playback, blocked playback, initial autoplay, timeout, ready cancellation,
+replacement budgets and unmount cleanup. Existing recoverable-preview deadline
+and retry tests remain green after factoring out the shared hook.
+
+Remaining web inventory: composer uploads/lightbox, marketplace and resource-bundle
+players, showcase carousel/resource viewer, CreatorStudio/modal players and audio
+controls in workflow nodes/editors/overlays, creation outputs and reference panels.
+These have not been enrolled automatically in the inline-video ownership group.
+Native physical-device budgets, production-duration session expiry, legacy demo/
+poster backfill and full share/import/unlock journeys also remain open.
+
+
+Final checks: 190 mobile test files / 1,819 tests pass, mobile typecheck passes,
+and both production exports plus bundled-client environment checks pass. Logs:
+`long-expiry-mobile-final.log`, `long-expiry-export.log`. The final Android
+stalled-load check was repeated after force-stopping/relaunching the development
+client because an earlier hot-reloaded session had a blank screenshot despite
+its React/native state. The clean launch visibly showed Retry with the source
+cleared (`idle`), then playback was rechecked after explicit Retry. The earlier
+blank development snapshot is not counted as passing visual evidence or assigned
+a production root cause. Evidence: `viewer-stall-android-loading-clean.png` and
+`viewer-stall-ios-recovered.png`; the loading-clean screenshot actually captures
+the timeout/Retry state.
+
+No new migration is needed. No production deployment, OTA, remote push or release
+was performed. Web tests/build were not repeated for these native-only changes.
+
+The clean Android retry rendered the decoded 40-second fixture and reported
+`readyToPlay`, `playing=true` at 17.39 seconds; screenshot:
+`viewer-stall-android-recovered-clean.png`. iOS feed reactivation after its native
+error rendered again (`feed-ios-reactivated.png`). Final post-indicator typecheck
+and 47 focused regressions pass in `long-expiry-final-focused.log`.

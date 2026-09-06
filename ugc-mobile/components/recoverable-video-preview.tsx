@@ -6,6 +6,7 @@ import { ActivityIndicator, Text, View, type StyleProp, type ViewStyle } from 'r
 import { SecondaryButton } from '@/components/ui';
 import { useNativePreviewPlayback } from '@/lib/use-native-preview-playback';
 import { useMediaSource } from '@/lib/use-media-source';
+import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
 import { appTheme } from '@/lib/theme';
 
 type VideoPreviewProps = {
@@ -96,18 +97,7 @@ function VideoPreviewAttempt({
     if (!isFocused) player.pause();
   }, [isFocused, player]);
   const [status, setStatus] = useState<VideoPlayerStatus>(player.status);
-  const [timedOutPlayer, setTimedOutPlayer] = useState<VideoPlayer | null>(null);
-  const timedOut = timedOutPlayer === player;
-  useEffect(() => {
-    if (timedOut || (status !== 'loading' && status !== 'idle')) return;
-    const timer = setTimeout(() => {
-      setTimedOutPlayer(player);
-      player.pause();
-      // Release the stalled transport; Retry creates a fresh native player.
-      void player.replaceAsync(null).catch(() => undefined);
-    }, 30_000);
-    return () => clearTimeout(timer);
-  }, [player, status, timedOut]);
+  const timedOut = useVideoLoadDeadline(player, status);
 
   useEffect(() => {
     const subscription = player.addListener('statusChange', event => setStatus(event.status));

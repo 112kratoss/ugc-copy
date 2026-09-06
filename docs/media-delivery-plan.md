@@ -99,8 +99,10 @@ Map additional media callers discovered in step 1 into this table.
 
 ## Immediate next action
 
-Continue long-session signed-URL expiry during playback and background recovery,
-then viewport budgeting for the remaining renderer families. Shared native
+Continue remaining web audio/video ownership and recovery, then physical-device
+transfer/memory budgets and production-duration credential checks. Native viewer
+renewal now preserves playback state; real short-lived Storage signatures and a
+20-minute background interval have local acceptance evidence (checkpoint below). Shared native
 preview ownership/offscreen pause, actual Android/iOS background transitions,
 Android radio-off retry/reconnect and iOS stalled-transport recovery now have
 local acceptance evidence (see the native lifecycle checkpoint below).
@@ -265,3 +267,28 @@ These are development-client correctness checks, not store-binary performance
 certification. All 1,812 mobile tests, mobile typecheck and both production exports
 with bundled-client environment verification pass. No new migration or deployment.
 Details and evidence: `docs/media-delivery-audit-2026-09-06.md`.
+
+
+## Viewer expiry continuity and remaining native players (2026-09-06)
+
+Fixed a native fullscreen viewer renewal defect reproduced on iOS: a video paused
+at 23 seconds restarted when its source changed to the authenticated renewal path.
+Renewal now preserves position, pause/play, volume and rate. The viewer has explicit
+background pause and shares the preview's 30-second stalled-load deadline; loading
+has a spinner and failed/timed-out playback uses its existing Retry control.
+
+Real local Storage signatures with a 75-second lifetime exercised the existing
+30-second early-renewal boundary. Android continued playing across renewal; iOS
+remained paused at 23 seconds. Fresh sessions remained backgrounded about 20 minutes
+and returned paused at their previous positions (Android 23s, iOS 15.31s). Explicit
+Play worked on both. This is a real elapsed expiry boundary using shortened local
+lifetimes, not a production-duration token/session or physical-device certificate.
+
+The remaining native player inventory is complete: shared recoverable previews,
+feed player and fullscreen viewer. Feed activation/deactivation was exercised on
+both platforms, with zero native video views after deactivation. Native reference
+audio opens externally after resolving a fresh URL; there is no separate native
+audio player. Feed buffering still follows its existing 8-second preference and
+one-active-preview policy; this is source evidence, not measured memory/bytes.
+Web composer, marketplace/resource players, carousel/studio and audio players
+remain explicit follow-up surfaces. Evidence: `docs/media-delivery-audit-2026-09-06.md`.

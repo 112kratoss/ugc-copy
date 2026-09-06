@@ -3,7 +3,7 @@ import * as Clipboard from 'expo-clipboard';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useVideoPlayer } from 'expo-video';
+import { useVideoPlayer, type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
 import { Copy, FileText, Globe, Heart, ImageOff, Images, Lock, LockKeyhole, MessageCircle, MoreHorizontal, Play, Repeat2, Volume2, VolumeX, Wand2 } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { cloneElement, useCallback, useEffect, useId, useMemo, useRef, useState, type MutableRefObject, type ReactElement } from 'react';
@@ -13,6 +13,8 @@ import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'reac
 
 import { DoubleTapPressable } from '@/components/double-tap-pressable';
 import { useMediaSource } from '@/lib/use-media-source';
+import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
+import { restoreVideoPlayback } from '@/lib/video-playback-continuity';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { PostDetailsPage } from '@/components/post-details-page';
@@ -2002,6 +2004,7 @@ function ActiveVideoAttempt({
   const reducedMotion = useReducedMotion();
   const audioMuted = useViewerAudioMuted();
   const { source, requestKey } = useMediaSource(url);
+  const previousPlayer = useRef<VideoPlayer | null>(null);
   const player = useVideoPlayer({ ...source, useCaching: true }, (instance) => {
     instance.loop = true;
     instance.muted = isViewerAudioMuted();
@@ -2015,7 +2018,13 @@ function ActiveVideoAttempt({
     // takes it the moment anything plays — muted previews included — while its
     // Android default is already `auto`. Setting it makes the platforms agree.
     instance.audioMixingMode = 'auto';
+    restoreVideoPlayback(instance, previousPlayer.current, !reducedMotion,
+      !reducedMotion && (!AppState.currentState || AppState.currentState === 'active'));
   });
+  previousPlayer.current = player;
+  const [status, setStatus] = useState<VideoPlayerStatus>(player.status);
+  const timedOut = useVideoLoadDeadline(player, status);
+  const playbackFailed = hasError || timedOut;
 
   useEffect(() => {
     player.muted = audioMuted;
@@ -2030,13 +2039,19 @@ function ActiveVideoAttempt({
 
   useEffect(() => {
     if (reducedMotion) player.pause();
-    else player.play();
   }, [player, reducedMotion]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => {
+      if (state !== 'active') player.pause();
+    });
+    return () => subscription.remove();
+  }, [player]);
 
   useEffect(() => {
     setHasFrame(false);
     setHasError(false);
-  }, [url, requestKey]);
+  }, [player, url, requestKey]);
 
   useEffect(() => {
     const subscription = player.addListener('playingChange', (event) => {
@@ -2050,8 +2065,10 @@ function ActiveVideoAttempt({
   useEffect(() => {
     // A cached/native failure can arrive before this effect subscribes.
     setHasError(player.status === 'error');
+    setStatus(player.status);
     const subscription = player.addListener('statusChange', (event) => {
       setHasError(event.status === 'error');
+      setStatus(event.status);
     });
     return () => {
       subscription.remove();
@@ -2093,7 +2110,7 @@ function ActiveVideoAttempt({
           player={player}
           backdropUrl={previewUrl}
           posterUrl={previewUrl}
-          posterVisible={Boolean(previewUrl && (!hasFrame || hasError))}
+          posterVisible={Boolean(previewUrl && (!hasFrame || playbackFailed))}
           cacheKey={previewCacheKey}
           thumbhash={previewThumbhash}
           onFirstFrameRender={() => {
@@ -2102,9 +2119,14 @@ function ActiveVideoAttempt({
           }}
           style={{ width, height }}
         />
-        {!isPlaying && hasFrame && !hasError ? <ViewerPlayBadge /> : null}
+        {!isPlaying && hasFrame && !playbackFailed ? <ViewerPlayBadge /> : null}
       </DoubleTapPressable>
-      {hasError ? (
+      {!playbackFailed && (status === 'loading' || status === 'idle') ? (
+        <View pointerEvents="none" style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
+          <ActivityIndicator accessibilityLabel="Loading video" color={appTheme.colors.primary} />
+        </View>
+      ) : null}
+      {playbackFailed ? (
         <View style={{ position: 'absolute', left: 32, right: 80, alignItems: 'center' }}>
           <View style={{ backgroundColor: appTheme.colors.panel, padding: 20, borderRadius: 20, gap: 12 }}>
             <Text accessibilityRole="alert" style={{ color: appTheme.colors.text, fontSize: 16, textAlign: 'center' }}>
