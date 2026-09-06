@@ -152,3 +152,13 @@ request deduplication, successful image display and close during delayed renewal
 passed on both native platforms using the shared-component fixture host. Mobile
 tests/typecheck and Android/iOS production exports passed. This remains local and
 unreleased; it does not certify actual long-session expiry or the purchase journey.
+
+Latest acceptance: real local Storage signed-link expiration followed by explicit
+Retry recovered reference images and videos on Android and iOS. Actual Android
+airplane-mode/network loss produced visible renewal errors; explicit Retry after
+reconnect recovered both media kinds without restarting the app. iOS intermediate
+template video steps passed controlled failure/retry and navigation pause/return.
+Android intermediate steps currently need an authenticated route session. These
+are partial surface checks; iOS offline, uninterrupted-playback expiry, viewport
+player ownership and physical-device measurements remain open. See the detailed
+September 6 evidence for fixture boundaries and current release status.

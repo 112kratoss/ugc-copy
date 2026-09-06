@@ -600,3 +600,71 @@ Remaining: actual signature expiry during long sessions, real offline/reconnect,
 full unlock navigation, intermediate template steps, audio ownership, remaining
 web consumers and physical-device performance measurements. The resource endpoint
 uses the shared API request timeout; token acquisition is still outside that timer.
+
+## Real signed-link expiry acceptance (local, unreleased)
+
+On Android API 36 and iOS 26.4, reference videos and images recovered after real
+local Supabase Storage links expired. Synthetic files were uploaded to the private
+`post_resource_files` bucket and signed for eight seconds. The native fixture
+opened them after expiry. Storage returned HTTP 400 / InvalidJWT with an expiry
+claim timestamp failure, and both video players entered error with zero duration.
+Retry signed a fresh 120-second URL and both reached readyToPlay with advancing
+playback. Expired images likewise showed the failure tile, then displayed the
+synthetic JPEG after Retry. Screenshots verified image recovery on both platforms.
+
+This exercises the actual reference components and native players with real
+Storage expiration. The fixture resolver replaces the production resource route;
+it does not certify purchase authorization, the full unlock journey, or expiry
+during uninterrupted playback. No application code changed in this acceptance
+pass. The latest application validation remains 185 files / 1,797 mobile tests,
+typecheck and Android/iOS production exports passing at `1d7f964`.
+
+Evidence: `output/media-audit/{android,ios}-real-expiry-*` and
+`real-expiry-renewal-receipts.json`. The interrupted local fixture process did not
+record cleanup; any retained `expiry-audit/` objects are synthetic local test data.
+
+## Android offline/reconnect acceptance (local, unreleased)
+
+Disabled Wi-Fi and cellular data and enabled airplane mode on the Android API 36
+emulator; ConnectivityService reported no active default network. In the actual
+reference lightbox, image and video renewal failed with ApiError status 0 and
+visible refresh errors. The controls returned to an enabled retry state. The
+fixture used the real mobile API client with a three-second timeout and a local
+endpoint; failures arrived in 88 ms for image and 1,442 ms for video. These are
+fixture observations, not production latency measurements.
+
+After restoring connectivity, Retry displayed the image again and the video
+reached readyToPlay with advancing playback. No app restart was needed. Renewals
+completed in 128 ms and 119 ms respectively. Screenshots verified both recovery
+states. This validates explicit recovery from offline renewal on Android; iOS
+offline behavior, loss of connectivity during buffered playback and recovery
+without pressing Retry remain unverified. No application code changed.
+
+Evidence: `output/media-audit/android-offline-*` and `android-reconnect-*`.
+Network settings were restored after the checks. The local fixture server was
+used because Docker was stopped; this pass did not use Supabase or production.
+
+## Intermediate template previews (partial native acceptance)
+
+On iOS 26.4, a synthetic template run rendered two intermediate video outputs
+through the actual RunSteps/RunStepCard path, with no final result. Both players
+loaded paused. After starting both through the native inspector, navigating to
+the creation screen paused both retained players; returning kept them paused.
+A second synthetic run returned HTTP 503 for both video sources. Both displayed
+player errors; Retry after restoring the fixture server recovered both to
+readyToPlay with advancing playback. Screenshots verified the rendered previews.
+
+Android reached the template route's sign-in screen after the dev reload, so its
+intermediate-result route acceptance remains open. There is no evidence in this
+pass attributing that auth state to the earlier network disconnect. This test
+does not execute a provider generation, approve a step, or charge credits.
+
+Multiple players can play concurrently within the active intermediate-results
+screen, and paused players remain allocated on retained screens. Navigation
+pause is verified; viewport-based ownership, audio overlap and physical-device
+decoder/memory budgets still need assessment. Source review also confirms that
+resource audio opens externally via Linking, while creation audio references
+render a static tile; neither is an in-app audio player acceptance result.
+
+Evidence: `output/media-audit/ios-intermediate-*`, `native-intermediate-run.js`,
+and `android-intermediate-setup.png`. No application code changed in this pass.
