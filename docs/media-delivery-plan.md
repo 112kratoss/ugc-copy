@@ -99,7 +99,11 @@ Map additional media callers discovered in step 1 into this table.
 
 ## Immediate next action
 
-Continue native viewport player ownership and real background/offline checks.
+Continue long-session signed-URL expiry during playback and background recovery,
+then viewport budgeting for the remaining renderer families. Shared native
+preview ownership/offscreen pause, actual Android/iOS background transitions,
+Android radio-off retry/reconnect and iOS stalled-transport recovery now have
+local acceptance evidence (see the native lifecycle checkpoint below).
 Shared-workflow snapshot/import-preview media removal has local evidence; web
 inline demos and run previews now pause offscreen and hand playback to the next
 preview. The full share/import journey and other renderer families remain open.
@@ -235,3 +239,29 @@ play and close remain verified. Shared-workflow import previews have zero media
 players and use sanitized structure snapshots. Actual background-tab transitions,
 native offscreen behavior, physical-device budgets and the full share/import
 journey remain open. See the September 6 audit for exact scope and evidence.
+
+
+## Native preview lifecycle and transport recovery checkpoint (2026-09-06)
+
+Fixed locally after Android/iOS reproduction: shared recoverable previews now
+pause completely offscreen within `Screen`, hand playback to the next enrolled
+preview, and stay paused on viewport or app return. The scroll container supplies
+viewport measurements through scroll/layout events, without per-player timers or
+React scroll-state updates. Feed/viewer players keep their separate policies.
+
+A cold request accepted by a local server but receiving no response kept iOS
+loading for over a minute before its eventual native error. A 30-second loading
+budget now shows the existing Retry control and clears the stalled native source.
+Retry creates a fresh player and retains the existing URL-renewal path. Ready
+playback cancels the budget. Native fullscreen bypasses inline clipping only.
+
+Actual simulator/emulator checks: offscreen pause/no return resume and competing
+players on both platforms; background/return on both; Android with airplane mode,
+Wi-Fi and mobile data disabled showed Retry, then rendered video after connection
+restoration and explicit Retry. iOS stalled TCP transport showed Retry and rendered
+a 40-second fixture after server recovery. iOS radio-off, long credential expiry,
+physical-device memory/transfer budgets and other renderer families remain open.
+These are development-client correctness checks, not store-binary performance
+certification. All 1,812 mobile tests, mobile typecheck and both production exports
+with bundled-client environment verification pass. No new migration or deployment.
+Details and evidence: `docs/media-delivery-audit-2026-09-06.md`.

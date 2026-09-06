@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { SecondaryButton } from '@/components/ui';
+import { useNativePreviewPlayback } from '@/lib/use-native-preview-playback';
 import { useMediaSource } from '@/lib/use-media-source';
 import { appTheme } from '@/lib/theme';
 
@@ -88,12 +89,26 @@ function VideoPreviewAttempt({
     else if (previous) instance.pause();
   });
   previousPlayer.current = player;
+  const playback = useNativePreviewPlayback(player, isFocused);
   // Stack navigation keeps earlier screens mounted. Their players must stop
   // even though useVideoPlayer's unmount cleanup has not run yet.
   useEffect(() => {
     if (!isFocused) player.pause();
   }, [isFocused, player]);
   const [status, setStatus] = useState<VideoPlayerStatus>(player.status);
+  const [timedOutPlayer, setTimedOutPlayer] = useState<VideoPlayer | null>(null);
+  const timedOut = timedOutPlayer === player;
+  useEffect(() => {
+    if (timedOut || (status !== 'loading' && status !== 'idle')) return;
+    const timer = setTimeout(() => {
+      setTimedOutPlayer(player);
+      player.pause();
+      // Release the stalled transport; Retry creates a fresh native player.
+      void player.replaceAsync(null).catch(() => undefined);
+    }, 30_000);
+    return () => clearTimeout(timer);
+  }, [player, status, timedOut]);
+
   useEffect(() => {
     const subscription = player.addListener('statusChange', event => setStatus(event.status));
     setStatus(player.status);
@@ -101,19 +116,21 @@ function VideoPreviewAttempt({
   }, [player]);
 
   return (
-    <View style={[style, { overflow: 'hidden' }]}>
+    <View ref={playback.viewRef} collapsable={false} onLayout={playback.onLayout} style={[style, { overflow: 'hidden' }]}>
       <VideoView
         player={player}
+        onFullscreenEnter={playback.onFullscreenEnter}
+        onFullscreenExit={playback.onFullscreenExit}
         nativeControls={nativeControls}
         contentFit={contentFit}
         style={{ width: '100%', height: '100%' }}
       />
-      {status === 'loading' || status === 'idle' ? (
+      {!timedOut && (status === 'loading' || status === 'idle') ? (
         <View pointerEvents="none" style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
           <ActivityIndicator accessibilityLabel="Loading video" color={appTheme.colors.primary} />
         </View>
       ) : null}
-      {status === 'error' ? (
+      {timedOut || status === 'error' ? (
         <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
           <View style={{ backgroundColor: appTheme.colors.panel, borderRadius: 20, padding: 20, gap: 12 }}>
             <Text accessibilityRole="alert" style={{ color: appTheme.colors.text, fontSize: 16, textAlign: 'center' }}>

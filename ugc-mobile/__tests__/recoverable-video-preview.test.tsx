@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
     listener?: (event: { status: string }) => void;
   }>,
 }));
+vi.mock('@/lib/use-native-preview-playback', () => ({ useNativePreviewPlayback: () => ({ viewRef: { current: null }, onLayout: () => {}, onFullscreenEnter: () => {}, onFullscreenExit: () => {} }) }));
 vi.mock('@react-navigation/native', () => ({ useIsFocused: () => state.focused }));
 vi.mock('@/lib/use-media-source', () => ({ useMediaSource: (url: string) => ({ source: { uri: state.sourceVersion ? `${url}?version=${state.sourceVersion}` : url } }) }));
 vi.mock('@/components/ui', () => ({ SecondaryButton: (props: object) => React.createElement('retry-button', props) }));
@@ -35,7 +36,7 @@ vi.mock('expo-video', () => ({
       const instance = {
         source,
         currentTime: 0, playing: false, muted: false, volume: 1, playbackRate: 1,
-        status: state.initialStatus, play: vi.fn(), pause: vi.fn(), release: vi.fn(),
+        status: state.initialStatus, play: vi.fn(), pause: vi.fn(), release: vi.fn(), replaceAsync: vi.fn(async () => {}),
         listener: undefined as ((event: { status: string }) => void) | undefined,
         addListener: (_name: string, listener: (event: { status: string }) => void) => {
           instance.listener = listener;
@@ -188,4 +189,22 @@ it('ignores renewal completing after the selected source changes', async () => {
   expect(state.players).toHaveLength(2);
   expect(state.players[1].source).toEqual({ uri: 'https://media.test/other.mp4' });
   expect(state.players[1].play).not.toHaveBeenCalled();
+});
+it('turns a stalled native load into an actionable retry after 30 seconds', () => {
+  vi.useFakeTimers();
+  try {
+    const view = mount();
+    renderer.act(() => { vi.advanceTimersByTime(30_000); });
+    expect(view.root.findByType('retry-button' as never).props.label).toBe('Retry video');
+    expect(view.root.findAllByType('loading' as never)).toHaveLength(0);
+  } finally { vi.useRealTimers(); }
+});
+it('clears the load deadline once native playback is ready', () => {
+  vi.useFakeTimers();
+  try {
+    const view = mount();
+    renderer.act(() => { vi.advanceTimersByTime(20_000); state.players[0].listener?.({ status: 'readyToPlay' }); });
+    renderer.act(() => { vi.advanceTimersByTime(30_000); });
+    expect(view.root.findAllByType('retry-button' as never)).toHaveLength(0);
+  } finally { vi.useRealTimers(); }
 });

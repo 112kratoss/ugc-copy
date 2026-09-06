@@ -1178,3 +1178,80 @@ focused lint, production build and ffmpeg/libvips artifact checks pass. Logs:
 `viewport-build-final.log`. No mobile files or contracts changed, so native
 builds/tests were not repeated for this web-only checkpoint. The temporary
 Chromium session and Next development server were closed before the build.
+
+
+## Native offscreen ownership and real transport recovery (2026-09-06)
+
+Scope: shared `RecoverableVideoPreview`, used by template demos, `MediaPreview`
+and `MediaLightbox`, plus the common `Screen` scroll container. This checkpoint
+does not enroll feed/viewer/audio players or change API, storage or contracts.
+
+Reproduction used running SDK 55 development clients on the Android Pixel 9a
+emulator and iOS iPhone 17 Pro simulator. Template metadata was overridden in
+memory through Metro inspector; actual native players fetched local MP4 fixtures.
+The real template detail screen's description was extended to make full offscreen
+scrolling deterministic. Both platforms continued playing after scrolling past
+the demo. A second fixture mounted two actual recoverable previews in the detail
+screen; both played simultaneously before the change.
+
+The shared hook now measures playing previews against the `Screen` scroll viewport
+and window. Scroll/layout/dimension events trigger checks, with concurrent native
+measurements coalesced and no per-player polling. Fully clipped playback pauses;
+scrolling back does not start it. Starting another enrolled player pauses the
+previous one. App-state change pauses playback and background play requests are
+rejected; Android notification blur also pauses. Native fullscreen bypasses inline
+clipping until exit. A native screenshot caught an initial unguarded Android-only
+blur subscription on iOS; it was corrected with a Platform guard, covered by a
+regression test and the final iOS screen was reloaded and visually verified.
+
+Final native observations:
+
+- Both real demo players were `readyToPlay` and playing before scrolling. Once
+  fully offscreen, each reported `playing=false`; returning to the top without a
+  play request left it false. Screenshots confirm the player was out of view.
+- The two-preview fixture changed from `[true, true]` to `[false, true]` on both
+  platforms. Retained screens were separately identified and remained paused.
+- Android Home and iOS switching to Settings stopped the active player. Returning
+  to the app left every retained preview paused. This is actual app switching,
+  not a manually dispatched AppState event. Expanding the Android notification
+  drawer also paused the playing preview. Short background duration only.
+- A local transport server on port 8774 accepted real connections and sent no
+  headers/body. Before the timeout change, iOS stayed loading for over a minute
+  (eventually reporting a native error); Android also spent tens of seconds
+  retrying the transport. This reproduced a loading gap, not an infinite hang.
+- Loading/idle phases now have a 30-second budget. Expiry pauses playback, clears
+  the source asynchronously and shows the existing Retry UI. Retry remounts a
+  fresh player and uses the existing renewal callback. Ready playback cancels the
+  deadline. A failing timer regression preceded this fix.
+- Final iOS cold stall displayed `Retry video` even while the native player still
+  reported loading. After the server resumed and explicit Retry, the new player
+  reported `readyToPlay`, duration 40 seconds and `playing=true`; a screenshot
+  confirms the decoded test pattern. This is real stalled transport, not iOS
+  radio-off testing or signed-credential expiry.
+- Android was placed in airplane mode with Wi-Fi and mobile data disabled;
+  connectivity reported no active default network. A fresh, uncached media URL
+  showed Retry. Restoring the original radio settings and invoking Retry produced
+  a playing 40-second video, visually confirmed. API metadata came from the local
+  fixture, so this proves media recovery rather than whole-app offline navigation.
+
+Evidence under ignored `output/media-audit/`: `native-viewport-setup.js`,
+`native-viewport-state.js`, `native-viewport-play-scroll.js`,
+`native-viewport-top-only.js`, `native-viewport-competitors.js`,
+`native-network-server.cjs`, `native-network-setup.js`, `native-offline-schedule.js`,
+`native-viewport-{ios,android}-{before,after}.png`,
+`native-network-android-offline.png`, `native-network-ios-stalled.png` and
+`native-network-{ios,android}-recovered.png`. Fixtures are not shipped or written
+to production. Pausing does not prove zero buffered bytes or freed decoder memory.
+Native fullscreen behavior has regression coverage; a real fullscreen round-trip
+has not been certified in this checkpoint.
+
+Validation: 188 mobile test files / 1,812 tests pass, as does the mobile typecheck.
+Both Android and iOS production exports pass and their bundled-client environment
+checks report no problems. Logs: `native-viewport-mobile-final.log` and
+`native-viewport-export.log`. Web tests/build were not repeated for mobile-only
+changes. No migration, remote push, OTA or deployment was performed.
+
+Remaining audit: long-session expiry during playback/background, physical iOS
+radio-off recovery, physical-device transfer/memory/battery budgets, remaining
+renderer families and the full share/import journey, plus legacy demo/poster
+backfill. The whole-app audit remains open.

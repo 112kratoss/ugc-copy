@@ -18,6 +18,9 @@ vi.mock('@/lib/use-media-source', () => ({
 }));
 
 vi.mock('react-native', () => ({
+  Platform: { OS: 'ios' },
+  AppState: { currentState: 'active', addEventListener: () => ({ remove: vi.fn() }) },
+  Dimensions: { get: () => ({ width: 400, height: 800 }), addEventListener: () => ({ remove: vi.fn() }) },
   Modal: ({ children, visible, ...props }: MockProps) =>
     React.createElement('modal', { visible, ...props }, visible ? children : null),
   Pressable: ({ children, style, ...props }: MockProps) =>
