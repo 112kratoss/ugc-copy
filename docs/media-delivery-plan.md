@@ -63,12 +63,12 @@ Map additional media callers discovered in step 1 into this table.
 | Own profile: Creations, Posts, Saved, archives | Partial: synthetic creation detail rendition playback | Partial: Creations/Posts; one real 404 and controlled corruption reproduction | Pending |
 | Creator profiles, avatars, and covers | Pending | Pending | Pending |
 | Post details, overlays, full viewers, and lightboxes | Pending | Partial: creation viewer rendition playback and failed-request retry | Partial: creation viewer rendition playback and failed-request retry via rendered handler |
-| Creation inputs, uploads, results, and library/Studio | Partial: Studio rendition playback and original download verified | Pending | Pending |
+| Creation inputs, uploads, results, and library/Studio | Partial: Studio rendition playback and original download verified | Partial: video result playback/retry/close verified with injected completed state | Partial: video result playback/retry/close verified with injected completed state |
 | Motion references and outputs | Pending | Pending | Pending |
 | Workflow node previews, results, and shared workflows | Pending | Map supported consumers | Map supported consumers |
 | Template catalog, details, demos, and run results | Pending | Partial: detail and final-run video failure/retry/navigation verified with synthetic responses | Partial: detail and final-run video failure/retry/navigation verified with synthetic responses |
 | Marketplace, resource bundles, unlocks, and downloads | Pending | Pending | Pending |
-| Post composer, drafts, media reorder, and publish results | Pending | Pending | Pending |
+| Post composer, drafts, media reorder, and publish results | Pending | Partial: edit-post lightbox poster-as-video bug reproduced/fixed; item switch and close verified | Partial: edit-post lightbox poster-as-video bug reproduced/fixed; item switch and close verified |
 | Remaining image/audio/video/file renderers, including operator surfaces | Inventory pending | Inventory pending | Inventory pending |
 
 ## Common test cases
@@ -124,7 +124,12 @@ used a native fixture host. A reproduced retained-screen playback leak is fixed
 locally: detail and final-result players pause on navigation and stay paused on
 return. Short background/return checks passed for detail previews; long expiry,
 offline and physical-device performance checks remain open. Next surface
-priority: creation/motion results, intermediate template steps and composer/reference
-lightbox navigation, then private URL expiry and remaining audio ownership. Source review found direct result URL consumers in web video/motion
+priority: motion results, intermediate template steps and post-reference lightbox
+navigation, then private URL expiry and remaining audio ownership. Composer edit
+lightbox source selection is now fixed locally after native reproduction: videos
+use their media URI instead of their image poster. Video creation workspace
+playback/retry/close also passed with synthetic completed state on both platforms.
+Upload, publish, real provider completion and motion still need their own checks.
+Source review found direct result URL consumers in web video/motion
 results and workflow previews; their rendition and expiry integration remains
 pending. Keep these findings distinct from the verified full-screen viewer fix.

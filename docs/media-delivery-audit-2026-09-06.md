@@ -384,3 +384,46 @@ Ignored evidence under `output/media-audit/`: `{android,ios}-navigation-*`,
 `{android,ios}-run-{error,recovered}.png`, `native-fifth-pass-requests.json`,
 `native-fifth-pass-checks.log`, `native-fifth-pass-export.log` and
 `native-fifth-pass-env-verification.jsonl`.
+
+## Composer video source and creation-result acceptance (local, unreleased)
+
+Reproduced a composer-specific playback defect on Android API 36 and iOS 26.4.
+Editing an existing video post hydrates `uri` from the video's URL and
+`previewUrl` from its image poster. ComposerMediaLightbox preferred previewUrl
+for every media kind, so it handed the JPEG to the native video decoder. The
+actual `/post/new?postId=…` route, supplied with a synthetic owner-post response,
+showed a black player and the earlier audit's error panel on both platforms.
+Native state was `error`, duration zero; the fixture request log contained JPEG
+reads and no MP4 request before the fix. This is a source-selection failure,
+not a missing video or a slow connection.
+
+Video lightbox items now select `uri`; image items retain their preview selection.
+A regression test failed on the poster URL before the change and passes after
+it, including image-preview and local-video cases. Both native composer players
+then loaded the MP4, reached `readyToPlay`, and displayed moving frames. Moving
+to the adjacent image removed the video player, returning to the video loaded
+it again, and closing the lightbox left no mounted VideoView. These controls
+were exercised through their rendered handlers in the native JS inspector;
+this pass does not establish physical finger hit testing or upload/publish success.
+
+The video creation route's actual GenerationWorkspace was also checked, with
+synthetic completed-status state injected through the inspector. No generation
+was started and no credits were spent. Both platforms played the two-second
+fixture and unmounted the player when the workspace was minimized. A fresh URL
+returning HTTP 503 showed the error panel; restoring the endpoint and invoking
+Retry video recovered ready playback and visible frames. This verifies the video
+result caller, not the motion route, provider completion, polling, or private
+rendition selection. Those cases remain open. No additional workspace lifecycle
+change was necessary.
+
+Validation: 185 mobile test files / 1,783 tests, typecheck, Android/iOS production
+Hermes exports and bundled-environment checks passed. Both development apps were
+reloaded to clear API/state overrides, and fixture-specific persisted composer
+draft entries were removed. No production post, media object, database schema,
+deployment or OTA was changed. This source-selection fix needs no migration.
+
+Ignored evidence under `output/media-audit/`: `{android,ios}-composer-*`,
+`composer-requests-{before,after}.json`, `composer-regression-before.log`,
+`{android,ios}-creation-{playing,closed,error,recovered}.json`,
+`{android,ios}-creation-{error,recovered}.png`, `mobile-sixth-pass-checks.log`,
+`native-sixth-pass-export.log`, `native-sixth-pass-env-verification.jsonl`.
