@@ -1,5 +1,7 @@
 'use client';
 
+import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+
 import Link from 'next/link';
 import TemplateRunMedia from './TemplateRunMedia';
 import clsx from 'clsx';
@@ -274,7 +276,7 @@ export function TemplateSlotUpload({
     >
       <div className="relative aspect-[16/10] bg-black/45 sm:aspect-[4/3]">
         {previewUrl && slot.kind === 'video' ? (
-          <video src={previewUrl} muted controls playsInline className="h-full w-full object-contain" aria-label={`${slot.label} preview`} />
+          <InlineMediaVideo src={previewUrl} muted controls playsInline className="h-full w-full object-contain" aria-label={`${slot.label} preview`} />
         ) : previewUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={previewUrl} alt={`${slot.label} preview`} className="h-full w-full object-cover" />
@@ -386,7 +388,7 @@ function StepMedia({ step, mediaRecovery }: { step: TemplateRunStep; mediaRecove
       renditionUrl={step.renditionUrl} previewUrl={step.previewUrl} alt={step.label} />;
   }
   if (step.outputUrl && step.mediaKind === 'video') {
-    return <video src={step.outputUrl} controls playsInline preload="metadata" className="h-full w-full bg-black object-contain" />;
+    return <InlineMediaVideo src={step.outputUrl} controls playsInline preload="metadata" className="h-full w-full bg-black object-contain" />;
   }
   if (step.outputUrl) {
     // eslint-disable-next-line @next/next/no-img-element

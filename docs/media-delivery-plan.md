@@ -99,8 +99,11 @@ Map additional media callers discovered in step 1 into this table.
 
 ## Immediate next action
 
-Continue shared-workflow consumers and viewport player ownership. New published
-video demo copies now use bounded optimization, and catalog poster failure/reload
+Continue native viewport player ownership and real background/offline checks.
+Shared-workflow snapshot/import-preview media removal has local evidence; web
+inline demos and run previews now pause offscreen and hand playback to the next
+preview. The full share/import journey and other renderer families remain open.
+New published video demo copies now use bounded optimization, and catalog poster failure/reload
 has local web/Android/iOS acceptance evidence. Existing demo backfill, corrupt
 poster repair and real long offline/background expiry remain open. Template demo
 failed-link renewal and workflow input-editor failure/retry/close now have local
@@ -222,3 +225,13 @@ reconnect-event recovery also passed. These changes remain local, require no new
 migration, and do not backfill existing published versions. See the September 6
 audit's “Published demo size and catalog poster recovery” section for evidence
 and remaining limits.
+
+
+Web inline playback checkpoint: template demos and final/intermediate results
+now pause completely offscreen, stay paused on return and allow only one enrolled
+inline preview to play at a time. Chromium reproduced both offscreen continuation
+and simultaneous approval playback before the fix. Workflow output/input-editor
+play and close remain verified. Shared-workflow import previews have zero media
+players and use sanitized structure snapshots. Actual background-tab transitions,
+native offscreen behavior, physical-device budgets and the full share/import
+journey remain open. See the September 6 audit for exact scope and evidence.

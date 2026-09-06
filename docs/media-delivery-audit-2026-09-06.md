@@ -1097,3 +1097,84 @@ closure; that entry was added. A concurrent export/test run then hit the existin
 5-second workflow/composer test limits; the final complete run without the
 competing export/build passed without relaxing test limits. Logs:
 `output/media-audit/catalog-{web-final,mobile-final,checks-final,build-final,export}.log`.
+
+## Shared-workflow boundary and web inline playback ownership
+
+Status: locally verified web fixes; not deployed. No API, schema or mobile code
+change in this checkpoint.
+
+Shared workflow links are structure imports, not shared-media viewers. The create
+service uses `createWorkflowShareSnapshotGraph`; an eight-node-kind local fixture
+(image/video/audio inputs, image/video/motion/voiceover outputs and approval)
+retained no injected private media URLs, storage paths or generation-output
+bindings. Existing create/import tests pass, and video/audio input removal now has
+explicit regression coverage. Chromium's actual import preview showed the media
+removal notice and zero video/audio players using that sanitized fixture.
+`output/media-audit/shared-media-snapshot.json` and
+`output/playwright/shared-media-preview.js` record the controlled input. No share
+storage/access behavior was changed. This does not certify arbitrary historical
+share rows or provider asset identifiers; a full share-create/import journey and
+native handling of links remain outside this check.
+
+Two web rendering defects reproduced before changes:
+
+- A real template-detail demo player continued playing after its bounding box was
+  entirely above the viewport. The fixture used a 390 × 700 browser and appended
+  a spacer to make scrolling beyond the demo deterministic.
+- Two real template approval-step players on the same run page were both playing
+  after starting them sequentially. This allows overlapping playback and decoding.
+
+`InlineMediaVideo` now supplies one playback owner among its mounted inline
+previews. Starting another pauses the previous preview. IntersectionObserver
+pauses a preview when it no longer intersects the viewport, and visibilitychange
+pauses it when the document is hidden. Play events also check current visibility,
+including the latest observer state, so delayed autoplay cannot restart a clipped
+preview. Returning to view never starts playback. Unmount pauses and removes the
+observer/listeners. Explicit picture-in-picture remains allowed across viewport
+and visibility changes; leaving it reapplies the pause policy (unit coverage only,
+not a browser PiP acceptance claim). Fullscreen/native controls stay on the video.
+
+The shared component is used by template demos, final/intermediate results,
+template input previews, workflow input-editor previews and generation-result
+players (including expanded workflow video/motion outputs). Existing source
+renewal, posters, rendition selection, controls and original-download selection
+are preserved. Unrelated feed/fullscreen players have not been enrolled in this
+inline group and retain their own playback policies.
+
+Browser acceptance on controlled API/video fixtures:
+
+- Demo after scrolling out: `playingInitially=true`, `offscreen=true`,
+  `stillPlaying=false`. Repeated after the final observer-state adjustment.
+- Two approval videos after sequential play: `[false, true]`, versus `[true, true]`
+  before the change. Repeated against the final code.
+- Final result: pauses completely offscreen and remains paused on return. A
+  controlled `document.hidden`/visibilitychange event paused playback and left it
+  paused when restored. Actual tab switching in this automation harness continued
+  reporting `visible`, including after disabling CDP focus emulation. That is not
+  counted as a successful real-background test; it remains open.
+- Expanded generated workflow output and the input editor both played a valid
+  fixture; Escape left zero players for each. The generation output still used
+  its resolved playback rendition. The workflow canvas itself had no video players
+  before opening a preview.
+
+Six component regressions cover ownership, offscreen/hidden pause, no return
+resume, cleanup, explicit PiP and delayed playback inside clipped scroll parents.
+The last case first failed, then passed after retaining the observer's visibility
+state. Runtime fixture files are in `output/playwright/*viewport*.js` and
+`workflow-playback-lifecycle.js`. These are local correctness checks, not network
+transfer, memory or physical-device performance measurements. Pausing can still
+leave already-requested browser buffering in progress; this change does not claim
+that offscreen bytes or decoded buffers drop to zero.
+
+Remaining work: native viewport ownership and simultaneous inline players, real
+background transitions, viewport budgeting for other renderer families, legacy
+demo/poster backfill, long offline/expiry, and the full share/import journey. No
+new migration is needed; earlier unreleased migrations still follow the planned
+coordinated release.
+
+Validation: all 758 web test files / 5,395 tests pass. App/test/script typechecks,
+focused lint, production build and ffmpeg/libvips artifact checks pass. Logs:
+`output/media-audit/viewport-web-final.log`, `viewport-checks.log` and
+`viewport-build-final.log`. No mobile files or contracts changed, so native
+builds/tests were not repeated for this web-only checkpoint. The temporary
+Chromium session and Next development server were closed before the build.

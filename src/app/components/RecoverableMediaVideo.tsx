@@ -1,5 +1,7 @@
 'use client';
 
+import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, RotateCcw } from 'lucide-react';
 
@@ -42,7 +44,7 @@ function Attempt({ renew, onRetry, ...props }: Props & { renew: boolean; onRetry
     return () => { active = false; clearTimeout(timer); controller.abort(); };
   }, [renew, request]);
   return <div className="relative h-full min-h-52 w-full overflow-hidden bg-black" aria-busy={status === 'loading'}>
-    {source && status !== 'error' ? <video src={source.url} poster={source.poster || undefined}
+    {source && status !== 'error' ? <InlineMediaVideo src={source.url} poster={source.poster || undefined}
       aria-label={request.label} controls muted={request.muted} playsInline preload="metadata" className="h-full w-full object-contain"
       onLoadedData={() => finishRef.current('ready')} onError={() => finishRef.current('error')} /> : null}
     {status === 'loading' ? <div role="status" className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 bg-black/40 text-sm text-zinc-100">

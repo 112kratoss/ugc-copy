@@ -1,5 +1,7 @@
 'use client';
 
+import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, RotateCcw } from 'lucide-react';
 import { getTemplateRun } from './api';
@@ -72,7 +74,7 @@ function MediaAttempt({ renew, onRetry, ...props }: Props & { renew: boolean; on
   return (
     <div className="relative h-full min-h-52 w-full bg-black" aria-busy={status === 'loading'}>
       {source && status !== 'error' ? request.kind === 'video' ? (
-        <video src={source} poster={poster} controls playsInline preload="metadata" className="h-full w-full object-contain"
+        <InlineMediaVideo src={source} poster={poster} controls playsInline preload="metadata" className="h-full w-full object-contain"
           onLoadedMetadata={() => finishRef.current('ready')} onError={() => finishRef.current('error')} />
       ) : (
         // eslint-disable-next-line @next/next/no-img-element

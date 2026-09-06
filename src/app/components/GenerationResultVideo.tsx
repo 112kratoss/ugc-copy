@@ -1,5 +1,7 @@
 'use client';
 
+import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, RotateCcw } from 'lucide-react';
 
@@ -98,7 +100,7 @@ function ResultAttempt({ onRetry, ...props }: GenerationResultVideoProps & { onR
   return (
     <div className="relative h-full w-full" aria-busy={status === 'loading'}>
       {source && status !== 'error' ? (
-        <video
+        <InlineMediaVideo
           src={source.url}
           poster={source.poster}
           controls
