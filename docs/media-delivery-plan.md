@@ -99,8 +99,10 @@ Map additional media callers discovered in step 1 into this table.
 
 ## Immediate next action
 
-Audit template catalog/demo playback and the workflow input editor’s explicit
-player next, followed by shared-workflow consumers and viewport player ownership.
+Continue demo file size/encoding and catalog poster failure/reconnect coverage,
+then shared-workflow consumers and viewport player ownership. Template demo
+failed-link renewal and workflow input-editor failure/retry/close now have local
+acceptance evidence.
 The template-run rendition and canvas input/approval thumbnail checkpoint is
 locally verified; its evidence and release boundaries are recorded below.
 
@@ -121,7 +123,7 @@ select private playback. Result pages also renew failed links on Retry, verified
 in Chromium fixtures. Expanded workflow video/motion previews also resolve the
 generation descriptor. Generated video/motion node thumbnails now use batched
 posters; template final and intermediate media renew on explicit Reload media.
-Template final/intermediate rendition delivery and input/approval canvas cards now have local acceptance evidence. Catalog/demo media, editor input players and shared-workflow consumers still need their own review before claiming private renditions reach every consumer. Keep all
+Template final/intermediate rendition delivery and input/approval canvas cards now have local acceptance evidence. Catalog poster recovery, optimized demo encoding and shared-workflow consumers still need their own review before claiming private renditions reach every consumer. Keep all
 source-only concerns distinct from reproduced defects and measured improvements.
 
 
@@ -195,7 +197,15 @@ synthetic auth context because its development session was signed out. This does
 not certify the real sign-in or paid template execution journey. No deployment or
 new migration was performed for this checkpoint.
 
-Next work: template catalog/demo playback and the workflow input editor's explicit
-player; then shared-workflow media, viewport player ownership and iOS offline
-recovery. Actual long-session expiry during playback and physical-device transfer,
+Next work: optimized published demo files and catalog poster recovery; then
+shared-workflow media, viewport player ownership and iOS offline recovery. Actual long-session expiry during playback and physical-device transfer,
 startup and memory measurements remain required before closing the whole-app audit.
+
+
+Latest demo/editor checkpoint: explicit demo Retry renews through the existing
+catalog endpoint on web, Android and iOS; workflow input-editor Retry recovers a
+failed request and closing the editor removes its player. Catalog signing failure
+now remains null, and the publishing poster writer uses a byte-preserving Blob
+upload with real local Storage readback. These changes are local and need no new
+migration. Existing demo transcoding/backfill and catalog poster recovery remain
+open; this is a reliability checkpoint, not complete demo optimization.

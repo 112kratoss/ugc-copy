@@ -18,6 +18,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Linking, Pressable, View } from 'react-native';
 
+import { RecoverableVideoPreview } from '@/components/recoverable-video-preview';
 import { MediaPreview } from '@/components/media-preview';
 import {
   AppText,
@@ -270,7 +271,11 @@ export function MediaTemplateDetailScreen({ slug }: { slug: string }) {
           <SecondaryButton label="Try again" onPress={() => void templateQuery.refetch()} />
         </View>
       ) : (
-        <TemplateDetailContent template={template} message={message} starting={createRun.isPending} onUse={useTemplate} />
+        <TemplateDetailContent template={template} resolveVideoRetry={async () => {
+          const fresh = await api.getMediaTemplate(template.id);
+          if (fresh.template.id !== template.id || !fresh.template.videoUrl) throw new Error('Demo unavailable');
+          return fresh.template.videoUrl;
+        }} message={message} starting={createRun.isPending} onUse={useTemplate} />
       )}
     </Screen>
   );
@@ -278,11 +283,13 @@ export function MediaTemplateDetailScreen({ slug }: { slug: string }) {
 
 function TemplateDetailContent({
   template,
+  resolveVideoRetry,
   message,
   starting,
   onUse,
 }: {
   template: MediaTemplateDetail;
+  resolveVideoRetry: () => Promise<string>;
   message: string | null;
   starting: boolean;
   onUse: () => void;
@@ -299,7 +306,9 @@ function TemplateDetailContent({
         </View>
       </View>
 
-      <MediaPreview url={template.videoUrl ?? template.thumbnailUrl} kind={template.videoUrl ? 'video' : 'image'} height={430} />
+      {template.videoUrl ? <RecoverableVideoPreview url={template.videoUrl} resolveRetryUrl={resolveVideoRetry}
+        style={{ width: '100%', height: 430, borderRadius: appTheme.radii.lg, backgroundColor: appTheme.colors.panelSoft }} />
+        : <MediaPreview url={template.thumbnailUrl} kind="image" height={430} />}
       {template.description ? <AppText variant="body" color="textSecondary">{template.description}</AppText> : null}
 
       <View style={{ gap: 12 }}>

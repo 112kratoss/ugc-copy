@@ -11,6 +11,7 @@ import {
   createTemplateSnapshotHash,
   validateAndCompileTemplateGraph,
 } from '@/lib/template-graph-compiler';
+import { toStorageUploadBody } from '@/lib/storage-upload-body';
 import { createVideoPosterBuffer } from '@/lib/video-poster';
 import {
   isRecord,
@@ -207,8 +208,8 @@ function rowToDto(row: MediaTemplateRow, options: {
     name: row.name,
     description: row.description,
     category: row.category ?? 'general',
-    videoUrl: options.videoUrl ?? row.video_url,
-    thumbnailUrl: options.thumbnailUrl ?? row.thumbnail_url,
+    videoUrl: options.videoUrl !== undefined ? options.videoUrl : row.video_url,
+    thumbnailUrl: options.thumbnailUrl !== undefined ? options.thumbnailUrl : row.thumbnail_url,
     creatorUserId: row.creator_user_id,
     creator: options.creator ?? null,
     inputSlots: normalizeTemplateInputSlots(row.input_slots),
@@ -513,7 +514,7 @@ async function copyOwnedAssetToVersion(params: {
  * publish already holds. Cosmetic: a failure must never fail the publish —
  * the media-preview-repair sweep retries missing posters hourly.
  */
-async function createTemplateDemoPosterAsset(params: {
+export async function createTemplateDemoPosterAsset(params: {
   client: SupabaseClient;
   templateId: string;
   versionId: string;
@@ -523,7 +524,7 @@ async function createTemplateDemoPosterAsset(params: {
     const poster = await createVideoPosterBuffer(params.demoBlob);
     const destination = `${params.templateId}/${params.versionId}/demo/poster.webp`;
     const { error } = await params.client.storage.from('template_assets')
-      .upload(destination, poster, { contentType: 'image/webp', upsert: false });
+      .upload(destination, toStorageUploadBody(poster, 'image/webp'), { contentType: 'image/webp', upsert: false });
     if (error) throw error;
     return destination;
   } catch (error) {

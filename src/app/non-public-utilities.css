@@ -54,6 +54,7 @@
 @source "./components/NavbarClient.tsx";
 @source "./components/ProfileShareButton.tsx";
 @source "./components/PublishToShowcaseModal.tsx";
+@source "./components/RecoverableMediaVideo.tsx";
 @source "./components/StudioOverflowMenu.tsx";
 @source "./components/StudioModelPicker.tsx";
 @source "./components/enhancePromptClient.ts";

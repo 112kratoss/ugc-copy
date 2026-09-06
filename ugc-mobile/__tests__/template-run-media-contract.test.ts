@@ -17,3 +17,8 @@ describe('template media wire contract', () => {
     expect(run.steps[0]).not.toHaveProperty('renditionUrl');
   });
 });
+
+it('keeps unavailable catalog media null on mobile', async () => {
+  const api = createApiClient({ baseUrl: 'https://app.test', getAccessToken: async () => 'token', fetcher: async () => new Response(JSON.stringify(contract.unavailableDemoResponse), { headers: { 'Content-Type': 'application/json' } }) });
+  expect((await api.getMediaTemplate('demo')).template).toMatchObject({ videoUrl: null, thumbnailUrl: null });
+});

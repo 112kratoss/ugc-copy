@@ -308,10 +308,10 @@ export async function listTemplatePage(options: {
   };
 }
 
-export async function getTemplate(idOrSlug: string, token?: string | null): Promise<MediaTemplate> {
+export async function getTemplate(idOrSlug: string, token?: string | null, signal?: AbortSignal): Promise<MediaTemplate> {
   return normalizeTemplate(await requestJson<unknown>(
     `/api/templates/${encodeURIComponent(idOrSlug)}`,
-    { token }
+    { token, signal }
   ));
 }
 

@@ -41,5 +41,16 @@
       "createdAt": "2026-09-06T00:00:00Z",
       "updatedAt": "2026-09-06T00:00:00Z"
     }
+  },
+  "unavailableDemoResponse": {
+    "template": {
+      "id": "demo",
+      "slug": "demo",
+      "name": "Demo unavailable",
+      "outputKind": "video",
+      "inputSlots": [],
+      "videoUrl": null,
+      "thumbnailUrl": null
+    }
   }
 }

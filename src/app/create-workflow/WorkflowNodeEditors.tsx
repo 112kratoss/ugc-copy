@@ -15,6 +15,7 @@ import {
   isValidElementHandle,
 } from '@/lib/image-elements';
 import { getActiveRegistryModels } from '@/lib/generation-model-client';
+import RecoverableMediaVideo from '@/app/components/RecoverableMediaVideo';
 import { getDisplayMediaUrl } from '@/lib/media-urls';
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS, getImageResolutionOptions, getVideoDurationRange, getVideoElementSupport, supportsImageResolutionControl } from '@/lib/client-generation-models';
 import type { EnhancerContext } from '@/lib/prompt-enhancer';
@@ -2133,14 +2134,14 @@ function NodeEditorContent({
                     Detected duration: {formatSecondsLabel(videoInput.durationSeconds!)}
                   </div>
                 )}
-                {videoInput.videoUrl && (
-                  <video
-                    src={getDisplayMediaUrl(videoInput.storagePath || videoInput.videoUrl || '')}
-                    className="w-full rounded-2xl border border-white/10"
-                    controls
-                    muted
-                    playsInline
-                  />
+                {(videoInput.storagePath || videoInput.videoUrl) && (
+                  <div className="h-64 overflow-hidden rounded-2xl border border-white/10">
+                    <RecoverableMediaVideo
+                      url={getDisplayMediaUrl(videoInput.storagePath || videoInput.videoUrl || '')}
+                      label="Video input preview"
+                      muted
+                    />
+                  </div>
                 )}
                 <SeedanceAssetStatusCard
                   title="Seedance asset"

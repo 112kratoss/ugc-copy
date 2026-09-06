@@ -954,3 +954,72 @@ Acceptance evidence:
 Remaining: catalog/demo media, explicit input editor players, shared workflow
 consumers, true template long-session expiry/renewal, physical-device performance
 and the remaining surface matrix. This checkpoint does not close the whole-app audit.
+
+
+## Template demo and workflow input-editor recovery
+
+Status: fixed locally, not deployed. No schema or migration change.
+
+Three service regression cases failed before this change:
+`output/media-audit/template-demo-before.log`. The catalog DTO used nullish
+fallback after media signing; an explicit rejection (signing failure or a demo
+outside the active version) therefore returned the raw stored path anyway. It
+now preserves the resolver's null result. Both clients consume a shared null-media
+fixture in `contracts/template-run-media-v1.json`. The template publish poster
+writer still passed a Buffer to Storage; it now uses the existing Blob upload
+helper, matching the repaired background poster writer. A local real-Storage
+readback produced an identical 7,712-byte WebP that fully decoded at 343 × 720;
+the temporary poster was removed. Receipt:
+`output/media-audit/template-demo-poster-readback.json`. This does not repair
+previously published corrupt posters automatically.
+
+Chromium reproduced a demo HTTP 403 with media error 4, readyState 0 and no Retry.
+The video input editor similarly showed only an empty native controls player after
+HTTP 503. Both now use a shared inline video component with visible loading,
+30-second timeout, explicit Reload video and cancellation on unmount/source
+replacement. Initial load and web Retry remain paused; preload is metadata.
+Demo Retry re-reads the template through its existing public/owner catalog route
+and checks template identity before accepting a fresh URL/poster. The input editor
+retries its canonical media proxy/direct input URL, without invoking generation.
+The editor admits storagePath-only inputs and unmounts its player on close.
+
+Browser acceptance:
+
+- Failed demo renewed to a fresh URL and decoded (readyState 4, width 320), staying
+  paused. At 390px viewport width there was no horizontal overflow and native
+  controls remained visible. Screenshot: `output/playwright/template-demo-mobile-web.png`.
+- Failed input loaded after explicit Reload video and decoded while paused/muted.
+  Escape closed the editor and left zero video elements. Screenshot:
+  `output/playwright/editor-recovery.png`.
+- Browser verification found a cancellation race during React Strict Mode's
+  discarded renewal. A regression test failed, then passed after inactive/aborted
+  attempts were prevented from changing the next attempt's error state. The
+  development fixture makes two GET attempts because of Strict Mode; the discarded
+  request is aborted. Retry never starts a paid operation.
+- Native Android and iOS template-detail fixtures began with an HTTP 403, then
+  Retry fetched fresh template metadata and decoded the replacement video.
+  API counter changed from one initial read to two total reads; the existing
+  explicit native Retry behavior starts playback. Back removed the active demo
+  player. Screenshots: `output/media-audit/template-demo-recovery-android.png` and
+  `template-demo-recovery-ios.png`. Responses/media were local synthetic fixtures;
+  this does not certify production signing or physical-device performance.
+  Development bundles were reloaded to clear temporary API overrides.
+
+Scope limits: template demos still use the published demo file; this change does
+not transcode/backfill every existing demo or add a durable demo rendition worker.
+Catalog poster failure/reconnect, null-demo refresh UI and existing corrupt-poster
+repair are still open. The input editor's arbitrary external signed URLs can be
+retried but cannot be renewed without an owning service; durable Storage paths use
+the canonical authenticated media proxy. Full upload/publish execution, shared
+workflows and physical-device budgets remain separate audit work.
+
+
+Validation for this demo/editor checkpoint: web 755 files / 5,376 tests pass;
+mobile 186 files / 1,803 tests pass. Web app/test/script and mobile typechecks,
+focused lint, production web build, ffmpeg/libvips artifact checks, Android/iOS
+production exports and bundled configuration checks pass. The first concurrent
+suite runs had unrelated workflow/composer/icon test timeouts; those passed on
+isolated rerun and the final complete suites passed with bounded worker counts.
+The stylesheet closure test found the new component missing from the explicit
+Tailwind source list; the source entry was added before final checks. No test
+thresholds or timeouts were relaxed.

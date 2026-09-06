@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import contract from '../../contracts/template-run-media-v1.json';
-import { normalizeTemplateRun } from '@/app/components/templates/api';
+import { normalizeTemplateRun, normalizeTemplate } from '@/app/components/templates/api';
 
 describe('template media wire contract', () => {
   it('preserves separate originals, playback and poster URLs for steps and final results', () => {
@@ -13,4 +13,8 @@ describe('template media wire contract', () => {
     expect(run.result).not.toHaveProperty('renditionUrl');
     expect(run.steps[0]).not.toHaveProperty('previewUrl');
   });
+});
+
+it('keeps unavailable catalog media null instead of reconstructing storage paths', () => {
+  expect(normalizeTemplate(contract.unavailableDemoResponse)).toMatchObject({ videoUrl: null, thumbnailUrl: null });
 });
