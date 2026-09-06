@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import GenerationResultVideo from '@/app/components/GenerationResultVideo';
 import { Upload, Sparkles, Loader2, Download, Zap, ChevronDown, Check, Play, Share2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
@@ -118,6 +119,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
     const [videoError, setVideoError] = useState<string | null>(null);
     const [outputVideo, setOutputVideo] = useState<string | null>(null);
+    const [resolvedOutputVideo, setResolvedOutputVideo] = useState<{ outputUrl: string; url: string } | null>(null);
     const [latestGenerationId, setLatestGenerationId] = useState<string | null>(null);
     const [latestIsPublic, setLatestIsPublic] = useState(false);
     const [publishedMeta, setPublishedMeta] = useState<{ title: string; description: string } | null>(null);
@@ -1244,11 +1246,11 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                             {outputVideo ? (
                                 <div className="space-y-5">
                                     <div className="aspect-video overflow-hidden rounded-[26px] border border-white/8 bg-black/60">
-                                        <video src={outputVideo} controls autoPlay loop className="h-full w-full object-contain" />
+                                        <GenerationResultVideo generationId={latestGenerationId} outputUrl={outputVideo} accessToken={session?.access_token} onOriginalResolved={setResolvedOutputVideo} />
                                     </div>
                                     <div className="flex flex-wrap gap-3">
                                         <a
-                                            href={outputVideo}
+                                            href={resolvedOutputVideo?.outputUrl === outputVideo ? resolvedOutputVideo.url : outputVideo}
                                             download="generated-video.mp4"
                                             target="_blank"
                                             rel="noopener noreferrer"

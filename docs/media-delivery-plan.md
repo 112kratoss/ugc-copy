@@ -63,8 +63,8 @@ Map additional media callers discovered in step 1 into this table.
 | Own profile: Creations, Posts, Saved, archives | Partial: synthetic creation detail rendition playback | Partial: Creations/Posts; one real 404 and controlled corruption reproduction | Pending |
 | Creator profiles, avatars, and covers | Pending | Pending | Pending |
 | Post details, overlays, full viewers, and lightboxes | Pending | Partial: creation viewer rendition playback and failed-request retry | Partial: creation viewer rendition playback and failed-request retry via rendered handler |
-| Creation inputs, uploads, results, and library/Studio | Partial: Studio rendition playback and original download verified | Partial: video result playback/retry/close verified with injected completed state | Partial: video result playback/retry/close verified with injected completed state |
-| Motion references and outputs | Pending | Partial: result playback/retry/close verified with injected completed state | Partial: result playback/retry/close verified with injected completed state |
+| Creation inputs, uploads, results, and library/Studio | Partial: Studio and video result rendition playback/original download verified; result failed-link renewal and initial timeout checked in Chromium fixtures | Partial: video result playback/retry/close verified with injected completed state | Partial: video result playback/retry/close verified with injected completed state |
+| Motion references and outputs | Partial: result rendition playback, original download and failed-link renewal checked in Chromium fixtures | Partial: result playback/retry/close verified with injected completed state | Partial: result playback/retry/close verified with injected completed state |
 | Workflow node previews, results, and shared workflows | Pending | Map supported consumers | Map supported consumers |
 | Template catalog, details, demos, and run results | Pending | Partial: detail and final-run video failure/retry/navigation verified with synthetic responses | Partial: detail and final-run video failure/retry/navigation verified with synthetic responses |
 | Marketplace, resource bundles, unlocks, and downloads | Pending | Partial: reference image/video renewal and failure recovery in native fixture host; full purchase/unlock journey pending | Partial: reference image/video renewal and failure recovery in native fixture host; full purchase/unlock journey pending |
@@ -111,8 +111,9 @@ crash-orphan reclamation, and source-change requeue remain explicit limitations
 in the September 6 audit.
 
 Continue signed-URL/background recovery and device verification across the
-surface matrix. Web creation/profile viewers now select private playback; generation result
-pages, workflow previews and template results still need integration review
+surface matrix. Web creation/profile viewers and video/motion result pages now
+select private playback. Result pages also renew failed links on Retry, verified
+in Chromium fixtures. Workflow previews and template results still need integration review
 before claiming private renditions reach every consumer. Keep all
 source-only concerns distinct from reproduced defects and measured improvements.
 

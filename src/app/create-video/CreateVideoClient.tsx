@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import GenerationResultVideo from '@/app/components/GenerationResultVideo';
 import { Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, VolumeX, Play, Camera, ChevronDown, Check, Share2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
@@ -671,6 +672,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [isGenerating, setIsGenerating] = useState(false);
     const [generationTiming, setGenerationTiming] = useState<GenerationTiming | null>(null);
     const [outputVideo, setOutputVideo] = useState<string | null>(null);
+    const [resolvedOutputVideo, setResolvedOutputVideo] = useState<{ outputUrl: string; url: string } | null>(null);
     const [latestGenerationId, setLatestGenerationId] = useState<string | null>(null);
     const [latestIsPublic, setLatestIsPublic] = useState(false);
     const [publishedMeta, setPublishedMeta] = useState<{ title: string; description: string } | null>(null);
@@ -4648,10 +4650,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             {outputVideo ? (
                                 <div className="space-y-5">
                                     <div className="overflow-hidden rounded-[26px] border border-white/8 bg-black/60 aspect-video">
-                                        <video src={outputVideo} controls autoPlay loop className="h-full w-full object-contain" />
+                                        <GenerationResultVideo generationId={latestGenerationId} outputUrl={outputVideo} accessToken={session?.access_token} onOriginalResolved={setResolvedOutputVideo} />
                                     </div>
                                     <div className="flex flex-wrap gap-3">
-                                        <a href={outputVideo} download="generated_video.mp4" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-full bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500">
+                                        <a href={resolvedOutputVideo?.outputUrl === outputVideo ? resolvedOutputVideo.url : outputVideo} download="generated_video.mp4" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-full bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500">
                                             <Download className="h-4 w-4" />
                                             Download video
                                         </a>

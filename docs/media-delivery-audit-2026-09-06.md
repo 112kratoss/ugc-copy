@@ -102,7 +102,7 @@ contract or storage permission changed.
 | --- | --- | --- |
 | Private generation encoding and owner API | Measured 14 originals / 187 MB. Private producer, owner signing and deletion cleanup implemented and locally verified below. | Release migration/code through Quality and the release workflow; measure native playback and backlog drainage. |
 | Web profile/Creations viewers | Generation previews and detail modals now use the descriptor rendition, retaining original downloads. | Browser fixture verification below; expired-signature and reconnect cases remain open. |
-| Creation/motion results, workflows, templates | Source review: direct video elements consume result URLs. No common renewal/rendition integration is established across these callers. | Check expiry, poster continuity, background return and the original/download distinction on each supported surface. |
+| Creation/motion results, workflows, templates | Web video/motion result rendition selection and failed-link renewal are now verified in Chromium with synthetic responses (see latest entry). Workflow and template web players still consume direct URLs. | Continue workflow/template integration; test long-session expiry, poster continuity and background return per surface. |
 | Full-rendition worker interruption | Source review: `claim_media_rendition_repairs` leases without incrementing attempts; the worker increments at terminal updates. A process killed before that update may retain its attempt count. | Reproduce lease-expiry/crash exhaustion locally before changing claim semantics; account for claimed rows deferred by the time budget. |
 | Generation deletion | Source review: Private playback cleanup now uses DELETE RETURNING to capture a concurrently published derivative; linked posts retain outputs. Preview cleanup remains source-only. | Continue preview/reference retention audit; no orphan purge has been performed. |
 | Remaining device coverage | Offline/reconnect, background expiry, rapid navigation, audio/resources, avatars/covers and physical-device performance remain incomplete. | Continue the whole-app matrix; do not infer caller coverage from shared unit tests. |
@@ -707,3 +707,56 @@ and `native-source-refresh-env-verification.jsonl`. Fixture overrides were clear
 by reloading the apps after the checks. Remaining work includes actual expiry
 during playback, viewport-based player ownership, iOS offline recovery, remaining
 web consumers, authenticated Android template checks and physical-device budgets.
+
+## Web video and motion result delivery (local, unreleased)
+
+Reproduced on the actual `/create-video` and `/create-motion` routes in Chromium:
+mocked completion responses supplied a video URL returning HTTP 403 while the
+owner-generation response offered a playable rendition. Both pages still loaded
+the failed original, reaching media error code 4 and readyState 0, with no Retry
+control. This was a controlled expired-link response, not another real Storage
+JWT expiry test. No provider generation or credit charge was performed.
+
+Both result pages now use `GenerationResultVideo`. It fetches the matching owner
+descriptor before mounting the video, prefers the full playback rendition, and
+uses the freshly signed original if no rendition exists. The separate download
+link receives that original URL, never the rendition. The preview shows loading
+and recoverable error states. Retry remounts the attempt, requests a fresh
+descriptor using the current auth token and reloads the video. A token update
+alone does not replace the active player. Replacing or closing the result aborts
+pending work, and late responses cannot restore an older result.
+
+The initial lookup, response-body read and first-frame wait share a 30-second
+deadline. A stalled owner request was held open in Chromium: the loading state
+changed to Retry with no mounted video after the deadline. Denied/missing owner
+responses do not fall back to the stale output URL. Once the first frame loads,
+this deadline stops; detecting a later silent playback stall remains open.
+
+Browser acceptance on both routes: a failed rendition displayed Retry; supplying
+a refreshed descriptor and clicking Retry produced readyState 4, decoded width
+320 and advancing playback of the synthetic rendition. The download href stayed
+on the refreshed original. Screenshots were inspected for the rendered error and
+playback states. Fixture MP4s have different lengths and are only selection and
+recovery evidence, not a compression-quality or bandwidth comparison. The dev
+resume fixture also exposed a separate aborted-poll message under Strict Mode;
+that generation-status behavior was not changed in this media pass.
+
+Focused component/client/style checks pass (3 files / 27 tests); application and
+test typechecks and changed-file ESLint pass. The first full run passed 5,335 of
+5,336 tests and caught the new component missing from the private stylesheet's
+explicit scan list. That registration was added and the affected checks passed.
+The final full rerun passed all 749 test files / 5,336 tests.
+
+Evidence: `output/playwright/web-{video,motion}-result-*.png`,
+`output/playwright/result-{setup,retry-setup}.js`, and
+`output/media-audit/web-result-*.log`. The Next server used explicitly overridden
+local Supabase configuration and synthetic browser API responses. This change
+adds no migration and has not been deployed. The previously added private
+playback migration remains local and must ship through the normal release gates.
+
+Next: workflow node outputs retain `runState.generationId`, but node previews
+and the expanded workflow player still pass direct URLs without this descriptor
+resolution. Audit that handoff before extending result playback there. Web
+template results, original-download renewal at click time after a long idle,
+real expiry during playback, viewport ownership, iOS offline recovery and
+physical-device performance remain open.
