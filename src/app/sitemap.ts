@@ -1,5 +1,6 @@
 import { MetadataRoute } from 'next';
 
+import { ALTERNATIVES } from '@/lib/alternatives';
 import { getSortedPostsData } from '@/lib/blog';
 import { listPublicModels, toModelSlug } from '@/lib/model-pages';
 import { siteConfig } from '@/lib/seo';
@@ -24,6 +25,7 @@ const INDEXABLE_ROUTES: Array<{
     { path: '/ai-workflow-builder', changeFrequency: 'weekly', priority: 0.8 },
     { path: '/templates', changeFrequency: 'daily', priority: 0.75 },
     { path: '/models', changeFrequency: 'weekly', priority: 0.8 },
+    { path: '/alternatives', changeFrequency: 'monthly', priority: 0.7 },
     { path: '/contact', changeFrequency: 'monthly', priority: 0.55 },
     { path: '/child-safety', changeFrequency: 'yearly', priority: 0.4 },
     { path: '/terms', changeFrequency: 'yearly', priority: 0.3 },
@@ -83,6 +85,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
             lastModified: template.updated_at ? new Date(template.updated_at) : now,
             changeFrequency: 'weekly' as const,
             priority: 0.55,
+        })),
+        ...ALTERNATIVES.map((entry) => ({
+            url: `${baseUrl}/alternatives/${entry.slug}`,
+            lastModified: now,
+            changeFrequency: 'monthly' as const,
+            priority: 0.7,
         })),
         ...models.map((model) => ({
             url: `${baseUrl}/models/${toModelSlug(model.id)}`,
