@@ -169,6 +169,7 @@ function MediaLightboxContent({
               key={item.id}
               url={item.url}
               cacheKey={`lightbox:${item.id}`}
+              resolveRetryUrl={item.resolveRetryUrl}
               contentFit="contain"
               style={{ width: '100%', height: stageHeight }}
             />

@@ -102,6 +102,14 @@ describe('MediaLightbox', () => {
     expect(buttons(tree, 'Show previous media')).toHaveLength(0);
   });
 
+  it('passes the reference renewal handler to an image preview', () => {
+    const resolveRetryUrl = vi.fn(async () => 'https://cdn.example.com/fresh.jpg');
+    let tree: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(<MediaLightbox items={[{ ...items[0], resolveRetryUrl }]} activeIndex={0} onClose={vi.fn()} onNavigate={vi.fn()} />); });
+    expect(tree!.root.findByType('stable-image' as never).props.resolveRetryUrl).toBe(resolveRetryUrl);
+    renderer.act(() => tree.unmount());
+  });
+
   it('plays a video with native controls', () => {
     const tree = render(1);
 

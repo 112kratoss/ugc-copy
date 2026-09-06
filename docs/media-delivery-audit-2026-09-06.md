@@ -561,3 +561,42 @@ Limits: access-token and installation-ID acquisition precede this request timer.
 The separately implemented conditional generation-catalog fetch does not use this
 timeout path. Image retry renewal, actual expiry and offline/reconnect verification
 remain open.
+
+## Reference image retry renewal (local, unreleased)
+
+Reproduced on Android API 36 and iOS 26.4 using the actual reference component
+and lightbox in a temporary native fixture host. After a controlled HTTP 403,
+Retry loading media reused the failed image URL even when the resource resolver
+could supply a working link. Both platforms returned to Preview unavailable;
+the resolver count stayed at three. This reproduces rejected-link recovery, not
+actual JWT expiration or the full purchased-resource journey.
+
+StableMediaImage now accepts the existing optional retry resolver from
+MediaLightbox. An explicit retry renews the link before loading the image, shows
+Refreshing image while pending, and suppresses duplicate requests. Renewal denial
+keeps a visible error with another retry available. A source change or unmount
+invalidates the pending image session. Existing callers without a resolver retain
+their remount retry, stable cache identity and bounded automatic network retries.
+
+Both native platforms showed denial feedback, then displayed the synthetic JPEG
+after a successful renewal. Repeated pending presses made only one resolver call.
+Closing during delayed renewal left zero lightbox images after the response;
+it did not reopen the modal. These checks invoked rendered native handlers through
+the JS inspector; screenshots verified the denied, pending and recovered states.
+The fixture overrides were cleared by reloading the apps after verification.
+
+Validation: 185 mobile test files / 1,797 tests, mobile typecheck, Android/iOS
+production Hermes exports and bundled-environment checks passed. Added regression
+coverage for renewal, denial/retry, duplicate pending requests, source replacement,
+close during renewal, and lightbox resolver forwarding. Existing image caching,
+fallback and HIG guards passed. No database migration, deployment or OTA changed.
+
+Ignored evidence: `output/media-audit/{android,ios}-image-retry-*`,
+`{android,ios}-image-renewal-*`, `reference-tenth-pass-requests.json`,
+`mobile-tenth-pass-checks.log`, `native-tenth-pass-export.log`, and
+`native-tenth-pass-env-verification.jsonl`.
+
+Remaining: actual signature expiry during long sessions, real offline/reconnect,
+full unlock navigation, intermediate template steps, audio ownership, remaining
+web consumers and physical-device performance measurements. The resource endpoint
+uses the shared API request timeout; token acquisition is still outside that timer.

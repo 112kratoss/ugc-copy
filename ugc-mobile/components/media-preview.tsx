@@ -72,17 +72,7 @@ export function MediaPreview({
   );
 }
 
-export function StableMediaImage({
-  url,
-  cacheKey,
-  thumbhash,
-  contentFit = 'cover',
-  onDisplay,
-  onLoad,
-  onError,
-  style,
-  transition = 120,
-}: {
+type StableMediaImageProps = {
   url: string;
   cacheKey: string;
   thumbhash?: string | null;
@@ -92,7 +82,31 @@ export function StableMediaImage({
   onError?: ImageProps['onError'];
   style?: ImageProps['style'];
   transition?: number;
-}) {
+  resolveRetryUrl?: () => Promise<string>;
+};
+
+export function StableMediaImage(props: StableMediaImageProps) {
+  // A new source ends any pending renewal for the previously selected image.
+  return <StableMediaImageSession key={`${props.cacheKey}|${props.url}`} {...props} />;
+}
+
+function StableMediaImageSession({
+  url: initialUrl,
+  cacheKey,
+  thumbhash,
+  contentFit = 'cover',
+  onDisplay,
+  onLoad,
+  onError,
+  style,
+  transition = 120,
+  resolveRetryUrl,
+}: StableMediaImageProps) {
+  const [url, setUrl] = useState(initialUrl);
+  const [renewing, setRenewing] = useState(false);
+  const [renewalFailed, setRenewalFailed] = useState(false);
+  const pending = useRef(false);
+  const mounted = useRef(true);
   // Failure is keyed to the (cacheKey, url) pair, not cacheKey alone: parents
   // like ShowcaseMediaSlide keep the cacheKey stable while swapping the url to
   // a fallback source, and that swap must release the latch so the fallback
@@ -106,23 +120,48 @@ export function StableMediaImage({
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attempt = retry.sourceId === sourceId ? retry.attempt : 0;
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
       if (retryTimer.current) clearTimeout(retryTimer.current);
-    },
-    [],
-  );
+    };
+  }, []);
+
+  const retryImage = async () => {
+    if (pending.current) return;
+    if (!resolveRetryUrl) {
+      setFailedSourceId(null);
+      setRetry({ sourceId, attempt: 0 });
+      return;
+    }
+    pending.current = true;
+    setRenewing(true);
+    setRenewalFailed(false);
+    try {
+      const renewedUrl = await resolveRetryUrl();
+      if (!renewedUrl.trim()) throw new Error('Missing renewed URL');
+      if (mounted.current) {
+        setUrl(renewedUrl);
+        setFailedSourceId(null);
+        setRetry({ sourceId, attempt: 0 });
+      }
+    } catch {
+      if (mounted.current) setRenewalFailed(true);
+    } finally {
+      pending.current = false;
+      if (mounted.current) setRenewing(false);
+    }
+  };
 
   if (failedSourceId === sourceId) {
     return (
       <MediaFallback
         radius={0}
-        label="Preview unavailable"
+        label={renewalFailed ? 'Couldn’t refresh image. Try again.' : 'Preview unavailable'}
         thumbhash={thumbhash}
-        onRetry={() => {
-          setFailedSourceId(null);
-          setRetry({ sourceId, attempt: 0 });
-        }}
+        renewing={renewing}
+        onRetry={() => void retryImage()}
       />
     );
   }
@@ -166,12 +205,14 @@ function MediaFallback({
   label,
   thumbhash,
   onRetry,
+  renewing = false,
 }: {
   height?: number;
   radius: number;
   label: string;
   thumbhash?: string | null;
   onRetry?: () => void;
+  renewing?: boolean;
 }) {
   const frameStyle = {
     width: '100%' as const,
@@ -204,7 +245,7 @@ function MediaFallback({
       <ImageOff size={28} color={appTheme.colors.faint} />
       <Text style={{ color: appTheme.colors.textSecondary, fontSize: 12, fontWeight: '800' }}>{label}</Text>
       {onRetry ? (
-        <Text style={{ color: appTheme.colors.faint, fontSize: 11, fontWeight: '700' }}>Tap to retry</Text>
+        <Text style={{ color: appTheme.colors.faint, fontSize: 11, fontWeight: '700' }}>{renewing ? 'Refreshing image…' : 'Tap to retry'}</Text>
       ) : null}
     </>
   );
@@ -217,6 +258,8 @@ function MediaFallback({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel="Retry loading media"
+      accessibilityState={{ disabled: renewing, busy: renewing }}
+      disabled={renewing}
       onPress={onRetry}
       style={({ pressed }) => [frameStyle, { opacity: pressed ? appTheme.opacity.pressed : 1 }]}
     >

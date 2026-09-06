@@ -67,7 +67,7 @@ Map additional media callers discovered in step 1 into this table.
 | Motion references and outputs | Pending | Partial: result playback/retry/close verified with injected completed state | Partial: result playback/retry/close verified with injected completed state |
 | Workflow node previews, results, and shared workflows | Pending | Map supported consumers | Map supported consumers |
 | Template catalog, details, demos, and run results | Pending | Partial: detail and final-run video failure/retry/navigation verified with synthetic responses | Partial: detail and final-run video failure/retry/navigation verified with synthetic responses |
-| Marketplace, resource bundles, unlocks, and downloads | Pending | Pending | Pending |
+| Marketplace, resource bundles, unlocks, and downloads | Pending | Partial: reference image/video renewal and failure recovery in native fixture host; full purchase/unlock journey pending | Partial: reference image/video renewal and failure recovery in native fixture host; full purchase/unlock journey pending |
 | Post composer, drafts, media reorder, and publish results | Pending | Partial: edit-post lightbox poster-as-video bug reproduced/fixed; item switch and close verified | Partial: edit-post lightbox poster-as-video bug reproduced/fixed; item switch and close verified |
 | Remaining image/audio/video/file renderers, including operator surfaces | Inventory pending | Inventory pending | Inventory pending |
 
@@ -124,8 +124,8 @@ used a native fixture host. A reproduced retained-screen playback leak is fixed
 locally: detail and final-result players pause on navigation and stay paused on
 return. Short background/return checks passed for detail previews; long expiry,
 offline and physical-device performance checks remain open. Next surface
-priority: intermediate template steps, actual expiry during playback, reference
-image retry renewal, real offline/reconnect, and remaining audio ownership.
+priority: intermediate template steps, actual expiry during playback,
+real offline/reconnect, full unlock navigation, and remaining audio ownership.
 Reference video Retry now renews via the resource endpoint; renewal denial and
 pending navigation are visible inside the lightbox. Delayed responses cannot
 reopen a closed preview. These passed controlled native failure/recovery checks
@@ -146,3 +146,9 @@ until the response body finishes. Partial-body timeout and cancellation reproduc
 in regression tests; a real local HTTP stall also timed out correctly. This is
 locally verified request behavior, not a native black-media reproduction. Token
 acquisition and the separate conditional catalog fetch remain outside this timer.
+
+Reference image Retry now also renews rejected links. Denial feedback, pending
+request deduplication, successful image display and close during delayed renewal
+passed on both native platforms using the shared-component fixture host. Mobile
+tests/typecheck and Android/iOS production exports passed. This remains local and
+unreleased; it does not certify actual long-session expiry or the purchase journey.
