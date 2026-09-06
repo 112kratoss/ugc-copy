@@ -538,3 +538,26 @@ Ignored evidence in `output/media-audit/`: `{android,ios}-reference-retry-*`,
 `retry-renewal-before.log`, `mobile-eighth-pass-checks.log`,
 `native-eighth-pass-export.log`, `native-eighth-pass-env-verification.jsonl`,
 and `reference-eighth-pass-requests.json`.
+
+## Mobile API response-body timeout (local, unreleased)
+
+Reproduced a shared API-client timeout gap with two failing regression tests:
+the timeout and caller cancellation were detached after response headers, before
+the body had finished. A partial JSON response could therefore leave a media-link
+renewal pending indefinitely. The request now retains both until body parsing
+finishes, and cleans them up on success or failure. HTTP error and upgrade handling
+continue through the existing path. This is a request-layer reproduction, not
+evidence that this condition caused the reported native black media.
+
+Validation: the mobile suite passed 185 files / 1,792 tests. After correcting a
+test-only TypeScript narrowing issue, all 55 API-client tests and mobile typecheck
+passed. A real local HTTP server sent headers and partial JSON then stalled; the
+media-link call failed with ApiError status 0 in 181 ms with a 150 ms configured
+timeout. The production default remains 30 seconds. No database or release change
+is required for this fix. Evidence: `output/media-audit/api-body-timeout-before.log`,
+`mobile-ninth-pass-checks.log`, and `api-body-timeout-smoke.ts`.
+
+Limits: access-token and installation-ID acquisition precede this request timer.
+The separately implemented conditional generation-catalog fetch does not use this
+timeout path. Image retry renewal, actual expiry and offline/reconnect verification
+remain open.

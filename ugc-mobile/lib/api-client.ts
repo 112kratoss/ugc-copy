@@ -462,6 +462,7 @@ export function createApiClient({
 
       const url = `${root}${path}`;
       let response: Response;
+      let body: unknown;
       const requestController = new AbortController();
       const upstreamSignal = init.signal;
       const abortFromUpstream = () => requestController.abort(upstreamSignal?.reason);
@@ -479,6 +480,9 @@ export function createApiClient({
           headers,
           signal: requestController.signal,
         });
+        // fetch resolves at headers. Keep timeout and caller cancellation
+        // active until the body is consumed, including signed-link responses.
+        body = await parseResponse(response);
       } catch (error) {
         throw new ApiError(networkFailureMessage(root), 0, {
           url,
@@ -488,7 +492,6 @@ export function createApiClient({
         clearTimeout(timeoutId);
         upstreamSignal?.removeEventListener('abort', abortFromUpstream);
       }
-      const body = await parseResponse(response);
       const responseRequestId = response.headers.get(REQUEST_ID_HEADER) ?? requestId;
 
       if (!response.ok) {

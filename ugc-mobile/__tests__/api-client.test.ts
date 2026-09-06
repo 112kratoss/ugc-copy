@@ -271,6 +271,65 @@ describe('mobile api client caching', () => {
     expect(init.signal?.aborted).toBe(true);
   });
 
+  it('times out a media-link response that sends headers but stalls while sending its body', async () => {
+    vi.useFakeTimers();
+    const responseState: { signal: AbortSignal | null } = { signal: null };
+    let closeBody: () => void = () => undefined;
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      responseState.signal = init?.signal ?? null;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"signedUrl":'));
+          closeBody = () => { try { controller.close(); } catch { /* Already aborted. */ } };
+          init?.signal?.addEventListener('abort', () => controller.error(init.signal?.reason), { once: true });
+        },
+      });
+      return new Response(stream, { headers: { 'Content-Type': 'application/json' } });
+    });
+    const api = createApiClient({ baseUrl: 'https://magicbooklet.test', getAccessToken: async () => 'token', fetcher, requestTimeoutMs: 100 });
+    const result = api.getPostResourceFileUrl('post-1', 'references/video.mp4').catch(error => error);
+    try {
+      await vi.advanceTimersByTimeAsync(150);
+      expect(responseState.signal?.aborted).toBe(true);
+      expect(await result).toMatchObject({ name: 'ApiError', status: 0 });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      closeBody();
+      await result;
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps caller cancellation attached until the response body has finished', async () => {
+    const caller = new AbortController();
+    const responseState: { signal: AbortSignal | null } = { signal: null };
+    let closeBody: () => void = () => undefined;
+    let bodyStarted: () => void = () => undefined;
+    const ready = new Promise<void>(resolve => { bodyStarted = resolve; });
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      responseState.signal = init?.signal ?? null;
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          closeBody = () => { try { controller.close(); } catch { /* Already aborted. */ } };
+          init?.signal?.addEventListener('abort', () => controller.error(init.signal?.reason), { once: true });
+          bodyStarted();
+        },
+      }), { headers: { 'Content-Type': 'application/json' } });
+    });
+    const api = createApiClient({ baseUrl: 'https://magicbooklet.test', getAccessToken: async () => 'token', fetcher });
+    const result = api.quoteGenerationModel({} as never, caller.signal).catch(error => error);
+    try {
+      await ready;
+      await new Promise(resolve => setTimeout(resolve, 0));
+      caller.abort();
+      expect(responseState.signal?.aborted).toBe(true);
+      expect(await result).toMatchObject({ name: 'ApiError', status: 0 });
+    } finally {
+      closeBody();
+      await result;
+    }
+  });
+
   it('requests fresh authenticated showcase feed data by default', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       items: [],

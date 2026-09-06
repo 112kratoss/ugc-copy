@@ -140,3 +140,9 @@ Upload, publish, real provider completion and motion inputs still need their own
 Source review found direct result URL consumers in web video/motion
 results and workflow previews; their rendition and expiry integration remains
 pending. Keep these findings distinct from the verified full-screen viewer fix.
+
+The shared mobile API request now keeps its timeout and caller cancellation active
+until the response body finishes. Partial-body timeout and cancellation reproduced
+in regression tests; a real local HTTP stall also timed out correctly. This is
+locally verified request behavior, not a native black-media reproduction. Token
+acquisition and the separate conditional catalog fetch remain outside this timer.
