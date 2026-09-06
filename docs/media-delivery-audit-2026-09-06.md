@@ -102,7 +102,7 @@ contract or storage permission changed.
 | --- | --- | --- |
 | Private generation encoding and owner API | Measured 14 originals / 187 MB. Private producer, owner signing and deletion cleanup implemented and locally verified below. | Release migration/code through Quality and the release workflow; measure native playback and backlog drainage. |
 | Web profile/Creations viewers | Generation previews and detail modals now use the descriptor rendition, retaining original downloads. | Browser fixture verification below; expired-signature and reconnect cases remain open. |
-| Creation/motion results, workflows, templates | Web video/motion results and expanded workflow output rendition selection and failed-link renewal are verified in Chromium fixtures (see latest entries). Workflow thumbnails and template web players still consume direct URLs. | Continue node-thumbnail/template integration; test long-session expiry, poster continuity and background return per surface. |
+| Creation/motion results, workflows, templates | Web video/motion results and expanded workflow rendition selection are verified. Generated workflow video/motion cards now use batched posters. Template run final/intermediate media can renew through owned-run GET; template rendition metadata and input/approval thumbnails remain open. | Continue template optimization and remaining thumbnails; test long-session expiry, poster continuity and background return per surface. |
 | Full-rendition worker interruption | Source review: `claim_media_rendition_repairs` leases without incrementing attempts; the worker increments at terminal updates. A process killed before that update may retain its attempt count. | Reproduce lease-expiry/crash exhaustion locally before changing claim semantics; account for claimed rows deferred by the time budget. |
 | Generation deletion | Source review: Private playback cleanup now uses DELETE RETURNING to capture a concurrently published derivative; linked posts retain outputs. Preview cleanup remains source-only. | Continue preview/reference retention audit; no orphan purge has been performed. |
 | Remaining device coverage | Offline/reconnect, background expiry, rapid navigation, audio/resources, avatars/covers and physical-device performance remain incomplete. | Continue the whole-app matrix; do not infer caller coverage from shared unit tests. |
@@ -814,3 +814,71 @@ without introducing a request per rendered node. Template final and intermediate
 results also need review: the owner-generations endpoint deliberately excludes
 hidden intermediate template outputs, so the workflow fix must not be copied
 blindly into those players. Use their authorized run API when renewing media.
+
+## Workflow poster thumbnails and template run recovery (local, unreleased)
+
+On the real workflow editor with a saved two-node canvas fixture, generated
+video/motion cards each mounted a video and requested the failed original. Both
+reached media error 4 and readyState 0. The new `WorkflowOutputThumbnails` provider
+resolves preview images in sequential owner-API batches of at most 50 unique
+generation IDs, including archived outputs. Node position and selection changes
+do not refetch. Source/generation changes, auth changes, returning to the page
+and reconnect events refresh descriptors. Each batch's headers/body have a
+15-second timeout, and replaced graphs ignore late results.
+
+Those generated cards now render lazy-decoded images and an Open video control.
+Missing, denied or corrupt posters use the same clickable fallback without
+loading a full video. Chromium verified two decoded 320px posters from one batch
+request and zero video elements in the two nodes. Holding poster responses at
+503 removed the images while retaining both controls; restoring the same URL
+and dispatching an online event reloaded the images without mounting videos.
+This is controlled event recovery, not an actual browser network disconnect.
+The same-URL case initially failed its regression check and was corrected by
+tracking a new image attempt after each descriptor refresh. Tests also cover
+51 unique IDs plus a duplicate, drag/selection stability, timeout and late work.
+
+Video inputs and approval-node thumbnails still use direct video elements.
+The new provider does not poll pending preview production continuously: a
+poster that becomes ready while the user remains on the canvas is picked up on
+the next graph/auth/focus/online refresh. Viewport-only descriptor admission and
+larger-canvas performance remain open; batching alone is not a capacity claim.
+
+The actual template run page also reproduced a failed final video with no media
+recovery control. `TemplateRunMedia` now serves final results and intermediate
+step outputs. Initial rendering uses the authorized run response without extra
+API calls. Reload media makes a GET to the same owned run and selects the final
+result or the matching public run-step ID, never a hidden generation lookup.
+Missing outputs, a different run, a changed media kind and denied responses
+remain errors. This action never invokes generation retry/approval endpoints.
+The final download link receives the renewed original URL. Videos stay paused,
+do not loop, and request metadata until the user plays them.
+
+Each template media attempt bounds loading and renewal to 30 seconds, including
+a stalled JSON response body. Video metadata readiness ends the initial timer;
+this is not detection of later silent playback stalls or a first-frame deadline.
+Unmount/replacement cancels pending renewal, and late responses are ignored.
+The separate paid regenerate-step action and its confirmation are unchanged.
+
+Chromium acceptance: final video Reload media changed the failed URL to a
+decoded renewed video at readyState 4, paused, and updated Download video to the
+same renewed original. Intermediate approval video and generated image both
+recovered from controlled 403s through their public step IDs; the video was
+readyState 4/paused with metadata preload, and the image decoded at width 320.
+Desktop and 390×844 screenshots were inspected. No provider generation,
+approval, credit charge, Storage ACL change or production request was performed.
+
+Template `toRunDto` still signs step/result originals individually and supplies
+no rendition/poster descriptor. This pass fixes client recovery, not template
+encoding or byte reduction. Extending the authorized run DTO with source-matched
+derivatives, batched signing and web/mobile contract verification is next.
+Catalog/demo videos, signed-link refresh during uninterrupted playback,
+download/share renewal after a long idle and actual reconnect remain open.
+
+Evidence: `output/playwright/workflow-thumbnail-setup.js`,
+`workflow-thumbnails.png`, `template-*-setup.js`, `template-*-renew*.js`,
+`template-final-renewed.png`, `template-intermediate-{renewed,narrow}.png`, and
+`output/media-audit/{thumbnail*,template-media*,thumbnails-template*}.log`.
+Validation: final full web run passed 751 files / 5,350 tests. Application and
+test typechecks and changed-file ESLint passed. No production build was run
+alongside the active dev server; exact release Quality remains required.
+No migration, deployment or OTA is included in this checkpoint.

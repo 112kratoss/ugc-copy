@@ -318,10 +318,10 @@ export async function createTemplateRun(templateId: string, token: string, idemp
   ));
 }
 
-export async function getTemplateRun(runId: string, token: string): Promise<TemplateRun> {
+export async function getTemplateRun(runId: string, token: string, signal?: AbortSignal): Promise<TemplateRun> {
   return normalizeTemplateRun(await requestJson<unknown>(
     `/api/template-runs/${encodeURIComponent(runId)}`,
-    { token }
+    { token, ...(signal ? { signal } : {}) }
   ));
 }
 

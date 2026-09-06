@@ -37,6 +37,7 @@ import {
 } from 'lucide-react';
 
 import { getDisplayMediaUrl } from '@/lib/media-urls';
+import { WorkflowOutputThumbnail } from './WorkflowOutputThumbnails';
 import { IMAGE_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import type { WorkflowAssistantPreviewState } from '@/lib/workflow-assistant-client';
 import type {
@@ -897,7 +898,7 @@ const VideoGenerateNode = memo(function VideoGenerateNode({ data, dragging }: No
       minHeight={previewUrl ? undefined : 156}
       preview={previewUrl ? (
         <PreviewMediaLink href={previewUrl} label="Open generated video" kind="video" generationId={typed.runState.generationId} disabled={dragging}>
-          <video src={previewUrl} className="h-28 w-full rounded-xl border border-white/10 object-cover" muted playsInline />
+          <WorkflowOutputThumbnail generationId={typed.runState.generationId} />
         </PreviewMediaLink>
       ) : undefined}
     >
@@ -937,7 +938,7 @@ const MotionGenerateNode = memo(function MotionGenerateNode({ data, dragging }: 
       minHeight={previewUrl ? undefined : 160}
       preview={previewUrl ? (
         <PreviewMediaLink href={previewUrl} label="Open motion output" kind="video" generationId={typed.runState.generationId} disabled={dragging}>
-          <video src={previewUrl} className="h-28 w-full rounded-xl border border-white/10 object-cover" muted playsInline />
+          <WorkflowOutputThumbnail generationId={typed.runState.generationId} />
         </PreviewMediaLink>
       ) : undefined}
     >

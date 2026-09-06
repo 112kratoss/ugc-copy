@@ -66,6 +66,7 @@
 @source "./components/templates/TemplateEditorClient.tsx";
 @source "./components/templates/TemplatePrimitives.tsx";
 @source "./components/templates/TemplateRunClient.tsx";
+@source "./components/templates/TemplateRunMedia.tsx";
 @source "./components/templates/api.ts";
 @source "./components/templates/types.ts";
 

@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import TemplateRunMedia from './TemplateRunMedia';
 import clsx from 'clsx';
 import { useState, type ChangeEvent, type ReactNode } from 'react';
 import {
@@ -367,7 +368,10 @@ export function TemplateSlotUpload({
   );
 }
 
-function StepMedia({ step }: { step: TemplateRunStep }) {
+function StepMedia({ step, mediaRecovery }: { step: TemplateRunStep; mediaRecovery?: { runId: string; token?: string } }) {
+  if (step.outputUrl && mediaRecovery) {
+    return <TemplateRunMedia {...mediaRecovery} stepId={step.id} kind={step.mediaKind} url={step.outputUrl} alt={step.label} />;
+  }
   if (step.outputUrl && step.mediaKind === 'video') {
     return <video src={step.outputUrl} controls playsInline preload="metadata" className="h-full w-full bg-black object-contain" />;
   }
@@ -416,6 +420,7 @@ function stepPill(step: TemplateRunStep): { label: string; accent: 'workflow' | 
 
 export function TemplateRunStepCard({
   step,
+  mediaRecovery,
   disabled,
   availableCredits,
   busyAction,
@@ -426,6 +431,7 @@ export function TemplateRunStepCard({
   onRetry,
 }: {
   step: TemplateRunStep;
+  mediaRecovery?: { runId: string; token?: string };
   disabled?: boolean;
   availableCredits?: number | null;
   busyAction?: 'approve' | 'retry' | null;
@@ -482,7 +488,7 @@ export function TemplateRunStepCard({
           aspectRatio={mediaAspect}
           className="relative rounded-none border-0 border-b border-white/8 md:!aspect-auto md:min-h-72 md:border-b-0 md:border-r"
         >
-          <StepMedia step={step} />
+          <StepMedia step={step} mediaRecovery={mediaRecovery} />
           <Pill accent={status.accent} icon={isStepSuccessful(step) ? Check : undefined} className="absolute right-4 top-4">
             {status.label}
           </Pill>
