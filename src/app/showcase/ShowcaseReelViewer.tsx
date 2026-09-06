@@ -757,18 +757,17 @@ export default function ShowcaseReelViewer({
     };
   }, [activeReferencePreview, goNext, goPrevious, handleClose, isOpen]);
 
-  // Restore recipes that this viewer previously added, without asking them to
-  // claim the same free recipe again when they return to the reel.
+  // Re-check access for both free and paid recipes, including purchases made
+  // on the detail page before returning to this viewer.
   useEffect(() => {
     if (!isOpen || !item?.id || !item?.asset) {
       return;
     }
 
     const isPublicRecipe = Boolean(item.asset.id && isGenerationRecipeAssetId(item.asset.id));
-    const isFree = item.asset.accessMode === 'free' || item.asset.priceUsdCents === 0;
     const alreadyUnlocked = unlockSuccessItemId === item.id;
 
-    if (isPublicRecipe || !isFree || alreadyUnlocked) {
+    if (isPublicRecipe || alreadyUnlocked) {
       return;
     }
 
@@ -792,7 +791,7 @@ export default function ShowcaseReelViewer({
           return;
         }
 
-        setUnlockError(err instanceof Error ? err.message : 'Failed to load the free recipe.');
+        setUnlockError(err instanceof Error ? err.message : 'Failed to load recipe access.');
       });
 
     return () => {

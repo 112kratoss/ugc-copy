@@ -1654,3 +1654,114 @@ output/media-audit/probes-stable-final.log (full suite) and
 output/media-audit/probes-quality-stable.log (final focused test and quality gates).
 No mobile runtime code changed, so native tests/exports were not repeated.
 No migration, production deployment, OTA or remote push was performed.
+
+## Complete browser journeys and first physical Android baseline (2026-09-07)
+
+### Purchased recipes were offered for purchase again in the reel
+
+Reproduced in Chromium with real local Supabase Auth, Postgres and private
+Storage: a second account bought a local $1 recipe with 100 fixture credits on
+its detail page. The detail page revealed the image, video and audio, but opening
+/showcase?post=... offered Unlock for $1.00 twice and rendered zero resource
+images. The reel's restore effect explicitly skipped paid bundles. This was a
+client presentation/access-refresh failure; no duplicate charge was established.
+
+The effect now rechecks the existing authorized bundle endpoint for paid as well
+as free bundles. The same buyer returns to a 320px resource image, one video and
+one audio control, with no Unlock button or new checkout. An unpurchased account
+still receives 403 and no signed URL; the buyer receives 200 and a signed URL.
+Final database readback has exactly one paid receipt. The credit purchase reduced
+100 fixture credits to zero; the free-fixture setup later replenished 100 for the
+remaining checks, and free unlock/reentry left that balance unchanged.
+
+A concurrent task switched the original checkout from the media branch to an
+older SEO branch during this session. Its unrelated edits were preserved; only
+this audit's two-file patch was moved to /private/tmp/magicbooklet-media-journeys,
+on fix/private-video-delivery at 8aae538. The paid failure and recovery were
+repeated there by temporarily reversing/reapplying the source patch. Share/import,
+free unlock, reel playback, downloads and access readback were repeated there.
+The earlier detail-page credit action establishes a real local purchase, but its
+checkout state was not pinned and is not an exact-build certificate.
+
+### Real local journeys
+
+- Workflow: owner opens a saved canvas containing real private uploaded image
+  and audio references, clicks Share and Copy link; buyer opens the import
+  preview, imports and reloads the new private draft. The instructions persist,
+  both storage paths and media URLs are null, run outputs are null, and the
+  imported canvas renders zero media elements. The dev-generated localhost
+  origin was changed to 127.0.0.1 to reuse the local browser's cookie domain.
+- Credit unlock: actual detail-page action and database receipt, followed by the
+  corrected paid reel reentry. No cash/payment-provider transaction was made.
+- Free unlock: actual reel Get free recipe action returns 200, reveals View
+  recipe details, and survives navigation back into the reel. One free receipt
+  exists; the balance is unchanged. Fixture records were seeded directly; the
+  creator publishing/upload-authoring journey was not part of this check.
+- Media: the unlocked reel image decodes to 320x480. Its video advances with
+  readyState 4; starting its audio advances playback and pauses the video.
+- Files: the reel's Open Journey guide signs on each click. Storage delivers it
+  as a download, so waiting for the popup to finish navigating is the wrong
+  browser assertion. Both actual download events finish without error, with
+  window.opener detached and matching file bytes. Initial fixture mistakes
+  (wrong workflow bucket and missing attachment kind) were corrected as setup,
+  not classified as application bugs. Purchased-content immutability correctly
+  rejected changing the already-purchased fixture; a separate free fixture was
+  used for the guide.
+
+Evidence (ignored local artifacts): output/playwright/journey-isolated-before.log,
+journey-isolated-after.log, journey-isolated-share.log,
+journey-isolated-playback.log, journey-free-unlock.log,
+journey-file-download.log; output/media-audit/journey-final-readback.json and
+journey-access-result.json. These use real local APIs and Storage, without
+intercepted media responses or the E2E auth bypass. They do not certify Razorpay
+cash checkout, production purchases, narrow mobile-web layouts, or native unlock
+journeys. Rejected/expired-link fixtures and background acceptance remain in the
+previous checkpoints, not implicitly repeated by these success-path journeys.
+
+### Physical Android baseline, installed store app
+
+Device: Samsung Galaxy S24 Ultra (SM-S928B), connected by USB, Wi-Fi active,
+1440x3120 screenshots, battery approximately 41–47% and charging. Installed
+com.magicbooklet.mobile version 0.1.4 / build 71 was launched successfully. The
+installed OTA revision was not extracted, so these results identify the store
+binary version only. No APK was installed, app data/cache cleared, production
+content changed, or purchase/generation triggered on the phone.
+
+Measurements use adb am start -W, timestamped screenshots, dumpsys meminfo TOTAL
+PSS (KiB), and polled Android UID 10564 network-history byte counters. Network
+deltas include the whole app, not just a single URL; they cannot distinguish API,
+media, TLS or analytics traffic. UI dump/screenshot collection itself adds time.
+
+| Scenario | Observed result |
+| --- | --- |
+| Existing-process launch | Android reported WARM, TotalTime 738ms; not time to first media. |
+| Process-cold launches, existing disk cache | Android reported COLD, TotalTime 578ms and 525ms. On the timestamped repeat, the feed was still a skeleton around 2.0–2.4s; the feed image was visible in the screenshot captured during 3.15–3.87s. Thus first feed image was visible by 3.9s in this one sample, not a percentile. |
+| Profile grid | Actual thumbnails displayed. PSS was 419,956 KiB on first profile sample and 473,628 KiB after scrolling the grid. |
+| Image viewer, first observed open | PSS 698,711 KiB; app received 886,088 bytes since the preceding grid sample. |
+| Five repeated image open/close cycles | Open PSS 700,717–716,217 KiB (about 684–699 MiB); last four close samples 648,971–656,721 KiB. Total app RX increased 598,977 bytes across five cycles (about 117 KiB per cycle). Small retained growth remains to investigate; these samples do not establish a leak. |
+| Return Home | PSS 637,151 KiB after the image cycles. A later fresh-process Home sample was 264,330 KiB. Different cache/scene histories prevent treating these as equivalent memory states. |
+| Profile video viewer | Visible moving video, no black/error state observed. First viewer interval received 3,721,543 app bytes (3.55 MiB); warm reopen/watch received another 1,939,266 bytes (1.85 MiB). The immediate reopen sample alone was misleadingly near zero before remaining bytes arrived. |
+
+Evidence: output/media-audit/physical-samples.jsonl, physical-*-memory.txt,
+physical-startup.json, physical-startup-repeat.json and timestamp-correlated PNGs;
+physical-repeat.log and five UI dumps record repeated image navigation. Raw phone
+screenshots/netstats may contain personal context and remain ignored locally.
+
+The physical baseline is not a before/after certificate for the unreleased media
+branch. Next measurements must attribute repeated image-viewer requests, inspect
+retained memory with a comparable exact build, measure actual video first frame
+and stalls, and cover cache-cold/slow-network behavior plus physical iOS. Do not
+replace those requirements with emulator timing or the Android activity-start
+number. No iPhone was connected during this pass.
+
+Final validation on the isolated patch: 763 web test files / 5,415 tests pass;
+all three web typechecks and lint pass. Production build and build:verify pass
+with FFmpeg traced by 51 server bundles and resolvable in all 9 required routes,
+and libvips in all 38 sharp-using bundles. The worktree initially lacked mobile
+dependencies for cross-workspace types, and Turbopack rejected an external web
+node_modules symlink; restoring dependency availability and cloning the web
+dependencies locally resolved those setup failures without source/config changes.
+Logs: output/media-audit/journey-final-tests.log, journey-final-quality.log
+(typechecks/lint), journey-final-build.log (successful final build/verification).
+The dev server was stopped before building. No mobile source changed and no
+native rebuild/export, migration, deployment, OTA or remote push was performed.

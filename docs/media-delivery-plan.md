@@ -99,8 +99,11 @@ Map additional media callers discovered in step 1 into this table.
 
 ## Immediate next action
 
-Next, exercise complete reel/share/import/unlock journeys and measure cold/warm
-transfer, startup and memory on physical devices. Metadata probes now terminate
+Next, attribute repeated image-viewer traffic and retained memory on a physical
+Android device using a comparable exact build; cover cache-cold/slow-network video
+startup and physical iOS. Real local workflow share/import, credit/free unlock,
+reel reentry and file downloads now have journey evidence. The paid-recipe reel
+restore bug is fixed locally. The S24 Ultra store-build baseline is recorded below. Metadata probes now terminate
 within four seconds; resource images and stored reel attachments renew explicitly;
 non-resource audio now has a visible Reload path, using the authenticated media
 route for stored sources. Browser component acceptance is recorded below. These
@@ -379,3 +382,26 @@ expanded image recovery plus distinct freshly signed attachment opens. This is
 local fixture evidence, not production purchase/share/import or every caller’s
 full journey. No new migration or deployment. Evidence: the September 6 audit
 journal’s “Metadata probes, images/attachments and non-resource audio” entry.
+
+
+## Browser journeys and physical Android baseline (2026-09-07)
+
+Real local accounts completed workflow Share/Copy/import/reload with private media
+stripped and instructions preserved. Credit unlock and free reel unlock produced
+one receipt each. Unpurchased file access returned 403; purchased access returned
+200. Actual unlocked image/video/audio playback and two guide downloads passed.
+Paid purchases made outside the reel were incorrectly shown as locked on reel
+entry; the reel now refreshes paid access using the existing authorized endpoint.
+
+The physical Samsung S24 Ultra (installed 0.1.4/build 71; OTA id unverified) showed
+profile media and video playback. Process-cold activity start was 525–578ms with
+existing disk cache; one repeat's feed image was visible by a 3.9-second screenshot.
+Repeated image-viewer opens used about 684–699 MiB PSS and approximately 117 KiB
+of app traffic per cycle. These are baseline observations, not an exact-build
+optimization result or a proven memory leak. Request attribution, comparable
+latest-build measurements, cold cache/slow network and physical iOS remain open.
+
+Work continues in /private/tmp/magicbooklet-media-journeys on
+fix/private-video-delivery because another task switched the original checkout.
+Evidence and measurement limits: September 6 audit journal, “Complete browser
+journeys and first physical Android baseline”. No migration or deployment.
