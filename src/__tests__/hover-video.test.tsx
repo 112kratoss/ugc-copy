@@ -22,7 +22,7 @@ class IntersectionObserverMock {
 
 function enterViewport() {
   act(() => {
-    observerCallbacks[0]?.([
+    observerCallbacks[1]?.([
       { isIntersecting: true, intersectionRatio: 1 } as IntersectionObserverEntry,
     ], {} as IntersectionObserver);
   });
@@ -41,7 +41,7 @@ describe('HoverVideo', () => {
     vi.restoreAllMocks();
   });
 
-  it('keeps the original source detached until a nearby card is hovered', () => {
+  it('keeps the original source detached until a visible card is hovered', () => {
     const { container } = render(
       <HoverVideo
         src="https://example.com/video.mp4"
@@ -68,7 +68,7 @@ describe('HoverVideo', () => {
     expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled();
   });
 
-  it('attaches and autoplays an explicitly requested video only near the viewport', () => {
+  it('attaches and autoplays an explicitly requested video only in the viewport', () => {
     const { container } = render(
       <HoverVideo
         src="https://example.com/video.mp4"
@@ -126,4 +126,24 @@ describe('HoverVideo', () => {
     expect(video).not.toHaveAttribute('src');
     expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
   });
+  it('detaches hidden and fully offscreen previews, and resumes decorative autoplay only when visible', () => {
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
+    const { container } = render(<HoverVideo src="/clip.mp4" autoPlay />);
+    const video = container.querySelector('video')!;
+    enterViewport();
+    expect(video).toHaveAttribute('src', '/clip.mp4');
+    hidden.mockReturnValue(true);
+    fireEvent(document, new Event('visibilitychange'));
+    expect(video).not.toHaveAttribute('src');
+    hidden.mockReturnValue(false);
+    fireEvent(document, new Event('visibilitychange'));
+    expect(video).toHaveAttribute('src', '/clip.mp4');
+    act(() => observerCallbacks[1]([
+      { isIntersecting: false, intersectionRatio: 0 } as IntersectionObserverEntry,
+    ], {} as IntersectionObserver));
+    expect(video).not.toHaveAttribute('src');
+    fireEvent.mouseEnter(video);
+    expect(video).not.toHaveAttribute('src');
+  });
+
 });

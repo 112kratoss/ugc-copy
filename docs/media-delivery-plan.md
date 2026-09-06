@@ -99,10 +99,13 @@ Map additional media callers discovered in step 1 into this table.
 
 ## Immediate next action
 
-Next, check CreatorStudio upload/modal playback and the separate hover/carousel
-policies, then resource/audio expired-link and offline recovery. The controlled
-web player ownership checkpoint below is locally verified. Physical-device
-transfer/memory budgets and production-duration credential checks remain open. Native viewer
+Next, check the remaining detached metadata probes, resource-image/attachment
+renewal, non-resource audio source recovery, and full reel/share/import/unlock journeys; then measure physical-device
+transfer/memory and production-duration credentials. Studio, hover and carousel
+playback now have offscreen evidence, and actual Chromium background transitions
+pass. Resource audio/video failed signatures, elapsed local expiry, offline
+signing/reconnect and stalled signing now have recovery evidence (checkpoint below).
+The full app audit remains open. Native viewer
 renewal now preserves playback state; real short-lived Storage signatures and a
 20-minute background interval have local acceptance evidence (checkpoint below). Shared native
 preview ownership/offscreen pause, actual Android/iOS background transitions,
@@ -318,3 +321,31 @@ playback policies requiring runtime checks. Resource/audio expired-source and
 reconnect recovery, full unlock/share/import journeys, and physical-device
 performance are still open. This checkpoint requires no new migration and is not
 deployed. Details and validation: docs/media-delivery-audit-2026-09-06.md.
+
+
+## Studio, hover/carousel and resource recovery (2026-09-07)
+
+Studio upload previews/modal and showcase carousel videos now share inline media
+ownership, offscreen pause and hidden-document pause. Opening Studio's expanded
+preview pauses its thumbnail; closing leaves it paused. Hover previews now load
+only within the actual viewport and visible document, retaining reduced-motion
+and data-saver gates. They detach while hidden/offscreen; decorative autoplay may
+resume when eligible again. Controlled Studio/carousel/resource playback remains
+paused on document return.
+
+Resource audio/video previews in post details and reel resources now provide
+loading/error/Reload states. Signing and loading have a 30-second budget. Explicit
+Reload obtains a fresh URL through the same authorized endpoint, aborts obsolete
+requests, and does not autoplay. Audio keeps preload none and has no idle timeout.
+Source failure removes the player until retry. Images and attachment links retain
+their existing paths and remain separate renewal work.
+
+Chromium fixtures reproduced and verified offscreen/handoff failures, rejected
+URLs, actual short-lived private Storage signatures, offline signing/reconnect and
+30.5-second stalled-signing recovery. A separate Chrome process connected without
+Playwright focus overrides recorded real hidden/visible events: Studio, carousel
+and resource audio pause and remain paused on return; hover detaches while hidden.
+These are local component/browser checks, not full purchase/reel journeys, physical
+mobile browser certification, or production-duration session measurements.
+No new migration or deployment. Evidence: docs/media-delivery-audit-2026-09-06.md,
+“Studio, hover/carousel and resource recovery (2026-09-07)”.

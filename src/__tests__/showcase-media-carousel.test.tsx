@@ -12,7 +12,7 @@ interface ObserverRegistration {
 const observerRegistrations: ObserverRegistration[] = [];
 
 function getPlaybackObserver() {
-  return observerRegistrations.find(({ options }) => options?.rootMargin !== '320px 0px');
+  return observerRegistrations.find(({ options }) => Array.isArray(options?.threshold));
 }
 
 function getNearViewportObserver() {
@@ -97,7 +97,7 @@ describe('ShowcaseMediaCarousel', () => {
     expect(video).not.toHaveAttribute('src');
     expect(video).not.toHaveAttribute('poster');
     expect(video).toHaveAttribute('preload', 'none');
-    expect(observerRegistrations).toHaveLength(2);
+    expect(observerRegistrations).toHaveLength(3);
 
     act(() => {
       getPlaybackObserver()?.callback([
@@ -694,4 +694,32 @@ describe('ShowcaseMediaCarousel', () => {
       expect(container.querySelector('video')).toHaveAttribute('src', RENDITION);
     });
   });
+  it('pauses manual detail playback offscreen and in a hidden document without resuming on return', () => {
+    vi.spyOn(HTMLVideoElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      top: 10, bottom: 210, left: 0, right: 300, width: 300, height: 200,
+    } as DOMRect);
+    vi.mocked(HTMLMediaElement.prototype.pause).mockImplementation(function (this: HTMLMediaElement) {
+      Object.defineProperty(this, 'paused', { configurable: true, value: true });
+    });
+    const { container } = render(<ShowcaseMediaCarousel title="Detail" mode="detail" autoPlayVideo={false} mediaItems={[createVideoItem()]} />);
+    const video = container.querySelector('video')!;
+    const start = () => {
+      Object.defineProperty(video, 'paused', { configurable: true, value: false });
+      fireEvent.play(video);
+    };
+    start();
+    expect(video.paused).toBe(false);
+    act(() => observerRegistrations[0].callback([{ isIntersecting: false } as IntersectionObserverEntry], {} as IntersectionObserver));
+    expect(video.paused).toBe(true);
+    act(() => observerRegistrations[0].callback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver));
+    expect(video.paused).toBe(true);
+    start();
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+    fireEvent(document, new Event('visibilitychange'));
+    expect(video.paused).toBe(true);
+    hidden.mockReturnValue(false);
+    fireEvent(document, new Event('visibilitychange'));
+    expect(video.paused).toBe(true);
+  });
+
 });

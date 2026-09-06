@@ -1,7 +1,6 @@
 'use client';
 
-import InlineMediaAudio from '@/app/components/InlineMediaAudio';
-import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+import ResourceMediaPreview from '@/app/components/ResourceMediaPreview';
 
 import Script from 'next/script';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -668,8 +667,9 @@ export default function PostResourceBundlePanel({
     }
   };
 
-  const fetchResourceFileUrl = useCallback(async (storagePath: string): Promise<string> => {
+  const fetchResourceFileUrl = useCallback(async (storagePath: string, signal?: AbortSignal): Promise<string> => {
     const response = await fetch(fileUrlEndpoint ?? `/api/posts/${postId}/resource-bundle/file-url`, {
+      signal,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -726,9 +726,7 @@ export default function PostResourceBundlePanel({
       }
 
       return Boolean(
-        item.contentType?.startsWith('image/') ||
-        item.contentType?.startsWith('video/') ||
-        item.contentType?.startsWith('audio/')
+        item.contentType?.startsWith('image/')
       );
     });
 
@@ -816,11 +814,11 @@ export default function PostResourceBundlePanel({
 
   const renderResourceItemMediaPreview = (item: PostResourceItem) => {
     const signedUrl = item.storagePath ? resourceFileUrls[item.storagePath] : null;
-    if (!signedUrl || !item.contentType) {
+    if (!item.contentType) {
       return null;
     }
 
-    if (item.contentType.startsWith('image/')) {
+    if (signedUrl && item.contentType.startsWith('image/')) {
       return (
         // Natural width up to a modest cap — a reference thumbnail, not a
         // second post media frame with letterboxing around a portrait.
@@ -833,24 +831,14 @@ export default function PostResourceBundlePanel({
       );
     }
 
-    if (item.contentType.startsWith('video/')) {
-      return (
-        <InlineMediaVideo
-          src={signedUrl}
-          controls
-          className="mb-3 max-h-64 w-auto max-w-full rounded-xl border border-white/8"
-        />
-      );
-    }
-
-    if (item.contentType.startsWith('audio/')) {
-      return (
-        <InlineMediaAudio
-          src={signedUrl}
-          controls
-          className="mb-3 w-full"
-        />
-      );
+    if (item.storagePath && (item.contentType.startsWith('video/') || item.contentType.startsWith('audio/'))) {
+      return <ResourceMediaPreview
+        key={`${postId}:${item.storagePath}`}
+        mediaType={item.contentType.startsWith('audio/') ? 'audio' : 'video'}
+        label={item.title}
+        resolveUrl={signal => fetchResourceFileUrl(item.storagePath!, signal)}
+        className="mb-3 max-w-full"
+      />;
     }
 
     return null;

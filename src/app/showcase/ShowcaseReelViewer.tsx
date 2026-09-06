@@ -1,7 +1,6 @@
 'use client';
 
-import InlineMediaAudio from '@/app/components/InlineMediaAudio';
-import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+import ResourceMediaPreview from '@/app/components/ResourceMediaPreview';
 
 import Link from 'next/link';
 import Script from 'next/script';
@@ -675,9 +674,25 @@ export default function ShowcaseReelViewer({
         ? publicRecipeResources
         : null;
 
+  const fetchResourceFileUrl = useCallback(async (storagePath: string, signal?: AbortSignal): Promise<string> => {
+    if (!item?.id) throw new Error('Resource unavailable');
+    const response = await fetch(`/api/posts/${item.id}/resource-bundle/file-url`, {
+      method: 'POST', signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+      },
+      body: JSON.stringify({ storagePath }),
+    });
+    const data = await response.json();
+    if (!response.ok || typeof data?.signedUrl !== 'string') throw new Error('Resource unavailable');
+    return data.signedUrl;
+  }, [item?.id, session?.access_token]);
+
   useEffect(() => {
     const storagePaths = Array.from(new Set([
       ...(activeAccessibleResources?.items ?? [])
+        .filter(resource => !resource.contentType?.startsWith('audio/') && !resource.contentType?.startsWith('video/'))
         .map((resourceItem) => resourceItem.storagePath)
         .filter((storagePath): storagePath is string => Boolean(storagePath)),
       ...(activeAccessibleResources?.attachments ?? [])
@@ -695,23 +710,11 @@ export default function ShowcaseReelViewer({
     let cancelled = false;
 
     void Promise.all(storagePaths.map(async (storagePath) => {
-      const response = await fetch(`/api/posts/${item.id}/resource-bundle/file-url`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-        },
-        body: JSON.stringify({
-          storagePath,
-        }),
-      });
-      const data = await response.json();
-
-      if (!response.ok || typeof data?.signedUrl !== 'string') {
+      try {
+        return [storagePath, await fetchResourceFileUrl(storagePath)] as const;
+      } catch {
         return null;
       }
-
-      return [storagePath, data.signedUrl] as const;
     }))
       .then((entries) => {
         if (cancelled) {
@@ -729,7 +732,7 @@ export default function ShowcaseReelViewer({
     return () => {
       cancelled = true;
     };
-  }, [activeAccessibleResources, item?.id, session?.access_token]);
+  }, [activeAccessibleResources, item?.id, fetchResourceFileUrl]);
 
   useEffect(() => {
     // Reference previews cannot carry across reel items.
@@ -1235,10 +1238,14 @@ export default function ShowcaseReelViewer({
                       key={`${resourceItem.storagePath ?? resourceItem.externalUrl ?? resourceItem.title}:${index}`}
                       className="min-w-0 basis-[180px] overflow-hidden rounded-2xl border border-white/10 bg-black/35 p-3"
                     >
-                      {showMediaPreview && fileUrl && isVideo ? (
-                        <InlineMediaVideo src={fileUrl} controls className="h-full w-full object-contain" />
-                      ) : showMediaPreview && fileUrl && isAudio ? (
-                        <InlineMediaAudio src={fileUrl} controls className="w-full" />
+                      {showMediaPreview && (isVideo || isAudio) ? (
+                        <ResourceMediaPreview
+                          key={`${item.id}:${resourceItem.storagePath || fileUrl}`}
+                          mediaType={isAudio ? 'audio' : 'video'}
+                          label={resourceItem.title}
+                          url={resourceItem.storagePath ? null : fileUrl}
+                          resolveUrl={resourceItem.storagePath ? signal => fetchResourceFileUrl(resourceItem.storagePath!, signal) : undefined}
+                        />
                       ) : (
                         <div className="text-xs text-zinc-400">{resourceItem.title}</div>
                       )}

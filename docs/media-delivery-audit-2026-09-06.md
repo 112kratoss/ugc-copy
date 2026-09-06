@@ -1462,3 +1462,109 @@ remaining-player-stable-build.log and remaining-player-generation-recheck.log.
 The temporary dev server was stopped before building. No mobile runtime code
 changed, so mobile tests/exports were not repeated. No new migration, deployment,
 OTA or remote push was performed for this checkpoint.
+
+
+## Studio, hover/carousel and resource recovery (2026-09-07)
+
+### Reproduction and changes
+
+Chromium component fixtures reproduced Studio's upload thumbnail and expanded
+modal playing together, and its thumbnail playing entirely offscreen. HoverVideo
+and detail-mode ShowcaseMediaCarousel also kept playing with the full video frame
+above the viewport (bottom -100px). Studio now uses InlineMediaVideo; carousel and
+hover use the shared hook with their existing element refs. The shared registry
+coordinates their ownership with other enrolled audio/video. Existing carousel
+source, feed activation, rendition and error/retry policies are preserved.
+
+HoverVideo's 320px near-viewport activation was replaced by actual intersection
+and document visibility. Hidden/offscreen decorative videos detach their source;
+visible decorative autoplay may resume, subject to reduced-motion/data-saver
+preferences. Controlled Studio/carousel previews stay paused on return. This is a
+policy distinction, not a claim that all decorative previews remain paused.
+
+PostResourceBundlePanel and ShowcaseReelViewer resource players retained stale
+signed URLs with no inline Reload action. Controlled 403 responses reproduced
+failed video/audio controls without recovery UI. New ResourceMediaPreview shares
+inline ownership and presents loading, error and Reload. Each explicit attempt
+uses the existing authorized signing endpoint, preserving bearer headers and
+post/resource scope. Signing and active media loading have a 30-second deadline;
+timeout aborts signing and removes the failed player. Late ready events cannot
+clear the terminal error. Audio uses preload none and does not time out while
+idle; retry remains paused. No background renewal/retry loop or authorization
+change was introduced. Image previews and attachment links keep their old paths.
+
+### Real browser and transport acceptance
+
+- Studio modal playback pauses the upload thumbnail; close leaves it paused.
+  Fully offscreen thumbnail playback pauses and stays paused after scrolling back.
+- Hover stops and detaches its source with bottom -100px. Detail carousel pauses
+  at the same offscreen boundary. Existing focused feed activation tests pass.
+- Resource audio/video recover from rejected URLs after explicit Reload. Starting
+  recovered audio pauses the recovered resource video.
+- Local private generation_inputs Storage supplied three-second signatures. A
+  fresh range request returned 206; after 4.5 seconds Storage returned 400
+  InvalidJWT with `"exp" claim timestamp check failed`. Idle audio failed after
+  elapsed expiry; video was given a genuinely expired URL after delayed signing
+  response delivery. Both showed Reload and played after renewed 300-second URLs.
+  The initial fixture regex searched only for “expired” and returned false for
+  Storage's “exp” message; inspect-storage-expiry.log records the actual response.
+  This is elapsed shortened local expiry, not production-duration session expiry.
+- With browser networking offline and no signing-route override, both resource
+  types showed Reload. After network restoration and a local signing response,
+  explicit retry played actual private Storage audio and a 320px-wide video.
+- A signing response withheld for 32 seconds showed both Reload controls at
+  approximately 30,502ms. Explicit retry played audio. The narrow viewport
+  screenshot shows the shared error UI; controls remain scrollable/reachable.
+
+Ignored scripts and logs under output/playwright: lifecycle-before.log,
+lifecycle-scroll-before.log, lifecycle-scroll-after.log, studio-after.log,
+resource-expiry-before.log, resource-expiry-after.log,
+resource-real-expiry-proof.log, resource-real-video-expiry.log,
+inspect-storage-expiry.log, resource-offline-signing.log, resource-stall.log and
+resource-stall-retry.png. The private Storage fixture server is
+output/media-audit/web-resource-expiry-server.cjs. It only uses the local audit
+Docker stack; service-role credentials never enter browser code or evidence.
+Development Strict Mode starts/aborts a duplicate effect request per attempt;
+fixture request counts include these, not repeated automatic recovery.
+
+### Real background evidence and remaining boundaries
+
+The default Playwright session reported visible even after tab switch/minimize.
+A separate temporary Chrome profile launched with ordinary browser flags and
+connected using connectOverCDP(noDefaults: true) removed the focus override.
+Actual tab switching then emitted hidden/visible events. Studio and detail
+carousel paused while hidden and stayed paused on return; resource audio did the
+same. Hover detached while hidden and resumed decorative autoplay when visible.
+Evidence: output/playwright/real-background.cjs, real-background-final.log and
+real-background-results.json. No synthetic visibility event is counted as this
+acceptance. These are Chrome checks; physical mobile Safari/Chrome background
+behavior is not certified by them.
+
+The fixture route was removed before final tests/build; its source is preserved
+only as output/media-audit/lifecycle-fixture.tsx.txt. Full reel navigation/unlock
+and share/import journeys, resource-image/attachment URL recovery, detached
+metadata-probe deadlines, legacy backfills, and physical-device transfer/memory
+budgets remain open. Reel resource wiring is covered by shared component behavior
+and repository regressions, not a complete live purchase/reel walkthrough.
+
+
+Audio outside resource bundles (for example creation outputs and workflow node
+sources) shares playback ownership from the previous checkpoint but has not been
+converted to this new signed-resource resolver. Its source-specific renewal still
+needs separate coverage. The recovery component does not silently substitute a
+public URL, broaden access, or start a generation.
+
+Final validation: 760 web test files / 5,404 tests pass (four workers), all three
+web typechecks pass, and application lint passes with git-ignored `output/**`
+audit scripts excluded. Production build and build:verify pass: FFmpeg is traced
+by 51 server bundles and resolves in all 9 required routes; libvips is present in
+all 38 sharp-using bundles. Logs: output/media-audit/lifecycle-web-tests-final.log,
+lifecycle-quality-final.log and lifecycle-build-final.log. Six new regressions
+cover hover visibility, controlled carousel pause, resource renewal, stalled
+signing/unmount cancellation, idle audio versus stalled playback, and video-ready
+cancellation/signing failure. Existing recovery and resource access tests pass.
+
+The local fixture server was stopped and removes its two uploaded objects on
+shutdown. Temporary browser profiles and ignored evidence remain local. No mobile
+runtime code changed, so native tests/exports were not repeated. No migration,
+production deployment, OTA or remote push was performed.

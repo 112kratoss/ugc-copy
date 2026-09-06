@@ -1,12 +1,13 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, type RefObject } from 'react';
 
 const mountedPreviews = new Set<HTMLMediaElement>();
 
 /** User-controlled inline playback: leaving the view pauses, returning never resumes. */
-export function useInlineMediaPlayback<T extends HTMLMediaElement>() {
+export function useInlineMediaPlayback<T extends HTMLMediaElement>(elementRef?: RefObject<T | null>) {
   const attach = useCallback((media: T | null) => {
+    if (elementRef) elementRef.current = media;
     if (!media) return;
     mountedPreviews.add(media);
     let isIntersecting: boolean | null = null;
@@ -47,9 +48,10 @@ export function useInlineMediaPlayback<T extends HTMLMediaElement>() {
       media.removeEventListener('play', claimPlayback);
       media.removeEventListener('leavepictureinpicture', pauseIfAway);
       document.removeEventListener('visibilitychange', pauseIfAway);
+      if (elementRef?.current === media) elementRef.current = null;
       mountedPreviews.delete(media);
       pause();
     };
-  }, []);
+  }, [elementRef]);
   return attach;
 }
