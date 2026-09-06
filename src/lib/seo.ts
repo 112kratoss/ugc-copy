@@ -18,7 +18,13 @@ type CreateMetadataOptions = {
     absoluteTitle?: string;
     keywords?: string[];
     type?: 'website' | 'article';
-    image?: string | MetadataImage;
+    /**
+     * `null` omits the social card entirely, which is how a route hands the job
+     * to a file-based `opengraph-image` convention: an explicit
+     * `openGraph.images` always wins over the generated one, so a caller with a
+     * per-page card has to say "no image here" rather than pass a default.
+     */
+    image?: string | MetadataImage | null;
     noIndex?: boolean;
     publishedTime?: string;
     modifiedTime?: string;
@@ -135,7 +141,8 @@ export function createMetadata({
     const metadataTitle = absoluteTitle || title === siteConfig.name
         ? { absolute: fullTitle }
         : title;
-    const resolvedImage = typeof image === 'string' ? { url: image } : image;
+    const hasImage = image !== null;
+    const resolvedImage = typeof image === 'string' ? { url: image } : (image ?? { url: siteConfig.ogImage });
     // Crawlers lay the card out from these before fetching the asset, so real
     // dimensions win when a caller knows them. Everything else keeps the site
     // card's own 1200x630.
@@ -157,13 +164,17 @@ export function createMetadata({
             url: path,
             siteName: siteConfig.name,
             type,
-            images: [
-                {
-                    url: resolvedImage.url,
-                    ...imageDimensions,
-                    alt: `${siteConfig.name} preview`,
-                },
-            ],
+            ...(hasImage
+                ? {
+                    images: [
+                        {
+                            url: resolvedImage.url,
+                            ...imageDimensions,
+                            alt: `${siteConfig.name} preview`,
+                        },
+                    ],
+                }
+                : {}),
             ...(type === 'article'
                 ? {
                     publishedTime,
@@ -175,7 +186,7 @@ export function createMetadata({
             card: 'summary_large_image',
             title: fullTitle,
             description,
-            images: [resolvedImage.url],
+            ...(hasImage ? { images: [resolvedImage.url] } : {}),
         },
     };
 }

@@ -5,18 +5,28 @@ import { notFound } from 'next/navigation';
 import { ArrowLeft, Calendar } from 'lucide-react';
 
 import { JsonLd } from '@/app/components/JsonLd';
-import { buildArticleSchema, createMetadata } from '@/lib/seo';
+import { buildArticleSchema, createMetadata, siteConfig } from '@/lib/seo';
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
     const resolvedParams = await params;
     try {
         const post = await getPostData(resolvedParams.slug);
+        // Every post's `coverImage` is the site-wide card, so passing it made
+        // four different articles share one preview — and an explicit
+        // `openGraph.images` also suppresses the generated per-article card in
+        // `opengraph-image.tsx`. Only a genuinely distinct cover is passed
+        // through now; anything else falls through to the generated one.
+        const hasDistinctCover = Boolean(
+            post.coverImage && post.coverImage !== siteConfig.ogImage
+        );
+
         return createMetadata({
             title: post.seoTitle ?? post.title,
             absoluteTitle: post.seoTitle,
             description: post.seoDescription ?? post.excerpt,
             path: `/blog/${resolvedParams.slug}`,
-            image: post.coverImage,
+            // null hands the card to `opengraph-image.tsx` for this route.
+            image: hasDistinctCover ? post.coverImage : null,
             type: 'article',
             publishedTime: post.date,
             modifiedTime: post.date,
