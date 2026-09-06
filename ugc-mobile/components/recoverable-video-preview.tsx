@@ -1,4 +1,4 @@
-import { useVideoPlayer, VideoView, type VideoPlayerStatus } from 'expo-video';
+import { useVideoPlayer, VideoView, type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
 import { useIsFocused } from '@react-navigation/native';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Text, View, type StyleProp, type ViewStyle } from 'react-native';
@@ -69,12 +69,25 @@ function VideoPreviewAttempt({
 }: VideoPreviewProps & { onRetry: () => void; renewing: boolean; renewalFailed: boolean }) {
   const isFocused = useIsFocused();
   const { source } = useMediaSource(url);
+  const previousPlayer = useRef<VideoPlayer | null>(null);
   const player = useVideoPlayer(source, instance => {
+    const previous = previousPlayer.current;
     instance.loop = true;
-    instance.muted = false;
+    instance.muted = previous?.muted ?? false;
     instance.audioMixingMode = 'auto';
-    if (autoPlay && isFocused) instance.play();
+    // The hook recreates its native player when credentials or the effective
+    // URL change. The old player is still alive during setup, so preserve the
+    // viewer's state before the hook releases it. A new item/explicit Retry
+    // remounts this attempt and starts with no previous player.
+    if (previous) {
+      instance.currentTime = previous.currentTime;
+      instance.volume = previous.volume;
+      instance.playbackRate = previous.playbackRate;
+    }
+    if ((previous ? previous.playing : autoPlay) && isFocused) instance.play();
+    else if (previous) instance.pause();
   });
+  previousPlayer.current = player;
   // Stack navigation keeps earlier screens mounted. Their players must stop
   // even though useVideoPlayer's unmount cleanup has not run yet.
   useEffect(() => {

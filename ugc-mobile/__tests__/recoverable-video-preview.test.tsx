@@ -5,9 +5,15 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({
   initialStatus: 'loading',
   focused: true,
+  sourceVersion: 0,
   players: [] as Array<{
     source: unknown;
     status: string;
+    currentTime: number;
+    playing: boolean;
+    muted: boolean;
+    volume: number;
+    playbackRate: number;
     play: ReturnType<typeof vi.fn>;
     pause: ReturnType<typeof vi.fn>;
     release: ReturnType<typeof vi.fn>;
@@ -15,7 +21,7 @@ const state = vi.hoisted(() => ({
   }>,
 }));
 vi.mock('@react-navigation/native', () => ({ useIsFocused: () => state.focused }));
-vi.mock('@/lib/use-media-source', () => ({ useMediaSource: (url: string) => ({ source: { uri: url } }) }));
+vi.mock('@/lib/use-media-source', () => ({ useMediaSource: (url: string) => ({ source: { uri: state.sourceVersion ? `${url}?version=${state.sourceVersion}` : url } }) }));
 vi.mock('@/components/ui', () => ({ SecondaryButton: (props: object) => React.createElement('retry-button', props) }));
 vi.mock('react-native', () => ({
   View: (props: object) => React.createElement('view', props),
@@ -25,9 +31,10 @@ vi.mock('react-native', () => ({
 vi.mock('expo-video', () => ({
   VideoView: (props: object) => React.createElement('video', props),
   useVideoPlayer: (source: unknown, setup: (player: unknown) => void) => {
-    const [player] = React.useState(() => {
+    const player = React.useMemo(() => {
       const instance = {
         source,
+        currentTime: 0, playing: false, muted: false, volume: 1, playbackRate: 1,
         status: state.initialStatus, play: vi.fn(), pause: vi.fn(), release: vi.fn(),
         listener: undefined as ((event: { status: string }) => void) | undefined,
         addListener: (_name: string, listener: (event: { status: string }) => void) => {
@@ -38,14 +45,14 @@ vi.mock('expo-video', () => ({
       state.players.push(instance);
       setup(instance);
       return instance;
-    });
+    }, [JSON.stringify(source)]);
     React.useEffect(() => () => player.release(), [player]);
     return player;
   },
 }));
 import { RecoverableVideoPreview } from '../components/recoverable-video-preview';
 let tree: renderer.ReactTestRenderer | undefined;
-beforeEach(() => { state.initialStatus = 'loading'; state.focused = true; state.players = []; });
+beforeEach(() => { state.initialStatus = 'loading'; state.focused = true; state.sourceVersion = 0; state.players = []; });
 afterEach(() => { renderer.act(() => tree?.unmount()); tree = undefined; });
 function mount(autoPlay = false) {
   renderer.act(() => { tree = renderer.create(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 300 }} autoPlay={autoPlay} />); });
@@ -108,6 +115,37 @@ it('does not carry a previous retry autoplay decision into a different result', 
   renderer.act(() => view.update(<RecoverableVideoPreview url="https://media.test/another.mp4" style={{ height: 300 }} />));
   expect(state.players[2].play).not.toHaveBeenCalled();
   expect(view.root.findAllByType('retry-button' as never)).toHaveLength(0);
+});
+
+it('preserves pause, position and audio settings when the effective URL renews', () => {
+  const view = mount(true);
+  const original = state.players[0];
+  Object.assign(original, { currentTime: 12.5, playing: false, muted: true, volume: 0.4, playbackRate: 1.5 });
+  state.sourceVersion = 1;
+  renderer.act(() => view.update(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 300 }} autoPlay />));
+  expect(original.release).toHaveBeenCalledOnce();
+  expect(state.players[1]).toMatchObject({ currentTime: 12.5, muted: true, volume: 0.4, playbackRate: 1.5 });
+  expect(state.players[1].play).not.toHaveBeenCalled();
+  expect(state.players[1].pause).toHaveBeenCalledOnce();
+});
+
+it('continues a manually started preview from its position after source renewal', () => {
+  const view = mount();
+  Object.assign(state.players[0], { currentTime: 9, playing: true });
+  state.sourceVersion = 1;
+  renderer.act(() => view.update(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 300 }} />));
+  expect(state.players[1].currentTime).toBe(9);
+  expect(state.players[1].play).toHaveBeenCalledOnce();
+});
+
+it('does not resume a playing source renewed while its screen is hidden', () => {
+  const view = mount();
+  Object.assign(state.players[0], { currentTime: 9, playing: true });
+  state.focused = false;
+  state.sourceVersion = 1;
+  renderer.act(() => view.update(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 300 }} />));
+  expect(state.players[1].currentTime).toBe(9);
+  expect(state.players[1].play).not.toHaveBeenCalled();
 });
 
 it('renews once before replacing a failed player and ignores repeated presses while pending', async () => {

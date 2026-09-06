@@ -162,3 +162,11 @@ Android intermediate steps currently need an authenticated route session. These
 are partial surface checks; iOS offline, uninterrupted-playback expiry, viewport
 player ownership and physical-device measurements remain open. See the detailed
 September 6 evidence for fixture boundaries and current release status.
+
+Shared preview source replacement now preserves playback position and paused or
+playing state for the same media item. Android/iOS reproduction showed paused
+videos unexpectedly restarting before the fix; native checks now preserve pause,
+continue a 40-second clip from its position and keep hidden players paused.
+Different media items and explicit Retry retain their existing behavior. Mobile
+tests/typecheck and clean production exports passed. Actual expiry-timer and
+authenticated-redirect integration during playback remain separate open checks.

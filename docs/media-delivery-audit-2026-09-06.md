@@ -668,3 +668,42 @@ render a static tile; neither is an in-app audio player acceptance result.
 
 Evidence: `output/media-audit/ios-intermediate-*`, `native-intermediate-run.js`,
 and `android-intermediate-setup.png`. No application code changed in this pass.
+
+## Preserve playback state during effective-source renewal (local, unreleased)
+
+Reproduced on Android API 36 and iOS 26.4: a shared preview paused at one second
+started playing again when useMediaSource returned a new effective URL for the
+same input media URL. The native fixture changed the effective URL through a
+temporary hook override while rendering the actual RecoverableVideoPreview.
+This reproduces player replacement behavior; it does not exercise the actual
+expiry timer, authenticated redirect, or JWT refresh in a long session.
+
+The installed expo-video hook recreates its native player when the serialized
+source changes and releases the old player after render. The shared preview now
+copies position, pause/play intent, mute, volume and playback rate from that old
+player during replacement setup. An explicit pause is necessary after restoring
+settings: the first implementation still resumed on iOS, which native testing
+caught. Different media items and explicit Retry retain their existing fresh
+attempt behavior. A replacement on a hidden screen cannot resume playback.
+
+Both platforms now remain paused at one second after replacement. With a
+40-second synthetic clip, source replacement during playback preserved progress:
+Android advanced from 25.528 to 34.613 seconds and iOS from 25.758 to 35.589
+seconds across the check interval. Both were readyToPlay and playing. Refreshing
+the source after navigating away left the retained player paused on both
+platforms. Tests also verify copied audio settings and existing Retry behavior;
+native audio-setting acceptance is not claimed here.
+
+Validation: 185 mobile test files / 1,800 tests and mobile typecheck passed;
+the 14 focused preview tests passed again on the final patch. Initial local
+production exports failed the bundled-client-configuration gate. Re-exporting
+both platforms with Expo's cache cleared passed the same gate. Android/iOS
+Hermes exports therefore passed after the clean rebuild; the failed earlier
+exports are not release evidence. No migration, deployment or OTA changed.
+
+Evidence: `output/media-audit/{android,ios}-source-refresh-*`,
+`mobile-source-refresh-final-checks.log`, `native-source-refresh-clean-export.log`,
+and `native-source-refresh-env-verification.jsonl`. Fixture overrides were cleared
+by reloading the apps after the checks. Remaining work includes actual expiry
+during playback, viewport-based player ownership, iOS offline recovery, remaining
+web consumers, authenticated Android template checks and physical-device budgets.
