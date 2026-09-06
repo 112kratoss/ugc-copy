@@ -29,7 +29,7 @@ vi.mock('react-native-safe-area-context', () => ({
 }));
 
 vi.mock('expo-video', () => ({
-  useVideoPlayer: (url: string) => ({ url }),
+  useVideoPlayer: (url: string) => ({ url, status: 'readyToPlay', addListener: () => ({ remove: vi.fn() }) }),
   VideoView: (props: MockProps) => React.createElement('video-view', props),
 }));
 
@@ -105,7 +105,7 @@ describe('MediaLightbox', () => {
 
     const video = tree.root.findByType('video-view' as never);
     expect(video.props.nativeControls).toBe(true);
-    expect(video.props.player).toEqual({ url: { uri: 'https://cdn.example.com/camera.mp4' } });
+    expect(video.props.player.url).toEqual({ uri: 'https://cdn.example.com/camera.mp4' });
     expect(tree.root.findAll((node) => String(node.type) === 'stable-image')).toHaveLength(0);
   });
 

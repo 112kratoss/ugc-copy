@@ -1,5 +1,5 @@
 import { Image, type ImageProps } from 'expo-image';
-import { useVideoPlayer, VideoView } from 'expo-video';
+import { RecoverableVideoPreview } from '@/components/recoverable-video-preview';
 import { ImageOff } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
@@ -236,18 +236,9 @@ function VideoPreview({
   radius: number;
   nativeControls: boolean;
 }) {
-  const { source } = useMediaSource(url);
-  const player = useVideoPlayer(source, (instance) => {
-    instance.loop = true;
-    instance.muted = false;
-    // Holds the audio session only while it is actually making a sound — see
-    // the note in `feed-video-preview`.
-    instance.audioMixingMode = 'auto';
-  });
-
   return (
-    <VideoView
-      player={player}
+    <RecoverableVideoPreview
+      url={url}
       nativeControls={nativeControls}
       style={{
         width: '100%',

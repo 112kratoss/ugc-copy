@@ -279,3 +279,61 @@ Ignored evidence: `android-third-pass-error.png`,
 `{android,ios}-third-pass-recovered.{json,png}`, `native-third-pass-requests.json`,
 `mobile-third-pass-checks.log`, `native-third-pass-export.log`, and
 `native-third-pass-env-verification.jsonl` under `output/media-audit/`.
+
+## Shared native preview and lightbox recovery (local, unreleased)
+
+The template detail page reproduced a failed-video state on both Android API 36
+and iOS 26.4 using a synthetic template response and a local video endpoint
+returning HTTP 503. The player reported `error` with zero duration; the surface
+showed a black video with native controls and no app-level failure explanation.
+After restoring the endpoint, Android's native play control recovered in this
+case, whereas an iOS `play()` request retained the failed state. This differs from
+the immersive viewer reproduction above and is not evidence that all native
+controls fail identically.
+
+The actual MediaLightbox component was also mounted in a temporary native fixture
+host using an in-memory module override. It reproduced an errored black video on
+both platforms. This exercised the shared lightbox and native player, not the
+composer's upload/navigation journey. The fixture did not create a template,
+start a generation, upload user content, or modify production data.
+
+`RecoverableVideoPreview` now supplies one loading/error/retry implementation to
+both MediaPreview and MediaLightbox. It shows loading feedback while the native
+source is idle/loading and a labelled Retry video action on error. Retry releases
+the failed attempt and resolves/loads its source again, then plays after the
+explicit action. Initial result previews remain paused and lightboxes retain
+their existing autoplay. Changing to a different URL resets the retry state and
+does not transfer an earlier retry's autoplay decision to the new result. The
+original URLs, authenticated-source helper and audio mixing policy are preserved.
+
+On both native platforms, retrying during continued failure left an actionable
+error. Restoring the server and retrying produced `readyToPlay`, two-second
+duration, advancing time and visible frames in template previews and lightboxes.
+The Android lightbox retry was activated by screen tap; other retry checks used
+the rendered SecondaryButton handler through the inspector. This is not an iOS
+finger hit-test or physical-device performance measurement. Loading feedback was
+observed during native retry; slow-network timing and stalled-request timeout
+behavior remain unmeasured.
+
+The shared preview is used by creation/motion result workspaces, template demos,
+intermediate steps and final results. Those callers inherit the implementation,
+but only the template detail caller was navigated end to end here. Generation
+results, template-run final results, composer/reference lightbox navigation,
+background audio ownership and expired template asset URLs remain separate
+acceptance cases. Source review alone does not close those rows in the matrix.
+
+Six new component regression cases cover loading, early error, attempt release,
+repeated failure, autoplay and source replacement. Existing image/feed tests now
+mock the unrelated shared video leaf; the lightbox native mock includes status
+listeners. The HIG player inventory was moved to the shared constructor without
+weakening the exhaustive audio-policy scan. Full mobile suite: 184 files / 1,780
+tests passed; typecheck passed after correcting test-renderer host element types.
+Android/iOS production Hermes exports and bundled-environment checks passed.
+No backend code, database migration, store artifact or OTA was released here.
+
+Evidence in ignored `output/media-audit/`: `{android,ios}-template-before.json`,
+`{android,ios}-template-restored-before.json`, `android-template-before.png`,
+`{android,ios}-template-recovered.{json,png}`, `{android,ios}-lightbox-before.json`,
+`{android,ios}-lightbox-retry.png`, `{android,ios}-lightbox-recovered.{json,png}`,
+`native-fourth-pass-full-checks.log`, `native-fourth-pass-typecheck.log`,
+`native-fourth-pass-export.log`, `native-fourth-pass-env-verification.jsonl`.

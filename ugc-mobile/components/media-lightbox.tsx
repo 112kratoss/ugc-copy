@@ -1,4 +1,4 @@
-import { useVideoPlayer, VideoView } from 'expo-video';
+import { RecoverableVideoPreview } from '@/components/recoverable-video-preview';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react-native';
 import { Modal, Pressable, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -7,7 +7,6 @@ import { StableMediaImage } from '@/components/media-preview';
 import { AppText } from '@/components/ui';
 import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
-import { useMediaSource } from '@/lib/use-media-source';
 import { appTheme } from '@/lib/theme';
 
 export interface LightboxMediaItem {
@@ -179,19 +178,10 @@ function MediaLightboxContent({
 }
 
 function LightboxVideo({ url, height }: { url: string; height: number }) {
-  const { source } = useMediaSource(url);
-  const player = useVideoPlayer(source, (instance) => {
-    instance.loop = true;
-    instance.muted = false;
-    // Holds the audio session only while it is actually making a sound — see
-    // the note in `feed-video-preview`.
-    instance.audioMixingMode = 'auto';
-    instance.play();
-  });
-
   return (
-    <VideoView
-      player={player}
+    <RecoverableVideoPreview
+      url={url}
+      autoPlay
       nativeControls
       contentFit="contain"
       style={{ width: '100%', height, backgroundColor: '#050506' }}

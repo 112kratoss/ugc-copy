@@ -66,7 +66,7 @@ Map additional media callers discovered in step 1 into this table.
 | Creation inputs, uploads, results, and library/Studio | Partial: Studio rendition playback and original download verified | Pending | Pending |
 | Motion references and outputs | Pending | Pending | Pending |
 | Workflow node previews, results, and shared workflows | Pending | Map supported consumers | Map supported consumers |
-| Template catalog, details, demos, and run results | Pending | Pending | Pending |
+| Template catalog, details, demos, and run results | Pending | Partial: template-detail video failure/retry verified | Partial: template-detail video failure/retry verified |
 | Marketplace, resource bundles, unlocks, and downloads | Pending | Pending | Pending |
 | Post composer, drafts, media reorder, and publish results | Pending | Pending | Pending |
 | Remaining image/audio/video/file renderers, including operator surfaces | Inventory pending | Inventory pending | Inventory pending |
@@ -101,8 +101,9 @@ Map additional media callers discovered in step 1 into this table.
 
 The private-video producer, durable metadata, batched owner signing, and
 retention-aware deletion are committed locally in `14eedb0` and have passed local
-database/Storage validation. The subsequent native viewer recovery fix has passed
-HTTP-503/retry verification on Android and iOS; it is also unreleased. Chromium
+database/Storage validation. The native viewer recovery fix in `330dfd6` and subsequent shared preview/lightbox
+recovery have passed HTTP-503/retry verification on Android and iOS; both remain
+unreleased. Chromium
 Studio verifies rendition playback and original download selection. Finish native
 playback/lifecycle checks and exact-release Quality before deploying the migration
 and code through the existing release workflow. Worker upload/DB cancellation,
@@ -116,8 +117,10 @@ before claiming private renditions reach every consumer. Keep all
 source-only concerns distinct from reproduced defects and measured improvements.
 
 
-Next surface priority: reproduce loading and failure behavior in the shared native
-`MediaPreview` and `MediaLightbox` video branches used by creation results and
-templates. Source review found direct result URL consumers in web video/motion
+Shared native `MediaPreview` and `MediaLightbox` now have locally verified
+loading/error/retry behavior on Android and iOS. Template detail was navigated
+with a synthetic API response; lightbox used a native fixture host. Next surface
+priority: verify actual creation/template-run results and composer/reference
+lightbox navigation, then private URL expiry and background audio ownership. Source review found direct result URL consumers in web video/motion
 results and workflow previews; their rendition and expiry integration remains
 pending. Keep these findings distinct from the verified full-screen viewer fix.

@@ -9,6 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 const imageState = vi.hoisted(() => ({ prefetch: vi.fn(async () => true) }));
 
+// This suite exercises image caching/retry; native video recovery has its own suite.
+vi.mock('@/components/recoverable-video-preview', () => ({
+  RecoverableVideoPreview: (props: MockProps) => React.createElement('video-preview', props),
+}));
+
 vi.mock('@/lib/use-media-source', () => ({
   useMediaSource: (url: string) => ({ source: buildMediaSource(url, 'https://magicbooklet.com', 'test-session'), requestKey: '' }),
 }));
