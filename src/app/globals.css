@@ -37,6 +37,7 @@
 @source "./components/QuickStartsCard.tsx";
 @source "./components/RouteAuthBoundary.tsx";
 @source "./components/ResourceMediaPreview.tsx";
+@source "./components/ResourceFileLink.tsx";
 @source "./components/SignInWorkspaceCard.tsx";
 @source "./components/SkeletonLoader.tsx";
 @source "./components/TabLoadingShell.tsx";

@@ -63,3 +63,26 @@ it('cancels the video deadline when frames load and exposes signing failures', a
   await act(async () => {});
   expect(screen.getByRole('button', { name: 'Reload audio' })).toBeInTheDocument();
 });
+
+it('renews a broken image and ignores completion from the old element', async () => {
+  const resolveUrl = vi.fn().mockResolvedValueOnce('/expired.jpg').mockResolvedValueOnce('/fresh.jpg');
+  const { container } = render(<ResourceMediaPreview mediaType="image" label="Reference" resolveUrl={resolveUrl} />);
+  await waitFor(() => expect(container.querySelector('img')).toHaveAttribute('src', '/expired.jpg'));
+  const stale = container.querySelector('img')!;
+  fireEvent.error(stale);
+  fireEvent.load(stale);
+  expect(screen.getByRole('button', { name: 'Reload image' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Reload image' }));
+  await waitFor(() => expect(container.querySelector('img')).toHaveAttribute('src', '/fresh.jpg'));
+  fireEvent.load(container.querySelector('img')!);
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.queryByRole('status')).toBeNull();
+});
+
+it('keeps a restoration action responsive to parent progress while showing a media error', () => {
+  const view = render(<ResourceMediaPreview mediaType="audio" label="Audio" url="/clip.wav" errorAction={<button>Restore preview</button>} />);
+  fireEvent.error(view.container.querySelector('audio')!);
+  view.rerender(<ResourceMediaPreview mediaType="audio" label="Audio" url="/clip.wav" errorAction={<button disabled>Restoring...</button>} />);
+  expect(screen.getByRole('button', { name: 'Restoring...' })).toBeDisabled();
+  expect(screen.queryByRole('button', { name: 'Restore preview' })).toBeNull();
+});

@@ -1,5 +1,6 @@
 'use client';
 
+import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -375,39 +376,19 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
             return;
         }
 
-        let isCancelled = false;
-        const previewVideo = document.createElement('video');
-        previewVideo.preload = 'metadata';
-
-        const handleLoadedMetadata = () => {
-            if (isCancelled || !Number.isFinite(previewVideo.duration)) {
+        const controller = new AbortController();
+        void readVideoDurationSeconds(referenceVideo, controller.signal).then(duration => {
+            if (controller.signal.aborted) return;
+            if (duration === null) {
+                setVideoError('We could not read the reference video. Please try another clip.');
                 return;
             }
-
-            setDuration(previewVideo.duration);
-            if (previewVideo.duration > maxVideoDuration) {
-                setVideoError(`Reference video exceeds ${maxVideoDuration}s. Please choose a shorter clip.`);
-            } else {
-                setVideoError(null);
-            }
-        };
-
-        const handleMetadataError = () => {
-            if (!isCancelled) {
-                setVideoError('We could not read the reference video. Please try another clip.');
-            }
-        };
-
-        previewVideo.addEventListener('loadedmetadata', handleLoadedMetadata);
-        previewVideo.addEventListener('error', handleMetadataError);
-        previewVideo.src = referenceVideo;
-
-        return () => {
-            isCancelled = true;
-            previewVideo.removeEventListener('loadedmetadata', handleLoadedMetadata);
-            previewVideo.removeEventListener('error', handleMetadataError);
-            previewVideo.src = '';
-        };
+            setDuration(duration);
+            setVideoError(duration > maxVideoDuration
+                ? `Reference video exceeds ${maxVideoDuration}s. Please choose a shorter clip.`
+                : null);
+        });
+        return () => controller.abort();
     }, [maxVideoDuration, referenceVideo]);
 
     // Generation Recovery & Persistence

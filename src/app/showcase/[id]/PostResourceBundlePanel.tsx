@@ -287,7 +287,6 @@ export default function PostResourceBundlePanel({
   const [workingAction, setWorkingAction] = useState<'free' | 'razorpay' | 'credits' | 'file' | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [resourceFileUrls, setResourceFileUrls] = useState<Record<string, string>>({});
 
   const summaryLine = useMemo(
     () => activeSummary || activePreviewText || describePostResourceKinds(activeResourceKinds),
@@ -715,57 +714,6 @@ export default function PostResourceBundlePanel({
     }
   };
 
-  useEffect(() => {
-    if (!isRecipeVisible || !activeResources?.items?.length) {
-      return;
-    }
-
-    const previewItems = activeResources.items.filter((item) => {
-      if (!item.storagePath || resourceFileUrls[item.storagePath]) {
-        return false;
-      }
-
-      return Boolean(
-        item.contentType?.startsWith('image/')
-      );
-    });
-
-    if (previewItems.length === 0) {
-      return;
-    }
-
-    let cancelled = false;
-
-    void Promise.all(
-      previewItems.map(async (item) => {
-        try {
-          const signedUrl = await fetchResourceFileUrl(item.storagePath ?? '');
-          return [item.storagePath, signedUrl] as const;
-        } catch {
-          return null;
-        }
-      })
-    ).then((entries) => {
-      if (cancelled) {
-        return;
-      }
-
-      const resolvedEntries = entries.filter((entry): entry is readonly [string, string] => Boolean(entry));
-      if (resolvedEntries.length === 0) {
-        return;
-      }
-
-      setResourceFileUrls((currentUrls) => ({
-        ...currentUrls,
-        ...Object.fromEntries(resolvedEntries),
-      }));
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [fetchResourceFileUrl, isRecipeVisible, resourceFileUrls, activeResources?.items]);
-
   const downloadResourceFile = async (storagePath: string, filename: string) => {
     try {
       setWorkingAction('file');
@@ -813,22 +761,10 @@ export default function PostResourceBundlePanel({
   };
 
   const renderResourceItemMediaPreview = (item: PostResourceItem) => {
-    const signedUrl = item.storagePath ? resourceFileUrls[item.storagePath] : null;
-    if (!item.contentType) {
-      return null;
-    }
-
-    if (signedUrl && item.contentType.startsWith('image/')) {
-      return (
-        // Natural width up to a modest cap — a reference thumbnail, not a
-        // second post media frame with letterboxing around a portrait.
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={signedUrl}
-          alt={item.title}
-          className="mb-3 max-h-48 w-auto max-w-full rounded-xl border border-white/8"
-        />
-      );
+    if (!item.contentType) return null;
+    if (item.storagePath && item.contentType.startsWith('image/')) {
+      return <ResourceMediaPreview key={`${postId}:${item.storagePath}`} mediaType="image" label={item.title}
+        resolveUrl={signal => fetchResourceFileUrl(item.storagePath!, signal)} className="mb-3 max-w-full" />;
     }
 
     if (item.storagePath && (item.contentType.startsWith('video/') || item.contentType.startsWith('audio/'))) {

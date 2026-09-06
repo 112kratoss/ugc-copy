@@ -99,12 +99,12 @@ Map additional media callers discovered in step 1 into this table.
 
 ## Immediate next action
 
-Next, check the remaining detached metadata probes, resource-image/attachment
-renewal, non-resource audio source recovery, and full reel/share/import/unlock journeys; then measure physical-device
-transfer/memory and production-duration credentials. Studio, hover and carousel
-playback now have offscreen evidence, and actual Chromium background transitions
-pass. Resource audio/video failed signatures, elapsed local expiry, offline
-signing/reconnect and stalled signing now have recovery evidence (checkpoint below).
+Next, exercise complete reel/share/import/unlock journeys and measure cold/warm
+transfer, startup and memory on physical devices. Metadata probes now terminate
+within four seconds; resource images and stored reel attachments renew explicitly;
+non-resource audio now has a visible Reload path, using the authenticated media
+route for stored sources. Browser component acceptance is recorded below. These
+checks do not establish production-duration credentials or physical-device budgets.
 The full app audit remains open. Native viewer
 renewal now preserves playback state; real short-lived Storage signatures and a
 20-minute background interval have local acceptance evidence (checkpoint below). Shared native
@@ -349,3 +349,33 @@ These are local component/browser checks, not full purchase/reel journeys, physi
 mobile browser certification, or production-duration session measurements.
 No new migration or deployment. Evidence: docs/media-delivery-audit-2026-09-06.md,
 “Studio, hover/carousel and resource recovery (2026-09-07)”.
+
+
+## Metadata, resource images/attachments and other audio (2026-09-07)
+
+The workflow metadata probe remained pending beyond six seconds under a stalled
+transport. Workflow, motion and composer now share a four-second metadata helper
+with listener/source/object-URL cleanup and abort support. Unknown metadata
+returns null; the server remains authoritative. Motion cancels replaced probes
+and reports unreadable metadata through its existing error UI. Chromium verified
+normal 40-second duration and stalled completion at roughly 4.3 seconds.
+
+Resource images use the existing bounded loading/Reload component in post details,
+reel reference thumbnails and the expanded reel image. Reload signs again through
+the same authorized endpoint. Reel stored attachments now sign on every Open,
+reserve a tab during the click, sever its opener, and close it on failure/unmount.
+A 30-second deadline and visible error permit retry; popup blocking is explicit.
+Post-detail Open/Download already obtained fresh URLs and retain those paths.
+
+All remaining web audio controls now share recovery in MediaDetails, creation
+cards, workflow nodes/editors/overlays and video-generation references. Stored
+sources retry through /api/media; external/provider/blob URLs can only retry their
+existing source. Initial user-opened autoplay is retained, while Reload stays
+paused. Creation cards avoid idle metadata downloads/spinners and retain Restore.
+
+Browser checks verified broken-image recovery, failed audio retry, canonical
+stored-audio proxy routing, normal/stalled metadata, and actual reel thumbnail /
+expanded image recovery plus distinct freshly signed attachment opens. This is
+local fixture evidence, not production purchase/share/import or every caller’s
+full journey. No new migration or deployment. Evidence: the September 6 audit
+journal’s “Metadata probes, images/attachments and non-resource audio” entry.

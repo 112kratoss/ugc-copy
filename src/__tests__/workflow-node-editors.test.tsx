@@ -787,10 +787,11 @@ describe('WorkflowNodeEditors', () => {
           get: () => 'blob:workflow-video',
           set: () => {
             setTimeout(() => {
-              previewVideo.onloadedmetadata?.(new Event('loadedmetadata'));
+              previewVideo.dispatchEvent(new Event('loadedmetadata'));
             }, 0);
           },
         });
+        previewVideo.canPlayType = vi.fn(() => 'probably' as const);
         previewVideo.load = vi.fn();
         return previewVideo;
       }

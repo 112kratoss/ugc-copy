@@ -1568,3 +1568,89 @@ The local fixture server was stopped and removes its two uploaded objects on
 shutdown. Temporary browser profiles and ignored evidence remain local. No mobile
 runtime code changed, so native tests/exports were not repeated. No migration,
 production deployment, OTA or remote push was performed.
+
+
+## Metadata probes, images/attachments and non-resource audio (2026-09-07)
+
+### Reproductions and resulting behavior
+
+A Chromium fixture called the actual workflow metadata reader with an uploaded
+MP4, redirecting only its detached media element's source to a withheld network
+response. After six seconds the caller still displayed Reading metadata. This
+controlled transport exercised real browser media loading; it did not synthesize
+metadata/error events or replace the reader. Resource image failure simultaneously
+showed naturalWidth 0 without Reload, and the real MediaDetails audio control
+reported media error 4 with no recovery action.
+
+WorkflowNodeEditors, CreateMotionClient and NewPostClient now use
+video-metadata-probe.ts. The shared metadata-only reader settles within four
+seconds, returns null for unknown/unsupported duration, removes listeners and
+source, resets the element and revokes its owned object URL. An AbortSignal
+cancels a replaced/unmounted motion probe. Composer retains its existing four-
+second behavior and server-authoritative validation. The workflow upload can
+continue with unknown duration; motion presents its existing unreadable-reference
+message. A normal local MP4 still returns 40 seconds; withheld transport settled
+in approximately 4,319ms. The complete motion authoring/upload journey was not
+replayed; its new helper and cancellation are separately covered.
+
+ResourceMediaPreview now supports images. PostResourceBundlePanel no longer keeps
+an image-only signed-URL cache: visible images use bounded signing/loading and
+explicit Reload. Reel thumbnails and expanded references use the same component,
+including source-specific renewal when the expanded image fails. The image Open
+button receives the currently recovered URL. Retry never changes the resource
+scope or permission endpoint.
+
+The actual previous-commit ShowcaseReelViewer, copied only for a temporary local
+comparison, reproduced a stale attachment: after the signing fixture offered a
+fresh URL, Open still navigated to /expired-guide and the browser received the
+expired-signature response; zero renewal requests occurred. Its reference image
+was also broken (naturalWidth 0). The changed reel recovered the image and opened
+its expanded 320px-wide preview. Two attachment clicks then signed twice and
+opened two distinct fresh URLs. ResourceFileLink reserves a blank tab within the
+click gesture, clears window.opener before navigation, accepts HTTP(S) results
+from the authorized signer, closes failures and obsolete tabs, and bounds signing
+at 30 seconds. A blocked popup displays an actionable message without caching a
+stale fallback link. Post-detail Open/Download already sign on demand; they were
+not replaced with a cached link.
+
+RecoverableMediaAudio now covers MediaDetails primary/expanded audio, creation
+cards, workflow nodes/editors/overlays, and video-generation references. It uses
+the existing media recovery state machine and playback ownership. Initial
+user-opened autoplay is preserved; Reload does not autoplay. An expired stored
+URL retries via getDisplayMediaUrl's existing authenticated /api/media route.
+Already proxied audio retries the proxy. Its existing redirect may be cached for
+60 seconds, versus a 600-second signature lifetime; retry is not a guarantee of
+a new signing request within that cache window. Provider/external/blob URLs without a
+stored identity retry unchanged, so unavailable remote originals are not claimed
+repaired. Creation audio no longer downloads idle metadata or leaves an overlay
+spinner over idle controls; its Restore preview action is retained on failure.
+
+### Evidence and scope
+
+Ignored output/playwright evidence: probes-before.log, probes-after.log,
+probe-normal.log, audio-proxy-recovery.log, attachment-after.log,
+reel-renewal-before.log and reel-renewal-after.log. The stored-audio failure check
+observed exactly one /api/media request after explicit Play, with canonical bucket
+and path, paused state after Reload and successful audio playback. It uses
+controlled signed-source rejection and a media-route fixture; it is not an
+additional production-auth or elapsed-signature certificate. Previous-checkpoint
+real local Storage expiry evidence remains separately recorded.
+
+The reel checks rendered both old and changed actual components with synthetic
+public recipe data, not a purchase or real entitlement mutation. The temporary
+comparison component and fixture route were removed before final checks. The
+fixture source is preserved only as output/media-audit/probes-fixture.tsx.txt.
+No production data or credentials were changed. Full purchased-bundle navigation,
+share/import flows, provider-original loss recovery, long production sessions and
+physical-device transfer/startup/memory measurements remain separate audit work.
+
+Final validation: all 763 web test files / 5,414 tests pass. The workflow metadata
+mock was then narrowed to TypeScript's CanPlayTypeResult literal and its 25 tests
+passed again. All three web typechecks, application lint (excluding git-ignored
+output/** audit fixtures), production build and build:verify pass. FFmpeg is
+traced by 51 server bundles and resolves in all 9 required routes; libvips is
+present in all 38 sharp-using route bundles. Logs:
+output/media-audit/probes-stable-final.log (full suite) and
+output/media-audit/probes-quality-stable.log (final focused test and quality gates).
+No mobile runtime code changed, so native tests/exports were not repeated.
+No migration, production deployment, OTA or remote push was performed.

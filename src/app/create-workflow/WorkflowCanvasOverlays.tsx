@@ -1,6 +1,6 @@
 'use client';
 
-import InlineMediaAudio from '@/app/components/InlineMediaAudio';
+import RecoverableMediaAudio from '@/app/components/RecoverableMediaAudio';
 
 import Image from 'next/image';
 import { useEffect, useRef } from 'react';
@@ -162,7 +162,7 @@ function PreviewMediaOverlay({
 
         {preview.kind === 'audio' && (
           <div className="rounded-3xl border border-white/10 bg-black/60 p-8">
-            <InlineMediaAudio src={preview.url} controls autoPlay className="w-full" />
+            <RecoverableMediaAudio src={preview.url} autoPlay className="w-full" />
           </div>
         )}
       </div>

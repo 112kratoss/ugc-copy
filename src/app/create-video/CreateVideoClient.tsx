@@ -1,6 +1,6 @@
 'use client';
 
-import InlineMediaAudio from '@/app/components/InlineMediaAudio';
+import RecoverableMediaAudio from '@/app/components/RecoverableMediaAudio';
 import InlineMediaVideo from '@/app/components/InlineMediaVideo';
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
@@ -4239,16 +4239,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                                 </button>
                                                             </div>
                                                             {reference.providerUrl ? (
-                                                                <InlineMediaAudio
+                                                                <RecoverableMediaAudio
                                                                     src={reference.providerUrl}
                                                                     className="mt-3 w-full"
-                                                                    controls
                                                                 />
                                                             ) : reference.previewUrl ? (
-                                                                <InlineMediaAudio
+                                                                <RecoverableMediaAudio
                                                                     src={reference.previewUrl}
                                                                     className="mt-3 w-full"
-                                                                    controls
                                                                 />
                                                             ) : null}
                                                         </div>

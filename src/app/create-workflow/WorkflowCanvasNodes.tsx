@@ -1,6 +1,6 @@
 'use client';
 
-import InlineMediaAudio from '@/app/components/InlineMediaAudio';
+import RecoverableMediaAudio from '@/app/components/RecoverableMediaAudio';
 
 import {
   createContext,
@@ -553,7 +553,7 @@ function AudioPreview({ url, dragging }: { url: string; dragging?: boolean }) {
     );
   }
 
-  return <InlineMediaAudio src={url} controls className="nodrag nopan mt-3 w-full rounded-xl border border-white/10" />;
+  return <RecoverableMediaAudio src={url} className="nodrag nopan mt-3 w-full rounded-xl border border-white/10" />;
 }
 
 export function getImageGenerateNodeSummary(data: ImageGenerateNodeData): string[] {

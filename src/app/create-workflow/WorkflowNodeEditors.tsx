@@ -1,6 +1,8 @@
 'use client';
 
-import InlineMediaAudio from '@/app/components/InlineMediaAudio';
+import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
+
+import RecoverableMediaAudio from '@/app/components/RecoverableMediaAudio';
 
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import Image from 'next/image';
@@ -1611,36 +1613,6 @@ function EdgeSummaryPanel({
   );
 }
 
-async function readVideoDurationSeconds(file: File): Promise<number | null> {
-  const previewUrl = URL.createObjectURL(file);
-
-  try {
-    const durationSeconds = await new Promise<number | null>((resolve) => {
-      const previewVideo = document.createElement('video');
-
-      const cleanup = () => {
-        previewVideo.removeAttribute('src');
-        previewVideo.load();
-      };
-
-      previewVideo.preload = 'metadata';
-      previewVideo.onloadedmetadata = () => {
-        const nextDuration = Number.isFinite(previewVideo.duration) ? previewVideo.duration : null;
-        cleanup();
-        resolve(nextDuration);
-      };
-      previewVideo.onerror = () => {
-        cleanup();
-        resolve(null);
-      };
-      previewVideo.src = previewUrl;
-    });
-
-    return durationSeconds;
-  } finally {
-    URL.revokeObjectURL(previewUrl);
-  }
-}
 
 function formatSecondsLabel(value: number) {
   const rounded = Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1);
@@ -2203,10 +2175,9 @@ function NodeEditorContent({
                   }}
                 />
                 {audioInput.audioUrl && (
-                  <InlineMediaAudio
+                  <RecoverableMediaAudio
                     src={getDisplayMediaUrl(audioInput.storagePath || audioInput.audioUrl || '')}
                     className="w-full rounded-2xl border border-white/10"
-                    controls
                   />
                 )}
                 <SeedanceAssetStatusCard

@@ -1,6 +1,6 @@
 'use client';
 
-import InlineMediaAudio from '@/app/components/InlineMediaAudio';
+import RecoverableMediaAudio from '@/app/components/RecoverableMediaAudio';
 
 import { useState, type MouseEvent } from 'react';
 import { AlertTriangle, Loader2, UploadCloud, Volume2 } from 'lucide-react';
@@ -42,7 +42,7 @@ export default function CreationMediaFrame({
     // Nothing will load, so nothing can report itself loaded -- start settled
     // or the spinner would sit over the poster forever.
     const [loadState, setLoadState] = useState<'loading' | 'loaded' | 'error'>(
-        defersVideoBytes ? 'loaded' : 'loading',
+        defersVideoBytes || mediaKind === 'audio' ? 'loaded' : 'loading',
     );
 
     const safelyPlayVideo = (event: MouseEvent<HTMLVideoElement>) => {
@@ -115,12 +115,13 @@ export default function CreationMediaFrame({
                     <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-emerald-300">
                         <Volume2 className="h-7 w-7" />
                     </div>
-                    <InlineMediaAudio
+                    <RecoverableMediaAudio
+                        label={alt}
                         src={src}
-                        controls
-                        preload="metadata"
-                        onLoadedMetadata={() => setLoadState('loaded')}
-                        onError={() => setLoadState('error')}
+                        errorAction={onRestore ? <button type="button" onClick={onRestore} disabled={isRestoring}
+                            className="ui-focus-ring min-h-11 rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-zinc-200 disabled:opacity-50">
+                            {isRestoring ? 'Restoring...' : 'Restore preview'}
+                        </button> : null}
                         className="relative z-20 w-full"
                     />
                 </div>

@@ -1,7 +1,7 @@
 'use client';
 
 import InlineMediaVideo from '@/app/components/InlineMediaVideo';
-import InlineMediaAudio from '@/app/components/InlineMediaAudio';
+import RecoverableMediaAudio from '@/app/components/RecoverableMediaAudio';
 
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Check, ChevronDown, Copy, Film, Image as ImageIcon, Maximize2, Volume2, X } from 'lucide-react';
@@ -191,7 +191,7 @@ function MediaDetailsPreviewDialog({
             <Volume2 className="h-4 w-4 text-emerald-200" />
             {preview.title}
           </div>
-          <InlineMediaAudio src={preview.src} controls autoPlay className="w-full" />
+          <RecoverableMediaAudio label={preview.title} src={preview.src} autoPlay className="w-full" />
         </div>
       );
     }
@@ -250,7 +250,7 @@ function MediaDetailsPreviewDialog({
             <div className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">Audio preview</div>
             <p className="mt-2 text-sm text-zinc-400">Listen to the saved generation and copy the prompt below if you want to reuse it.</p>
           </div>
-          <InlineMediaAudio src={src} controls autoPlay className="w-full" />
+          <RecoverableMediaAudio label={title} src={src} autoPlay className="w-full" />
         </div>
       );
     }

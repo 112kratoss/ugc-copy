@@ -1,5 +1,6 @@
 'use client';
 
+import ResourceFileLink from '@/app/components/ResourceFileLink';
 import ResourceMediaPreview from '@/app/components/ResourceMediaPreview';
 
 import Link from 'next/link';
@@ -108,6 +109,7 @@ interface ReelBundleRefreshPayload {
 
 interface ActiveReferencePreview {
   src: string;
+  storagePath?: string | null;
   alt: string;
 }
 
@@ -287,7 +289,6 @@ export default function ShowcaseReelViewer({
   const [publicRecipeResources, setPublicRecipeResources] = useState<ReelBundleResources | null>(null);
   const [publicRecipeLoadingItemId, setPublicRecipeLoadingItemId] = useState<string | null>(null);
   const [publicRecipeError, setPublicRecipeError] = useState<string | null>(null);
-  const [resourceFileUrls, setResourceFileUrls] = useState<Record<string, string>>({});
   const [activeReferencePreview, setActiveReferencePreview] = useState<ActiveReferencePreview | null>(null);
   const selectedIndex = useMemo(
     () => selectedItemId ? items.findIndex((item) => item.id === selectedItemId) : -1,
@@ -688,51 +689,6 @@ export default function ShowcaseReelViewer({
     if (!response.ok || typeof data?.signedUrl !== 'string') throw new Error('Resource unavailable');
     return data.signedUrl;
   }, [item?.id, session?.access_token]);
-
-  useEffect(() => {
-    const storagePaths = Array.from(new Set([
-      ...(activeAccessibleResources?.items ?? [])
-        .filter(resource => !resource.contentType?.startsWith('audio/') && !resource.contentType?.startsWith('video/'))
-        .map((resourceItem) => resourceItem.storagePath)
-        .filter((storagePath): storagePath is string => Boolean(storagePath)),
-      ...(activeAccessibleResources?.attachments ?? [])
-        .map((attachment) => attachment.storagePath)
-        .filter((storagePath): storagePath is string => Boolean(storagePath)),
-    ]));
-
-    // Signed file URLs are scoped to the currently accessible resource bundle.
-    setResourceFileUrls({});
-
-    if (!item?.id || storagePaths.length === 0) {
-      return;
-    }
-
-    let cancelled = false;
-
-    void Promise.all(storagePaths.map(async (storagePath) => {
-      try {
-        return [storagePath, await fetchResourceFileUrl(storagePath)] as const;
-      } catch {
-        return null;
-      }
-    }))
-      .then((entries) => {
-        if (cancelled) {
-          return;
-        }
-
-        setResourceFileUrls(Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => Boolean(entry))));
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setResourceFileUrls({});
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeAccessibleResources, item?.id, fetchResourceFileUrl]);
 
   useEffect(() => {
     // Reference previews cannot carry across reel items.
@@ -1198,7 +1154,7 @@ export default function ShowcaseReelViewer({
               {referenceItems.map((resourceItem, index) => {
                 const hasFile = Boolean(resourceItem.storagePath || resourceItem.externalUrl);
                 const fileUrl = hasFile
-                  ? (resourceItem.storagePath ? resourceFileUrls[resourceItem.storagePath] : resourceItem.externalUrl)
+                  ? resourceItem.externalUrl
                   : null;
                 const isImage = resourceItem.type === 'reference_image' || resourceItem.contentType?.startsWith('image/');
                 const isVideo = resourceItem.contentType?.startsWith('video/');
@@ -1206,33 +1162,16 @@ export default function ShowcaseReelViewer({
                 const showMediaPreview = hasFile && (isImage || isVideo || isAudio);
 
                 return (
-                  isImage && fileUrl ? (
-                    <button
-                      key={`${resourceItem.storagePath ?? resourceItem.externalUrl ?? resourceItem.title}:${index}`}
-                      type="button"
-                      onClick={() => setActiveReferencePreview({
-                        src: fileUrl,
-                        alt: resourceItem.title,
-                      })}
-                      aria-label={`Open preview for ${resourceItem.title}`}
-                      className="group w-[112px] shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-black/35 text-left transition hover:border-white/20"
-                    >
-                      <div className="flex h-full flex-col">
-                        <div className="flex aspect-[3/4] items-center justify-center bg-black">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={fileUrl}
-                            alt={resourceItem.title}
-                            className="h-full w-full object-contain transition duration-200 group-hover:scale-[1.02]"
-                          />
-                        </div>
-                        <div className="border-t border-white/8 bg-black/45 px-3 py-2">
-                          <div className="truncate text-xs font-medium text-zinc-100">
-                            {resourceItem.title}
-                          </div>
-                        </div>
-                      </div>
-                    </button>
+                  isImage && hasFile ? (
+                    <div key={`${item.id}:${resourceItem.storagePath || fileUrl}`} className="w-[112px] shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-black/35">
+                      <ResourceMediaPreview mediaType="image" label={resourceItem.title}
+                        url={resourceItem.storagePath ? null : fileUrl}
+                        resolveUrl={resourceItem.storagePath ? signal => fetchResourceFileUrl(resourceItem.storagePath!, signal) : undefined}
+                        onOpenImage={src => setActiveReferencePreview({ src, alt: resourceItem.title, storagePath: resourceItem.storagePath })}
+                        imageClassName="aspect-[3/4] h-full w-full object-contain"
+                      />
+                      <div className="truncate border-t border-white/8 px-3 py-2 text-xs font-medium text-zinc-100">{resourceItem.title}</div>
+                    </div>
                   ) : (
                     <div
                       key={`${resourceItem.storagePath ?? resourceItem.externalUrl ?? resourceItem.title}:${index}`}
@@ -1255,7 +1194,7 @@ export default function ShowcaseReelViewer({
               })}
 
               {attachmentItems.map((attachment, index) => {
-                const fileUrl = attachment.storagePath ? resourceFileUrls[attachment.storagePath] : attachment.url;
+                const fileUrl = attachment.url;
 
                 return (
                   <div
@@ -1263,7 +1202,10 @@ export default function ShowcaseReelViewer({
                     className="min-w-0 basis-[180px] rounded-2xl border border-white/10 bg-black/35 p-3"
                   >
                     <div className="truncate text-xs font-semibold text-zinc-100">{attachment.label}</div>
-                    {fileUrl ? (
+                    {attachment.storagePath ? (
+                      <ResourceFileLink key={`${item.id}:${attachment.storagePath}`} label={attachment.label}
+                        resolveUrl={signal => fetchResourceFileUrl(attachment.storagePath!, signal)} />
+                    ) : fileUrl ? (
                       <a
                         href={fileUrl}
                         target="_blank"
@@ -1510,12 +1452,9 @@ export default function ShowcaseReelViewer({
                 <X className="h-5 w-5" />
               </button>
               <div className="flex min-h-[220px] w-full items-center justify-center rounded-[24px] border border-white/10 bg-black p-4 sm:min-h-[420px] sm:p-6">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={activeReferencePreview.src}
-                  alt={activeReferencePreview.alt}
-                  className="max-h-[calc(100dvh-7rem)] max-w-full object-contain"
-                />
+                <ResourceMediaPreview mediaType="image" url={activeReferencePreview.src} label={activeReferencePreview.alt}
+                  resolveUrl={activeReferencePreview.storagePath ? signal => fetchResourceFileUrl(activeReferencePreview.storagePath!, signal) : undefined}
+                  imageClassName="max-h-[calc(100dvh-7rem)] max-w-full object-contain" />
               </div>
             </div>
           </motion.div>

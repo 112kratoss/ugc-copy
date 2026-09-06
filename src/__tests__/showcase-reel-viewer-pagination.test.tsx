@@ -976,7 +976,7 @@ describe('ShowcaseReelViewer pagination', () => {
     expect(screen.getByText('@alisa')).toBeInTheDocument();
 
     const referencePreviewButton = await screen.findByRole('button', { name: /open preview for @alisa/i });
-    expect(referencePreviewButton.className).toContain('w-[112px]');
+    expect(referencePreviewButton.closest('div.w-\\[112px\\]')).not.toBeNull();
 
     fireEvent.click(referencePreviewButton);
 
