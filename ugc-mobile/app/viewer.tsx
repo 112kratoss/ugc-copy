@@ -1943,6 +1943,7 @@ function ImmersiveMedia({
           kind="image"
           url={mediaItem.url}
           backdropUrl={mediaItem.previewUrl}
+          backdropCacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
           cacheKey={getShowcaseSourceImageCacheKey(mediaItem)}
           thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
           transition={120}

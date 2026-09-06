@@ -405,3 +405,18 @@ Work continues in /private/tmp/magicbooklet-media-journeys on
 fix/private-video-delivery because another task switched the original checkout.
 Evidence and measurement limits: September 6 audit journal, “Complete browser
 journeys and first physical Android baseline”. No migration or deployment.
+
+
+## Native backdrop cache follow-up (2026-09-07)
+
+The native viewer re-downloaded blurred previews when signed URLs renewed because
+its backdrop lacked a stable cache identity. It now uses the descriptor's preview
+key, separate from the full-size image key. Android and iOS simulator checks reuse
+both layers after renewal and memory-cache eviction/reopen; changed media versions
+still fetch replacement assets. All 1,821 mobile tests, typecheck, both native
+exports and bundled environment checks pass. No new migration or deployment.
+
+The physical S24 Ultra has reconnected. Next remains exact-build image-viewer
+traffic/memory measurement, followed by cache-cold and slow-network video startup.
+The simulator cache finding does not account for all of the prior phone traffic
+or establish a memory leak. A side-by-side release audit APK is being prepared.

@@ -1765,3 +1765,41 @@ Logs: output/media-audit/journey-final-tests.log, journey-final-quality.log
 (typechecks/lint), journey-final-build.log (successful final build/verification).
 The dev server was stopped before building. No mobile source changed and no
 native rebuild/export, migration, deployment, OTA or remote push was performed.
+
+
+## Native backdrop cache reuse (2026-09-07)
+
+Physical Android baseline follow-up reproduced an independent cache inefficiency
+in the actual native viewer on the emulator: refreshing a synthetic generation's
+URL query token fetched its blurred preview again on every renewal, while the
+full-size foreground stayed cached. The local server served a 57,392-byte JPEG
+original and a distinct 2,454-byte WebP preview. Before the fix, tokens 1, 2 and 3
+all fetched the preview; only token 1 fetched the original.
+
+FeedMediaFrame now accepts the preview's explicit cache identity. The viewer
+passes the descriptor preview key separately from its full-size source key.
+When both layers use the same URL, image and video-poster frames reuse the same
+asset key. Distinct backdrops without an explicit identity retain URL caching;
+no signed URL is generalized into a guessed stable identity. Authorization
+headers are preserved.
+
+Android native viewer verification: renewed tokens 2 and 3 made no additional
+media requests. Unmounting, clearing the Expo image memory cache and reopening
+with token 4 also made no additional requests; the full-size image and backdrop
+remained visible. Changing the media version/key fetched both replacement assets.
+iOS simulator verification: initial original/preview requests only, no new requests
+on token renewal or memory-cache eviction/reopen. These synthetic component
+journeys establish cache reuse, not production expiry or physical performance.
+
+Validation: all 190 mobile test files / 1,821 tests, mobile typecheck, Android and
+iOS Hermes exports, and both exports' bundled public environment checks pass.
+The shared output directory was removed externally during verification; this
+worktree now owns its output directory. Final request/state evidence, screenshots,
+and rerun validation logs are under output/media-audit/backdrop-*; earlier
+pre-fix observations are recorded above from tool output.
+
+The S24 Ultra reconnected during this pass, still on 0.1.4/build 71. A release-mode
+side-by-side audit APK is being prepared with a separate application ID and OTA
+updates disabled. Physical memory/traffic attribution and cold/slow-network
+playback on that build remain pending. This change requires no new migration and
+has not been deployed.
