@@ -22,6 +22,7 @@ export interface PreviewMediaState {
   kind: PreviewMediaKind;
   url: string;
   title: string;
+  generationId?: string | null;
 }
 
 interface CanvasFloatingPosition {

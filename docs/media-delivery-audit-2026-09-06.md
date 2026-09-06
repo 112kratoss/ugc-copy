@@ -102,7 +102,7 @@ contract or storage permission changed.
 | --- | --- | --- |
 | Private generation encoding and owner API | Measured 14 originals / 187 MB. Private producer, owner signing and deletion cleanup implemented and locally verified below. | Release migration/code through Quality and the release workflow; measure native playback and backlog drainage. |
 | Web profile/Creations viewers | Generation previews and detail modals now use the descriptor rendition, retaining original downloads. | Browser fixture verification below; expired-signature and reconnect cases remain open. |
-| Creation/motion results, workflows, templates | Web video/motion result rendition selection and failed-link renewal are now verified in Chromium with synthetic responses (see latest entry). Workflow and template web players still consume direct URLs. | Continue workflow/template integration; test long-session expiry, poster continuity and background return per surface. |
+| Creation/motion results, workflows, templates | Web video/motion results and expanded workflow output rendition selection and failed-link renewal are verified in Chromium fixtures (see latest entries). Workflow thumbnails and template web players still consume direct URLs. | Continue node-thumbnail/template integration; test long-session expiry, poster continuity and background return per surface. |
 | Full-rendition worker interruption | Source review: `claim_media_rendition_repairs` leases without incrementing attempts; the worker increments at terminal updates. A process killed before that update may retain its attempt count. | Reproduce lease-expiry/crash exhaustion locally before changing claim semantics; account for claimed rows deferred by the time budget. |
 | Generation deletion | Source review: Private playback cleanup now uses DELETE RETURNING to capture a concurrently published derivative; linked posts retain outputs. Preview cleanup remains source-only. | Continue preview/reference retention audit; no orphan purge has been performed. |
 | Remaining device coverage | Offline/reconnect, background expiry, rapid navigation, audio/resources, avatars/covers and physical-device performance remain incomplete. | Continue the whole-app matrix; do not infer caller coverage from shared unit tests. |
@@ -760,3 +760,57 @@ resolution. Audit that handoff before extending result playback there. Web
 template results, original-download renewal at click time after a long idle,
 real expiry during playback, viewport ownership, iOS offline recovery and
 physical-device performance remain open.
+
+## Expanded workflow video playback (local, unreleased)
+
+The real workflow editor was loaded with a synthetic saved canvas containing
+completed video and motion nodes. Both retained a generation ID, but
+`PreviewMediaLink` discarded it when opening the expanded player. With a 403
+source and an available rendition, each expanded video reached readyState 0 /
+media error 4 without Retry. The two node thumbnails also failed. This reproduces
+the web renderer behavior, not an actual provider completion or Storage expiry.
+
+Generated video and motion preview links now pass their generation ID into the
+expanded viewer. The overlay uses `GenerationResultVideo` to resolve the current
+owner descriptor, prefer the rendition and renew it on Retry. It preserves the
+workflow's non-looping playback behavior. Video inputs without a generation ID
+use the same player's direct-URL loading/error/retry path. Original workflow
+data and downstream generation inputs are unchanged; signed rendition URLs are
+not persisted into the graph.
+
+Opening a node preview also reproduced an Escape failure: focus remained on the
+node button, whose keyboard handler stops propagation. The overlay now focuses
+Close on opening and restores the previous focus on closing. Chromium verified
+that Escape removes the expanded player and returns focus to the node button.
+This is not certification of a complete modal focus trap or all canvas shortcuts.
+
+Archived owned generations require `includeArchived=true` on the owner lookup.
+The default endpoint filter would otherwise reject an output still referenced by
+a saved workflow. A browser response fixture following that filter and a failing
+regression test reproduced the omission. The shared player now includes archived
+rows in its targeted lookup; the existing owner authentication and linked-account
+filter remain enforced by the endpoint. The fixture then decoded the rendition.
+No production archive mutation or database change was performed.
+
+Browser acceptance: video and motion expanded outputs decoded the 320-pixel
+synthetic rendition at readyState 4; motion Retry recovered from a failed
+rendition with advancing playback. Loop remained false. The video player and
+Close control fit the inspected 390×844 viewport. Node thumbnails still request
+the original video and remain a reproduced unresolved issue; no thumbnail or
+bandwidth optimization is claimed by this change.
+An uploaded-video input with no generation ID also recovered after a controlled
+503 response: Retry reloaded the same direct URL and reached readyState 4 with
+advancing playback. This did not exercise an actual upload or storage redirect.
+
+Validation: 6 focused suites / 79 tests passed, including shared player,
+workflow page/overlays/node editors, video creation and route stylesheet checks. Application/test
+typechecks and changed-file ESLint passed. Evidence is under
+`output/playwright/workflow-*.png`, `workflow-media*-setup.js`, and
+`output/media-audit/workflow-*.log`. Tests used local configuration and synthetic
+API/media responses; no paid generation ran. No migration, deploy or OTA changed.
+
+Next: replace original-video node thumbnail loading with bounded preview delivery
+without introducing a request per rendered node. Template final and intermediate
+results also need review: the owner-generations endpoint deliberately excludes
+hidden intermediate template outputs, so the workflow fix must not be copied
+blindly into those players. Use their authorized run API when renewing media.

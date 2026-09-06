@@ -65,7 +65,7 @@ Map additional media callers discovered in step 1 into this table.
 | Post details, overlays, full viewers, and lightboxes | Pending | Partial: creation viewer rendition playback and failed-request retry | Partial: creation viewer rendition playback and failed-request retry via rendered handler |
 | Creation inputs, uploads, results, and library/Studio | Partial: Studio and video result rendition playback/original download verified; result failed-link renewal and initial timeout checked in Chromium fixtures | Partial: video result playback/retry/close verified with injected completed state | Partial: video result playback/retry/close verified with injected completed state |
 | Motion references and outputs | Partial: result rendition playback, original download and failed-link renewal checked in Chromium fixtures | Partial: result playback/retry/close verified with injected completed state | Partial: result playback/retry/close verified with injected completed state |
-| Workflow node previews, results, and shared workflows | Pending | Map supported consumers | Map supported consumers |
+| Workflow node previews, results, and shared workflows | Partial: expanded video/motion rendition playback, Retry, archive lookup and Escape/focus return verified in Chromium fixtures; node thumbnails still request originals and fail in the fixture | Map supported consumers | Map supported consumers |
 | Template catalog, details, demos, and run results | Pending | Partial: detail and final-run video failure/retry/navigation verified with synthetic responses | Partial: detail and final-run video failure/retry/navigation verified with synthetic responses |
 | Marketplace, resource bundles, unlocks, and downloads | Pending | Partial: reference image/video renewal and failure recovery in native fixture host; full purchase/unlock journey pending | Partial: reference image/video renewal and failure recovery in native fixture host; full purchase/unlock journey pending |
 | Post composer, drafts, media reorder, and publish results | Pending | Partial: edit-post lightbox poster-as-video bug reproduced/fixed; item switch and close verified | Partial: edit-post lightbox poster-as-video bug reproduced/fixed; item switch and close verified |
@@ -113,7 +113,8 @@ in the September 6 audit.
 Continue signed-URL/background recovery and device verification across the
 surface matrix. Web creation/profile viewers and video/motion result pages now
 select private playback. Result pages also renew failed links on Retry, verified
-in Chromium fixtures. Workflow previews and template results still need integration review
+in Chromium fixtures. Expanded workflow video/motion previews also resolve the
+generation descriptor. Node thumbnails and template results still need integration review
 before claiming private renditions reach every consumer. Keep all
 source-only concerns distinct from reproduced defects and measured improvements.
 
@@ -138,9 +139,10 @@ lightbox source selection is now fixed locally after native reproduction: videos
 use their media URI instead of their image poster. Video creation workspace
 playback/retry/close also passed with synthetic completed state on both platforms.
 Upload, publish, real provider completion and motion inputs still need their own checks.
-Source review found direct result URL consumers in web video/motion
-results and workflow previews; their rendition and expiry integration remains
-pending. Keep these findings distinct from the verified full-screen viewer fix.
+Web video/motion results and expanded workflow output previews now resolve
+renditions and offer Retry. Node thumbnails still consume direct video URLs;
+their failed-source state was reproduced and remains open. Keep these findings
+distinct from the verified full-screen viewer fix.
 
 The shared mobile API request now keeps its timeout and caller cancellation active
 until the response body finishes. Partial-body timeout and cancellation reproduced

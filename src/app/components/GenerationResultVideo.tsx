@@ -9,7 +9,8 @@ interface GenerationResultVideoProps {
   generationId: string | null;
   outputUrl: string;
   accessToken: string | undefined;
-  onOriginalResolved: (result: { outputUrl: string; url: string }) => void;
+  onOriginalResolved?: (result: { outputUrl: string; url: string }) => void;
+  loop?: boolean;
 }
 
 export default function GenerationResultVideo(props: GenerationResultVideoProps) {
@@ -49,6 +50,9 @@ function ResultAttempt({ onRetry, ...props }: GenerationResultVideoProps & { onR
           const response = await fetch(`/api/generations?${new URLSearchParams({
             id: request.generationId,
             detail: 'summary',
+            // Archiving hides a creation from the library; saved workflows
+            // can still reference it. The owner endpoint retains auth checks.
+            includeArchived: 'true',
           })}`, {
             headers: { Authorization: `Bearer ${request.accessToken}` },
             cache: 'no-store',
@@ -76,7 +80,7 @@ function ResultAttempt({ onRetry, ...props }: GenerationResultVideoProps & { onR
           }
         }
         if (active && !controller.signal.aborted) {
-          request.onOriginalResolved({ outputUrl: request.outputUrl, url: originalUrl });
+          request.onOriginalResolved?.({ outputUrl: request.outputUrl, url: originalUrl });
           setSource(nextSource);
         }
       } catch {
@@ -99,7 +103,7 @@ function ResultAttempt({ onRetry, ...props }: GenerationResultVideoProps & { onR
           poster={source.poster}
           controls
           autoPlay
-          loop
+          loop={request.loop ?? true}
           playsInline
           className="h-full w-full object-contain"
           onLoadedData={() => finishRef.current('ready')}

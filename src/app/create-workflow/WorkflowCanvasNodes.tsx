@@ -500,12 +500,14 @@ function PreviewMediaLink({
   href,
   label,
   kind,
+  generationId,
   disabled = false,
   children,
 }: {
   href: string;
   label: string;
   kind: PreviewMediaKind;
+  generationId?: string | null;
   disabled?: boolean;
   children: ReactNode;
 }) {
@@ -521,7 +523,7 @@ function PreviewMediaLink({
       type="button"
       onClick={(event) => {
         event.stopPropagation();
-        openPreview({ kind, url: href, title: label });
+        openPreview({ kind, url: href, title: label, generationId });
       }}
       onMouseDown={(event) => event.stopPropagation()}
       onPointerDown={(event) => event.stopPropagation()}
@@ -894,7 +896,7 @@ const VideoGenerateNode = memo(function VideoGenerateNode({ data, dragging }: No
       runtime={runtime}
       minHeight={previewUrl ? undefined : 156}
       preview={previewUrl ? (
-        <PreviewMediaLink href={previewUrl} label="Open generated video" kind="video" disabled={dragging}>
+        <PreviewMediaLink href={previewUrl} label="Open generated video" kind="video" generationId={typed.runState.generationId} disabled={dragging}>
           <video src={previewUrl} className="h-28 w-full rounded-xl border border-white/10 object-cover" muted playsInline />
         </PreviewMediaLink>
       ) : undefined}
@@ -934,7 +936,7 @@ const MotionGenerateNode = memo(function MotionGenerateNode({ data, dragging }: 
       runtime={runtime}
       minHeight={previewUrl ? undefined : 160}
       preview={previewUrl ? (
-        <PreviewMediaLink href={previewUrl} label="Open motion output" kind="video" disabled={dragging}>
+        <PreviewMediaLink href={previewUrl} label="Open motion output" kind="video" generationId={typed.runState.generationId} disabled={dragging}>
           <video src={previewUrl} className="h-28 w-full rounded-xl border border-white/10 object-cover" muted playsInline />
         </PreviewMediaLink>
       ) : undefined}

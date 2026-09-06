@@ -12,6 +12,26 @@ const response = (payload = descriptor()) => ({ ok: true, json: async () => payl
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); props.onOriginalResolved.mockClear(); });
 
 describe('generation result video delivery', () => {
+  it('can reopen an owned archived generation referenced by a saved workflow', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => response(
+      new URL(url, 'https://app.example').searchParams.get('includeArchived') === 'true'
+        ? descriptor()
+        : { generations: [] },
+    )));
+    const { container } = render(<GenerationResultVideo {...props} />);
+    await waitFor(() => expect(container.querySelector('video')).toHaveAttribute('src', '/small.mp4'));
+  });
+
+  it('supports a standalone non-looping viewer without a download callback', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response()));
+    const { container } = render(<GenerationResultVideo {...props} onOriginalResolved={undefined} loop={false} />);
+    await waitFor(() => expect(container.querySelector('video')).toHaveAttribute('src', '/small.mp4'));
+    expect(container.querySelector('video')!.loop).toBe(false);
+    fireEvent.loadedData(container.querySelector('video')!);
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('resolves a rendition before mounting the video and renews it on Retry', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(response()).mockResolvedValueOnce(response(descriptor('/renewed.mp4')));
     vi.stubGlobal('fetch', fetchMock);
@@ -24,7 +44,7 @@ describe('generation result video delivery', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(container.querySelector('video')).toHaveAttribute('src', '/renewed.mp4'));
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[0][0]).toBe('/api/generations?id=generation-1&detail=summary');
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/generations?id=generation-1&detail=summary&includeArchived=true');
   });
 
   it('falls back to the freshly signed original when no rendition exists', async () => {
