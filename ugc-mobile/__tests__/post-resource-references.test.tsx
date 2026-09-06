@@ -67,6 +67,62 @@ const promptItem: PostResourceItem = {
 };
 
 describe('PostResourceReferences', () => {
+  it('renews a preloaded reference URL before opening instead of replaying a stale link', async () => {
+    const resolveFileUrl = vi.fn()
+      .mockResolvedValueOnce('https://media.test/expired.jpg')
+      .mockResolvedValueOnce('https://media.test/renewed.jpg');
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => {
+      tree = renderer.create(<PostResourceReferences items={[referenceImage]} onOpenUrl={vi.fn()} resolveFileUrl={resolveFileUrl} />);
+    });
+    await renderer.act(async () => {
+      tree!.root.findByProps({ accessibilityLabel: 'Open reference @alisa' }).props.onPress();
+    });
+    expect(resolveFileUrl).toHaveBeenCalledTimes(2);
+    expect(tree!.root.findByType('media-lightbox' as never).props.items[0].url).toBe('https://media.test/renewed.jpg');
+    renderer.act(() => tree?.unmount());
+  });
+
+  it('does not open the cached link when renewal is denied', async () => {
+    const onError = vi.fn();
+    const resolveFileUrl = vi.fn().mockResolvedValueOnce('https://media.test/expired.jpg').mockRejectedValueOnce(new Error('Access unavailable'));
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => {
+      tree = renderer.create(<PostResourceReferences items={[referenceImage]} onOpenUrl={vi.fn()} onError={onError} resolveFileUrl={resolveFileUrl} />);
+    });
+    await renderer.act(async () => {
+      tree!.root.findByProps({ accessibilityLabel: 'Open reference @alisa' }).props.onPress();
+    });
+    expect(onError).toHaveBeenCalledWith('Access unavailable');
+    expect(tree!.root.findByType('media-lightbox' as never).props.activeIndex).toBeNull();
+    renderer.act(() => tree?.unmount());
+  });
+
+  it('renews the next item and does not reopen a lightbox closed during renewal', async () => {
+    const videoReference = { ...referenceImage, id: 'video', type: 'reference_video' as const, contentType: 'video/mp4', storagePath: 'references/clip.mp4', sortOrder: 1 };
+    let finish: (url: string) => void = () => undefined;
+    const resolveFileUrl = vi.fn(async (path: string) => `https://media.test/initial/${path}`);
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => {
+      tree = renderer.create(<PostResourceReferences items={[referenceImage, videoReference]} onOpenUrl={vi.fn()} resolveFileUrl={resolveFileUrl} />);
+    });
+    const lightbox = () => tree!.root.findByType('media-lightbox' as never);
+    resolveFileUrl.mockResolvedValueOnce('https://media.test/renewed.jpg');
+    await renderer.act(async () => {
+      tree!.root.findAllByProps({ accessibilityLabel: 'Open reference @alisa' })[0].props.onPress();
+    });
+    resolveFileUrl.mockResolvedValueOnce('https://media.test/renewed.mp4');
+    await renderer.act(async () => { lightbox().props.onNavigate(1); });
+    expect(lightbox().props.activeIndex).toBe(1);
+    expect(lightbox().props.items[1].url).toBe('https://media.test/renewed.mp4');
+    resolveFileUrl.mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
+    renderer.act(() => { lightbox().props.onNavigate(0); });
+    renderer.act(() => { lightbox().props.onClose(); });
+    await renderer.act(async () => { finish('https://media.test/late.jpg'); });
+    expect(lightbox().props.activeIndex).toBeNull();
+    renderer.act(() => tree?.unmount());
+  });
+
   it('preloads and renders an unlocked reference image with contained media', async () => {
     const resolveFileUrl = vi.fn(async () => 'https://cdn.example.com/alisa.jpg');
     let tree: renderer.ReactTestRenderer | undefined;

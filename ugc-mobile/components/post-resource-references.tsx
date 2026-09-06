@@ -26,12 +26,14 @@ export function PostResourceReferences({
   );
   const [fileUrls, setFileUrls] = useState<Record<string, string>>({});
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({});
+  const [openingPath, setOpeningPath] = useState<string | null>(null);
   const [failedPreviewPaths, setFailedPreviewPaths] = useState<Record<string, boolean>>({});
   // Keyed by item, not by position: signed URLs resolve in any order, so the
   // list of viewable items can grow while the lightbox is open.
   const [lightboxKey, setLightboxKey] = useState<string | null>(null);
   const requestedPaths = useRef(new Set<string>());
   const mounted = useRef(true);
+  const openRequest = useRef(0);
 
   useEffect(() => {
     mounted.current = true;
@@ -53,7 +55,7 @@ export function PostResourceReferences({
       void resolveFileUrl(storagePath)
         .then((url) => {
           if (!mounted.current) return;
-          setFileUrls((current) => ({ ...current, [storagePath]: url }));
+          setFileUrls((current) => ({ ...current, [storagePath]: current[storagePath] ?? url }));
         })
         .catch(() => {
           requestedPaths.current.delete(storagePath);
@@ -86,11 +88,17 @@ export function PostResourceReferences({
   if (!referenceItems.length) return null;
 
   const openItem = async (item: PostResourceItem, index: number) => {
+    const request = ++openRequest.current;
+    const storagePath = item.storagePath;
     try {
-      const storagePath = item.storagePath;
+      setOpeningPath(storagePath ?? null);
       if (storagePath && referenceMediaKind(item)) {
-        const url = fileUrls[storagePath] ?? await resolveFileUrl(storagePath);
+        // Preview links expire. An explicit open must renew access through the
+        // resource endpoint instead of replaying the URL cached at mount.
+        const url = await resolveFileUrl(storagePath);
+        if (!mounted.current || request !== openRequest.current) return;
         setFileUrls((current) => ({ ...current, [storagePath]: url }));
+        setFailedPreviewPaths((current) => ({ ...current, [storagePath]: false }));
         setLightboxKey(referenceKey(item, index));
         return;
       }
@@ -101,11 +109,18 @@ export function PostResourceReferences({
       }
 
       if (!storagePath) return;
-      const url = fileUrls[storagePath] ?? await resolveFileUrl(storagePath);
+      const url = await resolveFileUrl(storagePath);
+      if (!mounted.current || request !== openRequest.current) return;
       setFileUrls((current) => ({ ...current, [storagePath]: url }));
       await onOpenUrl(url);
     } catch (error) {
-      onError?.(error instanceof Error ? error.message : 'Failed to open this reference.');
+      if (mounted.current && request === openRequest.current) {
+        onError?.(error instanceof Error ? error.message : 'Failed to open this reference.');
+      }
+    } finally {
+      if (mounted.current && request === openRequest.current) {
+        setOpeningPath(null);
+      }
     }
   };
 
@@ -128,7 +143,7 @@ export function PostResourceReferences({
             : item.contentType?.startsWith('audio/')
               ? 'Open audio'
               : 'Open media';
-          const isLoading = Boolean(storagePath && loadingPaths[storagePath]);
+          const isLoading = Boolean(storagePath && (loadingPaths[storagePath] || openingPath === storagePath));
           const previewFailed = Boolean(storagePath && failedPreviewPaths[storagePath]);
           const isOpenable = Boolean(item.externalUrl || storagePath);
 
@@ -194,8 +209,16 @@ export function PostResourceReferences({
       <MediaLightbox
         items={lightboxItems}
         activeIndex={lightboxIndex >= 0 ? lightboxIndex : null}
-        onClose={() => setLightboxKey(null)}
-        onNavigate={(index) => setLightboxKey(lightboxItems[index]?.id ?? null)}
+        onClose={() => {
+          openRequest.current++;
+          setOpeningPath(null);
+          setLightboxKey(null);
+        }}
+        onNavigate={(index) => {
+          const key = lightboxItems[index]?.id;
+          const referenceIndex = referenceItems.findIndex((item, itemIndex) => referenceKey(item, itemIndex) === key);
+          if (referenceIndex >= 0) void openItem(referenceItems[referenceIndex], referenceIndex);
+        }}
       />
     </View>
   );

@@ -427,3 +427,58 @@ Ignored evidence under `output/media-audit/`: `{android,ios}-composer-*`,
 `{android,ios}-creation-{playing,closed,error,recovered}.json`,
 `{android,ios}-creation-{error,recovered}.png`, `mobile-sixth-pass-checks.log`,
 `native-sixth-pass-export.log`, `native-sixth-pass-env-verification.jsonl`.
+
+## Motion-result acceptance and reference URL renewal (local, unreleased)
+
+The actual `/create/motion` route was exercised on Android API 36 and iOS 26.4
+with completed-result state injected through the inspector. Both players played
+the silent two-second fixture, unmounted when the result window closed, displayed
+an error for a fresh URL returning HTTP 503, and recovered ready playback and
+visible frames through Retry video after the endpoint was restored. These actions
+used rendered handlers/native player methods; no motion generation or upload was
+started. This verifies the result caller, not provider execution, input validation,
+private rendition selection or physical-device performance.
+
+Source tracing found that the resource-file endpoint signs links for 600 seconds,
+while PostResourceReferences retained its initial resolved URLs without renewal
+when opening or navigating between references. A native fixture host mounted the
+actual reference component and shared lightbox. Its initial resolver supplied a
+URL returning HTTP 403; later resolver calls would supply a working URL. Before
+the fix, opening the video called no resolver beyond the two initial preloads and
+both native players entered `error` with duration zero. This is a controlled
+rejection/renewal reproduction, not an actual ten-minute Supabase JWT expiry test,
+nor an end-to-end purchased-resource journey.
+
+Explicit reference opens and lightbox navigation now resolve through the existing
+resource endpoint again. Image preview caching remains; an initial preload cannot
+overwrite a subsequently renewed URL. Opening audio/files also renews before the
+existing external handoff. Failed renewal reports through the existing onError
+callback and does not open the stale target. A request sequence prevents late
+responses from selecting an older target or reopening a closed lightbox.
+
+After the change, a clean fixture on each platform recorded two preload
+resolutions, then exactly one more on opening the reference. The renewed URL
+reached `readyToPlay`, two-second duration and visible moving frames. Selecting
+the adjacent image renewed its link and removed the video player; navigating back
+played the video again, and closing removed it. These controls used rendered
+handlers through the native inspector. Development apps were reloaded afterwards
+to clear all fixture overrides; no production data was changed.
+
+Three regression cases cover renewal of a cached URL, denial without stale
+fallback, and navigation/closing during a delayed resolution. The two initial
+cases failed before implementation. Full mobile suite: 185 files / 1,786 tests;
+typecheck, Android/iOS production Hermes exports and bundled-environment checks
+passed. No migration, deployment or OTA was performed.
+
+Remaining limits: this adds one access-check request per explicit open/navigation.
+It does not renew a reference automatically while its lightbox remains open;
+Retry video still retries that already-selected URL. Long-lived playback expiry,
+renewal failure visibility inside an open modal, real offline/reconnect and the
+full unlock-to-reference journey remain acceptance cases. Do not treat these as
+covered by the successful reopen check.
+
+Ignored evidence under `output/media-audit/`: `{android,ios}-motion-*`,
+`{android,ios}-reference-*`, `reference-regression-{before,after}.log`,
+`reference-requests-seventh-pass.json`, `motion-requests-seventh-pass.json`,
+`mobile-seventh-pass-checks.log`, `native-seventh-pass-export.log`, and
+`native-seventh-pass-env-verification.jsonl`.
