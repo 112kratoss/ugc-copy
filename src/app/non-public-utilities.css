@@ -70,6 +70,7 @@
 @source "./components/templates/TemplateRunMedia.tsx";
 @source "./components/templates/api.ts";
 @source "./components/templates/types.ts";
+@source "./components/templates/useTemplatePosterRecovery.ts";
 
 /* Model and tool registries expose complete class tokens through data fields
  * (for example gradient badge colors) that route components compose at run

@@ -1023,3 +1023,77 @@ isolated rerun and the final complete suites passed with bounded worker counts.
 The stylesheet closure test found the new component missing from the explicit
 Tailwind source list; the source entry was added before final checks. No test
 thresholds or timeouts were relaxed.
+
+## Published demo size and catalog poster recovery
+
+Status: fixed locally; not deployed. No new schema or migration.
+
+New video-template publication now tries the existing H.264/AAC fast-start
+playback encoder before storing the version's demo. This is restricted to demo
+copies at most 64 MiB, with a 60-second cancellation deadline within the existing
+300-second publish route budget. The encoder only retains copies at least 15%
+smaller. Already-lean media, oversized inputs and encoder failures keep the
+original demo copy; expected size skips do not emit backend errors. Fixed workflow
+inputs and source generation files retain their original bytes. The demo poster
+is derived from the file actually published. Existing version activation and
+rollback still own the copied paths; the API and stored demo field are unchanged.
+
+Two regression assertions first failed because the copy helper stored the source
+unchanged and never invoked the bounded encoder. Tests now cover MP4 naming and
+exact Blob bytes, cancellation signal, fallback, the size cap, fixed-input
+preservation and foreign-owner rejection. Real local Storage validation used the
+existing synthetic original: 1,790,943 bytes became 150,439 bytes (91.60% smaller).
+Readback was byte-identical, full ffmpeg decode succeeded, the moov atom precedes
+mdat, a signed range read returned 206, and source readback remained identical.
+The temporary demo object was removed. Receipt:
+`output/media-audit/template-demo-optimized-readback.json`. This is a controlled
+fixture, not a production bandwidth/latency benchmark.
+
+Catalog reproduction and recovery:
+
+- Chromium's real owner catalog rendered two video elements with rejected poster
+  URLs and no recovery action. Cards now use lazy still images, keep an icon
+  underneath loading media, and show the fallback when an image fails. A shared
+  Reload previews action renews only failed IDs, preserves other catalog entries
+  and pagination, limits concurrency to four, deduplicates repeated actions, and
+  cancels at 30 seconds or unmount/token replacement. The online event uses the
+  same bounded path. Failed URLs can retry even when signing returns the same URL.
+- In Chromium, two failed cards recovered through two template GETs, decoded at
+  width 320 and left zero video players. A separate controlled online event
+  recovered unchanged image URLs. At 390px width there was no horizontal overflow.
+  `output/playwright/catalog-poster-recovered.png` records the result. These are
+  controlled HTTP failures/reconnect events, not a physical network-outage test.
+- Android Pixel_9a and iOS iPhone 17 Pro reproduced HTTP-403 posters with blank
+  tiles and no image error handler. Native cards now retain an icon and provide a
+  shared Reload previews control outside the card's navigation target. It refetches
+  the catalog once and remounts images on fresh query data, including unchanged
+  URLs. Existing cards remain visible if this refetch fails. On each platform,
+  invoking the rendered Reload previews handler renewed the poster, produced an
+  HTTP 200 and visibly decoded the fixture image; the control disappeared after
+  success. Android's metadata counter advanced 1 → 2; iOS's 2 → 3 (Fast Refresh had
+  caused its extra initial query). Screenshots: `output/media-audit/catalog-android-after.png`
+  and `catalog-ios-after.png`. Synthetic API overrides were cleared by reloading
+  the development bundles. This does not certify production binary performance.
+- A hook regression reproduced loss of a newly failed card while an older batch
+  was renewing. The completed batch now preserves newly reported failures. Other
+  tests cover concurrency, deduplication, wrong-template responses, unchanged URLs,
+  deadline and unmount cancellation. No automatic per-image retry loop is added.
+
+Scope limits: this optimizes future published versions; immutable existing demos
+have not been backfilled or replaced. There is no durable demo optimization queue,
+and optional inline work can add up to 60 seconds to publish. Source download,
+Storage upload and existing poster extraction retain their earlier bounds. Full
+upload/test/publish execution, legacy corrupt-poster repair, null-media refresh UI,
+long offline/background expiry, shared workflows and viewport player ownership
+remain open. This checkpoint adds no migration; the earlier private-playback
+migration still awaits the coordinated release.
+
+Validation: the final complete web suite passes 757 files / 5,387 tests, and the
+mobile suite passes 186 files / 1,803 tests. Web app/test/script and mobile
+typechecks, focused lint, production web build and ffmpeg/libvips artifact checks
+pass. Android/iOS production exports and bundled-environment checks pass. The
+first web run found the new hook missing from the explicit stylesheet source
+closure; that entry was added. A concurrent export/test run then hit the existing
+5-second workflow/composer test limits; the final complete run without the
+competing export/build passed without relaxing test limits. Logs:
+`output/media-audit/catalog-{web-final,mobile-final,checks-final,build-final,export}.log`.

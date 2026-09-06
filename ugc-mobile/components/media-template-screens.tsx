@@ -97,6 +97,8 @@ export function MediaTemplateCatalogScreen() {
     queryFn: () => api.listMediaTemplates(),
   });
   const templates = templatesQuery.data?.templates ?? [];
+  const [failedPreviewAt, setFailedPreviewAt] = useState<number | null>(null);
+  const hasFailedPreview = failedPreviewAt === templatesQuery.dataUpdatedAt;
   const activeRunQuery = useQuery({
     queryKey: ['active-media-template-run', user?.id],
     enabled: Boolean(user?.id),
@@ -132,6 +134,16 @@ export function MediaTemplateCatalogScreen() {
         body="Choose a format, add its required media, and review each generated step on the way to your result."
       />
 
+      {hasFailedPreview ? (
+        <View style={{ gap: 12 }}>
+          <AppText variant="bodySm" color="muted">Some previews could not load. You can still open a template.</AppText>
+          <SecondaryButton
+            label={templatesQuery.isFetching ? 'Reloading previews…' : 'Reload previews'}
+            disabled={templatesQuery.isFetching}
+            onPress={() => void templatesQuery.refetch()}
+          />
+        </View>
+      ) : null}
       {activeRun ? (
         <Pressable
           accessibilityRole="button"
@@ -167,7 +179,7 @@ export function MediaTemplateCatalogScreen() {
 
       {templatesQuery.isLoading ? (
         <LoadingState label="Loading templates" />
-      ) : templatesQuery.isError ? (
+      ) : templatesQuery.isError && templates.length === 0 ? (
         <View style={{ gap: 12 }}>
           <StatusBlock title="Templates are unavailable" body={errorMessage(templatesQuery.error, 'Check your connection and try again.')} tone="danger" />
           <SecondaryButton label="Try again" onPress={() => void templatesQuery.refetch()} />
@@ -176,15 +188,25 @@ export function MediaTemplateCatalogScreen() {
         <StatusBlock title="No templates yet" body="Published creator templates will appear here." tone="neutral" />
       ) : (
         <View style={{ gap: 22 }}>
-          {templates.map((template) => <TemplatePoster key={template.id} template={template} />)}
+          {templates.map((template) => (
+            <TemplatePoster
+              key={template.id}
+              template={template}
+              previewAttempt={templatesQuery.dataUpdatedAt}
+              onPreviewError={() => setFailedPreviewAt(templatesQuery.dataUpdatedAt)}
+            />
+          ))}
         </View>
       )}
     </Screen>
   );
 }
 
-function TemplatePoster({ template }: { template: MediaTemplateSummary }) {
-  const OutputIcon = template.outputKind === 'video' ? Video : ImageIcon;
+function TemplatePoster({ template, previewAttempt, onPreviewError }: {
+  template: MediaTemplateSummary;
+  previewAttempt: number;
+  onPreviewError: () => void;
+}) {
   return (
     <Pressable
       accessibilityRole="button"
@@ -194,13 +216,7 @@ function TemplatePoster({ template }: { template: MediaTemplateSummary }) {
       style={({ pressed }) => ({ gap: 11, opacity: pressed ? appTheme.opacity.pressed : 1 })}
     >
       <View style={{ minHeight: 280, aspectRatio: 4 / 5, overflow: 'hidden', borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: appTheme.colors.surfaceInset }}>
-        {template.thumbnailUrl ? (
-          <Image source={{ uri: template.thumbnailUrl }} contentFit="cover" transition={160} style={{ position: 'absolute', inset: 0 }} />
-        ) : (
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-            <OutputIcon size={appTheme.icon.hero} color={appTheme.colors.faint} />
-          </View>
-        )}
+        <TemplatePosterImage key={`${template.thumbnailUrl}:${previewAttempt}`} template={template} onError={onPreviewError} />
         <LinearGradient
           colors={['rgba(8,8,10,0.03)', 'rgba(8,8,10,0.18)', 'rgba(8,8,10,0.94)']}
           locations={[0.35, 0.58, 1]}
@@ -224,6 +240,25 @@ function TemplatePoster({ template }: { template: MediaTemplateSummary }) {
         <ArrowRight size={20} color={appTheme.colors.primary} />
       </View>
     </Pressable>
+  );
+}
+
+function TemplatePosterImage({ template, onError }: { template: MediaTemplateSummary; onError: () => void }) {
+  const [failed, setFailed] = useState(false);
+  const OutputIcon = template.outputKind === 'video' ? Video : ImageIcon;
+  return (
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+      <OutputIcon size={appTheme.icon.hero} color={appTheme.colors.faint} />
+      {template.thumbnailUrl && !failed ? (
+        <Image
+          source={{ uri: template.thumbnailUrl }}
+          contentFit="cover"
+          transition={160}
+          style={{ position: 'absolute', inset: 0 }}
+          onError={() => { setFailed(true); onError(); }}
+        />
+      ) : null}
+    </View>
   );
 }
 

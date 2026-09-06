@@ -71,9 +71,13 @@ function inputSummary(slots: TemplateInputSlot[]): string {
 export function TemplateCard({
   template,
   mode = 'public',
+  previewAttempt = 0,
+  onPreviewError,
 }: {
   template: MediaTemplate;
   mode?: 'public' | 'owner';
+  previewAttempt?: number;
+  onPreviewError?: (id: string) => void;
 }) {
   const href = mode === 'owner'
     ? `/templates/${template.id}/edit`
@@ -84,24 +88,11 @@ export function TemplateCard({
   return (
     <Link href={href} className="ui-card ui-card-interactive ui-focus-ring group flex h-full flex-col overflow-hidden rounded-3xl">
       <MediaFrame aspectRatio="4 / 5" className="relative rounded-none border-0 border-b border-white/8">
-        {template.videoUrl ? (
-          <video
-            src={template.videoUrl}
-            poster={template.thumbnailUrl || undefined}
-            muted
-            playsInline
-            preload="none"
-            className="h-full w-full object-cover"
-            aria-label={`${template.name} demo`}
-          />
-        ) : template.thumbnailUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={template.thumbnailUrl} alt={`${template.name} preview`} loading="lazy" decoding="async" className="h-full w-full object-cover" />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center bg-[radial-gradient(circle_at_70%_10%,rgba(244,63,94,0.26),transparent_36%),linear-gradient(145deg,#211318,#08090c)]">
-            <OutputIcon className="h-12 w-12 text-rose-100/70" aria-hidden />
-          </div>
-        )}
+        <TemplateCardPoster
+          key={`${template.thumbnailUrl}:${previewAttempt}`}
+          template={template}
+          onError={() => onPreviewError?.(template.id)}
+        />
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent" />
         <div className="absolute left-4 top-4">
           <Pill accent={template.outputKind} icon={mode === 'owner' ? OutputIcon : Play}>
@@ -142,6 +133,27 @@ export function TemplateCard({
         </div>
       </div>
     </Link>
+  );
+}
+
+function TemplateCardPoster({ template, onError }: { template: MediaTemplate; onError: () => void }) {
+  const [failed, setFailed] = useState(false);
+  const OutputIcon = template.outputKind === 'video' ? Video : ImageIcon;
+  return (
+    <div className="relative flex h-full w-full items-center justify-center bg-[radial-gradient(circle_at_70%_10%,rgba(244,63,94,0.26),transparent_36%),linear-gradient(145deg,#211318,#08090c)]">
+      <OutputIcon className="h-12 w-12 text-rose-100/70" aria-hidden />
+      {template.thumbnailUrl && !failed ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={template.thumbnailUrl}
+          alt={`${template.name} preview`}
+          loading="lazy"
+          decoding="async"
+          className="absolute inset-0 h-full w-full object-cover"
+          onError={() => { setFailed(true); onError(); }}
+        />
+      ) : null}
+    </div>
   );
 }
 

@@ -66,7 +66,7 @@ Map additional media callers discovered in step 1 into this table.
 | Creation inputs, uploads, results, and library/Studio | Partial: Studio and video result rendition playback/original download verified; result failed-link renewal and initial timeout checked in Chromium fixtures | Partial: video result playback/retry/close verified with injected completed state | Partial: video result playback/retry/close verified with injected completed state |
 | Motion references and outputs | Partial: result rendition playback, original download and failed-link renewal checked in Chromium fixtures | Partial: result playback/retry/close verified with injected completed state | Partial: result playback/retry/close verified with injected completed state |
 | Workflow node previews, results, and shared workflows | Partial: expanded video/motion rendition playback and renewal verified; generated video/motion cards use batched posters with no video players, including controlled poster failure/reconnect recovery. Input/approval cards now reuse matching posters or an Open video tile; controlled failures and expanded input Retry passed | Map supported consumers | Map supported consumers |
-| Template catalog, details, demos, and run results | Partial: final video and intermediate video/image Reload media verified through owned-run GET fixtures; final/intermediate videos now consume owned playback renditions and posters; original download links remain separate | Partial: detail/final-run recovery verified; optimized final/intermediate playback verified in emulator with synthetic API/auth context | Partial: detail/final-run recovery verified; optimized final/intermediate playback verified in simulator with synthetic API responses |
+| Template catalog, details, demos, and run results | Partial: demo/run recovery and optimized run playback verified; new published demo optimization passed local Storage readback/decode/range checks; catalog poster reload and online-event recovery verified | Partial: detail/final/intermediate playback and recovery verified with synthetic API/auth; catalog poster failure and reload verified in emulator | Partial: detail/final/intermediate playback and recovery verified with synthetic API; catalog poster failure and reload verified in simulator |
 | Marketplace, resource bundles, unlocks, and downloads | Pending | Partial: reference image/video renewal and failure recovery in native fixture host; full purchase/unlock journey pending | Partial: reference image/video renewal and failure recovery in native fixture host; full purchase/unlock journey pending |
 | Post composer, drafts, media reorder, and publish results | Pending | Partial: edit-post lightbox poster-as-video bug reproduced/fixed; item switch and close verified | Partial: edit-post lightbox poster-as-video bug reproduced/fixed; item switch and close verified |
 | Remaining image/audio/video/file renderers, including operator surfaces | Inventory pending | Inventory pending | Inventory pending |
@@ -99,8 +99,10 @@ Map additional media callers discovered in step 1 into this table.
 
 ## Immediate next action
 
-Continue demo file size/encoding and catalog poster failure/reconnect coverage,
-then shared-workflow consumers and viewport player ownership. Template demo
+Continue shared-workflow consumers and viewport player ownership. New published
+video demo copies now use bounded optimization, and catalog poster failure/reload
+has local web/Android/iOS acceptance evidence. Existing demo backfill, corrupt
+poster repair and real long offline/background expiry remain open. Template demo
 failed-link renewal and workflow input-editor failure/retry/close now have local
 acceptance evidence.
 The template-run rendition and canvas input/approval thumbnail checkpoint is
@@ -123,7 +125,7 @@ select private playback. Result pages also renew failed links on Retry, verified
 in Chromium fixtures. Expanded workflow video/motion previews also resolve the
 generation descriptor. Generated video/motion node thumbnails now use batched
 posters; template final and intermediate media renew on explicit Reload media.
-Template final/intermediate rendition delivery and input/approval canvas cards now have local acceptance evidence. Catalog poster recovery, optimized demo encoding and shared-workflow consumers still need their own review before claiming private renditions reach every consumer. Keep all
+Template final/intermediate rendition delivery and input/approval canvas cards now have local acceptance evidence. New demo encoding and catalog poster recovery now have local acceptance evidence; existing demo backfill and shared-workflow consumers remain open before claiming optimized delivery reaches every consumer. Keep all
 source-only concerns distinct from reproduced defects and measured improvements.
 
 
@@ -209,3 +211,14 @@ now remains null, and the publishing poster writer uses a byte-preserving Blob
 upload with real local Storage readback. These changes are local and need no new
 migration. Existing demo transcoding/backfill and catalog poster recovery remain
 open; this is a reliability checkpoint, not complete demo optimization.
+
+
+Latest template checkpoint: new video demo copies use the existing fast-start
+encoder with a 64 MiB input gate and 60-second deadline, retaining the original
+copy when encoding is unavailable or not smaller. A local Storage fixture saved
+91.60%, fully decoded, passed range reads and left its source unchanged. Catalog
+posters recovered after controlled failures in Chromium, Android and iOS; web
+reconnect-event recovery also passed. These changes remain local, require no new
+migration, and do not backfill existing published versions. See the September 6
+audit's “Published demo size and catalog poster recovery” section for evidence
+and remaining limits.
