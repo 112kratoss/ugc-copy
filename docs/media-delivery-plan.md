@@ -42,7 +42,7 @@ change fix priority, but cannot silently remove surfaces from coverage.
 | 3. URL and cache lifetime | Trace private signed URLs, refresh/renewal, query cache age, stable object identities, CDN cache behavior, and native disk cache. Verify mobile authentication on fallback paths. | Expired URL, old query cache, failed signing, offline/reconnect, and background/foreground tests recover without request storms or access changes. | Private proxy fallback released: browser plus Android/iOS images. A genuinely expired storage URL recovered on iOS; offline/background and remaining renderers pending. |
 | 4. Image delivery | Measure preview bytes and decode size against actual rendered size and device pixel ratio. Check thumbnails, original fallback, loading placeholders, prefetch, and duplicate backdrop loads. | Before/after transferred bytes, first-image time, and memory; readable images with no unbounded original downloads in grids. | 720px preview baseline measured; 66 missing dimensions backfilled. iOS grid fixture eliminated 48 separate measurement calls using rendered image metadata; Android cache alias reproduced and viewer source-key fix verified locally. Byte/time baselines and smaller variants pending. |
 | 5. Video and audio delivery | Cover published posts and private creations. Check poster continuity, first frame, range requests, codecs, faststart, renditions/teasers, buffering, simultaneous players, release, seeking, and audio source recovery. | Playback and lifecycle tests across slow network, fast scrolling, backgrounding, and failed sources; measured startup, stalls, bytes, and memory. | Ready-video teaser repaired live and played on iOS; automatic repair released. Second pass: all 27 selected stored video objects fully decode and pass range checks; 3 originals lack fast-start. Private original baseline: 14 videos / 187 MB; largest local rendition 93.69% smaller. Private pipeline locally verified with a 91.60% smaller synthetic video, unchanged original and private range reads. Release, audio and device stress checks pending. |
-| 6. Surface integration | Apply verified shared fixes and inspect every applicable surface in the matrix below. Exercise production-like native binaries and web browsers. | Every surface has recorded normal/loading/error/retry and navigation outcomes. Native rendering defects require native reproduction and verification. | Android profile first pass, controlled Android viewer recovery and Android/iOS private-image fallback verified. Broad surface pass pending. |
+| 6. Surface integration | Apply verified shared fixes and inspect every applicable surface in the matrix below. Exercise production-like native binaries and web browsers. | Every surface has recorded normal/loading/error/retry and navigation outcomes. Native rendering defects require native reproduction and verification. | Android profile first pass, controlled Android viewer recovery and Android/iOS private-image fallback verified. Native viewer HTTP-503 failure reproduced on Android; visible retry and resumed playback verified locally on Android/iOS. Broad surface pass pending. |
 | 7. Release and regression control | Run affected tests and required release checks; deploy through existing release workflows. Verify exact live web SHA and actual mobile runtime/build targets. Define delivery measurements and bounded integrity checks. | Exact-release evidence, post-release checks, rollback details, and actionable regression signals. | Reliability checkpoint released: exact live `85c137e` confirmed; Android 70/71 and iOS 47/51 production OTAs published. Second-pass client and private playback backend changes remain local. Broad device checks remain; no automation created. |
 
 Steps 3–5 may produce independent fixes while the legacy-source recovery in step
@@ -60,10 +60,10 @@ Map additional media callers discovered in step 1 into this table.
 | --- | --- | --- | --- |
 | Home and feed media, including promotional previews | Pending | Initial observation only | Initial observation only |
 | Showcase/Explore grids, carousels, and saved media | Pending | Pending | Pending |
-| Own profile: Creations, Posts, Saved, archives | Pending | Partial: Creations/Posts; one real 404 and controlled corruption reproduction | Pending |
+| Own profile: Creations, Posts, Saved, archives | Partial: synthetic creation detail rendition playback | Partial: Creations/Posts; one real 404 and controlled corruption reproduction | Pending |
 | Creator profiles, avatars, and covers | Pending | Pending | Pending |
-| Post details, overlays, full viewers, and lightboxes | Pending | Pending | Pending |
-| Creation inputs, uploads, results, and library/Studio | Pending | Pending | Pending |
+| Post details, overlays, full viewers, and lightboxes | Pending | Partial: creation viewer rendition playback and failed-request retry | Partial: creation viewer rendition playback and failed-request retry via rendered handler |
+| Creation inputs, uploads, results, and library/Studio | Partial: Studio rendition playback and original download verified | Pending | Pending |
 | Motion references and outputs | Pending | Pending | Pending |
 | Workflow node previews, results, and shared workflows | Pending | Map supported consumers | Map supported consumers |
 | Template catalog, details, demos, and run results | Pending | Pending | Pending |
@@ -100,7 +100,9 @@ Map additional media callers discovered in step 1 into this table.
 ## Immediate next action
 
 The private-video producer, durable metadata, batched owner signing, and
-retention-aware deletion have passed local database/Storage validation. Chromium
+retention-aware deletion are committed locally in `14eedb0` and have passed local
+database/Storage validation. The subsequent native viewer recovery fix has passed
+HTTP-503/retry verification on Android and iOS; it is also unreleased. Chromium
 Studio verifies rendition playback and original download selection. Finish native
 playback/lifecycle checks and exact-release Quality before deploying the migration
 and code through the existing release workflow. Worker upload/DB cancellation,
@@ -112,3 +114,10 @@ surface matrix. Web creation/profile viewers now select private playback; genera
 pages, workflow previews and template results still need integration review
 before claiming private renditions reach every consumer. Keep all
 source-only concerns distinct from reproduced defects and measured improvements.
+
+
+Next surface priority: reproduce loading and failure behavior in the shared native
+`MediaPreview` and `MediaLightbox` video branches used by creation results and
+templates. Source review found direct result URL consumers in web video/motion
+results and workflow previews; their rendition and expiry integration remains
+pending. Keep these findings distinct from the verified full-screen viewer fix.

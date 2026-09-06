@@ -1964,15 +1964,7 @@ function ImmersiveMedia({
   );
 }
 
-function ActiveVideo({
-  url,
-  previewUrl,
-  previewCacheKey,
-  previewThumbhash,
-  onDoublePress,
-  width,
-  height,
-}: {
+type ActiveVideoProps = {
   url: string;
   previewUrl?: string | null;
   previewCacheKey?: string;
@@ -1980,7 +1972,31 @@ function ActiveVideo({
   onDoublePress: (event: GestureResponderEvent) => void;
   width: number;
   height: number;
-}) {
+};
+
+function ActiveVideo(props: ActiveVideoProps) {
+  const [attempt, setAttempt] = useState(0);
+  // play() cannot revive a failed native source. A new attempt releases the
+  // failed player and resolves the URL again, including an expired signature.
+  return (
+    <ActiveVideoAttempt
+      {...props}
+      key={`${props.url}:${attempt}`}
+      onRetry={() => setAttempt(value => value + 1)}
+    />
+  );
+}
+
+function ActiveVideoAttempt({
+  url,
+  previewUrl,
+  previewCacheKey,
+  previewThumbhash,
+  onDoublePress,
+  width,
+  height,
+  onRetry,
+}: ActiveVideoProps & { onRetry: () => void }) {
   const [hasFrame, setHasFrame] = useState(false);
   const [hasError, setHasError] = useState(false);
   const reducedMotion = useReducedMotion();
@@ -2032,6 +2048,8 @@ function ActiveVideo({
   }, [player]);
 
   useEffect(() => {
+    // A cached/native failure can arrive before this effect subscribes.
+    setHasError(player.status === 'error');
     const subscription = player.addListener('statusChange', (event) => {
       setHasError(event.status === 'error');
     });
@@ -2086,6 +2104,16 @@ function ActiveVideo({
         />
         {!isPlaying && hasFrame && !hasError ? <ViewerPlayBadge /> : null}
       </DoubleTapPressable>
+      {hasError ? (
+        <View style={{ position: 'absolute', left: 32, right: 80, alignItems: 'center' }}>
+          <View style={{ backgroundColor: appTheme.colors.panel, padding: 20, borderRadius: 20, gap: 12 }}>
+            <Text accessibilityRole="alert" style={{ color: appTheme.colors.text, fontSize: 16, textAlign: 'center' }}>
+              Video couldn’t load
+            </Text>
+            <SecondaryButton label="Retry video" onPress={onRetry} />
+          </View>
+        </View>
+      ) : null}
     </View>
   );
 }

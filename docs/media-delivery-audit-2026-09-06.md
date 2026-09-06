@@ -209,3 +209,73 @@ Local evidence: `private-playback-local-smoke.json`,
 `private-playback-checks-complete.log`, and `private-playback-contract-mobile.log`
 in ignored `output/media-audit/`. All media in this smoke run is synthetic and
 local. Original production media has not been overwritten by this checkpoint.
+
+## Native viewer failed-request recovery (local, unreleased)
+
+The current checkout was served through a separate Metro instance to Android API
+36 and the iPhone 17 Pro iOS 26.4 simulator. The owner-generation API was replaced
+in memory with one synthetic creation descriptor pointing to the previously
+verified local original and rendition. No production data was written. The real
+`studio-creations` viewer adapter selected the 150,439-byte rendition, and the
+fixture server observed no request for the 1,790,943-byte original.
+
+Before the fix, forcing HTTP 503 on a fresh video URL reproduced an empty black
+viewer on Android. The native player reported `error`, zero duration and no
+playback. There was no error message or retry control. Restoring the server and
+tapping the video did not recover: `play()` retained the failed native source.
+This is a reproduced failure mode, not proof that every reported black tile has
+the same cause.
+
+The shared full-screen viewer now displays “Video couldn’t load” and a “Retry
+video” button. Retry remounts only the active playback attempt, releasing the
+failed player and resolving its source again. The effect also reads the player's
+current status when subscribing so an early error is not missed. Retry is an
+explicit action; this change adds no automatic retry loop or original fallback.
+The existing SecondaryButton supplies its touch target and typography. The
+recovery panel was visually checked on both simulators; the HIG type/contrast
+guard passed, with Apple's [UI design guidance](https://developer.apple.com/design/tips/)
+used for the touch/text review.
+
+Both platforms displayed the error and remained recoverable when Retry was used
+while the server still returned 503. Once restored, Android's Retry button was
+activated by an ADB screen tap; on iOS its rendered button handler was invoked
+through the native JS inspector. Both players reached `readyToPlay`, duration
+2 seconds, `playing: true`, and visible moving fixture frames. The error panel
+cleared. Dismissing the viewer left no mounted FeedMediaFrame video player on
+either platform, and reloading the development apps cleared the fixture overrides.
+The iOS check verifies the rendered handler and playback, not physical
+finger hit testing. Native decoder/request retries are included in the fixture
+server log; there is no claim of one HTTP request per user retry.
+
+An Android background/return check on a successfully loaded video paused playback
+and retained its ready player at the same position on return. Automatic resume
+was not added. This pass did not simulate a real offline network, long background
+signature expiry, reduced-motion recovery, or memory pressure. It also does not
+verify every caller of the viewer. The generic `MediaPreview` and lightbox video
+branches still need their own failure/recovery checks.
+
+Validation: 183 mobile test files / 1,775 tests and typecheck passed. Android and
+iOS production-configured Hermes exports passed, and the bundled environment
+validator found no missing values. The first export attempt used blank development
+RevenueCat values; explicit loading of the existing production env resolved it
+without modifying env files. No OTA, store build, web deploy or migration was
+performed for this viewer change.
+
+### Repeatable native acceptance case
+
+1. Open a fresh synthetic video through the `studio-creations` viewer, with
+   distinct original and rendition URLs. Confirm frames and rendition-only reads.
+2. Make the rendition endpoint return HTTP 503 and open a new URL to avoid cache.
+   Wait for native `error`; confirm the message and Retry button are visible.
+3. Retry while the endpoint still fails. Confirm the error remains actionable.
+4. Restore successful video responses and activate Retry. Confirm a new source
+   load, `readyToPlay`, advancing playback time, and disappearance of the error.
+5. Leave the viewer and confirm the active player is unmounted. Restore all
+   in-memory API overrides or reload the development app after the check.
+
+Ignored evidence: `android-third-pass-error.png`,
+`android-third-pass-restored-tap.json`, `{android,ios}-third-pass-retry.png`,
+`{android,ios}-third-pass-retry-still-failed.json`,
+`{android,ios}-third-pass-recovered.{json,png}`, `native-third-pass-requests.json`,
+`mobile-third-pass-checks.log`, `native-third-pass-export.log`, and
+`native-third-pass-env-verification.jsonl` under `output/media-audit/`.
