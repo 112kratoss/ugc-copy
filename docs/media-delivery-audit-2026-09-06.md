@@ -2368,4 +2368,10 @@ Android 65, so Android 71 was republished onto the preview-fix bundle as group
 `4546e404-022b-4599-bd68-fc4b8dc9e185`. Devices that fetched the rollback
 in between saw only the previous good update. The phone's own two download
 failures remain unexplained; it had lost its USB-debugging authorization to a
-Mac restart, so the pickup is re-verified in the next entry.
+Mac restart, so the pickup was re-verified once the phone re-authorized the Mac (Samsung
+needed "Revoke USB debugging authorizations" before it would prompt again).
+At 21:49–21:50 IST the store build's first cold start reported
+`isUpdateAvailable=true, isUpdatePending=true` for group `4546e404` and the
+second launched it and found "No update available"; the earlier download
+failure did not recur, so it is recorded as transient on the phone's side.
+All five shipped runtimes now carry the shared preview fix.
