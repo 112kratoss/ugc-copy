@@ -86,7 +86,11 @@ function VideoPreviewAttempt({
       instance.volume = previous.volume;
       instance.playbackRate = previous.playbackRate;
     }
-    if ((previous ? previous.playing : autoPlay) && isFocused) instance.play();
+    // A player replaced before it reached readiness still carries this
+    // component's own autoplay request: `playing` only turns true once the
+    // native player renders. Only a ready, paused player was actually stopped.
+    const requested = previous ? previous.playing || (previous.status !== 'readyToPlay' && autoPlay) : autoPlay;
+    if (requested && isFocused) instance.play();
     else if (previous) instance.pause();
   });
   previousPlayer.current = player;
