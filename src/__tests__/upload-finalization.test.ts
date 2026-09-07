@@ -332,6 +332,9 @@ describe('generic upload finalization', () => {
       objectsDeleted: 0,
       absentObjectsReleased: 0,
       failed: 0,
+      deferred: 0,
+      firstClaims: 1,
+      held: 0,
       bytesDeleted: 0,
       scanLimitReached: false,
       timeBudgetReached: false,
@@ -352,6 +355,9 @@ describe('generic upload finalization', () => {
       objectsDeleted: 0,
       absentObjectsReleased: 0,
       failed: 1,
+      deferred: 0,
+      firstClaims: 0,
+      held: 0,
       bytesDeleted: 0,
       scanLimitReached: false,
       timeBudgetReached: false,
@@ -693,6 +699,48 @@ describe('generic upload finalization', () => {
     });
     expect(fake.row).toMatchObject({ finalization_status: 'deleted' });
     expect(fake.remove).toHaveBeenCalledWith(['user-1/reference.png']);
+    expect(fake.row?.released_at).toBeTruthy();
+  });
+  it('distinguishes a held draft from drained work in the sweep summary', async () => {
+    // The 2026-09-06 backlog: every run reported zero failures while one row
+    // aged past its SLO, because `handled` scores a hold exactly like a
+    // release. These counters are what tell the two apart.
+    const intents = [{
+      user_id: 'user-1',
+      storage_path: 'user-1/reference.png',
+      storage_cleared_at: null as string | null,
+    }];
+    const fake = createClient({
+      row: reservation({ expires_at: '2026-08-18T00:00:00.000Z' }),
+      intentRows: intents,
+    });
+
+    const firstPass = await reclaimExpiredUploadReservations(fake.client, {
+      now: new Date('2026-08-20T00:00:00.000Z'),
+    });
+    expect(firstPass).toMatchObject({
+      handled: 1, failed: 0, firstClaims: 1, held: 0, objectsDeleted: 0,
+    });
+
+    // Protected: retained on purpose, still charged, and back to `consumed` --
+    // so the next run restarts the ladder rather than continuing it.
+    const heldPass = await reclaimExpiredUploadReservations(fake.client, {
+      now: new Date('2026-08-20T00:16:00.000Z'),
+    });
+    expect(heldPass).toMatchObject({
+      handled: 1, failed: 0, firstClaims: 0, held: 1, objectsDeleted: 0,
+    });
+    expect(fake.row).toMatchObject({ finalization_status: 'consumed', released_at: null });
+
+    // Clearing the intent is what actually lets the row drain.
+    intents[0]!.storage_cleared_at = '2026-08-20T00:23:00.000Z';
+    await reclaimExpiredUploadReservations(fake.client, {
+      now: new Date('2026-08-20T00:24:00.000Z'),
+    });
+    const releasingPass = await reclaimExpiredUploadReservations(fake.client, {
+      now: new Date('2026-08-20T00:40:00.000Z'),
+    });
+    expect(releasingPass).toMatchObject({ objectsDeleted: 1, held: 0, failed: 0 });
     expect(fake.row?.released_at).toBeTruthy();
   });
 });
