@@ -2350,3 +2350,22 @@ group `e7de37e8-bd78-46fc-9187-2544d69901d5`, iOS 51
 `00cf784f-2ba7-47cc-8b4e-eb737f85cb8f`, Android 65
 `ab95a86c-8072-4ebe-aaa2-04e7495bc0d9`. Devices pick these up on their next two
 cold starts, as with the earlier groups.
+
+### A probe false alarm and two republishes (2026-09-07, 21:20–21:45 IST)
+
+After the preview-fix publish the S24 Ultra's store build reported the update
+as available but logged `Failed to download asset 1ba3bb61…` (the launch
+bundle) on two consecutive cold starts. A curl of that bundle's CDN URL from
+the Mac returned 403, and so did every other launch bundle, which read as a
+CDN-side problem. It was not: `assets.eascdn.net` answers "Unauthorized asset
+request" to any request without the per-asset `authorization` header that the
+manifest's multipart `extensions` part supplies, so a bare probe cannot tell a
+missing bundle from a healthy one. On that misreading, Android 71 was rolled
+back by republishing the stable-URL group (`b6c737ec-8209-415d-a155-ea0ba8bc5d33`);
+a probe with the manifest's headers then returned 206 for that bundle and for
+all four preview-fix bundles still current on iOS 51, Android 70, iOS 47 and
+Android 65, so Android 71 was republished onto the preview-fix bundle as group
+`4546e404-022b-4599-bd68-fc4b8dc9e185`. Devices that fetched the rollback
+in between saw only the previous good update. The phone's own two download
+failures remain unexplained; it had lost its USB-debugging authorization to a
+Mac restart, so the pickup is re-verified in the next entry.
