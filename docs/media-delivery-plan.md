@@ -396,13 +396,13 @@ entry; the reel now refreshes paid access using the existing authorized endpoint
 The physical Samsung S24 Ultra (installed 0.1.4/build 71; OTA id unverified) showed
 profile media and video playback. Process-cold activity start was 525–578ms with
 existing disk cache; one repeat's feed image was visible by a 3.9-second screenshot.
-Repeated image-viewer opens used about 684–699 MiB PSS and approximately 117 KiB
-of app traffic per cycle. These are baseline observations, not an exact-build
-optimization result or a proven memory leak. Request attribution, comparable
-latest-build measurements, cold cache/slow network and physical iOS remain open.
+The initial repeated-open measurement was invalidated: fixed-coordinate taps
+selected different creations after the grid moved. Use the identity-matched
+measurements below instead. These store-build observations are not an exact-build
+optimization result or a proven memory leak. Physical iOS remains open.
 
-Work continues in /private/tmp/magicbooklet-media-journeys on
-fix/private-video-delivery because another task switched the original checkout.
+This pass originally used /private/tmp/magicbooklet-media-journeys on
+fix/private-video-delivery; the persistent recovery location is recorded below.
 Evidence and measurement limits: September 6 audit journal, “Complete browser
 journeys and first physical Android baseline”. No migration or deployment.
 
@@ -419,4 +419,47 @@ exports and bundled environment checks pass. No new migration or deployment.
 The physical S24 Ultra has reconnected. Next remains exact-build image-viewer
 traffic/memory measurement, followed by cache-cold and slow-network video startup.
 The simulator cache finding does not account for all of the prior phone traffic
-or establish a memory leak. A side-by-side release audit APK is being prepared.
+or establish a memory leak. The release audit APK is now installed on the S24
+Ultra and its pulled SHA-256 matches the artifact built from `4c8c6c4`.
+The earlier fixed-coordinate 117 KiB/open baseline was not a valid same-image
+comparison: grid movement could select different creations. Identity-matched
+store-build checks added zero RX bytes over three direct-Wi-Fi opens. See the
+journal's physical baseline correction for memory figures and evidence limits.
+Work now resides at `/Users/athuls/.codex/worktrees/media-delivery-audit` after
+the temporary worktree disappeared.
+
+## Exact Android build: image reuse and throttled private video (2026-09-07)
+
+The separate release audit APK at `4c8c6c4` signed into the supplied test account.
+Three process-cold launches took 539–723ms at the activity level. Two had feed
+media in the three-second capture; the third still showed a skeleton there and
+had media in the six-second capture. These launches retained disk cache.
+
+Ten identity-matched immersive image reopens added zero Storage-host RX bytes
+after the first 3,083,801-byte transfer. API refreshes added 173,823 bytes in total.
+Open PSS ranged 569–629 MiB and final return PSS was 601 MiB, above the initial
+416 MiB feed baseline. Retention and broader multi-asset stress remain open;
+this short run proves neither a leak nor a before/after memory improvement.
+
+At a shared 128,000-byte/second downlink cap, an unopened private video retained
+its poster, began rendering frames, buffered repeatedly, and eventually exposed
+Retry video. Production metadata identifies a 13,063,623-byte, 11-second source
+and confirms the private playback-rendition columns are not deployed. Smaller
+private playback files must be deployed/backfilled and remeasured before closing
+the slow-network gate. The retry measurement was interrupted by a phone call and
+is not a completed recovery check. Normal phone proxy settings were restored.
+
+Follow-up physical checks reproduced lost explicit pause after background/source
+refresh. The signed-URL React key remounted the player and discarded continuity
+state. The viewer now retains that state for the same media and remounts only on
+Retry or different media. A rebuilt, installed release preserves a settled paused
+frame through background/return; manual Play resumes normally. All 1,821 mobile
+tests, typecheck, iOS export and Android release/bundle-env checks pass.
+
+Cached video played with both Wi-Fi and mobile data disabled. An unopened full-size
+image showed a visible retry fallback offline and loaded after reconnection/retry.
+Normal network settings were restored. The previously-playing background case
+still resumes automatically, so an always-paused-on-return policy is not yet
+verified. Updated-backend cache-cold rendition playback, multi-asset memory stress,
+physical iOS and the full release/production audit remain open. Detailed limits
+and local evidence are in the September 6 journal's exact-build Android entries.

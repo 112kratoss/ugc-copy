@@ -1803,3 +1803,183 @@ side-by-side audit APK is being prepared with a separate application ID and OTA
 updates disabled. Physical memory/traffic attribution and cold/slow-network
 playback on that build remain pending. This change requires no new migration and
 has not been deployed.
+
+## Physical baseline correction and audit APK continuation (2026-09-07)
+
+The earlier roughly 117 KiB/open observation does not prove a same-image cache
+miss. The profile grid shifted after closing the creation feed; fixed-coordinate
+taps could select different creations. Subsequent tests identified the same
+creation by its unique accessibility label. The store app opened the profile
+creation feed; the backdrop reproduction above used the separate immersive viewer.
+
+Five identity-matched opens through a TLS passthrough proxy added no tracked-host
+bytes. Open PSS decreased from 588,596 to 560,806 KiB; return PSS decreased from
+575,928 to 551,211 KiB. A corrected direct-Wi-Fi run measured three opens with
+unchanged app UID RX (31,300,663 bytes before and after). Open PSS was
+469,742 / 477,882 / 470,538 KiB; return PSS was 460,868 / 459,813 / 458,204 KiB.
+Initial grid PSS was 375,537 KiB, so the short run includes retained allocations
+after first opening; it does not prove a leak or zero retained memory. No black
+image was observed. These are historical store-build-71 observations from the
+previous session's tool results, not measurements of the new audit APK.
+
+USB-proxied traffic is not counted as normal Wi-Fi traffic in Android UID network
+history. Proxy-host bytes and direct UID bytes must be reported separately.
+Deleting `http_proxy` alone did not reset the resolved Android proxy; setting
+`:0`, checking an empty `global_http_proxy_host` and zero port, removing the ADB
+reverse, and restarting the app restored direct transport for the final run.
+
+The temporary worktree and its ignored evidence were absent when work resumed.
+Committed code was recovered into the persistent worktree
+`/Users/athuls/.codex/worktrees/media-delivery-audit`. Historical raw measurements
+above cannot currently be re-opened from their former output paths. New evidence
+is stored in this worktree's own `output/media-audit/` directory.
+
+The S24 Ultra (SM-S928B) has the separate audit app installed. Pulling its APK
+back from the phone verified SHA-256
+`e440917446949ddbbb6d499dd46dd1fb1526087ab075f6365a2f720532cb372a`, matching the
+previously built artifact. Source commit: `4c8c6c440dbe137086bb163a8eca9d7711fc1509`.
+It is an arm64 release build, locally signed, with test-only native changes:
+application ID `com.magicbooklet.mobile.mediaaudit`, label Magic Booklet Audit,
+corresponding Google Services package entry, and OTA disabled. App version is
+0.1.4/build 1; it is not a store release. Prior APK signing, bundle-env and cache-fix
+inclusion checks passed. Resumed cold activity launch was 817ms and reached
+onboarding; this is not first-media timing. No migration, deployment, or OTA.
+
+## Exact-build Android image reuse and throttled private playback (2026-09-07)
+
+The verified audit APK above signed into the user-supplied test account. Only the
+separate audit app was used. No account content was generated, published, changed,
+or purchased during these measurements.
+
+Three process-cold starts returned Android TotalTime 675 / 723 / 539ms. Each kept
+the existing disk cache and signed-in session. Run 1 still showed a feed skeleton
+in the capture started at 3.002s and showed media in the capture started at 6.003s.
+Runs 2 and 3 showed feed media in captures started at 3.005s / 3.000s. Screenshot
+commands themselves took roughly 0.4–1.2s: these are sampled visual observations,
+not exact first-frame timings. Post-launch PSS was 299,642 / 290,292 / 288,628 KiB.
+Evidence: `output/media-audit/audit-cold-start-{1,2,3}.json` and associated PNGs.
+
+For request attribution, a local HTTPS CONNECT proxy tunneled TLS unchanged.
+Only magicbooklet.com and the project's Storage host were counted; request paths,
+headers, tokens and bodies were not decrypted or logged. Host-level counts include
+TLS overhead and can aggregate several app requests. The profile creation feed
+and immersive viewer were entered using unique accessibility labels, not a fixed
+grid position. The selected image was the ceramic mug on a linen cloth with soft
+window light. Its preview had already been viewed; the full-size viewer had not.
+The initial immersive open added 3,083,801 Storage-host RX bytes. A screenshot
+confirmed the full image and blurred backdrop.
+
+Ten further opens of that same immersive item added **zero** Storage-host RX bytes.
+API-host RX grew by 173,823 bytes, consistent with the viewer's source-data refresh
+on focus; this is not per-image payload attribution. Open PSS in KiB:
+617,508 / 622,463 / 633,622 / 625,008 / 636,314 / 636,154 / 640,082 /
+582,793 / 644,028 / 643,464. Final return after eight seconds was 615,541 KiB.
+The initial feed baseline was 426,203 KiB and the first immersive sample was
+588,520 KiB. Memory remains retained after this short session, including native
+caches/allocations; the run does not establish a leak, a long-session plateau,
+or an improvement against another build/account. Evidence:
+`audit-immersive-image-first.json`, `audit-repeat-image.json`, and screenshots.
+
+The proxy then capped the combined counted-host downlink at 128,000 bytes/s
+(approximately 1.024 Mbps). No latency or loss was added, so this is a bandwidth
+test rather than a complete cellular simulation. An initial selection named
+Minnal 3.0 proved to be an image; files named `audit-slow-video-feed-*` belong to
+that image and must not be counted as video-playback evidence.
+
+The actual unopened video was generation `0a58067a-f6d1-45bd-9850-c2d8c3cbff48`,
+selected via the unique long script title in the profile feed and then opened
+into the immersive viewer. Captures at 1s and 6s showed the poster with a loading
+indicator. By the 20s capture, a changed video frame was visible with buffering;
+35s and 45s still showed intermittent loading. The later observation (about 82s
+after opening) showed the poster and “Video couldn’t load” / Retry video.
+Storage RX increased by approximately 8.57 MB before the failure observation.
+The poster/error remained visible; no bare black media was observed in these
+samples. Sparse captures do not measure exact startup or total stall duration.
+Evidence: `audit-slow-immersive-video.json`, corresponding PNGs,
+`audit-slow-video-late.png`, `audit-video-normal-recovery.png`, `proxy-traffic.json`.
+
+A read-only production metadata query found an 11-second private MP4 source of
+13,063,623 bytes (roughly 9.5 Mbps averaged over its declared duration), with a
+ready image preview. Information-schema inspection confirmed that production
+does not yet have `generations.playback_rendition_path` or the other rendition
+columns. Thus this run tests the new native client against the existing production
+backend, not the complete private-rendition delivery change. The committed
+`20260905213637_private_generation_playback_renditions.sql` migration and matching
+backend release/backfill remain required, through the production-release workflow.
+Do not increase loading deadlines to mask this source/network bitrate mismatch.
+
+After restoring uncapped proxy transport, Retry video transferred additional
+Storage bytes, but an unrelated phone call took the foreground during observation.
+`audit-video-retry-normal-*` is therefore interrupted evidence, not a recovery or
+background-playback pass. No call controls were operated. The phone proxy was
+restored to `:0`, with empty global proxy host and port 0, and the ADB reverse
+removed. Subsequent phone checks must resume only when the phone is available.
+
+No application source changed in this measurement pass; no new migration,
+deployment, OTA or remote push. Still open: uninterrupted retry/offline/background
+checks, updated-backend cache-cold rendition playback, sustained multi-asset memory
+and playback stress, physical iOS, and production release validation. Local raw
+evidence remains ignored because screenshots can contain personal context.
+
+### Continued physical background/offline checks
+
+After the interruption ended, the audit app played the recovered video normally.
+An eight-second Home/background cycle reproduced a pause-continuity failure:
+the return screenshot initially showed paused, then the next screenshot showed
+a later playing frame, without a playback tap. Explicitly pausing before another
+five-second background cycle also returned to playing after the source refresh.
+Evidence: `audit-video-background-return-{1,2}.png`,
+`audit-video-background-return.json`, and `audit-user-paused-*-background.png`.
+
+The viewer keyed `ActiveVideoAttempt` by signed URL as well as retry count. Every
+renewed signature remounted the component and discarded the previous-player ref
+that preserves pause and position. The pending fix keys the outer player by media
+ID and remounts the attempt only on Retry. A new URL for the same media now reaches
+the existing continuity helper. Physical confirmation is recorded below.
+
+With both Wi-Fi and mobile data disabled (`wifi_on=0`, `mobile_data=0`), the already
+cached video continued rendering different frames. Both settings were restored.
+This confirms cached playback during a short real disconnection, not uncached
+offline playback. Evidence: `audit-cached-video-offline.json` and both PNGs.
+
+An unopened full-size image (Super women) was then opened after disabling both
+transports. Its cached blurred backdrop remained visible, and the foreground
+showed Preview unavailable / Tap to retry by the 20-second capture. Restoring
+both transports and pressing Retry loading media displayed the full image in
+the four-second capture. Evidence: `audit-uncached-image-offline.json`,
+`audit-image-reconnect-retry.json`, and associated screenshots. Proxy counters in
+these helper samples are historical, not live direct-network traffic measurements.
+
+### Pause-renewal fix: installed release verification
+
+The release rebuild succeeded (994 Gradle tasks; 5m52s), with all 190 mobile test
+files / 1,821 tests, typecheck, and iOS Hermes export passing. The Android APK's
+bundled environment verification passed. APK SHA-256:
+`fc59b8bd209c76d9e45edc7112decd53accf1d40303d4e8330b3078adf54c759`.
+The APK pulled back after installation had the same digest. Source is `4c8c6c4`
+plus the viewer key-boundary change; exact patch SHA-256 is recorded in
+`output/media-audit/pause-renewal-build-identity.json`. The separate audit package,
+local signing certificate, disabled OTA, and signed-in test session were retained.
+No store app data was changed.
+
+The formerly failing explicit-pause case now remains paused after background and
+source refresh. A further settled check captured the same paused frame before
+and after ten seconds backgrounded and ten seconds back in the app, with another
+three-second stationary observation. Accessibility continued to expose Play video.
+Manual Play then advanced through subsequent frames normally. Evidence:
+`fixed-background-checks.json`, `fixed-paused-settled.json`,
+`fixed-paused-settled-*.png`, and `fixed-manual-resume-*`.
+
+The previously-playing case still returned to playback after backgrounding.
+That is not a pass for a policy of always remaining paused on return; its native
+lifecycle behavior remains a separate open check. This fix is limited to preserving
+the explicit pause and frame through source renewal. No continuous native trace
+or physical iOS verification was taken for this change. Network cleanup confirmed
+Wi-Fi/mobile data enabled, proxy `:0`, port 0, and no audit ADB reverse.
+
+Build/setup logs: `pause-renewal-build.log`, `pause-renewal-mobile-tests.log`,
+`pause-renewal-ios-export.log`, and `pause-renewal-install.log`. Initial helper
+failures were local tooling assumptions (macOS Bash expansion, package detection,
+and missing SDK environment for the React Native source build); direct Gradle with
+the SDK path and explicit package/activity completed successfully. No new migration,
+deployment, OTA, or remote push was performed.

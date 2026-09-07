@@ -1875,6 +1875,7 @@ function ImmersiveMedia({
   if (mediaItem.mediaKind === 'video') {
     if (active && mediaItem.url) {
       return <ActiveVideo
+        key={mediaItem.id}
         url={getShowcasePlaybackUrl(mediaItem)}
         previewUrl={mediaItem.previewUrl}
         previewCacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
@@ -1984,7 +1985,9 @@ function ActiveVideo(props: ActiveVideoProps) {
   return (
     <ActiveVideoAttempt
       {...props}
-      key={`${props.url}:${attempt}`}
+      // A refreshed signature is still the same media. Keep this component's
+      // previous-player ref so URL renewal preserves pause and position.
+      key={attempt}
       onRetry={() => setAttempt(value => value + 1)}
     />
   );
