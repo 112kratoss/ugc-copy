@@ -2177,3 +2177,116 @@ minutes and takes one generation per run: 10:20 UTC produced the first
 stored private originals remained pending at 10:35 UTC, so the backlog drains
 in roughly two hours. The slow-network playback gate should be re-measured once
 the test account's videos carry renditions.
+
+### Store-build confirmation on Android (2026-09-07, 16:25 IST)
+
+With the phone free again, the same frame-hash check ran against the store
+build 0.1.4 (71) carrying update group `15926309`, on the signed-in owner
+account's own creation "The girl from @girl is crying" (generation
+`d32fb47c`, a 13 MB original without a rendition yet): the video advanced
+between captures 3 s apart after opening, a Pause tap followed by Home in the
+same injection came back after 8 s away with `Play video` and an identical
+frame 3 s later, and a manual Play advanced frames again
+(`store-build-ota-check.json`, `store-open-*.png`, `store-quick-*.png`,
+`store-manual-*.png`). This is the released binary plus the published update,
+not the audit APK. Physical iOS remains open.
+
+### iPhone reach (2026-09-07, 11:08 UTC)
+
+A physical iPhone 16e on the App Store build 0.1.2 (47) was launched four times
+over USB with `xcrun devicectl device process launch --terminate-existing`, the
+first launch downloading the update and the later ones applying and reporting
+it. Within a minute, channel insights for runtime `27175069` moved from zero to
+two OTA update users, with the cumulative metric naming "Media delivery second
+pass for iOS 47 (4cf5907)" installed once and zero failed installs. This is
+server-side proof that the published bundle runs on a real iPhone; the viewer
+behaviour on iOS was not driven from the Mac, because this Xcode's device
+tooling offers no screenshots or input for physical devices, so it rests on the
+owner's manual check and the simulator evidence earlier in this journal.
+
+The owner then ran the four-step check on that iPhone (App Store 0.1.2, build
+47, the runtime the update reached): quit and relaunch to apply, a video
+creation autoplaying from Profile, Pause followed immediately by Home returning
+paused on the same frame, and Home while playing returning paused with one tap
+resuming. All four passed. This is an owner-reported manual check, not a
+frame-hash measurement; the iPhone uses a different Apple ID from the Mac, so
+iPhone Mirroring could not drive it.
+
+## Slow-network gate with private renditions (2026-09-07)
+
+The backfill reached the test account's video (`0a58067a`, 13,063,623-byte
+original) at 11:10 UTC with a 1,475,359-byte rendition. The measurement reused
+the local TLS proxy from the earlier exact-build entry (`phone-proxy.py`, port
+8894, ADB reverse, Android global proxy, `/control/slow` capping the counted
+hosts' downlink at 128,000 B/s), driven by `slow-rendition-check.py`: cold
+process start, profile grid, open the video with the cap already active,
+captures at 1–40 s with labels, crop hashes and Storage-host bytes, then a
+warm reopen at full speed, then proxy and phone settings restored (verified
+empty host, port 0, no reverse). A stale proxy from the earlier session still
+held the port and was stopped first.
+
+| Run | Build | Players per open | Storage bytes by 40 s | Playing by | Retry |
+| --- | --- | ---: | ---: | --- | --- |
+| 1 | `1fe96f5e` | 7 | 5,130,082 | never | 40 s |
+| 2 | instrumented | 2 | 2,566,020 | 3 s, stall at 6 s, steady from 10 s | no |
+| 3 | instrumented | 2 | 2,627,261 | steady from 10 s | no |
+| 4 | instrumented | 2 | 2,969,245 | steady from 10 s, stall at 15 s | no |
+| 5 | instrumented + stable URL | 1 | 1,484,635 (complete at 17 s) | 3 s | no |
+
+Run 1's burst of seven `ExoPlayerImpl` creations in one open did not recur in
+three instrumented repeats and stays unattributed. Runs 2–4 attribute the
+second player exactly: the viewer's focus refetch returns the same rendition
+path with a fresh signature about a second after opening, `useMediaSource`
+yields a new source, expo-video recreates the player, and the first player's
+partial download (1.08–1.48 MB) is discarded while the second restarts from
+byte zero. With the rendition that still reaches steady playback by ten
+seconds at the cap, where the original had reached Retry; without the rendition
+the same churn under the cap would still fail.
+
+`lib/use-stable-signed-url.ts` holds the URL a player already loads while the
+parent addresses the same object and the held signature is more than a minute
+from expiry; a different object (a rendition replacing an original) or a
+near-expiry signature is adopted, and `useMediaSource` continues to renew the
+held URL through the authenticated route. Run 5 shows one player, one
+connection carrying exactly the rendition, and the first frame by three
+seconds. The warm reopen still transfers the rendition again (1.48 MB) because
+the signed URL, and therefore expo-video's cache key, changes on every list
+fetch; a stable cache identity for private media is a separate follow-up.
+Every run restored the phone's proxy settings; receipts are
+`slow-rendition-run{2,3,4,5-stable}.json`, `-traffic.json`,
+`-attribution.log`, and `slow-rendition-*.png`.
+
+### Clean build with the stable URL (run 6) and acceptance
+
+With the instrumentation removed, the same tree passed 192 mobile test files /
+1,832 tests and typecheck, and the release audit APK
+`a7974a7b3202e18c7a573a6ad4d172486ccf6c43e9650a282f698c2ffcdd5b4a` was
+installed. Throttled run 6 on it: Storage bytes 1 s 511,223, 3 s 1,035,511 loading, 6 s 1,484,617, 10 s 1,484,617, 15 s 1,484,617, 20 s 1,484,617, 30 s 1,484,617, 40 s 1,484,617; final
+1,484,617 bytes, Retry false, warm reopen
+1,484,615 bytes. The full acceptance from the gate
+checkpoint also passed on this build: 5 of 5 fresh opens advanced,
+3 of 3 Pause-then-Home cycles returned paused, Home while playing and Home
+during load returned paused, and manual Play resumed with a settled Pause
+holding (`stable-url-acceptance.json`, `stable-url-final.log`). The change is
+committed on `fix/viewer-stable-signed-url` for release through Quality and
+the same per-target over-the-air branches as the second pass.
+
+### Stable URL fix released (2026-09-07, 19:25–19:35 IST)
+
+PR #118 merged as `7e54ccc` after Quality; its production release promoted
+the same code to the web (`/api/app-version` reports `7e54ccc`). The Mac had
+rebooted in between, clearing the temporary publishing worktrees, so they were
+recreated from origin: main at `7e54ccc`, `release/media2-ios-51` at
+`9fbe7db` and `release/media2-ios-47` at `dc36250`, each carrying the
+cherry-picked fix, each passing typecheck and its suite, and each matching its
+shipped fingerprints on a fresh `npm ci`. The pinned eas-cli 21.2.0 published
+all five: Android 71 group `0d68c7e0-82f7-4040-a5bb-2a4931cb606a`, iOS 51
+`a5ba8d21-b668-40e6-a68c-6f5b27551ecb`, Android 70
+`bf4b65d8-5ac2-4003-b1fd-2c971bac81ac`, iOS 47
+`76628936-ae51-4ca8-b9df-b45431100c39`, Android 65
+`37782666-e5af-4f4a-9619-6bf60b41cc28`. The S24 Ultra's store build logged
+`NEW_UPDATE_LOADED` on its first cold start after the Android 71 publish and
+`No update available` on the next, and channel insights for `db146ca3` showed
+the new group installed once with zero failed installs within minutes. The
+iPhone had not relaunched by the time of writing, so its runtime still reports
+the second-pass group.
