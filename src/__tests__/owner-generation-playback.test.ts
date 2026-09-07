@@ -7,13 +7,13 @@ const source = 'generated_videos/owner/original.mp4';
 const derivative = 'generated_videos/owner/playback/generation/abc123.mp4';
 describe('owner generation playback descriptors', () => {
   it.each([
-    ['ready', source, derivative, 'https://storage.test/playback.mp4'],
+    ['ready', source, derivative, '/api/media?bucket=generated_videos&path=owner%2Fplayback%2Fgeneration%2Fabc123.mp4'],
     ['failed', source, derivative, null],
     ['processing', source, derivative, null],
     ['ready', 'generated_videos/owner/older.mp4', derivative, null],
     ['ready', source, 'generated_videos/other/playback/generation/abc123.mp4', null],
   ])(
-    'only signs a ready current-source owner rendition (%s, %s, %s)',
+    'exposes only a ready current-source owner rendition, through the authenticated media route (%s, %s, %s)',
     async (status, original, path, expected) => {
       const row = {
         id: 'generation',
@@ -81,8 +81,10 @@ describe('owner generation playback descriptors', () => {
       expect(
         Object.keys(response.generations[0]).some((k) => k.startsWith('playback_rendition_')),
       ).toBe(false);
+      // The rendition is never signed here: the route signs per request, and the
+      // stable URL is what lets the client cache and keep a playing source.
       const candidates = sign.mock.calls.at(-1)![0].outputUrls as string[];
-      expect(candidates.includes(path)).toBe(expected !== null);
+      expect(candidates.includes(path)).toBe(false);
     },
   );
 });

@@ -13,6 +13,7 @@ import { buildGenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { classifyVisualMedia } from '@/lib/media-contract';
 import { buildVisualMediaDescriptor, type MediaPreviewStatus } from '@/lib/media-descriptor';
 import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
+import { buildMediaProxyUrl } from '@/lib/media-urls';
 import { resolveOwnedStoredMediaUrlMap } from '@/lib/owned-media-url-batch';
 import { toUsablePreviewSize } from '@/lib/preview-dimensions';
 
@@ -190,12 +191,22 @@ function resolveGenerationPreviewUrl(
   return null;
 }
 
-function readyGenerationPlaybackPath(generation: GenerationRow): string | null {
+/**
+ * A ready private rendition is exposed through the authenticated media route
+ * rather than a signed Storage URL. The route redirects to a short signature
+ * on every request, so bytes still come from Storage, but the URL the client
+ * caches by never changes between list fetches: a reopen is a cache hit and a
+ * refetch does not replace a playing source. Originals keep their signed URLs
+ * for downloads and remixes.
+ */
+function readyGenerationPlaybackProxyUrl(generation: GenerationRow): string | null {
   const path = generation.playback_rendition_path;
   if (!path || !generation.user_id || generation.playback_rendition_status !== 'ready'
     || generation.playback_rendition_source !== generation.output_url) return null;
   const location = getUserOwnedStoredMediaLocation(path, generation.user_id, { allowedBuckets: ['generated_videos'] });
-  return location?.filePath.startsWith(`${generation.user_id}/playback/${generation.id}/`) ? path : null;
+  if (!location?.filePath.startsWith(`${generation.user_id}/playback/${generation.id}/`)) return null;
+  // `allowedBuckets` above admits only this bucket, so the location's bucket is it.
+  return buildMediaProxyUrl('generated_videos', location.filePath);
 }
 
 function collectOwnerMediaUrlCandidates(
@@ -212,8 +223,6 @@ function collectOwnerMediaUrlCandidates(
     if (generation.preview_url) {
       candidates.add(generation.preview_url);
     }
-    const playbackPath = readyGenerationPlaybackPath(generation);
-    if (playbackPath) candidates.add(playbackPath);
 
     if (!summaryOnly) {
       for (const storagePath of getPersistedOutputStoragePaths(
@@ -572,7 +581,7 @@ export async function listOwnerGenerationsForRoute({
         id: generation.id,
         kind: classification.kind,
         url: outputUrl,
-        renditionUrl: resolvedMediaUrls.get(readyGenerationPlaybackPath(generation) ?? '') ?? null,
+        renditionUrl: readyGenerationPlaybackProxyUrl(generation),
         storageKey: generation.showcase_asset_path || generation.output_url || generation.id,
         previewUrl,
         previewStorageKey: previewSource,

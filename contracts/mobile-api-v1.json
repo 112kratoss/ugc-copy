@@ -176,7 +176,7 @@
               "id": "private-video-1",
               "kind": "video",
               "url": "https://storage.example.test/private-video-original.mp4",
-              "renditionUrl": "https://storage.example.test/private-video-playback.mp4",
+              "renditionUrl": "/api/media?bucket=generated_videos&path=owner-1%2Fplayback%2Fprivate-video-1%2Fabc123.mp4",
               "previewUrl": null,
               "thumbhash": null,
               "cacheKey": "media:private-video-1",

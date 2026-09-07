@@ -5,8 +5,13 @@ import { getPrivateMediaExpiry } from './media-url-expiry';
 /** Adopt a fresh signature this close to the held one expiring. */
 const ADOPT_WITHIN_MS = 60_000;
 
-/** The object a URL addresses, ignoring its signature or other query parameters. */
-export function signedMediaIdentity(url: string): string {
+/**
+ * The object a URL addresses. A signed Storage URL is identified by its path,
+ * ignoring the signature; the authenticated media route addresses the object
+ * through its query (`bucket` and `path`), so that URL is its own identity.
+ */
+export function signedMediaIdentity(url: string, storageBaseUrl: string = env.supabaseUrl): string {
+  if (!getPrivateMediaExpiry(url, storageBaseUrl)) return url;
   const query = url.indexOf('?');
   return query === -1 ? url : url.slice(0, query);
 }
@@ -19,7 +24,7 @@ export function signedMediaIdentity(url: string): string {
  */
 export function shouldAdoptSignedUrl(held: string, next: string, now: number, storageBaseUrl: string): boolean {
   if (held === next) return false;
-  if (signedMediaIdentity(held) !== signedMediaIdentity(next)) return true;
+  if (signedMediaIdentity(held, storageBaseUrl) !== signedMediaIdentity(next, storageBaseUrl)) return true;
   const expiry = getPrivateMediaExpiry(held, storageBaseUrl);
   if (!expiry) return true;
   return expiry.expiresAt - now <= ADOPT_WITHIN_MS;
