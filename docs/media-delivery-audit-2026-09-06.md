@@ -2309,3 +2309,44 @@ markers, and a tile partly under the bottom tab bar must be scrolled up before
 tapping or the tap lands on the Home tab. The test account's video used for
 the earlier runs is 11.04 s (original 716 × 1284, rendition 714 × 1280).
 Receipts: `store-slow-check-run2.json`, `store-slow-check.log`, `store-slow-*.png`.
+
+## Backfill complete and shared preview replacement (2026-09-07, evening)
+
+By 12:30 UTC the private rendition producer had processed every stored private
+original: 14 of 14 `generated_videos` generations report `ready`, 13,718,275
+rendition bytes against 187,364,783 original bytes (92.7% smaller in object
+size), zero errors, one attempt each. This closes the plan's "backfill and
+re-measure" step; the throttled measurements above used the first of them.
+
+`components/recoverable-video-preview.tsx` carried the same replacement rule
+the viewer had: when `useMediaSource` renews the effective URL it copied
+`previous.playing`, which is `false` for a player still loading, so a renewal
+before the first frame parked an autoplaying preview (lightboxes, result
+previews with autoplay) on a still frame. A replaced player now keeps the
+component's autoplay request unless it was ready and paused; a ready paused
+player, a preview that never requested playback, and a hidden screen behave as
+before. The parent-driven case differs here: `VideoPreviewSession` is keyed on
+the URL prop, so a parent re-sign remounts the attempt outright and restarts
+its download without continuity. That is recorded as a follow-up next to the
+cache-key item and is not changed by this fix.
+
+Evidence: a component test that fails before the change (loading player,
+`autoPlay`, renewed source, `play` never called) and passes after; the
+paused-renewal fixture now marks its player `readyToPlay`. Full mobile suite
+and typecheck pass on the branch. Native reproduction was not repeated for
+this component; the mechanism is the one measured on the viewer earlier
+today, and the change is confined to the replacement decision. The Mac
+restarted twice during the evening (19:20 and 20:51, plain restarts), which
+cleared the temporary worktrees each time; branches and evidence live on
+origin and under the home directory, so nothing was lost.
+
+PR #121 merged as `6532971` and the fix was published over the air from the
+same per-target branches as the two earlier updates (`release/media2-ios-51`
+at `8b11b39`, `release/media2-ios-47` at `2f12ca1`, main at `6532971`; each
+typechecked, tested and fingerprint-matched after the cherry-pick): Android 71
+group `e7de37e8-bd78-46fc-9187-2544d69901d5`, iOS 51
+`d803fdc6-882b-458c-8cc6-40feacf0dc3f`, Android 70
+`8a2ea441-dc7c-4722-86bb-894e632bc9ef`, iOS 47
+`00cf784f-2ba7-47cc-8b4e-eb737f85cb8f`, Android 65
+`ab95a86c-8072-4ebe-aaa2-04e7495bc0d9`. Devices pick these up on their next two
+cold starts, as with the earlier groups.
