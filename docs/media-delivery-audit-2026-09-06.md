@@ -2270,3 +2270,23 @@ during load returned paused, and manual Play resumed with a settled Pause
 holding (`stable-url-acceptance.json`, `stable-url-final.log`). The change is
 committed on `fix/viewer-stable-signed-url` for release through Quality and
 the same per-target over-the-air branches as the second pass.
+
+### Stable URL fix released (2026-09-07, 19:25–19:35 IST)
+
+PR #118 merged as `7e54ccc` after Quality; its production release promoted
+the same code to the web (`/api/app-version` reports `7e54ccc`). The Mac had
+rebooted in between, clearing the temporary publishing worktrees, so they were
+recreated from origin: main at `7e54ccc`, `release/media2-ios-51` at
+`9fbe7db` and `release/media2-ios-47` at `dc36250`, each carrying the
+cherry-picked fix, each passing typecheck and its suite, and each matching its
+shipped fingerprints on a fresh `npm ci`. The pinned eas-cli 21.2.0 published
+all five: Android 71 group `0d68c7e0-82f7-4040-a5bb-2a4931cb606a`, iOS 51
+`a5ba8d21-b668-40e6-a68c-6f5b27551ecb`, Android 70
+`bf4b65d8-5ac2-4003-b1fd-2c971bac81ac`, iOS 47
+`76628936-ae51-4ca8-b9df-b45431100c39`, Android 65
+`37782666-e5af-4f4a-9619-6bf60b41cc28`. The S24 Ultra's store build logged
+`NEW_UPDATE_LOADED` on its first cold start after the Android 71 publish and
+`No update available` on the next, and channel insights for `db146ca3` showed
+the new group installed once with zero failed installs within minutes. The
+iPhone had not relaunched by the time of writing, so its runtime still reports
+the second-pass group.
