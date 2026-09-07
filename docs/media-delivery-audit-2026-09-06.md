@@ -2375,3 +2375,68 @@ At 21:49–21:50 IST the store build's first cold start reported
 second launched it and found "No update available"; the earlier download
 failure did not recur, so it is recorded as transient on the phone's side.
 All five shipped runtimes now carry the shared preview fix.
+
+### Stable playback addresses through the media route (2026-09-08, 00:30–02:20 IST)
+
+Item 1 of the remaining list. The owner generations API now hands out the
+private playback rendition as `/api/media?bucket=generated_videos&path=…`
+(PR #124, `49c8953`, live before the 00:55 IST measurement) instead of a signed
+Storage URL. The route authorizes every request (bearer or cookies), rate-limits
+signing, and answers a 302 to a fresh 600-second signed URL with
+`Cache-Control: private, max-age=60`. The native player caches by request URL,
+so the address no longer changes on each refetch and a reopen can hit the
+cache. Mobile already resolved route URLs (`use-stable-signed-url` holds the
+address while the object is unchanged; `buildMediaSource` attaches the bearer),
+so no over-the-air update was needed; the mobile contract fixture and the
+stable-URL tests pin the new shape.
+
+Measurements on the S24 Ultra through the byte-counting proxy with the Storage
+downlink capped at 128 kB/s:
+
+- Audit build, the test account's 11-second, 1,475,359-byte rendition, first
+  open through the route (00:55 IST): first changed frame at 3 s; Storage bytes
+  312,938 at 1 s, 1,378,843 at 10 s and 2,928,144 by 40 s. Two Storage
+  connections carried it, one from 1.4 s (1,484,649 bytes, closed at 30.3 s) and
+  one from 16.0 s (1,443,283 bytes, until 44.1 s) preceded by a 212-byte Storage
+  response at 16.0 s. The API host saw 6,558 bytes for the whole open, a single
+  route redirect. Warm reopen: 0 Storage bytes and 0 API bytes.
+- Same clip after a cold start of the app (01:01 IST): 0 bytes from either host
+  across 90 seconds of looping playback (twelve samples) and 0 on reopen. The
+  cache entry survives the restart and a fresh access token.
+- Store build (Android 0.1.4, build 71, current update), the owner's 4-second,
+  176,927-byte rendition, cold for the route key (01:28 IST): first changed
+  frame at 3 s, one Storage connection of 182,637 bytes from 0.8 s lasting
+  2.0 s, no further traffic through 40 s of looping (about nine loops), warm
+  reopen 0 bytes, one ExoPlayer instance per open.
+
+The open question is the second download in the first run. It began at
+16.0 s, about one clip length after playback started, fetched the file from
+roughly byte 41,000 (the offset of the first sample after the header) and did
+not ask the route again; the 212-byte Storage response before it suggests the
+player reopened the remembered redirect target, got a short answer and
+re-fetched. That points at the loop restart landing while the first download
+was still open: a 1.5 MB file needs about twelve seconds at this cap, whereas
+the 4-second clip finished in two seconds and looped without traffic. The cost
+is one extra rendition download on a slow link, on the first open only, for
+clips whose download outlasts their duration; the reopen is clean either way.
+Reproducing it with a colder long clip failed for tooling reasons: Samsung's
+`pm clear --cache-only` hangs, the test account owns one video, and the owner's
+longer clips sit past the first page of the Creations grid, which the
+automation cannot scroll into. It stays open with the recipe recorded: a cold
+rendition of ten seconds or more at 48 kB/s (`AUDIT_SLOW_RATE` on the proxy)
+on either build.
+
+Item 2 followed in the same pass: template-run renditions moved to the route
+form in `template-run-media-delivery.ts`, and the rendition path is no longer
+signed at all. Mobile's template screens render through `MediaPreview`, whose
+`useMediaSource` resolves a relative route URL against the API base and
+attaches the bearer, so shipped clients need nothing; web `TemplateRunMedia`
+plays it same-origin with cookies. Workflow persisted outputs stay on the
+explicit signed read-URL endpoint: they have no rendition, and the canvas
+depends on that endpoint's `signedUrl`/`expiresInSeconds` contract, so the
+conversion is a contract change for another day. The watchdog's degraded
+threshold for an unreclaimed upload row moved from 48 to 96 hours (the 24-hour
+warning stays), so a row that outlives one daily sweep no longer turns the ops
+endpoint into a 503. Three legacy creations still point at dead provider URLs
+and need a product decision: hide them, show an explicit unavailable state, or
+delete them.

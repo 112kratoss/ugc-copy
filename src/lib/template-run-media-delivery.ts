@@ -1,5 +1,6 @@
 import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { buildMediaProxyUrl } from '@/lib/media-urls';
 import { resolveOwnedStoredMediaUrlMap } from '@/lib/owned-media-url-batch';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
@@ -30,7 +31,7 @@ export async function resolveTemplateRunMedia({ client, ownerId, runId, generati
   const paths = outputs.map((output) => {
     const generation = owned.find((row) => row.output_url === output.url
       && (!output.generationId || row.id === output.generationId));
-    let rendition: string | null = null;
+    let renditionUrl: string | null = null;
     let preview: string | null = null;
     if (output.url && generation) {
       const location = generation.playback_rendition_path
@@ -39,16 +40,20 @@ export async function resolveTemplateRunMedia({ client, ownerId, runId, generati
       if (output.kind === 'video' && generation.playback_rendition_status === 'ready'
         && generation.playback_rendition_source === output.url
         && location?.filePath.startsWith(`${ownerId}/playback/${generation.id}/`)) {
-        rendition = generation.playback_rendition_path!;
+        // The authenticated media route rather than a signed Storage URL: the
+        // native player caches by request URL, so a renewal must not change the
+        // address (owner generations made the same move in #124). The route
+        // re-checks ownership on every request.
+        renditionUrl = buildMediaProxyUrl('generated_videos', location.filePath);
       }
       if (generation.preview_status === 'ready' && generation.preview_url
         && getUserOwnedStoredMediaLocation(generation.preview_url, ownerId, { allowedBuckets: ['generated_images', 'generated_videos'] })) {
         preview = generation.preview_url;
       }
     }
-    return { original: output.url, rendition, preview };
+    return { original: output.url, renditionUrl, preview };
   });
-  const candidates = new Set(paths.flatMap((item) => [item.original, item.rendition, item.preview]).filter((value): value is string => Boolean(value)));
+  const candidates = new Set(paths.flatMap((item) => [item.original, item.preview]).filter((value): value is string => Boolean(value)));
   const batchBuckets = new Set(['generated_images', 'generated_videos', 'generated_audio', 'generation_inputs']);
   const single: string[] = [];
   const batch: string[] = [];
@@ -65,7 +70,7 @@ export async function resolveTemplateRunMedia({ client, ownerId, runId, generati
     const url = item.original ? urls.get(item.original) ?? null : null;
     return {
       url,
-      ...(url && item.rendition ? { renditionUrl: urls.get(item.rendition) ?? null } : {}),
+      ...(url && item.renditionUrl ? { renditionUrl: item.renditionUrl } : {}),
       ...(url && item.preview ? { previewUrl: urls.get(item.preview) ?? null } : {}),
     };
   });

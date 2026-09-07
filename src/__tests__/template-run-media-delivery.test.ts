@@ -17,13 +17,14 @@ function fixture() {
 }
 
 describe('owned template playback delivery', () => {
-  it('signs step, approval and final output once per bucket while retaining originals', async () => {
+  it('signs step, approval and final output once per bucket, routing renditions through the media route', async () => {
     const { client, sign, from } = fixture();
     const results = await resolveTemplateRunMedia({ client, ownerId: 'owner', runId: 'run', generations: [generation],
       outputs: ['gen', null, 'gen'].map(generationId => ({ url: original, generationId, kind: 'video' })) });
-    expect(results).toEqual(Array(3).fill({ url: 'https://signed.test/owner/clip.mp4', renditionUrl: 'https://signed.test/owner/playback/gen/clip.mp4', previewUrl: 'https://signed.test/owner/clip.preview.hash.webp' }));
+    expect(results).toEqual(Array(3).fill({ url: 'https://signed.test/owner/clip.mp4', renditionUrl: '/api/media?bucket=generated_videos&path=owner%2Fplayback%2Fgen%2Fclip.mp4', previewUrl: 'https://signed.test/owner/clip.preview.hash.webp' }));
     expect(from).toHaveBeenCalledTimes(1);
-    expect(sign).toHaveBeenCalledWith(['owner/clip.mp4', 'owner/playback/gen/clip.mp4', 'owner/clip.preview.hash.webp'], 3600);
+    // The rendition is addressed through the authenticated media route, so it is never signed here.
+    expect(sign).toHaveBeenCalledWith(['owner/clip.mp4', 'owner/clip.preview.hash.webp'], 3600);
   });
 
   it.each([
