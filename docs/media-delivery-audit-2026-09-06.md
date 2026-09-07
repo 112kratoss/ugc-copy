@@ -2121,3 +2121,59 @@ about the two-player open cost, which needs a transfer measurement.
   broader surface matrix remain as listed in the plan.
 - All of this is committed on `fix/private-video-delivery` and unreleased: no
   push, PR, deployment or OTA.
+
+## Release of the second pass (2026-09-07)
+
+PR #115 squash-merged the branch as `0cf34e7` at 10:04 UTC after Quality run
+34108800673 passed all four jobs on the exact head. Production release
+34110410692 authorized the revision, applied
+`20260905213637_private_generation_playback_renditions.sql`, staged, verified
+and promoted; `/api/app-version` reported `0cf34e7` at 10:18 UTC and the
+migration ledger lists the private rendition migration. The watchdog health fix
+was cherry-picked onto main as PR #116, merged as `f246f80`, and release
+34111594369 promoted it; `/api/app-version` reported `f246f80` at 10:35 UTC.
+
+### Over-the-air publication
+
+Main's mobile tree fingerprints Android 71 exactly, while its iOS fingerprint
+has not matched a shipped iOS binary since #112. The published iOS 47/51 and
+Android 70 updates of 5 September came from per-target branches whose native
+surface is the shipped binary's own commit, so the same construction was
+repeated: `release/media2-ios-51` (`23347c1`) and `release/media2-ios-47`
+(`4cf5907`) overlay the `85c137e..2dbf163` changes under `ugc-mobile/` and
+`contracts/` onto `release/media-ios-51` and `release/media-ios-47`. One conflict
+in `components/ui.tsx` was resolved by keeping the backport's React Native
+`Image` for `CreatorAvatar` and taking the viewport scroll view import. Each
+branch passes typecheck and its suite (189 files / 1,818 tests; 188 files /
+1,809 tests) and `scripts/verify-ota-target.mjs` on a fresh `npm ci`: Android 70
+`17fa2c36` and iOS 51 `e2aa6c79` on the first, Android 65 `b32edbfe` and iOS 47
+`27175069` on the second, Android 71 `db146ca3` on main `0cf34e7`.
+
+`eas.json` pins eas-cli 21.2.0; the cached 23.2.0 refused every publish with a
+version-constraint error before anything was uploaded, and the global 21.2.0
+published all five with `--branch production --environment production` per
+platform: Android 71 group `15926309-a998-425c-b86c-bd06a50516aa`, iOS 51
+`ce10f3af-0d80-48f9-ab51-c11b8a387130`, Android 70
+`6b705318-d7cc-4ec0-8e95-bb027ec03463`, iOS 47
+`c25f2c92-6444-424f-b683-5011948863b4`, Android 65
+`cd3948f2-4e38-4e5c-a1f0-0d6956acfced`. Channel insights for the seven days
+before publication: iOS 47 had 7 embedded and 5 OTA users, iOS 51 3 and 0,
+Android 71 2 and 1, Android 70 1 and 0, Android 65 7 and 7; the App Store still
+serves 0.1.2, so iOS 47 is the runtime that reaches App Store users.
+
+On the Samsung S24 Ultra's store build 0.1.4 (71), the first cold start after
+publication logged `UpdatesController onBackgroundUpdateFinished: Update
+available` and `NEW_UPDATE_LOADED`, and the second reported `No update
+available`; channel insights for `db146ca3` showed one OTA user within the
+hour. A behavioural check of the store build was started and stopped because the
+phone was in personal use; the identical JavaScript passed the audit-APK
+acceptance earlier in this entry. Physical iOS verification remains open.
+
+### Backfill
+
+The private rendition producer runs inside `media-preview-repair` every ten
+minutes and takes one generation per run: 10:20 UTC produced the first
+(12.99 s, 1,922,882 bytes) and 10:30 UTC the second; twelve of the fourteen
+stored private originals remained pending at 10:35 UTC, so the backlog drains
+in roughly two hours. The slow-network playback gate should be re-measured once
+the test account's videos carry renditions.

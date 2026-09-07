@@ -43,7 +43,7 @@ change fix priority, but cannot silently remove surfaces from coverage.
 | 4. Image delivery | Measure preview bytes and decode size against actual rendered size and device pixel ratio. Check thumbnails, original fallback, loading placeholders, prefetch, and duplicate backdrop loads. | Before/after transferred bytes, first-image time, and memory; readable images with no unbounded original downloads in grids. | 720px preview baseline measured; 66 missing dimensions backfilled. iOS grid fixture eliminated 48 separate measurement calls using rendered image metadata; Android cache alias reproduced and viewer source-key fix verified locally. Byte/time baselines and smaller variants pending. |
 | 5. Video and audio delivery | Cover published posts and private creations. Check poster continuity, first frame, range requests, codecs, faststart, renditions/teasers, buffering, simultaneous players, release, seeking, and audio source recovery. | Playback and lifecycle tests across slow network, fast scrolling, backgrounding, and failed sources; measured startup, stalls, bytes, and memory. | Ready-video teaser repaired live and played on iOS; automatic repair released. Second pass: all 27 selected stored video objects fully decode and pass range checks; 3 originals lack fast-start. Private original baseline: 14 videos / 187 MB; largest local rendition 93.69% smaller. Private pipeline locally verified with a 91.60% smaller synthetic video, unchanged original and private range reads. Release, audio and device stress checks pending. |
 | 6. Surface integration | Apply verified shared fixes and inspect every applicable surface in the matrix below. Exercise production-like native binaries and web browsers. | Every surface has recorded normal/loading/error/retry and navigation outcomes. Native rendering defects require native reproduction and verification. | Android profile first pass, controlled Android viewer recovery and Android/iOS private-image fallback verified. Native viewer HTTP-503 failure reproduced on Android; visible retry and resumed playback verified locally on Android/iOS. Broad surface pass pending. |
-| 7. Release and regression control | Run affected tests and required release checks; deploy through existing release workflows. Verify exact live web SHA and actual mobile runtime/build targets. Define delivery measurements and bounded integrity checks. | Exact-release evidence, post-release checks, rollback details, and actionable regression signals. | Reliability checkpoint released: exact live `85c137e` confirmed; Android 70/71 and iOS 47/51 production OTAs published. Second-pass client and private playback backend changes remain local. Broad device checks remain; no automation created. |
+| 7. Release and regression control | Run affected tests and required release checks; deploy through existing release workflows. Verify exact live web SHA and actual mobile runtime/build targets. Define delivery measurements and bounded integrity checks. | Exact-release evidence, post-release checks, rollback details, and actionable regression signals. | Both passes released: exact live `f246f80` confirmed after `0cf34e7` (#115) and the watchdog fix (#116); second-pass OTAs published to Android 65/70/71 and iOS 47/51 at their shipped fingerprints and confirmed landing on an Android store build. Physical iOS confirmation, the rendition backfill re-measurement and broad device checks remain; no automation created. |
 
 Steps 3–5 may produce independent fixes while the legacy-source recovery in step
 2 is unresolved. A missing original must not block other optimization work or be
@@ -486,3 +486,16 @@ the shared preview component (source-only, not reproduced), the two player
 creations per open, physical iOS, and the production-duration checks above.
 Evidence and limits: the September 6 journal's "Viewer playback gate, quick-exit
 tap and replaced-player autoplay" entry.
+
+
+## Second pass released (2026-09-07)
+
+PR #115 is live as `0cf34e7` with the private rendition migration applied, and
+the watchdog fix followed as `f246f80` (#116). Five over-the-air updates went out
+from per-target release branches at the shipped fingerprints; an Android store
+build picked one up on its next cold start. The rendition backfill drains one
+generation per ten-minute repair run. Next: confirm the update on a physical
+iPhone (App Store 0.1.2 or TestFlight 0.1.4), re-measure slow-network private
+playback once the backfill completes, then the shared preview replacement
+pattern and the remaining surface matrix. Evidence: the September 6 journal's
+"Release of the second pass" entry.
