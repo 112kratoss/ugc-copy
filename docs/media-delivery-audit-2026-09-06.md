@@ -2290,3 +2290,22 @@ all five: Android 71 group `0d68c7e0-82f7-4040-a5bb-2a4931cb606a`, iOS 51
 the new group installed once with zero failed installs within minutes. The
 iPhone had not relaunched by the time of writing, so its runtime still reports
 the second-pass group.
+
+### Released binary under the cap (2026-09-07, 20:11–20:16 IST)
+
+With the phone free and untouched, `store-slow-check.py` (the same measurement
+pointed at the store package and the owner account's creation "The girl from
+@girl is crying", rendition 176,927 bytes) ran twice against store build 0.1.4
+(71) carrying update group `0d68c7e0`. Run 2, clean: one `ExoPlayerImpl`
+creation for the open, one Storage connection of 182,636 bytes completing in
+2.3 s at the 128,000 B/s cap, `Pause video` with a changing frame at every
+sample from 1 s to 40 s, no Retry, and the warm reopen transferring 182,629
+bytes again. Run 1 matched on every count until 15 s, when the label flipped to
+`Play video` and the frame froze; it did not recur and is recorded as a single
+unexplained event, not attributed. Navigating the store build by automation
+needs two allowances the audit build did not: the Home feed's rotating lane
+emits `Creation, …` labels, so the profile grid must be confirmed by its own
+markers, and a tile partly under the bottom tab bar must be scrolled up before
+tapping or the tap lands on the Home tab. The test account's video used for
+the earlier runs is 11.04 s (original 716 × 1284, rendition 714 × 1280).
+Receipts: `store-slow-check-run2.json`, `store-slow-check.log`, `store-slow-*.png`.
