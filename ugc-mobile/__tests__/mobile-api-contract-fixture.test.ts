@@ -52,6 +52,14 @@ function clientForEndpoint(endpointKey: ContractEndpointKey) {
   });
 }
 
+it('preserves private generation playback without replacing the original download URL', async () => {
+  const payload = await clientForEndpoint('listGenerations').listGenerations(false);
+  const video = payload.generations.find(generation => generation.id === 'private-video-1');
+  expect(video?.media?.renditionUrl).toBe('https://storage.example.test/private-video-playback.mp4');
+  expect(video?.media?.url).toBe(video?.output_url);
+  expect(video?.output_url).toBe('https://storage.example.test/private-video-original.mp4');
+});
+
 const successCases: Array<{
   key: Exclude<ContractEndpointKey, 'mobileUpdateRequired' | 'getPostResourceBundle'>;
   call: (api: MagicbookletApiClient) => Promise<unknown>;

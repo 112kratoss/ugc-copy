@@ -9,6 +9,7 @@ import { StableMediaImage } from '@/components/media-preview';
 
 type FeedMediaFrameBaseProps = {
   backdropUrl?: string | null;
+  backdropCacheKey?: string;
   backgroundColor?: string;
   borderColor?: string;
   borderWidth?: number;
@@ -64,7 +65,17 @@ export const FEED_VIDEO_VIEW_PROPS = {
 };
 
 export function FeedMediaFrame(props: FeedMediaFrameProps) {
-  const { source: backdropSource } = useMediaSource(props.backdropUrl || (props.kind === 'image' ? props.url : ''));
+  const foregroundUrl = props.kind === 'image' ? props.url : props.posterUrl;
+  const foregroundCacheKey = props.cacheKey ?? (props.recyclingKey
+    ? `${props.recyclingKey}:${props.kind === 'image' ? 'foreground' : 'video-poster'}`
+    : foregroundUrl);
+  const backdropUrl = props.backdropUrl || (props.kind === 'image' ? props.url : '');
+  const { source } = useMediaSource(backdropUrl);
+  // Share bytes only when both layers represent the same asset. A separate
+  // preview must never overwrite the full-size foreground's cache entry.
+  const backdropCacheKey = props.backdropCacheKey
+    ?? (backdropUrl === foregroundUrl ? foregroundCacheKey : undefined);
+  const backdropSource = backdropCacheKey ? { ...source, cacheKey: backdropCacheKey } : source;
   const {
     backgroundColor = appTheme.colors.app,
     borderColor,
@@ -108,7 +119,7 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
           ) : null}
           <StableMediaImage
             url={props.url}
-            cacheKey={props.cacheKey ?? (props.recyclingKey ? `${props.recyclingKey}:foreground` : props.url)}
+            cacheKey={foregroundCacheKey ?? props.url}
             thumbhash={props.thumbhash}
             contentFit={props.imageContentFit ?? 'contain'}
             onError={props.onImageError}
@@ -145,7 +156,7 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
           {props.posterVisible && props.posterUrl ? (
             <StableMediaImage
               url={props.posterUrl}
-              cacheKey={props.cacheKey ?? (props.recyclingKey ? `${props.recyclingKey}:video-poster` : props.posterUrl)}
+              cacheKey={foregroundCacheKey ?? props.posterUrl}
               thumbhash={props.thumbhash}
               contentFit={props.videoContentFit ?? 'contain'}
               style={[absoluteFill, { backgroundColor: 'transparent' }]}

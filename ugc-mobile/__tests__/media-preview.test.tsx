@@ -9,6 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 const imageState = vi.hoisted(() => ({ prefetch: vi.fn(async () => true) }));
 
+// This suite exercises image caching/retry; native video recovery has its own suite.
+vi.mock('@/components/recoverable-video-preview', () => ({
+  RecoverableVideoPreview: (props: MockProps) => React.createElement('video-preview', props),
+}));
+
 vi.mock('@/lib/use-media-source', () => ({
   useMediaSource: (url: string) => ({ source: buildMediaSource(url, 'https://magicbooklet.com', 'test-session'), requestKey: '' }),
 }));
@@ -145,6 +150,61 @@ describe('StableMediaImage', () => {
       uri: 'https://cdn/one.webp',
       cacheKey: 'one',
     });
+  });
+
+  it('renews a failed image on retry without duplicate pending requests', async () => {
+    let finish: (url: string) => void = () => undefined;
+    const resolveRetryUrl = vi.fn(() => new Promise<string>(resolve => { finish = resolve; }));
+    let tree: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(<StableMediaImage url="https://cdn/stale.jpg" cacheKey="reference" resolveRetryUrl={resolveRetryUrl} />); });
+    exhaustImageLoad(tree!);
+    const retry = tree!.root.findByType('pressable' as never).props.onPress;
+    renderer.act(() => { retry(); retry(); });
+    expect(resolveRetryUrl).toHaveBeenCalledTimes(1);
+    expect(tree!.root.findByType('pressable' as never).props.disabled).toBe(true);
+    expect(JSON.stringify(tree!.toJSON())).toContain('Refreshing image…');
+    await renderer.act(async () => { finish('https://cdn/fresh.jpg'); });
+    expect(tree!.root.findByType('image').props.source).toEqual({ uri: 'https://cdn/fresh.jpg', cacheKey: 'reference' });
+    renderer.act(() => tree.unmount());
+  });
+
+  it('keeps renewal failure visible and allows another retry', async () => {
+    const resolveRetryUrl = vi.fn().mockRejectedValueOnce(new Error('Denied')).mockResolvedValueOnce('https://cdn/fresh.jpg');
+    let tree: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(<StableMediaImage url="https://cdn/stale.jpg" cacheKey="reference" resolveRetryUrl={resolveRetryUrl} />); });
+    exhaustImageLoad(tree!);
+    await renderer.act(async () => { tree!.root.findByType('pressable' as never).props.onPress(); });
+    expect(JSON.stringify(tree!.toJSON())).toContain('Couldn’t refresh image. Try again.');
+    expect(tree!.root.findByType('pressable' as never).props.disabled).toBe(false);
+    expect(tree!.root.findAllByType('image')).toHaveLength(0);
+    await renderer.act(async () => { tree!.root.findByType('pressable' as never).props.onPress(); });
+    expect(tree!.root.findByType('image').props.source.uri).toBe('https://cdn/fresh.jpg');
+    renderer.act(() => tree.unmount());
+  });
+
+  it('does not replace a newly selected image with an old renewal response', async () => {
+    let finish: (url: string) => void = () => undefined;
+    const resolveRetryUrl = () => new Promise<string>(resolve => { finish = resolve; });
+    let tree: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(<StableMediaImage url="https://cdn/stale.jpg" cacheKey="reference" resolveRetryUrl={resolveRetryUrl} />); });
+    exhaustImageLoad(tree!);
+    renderer.act(() => { tree!.root.findByType('pressable' as never).props.onPress(); });
+    renderer.act(() => { tree!.update(<StableMediaImage url="https://cdn/other.jpg" cacheKey="reference" resolveRetryUrl={resolveRetryUrl} />); });
+    await renderer.act(async () => { finish('https://cdn/fresh.jpg'); });
+    expect(tree!.root.findByType('image').props.source.uri).toBe('https://cdn/other.jpg');
+    renderer.act(() => tree.unmount());
+  });
+
+  it('ignores renewal after the image is closed', async () => {
+    let finish: (url: string) => void = () => undefined;
+    const resolveRetryUrl = () => new Promise<string>(resolve => { finish = resolve; });
+    let tree: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(<StableMediaImage url="https://cdn/stale.jpg" cacheKey="reference" resolveRetryUrl={resolveRetryUrl} />); });
+    exhaustImageLoad(tree!);
+    renderer.act(() => { tree!.root.findByType('pressable' as never).props.onPress(); });
+    renderer.act(() => tree.unmount());
+    await renderer.act(async () => { finish('https://cdn/fresh.jpg'); });
+    expect(tree!.toJSON()).toBeNull();
   });
 
   it('keeps the thumbhash visible in the failure tile when one exists', () => {

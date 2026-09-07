@@ -34,6 +34,13 @@ export function getShowcaseMediaPreviewUrl(item: ShowcaseMediaItem) {
   return item.preview?.previewUrl ?? item.previewUrl ?? null;
 }
 
+/** The full-size image must not read or overwrite a thumbnail's disk entry. */
+export function getShowcaseSourceImageCacheKey(item: ShowcaseMediaItem): string | undefined {
+  const key = item.preview?.cacheKey ?? item.previewCacheKey;
+  const previewUrl = getShowcaseMediaPreviewUrl(item);
+  return key && previewUrl && previewUrl !== item.url ? `${key}:source` : key;
+}
+
 export type ShowcaseImageTileSource = 'preview' | 'source-fallback' | 'pending';
 
 /**

@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
+vi.mock('@react-navigation/native', () => ({ useIsFocused: () => true }));
+
 function resolvePressableStyle(style: unknown) {
   return typeof style === 'function'
     ? (style as (state: { pressed: boolean }) => unknown)({ pressed: false })
@@ -16,6 +18,9 @@ vi.mock('@/lib/use-media-source', () => ({
 }));
 
 vi.mock('react-native', () => ({
+  Platform: { OS: 'ios' },
+  AppState: { currentState: 'active', addEventListener: () => ({ remove: vi.fn() }) },
+  Dimensions: { get: () => ({ width: 400, height: 800 }), addEventListener: () => ({ remove: vi.fn() }) },
   Modal: ({ children, visible, ...props }: MockProps) =>
     React.createElement('modal', { visible, ...props }, visible ? children : null),
   Pressable: ({ children, style, ...props }: MockProps) =>
@@ -29,7 +34,7 @@ vi.mock('react-native-safe-area-context', () => ({
 }));
 
 vi.mock('expo-video', () => ({
-  useVideoPlayer: (url: string) => ({ url }),
+  useVideoPlayer: (url: string) => ({ url, status: 'readyToPlay', addListener: () => ({ remove: vi.fn() }) }),
   VideoView: (props: MockProps) => React.createElement('video-view', props),
 }));
 
@@ -100,12 +105,20 @@ describe('MediaLightbox', () => {
     expect(buttons(tree, 'Show previous media')).toHaveLength(0);
   });
 
+  it('passes the reference renewal handler to an image preview', () => {
+    const resolveRetryUrl = vi.fn(async () => 'https://cdn.example.com/fresh.jpg');
+    let tree: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(<MediaLightbox items={[{ ...items[0], resolveRetryUrl }]} activeIndex={0} onClose={vi.fn()} onNavigate={vi.fn()} />); });
+    expect(tree!.root.findByType('stable-image' as never).props.resolveRetryUrl).toBe(resolveRetryUrl);
+    renderer.act(() => tree.unmount());
+  });
+
   it('plays a video with native controls', () => {
     const tree = render(1);
 
     const video = tree.root.findByType('video-view' as never);
     expect(video.props.nativeControls).toBe(true);
-    expect(video.props.player).toEqual({ url: { uri: 'https://cdn.example.com/camera.mp4' } });
+    expect(video.props.player.url).toEqual({ uri: 'https://cdn.example.com/camera.mp4' });
     expect(tree.root.findAll((node) => String(node.type) === 'stable-image')).toHaveLength(0);
   });
 

@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react';
 import {
+  AppState,
+  Platform,
   Pressable,
   type GestureResponderEvent,
   type PressableProps,
@@ -22,8 +24,21 @@ export function DoubleTapPressable({
   const lastTapAtRef = useRef(0);
   const singleTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => () => {
-    if (singleTapTimerRef.current) clearTimeout(singleTapTimerRef.current);
+  useEffect(() => {
+    const cancelPendingTap = () => {
+      if (singleTapTimerRef.current) clearTimeout(singleTapTimerRef.current);
+      singleTapTimerRef.current = null;
+      lastTapAtRef.current = 0;
+    };
+    // A single tap waits for the double-tap window. Do not replay that action
+    // after the app loses focus (for example Pause immediately followed by Home).
+    const change = AppState.addEventListener('change', state => {
+      if (state !== 'active') cancelPendingTap();
+    });
+    const blur = Platform.OS === 'android'
+      ? AppState.addEventListener('blur', cancelPendingTap)
+      : null;
+    return () => { cancelPendingTap(); change.remove(); blur?.remove(); };
   }, []);
 
   const handlePress = (event: GestureResponderEvent) => {
