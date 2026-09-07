@@ -240,7 +240,8 @@ describe('template run catalog pinning', () => {
     }) }) } });
     const { getTemplateRun } = await import('@/lib/template-run-service');
     const result = await getTemplateRun({ adminClient: fake.client, runId: 'run-1', userId: 'user-1' });
-    expect(result.result).toMatchObject({ renditionUrl: 'https://storage.test/user-1/playback/generation-1/clip.mp4' });
+    // The rendition is addressed through the authenticated media route, never a signed URL.
+    expect(result.result).toMatchObject({ renditionUrl: '/api/media?bucket=generated_videos&path=user-1%2Fplayback%2Fgeneration-1%2Fclip.mp4' });
     expect(fake.writes).toEqual([]);
   });
 
