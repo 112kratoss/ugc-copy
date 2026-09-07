@@ -17,6 +17,7 @@ import {
   textPostViewerHref,
 } from '../lib/immersive-preview-view-model';
 import { getViewerActionSlots } from '../lib/viewer-actions';
+import { getShowcasePlaybackUrl } from '../lib/showcase-media';
 import type { GenerationListItem, OwnerPostListItem, ShowcaseFeedItem } from '../lib/types';
 
 function showcaseItem(overrides: Partial<ShowcaseFeedItem>): ShowcaseFeedItem {
@@ -81,6 +82,33 @@ function ownerPost(overrides: Partial<OwnerPostListItem>): OwnerPostListItem {
 }
 
 describe('immersive preview view model', () => {
+  it('keeps the creation descriptor on its matching output for playback and poster metadata', () => {
+    const original = 'https://cdn.example.com/original.mp4';
+    const rendition = 'https://cdn.example.com/playback.mp4';
+    const media = {
+      id: 'gen-1', kind: 'video' as const, url: original, renditionUrl: rendition,
+      previewUrl: 'https://cdn.example.com/poster.webp', thumbhash: 'poster-hash',
+      cacheKey: 'poster-object', expiresAt: '2026-09-06T12:00:00Z',
+      width: 610, height: 1280, durationSeconds: 11.4,
+      status: 'ready' as const, gridReady: true,
+    };
+    // The descriptor describes the primary output, which need not be the
+    // first member of the legacy multi-output array.
+    const [item] = buildImmersiveGenerationItems('studio-creations', [generation({
+      category: 'video', output_url: original,
+      output_urls: ['https://cdn.example.com/other.mp4', original], media,
+    })], { creatorLabel: 'You' });
+    const [other, primary] = item.mediaItems;
+    expect(getShowcasePlaybackUrl(primary)).toBe(rendition);
+    expect(primary.url).toBe(original);
+    expect(primary.preview).toEqual(media);
+    expect(primary).toMatchObject({
+      previewUrl: media.previewUrl, width: 610, height: 1280, durationSeconds: 11.4,
+    });
+    expect(getShowcasePlaybackUrl(other)).toBe('https://cdn.example.com/other.mp4');
+    expect(other.previewUrl).toBeNull();
+  });
+
   it('builds the shared text-post viewer route for public and owner posts', () => {
     expect(textPostViewerHref({ postId: 'post-1' })).toBe('/post/post-1');
     expect(textPostViewerHref({ postId: 'private/post', source: 'profile-posts' }))

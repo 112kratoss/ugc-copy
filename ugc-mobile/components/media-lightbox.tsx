@@ -1,4 +1,4 @@
-import { useVideoPlayer, VideoView } from 'expo-video';
+import { RecoverableVideoPreview } from '@/components/recoverable-video-preview';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react-native';
 import { Modal, Pressable, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -7,7 +7,6 @@ import { StableMediaImage } from '@/components/media-preview';
 import { AppText } from '@/components/ui';
 import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
-import { useMediaSource } from '@/lib/use-media-source';
 import { appTheme } from '@/lib/theme';
 
 export interface LightboxMediaItem {
@@ -18,6 +17,8 @@ export interface LightboxMediaItem {
   label: string;
   /** A second, quieter line under the heading. */
   caption?: string | null;
+  /** Re-authorize a failed private source on explicit retry. */
+  resolveRetryUrl?: () => Promise<string>;
 }
 
 /**
@@ -33,11 +34,15 @@ export function MediaLightbox({
   activeIndex,
   onClose,
   onNavigate,
+  statusMessage,
+  errorMessage,
 }: {
   items: LightboxMediaItem[];
   activeIndex: number | null;
   onClose: () => void;
   onNavigate: (index: number) => void;
+  statusMessage?: string | null;
+  errorMessage?: string | null;
 }) {
   const isOpen = activeIndex !== null && activeIndex >= 0 && activeIndex < items.length;
   const reducedMotion = useReducedMotion();
@@ -58,6 +63,8 @@ export function MediaLightbox({
           activeIndex={activeIndex}
           onClose={onClose}
           onNavigate={onNavigate}
+          statusMessage={statusMessage}
+          errorMessage={errorMessage}
         />
       ) : null}
     </Modal>
@@ -69,11 +76,15 @@ function MediaLightboxContent({
   activeIndex,
   onClose,
   onNavigate,
+  statusMessage,
+  errorMessage,
 }: {
   items: LightboxMediaItem[];
   activeIndex: number;
   onClose: () => void;
   onNavigate: (index: number) => void;
+  statusMessage?: string | null;
+  errorMessage?: string | null;
 }) {
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
@@ -84,7 +95,7 @@ function MediaLightboxContent({
   const caption = [counter, item.caption?.trim()].filter(Boolean).join(' · ');
 
   // Leaves room for the header row and the safe-area chrome above and below.
-  const stageHeight = Math.max(220, height - insets.top - insets.bottom - 150);
+  const stageHeight = Math.max(220, height - insets.top - insets.bottom - 150 - (statusMessage || errorMessage ? 60 : 0));
 
   return (
     // Opaque, not the usual translucent overlay: the web lightbox leans on a
@@ -113,6 +124,11 @@ function MediaLightboxContent({
               <AppText variant="caption" color="muted" numberOfLines={1}>
                 {caption}
               </AppText>
+            ) : null}
+            {errorMessage ? (
+              <AppText variant="caption" color="danger" accessibilityRole="alert">{errorMessage}</AppText>
+            ) : statusMessage ? (
+              <AppText variant="caption" color="muted" accessibilityLiveRegion="polite">{statusMessage}</AppText>
             ) : null}
           </View>
           <Pressable
@@ -147,12 +163,13 @@ function MediaLightboxContent({
           }}
         >
           {item.mediaKind === 'video' ? (
-            <LightboxVideo key={item.id} url={item.url} height={stageHeight} />
+            <LightboxVideo key={item.id} url={item.url} height={stageHeight} resolveRetryUrl={item.resolveRetryUrl} />
           ) : (
             <StableMediaImage
               key={item.id}
               url={item.url}
               cacheKey={`lightbox:${item.id}`}
+              resolveRetryUrl={item.resolveRetryUrl}
               contentFit="contain"
               style={{ width: '100%', height: stageHeight }}
             />
@@ -178,20 +195,12 @@ function MediaLightboxContent({
   );
 }
 
-function LightboxVideo({ url, height }: { url: string; height: number }) {
-  const { source } = useMediaSource(url);
-  const player = useVideoPlayer(source, (instance) => {
-    instance.loop = true;
-    instance.muted = false;
-    // Holds the audio session only while it is actually making a sound — see
-    // the note in `feed-video-preview`.
-    instance.audioMixingMode = 'auto';
-    instance.play();
-  });
-
+function LightboxVideo({ url, height, resolveRetryUrl }: { url: string; height: number; resolveRetryUrl?: () => Promise<string> }) {
   return (
-    <VideoView
-      player={player}
+    <RecoverableVideoPreview
+      url={url}
+      resolveRetryUrl={resolveRetryUrl}
+      autoPlay
       nativeControls
       contentFit="contain"
       style={{ width: '100%', height, backgroundColor: '#050506' }}

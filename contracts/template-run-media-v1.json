@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "description": "Optional playback and poster URLs. Original URL remains the download/publish source. Older responses may omit derivatives.",
+  "response": {
+    "run": {
+      "id": "contract-run",
+      "templateId": "contract-template",
+      "templateTitle": "Media contract",
+      "userId": "owner",
+      "status": "succeeded",
+      "inputs": {},
+      "inputSlots": [],
+      "steps": [
+        {
+          "id": "step",
+          "kind": "generation",
+          "mediaKind": "video",
+          "status": "succeeded",
+          "label": "Video",
+          "outputUrl": "/original.mp4",
+          "renditionUrl": "/playback.mp4",
+          "previewUrl": "/poster.webp",
+          "errorMessage": null,
+          "failureCode": null,
+          "canRetry": false,
+          "estimatedRetryCredits": 0
+        }
+      ],
+      "result": {
+        "generationId": "gen",
+        "kind": "video",
+        "url": "/original.mp4",
+        "renditionUrl": "/playback.mp4",
+        "previewUrl": "/poster.webp"
+      },
+      "estimatedTotalCredits": 1,
+      "estimatedRemainingCredits": 0,
+      "creditsUsed": 1,
+      "errorMessage": null,
+      "isTest": false,
+      "createdAt": "2026-09-06T00:00:00Z",
+      "updatedAt": "2026-09-06T00:00:00Z"
+    }
+  },
+  "unavailableDemoResponse": {
+    "template": {
+      "id": "demo",
+      "slug": "demo",
+      "name": "Demo unavailable",
+      "outputKind": "video",
+      "inputSlots": [],
+      "videoUrl": null,
+      "thumbnailUrl": null
+    }
+  }
+}

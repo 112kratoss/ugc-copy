@@ -36,6 +36,10 @@ vi.mock('expo-video', () => ({
 const imageState = vi.hoisted(() => ({ mounts: 0 }));
 const authRevision = vi.hoisted(() => ({ current: '' }));
 
+vi.mock('@/components/recoverable-video-preview', () => ({
+  RecoverableVideoPreview: (props: Record<string, unknown>) => React.createElement('video-preview', props),
+}));
+
 vi.mock('expo-image', () => ({
   Image: Object.assign(
     (props: Record<string, unknown>) => {

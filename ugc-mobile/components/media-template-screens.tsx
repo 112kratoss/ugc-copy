@@ -18,6 +18,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Linking, Pressable, View } from 'react-native';
 
+import { RecoverableVideoPreview } from '@/components/recoverable-video-preview';
 import { MediaPreview } from '@/components/media-preview';
 import {
   AppText,
@@ -96,6 +97,8 @@ export function MediaTemplateCatalogScreen() {
     queryFn: () => api.listMediaTemplates(),
   });
   const templates = templatesQuery.data?.templates ?? [];
+  const [failedPreviewAt, setFailedPreviewAt] = useState<number | null>(null);
+  const hasFailedPreview = failedPreviewAt === templatesQuery.dataUpdatedAt;
   const activeRunQuery = useQuery({
     queryKey: ['active-media-template-run', user?.id],
     enabled: Boolean(user?.id),
@@ -131,6 +134,16 @@ export function MediaTemplateCatalogScreen() {
         body="Choose a format, add its required media, and review each generated step on the way to your result."
       />
 
+      {hasFailedPreview ? (
+        <View style={{ gap: 12 }}>
+          <AppText variant="bodySm" color="muted">Some previews could not load. You can still open a template.</AppText>
+          <SecondaryButton
+            label={templatesQuery.isFetching ? 'Reloading previews…' : 'Reload previews'}
+            disabled={templatesQuery.isFetching}
+            onPress={() => void templatesQuery.refetch()}
+          />
+        </View>
+      ) : null}
       {activeRun ? (
         <Pressable
           accessibilityRole="button"
@@ -166,7 +179,7 @@ export function MediaTemplateCatalogScreen() {
 
       {templatesQuery.isLoading ? (
         <LoadingState label="Loading templates" />
-      ) : templatesQuery.isError ? (
+      ) : templatesQuery.isError && templates.length === 0 ? (
         <View style={{ gap: 12 }}>
           <StatusBlock title="Templates are unavailable" body={errorMessage(templatesQuery.error, 'Check your connection and try again.')} tone="danger" />
           <SecondaryButton label="Try again" onPress={() => void templatesQuery.refetch()} />
@@ -175,15 +188,25 @@ export function MediaTemplateCatalogScreen() {
         <StatusBlock title="No templates yet" body="Published creator templates will appear here." tone="neutral" />
       ) : (
         <View style={{ gap: 22 }}>
-          {templates.map((template) => <TemplatePoster key={template.id} template={template} />)}
+          {templates.map((template) => (
+            <TemplatePoster
+              key={template.id}
+              template={template}
+              previewAttempt={templatesQuery.dataUpdatedAt}
+              onPreviewError={() => setFailedPreviewAt(templatesQuery.dataUpdatedAt)}
+            />
+          ))}
         </View>
       )}
     </Screen>
   );
 }
 
-function TemplatePoster({ template }: { template: MediaTemplateSummary }) {
-  const OutputIcon = template.outputKind === 'video' ? Video : ImageIcon;
+function TemplatePoster({ template, previewAttempt, onPreviewError }: {
+  template: MediaTemplateSummary;
+  previewAttempt: number;
+  onPreviewError: () => void;
+}) {
   return (
     <Pressable
       accessibilityRole="button"
@@ -193,13 +216,7 @@ function TemplatePoster({ template }: { template: MediaTemplateSummary }) {
       style={({ pressed }) => ({ gap: 11, opacity: pressed ? appTheme.opacity.pressed : 1 })}
     >
       <View style={{ minHeight: 280, aspectRatio: 4 / 5, overflow: 'hidden', borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: appTheme.colors.surfaceInset }}>
-        {template.thumbnailUrl ? (
-          <Image source={{ uri: template.thumbnailUrl }} contentFit="cover" transition={160} style={{ position: 'absolute', inset: 0 }} />
-        ) : (
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-            <OutputIcon size={appTheme.icon.hero} color={appTheme.colors.faint} />
-          </View>
-        )}
+        <TemplatePosterImage key={`${template.thumbnailUrl}:${previewAttempt}`} template={template} onError={onPreviewError} />
         <LinearGradient
           colors={['rgba(8,8,10,0.03)', 'rgba(8,8,10,0.18)', 'rgba(8,8,10,0.94)']}
           locations={[0.35, 0.58, 1]}
@@ -223,6 +240,25 @@ function TemplatePoster({ template }: { template: MediaTemplateSummary }) {
         <ArrowRight size={20} color={appTheme.colors.primary} />
       </View>
     </Pressable>
+  );
+}
+
+function TemplatePosterImage({ template, onError }: { template: MediaTemplateSummary; onError: () => void }) {
+  const [failed, setFailed] = useState(false);
+  const OutputIcon = template.outputKind === 'video' ? Video : ImageIcon;
+  return (
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+      <OutputIcon size={appTheme.icon.hero} color={appTheme.colors.faint} />
+      {template.thumbnailUrl && !failed ? (
+        <Image
+          source={{ uri: template.thumbnailUrl }}
+          contentFit="cover"
+          transition={160}
+          style={{ position: 'absolute', inset: 0 }}
+          onError={() => { setFailed(true); onError(); }}
+        />
+      ) : null}
+    </View>
   );
 }
 
@@ -270,7 +306,11 @@ export function MediaTemplateDetailScreen({ slug }: { slug: string }) {
           <SecondaryButton label="Try again" onPress={() => void templateQuery.refetch()} />
         </View>
       ) : (
-        <TemplateDetailContent template={template} message={message} starting={createRun.isPending} onUse={useTemplate} />
+        <TemplateDetailContent template={template} resolveVideoRetry={async () => {
+          const fresh = await api.getMediaTemplate(template.id);
+          if (fresh.template.id !== template.id || !fresh.template.videoUrl) throw new Error('Demo unavailable');
+          return fresh.template.videoUrl;
+        }} message={message} starting={createRun.isPending} onUse={useTemplate} />
       )}
     </Screen>
   );
@@ -278,11 +318,13 @@ export function MediaTemplateDetailScreen({ slug }: { slug: string }) {
 
 function TemplateDetailContent({
   template,
+  resolveVideoRetry,
   message,
   starting,
   onUse,
 }: {
   template: MediaTemplateDetail;
+  resolveVideoRetry: () => Promise<string>;
   message: string | null;
   starting: boolean;
   onUse: () => void;
@@ -299,7 +341,9 @@ function TemplateDetailContent({
         </View>
       </View>
 
-      <MediaPreview url={template.videoUrl ?? template.thumbnailUrl} kind={template.videoUrl ? 'video' : 'image'} height={430} />
+      {template.videoUrl ? <RecoverableVideoPreview url={template.videoUrl} resolveRetryUrl={resolveVideoRetry}
+        style={{ width: '100%', height: 430, borderRadius: appTheme.radii.lg, backgroundColor: appTheme.colors.panelSoft }} />
+        : <MediaPreview url={template.thumbnailUrl} kind="image" height={430} />}
       {template.description ? <AppText variant="body" color="textSecondary">{template.description}</AppText> : null}
 
       <View style={{ gap: 12 }}>
@@ -797,7 +841,7 @@ function RunStepCard({
         <Pill label={statusLabel} accent={statusAccent} />
       </View>
       {step.outputUrl ? (
-        <MediaPreview url={step.outputUrl} kind={step.mediaKind} height={step.mediaKind === 'video' ? 300 : 390} />
+        <MediaPreview url={step.mediaKind === 'video' ? step.renditionUrl || step.outputUrl : step.outputUrl} kind={step.mediaKind} height={step.mediaKind === 'video' ? 300 : 390} />
       ) : (
         <View style={{ minHeight: 220, borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: appTheme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
           {failed ? <RefreshCw size={appTheme.icon.hero} color={appTheme.colors.danger} /> : <ActivityIndicator size="large" color={appTheme.colors.primary} />}
@@ -922,7 +966,7 @@ function ResultStage({
         </View>
         <AppText variant="cardTitle">Final {result.kind}</AppText>
       </View>
-      <MediaPreview url={result.url} kind={result.kind} height={440} />
+      <MediaPreview url={result.kind === 'video' ? result.renditionUrl || result.url : result.url} kind={result.kind} height={440} />
       {!safeResultUrl ? (
         <StatusBlock
           title="Result link unavailable"

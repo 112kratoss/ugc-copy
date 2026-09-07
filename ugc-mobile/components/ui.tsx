@@ -1,11 +1,11 @@
 import { useId, useState } from 'react';
+import { MediaViewportScrollView as ScrollView } from '@/components/media-viewport-scroll-view';
 import { Link } from 'expo-router';
 import {
   ActivityIndicator,
   Animated,
   Image,
   Pressable,
-  ScrollView,
   Text,
   TextInput,
   useWindowDimensions,
