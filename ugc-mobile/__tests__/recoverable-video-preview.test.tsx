@@ -121,7 +121,7 @@ it('does not carry a previous retry autoplay decision into a different result', 
 it('preserves pause, position and audio settings when the effective URL renews', () => {
   const view = mount(true);
   const original = state.players[0];
-  Object.assign(original, { currentTime: 12.5, playing: false, muted: true, volume: 0.4, playbackRate: 1.5 });
+  Object.assign(original, { status: 'readyToPlay', currentTime: 12.5, playing: false, muted: true, volume: 0.4, playbackRate: 1.5 });
   state.sourceVersion = 1;
   renderer.act(() => view.update(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 300 }} autoPlay />));
   expect(original.release).toHaveBeenCalledOnce();
@@ -137,6 +137,24 @@ it('continues a manually started preview from its position after source renewal'
   renderer.act(() => view.update(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 300 }} />));
   expect(state.players[1].currentTime).toBe(9);
   expect(state.players[1].play).toHaveBeenCalledOnce();
+});
+
+it('keeps an autoplay request when the source renews before the first frame', () => {
+  const view = mount(true);
+  expect(state.players[0].status).toBe('loading');
+  expect(state.players[0].playing).toBe(false);
+  state.sourceVersion = 1;
+  renderer.act(() => view.update(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 300 }} autoPlay />));
+  expect(state.players[1].play).toHaveBeenCalledOnce();
+  expect(state.players[1].pause).not.toHaveBeenCalled();
+});
+
+it('leaves a still-loading result preview paused on renewal when nothing requested playback', () => {
+  const view = mount();
+  state.sourceVersion = 1;
+  renderer.act(() => view.update(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 300 }} />));
+  expect(state.players[1].play).not.toHaveBeenCalled();
+  expect(state.players[1].pause).toHaveBeenCalledOnce();
 });
 
 it('does not resume a playing source renewed while its screen is hidden', () => {
