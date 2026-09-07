@@ -108,6 +108,7 @@ import {
 import type { PostLifecycleVisibility } from '@/lib/post-lifecycle-policy';
 import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
 import { useViewerPlaybackGate } from '@/lib/use-viewer-playback-gate';
+import { useStableSignedUrl } from '@/lib/use-stable-signed-url';
 import { verticalHitSlop } from '@/lib/hit-target';
 import { changeViewerPage, isDetailsPageCovering, resolveViewerPosition, settleViewerItem, slidePageKey, type ViewerPosition } from '@/lib/viewer-position';
 
@@ -2008,7 +2009,9 @@ function ActiveVideoAttempt({
   const [hasError, setHasError] = useState(false);
   const reducedMotion = useReducedMotion();
   const audioMuted = useViewerAudioMuted();
-  const { source, requestKey } = useMediaSource(url);
+  // A refetch re-signing the same object must not restart the download.
+  const playbackUrl = useStableSignedUrl(url);
+  const { source, requestKey } = useMediaSource(playbackUrl);
   // Optimistic: playback is requested below, and the native player reports
   // `playing` only once it is actually rendering — often a frame or two after
   // the first frame has already been drawn. Reading `player.playing` here
@@ -2058,7 +2061,7 @@ function ActiveVideoAttempt({
   useEffect(() => {
     setHasFrame(false);
     setHasError(false);
-  }, [player, url, requestKey]);
+  }, [player, playbackUrl, requestKey]);
 
   useEffect(() => {
     const subscription = player.addListener('playingChange', (event) => {
