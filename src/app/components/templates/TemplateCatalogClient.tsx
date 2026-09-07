@@ -15,6 +15,7 @@ import {
 import { listTemplatePage, listTemplates } from './api';
 import { TemplateCard, TemplatePageShell } from './TemplatePrimitives';
 import type { MediaTemplate } from './types';
+import { useTemplatePosterRecovery } from './useTemplatePosterRecovery';
 
 type InputFilter = 'all' | 'image' | 'video';
 
@@ -55,6 +56,7 @@ export default function TemplateCatalogClient({
   const [inputFilter, setInputFilter] = useState<InputFilter>('all');
   const [nextCursor, setNextCursor] = useState(initialNextCursor);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const posterRecovery = useTemplatePosterRecovery(setTemplates, session?.access_token);
 
   useEffect(() => {
     if (hasInitialPublicTemplates) return;
@@ -143,6 +145,14 @@ export default function TemplateCatalogClient({
         <div className="pointer-events-none absolute right-[-7rem] top-[-8rem] h-72 w-72 rounded-full bg-rose-500/10 blur-[90px]" />
       </Surface>
 
+      {posterRecovery.hasFailedPreviews ? (
+        <div className="mt-5 flex items-center gap-3" role="status">
+          <Text variant="bodySm">Some previews could not load. You can still open a template.</Text>
+          <Button variant="secondary" disabled={posterRecovery.isReloading} onClick={() => void posterRecovery.reloadPreviews()}>
+            {posterRecovery.isReloading ? 'Reloading previews…' : 'Reload previews'}
+          </Button>
+        </div>
+      ) : null}
       <div className="mt-8 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <label className="relative block w-full lg:max-w-md">
           <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" aria-hidden />
@@ -187,7 +197,7 @@ export default function TemplateCatalogClient({
           <>
             <div className="ui-stagger grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {filteredTemplates.map((template) => (
-                <TemplateCard key={template.id} template={template} mode={mode} />
+                <TemplateCard key={template.id} template={template} mode={mode} previewAttempt={posterRecovery.attempts[template.id] ?? 0} onPreviewError={posterRecovery.onPreviewError} />
               ))}
             </div>
             {!isOwnerMode && nextCursor ? (

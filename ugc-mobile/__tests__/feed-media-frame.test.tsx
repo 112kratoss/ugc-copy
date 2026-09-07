@@ -38,6 +38,39 @@ vi.mock('expo-video', () => ({
 import { FeedMediaFrame } from '../components/feed-media-frame';
 
 describe('FeedMediaFrame', () => {
+  it('keeps preview and original identities separate across signed URL renewal', () => {
+    let tree: renderer.ReactTestRenderer;
+    const frame = (token: string) => <FeedMediaFrame
+      kind="image"
+      url={`https://cdn.example.com/original.jpg?token=${token}`}
+      backdropUrl={`https://cdn.example.com/preview.webp?token=${token}`}
+      cacheKey="asset-v1:source"
+      backdropCacheKey="asset-v1:preview"
+    />;
+    renderer.act(() => { tree = renderer.create(frame('first')); });
+    renderer.act(() => { tree.update(frame('renewed')); });
+    const images = tree!.root.findAll(node => node.type === 'image');
+    expect(images.map(node => node.props.source)).toEqual([
+      { uri: 'https://cdn.example.com/preview.webp?token=renewed', cacheKey: 'asset-v1:preview' },
+      { uri: 'https://cdn.example.com/original.jpg?token=renewed', cacheKey: 'asset-v1:source' },
+    ]);
+    renderer.act(() => { tree.unmount(); });
+  });
+
+  it('shares the original cache identity when no separate backdrop exists and retains authorization', () => {
+    let tree: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(<FeedMediaFrame
+      kind="image" url="/api/media?path=generated_images%2Fowner%2Fimage.jpg" cacheKey="original-v1"
+    />); });
+    const images = tree!.root.findAll(node => node.type === 'image');
+    expect(images[0].props.source).toEqual({
+      uri: 'https://magicbooklet.com/api/media?path=generated_images%2Fowner%2Fimage.jpg',
+      headers: { Authorization: 'Bearer test-session' }, cacheKey: 'original-v1',
+    });
+    expect(images[1].props.source.cacheKey).toBe('original-v1');
+    renderer.act(() => { tree.unmount(); });
+  });
+
   it('renders images with a static blurred cover backdrop and contained foreground', () => {
     let tree: renderer.ReactTestRenderer | undefined;
 
@@ -156,6 +189,8 @@ describe('FeedMediaFrame', () => {
 
     const posters = tree!.root.findAll((node) => node.type === 'image');
     expect(posters).toHaveLength(2);
+    expect(posters[0].props.source.cacheKey).toBe('video-2:video-poster');
+    expect(posters[1].props.source.cacheKey).toBe('video-2:video-poster');
     expect(posters[1].props.source).toMatchObject({ uri: 'https://cdn.example.com/video-poster.jpg' });
     expect(posters[1].props.contentFit).toBe('contain');
     expect(posters[1].props.blurRadius).toBeUndefined();

@@ -27,7 +27,8 @@ export function ComposerMediaLightbox({
   const lightboxItems = useMemo<LightboxMediaItem[]>(
     () => items.map((item, index) => ({
       id: `composer:${item.id}`,
-      url: item.previewUrl ?? item.uri,
+      // Existing video posts carry an image poster in previewUrl.
+      url: item.mediaKind === 'video' ? item.uri : item.previewUrl ?? item.uri,
       mediaKind: item.mediaKind,
       label: getComposerMediaLabel(index),
       caption: item.name,

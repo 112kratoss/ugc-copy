@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CircleAlert, ChevronLeft, ChevronRight, Images, Maximize2, Play, RotateCcw } from 'lucide-react';
 
+import { useInlineMediaPlayback } from '@/app/components/useInlineMediaPlayback';
 import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
 import { useMediaLoadingPreferences } from '@/app/components/useMediaLoadingPreferences';
 import { resolvePlaybackUrl } from '@/lib/media-descriptor';
@@ -84,6 +85,7 @@ export default function ShowcaseMediaCarousel({
   const carouselRef = useRef<HTMLDivElement | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const activeVideoRef = useRef<HTMLVideoElement | null>(null);
+  const attachVideo = useInlineMediaPlayback(activeVideoRef);
   const lifecycleStatusRef = useRef<Map<string, 'ready' | 'error'>>(new Map());
   const [failedLoadKeys, setFailedLoadKeys] = useState<Set<string>>(new Set());
   const [loadAttempts, setLoadAttempts] = useState<Record<string, number>>({});
@@ -435,7 +437,7 @@ export default function ShowcaseMediaCarousel({
           {renderedActiveItem.mediaKind === 'video' ? (
             <>
               <video
-                ref={activeVideoRef}
+                ref={attachVideo}
                 key={activeLoadKey}
                 src={shouldAttachVideo ? activePlaybackUrl : undefined}
                 poster={shouldLoadPoster ? posterUrl ?? undefined : undefined}

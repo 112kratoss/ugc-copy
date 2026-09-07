@@ -27,6 +27,9 @@ type GenerationRow = {
   preview_status?: MediaPreviewStatus;
   preview_width?: number | null;
   preview_height?: number | null;
+  playback_rendition_path?: string | null;
+  playback_rendition_source?: string | null;
+  playback_rendition_status?: string;
   creation_mode?: 'motion' | null;
   showcase_asset_path?: string | null;
   status: string;
@@ -92,6 +95,9 @@ export function projectGenerationForStudio(
   delete projected.user_id;
   delete projected.preview_width;
   delete projected.preview_height;
+  delete projected.playback_rendition_path;
+  delete projected.playback_rendition_source;
+  delete projected.playback_rendition_status;
   if (isTemplateResult) {
     delete projected.prompt;
     projected.model = 'template-workflow';
@@ -184,6 +190,14 @@ function resolveGenerationPreviewUrl(
   return null;
 }
 
+function readyGenerationPlaybackPath(generation: GenerationRow): string | null {
+  const path = generation.playback_rendition_path;
+  if (!path || !generation.user_id || generation.playback_rendition_status !== 'ready'
+    || generation.playback_rendition_source !== generation.output_url) return null;
+  const location = getUserOwnedStoredMediaLocation(path, generation.user_id, { allowedBuckets: ['generated_videos'] });
+  return location?.filePath.startsWith(`${generation.user_id}/playback/${generation.id}/`) ? path : null;
+}
+
 function collectOwnerMediaUrlCandidates(
   generations: GenerationRow[],
   summaryOnly: boolean,
@@ -198,6 +212,8 @@ function collectOwnerMediaUrlCandidates(
     if (generation.preview_url) {
       candidates.add(generation.preview_url);
     }
+    const playbackPath = readyGenerationPlaybackPath(generation);
+    if (playbackPath) candidates.add(playbackPath);
 
     if (!summaryOnly) {
       for (const storagePath of getPersistedOutputStoragePaths(
@@ -295,7 +311,7 @@ async function fetchOwnerGenerations({
   const baseColumns = `id, user_id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, workflow_settings, archived_at, ${projectionColumns}`;
   const columns = statusOnly
     ? statusColumns
-    : `${baseColumns}, preview_url, preview_thumbhash, preview_status, preview_width, preview_height, creation_mode`;
+    : `${baseColumns}, preview_url, preview_thumbhash, preview_status, preview_width, preview_height, creation_mode, playback_rendition_path, playback_rendition_source, playback_rendition_status`;
 
   // `in` over the linked set, not `eq` on the caller. Anything made before the
   // person registered still carries its guest UUID — the financial tables
@@ -556,6 +572,7 @@ export async function listOwnerGenerationsForRoute({
         id: generation.id,
         kind: classification.kind,
         url: outputUrl,
+        renditionUrl: resolvedMediaUrls.get(readyGenerationPlaybackPath(generation) ?? '') ?? null,
         storageKey: generation.showcase_asset_path || generation.output_url || generation.id,
         previewUrl,
         previewStorageKey: previewSource,

@@ -32,6 +32,7 @@ import type {
   WorkflowCanvasNode,
 } from '@/lib/workflow-canvas';
 import { WorkflowCanvasOverlays } from './WorkflowCanvasOverlays';
+import { WorkflowOutputThumbnails } from './WorkflowOutputThumbnails';
 import {
   WorkflowCanvasPreviewProvider,
   decorateWorkflowEdge,
@@ -236,6 +237,7 @@ export function WorkflowCanvasSurface({
 
   return (
     <WorkflowCanvasPreviewProvider onOpenPreview={onOpenPreview}>
+      <WorkflowOutputThumbnails nodes={renderNodes}>
       <section ref={canvasSectionRef} className="relative min-h-0 flex-1">
         {error && (
           <div className="absolute left-4 top-4 z-20 rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
@@ -332,6 +334,7 @@ export function WorkflowCanvasSurface({
         />
       </section>
       <WorkflowCanvasStyles />
+      </WorkflowOutputThumbnails>
     </WorkflowCanvasPreviewProvider>
   );
 }

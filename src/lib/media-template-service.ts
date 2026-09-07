@@ -11,7 +11,9 @@ import {
   createTemplateSnapshotHash,
   validateAndCompileTemplateGraph,
 } from '@/lib/template-graph-compiler';
+import { toStorageUploadBody } from '@/lib/storage-upload-body';
 import { createVideoPosterBuffer } from '@/lib/video-poster';
+import { createVideoRenditionFromFile, VideoRenditionSkipped, withVideoInputFile } from '@/lib/video-rendition';
 import {
   isRecord,
   MediaTemplateError,
@@ -207,8 +209,8 @@ function rowToDto(row: MediaTemplateRow, options: {
     name: row.name,
     description: row.description,
     category: row.category ?? 'general',
-    videoUrl: options.videoUrl ?? row.video_url,
-    thumbnailUrl: options.thumbnailUrl ?? row.thumbnail_url,
+    videoUrl: options.videoUrl !== undefined ? options.videoUrl : row.video_url,
+    thumbnailUrl: options.thumbnailUrl !== undefined ? options.thumbnailUrl : row.thumbnail_url,
     creatorUserId: row.creator_user_id,
     creator: options.creator ?? null,
     inputSlots: normalizeTemplateInputSlots(row.input_slots),
@@ -474,7 +476,7 @@ function mediaFileMatchesKind(blob: Blob, objectPath: string, kind: TemplateMedi
     : ['.mp4', '.webm', '.mov'].includes(extension);
 }
 
-async function copyOwnedAssetToVersion(params: {
+export async function copyOwnedTemplateAssetToVersion(params: {
   client: SupabaseClient;
   userId: string;
   templateId: string;
@@ -497,15 +499,35 @@ async function copyOwnedAssetToVersion(params: {
   }
   const fileName = path.posix.basename(source.objectPath).replace(/[^a-zA-Z0-9._-]+/g, '-') || 'asset.bin';
   const safeSegment = params.destinationSegment.replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 100) || 'asset';
-  const destination = `${params.templateId}/${params.versionId}/${safeSegment}/${fileName}`;
+  let destination = `${params.templateId}/${params.versionId}/${safeSegment}/${fileName}`;
   const { data: blob, error: downloadError } = await params.client.storage.from(source.bucket).download(source.objectPath);
   if (downloadError || !blob || !mediaFileMatchesKind(blob, source.objectPath, params.kind)) {
     throw new MediaTemplateError('Template media could not be verified.', 400, 'TEMPLATE_ASSET_COPY_FAILED');
   }
+  let deliveryBlob = blob;
+  // Optimize only the published demonstration, never fixed generation inputs.
+  // Keep publication usable when the source is already lean or encoding fails.
+  // The publish route has a 300s budget; spend at most 60s on this optional work.
+  if (params.destinationSegment === 'demo' && params.kind === 'video' && blob.size <= 64 * 1024 * 1024) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60_000);
+    try {
+      const rendition = await withVideoInputFile(blob, (inputPath, sourceBytes) =>
+        createVideoRenditionFromFile(inputPath, sourceBytes, { signal: controller.signal }));
+      deliveryBlob = toStorageUploadBody(rendition.buffer, 'video/mp4');
+      destination = `${params.templateId}/${params.versionId}/demo/playback.mp4`;
+    } catch (error) {
+      if (!(error instanceof VideoRenditionSkipped)) {
+        logBackendError('template_demo_optimization_failed', { templateId: params.templateId, error });
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   const { error: uploadError } = await params.client.storage.from('template_assets')
-    .upload(destination, blob, { contentType: blob.type || undefined, upsert: false });
+    .upload(destination, deliveryBlob, { contentType: deliveryBlob.type || undefined, upsert: false });
   if (uploadError) throw new MediaTemplateError('Template media could not be stored.', 500, 'TEMPLATE_ASSET_COPY_FAILED');
-  return { destination, blob };
+  return { destination, blob: deliveryBlob };
 }
 
 /**
@@ -513,7 +535,7 @@ async function copyOwnedAssetToVersion(params: {
  * publish already holds. Cosmetic: a failure must never fail the publish —
  * the media-preview-repair sweep retries missing posters hourly.
  */
-async function createTemplateDemoPosterAsset(params: {
+export async function createTemplateDemoPosterAsset(params: {
   client: SupabaseClient;
   templateId: string;
   versionId: string;
@@ -523,7 +545,7 @@ async function createTemplateDemoPosterAsset(params: {
     const poster = await createVideoPosterBuffer(params.demoBlob);
     const destination = `${params.templateId}/${params.versionId}/demo/poster.webp`;
     const { error } = await params.client.storage.from('template_assets')
-      .upload(destination, poster, { contentType: 'image/webp', upsert: false });
+      .upload(destination, toStorageUploadBody(poster, 'image/webp'), { contentType: 'image/webp', upsert: false });
     if (error) throw error;
     return destination;
   } catch (error) {
@@ -548,7 +570,7 @@ async function copyFixedAssets(params: {
       const config = isRecord(node.data.templateInput) ? node.data.templateInput : {};
       if (config.mode !== 'fixed') continue;
       const storagePath = typeof node.data.storagePath === 'string' ? node.data.storagePath : '';
-      const { destination } = await copyOwnedAssetToVersion({
+      const { destination } = await copyOwnedTemplateAssetToVersion({
         client: params.client,
         userId: params.userId,
         templateId: params.templateId,
@@ -611,7 +633,7 @@ export async function publishMediaTemplate(client: SupabaseClient, userId: strin
   let demoObjectPath: string;
   let demoPosterPath: string | null = null;
   try {
-    const demoCopy = await copyOwnedAssetToVersion({
+    const demoCopy = await copyOwnedTemplateAssetToVersion({
       client,
       userId,
       templateId: template.id,

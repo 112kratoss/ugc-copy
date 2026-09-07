@@ -1,8 +1,10 @@
 'use client';
 
+import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import GenerationResultVideo from '@/app/components/GenerationResultVideo';
 import { Upload, Sparkles, Loader2, Download, Zap, ChevronDown, Check, Play, Share2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
@@ -118,6 +120,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
     const [videoError, setVideoError] = useState<string | null>(null);
     const [outputVideo, setOutputVideo] = useState<string | null>(null);
+    const [resolvedOutputVideo, setResolvedOutputVideo] = useState<{ outputUrl: string; url: string } | null>(null);
     const [latestGenerationId, setLatestGenerationId] = useState<string | null>(null);
     const [latestIsPublic, setLatestIsPublic] = useState(false);
     const [publishedMeta, setPublishedMeta] = useState<{ title: string; description: string } | null>(null);
@@ -373,39 +376,19 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
             return;
         }
 
-        let isCancelled = false;
-        const previewVideo = document.createElement('video');
-        previewVideo.preload = 'metadata';
-
-        const handleLoadedMetadata = () => {
-            if (isCancelled || !Number.isFinite(previewVideo.duration)) {
+        const controller = new AbortController();
+        void readVideoDurationSeconds(referenceVideo, controller.signal).then(duration => {
+            if (controller.signal.aborted) return;
+            if (duration === null) {
+                setVideoError('We could not read the reference video. Please try another clip.');
                 return;
             }
-
-            setDuration(previewVideo.duration);
-            if (previewVideo.duration > maxVideoDuration) {
-                setVideoError(`Reference video exceeds ${maxVideoDuration}s. Please choose a shorter clip.`);
-            } else {
-                setVideoError(null);
-            }
-        };
-
-        const handleMetadataError = () => {
-            if (!isCancelled) {
-                setVideoError('We could not read the reference video. Please try another clip.');
-            }
-        };
-
-        previewVideo.addEventListener('loadedmetadata', handleLoadedMetadata);
-        previewVideo.addEventListener('error', handleMetadataError);
-        previewVideo.src = referenceVideo;
-
-        return () => {
-            isCancelled = true;
-            previewVideo.removeEventListener('loadedmetadata', handleLoadedMetadata);
-            previewVideo.removeEventListener('error', handleMetadataError);
-            previewVideo.src = '';
-        };
+            setDuration(duration);
+            setVideoError(duration > maxVideoDuration
+                ? `Reference video exceeds ${maxVideoDuration}s. Please choose a shorter clip.`
+                : null);
+        });
+        return () => controller.abort();
     }, [maxVideoDuration, referenceVideo]);
 
     // Generation Recovery & Persistence
@@ -1244,11 +1227,11 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                             {outputVideo ? (
                                 <div className="space-y-5">
                                     <div className="aspect-video overflow-hidden rounded-[26px] border border-white/8 bg-black/60">
-                                        <video src={outputVideo} controls autoPlay loop className="h-full w-full object-contain" />
+                                        <GenerationResultVideo generationId={latestGenerationId} outputUrl={outputVideo} accessToken={session?.access_token} onOriginalResolved={setResolvedOutputVideo} />
                                     </div>
                                     <div className="flex flex-wrap gap-3">
                                         <a
-                                            href={outputVideo}
+                                            href={resolvedOutputVideo?.outputUrl === outputVideo ? resolvedOutputVideo.url : outputVideo}
                                             download="generated-video.mp4"
                                             target="_blank"
                                             rel="noopener noreferrer"

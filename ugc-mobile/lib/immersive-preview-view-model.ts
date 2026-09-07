@@ -396,37 +396,32 @@ function getGenerationMediaItemsList(
   outputUrls: string[] | undefined,
   outputUrl: string | null,
   mediaKind: 'image' | 'video' | null,
-  previewUrl?: string | null
+  previewUrl?: string | null,
+  descriptor?: GenerationListItem['media'],
 ): ShowcaseMediaItem[] {
-  if (outputUrls?.length && mediaKind) {
-    return outputUrls.map((url, index) => ({
-      id: `${id}:${index}`,
+  if (!mediaKind) return [];
+  const urls = outputUrls?.length ? outputUrls : outputUrl ? [outputUrl] : [];
+  return urls.map((url, index) => {
+    // A generation descriptor belongs to one output. Attaching it to every
+    // slide (or simply the first) would play the wrong clip in multi-output runs.
+    const media = descriptor?.url === url && descriptor.kind === mediaKind ? descriptor : undefined;
+    const legacyPreview = !descriptor && index === 0 ? previewUrl : null;
+    return {
+      id: outputUrls?.length ? `${id}:${index}` : `${id}:output`,
       url,
-      previewUrl: index === 0 ? previewUrl ?? (mediaKind === 'image' ? url : null) : mediaKind === 'image' ? url : null,
-      mediaKind: mediaKind === 'video' ? 'video' : 'image',
+      preview: media,
+      previewUrl: media?.previewUrl ?? legacyPreview ?? (mediaKind === 'image' ? url : null),
+      previewThumbhash: media?.thumbhash,
+      previewCacheKey: media?.cacheKey,
+      mediaKind,
       contentType: null,
       originalName: null,
-      width: null,
-      height: null,
-      durationSeconds: null,
+      width: media?.width ?? null,
+      height: media?.height ?? null,
+      durationSeconds: media?.durationSeconds ?? null,
       sortOrder: index,
-    }));
-  }
-  if (!outputUrl || !mediaKind) {
-    return [];
-  }
-  return [{
-    id: `${id}:output`,
-    url: outputUrl,
-    previewUrl: previewUrl ?? (mediaKind === 'image' ? outputUrl : null),
-    mediaKind: mediaKind === 'video' ? 'video' : 'image',
-    contentType: null,
-    originalName: null,
-    width: null,
-    height: null,
-    durationSeconds: null,
-    sortOrder: 0,
-  }];
+    };
+  });
 }
 
 function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeedItem): ImmersivePreviewItem {
@@ -544,7 +539,7 @@ function generationToImmersiveItem(
     displayText,
     mediaUrl: item.output_urls?.[0] ?? item.output_url ?? null,
     mediaKind,
-    mediaItems: getGenerationMediaItemsList(item.id, item.output_urls, item.output_url, mediaKind, previewUrl),
+    mediaItems: getGenerationMediaItemsList(item.id, item.output_urls, item.output_url, mediaKind, previewUrl, item.media),
     previewKind: kind === 'text' ? 'text' : undefined,
     creatorLabel: owner.creatorLabel,
     creatorAvatar: owner.creatorAvatar ?? null,

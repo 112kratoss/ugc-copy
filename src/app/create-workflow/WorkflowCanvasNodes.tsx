@@ -1,5 +1,7 @@
 'use client';
 
+import RecoverableMediaAudio from '@/app/components/RecoverableMediaAudio';
+
 import {
   createContext,
   memo,
@@ -37,6 +39,7 @@ import {
 } from 'lucide-react';
 
 import { getDisplayMediaUrl } from '@/lib/media-urls';
+import { WorkflowOutputThumbnail, useWorkflowOutputGenerationId } from './WorkflowOutputThumbnails';
 import { IMAGE_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import type { WorkflowAssistantPreviewState } from '@/lib/workflow-assistant-client';
 import type {
@@ -500,12 +503,14 @@ function PreviewMediaLink({
   href,
   label,
   kind,
+  generationId,
   disabled = false,
   children,
 }: {
   href: string;
   label: string;
   kind: PreviewMediaKind;
+  generationId?: string | null;
   disabled?: boolean;
   children: ReactNode;
 }) {
@@ -521,7 +526,7 @@ function PreviewMediaLink({
       type="button"
       onClick={(event) => {
         event.stopPropagation();
-        openPreview({ kind, url: href, title: label });
+        openPreview({ kind, url: href, title: label, generationId });
       }}
       onMouseDown={(event) => event.stopPropagation()}
       onPointerDown={(event) => event.stopPropagation()}
@@ -548,7 +553,7 @@ function AudioPreview({ url, dragging }: { url: string; dragging?: boolean }) {
     );
   }
 
-  return <audio src={url} controls className="nodrag nopan mt-3 w-full rounded-xl border border-white/10" />;
+  return <RecoverableMediaAudio src={url} className="nodrag nopan mt-3 w-full rounded-xl border border-white/10" />;
 }
 
 export function getImageGenerateNodeSummary(data: ImageGenerateNodeData): string[] {
@@ -765,6 +770,7 @@ const ImageInputNode = memo(function ImageInputNode({ data, dragging }: NodeProp
 
 const VideoInputNode = memo(function VideoInputNode({ data, dragging }: NodeProps) {
   const typed = data as unknown as RuntimeWorkflowNodeData<VideoInputNodeData>;
+  const generationId = useWorkflowOutputGenerationId(null, typed.storagePath || typed.videoUrl);
   const runtime = getWorkflowNodeRuntimeData(typed);
   const previewUrl = typed.storagePath
     ? getDisplayMediaUrl(typed.storagePath)
@@ -782,8 +788,8 @@ const VideoInputNode = memo(function VideoInputNode({ data, dragging }: NodeProp
       runtime={runtime}
       minHeight={previewUrl ? undefined : 108}
       preview={previewUrl ? (
-        <PreviewMediaLink href={previewUrl} label="Open video input preview" kind="video" disabled={dragging}>
-          <video src={previewUrl} className="h-28 w-full rounded-xl border border-white/10 object-cover" muted playsInline />
+        <PreviewMediaLink href={previewUrl} label="Open video input preview" kind="video" generationId={generationId} disabled={dragging}>
+          <WorkflowOutputThumbnail generationId={generationId} />
         </PreviewMediaLink>
       ) : undefined}
     >
@@ -894,8 +900,8 @@ const VideoGenerateNode = memo(function VideoGenerateNode({ data, dragging }: No
       runtime={runtime}
       minHeight={previewUrl ? undefined : 156}
       preview={previewUrl ? (
-        <PreviewMediaLink href={previewUrl} label="Open generated video" kind="video" disabled={dragging}>
-          <video src={previewUrl} className="h-28 w-full rounded-xl border border-white/10 object-cover" muted playsInline />
+        <PreviewMediaLink href={previewUrl} label="Open generated video" kind="video" generationId={typed.runState.generationId} disabled={dragging}>
+          <WorkflowOutputThumbnail generationId={typed.runState.generationId} />
         </PreviewMediaLink>
       ) : undefined}
     >
@@ -934,8 +940,8 @@ const MotionGenerateNode = memo(function MotionGenerateNode({ data, dragging }: 
       runtime={runtime}
       minHeight={previewUrl ? undefined : 160}
       preview={previewUrl ? (
-        <PreviewMediaLink href={previewUrl} label="Open motion output" kind="video" disabled={dragging}>
-          <video src={previewUrl} className="h-28 w-full rounded-xl border border-white/10 object-cover" muted playsInline />
+        <PreviewMediaLink href={previewUrl} label="Open motion output" kind="video" generationId={typed.runState.generationId} disabled={dragging}>
+          <WorkflowOutputThumbnail generationId={typed.runState.generationId} />
         </PreviewMediaLink>
       ) : undefined}
     >
@@ -1036,6 +1042,7 @@ const SoundEffectsGenerateNode = memo(function SoundEffectsGenerateNode({ data, 
 
 const ApprovalGateNode = memo(function ApprovalGateNode({ data, dragging }: NodeProps) {
   const typed = data as unknown as RuntimeWorkflowNodeData<ApprovalGateNodeData>;
+  const generationId = useWorkflowOutputGenerationId(typed.runState.generationId, typed.runState.outputUrl);
   const runtime = getWorkflowNodeRuntimeData(typed);
   const isImage = typed.mediaKind === 'image';
   const previewUrl = typed.runState.outputUrl ? getDisplayMediaUrl(typed.runState.outputUrl) : null;
@@ -1054,6 +1061,7 @@ const ApprovalGateNode = memo(function ApprovalGateNode({ data, dragging }: Node
           href={previewUrl}
           label={`Review ${typed.mediaKind} approval output`}
           kind={typed.mediaKind}
+          generationId={generationId}
           disabled={dragging}
         >
           {isImage ? (
@@ -1066,7 +1074,7 @@ const ApprovalGateNode = memo(function ApprovalGateNode({ data, dragging }: Node
               className="h-28 w-full rounded-xl border border-violet-400/15 object-cover"
             />
           ) : (
-            <video src={previewUrl} className="h-28 w-full rounded-xl border border-violet-400/15 object-cover" muted playsInline />
+            <WorkflowOutputThumbnail generationId={generationId} />
           )}
         </PreviewMediaLink>
       ) : undefined}

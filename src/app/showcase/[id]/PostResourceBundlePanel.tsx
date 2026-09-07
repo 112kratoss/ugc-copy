@@ -1,5 +1,7 @@
 'use client';
 
+import ResourceMediaPreview from '@/app/components/ResourceMediaPreview';
+
 import Script from 'next/script';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -285,7 +287,6 @@ export default function PostResourceBundlePanel({
   const [workingAction, setWorkingAction] = useState<'free' | 'razorpay' | 'credits' | 'file' | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [resourceFileUrls, setResourceFileUrls] = useState<Record<string, string>>({});
 
   const summaryLine = useMemo(
     () => activeSummary || activePreviewText || describePostResourceKinds(activeResourceKinds),
@@ -665,8 +666,9 @@ export default function PostResourceBundlePanel({
     }
   };
 
-  const fetchResourceFileUrl = useCallback(async (storagePath: string): Promise<string> => {
+  const fetchResourceFileUrl = useCallback(async (storagePath: string, signal?: AbortSignal): Promise<string> => {
     const response = await fetch(fileUrlEndpoint ?? `/api/posts/${postId}/resource-bundle/file-url`, {
+      signal,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -711,59 +713,6 @@ export default function PostResourceBundlePanel({
       setWorkingAction(null);
     }
   };
-
-  useEffect(() => {
-    if (!isRecipeVisible || !activeResources?.items?.length) {
-      return;
-    }
-
-    const previewItems = activeResources.items.filter((item) => {
-      if (!item.storagePath || resourceFileUrls[item.storagePath]) {
-        return false;
-      }
-
-      return Boolean(
-        item.contentType?.startsWith('image/') ||
-        item.contentType?.startsWith('video/') ||
-        item.contentType?.startsWith('audio/')
-      );
-    });
-
-    if (previewItems.length === 0) {
-      return;
-    }
-
-    let cancelled = false;
-
-    void Promise.all(
-      previewItems.map(async (item) => {
-        try {
-          const signedUrl = await fetchResourceFileUrl(item.storagePath ?? '');
-          return [item.storagePath, signedUrl] as const;
-        } catch {
-          return null;
-        }
-      })
-    ).then((entries) => {
-      if (cancelled) {
-        return;
-      }
-
-      const resolvedEntries = entries.filter((entry): entry is readonly [string, string] => Boolean(entry));
-      if (resolvedEntries.length === 0) {
-        return;
-      }
-
-      setResourceFileUrls((currentUrls) => ({
-        ...currentUrls,
-        ...Object.fromEntries(resolvedEntries),
-      }));
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [fetchResourceFileUrl, isRecipeVisible, resourceFileUrls, activeResources?.items]);
 
   const downloadResourceFile = async (storagePath: string, filename: string) => {
     try {
@@ -812,42 +761,20 @@ export default function PostResourceBundlePanel({
   };
 
   const renderResourceItemMediaPreview = (item: PostResourceItem) => {
-    const signedUrl = item.storagePath ? resourceFileUrls[item.storagePath] : null;
-    if (!signedUrl || !item.contentType) {
-      return null;
+    if (!item.contentType) return null;
+    if (item.storagePath && item.contentType.startsWith('image/')) {
+      return <ResourceMediaPreview key={`${postId}:${item.storagePath}`} mediaType="image" label={item.title}
+        resolveUrl={signal => fetchResourceFileUrl(item.storagePath!, signal)} className="mb-3 max-w-full" />;
     }
 
-    if (item.contentType.startsWith('image/')) {
-      return (
-        // Natural width up to a modest cap — a reference thumbnail, not a
-        // second post media frame with letterboxing around a portrait.
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={signedUrl}
-          alt={item.title}
-          className="mb-3 max-h-48 w-auto max-w-full rounded-xl border border-white/8"
-        />
-      );
-    }
-
-    if (item.contentType.startsWith('video/')) {
-      return (
-        <video
-          src={signedUrl}
-          controls
-          className="mb-3 max-h-64 w-auto max-w-full rounded-xl border border-white/8"
-        />
-      );
-    }
-
-    if (item.contentType.startsWith('audio/')) {
-      return (
-        <audio
-          src={signedUrl}
-          controls
-          className="mb-3 w-full"
-        />
-      );
+    if (item.storagePath && (item.contentType.startsWith('video/') || item.contentType.startsWith('audio/'))) {
+      return <ResourceMediaPreview
+        key={`${postId}:${item.storagePath}`}
+        mediaType={item.contentType.startsWith('audio/') ? 'audio' : 'video'}
+        label={item.title}
+        resolveUrl={signal => fetchResourceFileUrl(item.storagePath!, signal)}
+        className="mb-3 max-w-full"
+      />;
     }
 
     return null;

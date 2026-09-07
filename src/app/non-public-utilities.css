@@ -49,10 +49,13 @@
 @source "./components/CreatorToolPreview.tsx";
 @source "./components/EnhancePromptButton.tsx";
 @source "./components/FeatureLandingPage.tsx";
+@source "./components/GenerationResultVideo.tsx";
 @source "./components/MediaDetailsPreviewModal.tsx";
 @source "./components/NavbarClient.tsx";
 @source "./components/ProfileShareButton.tsx";
 @source "./components/PublishToShowcaseModal.tsx";
+@source "./components/RecoverableMediaVideo.tsx";
+@source "./components/RecoverableMediaAudio.tsx";
 @source "./components/StudioOverflowMenu.tsx";
 @source "./components/StudioModelPicker.tsx";
 @source "./components/enhancePromptClient.ts";
@@ -65,8 +68,10 @@
 @source "./components/templates/TemplateEditorClient.tsx";
 @source "./components/templates/TemplatePrimitives.tsx";
 @source "./components/templates/TemplateRunClient.tsx";
+@source "./components/templates/TemplateRunMedia.tsx";
 @source "./components/templates/api.ts";
 @source "./components/templates/types.ts";
+@source "./components/templates/useTemplatePosterRecovery.ts";
 
 /* Model and tool registries expose complete class tokens through data fields
  * (for example gradient badge colors) that route components compose at run

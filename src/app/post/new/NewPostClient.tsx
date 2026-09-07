@@ -1,5 +1,9 @@
 'use client';
 
+import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
+
+import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+
 import Link from 'next/link';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -279,66 +283,6 @@ function inferCategoryFromContentType(contentType: string | null | undefined): P
   }
 
   return null;
-}
-
-/**
- * How long the metadata probe may stall before the file is let through with an
- * unknown duration. Metadata loads resolve in milliseconds when they resolve
- * at all; a codec the browser chokes on must not wedge the composer.
- */
-const VIDEO_METADATA_READ_TIMEOUT_MS = 4000;
-
-/**
- * Reads a picked video's duration from a metadata-only load (the pattern
- * CreateMotionClient uses for reference clips). Resolves null when the browser
- * cannot read it — the caller lets those through for the server layers, whose
- * ffmpeg probe of the actual file is the authoritative check anyway.
- */
-function readVideoFileDurationSeconds(file: File): Promise<number | null> {
-  return new Promise((resolve) => {
-    let probe: HTMLVideoElement;
-    let objectUrl: string;
-    let settled = false;
-    let timeout: ReturnType<typeof setTimeout> | null = null;
-
-    const finish = (value: number | null) => {
-      if (settled) return;
-      settled = true;
-      if (timeout) clearTimeout(timeout);
-      probe.removeEventListener('loadedmetadata', handleLoadedMetadata);
-      probe.removeEventListener('error', handleError);
-      probe.src = '';
-      URL.revokeObjectURL(objectUrl);
-      resolve(value);
-    };
-
-    const handleLoadedMetadata = () => {
-      finish(Number.isFinite(probe.duration) ? probe.duration : null);
-    };
-    const handleError = () => finish(null);
-
-    try {
-      probe = document.createElement('video');
-      // An empty canPlayType means this browser could not decode the file, so
-      // a metadata load would only ever end in the error path — skip straight
-      // to "unknown". (This is also what keeps jsdom-based tests, whose media
-      // elements never fire load events, from hanging here.)
-      if (!probe.canPlayType || probe.canPlayType(file.type) === '') {
-        resolve(null);
-        return;
-      }
-      probe.preload = 'metadata';
-      objectUrl = URL.createObjectURL(file);
-    } catch {
-      resolve(null);
-      return;
-    }
-
-    timeout = setTimeout(() => finish(null), VIDEO_METADATA_READ_TIMEOUT_MS);
-    probe.addEventListener('loadedmetadata', handleLoadedMetadata);
-    probe.addEventListener('error', handleError);
-    probe.src = objectUrl;
-  });
 }
 
 function createComposerMediaItem(file: File, index: number, durationSeconds: number | null = null): ComposerMediaItem {
@@ -1353,7 +1297,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         if (!rejections.includes(POST_VIDEO_UPLOAD_BYTES_MESSAGE)) rejections.push(POST_VIDEO_UPLOAD_BYTES_MESSAGE);
         continue;
       }
-      const durationSeconds = await readVideoFileDurationSeconds(candidate);
+      const durationSeconds = await readVideoDurationSeconds(candidate);
       if (durationSeconds !== null && durationSeconds > POST_VIDEO_MAX_DURATION_SECONDS) {
         if (!rejections.includes(POST_VIDEO_DURATION_LIMIT_MESSAGE)) rejections.push(POST_VIDEO_DURATION_LIMIT_MESSAGE);
         continue;
@@ -2653,7 +2597,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                             </div>
                           ) : prefilledGeneration?.outputUrl ? (
                             category === 'video' ? (
-                              <video
+                              <InlineMediaVideo
                                 src={prefilledGeneration.outputUrl}
                                 controls
                                 playsInline
@@ -2769,7 +2713,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         <div className="mt-5 rounded-[24px] border border-white/8 bg-black/50 p-3">
                           {coverPreviewItem?.previewUrl ? (
                             coverPreviewItem.mediaKind === 'video' ? (
-                              <video
+                              <InlineMediaVideo
                                 src={coverPreviewItem.previewUrl}
                                 controls
                                 playsInline
@@ -2840,7 +2784,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                               >
                                 <div className="relative aspect-[4/5] overflow-hidden rounded-md bg-black">
                                   {item.mediaKind === 'video' ? (
-                                    <video
+                                    <InlineMediaVideo
                                       src={item.previewUrl ?? undefined}
                                       muted
                                       playsInline

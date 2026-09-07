@@ -27,6 +27,7 @@ import {
   Text,
 } from '@/app/components/DesignSystem';
 
+import RecoverableMediaVideo from '@/app/components/RecoverableMediaVideo';
 import { getTemplate } from './api';
 import { getTemplateCreatorLabel, TemplatePageShell } from './TemplatePrimitives';
 import type { MediaTemplate } from './types';
@@ -85,9 +86,12 @@ export default function TemplateDetailClient({ slug }: { slug: string }) {
         <Surface variant="panel" padding="none" className="overflow-hidden">
           <MediaFrame aspectRatio="16 / 10" className="relative rounded-none border-0 border-b border-white/8">
             {template.videoUrl ? (
-              <video src={template.videoUrl} poster={template.thumbnailUrl || undefined} controls playsInline preload="metadata" className="h-full w-full bg-black object-contain">
-                Your browser does not support video playback.
-              </video>
+              <RecoverableMediaVideo url={template.videoUrl} poster={template.thumbnailUrl} label={`${template.name} demo`}
+                resolveRetry={async signal => {
+                  const fresh = await getTemplate(template.id, session?.access_token, signal);
+                  if (fresh.id !== template.id || !fresh.videoUrl) throw new Error('Demo unavailable');
+                  return { url: fresh.videoUrl, poster: fresh.thumbnailUrl };
+                }} />
             ) : template.thumbnailUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={template.thumbnailUrl} alt={`${template.name} preview`} className="h-full w-full object-cover" />

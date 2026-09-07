@@ -976,12 +976,30 @@ describe('ShowcaseReelViewer pagination', () => {
     expect(screen.getByText('@alisa')).toBeInTheDocument();
 
     const referencePreviewButton = await screen.findByRole('button', { name: /open preview for @alisa/i });
-    expect(referencePreviewButton.className).toContain('w-[112px]');
+    expect(referencePreviewButton.closest('div.w-\\[112px\\]')).not.toBeNull();
 
     fireEvent.click(referencePreviewButton);
 
     expect(screen.getByRole('dialog', { name: /reference image preview/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /close reference preview/i })).toBeInTheDocument();
+  });
+
+  it('restores a paid purchase on entry without starting another checkout', async () => {
+    authState.session = { access_token: 'token-1' };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      bundle: { viewerCanAccess: true, resources: {
+        promptText: 'Previously purchased prompt', notesMarkdown: null,
+        workflowShareUrl: null, attachments: [], allowRemix: false,
+      } },
+    })));
+    vi.stubGlobal('fetch', fetchMock);
+    renderPaidReel();
+    expect(await screen.findByText('Previously purchased prompt')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /pay with/i })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.length).toBe(1);
+    expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle', expect.objectContaining({
+      headers: { Authorization: 'Bearer token-1' },
+    }));
   });
 
   it('starts the existing cash checkout from the compact reel choice', async () => {

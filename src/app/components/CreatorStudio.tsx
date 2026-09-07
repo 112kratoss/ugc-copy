@@ -1,3 +1,4 @@
+import InlineMediaVideo from '@/app/components/InlineMediaVideo';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { ArrowLeft, ArrowRight, CheckCircle2, Clock3, Expand, Loader2, RefreshCw, Sparkles, X } from 'lucide-react';
@@ -667,7 +668,7 @@ export function StudioUploadedMediaPreview({
             className={clsx('h-full w-full', fit === 'contain' ? 'object-contain' : 'object-cover')}
           />
         ) : (
-          <video
+          <InlineMediaVideo
             src={src}
             className={clsx('h-full w-full', fit === 'contain' ? 'object-contain' : 'object-cover')}
             autoPlay
@@ -755,7 +756,7 @@ export function StudioMediaPreviewModal({
             // eslint-disable-next-line @next/next/no-img-element
             <img src={src} alt={alt} className="preview-modal-visual max-h-[45dvh] w-full object-contain sm:max-h-[68vh]" />
           ) : (
-            <video src={src} controls autoPlay loop className="preview-modal-visual max-h-[45dvh] w-full object-contain sm:max-h-[68vh]" />
+            <InlineMediaVideo src={src} controls autoPlay loop className="preview-modal-visual max-h-[45dvh] w-full object-contain sm:max-h-[68vh]" />
           )}
         </div>
 

@@ -267,6 +267,16 @@ function normalizeGenerationMediaUrls(root: string, item: GenerationListItem): G
       ...item.media,
       url: absolutizeMediaUrl(root, item.media.url) ?? item.media.url,
       previewUrl: absolutizeMediaUrl(root, item.media.previewUrl),
+      ...(item.media.renditionUrl !== undefined ? {
+        renditionUrl: absolutizeMediaUrl(root, item.media.renditionUrl),
+      } : {}),
+      ...(item.media.teaserUrl !== undefined ? {
+        teaserUrl: absolutizeMediaUrl(root, item.media.teaserUrl),
+      } : {}),
+      // Absent is the old-server fallback; explicit null means poster-only.
+      ...(item.media.feedStreamUrl !== undefined ? {
+        feedStreamUrl: absolutizeMediaUrl(root, item.media.feedStreamUrl),
+      } : {}),
     } : item.media,
     input_media: isTemplateResult
       ? []
@@ -308,10 +318,14 @@ function normalizeTemplateRunMediaUrls(root: string, response: TemplateRunRespon
       steps: response.run.steps.map((step) => ({
         ...step,
         outputUrl: absolutizeMediaUrl(root, step.outputUrl),
+        ...(step.renditionUrl !== undefined ? { renditionUrl: absolutizeMediaUrl(root, step.renditionUrl) } : {}),
+        ...(step.previewUrl !== undefined ? { previewUrl: absolutizeMediaUrl(root, step.previewUrl) } : {}),
       })),
       result: response.run.result ? {
         ...response.run.result,
         url: absolutizeMediaUrl(root, response.run.result.url) ?? response.run.result.url,
+        ...(response.run.result.renditionUrl !== undefined ? { renditionUrl: absolutizeMediaUrl(root, response.run.result.renditionUrl) } : {}),
+        ...(response.run.result.previewUrl !== undefined ? { previewUrl: absolutizeMediaUrl(root, response.run.result.previewUrl) } : {}),
       } : null,
     },
   };
@@ -452,6 +466,7 @@ export function createApiClient({
 
       const url = `${root}${path}`;
       let response: Response;
+      let body: unknown;
       const requestController = new AbortController();
       const upstreamSignal = init.signal;
       const abortFromUpstream = () => requestController.abort(upstreamSignal?.reason);
@@ -469,6 +484,9 @@ export function createApiClient({
           headers,
           signal: requestController.signal,
         });
+        // fetch resolves at headers. Keep timeout and caller cancellation
+        // active until the body is consumed, including signed-link responses.
+        body = await parseResponse(response);
       } catch (error) {
         throw new ApiError(networkFailureMessage(root), 0, {
           url,
@@ -478,7 +496,6 @@ export function createApiClient({
         clearTimeout(timeoutId);
         upstreamSignal?.removeEventListener('abort', abortFromUpstream);
       }
-      const body = await parseResponse(response);
       const responseRequestId = response.headers.get(REQUEST_ID_HEADER) ?? requestId;
 
       if (!response.ok) {

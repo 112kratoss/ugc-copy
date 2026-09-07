@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { hasRepairablePostMediaTeasers, repairPostMediaTeasers } from '@/lib/post-media-teaser-repair';
+import { hasPendingGenerationPlaybackRendition, repairGenerationPlaybackRendition } from '@/lib/generation-playback-rendition';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendError } from '@/lib/backend-logger';
@@ -189,7 +190,8 @@ export async function hasRepairableMediaPreviews(supabase: SupabaseClient): Prom
     if (isMissingRenditionColumnError(renditionResult.error)) return false;
     throw renditionResult.error;
   }
-  return hasRows(renditionResult.data) || await hasRepairablePostMediaTeasers(supabase);
+  return hasRows(renditionResult.data) || await hasRepairablePostMediaTeasers(supabase)
+    || await hasPendingGenerationPlaybackRendition(supabase);
 }
 
 function previewFailure(error: unknown, attemptCount: number) {
@@ -888,6 +890,7 @@ export async function repairMediaPreviews(
   } = {}
 ): Promise<RepairSummary> {
   const batchSize = Math.max(1, Math.min(options.batchSize ?? 25, 500));
+  const startedAt = Date.now();
   const lockedBy = options.lockedBy ?? `media-preview:${randomUUID()}`;
   const [generations, postMedia] = await Promise.all([
     claimGenerationPreviewRows(supabase, batchSize, `${lockedBy}:generation`),
@@ -935,8 +938,14 @@ export async function repairMediaPreviews(
   const teasers = renditions.attempted === 0
     ? await repairPostMediaTeasers(supabase)
     : { attempted: 0, completed: 0, failed: 0 };
-  const completed = results.filter(Boolean).length + templatePosters.completed + renditions.completed + teasers.completed;
-  const attempted = results.length + templatePosters.attempted + renditions.attempted + teasers.attempted;
+  // A private encode gets an otherwise idle invocation, never the remainder
+  // of a busy preview/rendition pass. Leave at least 270s of platform headroom.
+  const privatePlayback = results.length + templatePosters.attempted + renditions.attempted + teasers.attempted === 0
+    && Date.now() - startedAt < 30_000
+    ? await repairGenerationPlaybackRendition(supabase)
+    : { attempted: 0, completed: 0, failed: 0 };
+  const completed = results.filter(Boolean).length + templatePosters.completed + renditions.completed + teasers.completed + privatePlayback.completed;
+  const attempted = results.length + templatePosters.attempted + renditions.attempted + teasers.attempted + privatePlayback.attempted;
 
   if (completed > 0) {
     (options.invalidateFeedCache ?? invalidateShowcaseFeedCache)();
