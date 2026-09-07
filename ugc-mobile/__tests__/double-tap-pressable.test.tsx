@@ -2,7 +2,13 @@ import React from 'react';
 import renderer from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+const { appListeners } = vi.hoisted(() => ({ appListeners: new Map<string, Set<(state?: string) => void>>() }));
 vi.mock('react-native', () => ({
+  Platform: { OS: 'android' },
+  AppState: { addEventListener: (name: string, fn: (state?: string) => void) => {
+    const group = appListeners.get(name) ?? new Set(); group.add(fn); appListeners.set(name, group);
+    return { remove: () => group.delete(fn) };
+  } },
   Pressable: ({ children, ...props }: Record<string, unknown> & { children?: React.ReactNode }) =>
     React.createElement('pressable', props, children),
 }));
@@ -11,6 +17,7 @@ import { DoubleTapPressable } from '../components/double-tap-pressable';
 
 afterEach(() => {
   vi.useRealTimers();
+  appListeners.clear();
 });
 
 describe('DoubleTapPressable', () => {
@@ -110,3 +117,25 @@ describe('DoubleTapPressable', () => {
     expect(onDoublePress).toHaveBeenCalledWith(secondTap);
   });
 });
+
+for (const event of ['change', 'blur']) {
+  it(`cancels a pending tap on ${event}, then accepts a fresh foreground tap`, () => {
+    vi.useFakeTimers();
+    const single = vi.fn(), double = vi.fn();
+    let tree: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(<DoubleTapPressable onSinglePress={single} onDoublePress={double} />); });
+    const press = () => tree!.root.find(node => String(node.type) === 'pressable').props.onPress();
+    renderer.act(() => {
+      press(); vi.advanceTimersByTime(100);
+      appListeners.get(event)?.forEach(fn => fn('background'));
+      appListeners.get('change')?.forEach(fn => fn('active'));
+      vi.advanceTimersByTime(180);
+    });
+    expect(single).not.toHaveBeenCalled();
+    renderer.act(() => { press(); vi.advanceTimersByTime(280); });
+    expect(single).toHaveBeenCalledOnce();
+    expect(double).not.toHaveBeenCalled();
+    renderer.act(() => tree!.unmount());
+    expect([...appListeners.values()].every(group => group.size === 0)).toBe(true);
+  });
+}

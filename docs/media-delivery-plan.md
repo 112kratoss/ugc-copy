@@ -459,7 +459,30 @@ tests, typecheck, iOS export and Android release/bundle-env checks pass.
 Cached video played with both Wi-Fi and mobile data disabled. An unopened full-size
 image showed a visible retry fallback offline and loaded after reconnection/retry.
 Normal network settings were restored. The previously-playing background case
-still resumes automatically, so an always-paused-on-return policy is not yet
-verified. Updated-backend cache-cold rendition playback, multi-asset memory stress,
-physical iOS and the full release/production audit remain open. Detailed limits
+now stays paused on return, and a 30-cycle image/video soak showed no retained
+growth; see the playback gate section below. Updated-backend cache-cold
+rendition playback, physical iOS and the full release/production audit remain
+open. Detailed limits
 and local evidence are in the September 6 journal's exact-build Android entries.
+
+
+## Viewer playback gate, quick-exit tap and autoplay race (2026-09-07)
+
+The gate checkpoint's phone verification is complete on a rebuilt audit APK,
+after fixing a race it exposed. The viewer refetches its source on every open,
+the freshly signed URL replaces the native player about a second later, and the
+replacement copied "not playing yet" as a pause: two of roughly ten opens on the
+S24 Ultra never started while showing the playing label over a still frame. A
+replaced player now keeps its playback request unless it was ready and paused,
+the viewer's badge follows that decision, and a gate revoke clears it. On the
+installed build, five fresh opens (two cold) autoplay; three Pause-then-Home
+cycles, Home while playing and Home during the initial load all return paused;
+manual Play resumes and Pause holds. A 30-cycle two-image/one-video soak in one
+process showed no upward trend on return and settled 12 MiB below its grid
+baseline after two minutes idle. Mobile tests (191 files / 1,828 tests),
+typecheck, the Android release build with bundled-environment verification and
+the iOS Hermes export pass. Remaining: the same `previous.playing` pattern in
+the shared preview component (source-only, not reproduced), the two player
+creations per open, physical iOS, and the production-duration checks above.
+Evidence and limits: the September 6 journal's "Viewer playback gate, quick-exit
+tap and replaced-player autoplay" entry.

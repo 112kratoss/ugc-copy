@@ -1983,3 +1983,141 @@ failures were local tooling assumptions (macOS Bash expansion, package detection
 and missing SDK environment for the React Native source build); direct Gradle with
 the SDK path and explicit package/activity completed successfully. No new migration,
 deployment, OTA, or remote push was performed.
+
+## Viewer playback gate, quick-exit tap and replaced-player autoplay (2026-09-07)
+
+The gate checkpoint was interrupted. The Codex session that built it stopped at
+its usage limit at 11:26 IST while installing the rebuilt audit APK
+(`cd6c0057f116c71e4d196f5c2eb9269b34dc9d2f4ee388a325c08e24a2bc92b9`, install
+completed 11:34). That build carried two uncommitted changes: a viewer playback
+gate that revokes autoplay after backgrounding until explicit Play, and a
+double-tap cancellation so a Pause tap immediately followed by Home cannot fire
+its delayed single-tap action after the app has left the foreground. Unit tests
+and typecheck had passed (191 files / 1,825 tests). Nothing on the phone had
+verified the quick-exit case, no memory soak had run, and no journal entry or
+commit existed. This entry records finishing that work in a separate session.
+
+### The first phone check measured a video that was never playing
+
+On the installed `cd6c0057` build, the quick-exit sequence (tap Pause, inject
+Home in the same device shell, wait 8 s, relaunch, wait 8 s) returned with the
+label `Pause video` and byte-identical viewer frames before, on return and 3 s
+later (`quick-exit-0-*.png`, crop hash `5532e877796d6703`). A Home-only control
+gave the same result (`gate-settled-control.json`). Both were invalid: the frame
+never changed before the tap either, so the video had not been playing.
+
+Reproduced directly: opening the same creation fresh from the profile grid
+showed that frame for 12 s with the label `Pause video`, no `Loading video`
+indicator and no error panel (`fresh-open-probe.json`, `fresh-open-*.png`). One
+tap on the surface started playback (crop hashes `66a3e1dcd9ffb5c3` then
+`099f890e60d097fc` 2 s apart) while the label stayed `Pause video`, which is
+only consistent with the tap calling `play()` on a player that had never
+started. The label is the optimistic initial `isPlaying` state, and the native
+player emits no `playingChange` for a `pause()` on a player that never played.
+
+A controlled comparison then autoplayed on all four opens: cold process start,
+cold start plus one background/return cycle, hot resume and a second cold start
+(`autoplay-cold-vs-hot.json`, `autoplay-*.png`). So this is a race, not a rule:
+two of roughly ten opens on this phone today never started (Wi-Fi enabled, LTE
+active default network, 13 MB private original because production has no
+private renditions). The mechanism is visible in the device log: every viewer
+open logs two `ExoPlayerImpl Init` lines 0.8–1.1 s apart with the first player
+released immediately after the second appears (for example 14:02:44.939 and
+14:02:45.851). The viewer refetches its source query on focus, the response
+carries freshly signed URLs, `useMediaSource` yields a new source and expo-video
+recreates the player. `restoreVideoPlayback` then copied `previous.playing`,
+which is `false` while the first player is still loading, so the replacement
+was paused as if the person had paused it. Whether an open plays is decided by
+whether the first player reaches playback inside that ~1 s window. This defect
+predates the gate: the `previous.playing` copy landed in `53a3903` on 6
+September and the optimistic label in `547aad6` on 23 August.
+
+### Change
+
+- `lib/video-playback-continuity.ts`: a replaced player keeps its playback
+  request unless it was `readyToPlay` and not playing. A loading, idle or failed
+  previous player therefore resumes on renewal when playback is still allowed;
+  explicit pauses and the background gate already arrive as `allowed === false`.
+  The helper now returns the decision. Tests cover the pending request, renewal
+  after an error with playback allowed and revoked, and the mirrored decision.
+- `lib/use-viewer-playback-gate.ts`: an optional `onRevoke` callback runs with
+  each revoke, because a player that has not started emits no `playingChange`
+  when paused.
+- `app/viewer.tsx`: `isPlaying` now follows the replacement decision through an
+  effect keyed on the player, and a gate revoke clears it. The optimistic
+  initial value is unchanged for the first player.
+- The gate and double-tap changes from the interrupted session are included
+  unchanged; their tests already covered `change` and Android `blur`.
+
+Validation under the shell's Node 24: 191 mobile test files / 1,828 tests and
+mobile typecheck pass (`replacement-fix-tests.log`). The audit APK was rebuilt
+with the same Gradle invocation (`replacement-fix-build.log`, bundle generated
+after the last source edit), its bundled client configuration verified
+(`replacement-fix-bundle-env.log`), and the iOS Hermes export passed
+(`replacement-fix-ios-export.log`). APK SHA-256
+`1fe96f5eca2d13d64bedf35355f75407171d3e332535af85c2d02fb6d249e6ab`; the APK
+pulled back after installation has the same digest
+(`replacement-fix-install.log`, `replacement-fix-apk-sha256.txt`).
+
+### Installed-build acceptance (`1fe96f5e`)
+
+`replacement-fix-verify.py` drove the installed audit APK over USB and judged
+playback by crop hashes of the viewer frame, not by labels
+(`replacement-fix-verify.json`, `replacement-fix-verify.log`, `verify-*.png`):
+
+- Autoplay on open: five fresh opens of the same private video advanced between
+  the 3 s and 6 s captures, three from a warm process and two after
+  `am force-stop` and a cold start. The device log still shows two
+  `ExoPlayerImpl Init` lines 0.9–1.4 s apart per open, so the focus refetch
+  still replaces the player; the replacement now keeps the pending request.
+- Quick exit: three cycles of a Pause tap followed by Home inside one device
+  shell (0.18–0.23 s for both injections) came back after 8 s away with
+  `Play video` and an identical frame 3 s later.
+- Home while playing, no tap: `Play video` on return, identical frame.
+- Home 0.21 s after the Open tap, during the initial load: `Play video` on
+  return and an identical frame. This is the revoke-callback path; before the
+  change the badge would have stayed in the playing state.
+- Manual Play then advanced frames, and a settled Pause held its frame.
+
+This is a development-signed release build on one Samsung S24 Ultra over the
+phone's own network, with the 13 MB private original because production has no
+private renditions. It does not certify iOS, the store build or the shared
+preview component, and the two-player open remains a transfer cost.
+
+### Memory soak on the installed build
+
+The prepared `long-memory.py` ran unchanged against the installed `1fe96f5e`
+build from the profile grid: 30 cycles opening two images and one video in
+turn, then four 30 s idle samples, all in one process (pid 26428) over 982 s
+(`long-memory.json`, `long-memory-NNN.txt` meminfo dumps,
+`long-memory-viewer-*.png`, `long-memory-final-grid.png`, `long-memory.log`).
+No `Retry` control appeared and every newly opened video reported the playing
+label, which after the change above means it had actually started.
+
+| Sample | PSS (MiB) |
+| --- | ---: |
+| Grid baseline | 556.9 |
+| Viewer, per cycle | 657.4 – 727.1 |
+| Grid on return, per cycle | 586.0 – 640.0 (first 594.2, last 605.0) |
+| Grid idle 30 / 60 / 90 / 120 s | 556.8 / 534.4 / 552.1 / 545.1 |
+
+Return PSS shows no upward trend across the 30 cycles, and after two minutes
+idle the process sits 12 MiB below its baseline. Between the first and last
+return, native heap moved 184.7 → 179.7 MiB and graphics 245.7 → 201.6 MiB;
+Java heap read 93.5 MiB on the last return but 22.4 MiB at the final idle
+sample, so that is collection timing rather than retention. This measures one
+three-item rotation on one phone with cached media. It is not a leak
+certificate for the broader library, cold caches or iOS, and it says nothing
+about the two-player open cost, which needs a transfer measurement.
+
+### Remaining after this entry
+
+- `components/recoverable-video-preview.tsx` line 89 copies `previous.playing`
+  the same way; source-only, not reproduced on a device, untouched here.
+- Each viewer open still creates and loads two players because the focus
+  refetch re-signs the source; the second now plays, but the first load is
+  wasted transfer on a 13 MB private original until private renditions ship.
+- Physical iOS, the store build, production-duration credentials and the
+  broader surface matrix remain as listed in the plan.
+- All of this is committed on `fix/private-video-delivery` and unreleased: no
+  push, PR, deployment or OTA.

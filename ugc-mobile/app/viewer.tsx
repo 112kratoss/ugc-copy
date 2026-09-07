@@ -107,6 +107,7 @@ import {
 } from '@/lib/post-lifecycle';
 import type { PostLifecycleVisibility } from '@/lib/post-lifecycle-policy';
 import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
+import { useViewerPlaybackGate } from '@/lib/use-viewer-playback-gate';
 import { verticalHitSlop } from '@/lib/hit-target';
 import { changeViewerPage, isDetailsPageCovering, resolveViewerPosition, settleViewerItem, slidePageKey, type ViewerPosition } from '@/lib/viewer-position';
 
@@ -2008,7 +2009,17 @@ function ActiveVideoAttempt({
   const reducedMotion = useReducedMotion();
   const audioMuted = useViewerAudioMuted();
   const { source, requestKey } = useMediaSource(url);
+  // Optimistic: playback is requested below, and the native player reports
+  // `playing` only once it is actually rendering — often a frame or two after
+  // the first frame has already been drawn. Reading `player.playing` here
+  // would flash the paused badge over that first frame; `playingChange` still
+  // corrects this the moment the player really is paused. A gate revoke and a
+  // player replacement are the two pauses the native player never reports for
+  // a source that has not started, so both update this state directly.
+  const [isPlaying, setIsPlaying] = useState(!reducedMotion);
   const previousPlayer = useRef<VideoPlayer | null>(null);
+  const playbackAllowed = useViewerPlaybackGate(previousPlayer, () => setIsPlaying(false));
+  const playbackRequested = useRef(true);
   const player = useVideoPlayer({ ...source, useCaching: true }, (instance) => {
     instance.loop = true;
     instance.muted = isViewerAudioMuted();
@@ -2022,8 +2033,8 @@ function ActiveVideoAttempt({
     // takes it the moment anything plays — muted previews included — while its
     // Android default is already `auto`. Setting it makes the platforms agree.
     instance.audioMixingMode = 'auto';
-    restoreVideoPlayback(instance, previousPlayer.current, !reducedMotion,
-      !reducedMotion && (!AppState.currentState || AppState.currentState === 'active'));
+    playbackRequested.current = restoreVideoPlayback(instance, previousPlayer.current, !reducedMotion,
+      playbackAllowed.current && !reducedMotion && (!AppState.currentState || AppState.currentState === 'active'));
   });
   previousPlayer.current = player;
   const [status, setStatus] = useState<VideoPlayerStatus>(player.status);
@@ -2034,23 +2045,15 @@ function ActiveVideoAttempt({
     player.muted = audioMuted;
   }, [audioMuted, player]);
 
-  // Optimistic: playback is requested below, and the native player reports
-  // `playing` only once it is actually rendering — often a frame or two after
-  // the first frame has already been drawn. Reading `player.playing` here
-  // would flash the paused badge over that first frame; `playingChange` still
-  // corrects this the moment the player really is paused.
-  const [isPlaying, setIsPlaying] = useState(!reducedMotion);
+  useEffect(() => {
+    // A replaced player that stays paused reports no playingChange, so the badge
+    // follows the replacement decision instead of the optimistic initial state.
+    setIsPlaying(playbackRequested.current);
+  }, [player]);
 
   useEffect(() => {
     if (reducedMotion) player.pause();
   }, [player, reducedMotion]);
-
-  useEffect(() => {
-    const subscription = AppState.addEventListener('change', state => {
-      if (state !== 'active') player.pause();
-    });
-    return () => subscription.remove();
-  }, [player]);
 
   useEffect(() => {
     setHasFrame(false);
@@ -2059,12 +2062,17 @@ function ActiveVideoAttempt({
 
   useEffect(() => {
     const subscription = player.addListener('playingChange', (event) => {
+      if (event.isPlaying && !playbackAllowed.current) {
+        player.pause();
+        setIsPlaying(false);
+        return;
+      }
       setIsPlaying(event.isPlaying);
     });
     return () => {
       subscription.remove();
     };
-  }, [player]);
+  }, [playbackAllowed, player]);
 
   useEffect(() => {
     // A cached/native failure can arrive before this effect subscribes.
@@ -2092,8 +2100,11 @@ function ActiveVideoAttempt({
 
   const togglePlayback = () => {
     if (player.playing) {
+      playbackAllowed.current = false;
       player.pause();
     } else {
+      playbackAllowed.current = !AppState.currentState || AppState.currentState === 'active';
+      if (!playbackAllowed.current) return;
       player.play();
     }
   };
