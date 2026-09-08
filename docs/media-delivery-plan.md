@@ -729,3 +729,41 @@ and so cannot reach any installed build over the air; doing it on the server
 fixes both platforms at once and the next store build owes nothing. Evidence:
 F6 of the [8 September audit](media-delivery-audit-2026-09-08-final.md).
 
+
+## A display size between the preview and the source (2026-09-09)
+
+The 720px preview exists for grids, where it is the right size and 25 KB is the
+right cost. A full-screen viewer needs more than that, so the mobile viewer
+reached past the preview and loaded the source, showing the preview only as a
+blurred backdrop. Stored generations average 1.19 MB, published showcase copies
+2.17 MB, the largest 7.9 MB — which made images 48% of a day's Storage bytes,
+more than every video kind together.
+
+`post_media.display_storage_path` (migration `20260909070000`) holds a 1440px
+WebP, 150–300 KB, which covers a 3x phone with room for a pinch. The preview
+writer emits it from the same decode as the preview, so a new image costs one
+extra resize rather than a second download, and the repair sweep records it
+whenever it rebuilds a preview. The original is untouched and stays the
+download and zoom target.
+
+A display rendition is only stored when it earns its place: a source already at
+or below the display size, or one WebP cannot shrink by at least a quarter,
+records nothing. Null is a normal answer and every reader falls back to the
+source, so nothing depends on the column being populated. The mobile viewer
+asks for `displayUrl || url` under its own cache key — preview, display and
+source are three different objects, and filing one under another's key would
+serve the wrong size.
+
+Existing rows are filled by `npm run backfill:media-display-renditions`
+(dry-run by default), not by the migration and not by the repair sweep. The
+sweep is keyed on `preview_status`, and moving a row off `ready` to trigger it
+would report `gridReady: false` and drop the post from the mobile showcase grid
+for as long as the backfill ran.
+
+Scope: published post media, the shared half — every viewer of a showcase post
+pays for its cover. Private creations reach the viewer through
+`generations.preview_url`, whose write path runs through the settlement RPC and
+three status services; giving them the same treatment is the remaining half of
+F3. Evidence: F3 of the
+[8 September audit](media-delivery-audit-2026-09-08-final.md).
+

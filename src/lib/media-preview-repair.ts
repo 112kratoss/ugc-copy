@@ -469,6 +469,10 @@ async function repairPostMedia(
     let resultQuery = supabase.from('post_media').update({
       preview_storage_path: preview.previewStoragePath,
       preview_thumbhash: preview.previewThumbhash,
+      // Null is a normal answer: no display rendition was worth storing, and
+      // readers fall back to the source. Written either way so a repair that
+      // replaces the media cannot leave the old display behind.
+      display_storage_path: preview.displayStoragePath ?? null,
       preview_status: 'ready',
       preview_attempt_count: reservedAttempt,
       preview_error: null,

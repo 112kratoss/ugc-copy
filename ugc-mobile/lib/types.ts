@@ -700,6 +700,13 @@ export interface ShowcaseMediaItem {
   id: string;
   mediaKey?: string;
   url: string;
+  /**
+   * A 1440px WebP for full-screen viewing, between the 720px preview and the
+   * source. Absent or null when one was not worth storing, in which case the
+   * viewer falls back to `url`. The original is still what a download or a
+   * pinch-zoom should reach for.
+   */
+  displayUrl?: string | null;
   renditionUrl?: string | null;
   /** Present when the media's only source is gone; render an explicit unavailable state. */
   sourceUnavailableAt?: string | null;
