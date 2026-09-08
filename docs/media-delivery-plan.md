@@ -678,3 +678,28 @@ code one — each pass downloads every preview it checks — so it is registered
 `npm run audit:media-previews` and left to be called at a cadence the owner
 picks. `--sample=25` is the cheap form. Evidence: F7 of the
 [8 September audit](media-delivery-audit-2026-09-08-final.md).
+
+## The media route reuses a signature it already minted (2026-09-09)
+
+`createMediaReadSignedUrlForRoute` signed on every authorised invocation. iOS
+asks for the same object three times to open one video — the content
+information request, the data request, and the remainder — so one open cost
+three signing round trips and three against the 300-per-10-minutes signing
+limit. That limit is what would start answering 429, which the viewer shows as
+"Video couldn't load", under fast scrolling.
+
+A signature this instance already minted for the same owner and object is now
+handed out again while more than two minutes of its ten remain. The margin
+matters: a range request started on a nearly-expired URL would fail
+mid-transfer. The cache is checked before the rate limit, because a reuse does
+no signing work and charging it would preserve the very 429 this removes; one
+iOS open now costs one signing call instead of three.
+
+The key is owner, bucket, path and download filename, so a capability can never
+cross viewers, and a download-disposition URL stays distinct from a playback
+one. Entries are per-process and bounded at 256, which is all the case needs —
+it is one player asking for one object several times in a row, not a shared
+cache. The CDN fragmentation the earlier pass noted is untouched and remains
+uninteresting: a private object has one viewer, and the native disk cache
+already covers repeat opens. Evidence: F5 of the
+[8 September audit](media-delivery-audit-2026-09-08-final.md).

@@ -1,10 +1,17 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createMediaReadSignedUrlForRoute,
   parseMediaReadRoutePayload,
+  resetMediaSignatureCacheForTests,
 } from '@/lib/media-read-service';
+
+// Signatures are cached per process, so a test that signed the same object
+// would otherwise hand its result to the next one.
+beforeEach(() => {
+  resetMediaSignatureCacheForTests();
+});
 
 function createClients({
   allowed = true,
@@ -126,6 +133,94 @@ describe('createMediaReadSignedUrlForRoute', () => {
       600,
       { download: 'my-bad-clip.mp4' },
     );
+  });
+
+
+  // iOS asks for the same object three times to open one video, and each
+  // request used to mint a fresh signature: three signing round trips and
+  // three against the 300-per-10-minutes budget, per open.
+  it('reuses a signature it already minted for the same owner and object', async () => {
+    const clients = createClients();
+    const payload = {
+      bucket: 'generated_videos' as const,
+      filePath: 'user/clip.mp4',
+      downloadFilename: null,
+    };
+
+    const first = await createMediaReadSignedUrlForRoute({
+      payload, rateLimitClient: clients.rateLimitClient, userClient: clients.userClient, userId: 'user-1',
+    });
+    const second = await createMediaReadSignedUrlForRoute({
+      payload, rateLimitClient: clients.rateLimitClient, userClient: clients.userClient, userId: 'user-1',
+    });
+
+    expect(second).toEqual(first);
+    expect(clients.createSignedUrl).toHaveBeenCalledTimes(1);
+    // A reuse does no signing work, so charging it would keep the 429 this
+    // exists to prevent.
+    expect(clients.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it('never hands one owner a signature minted for another', async () => {
+    const clients = createClients();
+    const payload = {
+      bucket: 'generated_videos' as const,
+      filePath: 'user/clip.mp4',
+      downloadFilename: null,
+    };
+
+    await createMediaReadSignedUrlForRoute({
+      payload, rateLimitClient: clients.rateLimitClient, userClient: clients.userClient, userId: 'user-1',
+    });
+    await createMediaReadSignedUrlForRoute({
+      payload, rateLimitClient: clients.rateLimitClient, userClient: clients.userClient, userId: 'user-2',
+    });
+
+    expect(clients.createSignedUrl).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a download URL distinct from a playback one for the same object', async () => {
+    const clients = createClients();
+    const base = { bucket: 'generated_videos' as const, filePath: 'user/clip.mp4' };
+
+    await createMediaReadSignedUrlForRoute({
+      payload: { ...base, downloadFilename: null },
+      rateLimitClient: clients.rateLimitClient, userClient: clients.userClient, userId: 'user-1',
+    });
+    await createMediaReadSignedUrlForRoute({
+      payload: { ...base, downloadFilename: 'clip.mp4' },
+      rateLimitClient: clients.rateLimitClient, userClient: clients.userClient, userId: 'user-1',
+    });
+
+    // A download-disposition URL is a different capability; serving one for the
+    // other would attach a Content-Disposition the player never asked for.
+    expect(clients.createSignedUrl).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reuse a signature once too little of its life remains', async () => {
+    vi.useFakeTimers();
+    try {
+      const clients = createClients();
+      const payload = {
+        bucket: 'generated_videos' as const,
+        filePath: 'user/clip.mp4',
+        downloadFilename: null,
+      };
+
+      await createMediaReadSignedUrlForRoute({
+        payload, rateLimitClient: clients.rateLimitClient, userClient: clients.userClient, userId: 'user-1',
+      });
+      // Past the 10-minute signature minus the two-minute safety margin: a
+      // range request started on it could otherwise expire mid-transfer.
+      vi.advanceTimersByTime((600 - 120) * 1000 + 1);
+      await createMediaReadSignedUrlForRoute({
+        payload, rateLimitClient: clients.rateLimitClient, userClient: clients.userClient, userId: 'user-1',
+      });
+
+      expect(clients.createSignedUrl).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('returns rate-limit and missing-media failures without signing after denial', async () => {
