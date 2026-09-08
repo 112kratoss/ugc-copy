@@ -194,12 +194,31 @@ export async function hasRepairableMediaPreviews(supabase: SupabaseClient): Prom
     || await hasPendingGenerationPlaybackRendition(supabase);
 }
 
-function previewFailure(error: unknown, attemptCount: number) {
+function previewFailure(error: unknown, reservedAttempt: number) {
   return {
     preview_status: 'failed',
-    preview_attempt_count: Math.min(MAX_PREVIEW_ATTEMPTS, attemptCount + 1),
+    preview_attempt_count: Math.min(MAX_PREVIEW_ATTEMPTS, reservedAttempt),
     preview_error: summarizeMediaToolError(error, 'Preview generation failed.'),
   };
+}
+
+/**
+ * Which attempt this run occupies, and how many ran before it.
+ *
+ * The claim RPCs reserve the attempt when they lease a row (migration
+ * 20260909060000), so what they return is already this run's ordinal — a
+ * worker that adds one to it would double count and trip the 0..3 CHECK. The
+ * fallback path, used when the claim RPC is absent, gets a plain row read
+ * instead and has to reserve the attempt itself.
+ *
+ * `Math.max(claimed, 1)` covers the moments during a release when a leased row
+ * was claimed by the previous definition: undercounting by one costs an extra
+ * retry, which is the safe direction.
+ */
+function reserveAttempt(claimed: number | null | undefined, leased: boolean) {
+  const count = claimed ?? 0;
+  const reservedAttempt = leased ? Math.max(count, 1) : count + 1;
+  return { reservedAttempt, priorAttempts: reservedAttempt - 1 };
 }
 
 /**
@@ -362,10 +381,15 @@ async function repairGeneration(
   row: GenerationRepairRow,
   leaseOwner?: string,
 ): Promise<boolean> {
-  const attempts = row.preview_attempt_count ?? 0;
+  const { reservedAttempt, priorAttempts } = reserveAttempt(row.preview_attempt_count, Boolean(leaseOwner));
   try {
     if (!leaseOwner) {
-      await supabase.from('generations').update({ preview_status: 'processing' }).eq('id', row.id);
+      // Persisted with the status: without a lease this is the only moment the
+      // attempt can be reserved before the work starts.
+      await supabase.from('generations').update({
+        preview_status: 'processing',
+        preview_attempt_count: reservedAttempt,
+      }).eq('id', row.id);
     }
     const source = await resolveGenerationRepairSource(supabase, row);
     const body = await downloadMedia(supabase, source.outputUrl, source.ownerUserId);
@@ -387,7 +411,7 @@ async function repairGeneration(
       // the source output's.
       preview_width: preview.previewWidth,
       preview_height: preview.previewHeight,
-      preview_attempt_count: attempts + 1,
+      preview_attempt_count: reservedAttempt,
       preview_error: null,
       preview_generated_at: new Date().toISOString(),
       preview_locked_at: null,
@@ -399,8 +423,10 @@ async function repairGeneration(
     return true;
   } catch (error) {
     const failure = supabase.from('generations').update({
-      ...previewFailure(error, attempts),
-      ...(isGoneExternalSourceError(error, attempts)
+      ...previewFailure(error, reservedAttempt),
+      // Counts runs that already finished, so the marker still needs a second,
+      // separate run rather than firing on the first 404.
+      ...(isGoneExternalSourceError(error, priorAttempts)
         ? { source_unavailable_at: new Date().toISOString() }
         : {}),
       preview_locked_at: null,
@@ -417,10 +443,13 @@ async function repairPostMedia(
   row: PostMediaRepairRow,
   leaseOwner?: string,
 ): Promise<boolean> {
-  const attempts = row.preview_attempt_count ?? 0;
+  const { reservedAttempt } = reserveAttempt(row.preview_attempt_count, Boolean(leaseOwner));
   try {
     if (!leaseOwner) {
-      await supabase.from('post_media').update({ preview_status: 'processing' }).eq('id', row.id);
+      await supabase.from('post_media').update({
+        preview_status: 'processing',
+        preview_attempt_count: reservedAttempt,
+      }).eq('id', row.id);
     }
     const storagePath = await resolvePostMediaRepairPath(supabase, row);
     const download = await supabase.storage.from(SHOWCASE_MEDIA_BUCKET).download(storagePath);
@@ -441,7 +470,7 @@ async function repairPostMedia(
       preview_storage_path: preview.previewStoragePath,
       preview_thumbhash: preview.previewThumbhash,
       preview_status: 'ready',
-      preview_attempt_count: attempts + 1,
+      preview_attempt_count: reservedAttempt,
       preview_error: null,
       preview_generated_at: new Date().toISOString(),
       width: preview.width,
@@ -455,7 +484,7 @@ async function repairPostMedia(
     return true;
   } catch (error) {
     const failure = supabase.from('post_media').update({
-      ...previewFailure(error, attempts),
+      ...previewFailure(error, reservedAttempt),
       preview_locked_at: null,
       preview_locked_by: null,
     }).eq('id', row.id);
@@ -470,7 +499,7 @@ async function repairPostMediaRendition(
   row: PostMediaRenditionRepairRow,
   leaseOwner?: string,
 ): Promise<boolean> {
-  const attempts = row.rendition_attempt_count ?? 0;
+  const { reservedAttempt } = reserveAttempt(row.rendition_attempt_count, Boolean(leaseOwner));
   // Field presence, not value: a pre-teaser claim RPC or database returns rows
   // without the field at all, and then no update may reference the columns.
   const teaserColumnsPresent = 'teaser_storage_path' in row;
@@ -494,7 +523,10 @@ async function repairPostMediaRendition(
   });
   try {
     if (!leaseOwner) {
-      await supabase.from('post_media').update({ rendition_status: 'processing' }).eq('id', row.id);
+      await supabase.from('post_media').update({
+        rendition_status: 'processing',
+        rendition_attempt_count: reservedAttempt,
+      }).eq('id', row.id);
     }
     const storagePath = await resolvePostMediaRepairPath(supabase, row);
     const download = await supabase.storage.from(SHOWCASE_MEDIA_BUCKET).download(storagePath);
@@ -525,7 +557,7 @@ async function repairPostMediaRendition(
     if (rendition.status === 'skipped') {
       let skipQuery = supabase.from('post_media').update({
         rendition_status: 'skipped',
-        rendition_attempt_count: attempts + 1,
+        rendition_attempt_count: reservedAttempt,
         rendition_error: `Rendition skipped: ${rendition.reason}.`,
         ...midFlightSpread(),
         rendition_locked_at: null,
@@ -540,7 +572,7 @@ async function repairPostMediaRendition(
     let resultQuery = supabase.from('post_media').update({
       rendition_storage_path: rendition.renditionStoragePath,
       rendition_status: 'ready',
-      rendition_attempt_count: attempts + 1,
+      rendition_attempt_count: reservedAttempt,
       rendition_error: null,
       rendition_generated_at: new Date().toISOString(),
       rendition_bytes: rendition.renditionBytes,
@@ -560,7 +592,7 @@ async function repairPostMediaRendition(
   } catch (error) {
     const failure = supabase.from('post_media').update({
       rendition_status: 'failed',
-      rendition_attempt_count: Math.min(MAX_RENDITION_ATTEMPTS, attempts + 1),
+      rendition_attempt_count: Math.min(MAX_RENDITION_ATTEMPTS, reservedAttempt),
       rendition_error: summarizeMediaToolError(error, 'Rendition generation failed.'),
       // The whole point of teaser-first: a timeout here must not lose the
       // teaser that already uploaded, nor the probed duration.
