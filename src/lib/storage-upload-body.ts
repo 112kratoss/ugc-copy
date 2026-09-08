@@ -1,7 +1,11 @@
-import 'server-only';
-
 /**
  * Wrap encoded bytes for Supabase Storage. Always upload a Blob, never a Buffer.
+ *
+ * Intentionally not marked `server-only`. That specifier resolves only inside
+ * Next, and backfill scripts upload to Storage too — marking it would push them
+ * into hand-rolling the Blob, which is the exact mistake documented below. A
+ * pure byte wrapper has nothing to withhold from a client bundle; the risk here
+ * is duplication, not exposure.
  *
  * `StorageFileApi.uploadOrUpdate` branches on the body type: a Blob is appended to
  * a FormData and sent as multipart, while anything it does not recognise — a Node
