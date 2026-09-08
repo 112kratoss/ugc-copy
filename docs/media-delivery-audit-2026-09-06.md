@@ -2606,3 +2606,46 @@ update); or reconsider `useCaching` per surface, trading one 2.9x cold open
 for a 1x transfer on every open. Evidence and repro scripts:
 `output/media-audit/sim-cold-open-ab.sh` and the `sim-A-*.png` / `sim-B-*.png`
 frames.
+
+### The content-information request now asks for two bytes (2026-09-08, 15:20–15:30 IST)
+
+`patches/expo-video+55.0.21.patch` applies the first fix direction from the
+entry above. The content-information request now carries `Range: bytes=0-1`,
+which forces three related changes: a ranged response reports only its slice
+in `Content-Length`, so the player's content length and the cached media info
+both read the total from `Content-Range`; the cache accepts a 206 as a valid
+description of a resource rather than only a 200; and the headers it replays
+to the player as a synthetic 200 have the slice's `Content-Range` stripped and
+`Content-Length` set to the total. A 206 is also taken as proof that the
+server serves ranges. A server that ignores the range answers exactly as it
+did before, so the change degrades to today's behaviour rather than failing.
+
+Measured on the same simulator, release build, cache cleared, production data:
+
+| Clip | Unpatched cold open | Patched cold open |
+| --- | --- | --- |
+| 465,804 B (6 s) | 1,337,500 B (2.87x) | 873,564 B (1.88x) |
+| 1,475,359 B (11 s) | not measured unpatched | 1,475,361 B (1.00x) |
+
+The first request drops from the whole file to two bytes in both. Whether the
+remainder request also appears is timing-dependent: the 11-second clip's cold
+open needed one transfer and nothing else, which is the Android figure.
+
+The cache still works, which the metadata changes put at risk. After a cold
+open the cached media info reads `expectedContentLength` 1,475,359 (the total,
+not the two-byte slice), `loadedDataRangesArr` `[[0, 465804]]` for the smaller
+clip, `Content-Range` absent from the stored headers, and the data file is the
+full size. The third launch of a clip fetched nothing at all and played from
+disk. The second launch still re-downloads, which is what the unpatched iPhone
+did too (its second launch re-fetched and its third was clean), so that is
+expo-video's own finalisation timing rather than anything this patch changed.
+
+One "Video couldn't load" plate appeared on a second launch during this pass,
+after the app had been terminated mid-download; it did not reproduce on a
+clean cold-play-terminate-reopen cycle with the other clip. It is recorded but
+not attributed to the patch.
+
+Because `patches/` is a fingerprint input, this changes the runtime version on
+both platforms: existing binaries can no longer take an update built from
+main, and the saving only reaches users in the next store build. The
+per-target release branches are unaffected.
