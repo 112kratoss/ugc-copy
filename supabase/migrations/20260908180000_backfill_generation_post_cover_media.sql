@@ -15,13 +15,33 @@
 -- gets the generation's preview grafted on, and a pending rendition keeps the
 -- feed poster-only rather than falling back to the source.
 --
--- Only the generation's own derivative is ever adopted. `showcase_asset_path`
--- must sit under `showcase/<generation id>/`, which is the same canonical check
--- the application makes before it writes or removes one of these objects, so a
--- path pointing anywhere else is left alone rather than trusted.
+-- This selection is deliberately NARROWER than the canonical path check the
+-- application makes (`getCanonicalGenerationShowcaseAssetPath`, which
+-- percent-decodes and rejects encoded separators, control characters,
+-- backslashes and traversal). Reproducing that decoder in SQL would risk
+-- disagreeing with it; instead anything it could interpret differently is left
+-- for the application to adopt on the post's next publish or exposure change:
 --
--- Idempotent: posts that already carry media rows are skipped entirely, so a
--- replay adopts nothing twice and never disturbs a derivative already built.
+--   * `%` is excluded outright — the app stores the *decoded* path, so for an
+--     escaped name the two could write different strings for the same object,
+--     and the app would then repoint the row (clearing its derivatives) on
+--     every edit forever.
+--   * `\` is excluded — it would violate `post_media_storage_path_safe_check`
+--     and abort the whole release.
+--   * exactly three segments are required, so `split_part(..., 3)` below is the
+--     object name, matching the app's `path.split('/').pop()`. Every path the
+--     copier writes has exactly three.
+--
+-- Media kind follows the file extension first and the post's category second,
+-- mirroring `inferShowcaseContentType`. Falling back to 'image' instead would
+-- turn a video with an unrecognised extension into an image row: the card
+-- would render an <img> at a video file, the rendition sweep (which requires
+-- media_kind = 'video') would never claim it, and the preview sweep would feed
+-- it to an image encoder three times and give up.
+--
+-- Idempotent: posts that already carry media rows are skipped, and the insert
+-- takes no conflict, so a replay adopts nothing twice and a publish racing this
+-- migration cannot abort the release.
 
 insert into public.post_media (
   post_id,
@@ -56,29 +76,39 @@ from (
     split_part(posts.showcase_asset_path, '/', 3) as original_name,
     case
       when posts.showcase_asset_path ~* '\.(mp4|m4v|mov|webm)$' then 'video'
+      when posts.showcase_asset_path ~* '\.(png|jpg|jpeg|webp|gif)$' then 'image'
+      -- The extension is unrecognised, so the post's own category decides,
+      -- the same fallback `inferShowcaseContentType` makes.
+      when posts.category in ('video', 'motion', 'ugc-ad') then 'video'
       else 'image'
     end as media_kind,
     case
-      when posts.showcase_asset_path ~* '\.mp4$' then 'video/mp4'
-      when posts.showcase_asset_path ~* '\.m4v$' then 'video/mp4'
+      when posts.showcase_asset_path ~* '\.(mp4|m4v)$' then 'video/mp4'
       when posts.showcase_asset_path ~* '\.mov$' then 'video/quicktime'
       when posts.showcase_asset_path ~* '\.webm$' then 'video/webm'
       when posts.showcase_asset_path ~* '\.png$' then 'image/png'
       when posts.showcase_asset_path ~* '\.webp$' then 'image/webp'
       when posts.showcase_asset_path ~* '\.gif$' then 'image/gif'
+      when posts.showcase_asset_path ~* '\.(jpg|jpeg)$' then 'image/jpeg'
+      when posts.category in ('video', 'motion', 'ugc-ad') then 'video/mp4'
       else 'image/jpeg'
     end as content_type
   from public.posts
   where posts.generation_id is not null
-    and posts.archived_at is null
-    -- The derivative only exists while the post is exposed; a private post's
-    -- copy has already been removed.
+    -- The derivative exists for as long as the post is not private, whether or
+    -- not it is archived: only the private transition removes it. An archived
+    -- post left out here would come back from the archive on the legacy cover
+    -- path with nothing to heal it.
     and posts.visibility in ('public', 'unlisted')
     and posts.showcase_asset_path is not null
-    -- The generation's own prefix, and a real object name after it.
+    -- The generation's own prefix, exactly three segments, and none of the
+    -- characters the application's canonical decoder would treat differently.
     and posts.showcase_asset_path like ('showcase/' || posts.generation_id::text || '/%')
     and split_part(posts.showcase_asset_path, '/', 3) <> ''
+    and split_part(posts.showcase_asset_path, '/', 4) = ''
     and posts.showcase_asset_path not like '%..%'
+    and position('%' in posts.showcase_asset_path) = 0
+    and position('\' in posts.showcase_asset_path) = 0
     and not exists (
       select 1 from public.post_media existing where existing.post_id = posts.id
     )
@@ -90,4 +120,7 @@ from (
       where storage.objects.bucket_id = 'showcase_media'
         and storage.objects.name = posts.showcase_asset_path
     )
-) as candidate;
+) as candidate
+-- A publish or caption edit racing this migration writes the same row; losing
+-- that race must not fail the release.
+on conflict (post_id, media_key) do nothing;

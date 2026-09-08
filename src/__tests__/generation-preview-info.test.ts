@@ -60,7 +60,7 @@ describe('loadGenerationPreviewInfoMap', () => {
     const { client, signedPaths } = createAdminClient([generationRow('gen-1'), generationRow('gen-2')]);
 
     const map = await loadGenerationPreviewInfoMap(client, ['gen-1', 'gen-2'], {
-      shouldSignPreview: (generationId) => generationId === 'gen-1',
+      signPreviewFor: Promise.resolve(new Set(['gen-1'])),
     });
 
     // The bucket is selected by `storage.from`, so only the path within it is
@@ -76,7 +76,7 @@ describe('loadGenerationPreviewInfoMap', () => {
     const { client } = createAdminClient([generationRow('gen-1')]);
 
     const map = await loadGenerationPreviewInfoMap(client, ['gen-1'], {
-      shouldSignPreview: () => false,
+      signPreviewFor: Promise.resolve(new Set<string>()),
     });
 
     expect(map.get('gen-1')).toMatchObject({
@@ -94,4 +94,32 @@ describe('loadGenerationPreviewInfoMap', () => {
     expect(map.size).toBe(0);
     expect(from).not.toHaveBeenCalled();
   });
+
+  it('reads the generations table without waiting on the caller\'s set', async () => {
+    // Only the signing depends on the caller's post_media read. The feed calls
+    // this once per scan batch, so making the row fetch wait would cost a
+    // round trip per batch.
+    const { client, signedPaths } = createAdminClient([generationRow('gen-1')]);
+    let selectStarted = false;
+    const originalFrom = client.from.bind(client);
+    (client as unknown as { from: (table: string) => unknown }).from = (table: string) => {
+      selectStarted = true;
+      return originalFrom(table) as unknown;
+    };
+
+    let releaseSet: (value: ReadonlySet<string>) => void = () => {};
+    const signPreviewFor = new Promise<ReadonlySet<string>>((resolve) => { releaseSet = resolve; });
+    const pending = loadGenerationPreviewInfoMap(client, ['gen-1'], { signPreviewFor });
+
+    // Let the row read run while the set is still unresolved.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(selectStarted).toBe(true);
+    expect(signedPaths).toEqual([]);
+
+    releaseSet(new Set(['gen-1']));
+    const map = await pending;
+    expect(signedPaths).toEqual(['user-1/gen-1.preview.webp']);
+    expect(map.get('gen-1')?.previewUrl).toContain('token=fresh');
+  });
+
 });

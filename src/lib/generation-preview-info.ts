@@ -22,18 +22,31 @@ function previewSizeFields(size: PreviewSize | null) {
  * `post_media` rows (the showcase feed and the owner post list/detail), so a
  * generation-backed post renders its poster the same way everywhere.
  *
- * `shouldSignPreview` decides which generations actually need the signature.
+ * `signPreviewFor` names the generations that actually need the signature.
  * Only a cover with no poster of its own is grafted onto, but this map is
  * loaded for every generation-backed post on the page, and signing a private
  * preview for each of them was the single largest source of Storage signing
  * calls in the product — one fresh token per feed read, none of them reusable
- * by the CDN. The model is still returned for every generation; callers read
- * it whether or not a poster is grafted.
+ * by the CDN.
+ *
+ * It arrives as a promise on purpose. Callers derive it from their
+ * `post_media` read, but only the *signing* depends on that read — the row
+ * fetch below does not — so taking it unresolved lets this run beside the
+ * caller's other queries instead of behind them. The showcase feed calls this
+ * once per scan batch inside a filtering loop, where a sequential read would
+ * have cost a round trip per batch rather than one per request.
+ *
+ * Omitting it signs every preview, which is the behaviour every caller had
+ * before this argument existed. Note the returned `previewUrl` is now "signed
+ * if the caller asked for it", not "signed whenever the generation has one":
+ * a new consumer that needs a poster must widen the set, not just read the map.
+ * The model is returned for every generation either way; callers read it
+ * whether or not a poster is grafted.
  */
 export async function loadGenerationPreviewInfoMap(
   adminSupabase: SupabaseClient,
   generationIds: string[],
-  options?: { shouldSignPreview?: (generationId: string) => boolean },
+  options?: { signPreviewFor?: PromiseLike<ReadonlySet<string>> },
 ): Promise<Map<string, GenerationPreviewInfo>> {
   const generationInfoMap = new Map<string, GenerationPreviewInfo>();
   const uniqueIds = Array.from(new Set(generationIds.filter(Boolean)));
@@ -60,13 +73,16 @@ export async function loadGenerationPreviewInfoMap(
     return generationInfoMap;
   }
 
+  // Awaited only now, after the read above has already happened.
+  const signPreviewFor = options?.signPreviewFor ? await options.signPreviewFor : null;
+
   const entries = await Promise.all((models ?? []).flatMap((generation) => {
     if (typeof generation.id !== 'string' || typeof generation.model !== 'string') return [];
     const previewSource =
       typeof generation.preview_url === 'string' && generation.preview_url
         ? generation.preview_url
         : null;
-    const needsPreview = options?.shouldSignPreview?.(generation.id) ?? true;
+    const needsPreview = !signPreviewFor || signPreviewFor.has(generation.id);
     return [Promise.resolve(needsPreview && previewSource && generation.user_id
       ? resolveOwnedStoredMediaUrl(adminSupabase, previewSource, generation.user_id)
       : null)
@@ -85,6 +101,23 @@ export async function loadGenerationPreviewInfoMap(
 }
 
 /**
+ * Whether a post's cover would use the linked generation's preview as its
+ * poster — which is exactly when signing that private preview is worth doing.
+ *
+ * Callers deciding what to sign and the graft below must agree, or the graft
+ * silently stops finding a poster it was promised (posts render poster-less)
+ * or a signature is minted for a cover that already has one. One predicate,
+ * used by both.
+ */
+export function coverNeedsGenerationPreview(
+  mediaItems: PostMediaSummary[] | undefined,
+): boolean {
+  const cover = mediaItems?.[0];
+  // No cover row at all means one is synthesised without a poster, so it does.
+  return !cover || !cover.previewUrl;
+}
+
+/**
  * Grafts the linked generation's preview onto a synthesised cover. Posts that
  * predate `post_media` (and creation posts whose derivative rows were removed
  * when they went private) are served `previewUrl: null`, which clients render
@@ -95,7 +128,7 @@ export function graftGenerationPreviewOntoCover(
   mediaItems: PostMediaSummary[],
   generationInfo: GenerationPreviewInfo | null | undefined,
 ): PostMediaSummary[] {
-  if (!generationInfo?.previewUrl || !mediaItems[0] || mediaItems[0].previewUrl) {
+  if (!generationInfo?.previewUrl || !mediaItems[0] || !coverNeedsGenerationPreview(mediaItems)) {
     return mediaItems;
   }
 

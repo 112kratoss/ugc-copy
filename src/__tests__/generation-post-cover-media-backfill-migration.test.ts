@@ -21,23 +21,39 @@ describe('generation post cover media backfill migration', () => {
     expect(migration).toContain("case when candidate.media_kind = 'video' then 'pending' else 'skipped' end");
   });
 
-  it('classifies video by the stored file rather than the post category', () => {
+  it('falls back to the post category when the extension is unrecognised', () => {
+    // Falling back to 'image' would render an <img> at a video file, keep the
+    // rendition sweep (media_kind = 'video') from ever claiming it, and feed
+    // the file to an image encoder until all three attempts were spent.
     expect(migration).toContain("posts.showcase_asset_path ~* '\\.(mp4|m4v|mov|webm)$' then 'video'");
-    expect(migration).toContain("posts.showcase_asset_path ~* '\\.mp4$' then 'video/mp4'");
+    expect(migration).toContain("when posts.category in ('video', 'motion', 'ugc-ad') then 'video'");
+    expect(migration).toContain("when posts.category in ('video', 'motion', 'ugc-ad') then 'video/mp4'");
   });
 
   it('adopts only a derivative under the generation’s own prefix', () => {
-    // The same canonical check the application makes before it writes or
-    // removes one of these objects.
     expect(migration).toContain("posts.showcase_asset_path like ('showcase/' || posts.generation_id::text || '/%')");
     expect(migration).toContain("posts.showcase_asset_path not like '%..%'");
     expect(migration).toContain("split_part(posts.showcase_asset_path, '/', 3) <> ''");
   });
 
-  it('skips posts whose derivative is already gone or was never exposed', () => {
+  it('leaves every path the application would canonicalise differently alone', () => {
+    // A percent escape could make the app store a decoded path that no longer
+    // equals this one, and it would then repoint the row — clearing its
+    // derivatives — on every edit. A backslash would violate
+    // post_media_storage_path_safe_check and abort the release.
+    expect(migration).toContain("position('%' in posts.showcase_asset_path) = 0");
+    expect(migration).toContain("position('\\' in posts.showcase_asset_path) = 0");
+    // Exactly three segments, so split_part(..., 3) is the object name and
+    // matches the application's `path.split('/').pop()`.
+    expect(migration).toContain("split_part(posts.showcase_asset_path, '/', 4) = ''");
+  });
+
+  it('follows visibility rather than the archive, which never removes a derivative', () => {
     expect(migration).toContain("posts.visibility in ('public', 'unlisted')");
-    expect(migration).toContain('posts.archived_at is null');
     expect(migration).toContain('posts.showcase_asset_path is not null');
+    // Archiving leaves the public copy in place, so an archived post excluded
+    // here would return from the archive with nothing to heal it.
+    expect(migration).not.toContain('posts.archived_at is null');
   });
 
   it('never adopts a path with no stored object behind it', () => {
@@ -47,8 +63,11 @@ describe('generation post cover media backfill migration', () => {
     expect(migration).toContain('storage.objects.name = posts.showcase_asset_path');
   });
 
-  it('is replayable, because it skips any post that already has media rows', () => {
+  it('is replayable and cannot abort the release on a race', () => {
     expect(migration).toContain('not exists (');
     expect(migration).toContain('from public.post_media existing where existing.post_id = posts.id');
+    // A publish writing the same row between the snapshot and the insert would
+    // otherwise raise 23505 and fail the whole production release.
+    expect(migration).toContain('on conflict (post_id, media_key) do nothing');
   });
 });

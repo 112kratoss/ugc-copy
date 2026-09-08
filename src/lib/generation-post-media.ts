@@ -197,9 +197,12 @@ function isDuplicateRowError(error: { code?: string } | null): boolean {
  * - a row pointing at a superseded derivative (the output was replaced) is
  *   repointed and its derivative columns cleared, because those files describe
  *   content this post no longer serves;
- * - the superseded objects are not deleted here. A publish must never remove
- *   public media; `removeGenerationShowcaseDerivative` collects them when the
- *   post goes private.
+ * - the superseded objects are not deleted here, and nothing else collects
+ *   them either: `removeGenerationShowcaseDerivative` only sees the path the
+ *   post currently points at. A repointed row therefore strands the previous
+ *   object and its derivatives in the public bucket. That is deliberate for
+ *   now — a publish must never delete public media, and the safe sweep for
+ *   orphans is separate work — but it is a leak, not a cleanup contract.
  */
 export async function ensureGenerationPostCoverMedia({
   adminSupabase,
@@ -247,10 +250,26 @@ export async function ensureGenerationPostCoverMedia({
 
   const coverRow = rows.find((row) => (row.sort_order ?? 0) === 0) ?? null;
   if (coverRow) {
+    // Only a row this module owns may be repointed: one the June 2026 gallery
+    // backfill left with no stored path, or one already serving a derivative
+    // of this same generation. Anything else holding position 0 belongs to a
+    // writer this function does not understand, so it is left alone rather
+    // than overwritten — and an insert is not attempted either, because it
+    // would collide on (post_id, sort_order).
+    const ownsCoverRow = !coverRow.storage_path
+      || Boolean(getCanonicalGenerationShowcaseAssetPath(coverRow.storage_path, generationId));
+    if (!ownsCoverRow) {
+      return { outcome: 'skipped', error: null };
+    }
+
     const { error } = await adminSupabase
       .from('post_media')
       .update({
         storage_path: derivativePath,
+        // The gallery backfill recorded the private original here when the
+        // post was private. A row carrying both is a shape no other writer
+        // produces, and `resolvePostMediaDbRowUrl` would silently prefer one.
+        external_url: null,
         media_kind: mediaKind,
         content_type: contentType,
         original_name: sourceName,
@@ -275,6 +294,16 @@ export async function ensureGenerationPostCoverMedia({
         width: null,
         height: null,
         duration_seconds: null,
+        // A sweep already working on the old file finishes with an update
+        // conditioned on holding the lease. Releasing it here makes that write
+        // miss, instead of stamping the old file's poster or rendition onto
+        // the row as `ready` — which is terminal, so it would never be redone.
+        preview_locked_at: null,
+        preview_locked_by: null,
+        rendition_locked_at: null,
+        rendition_locked_by: null,
+        teaser_locked_at: null,
+        teaser_locked_by: null,
       })
       .eq('id', coverRow.id);
     return { outcome: error ? 'failed' : 'repointed', error: error ?? null };

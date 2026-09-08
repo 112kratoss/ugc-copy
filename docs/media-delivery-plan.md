@@ -581,15 +581,29 @@ exist. Measured on 8 September: 6,169 preview signatures in 24 hours across 23
 paths, 92% of signed-preview reads a Cloudflare miss, and one public video
 (`40cac994`) streaming 1.56 MB where a 177 KB rendition already existed.
 
-Three changes close it. `ensureGenerationPostCoverMedia` writes the cover row
-at publish, with its derivatives pending so the ten-minute sweeps build them —
+Four changes close it. `ensureGenerationPostCoverMedia` writes the cover row at
+publish, with its derivatives pending so the ten-minute sweeps build them —
 nothing regresses while they wait, because a cover with no poster still gets
 the generation's preview grafted on and a pending rendition keeps the feed
-poster-only. Migration `20260908180000` backfills the five exposed posts that
-predate it. `loadGenerationPreviewInfoMap` now signs a preview only for the
-covers that will actually be grafted onto, which is what stops the signing for
-good once a post has a public poster of its own; the showcase feed and both
-owner surfaces pass that predicate.
+poster-only. It is called from both routes that expose a post: the publish
+route and the post editor, which creates its own derivative and whose private
+flip deletes the row.
+
+The repair sweeps had to be taught to accept these rows. Since `e8e30a7`
+(2026-08-20) `getCanonicalPostMediaPath` required media to sit under
+`posts/<post id>/`, but a generation-backed post's public copy lives under
+`showcase/<generation id>/`; the sweep claimed such a row, threw, and spent all
+three attempts. It now also accepts the generation prefix, with the generation
+id read from the owning post row rather than the path, so the scope stays
+server-derived. The existing `showcase/` rows were built on 2026-06-19, before
+that guard, which is why nothing looked broken: they were already `ready` and
+never re-claimed.
+
+Migration `20260908180000` backfills the five exposed posts that predate this.
+`loadGenerationPreviewInfoMap` now signs a preview only for the covers that
+will actually be grafted onto, which is what stops the signing for good once a
+post has a public poster of its own; the showcase feed and both owner surfaces
+pass that set, as a promise so the generation read still runs in parallel.
 
 The row is idempotent across republishes: one already serving the current
 derivative is left untouched, so an edit never discards a preview or rendition
@@ -599,6 +613,14 @@ its derivative columns cleared. Teardown was already in place —
 a post goes private. A failure to write the row never fails the publish: the
 post is committed by then, and it serves the legacy way until a later publish
 writes the row.
+
+Two gaps stay open, neither a regression. `claim_post_media_teaser_repair`
+still requires a `posts/<post id>/` rendition path, so a generation-published
+video over 30 seconds gets a rendition but never a teaser (no such video exists
+today). And a repointed row strands the superseded object and its derivatives
+in the public bucket: nothing collects them, because
+`removeGenerationShowcaseDerivative` only sees the path the post currently
+points at.
 
 Close by confirming the anonymous home payload carries no `/object/sign/` URL
 and every public video has a `.feed.` rendition. Evidence and the surrounding

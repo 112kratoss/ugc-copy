@@ -313,6 +313,17 @@ describe('ensureGenerationPostCoverMedia', () => {
     expect(updates[0].id).toBe('row-1');
     expect(updates[0].values).toMatchObject({
       storage_path: 'showcase/gen-1/generated_new.222222222222.mp4',
+      // A row the June 2026 gallery backfill left pointing at the private
+      // original must not keep both locations.
+      external_url: null,
+      // A sweep still working on the old file finishes with a write
+      // conditioned on holding the lease; releasing it makes that write miss.
+      preview_locked_at: null,
+      preview_locked_by: null,
+      rendition_locked_at: null,
+      rendition_locked_by: null,
+      teaser_locked_at: null,
+      teaser_locked_by: null,
       preview_storage_path: null,
       preview_status: 'pending',
       preview_attempt_count: 0,
@@ -370,4 +381,80 @@ describe('ensureGenerationPostCoverMedia', () => {
       category: 'video',
     })).resolves.toEqual({ outcome: 'failed', error: { message: 'insert rejected' } });
   });
+
+  it('adopts a gallery-backfill row that never had a stored path', async () => {
+    const { ensureGenerationPostCoverMedia } = await import('@/lib/generation-post-media');
+    // The June 2026 backfill wrote external_url only for posts that were
+    // private then; publishing one now gives it the derivative.
+    const { client, inserts, updates } = createCoverMediaClient({
+      rows: [{ id: 'row-1', storage_path: null, sort_order: 0 }],
+    });
+
+    const result = await ensureGenerationPostCoverMedia({
+      adminSupabase: client,
+      postId: 'post-1',
+      generationId: 'gen-1',
+      showcaseAssetPath: 'showcase/gen-1/generated_abc.348d1d89d1cf.mp4',
+      category: 'video',
+    });
+
+    expect(result).toEqual({ outcome: 'repointed', error: null });
+    expect(inserts).toEqual([]);
+    expect(updates[0].values).toMatchObject({
+      storage_path: 'showcase/gen-1/generated_abc.348d1d89d1cf.mp4',
+      external_url: null,
+    });
+  });
+
+  it('leaves a cover row it does not own alone instead of overwriting it', async () => {
+    const { ensureGenerationPostCoverMedia } = await import('@/lib/generation-post-media');
+    // Position 0 held by media belonging to some other writer. Overwriting it
+    // would destroy that row, and inserting would collide on sort_order.
+    const { client, inserts, updates } = createCoverMediaClient({
+      rows: [{ id: 'row-1', storage_path: 'posts/post-1/0/upload.jpg', sort_order: 0 }],
+    });
+
+    const result = await ensureGenerationPostCoverMedia({
+      adminSupabase: client,
+      postId: 'post-1',
+      generationId: 'gen-1',
+      showcaseAssetPath: 'showcase/gen-1/generated_abc.348d1d89d1cf.mp4',
+      category: 'video',
+    });
+
+    expect(result).toEqual({ outcome: 'skipped', error: null });
+    expect(inserts).toEqual([]);
+    expect(updates).toEqual([]);
+  });
+
+  it('reports a failed row read rather than inserting a duplicate cover', async () => {
+    const { ensureGenerationPostCoverMedia } = await import('@/lib/generation-post-media');
+    const { client, inserts } = createCoverMediaClient({ selectError: { message: 'read rejected' } });
+
+    await expect(ensureGenerationPostCoverMedia({
+      adminSupabase: client,
+      postId: 'post-1',
+      generationId: 'gen-1',
+      showcaseAssetPath: 'showcase/gen-1/generated_abc.348d1d89d1cf.mp4',
+      category: 'video',
+    })).resolves.toEqual({ outcome: 'failed', error: { message: 'read rejected' } });
+    expect(inserts).toEqual([]);
+  });
+
+  it('reports a failed repoint, the one path that can strand a row on a deleted object', async () => {
+    const { ensureGenerationPostCoverMedia } = await import('@/lib/generation-post-media');
+    const { client } = createCoverMediaClient({
+      rows: [{ id: 'row-1', storage_path: 'showcase/gen-1/generated_old.111111111111.mp4', sort_order: 0 }],
+      updateError: { message: 'update rejected' },
+    });
+
+    await expect(ensureGenerationPostCoverMedia({
+      adminSupabase: client,
+      postId: 'post-1',
+      generationId: 'gen-1',
+      showcaseAssetPath: 'showcase/gen-1/generated_new.222222222222.mp4',
+      category: 'video',
+    })).resolves.toEqual({ outcome: 'failed', error: { message: 'update rejected' } });
+  });
+
 });
