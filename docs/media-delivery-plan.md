@@ -651,3 +651,30 @@ rather than firing on a first 404.
 
 No behaviour changes for a healthy row: three attempts before and after.
 Evidence: F4 of the [8 September audit](media-delivery-audit-2026-09-08-final.md).
+
+## The integrity audit can report clean (2026-09-09)
+
+`scripts/audit-media-previews.ts` never selected `source_unavailable_at`, so
+the three records whose only source is gone were reported as
+`missing_preview` / `missing_source_and_preview` on every run. They have no
+preview and never will — the repair job marks them and the product renders them
+as explicitly unavailable — so the audit stayed red permanently over rows
+nothing can fix, which is why it could not be used as a health signal.
+
+It now counts them under `knownUnavailable` instead, and keeps failing for
+media that genuinely owes a preview. Exit status is health rather than
+progress: a run that leaves pages unread reports `complete: false` and still
+exits 0, where before any unread page also exited 1. `--sample=<n>` draws an
+even spread across the corpus for a bounded periodic check, rather than
+re-reading the oldest rows every time. The decisions it makes before
+downloading anything moved to `src/lib/media-integrity-audit.ts` so they are
+unit-tested rather than only exercised against production.
+
+Measured on production after the change: 104 rows, 101 previews decoded,
+**0 findings**, 3 known-unavailable, complete, exit 0.
+
+Whether to run this on a schedule is a standing cost decision rather than a
+code one — each pass downloads every preview it checks — so it is registered as
+`npm run audit:media-previews` and left to be called at a cadence the owner
+picks. `--sample=25` is the cheap form. Evidence: F7 of the
+[8 September audit](media-delivery-audit-2026-09-08-final.md).

@@ -18,6 +18,7 @@
     "eval:enhancer": "tsx --env-file-if-exists=.env.local --tsconfig tsconfig.scripts.json scripts/enhancer-eval.ts",
     "backfill:legacy-media": "node scripts/backfill-legacy-temp-media.mjs",
     "backfill:media-previews": "tsx scripts/backfill-media-previews.ts",
+    "audit:media-previews": "tsx --env-file-if-exists=.env.local scripts/audit-media-previews.ts",
     "backfill:media-upload-intents": "tsx --env-file-if-exists=.env.local scripts/backfill-media-upload-intents.ts",
     "backfill:welcome-credit-fingerprints": "tsx --env-file-if-exists=.env.local scripts/backfill-welcome-credit-fingerprints.ts",
     "backfill:generation-video-previews": "npm run backfill:media-previews",
