@@ -1,0 +1,107 @@
+diff --git a/node_modules/expo-video/ios/Cache/CachedResource.swift b/node_modules/expo-video/ios/Cache/CachedResource.swift
+index 8992dfe..a5c41d8 100644
+--- a/node_modules/expo-video/ios/Cache/CachedResource.swift
++++ b/node_modules/expo-video/ios/Cache/CachedResource.swift
+@@ -43,12 +43,13 @@ class CachedResource {
+   }
+ 
+   func onResponseReceived(response: HTTPURLResponse) {
+-    guard let headers = response.allHeaderFields as? [String: String], mediaInfo == nil, response.statusCode == 200 else {
++    guard let headers = wholeResourceHeaderFields(response: response), mediaInfo == nil,
++      response.statusCode == 200 || response.statusCode == 206 else {
+       return
+     }
+ 
+     mediaInfo = MediaInfo(
+-      expectedContentLength: response.expectedContentLength,
++      expectedContentLength: totalLengthFromResponse(response: response),
+       mimeType: response.mimeType,
+       supportsByteRangeAccess: urlResponseSupportsByteRangeAcces(response),
+       headerFields: headers,
+@@ -156,7 +157,9 @@ class CachedResource {
+   private func urlResponseSupportsByteRangeAcces(_ urlResponse: HTTPURLResponse) -> Bool {
+     // The first option is the standard-correct one, but we can check for some more in case someone
+     // didn't follow the documention fully when implementing the server
+-    return urlResponse.allHeaderFields["Accept-Ranges"] as? String == "bytes" ||
++    // A 206 is itself proof that the server served a range.
++    return urlResponse.statusCode == 206 ||
++      urlResponse.allHeaderFields["Accept-Ranges"] as? String == "bytes" ||
+       urlResponse.allHeaderFields["Accept-Ranges"] as? String == "Bytes" ||
+       urlResponse.allHeaderFields["accept-ranges"] as? String == "bytes" ||
+       urlResponse.allHeaderFields["accept-ranges"] as? String == "Bytes"
+diff --git a/node_modules/expo-video/ios/Cache/CachingHelpers.swift b/node_modules/expo-video/ios/Cache/CachingHelpers.swift
+index c9a30c5..1df63ff 100644
+--- a/node_modules/expo-video/ios/Cache/CachingHelpers.swift
++++ b/node_modules/expo-video/ios/Cache/CachingHelpers.swift
+@@ -38,6 +38,39 @@ internal func getRangeFromRequest(request: URLRequest) -> (Int?, Int?) {
+   return (firstInt, secondInt)
+ }
+ 
++/**
++ * The length of the whole resource. A ranged response reports only the length
++ * of its slice in Content-Length; the total is the part after the slash in
++ * Content-Range.
++ */
++internal func totalLengthFromResponse(response: HTTPURLResponse) -> Int64 {
++  let fullString = (response.allHeaderFields["Content-Range"] ?? response.allHeaderFields["content-range"]) as? String
++  if let totalComponent = fullString?.components(separatedBy: "/")[safe: 1],
++    let total = Int64(totalComponent.trimmingCharacters(in: .whitespaces)), total > 0 {
++    return total
++  }
++  return response.expectedContentLength
++}
++
++/**
++ * Header fields that describe the whole resource. The cache replays these to
++ * the player as a synthetic 200, so a ranged response's Content-Range and
++ * partial Content-Length must not travel with them.
++ */
++internal func wholeResourceHeaderFields(response: HTTPURLResponse) -> [String: String]? {
++  guard var headers = response.allHeaderFields as? [String: String] else {
++    return nil
++  }
++  guard response.statusCode == 206 else {
++    return headers
++  }
++  for key in headers.keys where key.lowercased() == "content-range" || key.lowercased() == "content-length" {
++    headers.removeValue(forKey: key)
++  }
++  headers["Content-Length"] = String(totalLengthFromResponse(response: response))
++  return headers
++}
++
+ internal func mimeTypeToExtension(mimeType: String?) -> String? {
+   guard let mimeType else {
+     return nil
+diff --git a/node_modules/expo-video/ios/Cache/ResourceLoaderDelegate.swift b/node_modules/expo-video/ios/Cache/ResourceLoaderDelegate.swift
+index aec0f9f..b569d22 100644
+--- a/node_modules/expo-video/ios/Cache/ResourceLoaderDelegate.swift
++++ b/node_modules/expo-video/ios/Cache/ResourceLoaderDelegate.swift
+@@ -203,7 +203,7 @@ final class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate, URL
+       return
+     }
+ 
+-    request?.loadingRequest.contentInformationRequest?.contentLength = response.expectedContentLength
++    request?.loadingRequest.contentInformationRequest?.contentLength = totalLengthFromResponse(response: response)
+     request?.loadingRequest.contentInformationRequest?.isByteRangeAccessSupported = true
+ 
+     if let mimeType = response.mimeType, isSupported(mimeType: mimeType) {
+@@ -265,7 +265,17 @@ final class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate, URL
+   // The loading resource might want only a part of the video
+   // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Range
+   private func addRangeHeaderFields(loadingRequest: AVAssetResourceLoadingRequest, urlRequest: inout URLRequest) {
+-    guard let dataRequest = loadingRequest.dataRequest, loadingRequest.contentInformationRequest == nil else {
++    guard let dataRequest = loadingRequest.dataRequest else {
++      return
++    }
++
++    // The content information request is cancelled as soon as its response
++    // headers arrive, but with no Range the server streams the whole resource
++    // in the meantime -- a second full copy of every video on its first play.
++    // Two bytes carry the same headers, and a server that ignores the range
++    // answers exactly as it did before.
++    if loadingRequest.contentInformationRequest != nil {
++      urlRequest.setValue("bytes=0-1", forHTTPHeaderField: "Range")
+       return
+     }
+ 

@@ -553,3 +553,15 @@ server-committed bytes against 1.0x on Android. The cause is expo-video's iOS
 iPhone-only "Video couldn't load" plate did not reproduce on the simulator and
 is now scoped to the shipped iOS binary, not to the route. Evidence: the
 September 6 journal's "iOS fetches a cold rendition three times" entry.
+
+## iOS content-information request bounded (2026-09-08)
+
+`patches/expo-video+55.0.21.patch` gives expo-video's iOS content-information
+request a two-byte range, and reads the resource length from `Content-Range`
+so a ranged response still describes the whole file to both the player and the
+cache. A cold open drops from 2.87x the file to 1.88x on a 466 KB clip and to
+1.00x on a 1.4 MB one; the cache still commits and a later launch fetches
+nothing. `patches/` is a fingerprint input, so this needs a new binary on both
+platforms and does not reach existing installs over the air. Evidence: the
+September 6 journal's "The content-information request now asks for two bytes"
+entry.
