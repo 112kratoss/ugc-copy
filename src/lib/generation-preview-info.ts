@@ -21,10 +21,19 @@ function previewSizeFields(size: PreviewSize | null) {
  * Shared by every surface that synthesises a cover for a post without
  * `post_media` rows (the showcase feed and the owner post list/detail), so a
  * generation-backed post renders its poster the same way everywhere.
+ *
+ * `shouldSignPreview` decides which generations actually need the signature.
+ * Only a cover with no poster of its own is grafted onto, but this map is
+ * loaded for every generation-backed post on the page, and signing a private
+ * preview for each of them was the single largest source of Storage signing
+ * calls in the product — one fresh token per feed read, none of them reusable
+ * by the CDN. The model is still returned for every generation; callers read
+ * it whether or not a poster is grafted.
  */
 export async function loadGenerationPreviewInfoMap(
   adminSupabase: SupabaseClient,
   generationIds: string[],
+  options?: { shouldSignPreview?: (generationId: string) => boolean },
 ): Promise<Map<string, GenerationPreviewInfo>> {
   const generationInfoMap = new Map<string, GenerationPreviewInfo>();
   const uniqueIds = Array.from(new Set(generationIds.filter(Boolean)));
@@ -57,7 +66,8 @@ export async function loadGenerationPreviewInfoMap(
       typeof generation.preview_url === 'string' && generation.preview_url
         ? generation.preview_url
         : null;
-    return [Promise.resolve(previewSource && generation.user_id
+    const needsPreview = options?.shouldSignPreview?.(generation.id) ?? true;
+    return [Promise.resolve(needsPreview && previewSource && generation.user_id
       ? resolveOwnedStoredMediaUrl(adminSupabase, previewSource, generation.user_id)
       : null)
       .then((previewUrl) => [generation.id, {

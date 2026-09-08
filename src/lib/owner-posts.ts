@@ -556,15 +556,22 @@ export async function getOwnerPostList(
     visibility,
   });
   const postIds = rows.map((row) => row.id);
-  const [bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap] = await Promise.all([
+  const [bundleMap, sourceToolsMap, mediaItemsMap] = await Promise.all([
     loadBundleMap(adminSupabase, postIds),
     loadSourceToolsMap(adminSupabase, postIds),
     loadPostMediaItemsMap(adminSupabase, postIds),
-    loadGenerationPreviewInfoMap(
-      adminSupabase,
-      rows.flatMap((row) => (row.generation_id ? [row.generation_id] : [])),
-    ),
   ]);
+  // Signed only for the covers that will actually be grafted onto — see
+  // `loadGenerationPreviewInfoMap`.
+  const generationPreviewMap = await loadGenerationPreviewInfoMap(
+    adminSupabase,
+    rows.flatMap((row) => (row.generation_id ? [row.generation_id] : [])),
+    {
+      shouldSignPreview: (generationId) => rows.some((row) => (
+        row.generation_id === generationId && !mediaItemsMap.get(row.id)?.[0]?.previewUrl
+      )),
+    },
+  );
   const filteredRows = rows.filter((row) => {
     if (visibility === 'archived') {
       return Boolean(row.archived_at);
@@ -595,12 +602,16 @@ export async function getOwnerPostDetail(
     return null;
   }
 
-  const [bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap] = await Promise.all([
+  const [bundleMap, sourceToolsMap, mediaItemsMap] = await Promise.all([
     loadBundleMap(adminSupabase, [row.id]),
     loadSourceToolsMap(adminSupabase, [row.id]),
     loadPostMediaItemsMap(adminSupabase, [row.id]),
-    loadGenerationPreviewInfoMap(adminSupabase, row.generation_id ? [row.generation_id] : []),
   ]);
+  const generationPreviewMap = await loadGenerationPreviewInfoMap(
+    adminSupabase,
+    row.generation_id ? [row.generation_id] : [],
+    { shouldSignPreview: () => !mediaItemsMap.get(row.id)?.[0]?.previewUrl },
+  );
   const listItem = await toOwnerPostListItem(adminSupabase, row, bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap);
   const bundleDetail = await getPostResourceBundleDetailByPostId(postId, {
     viewerUserId: userId,

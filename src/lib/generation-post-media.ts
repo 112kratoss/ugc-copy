@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { defaultPostMediaKey } from '@/lib/post-media-key';
 import { openAllowlistedRemoteMedia } from '@/lib/remote-media-security';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
 import type { ShowcaseItemCategory } from '@/lib/showcase';
@@ -160,6 +161,147 @@ export async function createGenerationShowcaseDerivative({
   }
 
   return showcaseAssetPath;
+}
+
+type GenerationPostCoverRow = {
+  id: string;
+  storage_path: string | null;
+  sort_order: number | null;
+};
+
+function isDuplicateRowError(error: { code?: string } | null): boolean {
+  return error?.code === '23505';
+}
+
+/**
+ * Gives a generation-backed post the `post_media` row its public derivative
+ * needs, and keeps that row pointed at the derivative the post actually serves.
+ *
+ * Publishing copies the generation's output into the public bucket and records
+ * the path on `posts.showcase_asset_path`, but every public derivative
+ * pipeline — preview, feed rendition, teaser, and the sweeps that repair them —
+ * reads `post_media`. A post without a row is served through the legacy cover
+ * instead, which signs the owner's *private* preview on every feed fetch (a
+ * fresh token each time, so the CDN can never reuse one) and hands out the
+ * full-size copy where a rendition could exist.
+ *
+ * Derivatives are left pending for the sweeps rather than built here: publish
+ * stays fast, and nothing regresses while they wait, because the feed grafts
+ * the generation's preview onto a cover that has none and
+ * `resolvePostVideoFeedStreamUrl` keeps a pending rendition poster-only.
+ *
+ * Publishing re-runs on every caption edit and visibility flip, so this is
+ * idempotent by design:
+ * - a row already pointing at this derivative is left exactly as it is, so an
+ *   edit never discards a preview or rendition the sweeps already built;
+ * - a row pointing at a superseded derivative (the output was replaced) is
+ *   repointed and its derivative columns cleared, because those files describe
+ *   content this post no longer serves;
+ * - the superseded objects are not deleted here. A publish must never remove
+ *   public media; `removeGenerationShowcaseDerivative` collects them when the
+ *   post goes private.
+ */
+export async function ensureGenerationPostCoverMedia({
+  adminSupabase,
+  postId,
+  generationId,
+  showcaseAssetPath,
+  category,
+}: {
+  adminSupabase: SupabaseClient;
+  postId: string;
+  generationId: string;
+  showcaseAssetPath: string | null | undefined;
+  category: GenerationShowcaseCategory;
+}): Promise<{
+  outcome: 'created' | 'repointed' | 'unchanged' | 'skipped' | 'failed';
+  error: { message?: string } | null;
+}> {
+  // Only the generation's own derivative may become its post's media row.
+  const derivativePath = getCanonicalGenerationShowcaseAssetPath(showcaseAssetPath, generationId);
+  if (!derivativePath) {
+    return { outcome: 'skipped', error: null };
+  }
+
+  const sourceName = derivativePath.split('/').pop() || `${generationId}`;
+  // The copier chose the extension from this same category, so the stored file
+  // and the row describe one thing. A `.mp4` still reads as video even when the
+  // category says otherwise: the extension check inside runs first.
+  const contentType = inferShowcaseContentType(sourceName, category);
+  const mediaKind: 'image' | 'video' = contentType.startsWith('video/') ? 'video' : 'image';
+  // Images have nothing to transcode; `skipped` is their terminal state.
+  const renditionStatus = mediaKind === 'video' ? 'pending' : 'skipped';
+
+  const { data, error: loadError } = await adminSupabase
+    .from('post_media')
+    .select('id, storage_path, sort_order')
+    .eq('post_id', postId);
+  if (loadError) {
+    return { outcome: 'failed', error: loadError };
+  }
+
+  const rows = (data ?? []) as GenerationPostCoverRow[];
+  if (rows.some((row) => row.storage_path === derivativePath)) {
+    return { outcome: 'unchanged', error: null };
+  }
+
+  const coverRow = rows.find((row) => (row.sort_order ?? 0) === 0) ?? null;
+  if (coverRow) {
+    const { error } = await adminSupabase
+      .from('post_media')
+      .update({
+        storage_path: derivativePath,
+        media_kind: mediaKind,
+        content_type: contentType,
+        original_name: sourceName,
+        preview_storage_path: null,
+        preview_thumbhash: null,
+        preview_status: 'pending',
+        preview_attempt_count: 0,
+        preview_error: null,
+        preview_generated_at: null,
+        rendition_storage_path: null,
+        rendition_status: renditionStatus,
+        rendition_attempt_count: 0,
+        rendition_error: null,
+        rendition_generated_at: null,
+        rendition_bytes: null,
+        teaser_storage_path: null,
+        teaser_bytes: null,
+        teaser_generated_at: null,
+        teaser_error: null,
+        teaser_attempt_count: 0,
+        // Measured from the replaced file, so they describe the wrong media.
+        width: null,
+        height: null,
+        duration_seconds: null,
+      })
+      .eq('id', coverRow.id);
+    return { outcome: error ? 'failed' : 'repointed', error: error ?? null };
+  }
+
+  const { error } = await adminSupabase
+    .from('post_media')
+    .insert({
+      post_id: postId,
+      media_key: defaultPostMediaKey(0),
+      storage_path: derivativePath,
+      media_kind: mediaKind,
+      content_type: contentType,
+      original_name: sourceName,
+      sort_order: 0,
+      preview_status: 'pending',
+      preview_attempt_count: 0,
+      rendition_status: renditionStatus,
+      rendition_attempt_count: 0,
+    });
+
+  // A concurrent publish of the same post won the unique index on
+  // (post_id, media_key); it wrote the same derivative, so the row is correct.
+  if (isDuplicateRowError(error)) {
+    return { outcome: 'unchanged', error: null };
+  }
+  return { outcome: error ? 'failed' : 'created', error: error ?? null };
 }
 
 /**

@@ -5,6 +5,8 @@ Evidence and repairs from the first pass:
 [media delivery audit](media-delivery-audit-2026-09-05.md).
 Second-pass findings and video integrity results:
 [6 September audit](media-delivery-audit-2026-09-06.md).
+The current finding set, its egress attribution and the remaining priority
+order: [8 September audit](media-delivery-audit-2026-09-08-final.md).
 
 ## September 6 checkpoint and release status
 
@@ -565,3 +567,39 @@ nothing. `patches/` is a fingerprint input, so this needs a new binary on both
 platforms and does not reach existing installs over the air. Evidence: the
 September 6 journal's "The content-information request now asks for two bytes"
 entry.
+
+## Generation publishes carry their public media row (2026-09-08)
+
+Publishing a generation copied its output into the public bucket and recorded
+the path on `posts.showcase_asset_path`, but wrote no `post_media` row. Every
+public derivative pipeline — preview, feed rendition, teaser and their repair
+sweeps — reads `post_media`, so those posts never received a public preview or
+a smaller playback file, and the feed served them through the legacy cover
+instead: a fresh signature of the owner's *private* preview on every read,
+which the CDN can never reuse, plus the full-size copy where a rendition could
+exist. Measured on 8 September: 6,169 preview signatures in 24 hours across 23
+paths, 92% of signed-preview reads a Cloudflare miss, and one public video
+(`40cac994`) streaming 1.56 MB where a 177 KB rendition already existed.
+
+Three changes close it. `ensureGenerationPostCoverMedia` writes the cover row
+at publish, with its derivatives pending so the ten-minute sweeps build them —
+nothing regresses while they wait, because a cover with no poster still gets
+the generation's preview grafted on and a pending rendition keeps the feed
+poster-only. Migration `20260908180000` backfills the five exposed posts that
+predate it. `loadGenerationPreviewInfoMap` now signs a preview only for the
+covers that will actually be grafted onto, which is what stops the signing for
+good once a post has a public poster of its own; the showcase feed and both
+owner surfaces pass that predicate.
+
+The row is idempotent across republishes: one already serving the current
+derivative is left untouched, so an edit never discards a preview or rendition
+already built, and one pointing at a superseded derivative is repointed with
+its derivative columns cleared. Teardown was already in place —
+`removeGenerationShowcaseDerivative` retires these rows and their objects when
+a post goes private. A failure to write the row never fails the publish: the
+post is committed by then, and it serves the legacy way until a later publish
+writes the row.
+
+Close by confirming the anonymous home payload carries no `/object/sign/` URL
+and every public video has a `.feed.` rendition. Evidence and the surrounding
+finding set: [8 September audit](media-delivery-audit-2026-09-08-final.md).

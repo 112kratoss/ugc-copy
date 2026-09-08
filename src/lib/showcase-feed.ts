@@ -549,7 +549,10 @@ export async function resolvePostRowsToFeedItems(
     return profilesMap;
   };
 
-  const loadGenerationInfo = () => loadGenerationPreviewInfoMap(adminSupabase, generationIds);
+  const loadGenerationInfo = (generationIdsNeedingPreview: Set<string>) =>
+    loadGenerationPreviewInfoMap(adminSupabase, generationIds, {
+      shouldSignPreview: (generationId) => generationIdsNeedingPreview.has(generationId),
+    });
 
   const loadSourceTools = async () => {
     const sourceToolsMap = new Map<string, Array<{
@@ -596,17 +599,25 @@ export async function resolvePostRowsToFeedItems(
   const assetMapPromise = assetHydrationPromise.then(({ assetMap }) => assetMap);
   const [
     profilesMap,
-    generationInfoMap,
     assetMap,
     mediaItemsMap,
     sourceToolsMap,
   ] = await Promise.all([
     loadProfiles(),
-    loadGenerationInfo(),
     assetMapPromise,
     loadPostMediaItemsMap(adminSupabase, postIds),
     loadSourceTools(),
   ]);
+  // Generation info waits on the media rows rather than loading beside them:
+  // only a cover with no poster of its own is grafted onto, and knowing which
+  // those are is what keeps a private preview from being signed for every
+  // generation-backed post on the page. One extra round trip buys that.
+  const generationIdsNeedingPreview = new Set(
+    rowsToHydrate
+      .filter((row) => row.generation_id && !mediaItemsMap.get(row.id)?.[0]?.previewUrl)
+      .map((row) => row.generation_id as string),
+  );
+  const generationInfoMap = await loadGenerationInfo(generationIdsNeedingPreview);
 
   const resolvedItems = await Promise.all(
     rowsToHydrate.map(async (post): Promise<ShowcaseFeedItem | null> => {
