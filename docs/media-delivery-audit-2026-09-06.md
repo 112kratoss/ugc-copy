@@ -2544,3 +2544,65 @@ route-form rendition (the caching loader's handling of the route's 302 is the
 first suspect; the 11-second clip cached from a run where the address was new
 shows the cache can commit), the loop difference between the platforms, and
 the autoplay difference between the first two launches and the third.
+
+### iOS fetches a cold rendition three times (2026-09-08, 14:45–15:10 IST)
+
+The iPhone run left two open questions: why a cold route-form rendition was
+transferred three times, and why the viewer showed "Video couldn't load /
+Retry video" for about four seconds first. A release build of current main
+(0.1.4, embedded bundle, production environment) on the iPhone 17 Pro
+simulator answers the first and separates the second.
+
+The simulator is signed in as the test account and its video cache is a
+directory (`Library/Caches/expo-video-cache`, one file per URL hash), so a
+cold open is `rm -rf` plus a relaunch rather than a reinstall. Two runs of the
+same 6-second clip (`ac95ad04`, 465,804-byte rendition), cache cleared before
+each, differing only in when the deep link fired:
+
+| Run | Deep link | Requests from the app | Server-committed bytes |
+| --- | --- | --- | --- |
+| A | at cold launch | 200 unranged; 206 `0-465803`; 206 `59912-465803` | 1,337,500 (2.87x) |
+| B | 25 s after launch, session hydrated | 200 unranged; 206 `0-465803`; 206 `163424-465803` | 1,233,988 (2.65x) |
+
+Both runs also show three `node` signing calls, one per app request: every
+loader request goes through `/api/media` and mints a *new* signed URL, so the
+stable address the route provides is stable only across opens, not within one.
+
+The cause is expo-video's iOS cache, and the code states it plainly.
+`ResourceLoaderDelegate` answers `AVAssetResourceLoader` with its own
+`URLSession` (hence the `MagicBooklet/… CFNetwork` user agent rather than
+AppleCoreMedia). Its first request is the content-information request, and
+`addRangeHeaderFields` returns early whenever `contentInformationRequest` is
+set, so that request carries no `Range` and the server answers 200 with the
+whole file; the delegate reads the headers, fills in the content information
+and only then cancels the task, so an unknown part of that body is already on
+the wire. The second request is the real data request, and the third is
+`attemptToRespondFromCache`'s partial path: the player asks again while the
+second is still running, the delegate serves the prefix it has and requests
+the remainder. Server-committed bytes are therefore an upper bound and the
+true cost is between about 1.7x and 2.9x; the request count and the ranges are
+exact. Android, measured through a byte-counting proxy, fetched each cold
+rendition once (1.006x on the 16-second clip, 1.03x on the 4-second one).
+
+The error plate did not reproduce on the simulator in either run, so it is not
+caused by the deep link outrunning session hydration, which was the leading
+hypothesis: run A opens the viewer before the session exists and still shows
+only a spinner. The plate remains specific to the iPhone's App Store binary
+(iOS build 47), whose native expo-video predates this build; the 30-second
+`useVideoLoadDeadline` is far too long to explain a four-second plate, so it
+was a genuine player error status there. It stays open, now scoped to that
+binary rather than to the route.
+
+A note on the earlier comparison: the Android deep-link script waits for the
+Home screen before firing its link, while the iPhone run fired the link as the
+launch itself. The two "cold deep-link" runs were therefore not equivalent.
+Run B above is the like-for-like case, and it transfers the same three times.
+
+Fix directions, none applied: patch `ResourceLoaderDelegate` so the
+content-information request carries a small `Range` (this alone removes a
+full-file response from every cold open, and `patch-package` is already in the
+mobile toolchain, though a native patch needs a new binary rather than an
+update); or reconsider `useCaching` per surface, trading one 2.9x cold open
+for a 1x transfer on every open. Evidence and repro scripts:
+`output/media-audit/sim-cold-open-ab.sh` and the `sim-A-*.png` / `sim-B-*.png`
+frames.
