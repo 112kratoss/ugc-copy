@@ -6,6 +6,7 @@ import {
   encodeDisplayRendition,
 } from '../src/lib/media-display-rendition';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '../src/lib/showcase-media-cache';
+import { toStorageUploadBody } from '../src/lib/storage-upload-body';
 import {
   logBackfillExecutionMode,
   parseBackfillExecutionMode,
@@ -119,7 +120,7 @@ async function main() {
 
       const upload = await supabase.storage
         .from(SHOWCASE_BUCKET)
-        .upload(displayPath, new Blob([new Uint8Array(display.body)], { type: 'image/webp' }), {
+        .upload(displayPath, toStorageUploadBody(display.body, 'image/webp'), {
           cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
           contentType: 'image/webp',
           upsert: true,

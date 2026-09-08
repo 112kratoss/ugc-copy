@@ -1,4 +1,3 @@
-import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import sharp from 'sharp';
 
@@ -14,6 +13,13 @@ import { toStorageUploadBody } from '@/lib/storage-upload-body';
  * never dimensions. Mobile renders `avatar_url` directly, so a creator card
  * fetched a 1.6 MB PNG to fill a 48pt circle; web at least routes through
  * `next/image`.
+ *
+ * No `server-only` marker here, deliberately: the backfill script imports this
+ * module directly, and that import specifier only resolves inside Next, so the
+ * marker made `npm run backfill:profile-image-dimensions` fail to start. The
+ * guard is kept where it belongs — `profile-route-service.ts`, the only caller
+ * in the app, carries it — and `sharp` could not be bundled for a client
+ * anyway. `media-display-rendition.ts` is unmarked for the same reason.
  *
  * Normalising happens on the server, when the profile is saved, rather than in
  * the clients. A client-side resize on mobile would need `expo-image-manipulator`,
