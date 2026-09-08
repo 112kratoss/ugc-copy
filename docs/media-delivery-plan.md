@@ -540,3 +540,16 @@ error and triple transfer (the caching loader and the route's 302), the
 loop and autoplay differences, and the rest of the backlog (surface matrix,
 thumbnails, sampler, fast-start audit, worker attempt count). Evidence: the
 September 6 journal's "Physical iOS baseline" entry.
+
+## iOS cold opens cost three transfers (2026-09-08)
+
+Reproduced on the iPhone 17 Pro simulator with a release build of main: one
+cold open of a route-form rendition makes three requests (an unranged
+content-information request the server answers in full, the data request, and
+a remainder request) and mints three signed URLs, for 2.65-2.87x the file in
+server-committed bytes against 1.0x on Android. The cause is expo-video's iOS
+`ResourceLoaderDelegate`, whose content-information request carries no
+`Range`. Fix directions are recorded in the journal; none applied. The
+iPhone-only "Video couldn't load" plate did not reproduce on the simulator and
+is now scoped to the shipped iOS binary, not to the route. Evidence: the
+September 6 journal's "iOS fetches a cold rendition three times" entry.
