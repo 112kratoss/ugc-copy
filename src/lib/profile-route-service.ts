@@ -21,6 +21,7 @@ import {
   type ProfileUpdatePayload,
 } from '@/lib/profile';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { normalizeStoredProfileImage } from '@/lib/profile-image-normalization';
 import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
 import {
   abortNullableUploadByteConsumption,
@@ -230,6 +231,15 @@ export async function updateProfileForRoute({
         };
       }
       if (finalization.consumptionClaim) consumptionClaims.push(finalization.consumptionClaim);
+      // Resized in place once the upload is accounted for, so the URL the
+      // client already holds stays correct and no oversized copy is left
+      // behind. A failure here is logged and ignored: an unresized avatar is
+      // still a correct avatar, and the save must not fail for it.
+      await normalizeStoredProfileImage({
+        adminSupabase: resolvedClient,
+        bucket: location.bucket,
+        filePath: location.filePath,
+      });
     }
   } catch (error) {
     await Promise.all(consumptionClaims.map((claim) => (

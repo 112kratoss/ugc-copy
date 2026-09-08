@@ -703,3 +703,29 @@ cache. The CDN fragmentation the earlier pass noted is untouched and remains
 uninteresting: a private object has one viewer, and the native disk cache
 already covers repeat opens. Evidence: F5 of the
 [8 September audit](media-delivery-audit-2026-09-08-final.md).
+
+
+## Profile images are normalised server-side (2026-09-09)
+
+The `profiles` bucket only ever capped total bytes (5 MB), never dimensions, so
+it holds avatars from 9.5 KB to 1.63 MB and covers to 1.77 MB. Mobile renders
+`avatar_url` directly, so a creator card fetched a 1.6 MB PNG to fill a 48pt
+circle; web at least routes through `next/image`.
+
+Saving a profile now resizes each freshly uploaded image in place — avatars to
+512px, covers to 1600px, as WebP — after the upload is accounted for and before
+the row is written. In place matters: the URL the client already holds stays
+correct, no column is rewritten, and no superseded copy is orphaned in a public
+bucket. The object is seconds old, so nothing has cached it. An image already
+within its role's size, or one the re-encode would not shrink, is left alone,
+and a failure is logged rather than thrown — an unresized avatar is still a
+correct avatar, and a profile save must not fail because a resize did.
+`npm run backfill:profile-image-dimensions` applies the same rule to what is
+already stored, and only to images a profile actually points at.
+
+This is deliberately server-side. A client-side resize on mobile would need
+`expo-image-manipulator`, a native module, which moves the runtime fingerprint
+and so cannot reach any installed build over the air; doing it on the server
+fixes both platforms at once and the next store build owes nothing. Evidence:
+F6 of the [8 September audit](media-delivery-audit-2026-09-08-final.md).
+
