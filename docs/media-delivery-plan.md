@@ -625,3 +625,29 @@ points at.
 Close by confirming the anonymous home payload carries no `/object/sign/` URL
 and every public video has a `.feed.` rendition. Evidence and the surrounding
 finding set: [8 September audit](media-delivery-audit-2026-09-08-final.md).
+
+## Repair attempts are reserved on claim (2026-09-09)
+
+`claim_generation_preview_repairs`, `claim_post_media_preview_repairs` and
+`claim_media_rendition_repairs` set `processing` and took the lease, but left
+the attempt counter to the worker's own success or failure write. An ordinary
+caught error still incremented, so the three-attempt budget held for anything
+the worker could observe. A worker that never reached that write did not: a
+hard kill, an out-of-memory, or an invocation that ran out of wall clock left
+the counter untouched, the lease lapsed, and the same row was admitted again
+with its budget intact.
+
+The cost is egress rather than CPU, because these workers download the source
+before they encode: a row whose download outlives the function is re-read in
+full on every sweep for as long as it keeps timing out. Migration
+`20260909060000` moves the increment into the claim, which is what
+`claim_post_media_teaser_repair` has done since 20260905201219, and the workers
+now write the ordinal the claim handed them instead of adding one to it —
+adding one would double count and trip the 0..3 CHECK. The fallback path, used
+when the claim RPC is absent, reserves the attempt itself alongside the
+`processing` status. `isGoneExternalSourceError` still counts runs that already
+finished, so the unavailable marker continues to need a second, separate run
+rather than firing on a first 404.
+
+No behaviour changes for a healthy row: three attempts before and after.
+Evidence: F4 of the [8 September audit](media-delivery-audit-2026-09-08-final.md).

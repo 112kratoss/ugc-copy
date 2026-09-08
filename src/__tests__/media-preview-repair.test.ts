@@ -180,6 +180,73 @@ describe('rendition byte admission (F14)', () => {
     expect(selects).toHaveLength(0);
   });
 
+  // The claim reserves the attempt (migration 20260909060000), so a worker that
+  // added one to what it was handed would double count and trip the 0..3 CHECK.
+  it('writes the attempt the claim already reserved rather than adding to it', async () => {
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    const updates: Array<Record<string, unknown>> = [];
+    const client = {
+      rpc: async () => ({
+        data: [{ id: 'm1', storage_path: 'posts/post-1/clip.mp4', content_type: 'video/mp4', rendition_attempt_count: 1 }],
+        error: null,
+      }),
+      from: () => ({
+        select: () => createSelectChain({ data: [], error: null }),
+        update: (payload: Record<string, unknown>) => {
+          updates.push(payload);
+          return { eq: () => ({ eq: async () => ({ error: null }) }) };
+        },
+      }),
+      storage: {
+        from: () => ({ download: async () => ({ data: null, error: new Error('gone') }) }),
+      },
+    };
+
+    await repairPostMediaRenditions(client as never);
+
+    // The download fails, so this is the failure write.
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({
+      rendition_status: 'failed',
+      rendition_attempt_count: 1,
+    });
+  });
+
+  // Without a lease there is no claim to reserve anything, so the worker has to
+  // do it before the download — otherwise a kill mid-download leaves the budget
+  // untouched and the same source is re-read on the next sweep, forever.
+  it('reserves the attempt with the processing status when it holds no lease', async () => {
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    const updates: Array<Record<string, unknown>> = [];
+    const client = {
+      rpc: async (name: string) => ({
+        data: null,
+        error: { code: 'PGRST202', message: `Could not find the function public.${name}` },
+      }),
+      from: () => ({
+        select: () => createSelectChain({
+          data: [{ id: 'm1', post_id: 'post-1', storage_path: 'posts/post-1/clip.mp4', content_type: 'video/mp4', rendition_attempt_count: 1 }],
+          error: null,
+        }),
+        update: (payload: Record<string, unknown>) => {
+          updates.push(payload);
+          return { eq: async () => ({ error: null }) };
+        },
+      }),
+      storage: {
+        from: () => ({ download: async () => ({ data: null, error: new Error('gone') }) }),
+      },
+    };
+
+    await repairPostMediaRenditions(client as never);
+
+    expect(updates[0]).toEqual({ rendition_status: 'processing', rendition_attempt_count: 2 });
+    expect(updates[updates.length - 1]).toMatchObject({
+      rendition_status: 'failed',
+      rendition_attempt_count: 2,
+    });
+  });
+
   it('honours an explicit byte budget', async () => {
     const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
     const { client, rpcCalls } = createAdmissionClient([]);
