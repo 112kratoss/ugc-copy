@@ -2499,3 +2499,48 @@ out over the air; the three records belong to other accounts, so the state is
 verified by tests rather than on the audit phone. The two per-target OTA
 worktrees were rebuilt (`/private/tmp/magicbooklet-media2-ios-51` and
 `-ios-47`, dependencies installed from cache in about 14 s each).
+
+### Physical iOS baseline (2026-09-08, 13:30–14:10 IST)
+
+The iPhone 16e (iOS 26.6.1, App Store 0.1.2 build 47, carrying the #126
+update) runs the test account, not the owner's, so its library is the
+11-second clip (`0a58067a`, 1,475,359-byte rendition) that last night's manual
+check had already cached. Three tools replaced the proxy and the taps used on
+Android: Apple's device tooling launches the app straight into the viewer
+(`xcrun devicectl device process launch --terminate-existing --payload-url
+'magicbooklet://viewer?source=profile-creations&initialId=<id>'`), QuickTime's
+USB screen capture supplies a mirror sampled once a second, and the Supabase
+edge logs (`request.path`, `response.headers.content_range`, the user agent)
+count every Storage transfer. A fresh 6-second `grok-imagine-video` clip
+(`ac95ad04`, 15 credits, 465,804-byte rendition ready 4 min 46 s after the
+request through the ten-minute repair cron) supplied the cold case.
+
+- **Warm, 11-second clip.** The owner's manual open at 13:40 and a deep-link
+  relaunch at 13:58 fetched no video bytes at all; playback was under way two
+  seconds after the launch, ran the clip through and stopped on its last frame
+  behind a play control. The iOS viewer does not loop, where Android's does.
+- **Cold, 6-second clip (launch 14:01:03).** The poster came up behind "Video
+  couldn't load / Retry video" for about four seconds, then playback recovered
+  by itself. Storage served the rendition three times inside those seconds: a
+  full-body 200 at 14:01:07.98, a 206 for bytes 0–465803 at 14:01:08.82 and a
+  206 for bytes 78156–465803 at 14:01:09.33, about 1.32 MB for a 466 KB file,
+  every request on a fresh signature (Cloudflare MISS) and every one from the
+  app's own loader (`MagicBooklet/47 CFNetwork`), not AppleCoreMedia.
+- **Reopen after termination (14:01:40).** The same pattern again: a full 200
+  and two full-range 206s (the second pair were Cloudflare HITs on one signed
+  URL), about 1.4 MB, so the iOS cache held nothing from the cold open.
+  Android's reopen of a route-form rendition was 0 bytes.
+- **Third open (14:04:19).** No video request, but the viewer stayed on its
+  poster behind a play control instead of autoplaying. A tap on that control
+  at 14:06 started playback at once with no Storage request between 14:05 and
+  14:11, so the cache had committed the clip after the reopen's clean
+  playback. The iOS cache holds once a playback completes; the cold open's
+  failed first attempt and the reopen that followed it are the anomaly.
+- Every launch also fetches two 720px preview images, and the Creation details
+  page appeared twice during the cold run with no launch from the Mac.
+
+Follow-ups this opens: the iOS cold-open error and triple transfer of a
+route-form rendition (the caching loader's handling of the route's 302 is the
+first suspect; the 11-second clip cached from a run where the address was new
+shows the cache can commit), the loop difference between the platforms, and
+the autoplay difference between the first two launches and the third.

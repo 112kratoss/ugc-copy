@@ -524,3 +524,19 @@ and mobile render "This file is no longer available" with no retry. The three
 audit records are marked; nothing was deleted. Remaining backlog: the surface
 matrix, physical iOS baseline, thumbnails, sampler, fast-start audit and
 worker attempt count. Evidence: the September 6 journal's 2026-09-08 entries.
+
+## Physical iOS baseline (2026-09-08)
+
+Measured on the iPhone 16e (App Store build 47 with the #126 update) with
+deep-link launches, QuickTime's USB mirror and the Supabase edge logs. Warm
+opens of a cached route-form rendition transfer nothing and play within two
+seconds; the iOS viewer does not loop. A cold route-form rendition shows
+"Video couldn't load / Retry video" for about four seconds before recovering
+and is transferred three times (about 1.32 MB for a 466 KB clip), and a
+reopen after termination repeats the three transfers, where Android's reopen
+was 0 bytes; the cache commits only after a clean playback (the third open
+and a tapped play fetched nothing). Open: the iOS cold-open
+error and triple transfer (the caching loader and the route's 302), the
+loop and autoplay differences, and the rest of the backlog (surface matrix,
+thumbnails, sampler, fast-start audit, worker attempt count). Evidence: the
+September 6 journal's "Physical iOS baseline" entry.
