@@ -3,6 +3,7 @@ import sharp from 'sharp';
 
 import { assertStoredPreviewIsIntact } from '@/lib/media-preview-integrity';
 
+import { buildDisplayRenditionPath, encodeDisplayRendition } from '@/lib/media-display-rendition';
 import { getMediaContentHash, getPreviewThumbhash } from '@/lib/media-preview-metadata';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
 import { toStorageUploadBody } from '@/lib/storage-upload-body';
@@ -16,6 +17,12 @@ type PostMediaPreviewResult = {
   previewStatus: 'ready';
   width: number | null;
   height: number | null;
+  /**
+   * Null whenever a display rendition is not worth storing — a source that is
+   * already display-sized, or one WebP cannot meaningfully shrink. Readers fall
+   * back to the source, which is what they did before this existed.
+   */
+  displayStoragePath: string | null;
 };
 
 export function buildPostMediaPreviewPath(storagePath: string, contentHash: string) {
@@ -74,12 +81,41 @@ export async function createPostMediaImagePreview({
     expected: preview,
   });
 
+  // Encoded from the same decode as the preview, so the extra size costs one
+  // resize rather than a second download.
+  const display = await encodeDisplayRendition({
+    image,
+    sourceBytes: input.byteLength,
+    width: metadata.width,
+    height: metadata.height,
+  });
+  let displayStoragePath: string | null = null;
+  if (display) {
+    displayStoragePath = buildDisplayRenditionPath(storagePath, display.storagePathHash);
+    const displayUpload = await supabase.storage
+      .from(SHOWCASE_MEDIA_BUCKET)
+      .upload(displayStoragePath, toStorageUploadBody(display.body, 'image/webp'), {
+        cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
+        contentType: 'image/webp',
+        upsert: true,
+      });
+    if (displayUpload.error) {
+      throw displayUpload.error;
+    }
+    await assertStoredPreviewIsIntact({
+      supabase,
+      location: { bucket: SHOWCASE_MEDIA_BUCKET, filePath: displayStoragePath },
+      expected: display.body,
+    });
+  }
+
   return {
     previewStoragePath,
     previewThumbhash: await getPreviewThumbhash(preview),
     previewStatus: 'ready',
     width: metadata.width ?? null,
     height: metadata.height ?? null,
+    displayStoragePath,
   } satisfies PostMediaPreviewResult;
 }
 
@@ -136,6 +172,9 @@ export async function createPostMediaPreview({
     previewStatus: 'ready',
     width: null,
     height: null,
+    // A video's still is only ever a poster; the clip itself is what the
+    // rendition pipeline shrinks.
+    displayStoragePath: null,
   };
 }
 

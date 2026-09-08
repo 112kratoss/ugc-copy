@@ -1983,6 +1983,7 @@ describe('updateOwnerPostForRoute', () => {
           previewStatus: 'ready' as const,
           width: 800,
           height: 600,
+          displayStoragePath: null,
         })),
       },
     });

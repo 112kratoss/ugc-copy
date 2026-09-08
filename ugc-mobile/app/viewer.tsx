@@ -90,7 +90,11 @@ import {
   flushShowcaseFeedEvents,
   isBatchedShowcaseFeedEventType,
 } from '@/lib/feed-event-queue';
-import { getShowcasePlaybackUrl, getShowcaseSourceImageCacheKey } from '@/lib/showcase-media';
+import {
+  getShowcasePlaybackUrl,
+  getShowcaseViewerImageCacheKey,
+  getShowcaseViewerImageUrl,
+} from '@/lib/showcase-media';
 import {
   createShowcaseMediaProgressTracker,
   reportShowcaseMediaProgress,
@@ -1944,10 +1948,10 @@ function ImmersiveMedia({
       >
         <FeedMediaFrame
           kind="image"
-          url={mediaItem.url}
+          url={getShowcaseViewerImageUrl(mediaItem)}
           backdropUrl={mediaItem.previewUrl}
           backdropCacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
-          cacheKey={getShowcaseSourceImageCacheKey(mediaItem)}
+          cacheKey={getShowcaseViewerImageCacheKey(mediaItem)}
           thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
           transition={120}
           recyclingKey={`viewer:${mediaItem.id}`}
