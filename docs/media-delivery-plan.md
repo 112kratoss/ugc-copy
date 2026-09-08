@@ -499,3 +499,18 @@ iPhone (App Store 0.1.2 or TestFlight 0.1.4), re-measure slow-network private
 playback once the backfill completes, then the shared preview replacement
 pattern and the remaining surface matrix. Evidence: the September 6 journal's
 "Release of the second pass" entry.
+
+## Route-form playback addresses (2026-09-08)
+
+Owner-generation renditions (#124, `49c8953`) and template-run renditions are
+addressed through `/api/media` instead of signed Storage URLs, so the native
+cache key no longer changes with each signature: the audit build measured a
+warm reopen and an after-restart reopen at 0 bytes, and the store build's cold
+open is one download with free looping. Open: the first-open second download
+of the 11-second clip (recipe in the journal), workflow outputs on the signed
+read-URL endpoint, a product decision on three legacy creations with dead
+provider URLs (hide, mark unavailable, or delete), and the backlog (surface
+matrix, physical iOS baseline, thumbnails, sampler, fast-start audit, worker
+attempt count). The watchdog degraded threshold is 96 hours. Evidence: the
+September 6 journal's "Stable playback addresses through the media route"
+entry.

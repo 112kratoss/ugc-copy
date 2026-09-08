@@ -120,7 +120,10 @@ export async function collectUploadCapacityHealth(
   if (
     actionableRowsCapped
     || actionableRows >= 20_000
-    || actionableAgeMs >= 48 * 60 * 60 * 1000
+    // Four days, not two: the reclaim sweep runs daily and a single row that
+    // outlives one sweep (a retry the next day still clears) is a warning,
+    // not a platform-wide 503 (see the 2026-09-06 watchdog incident).
+    || actionableAgeMs >= 96 * 60 * 60 * 1000
   ) {
     issues.push({
       severity: 'degraded',
