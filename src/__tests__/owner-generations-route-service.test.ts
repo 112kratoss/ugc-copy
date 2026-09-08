@@ -298,6 +298,85 @@ describe('listOwnerGenerationsForRoute', () => {
     expect(payload.generations[0]).not.toHaveProperty('user_id');
   });
 
+  it('withholds every address of a generation whose only source is gone', async () => {
+    const rows: Record<string, unknown[]> = {
+      profiles: [],
+      generations: [{
+        id: 'gen-gone',
+        user_id: 'user-1',
+        output_url: 'https://tempfile.provider.example/expired.mp4',
+        showcase_asset_path: null,
+        status: 'succeeded',
+        created_at: '2026-03-05T10:00:00.000Z',
+        completed_at: '2026-03-05T10:02:00.000Z',
+        duration: 5,
+        cost: 1,
+        model: 'kling-2.6/motion-control',
+        category: 'motion',
+        is_public: false,
+        title: null,
+        description: null,
+        prompt: 'a clip',
+        workflow_settings: {},
+        archived_at: null,
+        template_run_id: null,
+        template_run_step_id: null,
+        studio_visible: true,
+        preview_url: 'https://tempfile.provider.example/expired.jpg',
+        preview_thumbhash: null,
+        preview_status: 'failed',
+        creation_mode: 'motion',
+        // The 20260908061500 migration: the provider's temporary copy is gone.
+        source_unavailable_at: '2026-09-08T06:15:00.000Z',
+      }],
+      posts: [],
+      generation_input_media: [],
+    };
+    const from = vi.fn((table: string) => ({
+      select: vi.fn(() => {
+        const query = {
+          eq: vi.fn(() => query),
+          in: vi.fn(() => query),
+          is: vi.fn(() => query),
+          or: vi.fn(() => query),
+          order: vi.fn(() => query),
+          range: vi.fn(() => query),
+          then: (resolve: (result: { data: unknown[]; error: null }) => unknown) => (
+            Promise.resolve({ data: rows[table] ?? [], error: null }).then(resolve)
+          ),
+        };
+        return query;
+      }),
+    }));
+    const createSignedUrls = vi.fn(async (paths: string[]) => ({
+      data: paths.map((path) => ({ path, signedUrl: `https://signed.example/${path}`, error: null })),
+      error: null,
+    }));
+    const client = {
+      from,
+      storage: { from: vi.fn(() => ({ createSignedUrls })) },
+    } as unknown as OwnerGenerationsRouteClient;
+
+    const payload = await listOwnerGenerationsForRoute({
+      userId: 'user-1',
+      supabase: client,
+      getAdminSupabase: () => client,
+      searchParams: new URLSearchParams('limit=10'),
+    });
+
+    expect(payload.generations).toHaveLength(1);
+    const [generation] = payload.generations as Array<Record<string, unknown>>;
+    expect(generation).toMatchObject({
+      id: 'gen-gone',
+      status: 'succeeded',
+      media: null,
+      preview_url: null,
+      source_unavailable_at: '2026-09-08T06:15:00.000Z',
+    });
+    expect(generation).not.toHaveProperty('output_url');
+    expect(generation).not.toHaveProperty('output_urls');
+  });
+
   it('rejects an ids filter with no valid identifiers before querying', async () => {
     const database = createStatusClient([]);
     const getAdminSupabase = vi.fn(() => database.client);

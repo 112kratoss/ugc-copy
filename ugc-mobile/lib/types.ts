@@ -251,6 +251,8 @@ export interface GenerationListItem {
   linked_post_visibility?: string | null;
   linked_post_archived_at?: string | null;
   archived_at?: string | null;
+  /** Set when the output's only source is gone; the API withholds every address. */
+  source_unavailable_at?: string | null;
 }
 
 export interface GenerationListResponse {
@@ -699,6 +701,8 @@ export interface ShowcaseMediaItem {
   mediaKey?: string;
   url: string;
   renditionUrl?: string | null;
+  /** Present when the media's only source is gone; render an explicit unavailable state. */
+  sourceUnavailableAt?: string | null;
   teaserUrl?: string | null;
   feedStreamUrl?: string | null;
   previewUrl?: string | null;

@@ -245,6 +245,20 @@ function ShowcaseMediaSlide({
     setFailedPreviewUrl(null);
   }, [item.id, previewUrl]);
 
+  if (item.sourceUnavailableAt) {
+    // The only source is gone: an explicit plate, never a loader or a retry
+    // against an address that cannot answer.
+    return (
+      <View
+        testID="showcase-media-unavailable"
+        style={{ width, height, borderRadius: radius, overflow: 'hidden', backgroundColor: appTheme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      >
+        <Text style={{ color: appTheme.colors.text, fontSize: 14, fontWeight: '800', textAlign: 'center' }}>This file is no longer available</Text>
+        <Text style={{ color: appTheme.colors.muted, fontSize: 12, marginTop: 6, textAlign: 'center' }}>Its only copy expired at the provider before it could be saved.</Text>
+      </View>
+    );
+  }
+
   if (item.mediaKind === 'video') {
     return (
       <View style={{ width, height }}>

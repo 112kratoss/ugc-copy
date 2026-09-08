@@ -264,6 +264,43 @@ describe('CreationsPage', () => {
     expect(getSessionMock).not.toHaveBeenCalled();
   });
 
+  it('renders an explicit note for a creation whose only source is gone, with no loader or retry', async () => {
+    const goneGeneration = makeGeneration({
+      id: 'gen-gone',
+      output_url: undefined,
+      title: 'Expired clip',
+      category: 'motion',
+      media: null,
+      source_unavailable_at: '2026-09-08T06:15:00.000Z',
+    });
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url === GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({ generations: [goneGeneration] }));
+      }
+
+      if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0') {
+        return Promise.resolve(jsonResponse({ posts: [] }));
+      }
+
+      if (url === '/api/profile') {
+        return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    }));
+
+    render(<CreationsPage />);
+
+    expect(await screen.findByText('Expired clip')).toBeInTheDocument();
+    const note = await screen.findByTestId('creation-unavailable-gen-gone');
+    expect(note).toHaveTextContent('This file is no longer available');
+    expect(screen.queryByLabelText('Loading media')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /restore preview/i })).not.toBeInTheDocument();
+  });
+
   it('opens the exact generation preview from a notification deep link', async () => {
     navigationState.searchParams = new URLSearchParams('generation=gen-notification');
     const notificationGeneration = makeGeneration({

@@ -502,15 +502,25 @@ pattern and the remaining surface matrix. Evidence: the September 6 journal's
 
 ## Route-form playback addresses (2026-09-08)
 
-Owner-generation renditions (#124, `49c8953`) and template-run renditions are
-addressed through `/api/media` instead of signed Storage URLs, so the native
-cache key no longer changes with each signature: the audit build measured a
-warm reopen and an after-restart reopen at 0 bytes, and the store build's cold
-open is one download with free looping. Open: the first-open second download
-of the 11-second clip (recipe in the journal), workflow outputs on the signed
-read-URL endpoint, a product decision on three legacy creations with dead
-provider URLs (hide, mark unavailable, or delete), and the backlog (surface
-matrix, physical iOS baseline, thumbnails, sampler, fast-start audit, worker
-attempt count). The watchdog degraded threshold is 96 hours. Evidence: the
-September 6 journal's "Stable playback addresses through the media route"
-entry.
+Owner-generation renditions (#124, `49c8953`) and template-run renditions
+(#125, `e394694`) are addressed through `/api/media` instead of signed Storage
+URLs, so the native cache key no longer changes with each signature: the audit
+build measured a warm reopen and an after-restart reopen at 0 bytes, and the
+store build's cold open is one download with free looping. A deep-link open
+of a 16-second clip at 48 kB/s (download 2.2× the clip length) also produced
+one connection and looped without re-fetching, so the 11-second double
+download from the audit build is recorded as unreproduced. Workflow persisted
+outputs keep the signed form because the same address feeds downstream
+provider inputs. The watchdog degraded threshold is 96 hours.
+
+## Unavailable sources made explicit (2026-09-08)
+
+`source_unavailable_at` on `generations` and `post_media` (migration
+`20260908061500`) is the durable statement that a record's only source is
+gone. The owner API withholds every address for a marked generation, post
+media summaries carry the marker with a failed preview status, the preview
+repair job sets it after a second 404/410 from an external source, and web
+and mobile render "This file is no longer available" with no retry. The three
+audit records are marked; nothing was deleted. Remaining backlog: the surface
+matrix, physical iOS baseline, thumbnails, sampler, fast-start audit and
+worker attempt count. Evidence: the September 6 journal's 2026-09-08 entries.

@@ -42,6 +42,7 @@
 @source "./components/SkeletonLoader.tsx";
 @source "./components/TabLoadingShell.tsx";
 @source "./components/TextPostPreviewCard.tsx";
+@source "./components/UnavailableMediaNote.tsx";
 @source "./components/WhatsNewModelsCard.tsx";
 @source "./components/app-shell-auth-state.ts";
 @source "./components/app-shell-nav.ts";

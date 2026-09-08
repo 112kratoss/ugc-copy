@@ -202,6 +202,21 @@ function previewFailure(error: unknown, attemptCount: number) {
   };
 }
 
+/**
+ * A provider's temporary copy that answers 404/410 on a second, separate run
+ * is gone for good: those hosts expire outputs that were never imported, and
+ * no later attempt can bring the bytes back. Only `downloadMedia` produces
+ * this message, and only for external sources, so a missing Storage object
+ * never trips it. The marker is what lets the owner API and the clients show
+ * an explicit unavailable state (20260908061500 migration) instead of a
+ * retry that can never succeed.
+ */
+function isGoneExternalSourceError(error: unknown, attemptCount: number): boolean {
+  return attemptCount >= 1
+    && error instanceof Error
+    && /^External media download failed \((404|410)\)\.$/.test(error.message);
+}
+
 const GENERATION_MEDIA_BUCKETS = [
   'generated_images',
   'generated_videos',
@@ -354,6 +369,9 @@ async function repairGeneration(
   } catch (error) {
     const failure = supabase.from('generations').update({
       ...previewFailure(error, attempts),
+      ...(isGoneExternalSourceError(error, attempts)
+        ? { source_unavailable_at: new Date().toISOString() }
+        : {}),
       preview_locked_at: null,
       preview_locked_by: null,
     }).eq('id', row.id);
