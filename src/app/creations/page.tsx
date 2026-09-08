@@ -43,11 +43,14 @@ import { formatUsdCents, getPostResourceKindLabel } from '@/lib/post-resource-bu
 import UnlockLibrary from './UnlockLibrary';
 import { buildShowcaseDetailPath, supportsPublicCreationSharing } from '@/lib/share';
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
+import UnavailableMediaNote from '@/app/components/UnavailableMediaNote';
 
 interface Generation {
     id: string;
     media?: { renditionUrl?: string | null } | null;
     output_url: string | null;
+    /** Set when the only source is gone; the API withholds every address. */
+    source_unavailable_at?: string | null;
     /** Poster for the studio grid, so video tiles need not preload metadata. */
     preview_url?: string | null;
     output_urls?: string[] | null;
@@ -92,6 +95,7 @@ interface OwnerPost {
     mediaItems?: Array<{
       renditionUrl?: string | null;
       previewUrl?: string | null;
+      sourceUnavailableAt?: string | null;
     }>;
     title: string;
     description: string;
@@ -1358,7 +1362,10 @@ export default function CreationsPage() {
 
     const archivedGenerations = generations.filter((generation) => Boolean(generation.archived_at));
     const activeGenerations = generations.filter((generation) => !generation.archived_at);
-    const successfulGenerations = activeGenerations.filter(g => g.status === 'succeeded' && g.output_url);
+    // A creation whose only source is gone keeps its place in the grid with an
+    // explicit note: the API withholds its address, so `output_url` alone
+    // would silently hide it, which reads as deletion.
+    const successfulGenerations = activeGenerations.filter(g => g.status === 'succeeded' && (g.output_url || g.source_unavailable_at));
     const processingGenerations = activeGenerations.filter(g => g.status === 'processing' || g.status === 'waiting');
     const failedGenerations = activeGenerations.filter(g => g.status === 'failed');
 
@@ -1876,7 +1883,9 @@ export default function CreationsPage() {
                                         key={gen.id}
                                         density="compact"
                                         testId={`creation-card-${gen.id}`}
-                                        media={primaryMediaUrl ? (
+                                        media={gen.source_unavailable_at ? (
+                                            <UnavailableMediaNote testId={`creation-unavailable-${gen.id}`} />
+                                        ) : primaryMediaUrl ? (
                                             <CreationMediaFrame
                                                 key={primaryMediaUrl}
                                                 id={gen.id}
@@ -2254,7 +2263,9 @@ export default function CreationsPage() {
                                         key={post.id}
                                         density="expanded"
                                         tone={post.archivedAt ? 'archived' : 'default'}
-                                        media={post.mediaUrl ? (
+                                        media={post.mediaItems?.[0]?.sourceUnavailableAt ? (
+                                            <UnavailableMediaNote testId={`post-unavailable-${post.id}`} />
+                                        ) : post.mediaUrl ? (
                                             post.mediaKind === 'video' ? (
                                                 // Poster at rest, playback on hover: a page of rows must not
                                                 // start a metadata fetch of every full-size video.

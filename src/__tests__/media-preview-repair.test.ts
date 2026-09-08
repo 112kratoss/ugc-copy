@@ -360,6 +360,53 @@ describe('media preview repair retries', () => {
     expect(invalidateFeedCache).toHaveBeenCalledOnce();
   });
 
+  it('marks an external source gone when a second run meets a 404, and only then', async () => {
+    const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 404 } as Response)));
+    const run = async (attemptCount: number) => {
+      const updates: Array<{ table: string; payload: Record<string, unknown> }> = [];
+      const supabase = {
+        from: vi.fn((table: string) => ({
+          select: vi.fn(() => createSelectChain({
+            data: table === 'generations'
+              ? [{
+                  id: 'gen-gone',
+                  user_id: 'user-1',
+                  output_url: 'https://tempfile.provider.example/expired.mp4',
+                  category: 'motion',
+                  preview_attempt_count: attemptCount,
+                }]
+              : [],
+            error: null,
+          })),
+          update: vi.fn((payload: Record<string, unknown>) => {
+            updates.push({ table, payload });
+            return { eq: vi.fn(async () => ({ error: null })) };
+          }),
+        })),
+        storage: { from: vi.fn() },
+      };
+      const summary = await repairMediaPreviews(withAdmissionFallback(supabase) as never, {
+        batchSize: 10,
+        invalidateFeedCache: vi.fn(),
+      });
+      expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
+      return updates.filter((update) => update.table === 'generations' && update.payload.preview_status === 'failed');
+    };
+
+    // First sighting: a failed preview, nothing durable -- a provider blip
+    // must not brand the source gone.
+    const [first] = await run(0);
+    expect(first?.payload).not.toHaveProperty('source_unavailable_at');
+
+    // Second, separate run: the temporary copy is gone for good.
+    const [second] = await run(1);
+    expect(second?.payload).toMatchObject({
+      preview_status: 'failed',
+      source_unavailable_at: expect.any(String),
+    });
+  });
+
   it('fails a generation repair before Storage when its path is outside the exact owner prefix', async () => {
     const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
     const { createGenerationOutputPreview } = await import('@/lib/generation-output-preview');

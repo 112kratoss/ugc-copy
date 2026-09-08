@@ -23,6 +23,7 @@ import {
   Volume2,
   WalletCards,
 } from 'lucide-react';
+import UnavailableMediaNote from '@/app/components/UnavailableMediaNote';
 
 import { useAuth } from '@/app/components/AuthProvider';
 import { HoverVideo } from '@/app/components/HoverVideo';
@@ -93,6 +94,8 @@ interface OwnerGeneration {
   id: string;
   media?: { renditionUrl?: string | null } | null;
   output_url: string | null;
+  /** Set when the only source is gone; the API withholds every address. */
+  source_unavailable_at?: string | null;
   output_urls?: string[] | null;
   preview_url?: string | null;
   status: string;
@@ -255,10 +258,13 @@ function MediaCard({
   onClick,
   href,
   actionLabel,
+  unavailable = false,
 }: {
   title: string;
   subtitle: string;
   mediaUrl: string | null;
+  /** The media's only source is gone: draw the explicit note, never the address. */
+  unavailable?: boolean;
   previewUrl?: string | null;
   renditionUrl?: string | null;
   mediaKind: 'image' | 'video' | 'audio' | null;
@@ -273,7 +279,9 @@ function MediaCard({
   const content = (
     <>
       <div className="relative aspect-[4/5] overflow-hidden bg-zinc-950">
-        {mediaKind === 'video' && mediaUrl ? (
+        {unavailable ? (
+          <UnavailableMediaNote className="h-full w-full" />
+        ) : mediaKind === 'video' && mediaUrl ? (
           <HoverVideo
             src={resolvePlaybackUrl({ url: mediaUrl, renditionUrl })}
             poster={previewUrl}
@@ -908,6 +916,7 @@ export default function OwnerProfileMediaHub({
                     title={post.title}
                     subtitle={`${post.visibility} · ${formatShortDate(post.updatedAt)}`}
                     mediaUrl={post.mediaUrl}
+                    unavailable={Boolean(post.mediaItems?.[0]?.sourceUnavailableAt)}
                     previewUrl={post.mediaItems?.[0]?.previewUrl}
                     renditionUrl={post.mediaItems?.[0]?.preview?.renditionUrl ?? post.mediaItems?.[0]?.renditionUrl}
                     mediaKind={post.mediaKind}
@@ -944,6 +953,7 @@ export default function OwnerProfileMediaHub({
                     title={getGenerationTitle(generation)}
                     subtitle={`${generation.status} · ${formatShortDate(generation.created_at)}`}
                     mediaUrl={generation.output_url}
+                    unavailable={Boolean(generation.source_unavailable_at)}
                     renditionUrl={generation.media?.renditionUrl}
                     previewUrl={generation.preview_url}
                     mediaKind={mediaType === 'text' ? null : mediaType}

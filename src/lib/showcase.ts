@@ -83,6 +83,8 @@ export interface ShowcaseMediaItem {
      * fall back to `url` — which also stays what downloads and remixes use.
      */
     renditionUrl?: string | null;
+    /** Present when the media's only source is gone; render an explicit unavailable state, never the address. */
+    sourceUnavailableAt?: string | null;
     /** 8s muted head of a long clip; feed-only. Absent until encoded. */
     teaserUrl?: string | null;
     /**

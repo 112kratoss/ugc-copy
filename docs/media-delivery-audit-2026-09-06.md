@@ -2440,3 +2440,62 @@ warning stays), so a row that outlives one daily sweep no longer turns the ops
 endpoint into a 503. Three legacy creations still point at dead provider URLs
 and need a product decision: hide them, show an explicit unavailable state, or
 delete them.
+
+### Release of #125, the deep-link measurement, and an explicit unavailable state (2026-09-08, 10:20–12:30 IST)
+
+PR #125 merged as `e394694`; Quality on main and the production release both
+passed first time and `/api/app-version` confirmed the build at 10:33 IST. The
+owner API still hands out the route form, the route still answers a 302 into
+Storage byte ranges, the watchdog's three latest scheduled runs are green, and
+the store build's cached clip played through a 40-second throttled open with
+zero bytes from either host (warm reopen 0, one ExoPlayer instance per open).
+
+The open question from the night before, the second download of the
+11-second clip, now has a clean negative. The Creations grid could not be
+driven to older tiles: its recycled cells report one creation's label while
+holding another's content, so every tap on "the sports clip" opened a
+different creation. The viewer route accepts a deep link instead
+(`magicbooklet://viewer?source=profile-creations&initialId=<generation id>`,
+via `am start -a android.intent.action.VIEW`, quoted for the device shell),
+which bypasses the grid entirely. Opening the owner's 16-second,
+1,590,876-byte motion clip that way on the store build, cold for the route
+key, with Storage capped at 48 kB/s: first changed frame at 3 s; one Storage
+connection of 1,600,450 bytes from 0.6 s to 34.7 s; playback looped through
+the whole download (ten distinct frames across 60 s) with no second
+connection; the API host saw 6,579 bytes; warm reopen 0 bytes; one ExoPlayer
+instance per open. The download outlasted the clip by more than two loops,
+which is a harsher ratio than the audit build's run, and the loop restart
+never reopened the source. The 11-second double download stays a single,
+unreproduced observation on the audit build; nothing in the shipped players
+needs changing for it.
+
+Workflow persisted outputs were not moved to the route form, and the reason
+is recorded rather than deferred: the run state's resolved step `output_url`
+is the same address the runner hands to the next node's provider call (the
+`startImageUrl` of a downstream video step), and a provider cannot present
+the owner's session to the media route. Converting it would need a separate
+display address; the canvas is web-only and same-origin, so the caching gain
+is small. The signed form stays.
+
+The three records with dead provider sources now have an explicit state
+instead of a retry that can never succeed, following the September 5
+audit's own guidance (represent unavailable media explicitly; do not delete).
+Migration `20260908061500` adds `source_unavailable_at` to `generations` and
+`post_media` and marks generation `058a82f8` (motion clip, expired
+`tempfile.aiquickdraw.com` copy), generation `a2b54deb` (recorded succeeded
+with no output URL) and post media `a54b4ead` (image, same expired host, no
+stored object). The owner API withholds `output_url`, `output_urls` and
+`preview_url` for a marked generation and returns `media: null` alongside
+the marker; post media summaries carry `sourceUnavailableAt` with a failed
+preview status. The preview repair job now writes the marker itself when an
+external source answers 404 or 410 on a second, separate run, so future
+expiries stop looping. Web: the creations page, the profile hub cards and the
+showcase carousel render "This file is no longer available" in place of a
+loader, and the note has no retry control. Mobile: the profile grid keeps the
+tile with the label "File no longer available" (hiding it would read as
+deletion), never hands the dead address to an image or player, and the viewer
+slide renders the same plate. The mobile change is JavaScript only and goes
+out over the air; the three records belong to other accounts, so the state is
+verified by tests rather than on the audit phone. The two per-target OTA
+worktrees were rebuilt (`/private/tmp/magicbooklet-media2-ios-51` and
+`-ios-47`, dependencies installed from cache in about 14 s each).

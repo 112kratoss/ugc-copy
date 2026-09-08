@@ -223,6 +223,40 @@ describe('OwnerProfileMediaHub', () => {
     await waitFor(() => expect(screen.getByText('Owner-only creation prompt')).toBeInTheDocument());
   });
 
+  it('shows an explicit note for a creation whose only source is gone instead of a broken tile', async () => {
+    const baseFetch = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/generations?includeArchived=false&detail=summary')) {
+        return Promise.resolve(response({
+          generations: [{
+            id: 'gone-generation',
+            status: 'succeeded',
+            created_at: '2026-03-05T10:00:00.000Z',
+            duration: 5,
+            model: 'kling-2.6/motion-control',
+            category: 'motion',
+            title: 'Expired clip',
+            media: null,
+            preview_url: null,
+            linked_post_id: null,
+            source_unavailable_at: '2026-09-08T06:15:00.000Z',
+          }],
+          pagination: { hasMore: false, nextCursor: null },
+        }));
+      }
+      return baseFetch(input);
+    }));
+
+    render(<OwnerProfileMediaHub creator={{ id: 'owner-1', username: 'owner', name: 'Owner', avatar: null }} />);
+
+    await screen.findByRole('button', { name: /open public post/i });
+    fireEvent.click(screen.getByRole('tab', { name: /creations 1/i }));
+
+    expect(screen.getByText('Expired clip')).toBeInTheDocument();
+    expect(screen.getByText('This file is no longer available')).toBeInTheDocument();
+  });
+
   it('keeps failed runs out of the grid but reachable, and never as a dead control', async () => {
     render(<OwnerProfileMediaHub creator={{ id: 'owner-1', username: 'owner', name: 'Owner', avatar: null }} />);
 

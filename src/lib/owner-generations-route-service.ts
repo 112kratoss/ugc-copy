@@ -43,6 +43,8 @@ type GenerationRow = {
   template_run_id?: string | null;
   template_run_step_id?: string | null;
   studio_visible?: boolean;
+  /** Set when the output's only source is known to be gone; see the 20260908061500 migration. */
+  source_unavailable_at?: string | null;
 };
 
 type TemplateRunStudioRow = {
@@ -320,7 +322,7 @@ async function fetchOwnerGenerations({
   const baseColumns = `id, user_id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, workflow_settings, archived_at, ${projectionColumns}`;
   const columns = statusOnly
     ? statusColumns
-    : `${baseColumns}, preview_url, preview_thumbhash, preview_status, preview_width, preview_height, creation_mode, playback_rendition_path, playback_rendition_source, playback_rendition_status`;
+    : `${baseColumns}, preview_url, preview_thumbhash, preview_status, preview_width, preview_height, creation_mode, playback_rendition_path, playback_rendition_source, playback_rendition_status, source_unavailable_at`;
 
   // `in` over the linked set, not `eq` on the caller. Anything made before the
   // person registered still carries its guest UUID — the financial tables
@@ -598,17 +600,27 @@ export async function listOwnerGenerationsForRoute({
     const rest = projectGenerationForStudio(generation, Boolean(template));
     const linkedPost = linkedPostMap.get(generation.id);
 
+    const sourceUnavailable = Boolean(generation.source_unavailable_at);
+    if (sourceUnavailable) {
+      // The only copy of this output is gone (see the 20260908061500
+      // migration). Withhold every address so clients render an explicit
+      // unavailable state instead of retrying a dead URL; the row's own
+      // `source_unavailable_at` travels with the item as the signal.
+      delete rest.output_url;
+      delete rest.output_urls;
+      delete rest.preview_url;
+    }
     return {
       ...rest,
       origin: template ? 'template' : 'creation',
       template,
       category: canonicalCategory,
       creationMode: generation.creation_mode ?? classification?.creationMode ?? null,
-      media,
-      ...(outputUrl ? { output_url: outputUrl } : {}),
-      preview_url: previewUrl,
+      media: sourceUnavailable ? null : media,
+      ...(outputUrl && !sourceUnavailable ? { output_url: outputUrl } : {}),
+      preview_url: sourceUnavailable ? null : previewUrl,
       ...(outputCount !== null ? { output_count: outputCount } : {}),
-      ...(outputUrls.length > 0 ? { output_urls: outputUrls } : {}),
+      ...(outputUrls.length > 0 && !sourceUnavailable ? { output_urls: outputUrls } : {}),
       ...(summaryOnly ? {} : {
         input_media: inputMedia,
         paywallPrefill,

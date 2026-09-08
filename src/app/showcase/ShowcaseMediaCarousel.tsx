@@ -9,6 +9,7 @@ import { useMediaLoadingPreferences } from '@/app/components/useMediaLoadingPref
 import { resolvePlaybackUrl } from '@/lib/media-descriptor';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 import type { ShowcaseMediaItem } from '@/lib/showcase';
+import UnavailableMediaNote from '@/app/components/UnavailableMediaNote';
 
 interface ShowcaseMediaCarouselProps {
   mediaItems: ShowcaseMediaItem[];
@@ -434,7 +435,10 @@ export default function ShowcaseMediaCarousel({
         }}
       >
         <div className="absolute inset-0 z-[1] h-full w-full">
-          {renderedActiveItem.mediaKind === 'video' ? (
+          {renderedActiveItem.sourceUnavailableAt ? (
+            // The only source is gone: no element, no error overlay, no retry.
+            <UnavailableMediaNote className="h-full w-full" />
+          ) : renderedActiveItem.mediaKind === 'video' ? (
             <>
               <video
                 ref={attachVideo}
