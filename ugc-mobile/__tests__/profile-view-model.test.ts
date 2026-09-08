@@ -4,6 +4,59 @@ import { generationToProfileMediaCard, getProfileStats, ownerPostToProfileMediaC
 import type { GenerationListItem, OwnerPostListItem } from '../lib/types';
 
 describe('profile view model media cards', () => {
+  it('keeps a creation whose only source is gone on the grid with an explicit label', () => {
+    const item: GenerationListItem = {
+      id: 'gen-gone',
+      output_url: null,
+      status: 'succeeded',
+      created_at: '2026-03-05T10:00:00.000Z',
+      completed_at: '2026-03-05T10:02:00.000Z',
+      model: 'kling-2.6/motion-control',
+      category: 'motion',
+      media: null,
+      source_unavailable_at: '2026-09-08T06:15:00.000Z',
+    };
+
+    expect(generationToProfileMediaCard(item)).toMatchObject({
+      id: 'gen-gone',
+      mediaUrl: null,
+      previewUrl: null,
+      previewStatusLabel: 'File no longer available',
+      isGridReady: true,
+    });
+  });
+
+  it('draws a post whose media source is gone as a labelled plate and never hands out the dead address', () => {
+    const item = {
+      id: 'post-gone',
+      title: 'Expired image',
+      visibility: 'public',
+      createdAt: '2026-06-09T10:00:00.000Z',
+      updatedAt: '2026-06-09T10:00:00.000Z',
+      category: 'image',
+      postFormat: 'media',
+      mediaUrl: 'https://tempfile.provider.example/expired.png',
+      mediaKind: 'image',
+      mediaItems: [{
+        id: 'media-gone',
+        mediaKey: 'media-0',
+        url: 'https://tempfile.provider.example/expired.png',
+        mediaKind: 'image',
+        previewStatus: 'failed',
+        gridReady: false,
+        sourceUnavailableAt: '2026-09-08T06:15:00.000Z',
+      }],
+    } as unknown as OwnerPostListItem;
+
+    expect(ownerPostToProfileMediaCard(item)).toMatchObject({
+      id: 'post-gone',
+      mediaUrl: null,
+      previewUrl: null,
+      previewStatusLabel: 'File no longer available',
+      isGridReady: true,
+    });
+  });
+
   it('maps generation previewUrl so video creation tiles can render persisted posters', () => {
     const item: GenerationListItem = {
       id: 'gen-video-1',
