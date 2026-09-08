@@ -254,12 +254,28 @@ async function resolveGenerationRepairSource(
   return { outputUrl: current.output_url, ownerUserId: current.user_id };
 }
 
-function getCanonicalPostMediaPath(storagePath: string, postId: string): string | null {
-  if (!postId) return null;
+function getCanonicalPostMediaPath(
+  storagePath: string,
+  scope: { postId: string; generationId: string | null },
+): string | null {
+  if (!scope.postId) return null;
   const canonicalPath = parseCanonicalStorageObjectPath(storagePath, { minimumSegments: 3 });
   if (!canonicalPath) return null;
-  const [namespace, scopedPostId] = canonicalPath.split('/');
-  return namespace === 'posts' && scopedPostId === postId ? canonicalPath : null;
+  const [namespace, scopedId] = canonicalPath.split('/');
+  // Media uploaded to a post lives under the post's own prefix.
+  if (namespace === 'posts') {
+    return scopedId === scope.postId ? canonicalPath : null;
+  }
+  // A generation-backed post serves the public copy of its creation, which the
+  // publish and post-update routes write under the *generation's* prefix, not
+  // the post's. Those rows are as much this post's media as an upload is, and
+  // refusing them left them without a preview or a rendition. The generation
+  // id is read from the owning post row, never from the path, so the scope
+  // stays server-derived exactly as it is for the `posts` namespace.
+  if (namespace === 'showcase') {
+    return scope.generationId && scopedId === scope.generationId ? canonicalPath : null;
+  }
+  return null;
 }
 
 async function resolvePostMediaRepairPath(
@@ -291,7 +307,22 @@ async function resolvePostMediaRepairPath(
     storagePath = current.storage_path;
   }
 
-  const canonicalPath = getCanonicalPostMediaPath(storagePath, postId);
+  // Only a path under the showcase namespace can legitimately sit outside the
+  // post's own prefix, so this lookup is paid by generation-backed rows alone.
+  let generationId: string | null = null;
+  if (parseCanonicalStorageObjectPath(storagePath, { minimumSegments: 3 })?.startsWith('showcase/')) {
+    const { data: linkedPost } = await supabase
+      .from('posts')
+      .select('generation_id')
+      .eq('id', postId)
+      .maybeSingle();
+    const linkedGenerationId = (linkedPost as { generation_id?: unknown } | null)?.generation_id;
+    generationId = typeof linkedGenerationId === 'string' && linkedGenerationId.length > 0
+      ? linkedGenerationId
+      : null;
+  }
+
+  const canonicalPath = getCanonicalPostMediaPath(storagePath, { postId, generationId });
   if (!canonicalPath) throw new Error('Post media repair source is outside the owning post prefix.');
   return canonicalPath;
 }
