@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendWarning } from '@/lib/backend-logger';
 
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -167,6 +168,10 @@ type GenerationPostCoverRow = {
   id: string;
   storage_path: string | null;
   sort_order: number | null;
+  preview_storage_path?: string | null;
+  display_storage_path?: string | null;
+  rendition_storage_path?: string | null;
+  teaser_storage_path?: string | null;
 };
 
 function isDuplicateRowError(error: { code?: string } | null): boolean {
@@ -197,12 +202,12 @@ function isDuplicateRowError(error: { code?: string } | null): boolean {
  * - a row pointing at a superseded derivative (the output was replaced) is
  *   repointed and its derivative columns cleared, because those files describe
  *   content this post no longer serves;
- * - the superseded objects are not deleted here, and nothing else collects
- *   them either: `removeGenerationShowcaseDerivative` only sees the path the
- *   post currently points at. A repointed row therefore strands the previous
- *   object and its derivatives in the public bucket. That is deliberate for
- *   now — a publish must never delete public media, and the safe sweep for
- *   orphans is separate work — but it is a leak, not a cleanup contract.
+ * - once the row has moved, the superseded object and the preview, display,
+ *   rendition and teaser built from it are retired, under the same rule
+ *   `removeGenerationShowcaseDerivative` applies: only paths under this
+ *   generation's own prefix, never the one now served. A failed removal is
+ *   logged and leaves an orphan, which is what every repoint left before;
+ *   it is never turned into a publish failure.
  */
 export async function ensureGenerationPostCoverMedia({
   adminSupabase,
@@ -237,7 +242,7 @@ export async function ensureGenerationPostCoverMedia({
 
   const { data, error: loadError } = await adminSupabase
     .from('post_media')
-    .select('id, storage_path, sort_order')
+    .select('id, storage_path, sort_order, preview_storage_path, display_storage_path, rendition_storage_path, teaser_storage_path')
     .eq('post_id', postId);
   if (loadError) {
     return { outcome: 'failed', error: loadError };
@@ -306,6 +311,9 @@ export async function ensureGenerationPostCoverMedia({
         teaser_locked_by: null,
       })
       .eq('id', coverRow.id);
+    if (!error) {
+      await retireSupersededCoverObjects({ adminSupabase, generationId, postId, coverRow, derivativePath });
+    }
     return { outcome: error ? 'failed' : 'repointed', error: error ?? null };
   }
 
@@ -331,6 +339,52 @@ export async function ensureGenerationPostCoverMedia({
     return { outcome: 'unchanged', error: null };
   }
   return { outcome: error ? 'failed' : 'created', error: error ?? null };
+}
+
+/**
+ * Retires what a repointed cover row stopped serving: the superseded derivative
+ * and the preview, display, rendition and teaser built from it. Only a path
+ * under this generation's own showcase prefix is removed, and never the one
+ * the row now points at. The row has already moved, so a removal that fails
+ * leaves an orphan in the public bucket — exactly what every repoint left
+ * before this existed — and is logged rather than surfaced as a failure.
+ */
+async function retireSupersededCoverObjects({
+  adminSupabase,
+  generationId,
+  postId,
+  coverRow,
+  derivativePath,
+}: {
+  adminSupabase: SupabaseClient;
+  generationId: string;
+  postId: string;
+  coverRow: GenerationPostCoverRow;
+  derivativePath: string;
+}): Promise<void> {
+  const superseded = new Set<string>();
+  for (const candidate of [
+    coverRow.storage_path,
+    coverRow.preview_storage_path,
+    coverRow.display_storage_path,
+    coverRow.rendition_storage_path,
+    coverRow.teaser_storage_path,
+  ]) {
+    const canonicalPath = getCanonicalGenerationShowcaseAssetPath(candidate, generationId);
+    if (canonicalPath && canonicalPath !== derivativePath) superseded.add(canonicalPath);
+  }
+  if (superseded.size === 0) return;
+
+  const paths = [...superseded];
+  const { error } = await adminSupabase.storage.from(SHOWCASE_MEDIA_BUCKET).remove(paths);
+  if (error) {
+    logBackendWarning('generation_post_cover_superseded_objects_not_removed', {
+      postId,
+      generationId,
+      paths,
+      error,
+    });
+  }
 }
 
 /**
