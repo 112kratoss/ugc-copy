@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ApiError,
+  SessionMergedError,
   UpgradeRequiredError,
   createApiClient,
+  setSessionMergedHandler,
   setUpgradeRequiredHandler,
 } from '../lib/api-client';
 
@@ -1370,5 +1372,118 @@ describe('mobile api client forced-upgrade handling', () => {
 
     await expect(api.fetchGenerationModels()).rejects.toBeInstanceOf(UpgradeRequiredError);
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('mobile api client merged-guest-session handling', () => {
+  afterEach(() => {
+    setSessionMergedHandler(null);
+    vi.useRealTimers();
+  });
+
+  function sessionMergedResponse() {
+    return new Response(JSON.stringify({
+      code: 'SESSION_MERGED',
+      error: 'This guest session has been linked to an account. Sign in to continue.',
+    }), {
+      status: 409,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  function mergedApi(fetcher: ReturnType<typeof vi.fn>) {
+    return createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      clientInfo: {
+        appVersion: '1.0.0',
+        apiVersion: 1,
+        catalogSchemaVersion: 1,
+      },
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+  }
+
+  it('invokes the registered handler exactly once for concurrent 409 SESSION_MERGED responses', async () => {
+    const handler = vi.fn();
+    setSessionMergedHandler(handler);
+    const fetcher = vi.fn(async () => sessionMergedResponse());
+    const api = mergedApi(fetcher);
+
+    // A merged identity fails every authenticated route at once, so a burst is
+    // the normal case here rather than an edge one.
+    const results = await Promise.allSettled([
+      api.getProfile(),
+      api.getOnboardingState(),
+      api.getWelcomeCredits(),
+    ]);
+
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    for (const result of results) {
+      expect(result.status).toBe('rejected');
+      expect((result as PromiseRejectedResult).reason).toBeInstanceOf(SessionMergedError);
+    }
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toMatchObject({
+      name: 'SessionMergedError',
+      status: 409,
+      code: 'SESSION_MERGED',
+    });
+  });
+
+  it('notifies again after the renotify window so a stranded device is re-routed', async () => {
+    vi.useFakeTimers({ now: new Date('2026-09-10T10:00:00.000Z'), toFake: ['Date'] });
+    const handler = vi.fn();
+    setSessionMergedHandler(handler);
+    const fetcher = vi.fn(async () => sessionMergedResponse());
+    const api = mergedApi(fetcher);
+
+    await expect(api.getProfile()).rejects.toBeInstanceOf(SessionMergedError);
+    await expect(api.getProfile()).rejects.toBeInstanceOf(SessionMergedError);
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(new Date('2026-09-10T10:00:11.000Z'));
+    await expect(api.getProfile()).rejects.toBeInstanceOf(SessionMergedError);
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves a mid-deletion account alone: 409 ACCOUNT_DELETING is not a merged session', async () => {
+    // Both failures are 409. Only the merged one may tear down the session —
+    // signing a deleting user out would strand them mid-flow for no reason.
+    const handler = vi.fn();
+    setSessionMergedHandler(handler);
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      code: 'ACCOUNT_DELETING',
+      error: 'This account is being permanently deleted.',
+    }), {
+      status: 409,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    const api = mergedApi(fetcher);
+
+    const error = await api.getProfile().catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).not.toBeInstanceOf(SessionMergedError);
+    expect(error).toMatchObject({ status: 409, code: 'ACCOUNT_DELETING' });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('does not invoke the handler for a 409 that carries no code', async () => {
+    const handler = vi.fn();
+    setSessionMergedHandler(handler);
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      error: 'Conflict',
+    }), {
+      status: 409,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    const api = mergedApi(fetcher);
+
+    const error = await api.getProfile().catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).not.toBeInstanceOf(SessionMergedError);
+    expect(handler).not.toHaveBeenCalled();
   });
 });

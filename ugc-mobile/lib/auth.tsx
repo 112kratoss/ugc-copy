@@ -96,6 +96,11 @@ interface AuthContextValue {
   signInWithApple: (mode: AuthMode) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
+  /**
+   * Drops a guest session the server has told us is spent (409 SESSION_MERGED)
+   * and leaves the device on a fresh guest, ready to sign in.
+   */
+  abandonMergedGuestSession: () => Promise<void>;
   accountReauthenticationMethods: AccountReauthenticationMethod[];
   deleteAccount: (reauthentication?: AccountDeletionReauthentication) => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -630,6 +635,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     router.replace('/auth');
   };
 
+  /**
+   * Recovery for a guest identity that was linked to an account elsewhere.
+   *
+   * Every authenticated route answers this device 409 SESSION_MERGED, so there
+   * is no session state worth preserving and nothing to ask the user first —
+   * the app is already unusable. Three things make this different from signOut:
+   *
+   * - `scope: 'local'`. The token is spent server-side already, and a global
+   *   sign-out would reach for sessions that now belong to the registered
+   *   account. Local teardown is the same choice the reauthentication-mismatch
+   *   path makes.
+   * - No push unregister. That call is itself an authenticated route, so it
+   *   would 409 and throw before the teardown ran. The server already treats a
+   *   merged identity's push rows as stranded.
+   * - The stored guest merge ticket is deliberately left alone. It is the only
+   *   copy of the secret that moves the old guest's credits onto the account,
+   *   and the launch retry redeems it once the person signs in.
+   */
+  const abandonMergedGuestSession = async () => {
+    // A registered session must never be torn down by this path. SESSION_MERGED
+    // is only ever issued for an anonymous identity, so anything else reaching
+    // here is a bug upstream and is safer ignored than acted on.
+    if (!isGuestSession(sessionRef.current)) return;
+    const feedIdentityTransition = beginFeedIdentityTransition(sessionRef.current);
+    if (isSupabaseConfigured) {
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
+      await clearPersistedSupabaseAuthSession().catch(() => undefined);
+    }
+    feedIdentityTransition?.commit();
+    resetAuthState();
+    // Same convention as signOut: drop back to a guest rather than to nothing,
+    // so public browsing still works while the person decides to sign in.
+    guestBootstrapRef.current = false;
+    void ensureGuestSession();
+    router.replace('/auth?notice=session-merged');
+  };
+
   const deleteAccount = async (reauthentication?: AccountDeletionReauthentication) => {
     if (!registeredUser) {
       throw new Error('Sign in before deleting your account.');
@@ -713,6 +755,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signInWithApple,
         signInWithGoogle,
         signOut,
+        abandonMergedGuestSession,
         accountReauthenticationMethods,
         deleteAccount,
         refreshProfile,

@@ -14,6 +14,12 @@ import { isNetworkRequestFailedError } from './supabase-auth-recovery';
 export type AuthNotice = {
   title: string;
   body: string;
+  /**
+   * Omitted for the failures that make up almost every notice on this screen.
+   * Set to 'info' only when the notice explains a redirect rather than
+   * reporting that something went wrong.
+   */
+  tone?: 'danger' | 'info';
 };
 
 export const GENERIC_SIGN_IN_FAILURE: AuthNotice = {
@@ -24,6 +30,20 @@ export const GENERIC_SIGN_IN_FAILURE: AuthNotice = {
 const OFFLINE: AuthNotice = {
   title: 'You appear to be offline',
   body: 'Check your connection, then try again.',
+};
+
+/**
+ * Shown when this device arrives at sign-in because its guest session was
+ * linked to an account (409 SESSION_MERGED), not because anything failed.
+ *
+ * The wording avoids "error" and "expired" on purpose. Nothing broke and the
+ * work is not lost — it moved to the account — so the message names the cause
+ * and the one action that resolves it.
+ */
+export const GUEST_SESSION_MERGED: AuthNotice = {
+  title: 'Sign in to pick up where you left off',
+  body: 'This device was browsing as a guest, and that guest was added to an account. Sign in and your credits and creations come with you.',
+  tone: 'info',
 };
 
 /** Client-side checks, so a typo costs a glance rather than a round trip. */
