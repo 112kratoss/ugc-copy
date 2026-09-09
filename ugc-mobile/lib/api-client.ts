@@ -141,6 +141,56 @@ function notifyUpgradeRequired(error: UpgradeRequiredError) {
   }
 }
 
+export const SESSION_MERGED_CODE = 'SESSION_MERGED';
+
+/**
+ * Thrown when the caller's guest session has been linked to a registered
+ * account (HTTP 409 `SESSION_MERGED`).
+ *
+ * The token is genuine but spent: its credits and the right to act for its data
+ * moved to the account, so the server will refuse it forever. Refreshing cannot
+ * help and retrying cannot succeed, which is why this is separated from every
+ * other 409 — `ACCOUNT_DELETING` shares the status but not the remedy.
+ */
+export class SessionMergedError extends ApiError {
+  constructor(message: string, details?: unknown, requestId?: string) {
+    super(message, 409, details, requestId, SESSION_MERGED_CODE);
+    this.name = 'SessionMergedError';
+  }
+}
+
+export type SessionMergedHandler = (error: SessionMergedError) => void;
+
+// The app shell (app/_layout.tsx) registers the local session teardown here so
+// this lib never imports the router or the auth provider. Every in-flight
+// request fails at once when an identity is merged, so the same throttle the
+// upgrade path uses keeps that burst to a single recovery.
+const SESSION_MERGED_RENOTIFY_INTERVAL_MS = 10_000;
+let sessionMergedHandler: SessionMergedHandler | null = null;
+let sessionMergedNotifiedAt: number | null = null;
+
+export function setSessionMergedHandler(handler: SessionMergedHandler | null) {
+  sessionMergedHandler = handler;
+  sessionMergedNotifiedAt = null;
+}
+
+function notifySessionMerged(error: SessionMergedError) {
+  if (!sessionMergedHandler) return;
+  const now = Date.now();
+  if (
+    sessionMergedNotifiedAt !== null
+    && now - sessionMergedNotifiedAt < SESSION_MERGED_RENOTIFY_INTERVAL_MS
+  ) {
+    return;
+  }
+  sessionMergedNotifiedAt = now;
+  try {
+    sessionMergedHandler(error);
+  } catch (handlerError) {
+    console.warn('Session-merged handler failed', handlerError);
+  }
+}
+
 export interface ApiClientOptions {
   baseUrl: string;
   getAccessToken: () => Promise<string | null>;
@@ -390,6 +440,13 @@ function throwHttpApiError(status: number, body: unknown, requestId: string | un
     const upgradeError = new UpgradeRequiredError(message, body, requestId, code);
     notifyUpgradeRequired(upgradeError);
     throw upgradeError;
+  }
+  // Gated on the code, not the status: ACCOUNT_DELETING is also a 409 and must
+  // not tear down a registered session that is merely mid-deletion.
+  if (status === 409 && code === SESSION_MERGED_CODE) {
+    const mergedError = new SessionMergedError(message, body, requestId);
+    notifySessionMerged(mergedError);
+    throw mergedError;
   }
   throw new ApiError(message, status, body, requestId, code);
 }
