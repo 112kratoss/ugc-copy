@@ -23,15 +23,14 @@
       "$note": "Built from main 62e9f57 (EAS build 21641ad1, workflow run 33969667328) and submitted to the Play closed alpha 2026-09-05 14:07 UTC; a production release 0.1.4 (71) was created from the library the same day and sent for review as a full rollout (which restarted the alpha review). First binary with the full R8 pipeline (#112): optimize base, full mode, optimized resource shrinking, narrowed keeps, React Native core Image retired. Play bundle explorer: App optimization High (70 was Medium), obfuscation 80%, R8 checklist green on Full Mode, Resource Shrinking and Resource Shrinking Optimized (Repackage Classes and AGP 9 outstanding), install size 20.4 MB, -3.27 MB vs 70. Until the production review lands, Android users run 70 at 17fa2c368e3ed481875b6d43674042f036ea86f7."
     },
     "ios": {
-      "fingerprint": "e2aa6c798f52ce806aa7057841289f385c50a78a",
+      "fingerprint": "c2e22bfa7e480143c37e68b757aa9a91d3bd0c95",
       "appVersion": "0.1.4",
-      "buildNumber": 51,
-      "shipped": "2026-09-05",
+      "buildNumber": 52,
+      "shipped": "2026-09-09",
       "tracks": [
-        "testflight",
-        "app-store"
+        "testflight"
       ],
-      "$note": "Built from main 0a24b46 (EAS build 22b925ee) and submitted to the TestFlight internal group 2026-09-05; attached to App Store version 0.1.4 and submitted for review the same day, replacing 0.1.3 (build 50), which was pulled from review to make room. Carries the push-token listener fix (#108) and the 0.1.4 bump (#109); R8 (#107) is Android-only. Until review lands, App Store users still run 0.1.2 (47). main 62e9f57 (#112) moved the iOS fingerprint as well - Expo hashes every config plugin file into both platforms - so no OTA update from main can reach build 51; the next iOS binary restores it."
+      "$note": "Built from main 2bf292b (EAS build e20859dc) and submitted to TestFlight 2026-09-09, then installed and exercised on a physical iPhone. First iOS binary carrying patches/expo-video+55.0.21.patch, which bounds expo-video's content-information request to `Range: bytes=0-1` (F1 in the media delivery audit): measured 2.87x -> 1.88x bytes-per-open on a 466 KB clip, 1.96x on a 1.48 MB clip. Replaces build 51, which was pulled from App Store review to make room and is now in nobody's hands - this file recorded 51 until 2026-09-09, so any iOS update published in between targeted a fingerprint no device carried. App Store 0.1.4 (52) was rejected 2026-09-09 under guidelines 5.2.1 and 2.3.10 (demo-account content and non-iOS screenshots - version metadata, not the binary) and resubmitted the same day; until that is approved App Store users still run 0.1.2 (47), so an update published against this fingerprint reaches TestFlight only. This fingerprint equals main at 2bf292b, so JS-only updates from main can reach build 52 - the block that stood while 51 was current is lifted."
     }
   }
 }
