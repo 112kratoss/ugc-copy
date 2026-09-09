@@ -11,7 +11,7 @@ import {
 } from '@/lib/generation-input-media';
 import { buildGenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { classifyVisualMedia } from '@/lib/media-contract';
-import { buildVisualMediaDescriptor, type MediaPreviewStatus } from '@/lib/media-descriptor';
+import { buildVisualMediaDescriptor, type MediaPreviewStatus, type VisualMediaDescriptor } from '@/lib/media-descriptor';
 import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
 import { buildMediaProxyUrl } from '@/lib/media-urls';
 import { resolveOwnedStoredMediaUrlMap } from '@/lib/owned-media-url-batch';
@@ -24,6 +24,8 @@ type GenerationRow = {
   user_id?: string;
   output_url: string | null;
   preview_url?: string | null;
+  /** Storage path of the 1440px display rendition, beside the preview; null when none was stored. */
+  display_url?: string | null;
   preview_thumbhash?: string | null;
   preview_status?: MediaPreviewStatus;
   preview_width?: number | null;
@@ -98,6 +100,8 @@ export function projectGenerationForStudio(
   delete projected.user_id;
   delete projected.preview_width;
   delete projected.preview_height;
+  // A storage key, not an address; the signed form travels on `media.displayUrl`.
+  delete projected.display_url;
   delete projected.playback_rendition_path;
   delete projected.playback_rendition_source;
   delete projected.playback_rendition_status;
@@ -194,6 +198,28 @@ function resolveGenerationPreviewUrl(
 }
 
 /**
+ * The 1440px display rendition, signed under the owner prefix exactly like the
+ * preview. Null when none was stored, and the viewer then opens `url`, which
+ * is what it did before the column existed.
+ */
+function resolveGenerationDisplayUrl(
+  generation: GenerationRow,
+  resolvedMediaUrls: Map<string, string | null>,
+): string | null {
+  const displaySource = generation.display_url || null;
+  return displaySource ? resolvedMediaUrls.get(displaySource) ?? null : null;
+}
+
+/**
+ * The descriptor is shared with published post media, which attaches its
+ * display address the same way rather than widening the descriptor for one
+ * consumer. Mobile reads `displayUrl || url` for image slides.
+ */
+function withDisplayUrl(media: VisualMediaDescriptor, displayUrl: string | null) {
+  return { ...media, displayUrl };
+}
+
+/**
  * A ready private rendition is exposed through the authenticated media route
  * rather than a signed Storage URL. The route redirects to a short signature
  * on every request, so bytes still come from Storage, but the URL the client
@@ -224,6 +250,10 @@ function collectOwnerMediaUrlCandidates(
 
     if (generation.preview_url) {
       candidates.add(generation.preview_url);
+    }
+
+    if (generation.display_url) {
+      candidates.add(generation.display_url);
     }
 
     if (!summaryOnly) {
@@ -322,7 +352,7 @@ async function fetchOwnerGenerations({
   const baseColumns = `id, user_id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, workflow_settings, archived_at, ${projectionColumns}`;
   const columns = statusOnly
     ? statusColumns
-    : `${baseColumns}, preview_url, preview_thumbhash, preview_status, preview_width, preview_height, creation_mode, playback_rendition_path, playback_rendition_source, playback_rendition_status, source_unavailable_at`;
+    : `${baseColumns}, preview_url, display_url, preview_thumbhash, preview_status, preview_width, preview_height, creation_mode, playback_rendition_path, playback_rendition_source, playback_rendition_status, source_unavailable_at`;
 
   // `in` over the linked set, not `eq` on the caller. Anything made before the
   // person registered still carries its guest UUID — the financial tables
@@ -579,7 +609,7 @@ export async function listOwnerGenerationsForRoute({
       ? new Date(Date.now() + 55 * 60 * 1000).toISOString()
       : null;
     const media = outputUrl && classification?.kind
-      ? buildVisualMediaDescriptor({
+      ? withDisplayUrl(buildVisualMediaDescriptor({
         id: generation.id,
         kind: classification.kind,
         url: outputUrl,
@@ -595,7 +625,7 @@ export async function listOwnerGenerationsForRoute({
         durationSeconds: typeof (generation as GenerationRow & { duration?: unknown }).duration === 'number'
           ? (generation as GenerationRow & { duration: number }).duration
           : null,
-      })
+      }), resolveGenerationDisplayUrl(generation, resolvedMediaUrls))
       : null;
     const rest = projectGenerationForStudio(generation, Boolean(template));
     const linkedPost = linkedPostMap.get(generation.id);

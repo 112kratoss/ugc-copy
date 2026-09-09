@@ -10,7 +10,7 @@ vi.mock('@/lib/video-rendition', () => ({
 const bytes = Buffer.from('encoded video bytes');
 beforeEach(() => { encode.mockReset().mockResolvedValue({ buffer: bytes, bytes: bytes.length, durationSeconds: 8, width: 720, height: 405 }); });
 
-function fixture(options: { path?: string; sourceBytes?: number; corrupt?: boolean; stale?: boolean; downloadError?: boolean } = {}) {
+function fixture(options: { path?: string; generationId?: string | null; sourceBytes?: number; corrupt?: boolean; stale?: boolean; downloadError?: boolean } = {}) {
   const updates: Record<string, unknown>[] = [];
   const guards: [string, unknown][] = [];
   const storage = {
@@ -21,7 +21,7 @@ function fixture(options: { path?: string; sourceBytes?: number; corrupt?: boole
     upload: vi.fn().mockResolvedValue({ error: null }),
   };
   const db = {
-    rpc: vi.fn().mockResolvedValue({ data: [{ id: 'media', post_id: 'post',
+    rpc: vi.fn().mockResolvedValue({ data: [{ id: 'media', post_id: 'post', generation_id: options.generationId ?? null,
       rendition_storage_path: options.path ?? 'posts/post/clip.feed.mp4',
       source_bytes: options.sourceBytes ?? 1024 }], error: null }),
     storage: { from: vi.fn(() => storage) },
@@ -53,7 +53,21 @@ it('publishes verified Blob bytes from the existing rendition without changing f
   expect(f.guards.some(([key, value]) => key === 'teaser_locked_by' && String(value).startsWith('media-teaser:'))).toBe(true);
 });
 
-it.each([{ path: 'posts/another-post/clip.mp4' }, { sourceBytes: TEASER_REPAIR_MAX_BYTES + 1 }, { sourceBytes: 0 }])('rejects inadmissible input before storage: %j', async options => {
+it('admits a rendition filed under the linked generation, which is where creation-published posts keep theirs', async () => {
+  const f = fixture({ path: 'showcase/gen-1/clip.feed.mp4', generationId: 'gen-1' });
+  await expect(repairPostMediaTeasers(f.db as never)).resolves.toEqual({ attempted: 1, completed: 1, failed: 0 });
+  expect(f.storage.download.mock.calls[0][0]).toBe('showcase/gen-1/clip.feed.mp4');
+  expect(f.updates[0].teaser_storage_path).toMatch(/^showcase\/gen-1\/clip\.feed\.teaser\./);
+});
+
+it.each([
+  { path: 'posts/another-post/clip.mp4' },
+  // A showcase prefix is only admissible when it is the linked generation's own.
+  { path: 'showcase/gen-2/clip.feed.mp4', generationId: 'gen-1' },
+  { path: 'showcase/gen-1/clip.feed.mp4', generationId: null },
+  { sourceBytes: TEASER_REPAIR_MAX_BYTES + 1 },
+  { sourceBytes: 0 },
+])('rejects inadmissible input before storage: %j', async options => {
   const f = fixture(options);
   await expect(repairPostMediaTeasers(f.db as never)).resolves.toMatchObject({ completed: 0, failed: 1 });
   expect(f.db.storage.from).not.toHaveBeenCalled();

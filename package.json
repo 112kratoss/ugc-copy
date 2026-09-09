@@ -25,6 +25,7 @@
     "backfill:generation-video-previews": "npm run backfill:media-previews",
     "backfill:generation-preview-dimensions": "tsx --env-file-if-exists=.env.local scripts/backfill-generation-preview-dimensions.ts",
     "backfill:media-display-renditions": "tsx --env-file-if-exists=.env.local scripts/backfill-media-display-renditions.ts",
+    "backfill:generation-display-renditions": "tsx --env-file-if-exists=.env.local scripts/backfill-generation-display-renditions.ts",
     "backfill:post-media-previews": "npm run backfill:media-previews",
     "backfill:showcase-assets": "node scripts/backfill-showcase-assets.mjs",
     "backfill:showcase-media-cache": "tsx --env-file-if-exists=.env.local scripts/backfill-showcase-media-cache.ts",

@@ -159,6 +159,10 @@ type CoverRow = {
   id: string;
   storage_path: string | null;
   sort_order: number | null;
+  preview_storage_path?: string | null;
+  display_storage_path?: string | null;
+  rendition_storage_path?: string | null;
+  teaser_storage_path?: string | null;
 };
 
 function createCoverMediaClient({
@@ -166,14 +170,17 @@ function createCoverMediaClient({
   selectError = null,
   insertError = null,
   updateError = null,
+  removeError = null,
 }: {
   rows?: CoverRow[];
   selectError?: { message: string } | null;
   insertError?: { message?: string; code?: string } | null;
   updateError?: { message: string } | null;
+  removeError?: { message: string } | null;
 } = {}) {
   const inserts: Array<Record<string, unknown>> = [];
   const updates: Array<{ id: string; values: Record<string, unknown> }> = [];
+  const removals: string[][] = [];
   const client = {
     from(table: string) {
       if (table !== 'post_media') throw new Error(`unexpected table ${table}`);
@@ -197,8 +204,19 @@ function createCoverMediaClient({
         },
       };
     },
+    storage: {
+      from(bucket: string) {
+        if (bucket !== 'showcase_media') throw new Error(`unexpected bucket ${bucket}`);
+        return {
+          remove: async (paths: string[]) => {
+            removals.push(paths);
+            return { data: removeError ? null : paths.map((name) => ({ name })), error: removeError };
+          },
+        };
+      },
+    },
   };
-  return { client: client as never, inserts, updates };
+  return { client: client as never, inserts, updates, removals };
 }
 
 describe('ensureGenerationPostCoverMedia', () => {
@@ -335,6 +353,77 @@ describe('ensureGenerationPostCoverMedia', () => {
       height: null,
       duration_seconds: null,
     });
+  });
+
+  it('retires the superseded object and every derivative built from it once the row has moved', async () => {
+    const { ensureGenerationPostCoverMedia } = await import('@/lib/generation-post-media');
+    const { client, updates, removals } = createCoverMediaClient({
+      rows: [{
+        id: 'row-1',
+        sort_order: 0,
+        storage_path: 'showcase/gen-1/generated_old.111111111111.jpg',
+        preview_storage_path: 'showcase/gen-1/generated_old.111111111111.preview.aaaa.webp',
+        display_storage_path: 'showcase/gen-1/generated_old.111111111111.display.bbbb.webp',
+        rendition_storage_path: null,
+        // A derivative that is not this generation's must never be touched,
+        // whatever column it sits in.
+        teaser_storage_path: 'showcase/gen-9/stray.teaser.cccc.mp4',
+      }],
+    });
+
+    const result = await ensureGenerationPostCoverMedia({
+      adminSupabase: client,
+      postId: 'post-1',
+      generationId: 'gen-1',
+      showcaseAssetPath: 'showcase/gen-1/generated_new.222222222222.jpg',
+      category: 'image',
+    });
+
+    expect(result).toEqual({ outcome: 'repointed', error: null });
+    expect(updates).toHaveLength(1);
+    expect(removals).toHaveLength(1);
+    expect(removals[0]).toEqual([
+      'showcase/gen-1/generated_old.111111111111.jpg',
+      'showcase/gen-1/generated_old.111111111111.preview.aaaa.webp',
+      'showcase/gen-1/generated_old.111111111111.display.bbbb.webp',
+    ]);
+  });
+
+  it('keeps the repoint when retiring the old objects fails, so a publish never fails on cleanup', async () => {
+    const { ensureGenerationPostCoverMedia } = await import('@/lib/generation-post-media');
+    const { client, updates, removals } = createCoverMediaClient({
+      rows: [{ id: 'row-1', storage_path: 'showcase/gen-1/generated_old.111111111111.mp4', sort_order: 0 }],
+      removeError: { message: 'bucket unavailable' },
+    });
+
+    const result = await ensureGenerationPostCoverMedia({
+      adminSupabase: client,
+      postId: 'post-1',
+      generationId: 'gen-1',
+      showcaseAssetPath: 'showcase/gen-1/generated_new.222222222222.mp4',
+      category: 'video',
+    });
+
+    expect(result).toEqual({ outcome: 'repointed', error: null });
+    expect(updates).toHaveLength(1);
+    expect(removals).toEqual([['showcase/gen-1/generated_old.111111111111.mp4']]);
+  });
+
+  it('removes nothing when a gallery-backfill row never had a stored path', async () => {
+    const { ensureGenerationPostCoverMedia } = await import('@/lib/generation-post-media');
+    const { client, removals } = createCoverMediaClient({
+      rows: [{ id: 'row-1', storage_path: null, sort_order: 0 }],
+    });
+
+    await ensureGenerationPostCoverMedia({
+      adminSupabase: client,
+      postId: 'post-1',
+      generationId: 'gen-1',
+      showcaseAssetPath: 'showcase/gen-1/generated_new.222222222222.jpg',
+      category: 'image',
+    });
+
+    expect(removals).toEqual([]);
   });
 
   it('refuses a path outside the generation prefix rather than adopting it', async () => {

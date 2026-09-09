@@ -767,3 +767,57 @@ three status services; giving them the same treatment is the remaining half of
 F3. Evidence: F3 of the
 [8 September audit](media-delivery-audit-2026-09-08-final.md).
 
+
+## Private creations get the display size (2026-09-09)
+
+The 9 September display rendition stopped at published post media. Private
+creations reach the viewer through `generations`, and every open of one still
+downloaded the original — 1.2 MB on average, 7.9 MB at the top — for 75
+creations that a creator opens far more often than a stranger opens the feed.
+
+`generations.display_url` (migration `20260909130000`) holds the same 1440px
+WebP, beside the preview in the private `generated_images` bucket and signed
+for the owner the same way. The image preview writer now emits both sizes from
+one decode; the repair sweep records the display path whenever it rebuilds a
+preview; and `npm run backfill:generation-display-renditions` (dry-run by
+default) fills in what predates it.
+
+The settlement RPC is untouched, on purpose. `settle_generation_succeeded`
+owns the single-effect credit decision and its 33 pgTAP assertions are the
+proof; widening it for a cache would put the money path under review for a
+resize. The display path is stamped by a conditioned follow-up write after
+settlement — `where id = ? and output_url = ?`, so a row repaired to a
+different file never carries a display of one it no longer serves. A lost
+write costs one fewer optimisation, never correctness, and the backfill
+closes it.
+
+No mobile change. The viewer already reads `displayUrl || url` for image
+slides and the API client spreads the media descriptor through, so every
+installed build benefits the moment the route returns the field.
+
+## Repointed covers retire their superseded objects (2026-09-09)
+
+`ensureGenerationPostCoverMedia` repointed a cover row when a generation's
+output was replaced, cleared the derivative columns, and left the previous
+object and its preview, display, rendition and teaser in the public bucket —
+recorded at the time as a leak, not a cleanup contract.
+
+Once the row has moved, those objects are now removed under the same rule
+`removeGenerationShowcaseDerivative` applies: only paths under this
+generation's own showcase prefix, never the one now served. The row goes
+first; a removal that then fails leaves exactly what every repoint left
+before, is logged, and never becomes a publish failure.
+
+## Teaser sweep admits generation-published renditions (2026-09-09)
+
+`claim_post_media_teaser_repair` admitted only renditions filed under
+`posts/<post id>/`. A post published from a creation keeps its media under
+`showcase/<generation id>/`, so the sweep walked past every such video. No
+clip over 30 s has been published from a creation yet, which is the only
+reason it never showed.
+
+Migration `20260909131000` admits `showcase/<generation id>/` when the owning
+post links that generation, and returns the generation id so the worker holds
+the same ownership check the database applied. The result type changed, so
+the function is dropped and recreated with its ACL re-applied; argument types
+are unchanged, so callers and the privilege assertions are untouched.

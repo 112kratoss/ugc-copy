@@ -15,6 +15,8 @@ export const TEASER_REPAIR_MAX_BYTES = 32 * 1024 * 1024;
 type TeaserClaim = {
   id: string;
   post_id: string;
+  /** The generation a creation-published post links; its showcase prefix may hold the rendition. */
+  generation_id?: string | null;
   rendition_storage_path: string;
   source_bytes: number;
 };
@@ -50,7 +52,12 @@ export async function repairPostMediaTeasers(supabase: SupabaseClient) {
   if (!row) return empty;
   try {
     const path = parseCanonicalStorageObjectPath(row.rendition_storage_path, { minimumSegments: 3 });
-    if (!path || !path.startsWith(`posts/${row.post_id}/`)) throw new Error('Teaser source is outside the owning post.');
+    // Upload-published posts file media under their own id; creation-published
+    // ones keep it under the linked generation's showcase prefix. The claim
+    // already applied this rule; repeating it here keeps a wrong row harmless.
+    const ownedByPost = Boolean(path?.startsWith(`posts/${row.post_id}/`));
+    const ownedByGeneration = Boolean(row.generation_id && path?.startsWith(`showcase/${row.generation_id}/`));
+    if (!path || !(ownedByPost || ownedByGeneration)) throw new Error('Teaser source is outside the owning post.');
     if (!(row.source_bytes > 0 && row.source_bytes <= TEASER_REPAIR_MAX_BYTES)) throw new Error('Teaser source exceeds the byte budget.');
     const storage = supabase.storage.from('showcase_media');
     const download = await storage.download(path, {}, { signal: AbortSignal.timeout(30_000) });
