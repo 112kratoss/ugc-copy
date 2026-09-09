@@ -404,6 +404,10 @@ async function repairGeneration(
 
     let resultQuery = supabase.from('generations').update({
       preview_url: preview.previewStoragePath,
+      // Null when no display rendition was worth storing (or the output is a
+      // video). Written either way so a repair that replaces the media cannot
+      // leave the old display behind.
+      display_url: preview.displayStoragePath ?? null,
       preview_thumbhash: preview.previewThumbhash,
       preview_status: 'ready',
       // The showcase grid sizes a card from this before the image arrives; see
