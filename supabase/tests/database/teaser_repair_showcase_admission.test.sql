@@ -12,9 +12,9 @@ values ('e7200000-0000-4000-8000-000000000001', 'e7100000-0000-4000-8000-0000000
 -- generation's showcase prefix. Post 2 links generation 2 but its rendition
 -- sits under generation 1's prefix: owned by a generation, just not its own.
 insert into public.posts (id, user_id, visibility, category, source_kind, post_format, showcase_asset_path, generation_id)
-values ('e7300000-0000-4000-8000-000000000001', 'e7100000-0000-4000-8000-000000000001', 'public', 'video', 'generation', 'media',
+values ('e7300000-0000-4000-8000-000000000001', 'e7100000-0000-4000-8000-000000000001', 'public', 'video', 'magicbooklet', 'media',
         'showcase/e7200000-0000-4000-8000-000000000001/clip.mp4', 'e7200000-0000-4000-8000-000000000001'),
-       ('e7300000-0000-4000-8000-000000000002', 'e7100000-0000-4000-8000-000000000001', 'public', 'video', 'generation', 'media',
+       ('e7300000-0000-4000-8000-000000000002', 'e7100000-0000-4000-8000-000000000001', 'public', 'video', 'magicbooklet', 'media',
         'showcase/e7200000-0000-4000-8000-000000000002/clip.mp4', 'e7200000-0000-4000-8000-000000000002');
 insert into public.post_media (id, post_id, storage_path, media_kind, sort_order, rendition_status, rendition_storage_path, duration_seconds)
 values ('e7400000-0000-4000-8000-000000000001', 'e7300000-0000-4000-8000-000000000001',
