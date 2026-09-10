@@ -2083,6 +2083,18 @@ function ActiveVideoAttempt({
   // player replacement are the two pauses the native player never reports for
   // a source that has not started, so both update this state directly.
   const [isPlaying, setIsPlaying] = useState(active && !reducedMotion);
+  // The paused badge must not flash when a slide becomes active. The native
+  // playingChange event arrives only after the activation render has painted,
+  // and correcting the state from the activation effect costs a second render
+  // of the whole reel, so on a phone the badge sat over the first frames of
+  // every video. Adjust the state during render instead: the first frame the
+  // reader sees of the active slide already reads as playing, and
+  // playingChange still corrects it if the player really stays paused.
+  const [activeSeen, setActiveSeen] = useState(active);
+  if (active !== activeSeen) {
+    setActiveSeen(active);
+    setIsPlaying(active && !reducedMotion && (!AppState.currentState || AppState.currentState === 'active'));
+  }
   const previousPlayer = useRef<VideoPlayer | null>(null);
   const playbackAllowed = useViewerPlaybackGate(previousPlayer, () => setIsPlaying(false));
   const playbackRequested = useRef(active);
