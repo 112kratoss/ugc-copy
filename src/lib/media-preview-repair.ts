@@ -1184,8 +1184,14 @@ export async function regenerateVideoPosters(
   }
 
   if (posts.regenerated > 0) {
-    // Feed pages cache the preview URLs they were built from.
-    invalidateShowcaseFeedCache();
+    // Feed pages cache the preview URLs they were built from. The tag lives in
+    // the Next server, so from the CLI script this throws and the cache simply
+    // expires on its own schedule; inside the server it invalidates at once.
+    try {
+      invalidateShowcaseFeedCache();
+    } catch (error) {
+      log(`feed cache not invalidated from here (${summarizeMediaToolError(error, 'no Next request context')}); it expires on its own`);
+    }
   }
 
   return { generations, posts };
