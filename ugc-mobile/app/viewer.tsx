@@ -2191,6 +2191,34 @@ function ActiveVideoAttempt({
     setHasError(false);
   }, [player, playbackUrl, requestKey]);
 
+  // The surface reveals itself with a short fade on its first frame rather
+  // than a cut, the way Instagram brings a reel in over its cover. A prepared
+  // neighbour fades while it is still off-screen, so a swipe lands on a fully
+  // shown surface; the fade is only ever seen on a cold open, or when a
+  // source is still loading as its page arrives, and there it turns the
+  // poster-to-video moment into a dissolve. A new native player (a re-signed
+  // source, a retry) starts hidden again; a loop restart re-fires the first
+  // frame event and must not blink, so the reveal runs once per player.
+  const surfaceOpacity = useRef(new Animated.Value(0)).current;
+  const revealedPlayerRef = useRef<VideoPlayer | null>(null);
+  useEffect(() => {
+    if (revealedPlayerRef.current !== player) surfaceOpacity.setValue(0);
+  }, [player, surfaceOpacity]);
+  const revealSurface = () => {
+    if (revealedPlayerRef.current === player) return;
+    revealedPlayerRef.current = player;
+    if (reducedMotion) {
+      surfaceOpacity.setValue(1);
+      return;
+    }
+    Animated.timing(surfaceOpacity, {
+      toValue: 1,
+      duration: 160,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+  };
+
   useEffect(() => {
     const subscription = player.addListener('playingChange', (event) => {
       // The gate polices the active slide only: the reel's scroll handoff
@@ -2256,17 +2284,20 @@ function ActiveVideoAttempt({
         onSinglePress={togglePlayback}
         style={{ width, height, alignItems: 'center', justifyContent: 'center' }}
       >
-        <FeedMediaFrame
-          kind="video"
-          player={player}
-          backgroundColor="transparent"
-          videoBackdrop="none"
-          onFirstFrameRender={() => {
-            setHasFrame(true);
-            setHasError(false);
-          }}
-          style={{ width, height }}
-        />
+        <Animated.View style={{ width, height, opacity: surfaceOpacity }}>
+          <FeedMediaFrame
+            kind="video"
+            player={player}
+            backgroundColor="transparent"
+            videoBackdrop="none"
+            onFirstFrameRender={() => {
+              setHasFrame(true);
+              setHasError(false);
+              revealSurface();
+            }}
+            style={{ width, height }}
+          />
+        </Animated.View>
         {active && !isPlaying && hasFrame && !playbackFailed ? <ViewerPlayBadge /> : null}
       </DoubleTapPressable>
       {!playbackFailed && (status === 'loading' || status === 'idle') ? (
