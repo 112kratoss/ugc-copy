@@ -866,13 +866,15 @@ export default function ImmersivePreviewViewerScreen() {
             listRef.current?.scrollToOffset({ offset: height * index, animated: false });
           });
         }}
-        // Android reports momentum end only after its scroll view has polled a
-        // few stable frames, ~150-200ms after the page visibly stops. Hand
-        // playback over as soon as the landing page owns most of the screen
-        // instead, so the video is already moving when the page settles (the
-        // same moment Instagram and TikTok switch). Interval momentum is
-        // disabled below, so the rounded page can only ever be a neighbour.
-        onScroll={Platform.OS === 'android' ? (event) => {
+        // Hand playback over as soon as the landing page owns most of the
+        // screen, the moment Instagram and TikTok switch, rather than at
+        // momentum end. On Android that event trails the visible stop by
+        // ~150-200ms (the scroll view polls for stable frames). On iOS it is
+        // prompt, but a phone still needs ~100-200ms to resume a paused player
+        // and render, and that gap showed as the poster, then frame zero.
+        // Paging on iOS and momentum-free interval snapping on Android both
+        // stop at a neighbour, so the rounded page always has a prepared player.
+        onScroll={(event) => {
           const page = Math.max(0, Math.min(items.length - 1, Math.round(event.nativeEvent.contentOffset.y / height)));
           const previous = handoffPageRef.current ?? activeIndex;
           if (page === previous) return;
@@ -881,7 +883,7 @@ export default function ImmersivePreviewViewerScreen() {
             from: items[previous]?.id,
             to: items[page]?.id,
           });
-        } : undefined}
+        }}
         scrollEventThrottle={16}
         // Android's default paging restarts a fixed-duration animation at release.
         // Interval snapping uses its native fling and limits momentum to the next page.
@@ -2083,6 +2085,18 @@ function ActiveVideoAttempt({
   // player replacement are the two pauses the native player never reports for
   // a source that has not started, so both update this state directly.
   const [isPlaying, setIsPlaying] = useState(active && !reducedMotion);
+  // The paused badge must not flash when a slide becomes active. The native
+  // playingChange event arrives only after the activation render has painted,
+  // and correcting the state from the activation effect costs a second render
+  // of the whole reel, so on a phone the badge sat over the first frames of
+  // every video. Adjust the state during render instead: the first frame the
+  // reader sees of the active slide already reads as playing, and
+  // playingChange still corrects it if the player really stays paused.
+  const [activeSeen, setActiveSeen] = useState(active);
+  if (active !== activeSeen) {
+    setActiveSeen(active);
+    setIsPlaying(active && !reducedMotion && (!AppState.currentState || AppState.currentState === 'active'));
+  }
   const previousPlayer = useRef<VideoPlayer | null>(null);
   const playbackAllowed = useViewerPlaybackGate(previousPlayer, () => setIsPlaying(false));
   const playbackRequested = useRef(active);
