@@ -6,15 +6,15 @@ import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer } from 'expo-video';
 import { Copy, FileText, Globe, Heart, ImageOff, Images, Lock, LockKeyhole, MessageCircle, MoreHorizontal, Play, Repeat2, Volume2, VolumeX, Wand2 } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
-import { cloneElement, useCallback, useEffect, useId, useMemo, useRef, useState, type MutableRefObject, type ReactElement } from 'react';
+import { cloneElement, createContext, useContext, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ReactElement } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
 import { DoubleTapPressable } from '@/components/double-tap-pressable';
 import { useMediaSource } from '@/lib/use-media-source';
+import { createViewerPlaybackHandoff } from '@/lib/viewer-playback-handoff';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
-import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { PostDetailsPage } from '@/components/post-details-page';
 import { Pill, SecondaryButton, StatusBlock } from '@/components/ui';
 import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
@@ -145,6 +145,8 @@ type DoubleTapSavePosition = {
 const DOUBLE_TAP_SAVE_HEART_SIZE = 90;
 const VIEWER_PLAY_BADGE_SIZE = 72;
 
+const ViewerPlaybackContext = createContext<ReturnType<typeof createViewerPlaybackHandoff> | null>(null);
+
 export default function ImmersivePreviewViewerScreen() {
   const params = useLocalSearchParams<ViewerParams>();
   const source = normalizeViewerSource(params.source);
@@ -157,6 +159,8 @@ export default function ImmersivePreviewViewerScreen() {
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
+  const [playbackHandoff] = useState(createViewerPlaybackHandoff);
+  const reducedMotion = useReducedMotion();
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const topInset = resolvedTopInset(insets.top);
@@ -172,6 +176,9 @@ export default function ImmersivePreviewViewerScreen() {
   // and the ⋮ sheet act on what the reader is looking at, never on a neighbour
   // the list keeps mounted off-screen.
   const activeSlideRef = useRef<ImmersiveSlideHandle | null>(null);
+  // The page whose video was last handed playback by the scroll handlers.
+  // Tracks activeIndex, but leads it during a fling (see onScroll below).
+  const handoffPageRef = useRef<number | null>(null);
   const [actionsOpenItemId, setActionsOpenItemId] = useState<string | null>(null);
   const [commentsOpenItemId, setCommentsOpenItemId] = useState<string | null>(null);
   const [commentsReplyToId, setCommentsReplyToId] = useState<string | null>(null);
@@ -247,6 +254,11 @@ export default function ImmersivePreviewViewerScreen() {
     [items, savedPosition, initialId]
   );
   const activeIndex = Math.max(0, items.findIndex((item) => item.id === position?.itemId));
+  // ExoPlayer creation can block Android's handoff commit for hundreds of ms.
+  // First activate the already-prepared player; refresh the neighbouring player
+  // range in a lower-priority render. iOS keeps its existing preparation timing.
+  const deferredVideoIndex = useDeferredValue(activeIndex);
+  const preparedVideoIndex = Platform.OS === 'android' ? deferredVideoIndex : activeIndex;
   const detailsPageOpenItemId = isDetailsPageCovering(items[activeIndex], position) ? position?.itemId ?? null : null;
   const setActiveIndex = useCallback((next: number | ((current: number) => number)) => {
     setSavedPosition((saved) => {
@@ -269,6 +281,9 @@ export default function ImmersivePreviewViewerScreen() {
   // same frame would otherwise be yanked back to the page they just left.
   const nativeRowRef = useRef<{ index: number; height: number } | null>(null);
   useEffect(() => {
+    handoffPageRef.current = activeIndex;
+  }, [activeIndex]);
+  useEffect(() => {
     if (!initialPositionReady) return;
     if (nativeRowRef.current?.index === activeIndex && nativeRowRef.current.height === height) return;
     const frame = requestAnimationFrame(() => {
@@ -287,6 +302,11 @@ export default function ImmersivePreviewViewerScreen() {
   const activeVideoId = isFocused
     ? selectActiveImmersiveVideoId(items, activeIndex, overlayOpenItemId)
     : null;
+  const handoffAutoplayAllowed = isFocused && !reducedMotion && !overlayOpenItemId;
+  useLayoutEffect(() => {
+    playbackHandoff.setAutoplayAllowed(handoffAutoplayAllowed);
+    return () => playbackHandoff.setAutoplayAllowed(false);
+  }, [handoffAutoplayAllowed, playbackHandoff]);
   const activeItem = items[activeIndex];
   const detailsOpenForActive = Boolean(activeItem) && detailsPageOpenItemId === activeItem.id;
   const showMediaForActive = useCallback(() => {
@@ -798,6 +818,7 @@ export default function ImmersivePreviewViewerScreen() {
   }
 
   return (
+    <ViewerPlaybackContext.Provider value={playbackHandoff}>
     <View style={{ flex: 1, backgroundColor: '#000' }}>
       <Stack.Screen options={{ gestureEnabled: !detailsOpenForActive, fullScreenGestureEnabled: false }} />
       <FlatList
@@ -820,6 +841,14 @@ export default function ImmersivePreviewViewerScreen() {
           // to correct.
           nativeRowRef.current = { index: clampedIndex, height };
           if (clampedIndex === activeIndex) return;
+          // Swap playback now, on the scroll-end event, rather than after the
+          // reel re-renders: on Android that render is a few hundred ms during
+          // which the landed video would otherwise sit frozen on its first frame.
+          playbackHandoff.handoff({
+            from: items[handoffPageRef.current ?? activeIndex]?.id,
+            to: items[clampedIndex]?.id,
+          });
+          handoffPageRef.current = clampedIndex;
           setActiveIndex(clampedIndex);
           setActionsOpenItemId(null);
           setUnlockRemixOpenItemId(null);
@@ -829,11 +858,35 @@ export default function ImmersivePreviewViewerScreen() {
             listRef.current?.scrollToOffset({ offset: height * index, animated: false });
           });
         }}
-        pagingEnabled
-        removeClippedSubviews={Platform.OS === 'android'}
+        // Android reports momentum end only after its scroll view has polled a
+        // few stable frames, ~150-200ms after the page visibly stops. Hand
+        // playback over as soon as the landing page owns most of the screen
+        // instead, so the video is already moving when the page settles (the
+        // same moment Instagram and TikTok switch). Interval momentum is
+        // disabled below, so the rounded page can only ever be a neighbour.
+        onScroll={Platform.OS === 'android' ? (event) => {
+          const page = Math.max(0, Math.min(items.length - 1, Math.round(event.nativeEvent.contentOffset.y / height)));
+          const previous = handoffPageRef.current ?? activeIndex;
+          if (page === previous) return;
+          handoffPageRef.current = page;
+          playbackHandoff.handoff({
+            from: items[previous]?.id,
+            to: items[page]?.id,
+          });
+        } : undefined}
+        scrollEventThrottle={16}
+        // Android's default paging restarts a fixed-duration animation at release.
+        // Interval snapping uses its native fling and limits momentum to the next page.
+        pagingEnabled={Platform.OS !== 'android'}
+        snapToInterval={Platform.OS === 'android' ? height : undefined}
+        disableIntervalMomentum={Platform.OS === 'android'}
+        // Detaching a TextureView discards the frame we prepared offscreen.
+        // Virtualization still bounds mounted rows through windowSize.
+        removeClippedSubviews={false}
         renderItem={({ item, index }) => (
           <ImmersiveSlide
             active={index === activeIndex}
+            prepareVideo={Math.abs(index - activeIndex) <= 1 && (index === activeIndex || Math.abs(index - preparedVideoIndex) <= 1)}
             activeSlideRef={activeSlideRef}
             activeVideoId={activeVideoId}
             authReturnTo={immersiveViewerReturnPath({
@@ -1029,6 +1082,7 @@ export default function ImmersivePreviewViewerScreen() {
         </View>
       ) : null}
     </View>
+    </ViewerPlaybackContext.Provider>
   );
 }
 
@@ -1064,6 +1118,7 @@ interface ImmersiveSlideHandle {
 
 function ImmersiveSlide({
   active,
+  prepareVideo,
   activeSlideRef,
   activeVideoId,
   authReturnTo,
@@ -1089,6 +1144,7 @@ function ImmersiveSlide({
   onHorizontalScrollToggle,
 }: {
   active: boolean;
+  prepareVideo: boolean;
   activeSlideRef: MutableRefObject<ImmersiveSlideHandle | null>;
   activeVideoId: string | null;
   /** Where sign-in should land the viewer back: this reel, on this item. */
@@ -1147,6 +1203,10 @@ function ImmersiveSlide({
   const pages = useMemo(() => buildImmersiveSlidePages(item), [item]);
   const currentHorizontalIndex = Math.max(0, pages.findIndex((page) => slidePageKey(page) === pageKey));
   const currentPageIsDetails = isImmersiveDetailsSlidePageIndex(pages, currentHorizontalIndex);
+  // Details pauses the remembered media page without discarding its frame.
+  const preparedMediaIndex = currentPageIsDetails
+    ? Math.max(0, pages.findIndex((page) => slidePageKey(page) === mediaPageKey))
+    : currentHorizontalIndex;
   const canOpenCreator = Boolean(item.creatorUsername);
   const updateCurrentHorizontalIndex = useCallback((pageIndex: number) => {
     if (!active || !pages[pageIndex]) return;
@@ -1170,8 +1230,8 @@ function ImmersiveSlide({
   }, [mediaPageKey, pages, reducedMotion, updateCurrentHorizontalIndex]);
 
   // Only the active slide answers the reel. A neighbour that the list keeps
-  // mounted must never be scrolled from outside: its native views may be
-  // clipped on Android, and activation snaps it back to page 0 anyway.
+  // mounted must never be scrolled from outside: activation resets its page
+  // position, and only the active row owns the viewer navigation handle.
   useEffect(() => {
     if (!active) return;
     const handle: ImmersiveSlideHandle = { openDetails: openDetailsPage, showMedia: showMediaPage };
@@ -1483,9 +1543,11 @@ function ImmersiveSlide({
 
   if (pages.length <= 1) {
     return (
-      <View accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'} style={{ width, height }}>
+      <View collapsable={false} accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'} style={{ width, height }}>
         <MediaSlidePage
           active={videoPlaybackActive}
+          slideActive={active}
+          prepareVideo={prepareVideo}
           bottomInset={bottomInset}
           height={height}
           item={item}
@@ -1511,7 +1573,7 @@ function ImmersiveSlide({
   }
 
   return (
-    <View accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'} style={{ width, height, backgroundColor: '#000' }}>
+    <View collapsable={false} accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'} style={{ width, height, backgroundColor: '#000' }}>
       <FlatList
         ref={horizontalRef}
         data={pages}
@@ -1540,11 +1602,13 @@ function ImmersiveSlide({
           });
         }}
         pagingEnabled
-        removeClippedSubviews={Platform.OS === 'android'}
+        removeClippedSubviews={false}
         renderItem={({ item: page, index: pageIndex }) => (
-          <View accessibilityElementsHidden={!active || currentHorizontalIndex !== pageIndex} importantForAccessibility={active && currentHorizontalIndex === pageIndex ? 'auto' : 'no-hide-descendants'} style={{ width, height }}>
+          <View collapsable={false} accessibilityElementsHidden={!active || currentHorizontalIndex !== pageIndex} importantForAccessibility={active && currentHorizontalIndex === pageIndex ? 'auto' : 'no-hide-descendants'} style={{ width, height }}>
           <MediaSlidePage
             active={active && currentHorizontalIndex === pageIndex && (page.type !== 'media' || videoPlaybackActive)}
+            slideActive={active}
+            prepareVideo={prepareVideo && preparedMediaIndex === pageIndex}
             bottomInset={bottomInset}
             height={height}
             item={item}
@@ -1735,6 +1799,8 @@ function DoubleTapSaveHeart({
 
 function MediaSlidePage({
   active,
+  slideActive,
+  prepareVideo,
   bottomInset,
   height,
   item,
@@ -1753,6 +1819,9 @@ function MediaSlidePage({
   width,
 }: {
   active: boolean;
+  /** The reader is on this slide, overlays included -- see ActiveVideo's rewind. */
+  slideActive: boolean;
+  prepareVideo: boolean;
   bottomInset: number;
   height: number;
   item: ImmersivePreviewItem;
@@ -1797,8 +1866,11 @@ function MediaSlidePage({
         <StatusSlide item={item} width={width} height={height} />
       ) : (
         <ImmersiveMedia
+          postId={item.id}
           mediaItem={page.mediaItem}
           active={active}
+          slideActive={slideActive}
+          prepareVideo={prepareVideo}
           onDoubleTapSave={onDoubleTapSave}
           width={width}
           height={height}
@@ -1851,14 +1923,20 @@ function ViewerPlayBadge() {
 }
 
 function ImmersiveMedia({
+  postId,
   mediaItem,
   active,
+  slideActive,
+  prepareVideo,
   onDoubleTapSave,
   width,
   height,
 }: {
+  postId: string;
   mediaItem: ShowcaseMediaItem;
   active: boolean;
+  slideActive: boolean;
+  prepareVideo: boolean;
   onDoubleTapSave: (position: DoubleTapSavePosition) => void;
   width: number;
   height: number;
@@ -1871,62 +1949,44 @@ function ImmersiveMedia({
   }, [onDoubleTapSave]);
 
   if (mediaItem.mediaKind === 'video') {
-    if (active && mediaItem.url) {
-      return <ActiveVideo
-        url={getShowcasePlaybackUrl(mediaItem)}
-        previewUrl={mediaItem.previewUrl}
-        previewCacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
-        previewThumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
-        onDoublePress={handleDoublePress}
-        width={width}
-        height={height}
-      />;
-    }
-
-    if (mediaItem.previewUrl) {
-      return (
-        <DoubleTapPressable
-          accessible={false}
-          onDoublePress={handleDoublePress}
-          style={{ width, height }}
-        >
+    return (
+      <View style={{ width, height, backgroundColor: '#020203' }}>
+        {/* This image stays mounted while players enter and leave the prepared
+            range. Even a fast swipe that outruns decoding keeps a sharp poster
+            under the transparent video surface instead of flashing its backdrop. */}
+        {mediaItem.previewUrl ? (
           <FeedMediaFrame
             kind="image"
             url={mediaItem.previewUrl}
             backdropUrl={mediaItem.previewUrl}
             cacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
             thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
+            transition={0}
             recyclingKey={`viewer:${mediaItem.id}`}
-            style={{ width, height }}
+            style={{ position: 'absolute', width, height }}
           />
-          <ViewerPlayBadge />
-        </DoubleTapPressable>
-      );
-    }
-
-    return mediaItem.url ? (
-      <DoubleTapPressable
-        accessible={false}
-        onDoublePress={handleDoublePress}
-        style={{ width, height, backgroundColor: '#020203' }}
-      >
-        <FeedVideoPreview
-          url={getShowcasePlaybackUrl(mediaItem)}
-          active={false}
-          height={height}
-          radius={0}
-          accent="#ffffff"
-        />
-        <ViewerPlayBadge />
-      </DoubleTapPressable>
-    ) : (
-      <DoubleTapPressable
-        accessible={false}
-        onDoublePress={handleDoublePress}
-        style={{ width, height, alignItems: 'center', justifyContent: 'center', backgroundColor: '#020203' }}
-      >
-        <ViewerPlayBadge />
-      </DoubleTapPressable>
+        ) : null}
+        {prepareVideo && mediaItem.url ? (
+          <ActiveVideo
+            key={mediaItem.id}
+            postId={postId}
+            active={active}
+            slideActive={slideActive}
+            url={getShowcasePlaybackUrl(mediaItem)}
+            onDoublePress={handleDoublePress}
+            width={width}
+            height={height}
+          />
+        ) : (
+          <DoubleTapPressable
+            accessible={false}
+            onDoublePress={handleDoublePress}
+            style={{ width, height }}
+          >
+            <ViewerPlayBadge />
+          </DoubleTapPressable>
+        )}
+      </View>
     );
   }
 
@@ -1965,18 +2025,18 @@ function ImmersiveMedia({
 }
 
 function ActiveVideo({
+  postId,
+  active,
+  slideActive,
   url,
-  previewUrl,
-  previewCacheKey,
-  previewThumbhash,
   onDoublePress,
   width,
   height,
 }: {
+  postId: string;
+  active: boolean;
+  slideActive: boolean;
   url: string;
-  previewUrl?: string | null;
-  previewCacheKey?: string;
-  previewThumbhash?: string | null;
   onDoublePress: (event: GestureResponderEvent) => void;
   width: number;
   height: number;
@@ -1988,7 +2048,7 @@ function ActiveVideo({
   const { source, requestKey } = useMediaSource(url);
   const player = useVideoPlayer({ ...source, useCaching: true }, (instance) => {
     instance.loop = true;
-    instance.muted = isViewerAudioMuted();
+    instance.muted = !active || isViewerAudioMuted();
     instance.volume = 1.0;
     instance.showNowPlayingNotification = false;
     instance.staysActiveInBackground = false;
@@ -2002,25 +2062,52 @@ function ActiveVideo({
   });
 
   useEffect(() => {
-    player.muted = audioMuted;
-  }, [audioMuted, player]);
+    player.muted = !active || audioMuted;
+  }, [active, audioMuted, player]);
+
+  // Lets the reel's scroll-end handler start this player before the
+  // activation render reaches it (see lib/viewer-playback-handoff.ts).
+  const playbackHandoff = useContext(ViewerPlaybackContext);
+  useEffect(() => playbackHandoff?.register(postId, player), [playbackHandoff, player, postId]);
+
+  // A post the reader scrolled away from starts over when they come back, as
+  // it does in Instagram and TikTok. Rewind on leaving rather than on return,
+  // so the frame the prepared player shows while scrolling back is the clip's
+  // real first frame. Keyed to the slide, not to playback: the details page,
+  // comments and the actions sheet pause but must not restart. This effect
+  // runs after the activation commit, so the slide is already off-screen and
+  // the seek is invisible. A fresh neighbour is at zero already, so only a
+  // player that was on-screen is rewound.
+  const wasOnSlideRef = useRef(false);
+  useEffect(() => {
+    if (slideActive) {
+      wasOnSlideRef.current = true;
+      return;
+    }
+    if (!wasOnSlideRef.current) return;
+    wasOnSlideRef.current = false;
+    player.currentTime = 0;
+  }, [player, slideActive]);
 
   // Optimistic: playback is requested below, and the native player reports
   // `playing` only once it is actually rendering — often a frame or two after
   // the first frame has already been drawn. Reading `player.playing` here
   // would flash the paused badge over that first frame; `playingChange` still
   // corrects this the moment the player really is paused.
-  const [isPlaying, setIsPlaying] = useState(!reducedMotion);
+  const [isPlaying, setIsPlaying] = useState(active && !reducedMotion);
 
   useEffect(() => {
-    if (reducedMotion) player.pause();
+    // Preparing a neighbour decodes its first frame without playing audio or
+    // advancing its timeline. Activation resumes that same player and surface.
+    setIsPlaying(active && !reducedMotion);
+    if (!active || reducedMotion) player.pause();
     else player.play();
-  }, [player, reducedMotion]);
+  }, [active, player, reducedMotion]);
 
   useEffect(() => {
     setHasFrame(false);
     setHasError(false);
-  }, [url, requestKey]);
+  }, [player, url, requestKey]);
 
   useEffect(() => {
     const subscription = player.addListener('playingChange', (event) => {
@@ -2041,6 +2128,7 @@ function ActiveVideo({
   }, [player]);
 
   useEffect(() => {
+    if (!active) return;
     const subscription = player.addListener('timeUpdate', (event) => {
       const durationSeconds = player.duration;
       if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return;
@@ -2049,9 +2137,10 @@ function ActiveVideo({
     return () => {
       subscription.remove();
     };
-  }, [player]);
+  }, [active, player]);
 
   const togglePlayback = () => {
+    if (!active) return;
     if (player.playing) {
       player.pause();
     } else {
@@ -2073,18 +2162,15 @@ function ActiveVideo({
         <FeedMediaFrame
           kind="video"
           player={player}
-          backdropUrl={previewUrl}
-          posterUrl={previewUrl}
-          posterVisible={Boolean(previewUrl && (!hasFrame || hasError))}
-          cacheKey={previewCacheKey}
-          thumbhash={previewThumbhash}
+          backgroundColor="transparent"
+          videoBackdrop="none"
           onFirstFrameRender={() => {
             setHasFrame(true);
             setHasError(false);
           }}
           style={{ width, height }}
         />
-        {!isPlaying && hasFrame && !hasError ? <ViewerPlayBadge /> : null}
+        {active && !isPlaying && hasFrame && !hasError ? <ViewerPlayBadge /> : null}
       </DoubleTapPressable>
     </View>
   );
