@@ -18,6 +18,7 @@ import { ActionSheetHost } from '@/components/action-sheet';
 import { DialogHost } from '@/components/dialog';
 import { OnboardingServerSync } from '@/components/onboarding-server-sync';
 import { OverlayHost } from '@/components/overlay-host';
+import { SignOutOverlay } from '@/components/sign-out-overlay';
 import { CriticalUpdateSheet } from '@/components/critical-update-sheet';
 import { useOtaUpdateGate } from '@/lib/use-ota-update-gate';
 import { setSessionMergedHandler, setUpgradeRequiredHandler } from '@/lib/api-client';
@@ -123,6 +124,7 @@ function RootLayoutNav() {
                 <OverlayHost>
                 <ActionSheetHost />
                 <DialogHost />
+                <SignOutOverlay />
                 <Stack
                 screenOptions={{
                   animation: reducedMotion ? 'none' : 'default',

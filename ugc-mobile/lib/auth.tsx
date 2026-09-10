@@ -96,7 +96,10 @@ interface AuthContextValue {
   signInWithPassword: (email: string, password: string) => Promise<void>;
   signInWithApple: (mode: AuthMode) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
+  /** Signs out. A call made while one is already running joins that one. */
   signOut: () => Promise<void>;
+  /** True from the start of a sign-out until it has finished or failed. */
+  isSigningOut: boolean;
   /**
    * Drops a guest session the server has told us is spent (409 SESSION_MERGED)
    * and leaves the device on a fresh guest, ready to sign in.
@@ -143,6 +146,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [credits, setCredits] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSigningOut, setIsSigningOut] = useState(false);
+  const signOutInFlightRef = useRef<Promise<void> | null>(null);
   const queryClient = useQueryClient();
   const missingEnvKeys = useMemo(() => getMissingMobileEnvKeys(), []);
   const sessionUserIdRef = useRef<string | null>(null);
@@ -627,7 +632,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await refreshProfile();
   };
 
-  const signOut = async () => {
+  const runSignOut = async () => {
+    // Drives the app-wide cover in components/sign-out-overlay.tsx.
+    setIsSigningOut(true);
     const feedIdentityTransition = beginFeedIdentityTransition(sessionRef.current);
     try {
       try {
@@ -666,7 +673,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // After the local clear, so the timer resumes on the guest session, or on
       // the untouched one when sign-out failed on this phone.
       if (isSupabaseConfigured) void supabase.auth.startAutoRefresh();
+      setIsSigningOut(false);
     }
+  };
+
+  const signOut = () => {
+    // A second tap while the first sign-out is still on the network joins it
+    // rather than starting another.
+    signOutInFlightRef.current ??= runSignOut().finally(() => {
+      signOutInFlightRef.current = null;
+    });
+    return signOutInFlightRef.current;
   };
 
   /**
@@ -789,6 +806,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signInWithApple,
         signInWithGoogle,
         signOut,
+        isSigningOut,
         abandonMergedGuestSession,
         accountReauthenticationMethods,
         deleteAccount,

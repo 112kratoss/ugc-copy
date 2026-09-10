@@ -242,12 +242,58 @@ describe('AuthProvider startup performance', () => {
     });
 
     state.signOut.mockRejectedValueOnce(new Error('Keychain unavailable'));
-    await expect(latest.current?.signOut()).rejects.toThrow('Keychain unavailable');
+    let failure: unknown;
+    await renderer.act(async () => {
+      await latest.current?.signOut().catch((error: unknown) => {
+        failure = error;
+      });
+    });
 
+    expect((failure as Error).message).toBe('Keychain unavailable');
     expect(state.clearPersistedSession).not.toHaveBeenCalled();
     expect(latest.current?.user?.id).toBe('user-1');
+    expect(latest.current?.isSigningOut).toBe(false);
     expect(state.routerReplace).not.toHaveBeenCalled();
     expect(state.startAutoRefresh).toHaveBeenCalledOnce();
+    renderer.act(() => tree?.unmount());
+  });
+
+  it('reports a sign-out while it runs, and a second tap joins the first', async () => {
+    const latest: { current: ReturnType<typeof useAuth> | null } = { current: null };
+    function Probe() {
+      latest.current = useAuth();
+      return null;
+    }
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => {
+      tree = renderer.create(<AuthProvider><Probe /></AuthProvider>);
+    });
+    await renderer.act(async () => {
+      state.sessionResolve?.({ data: { session }, error: null });
+    });
+    let finishServerSignOut: ((result: { error: null }) => void) | undefined;
+    state.signOut.mockImplementationOnce(() => new Promise((resolve) => {
+      finishServerSignOut = resolve;
+    }));
+
+    let first: Promise<void> | undefined;
+    let second: Promise<void> | undefined;
+    await renderer.act(async () => {
+      first = latest.current?.signOut();
+      second = latest.current?.signOut();
+    });
+
+    expect(second).toBe(first);
+    expect(latest.current?.isSigningOut).toBe(true);
+    expect(state.signOut).toHaveBeenCalledOnce();
+
+    await renderer.act(async () => {
+      finishServerSignOut?.({ error: null });
+      await first;
+    });
+
+    expect(latest.current?.isSigningOut).toBe(false);
+    expect(state.routerReplace).toHaveBeenCalledWith('/auth');
     renderer.act(() => tree?.unmount());
   });
 

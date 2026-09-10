@@ -20,7 +20,6 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import {
-  ActivityIndicator,
   Animated,
   BackHandler,
   Modal,
@@ -35,7 +34,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SHEET_DISMISS_DISTANCE, SHEET_DISMISS_VELOCITY } from '@/components/sheet-chrome';
-import { AppText, BrandLockup } from '@/components/ui';
+import { BrandLockup } from '@/components/ui';
+import { showMessageDialog } from '@/lib/dialog';
 import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { formatUsdCents } from '@/lib/home-view-model';
@@ -72,7 +72,7 @@ interface HomeSideMenuProps {
 
 export function HomeSideMenu({
   visible,
-  onClose: dismissMenu,
+  onClose,
   user,
   profile,
   credits,
@@ -96,13 +96,7 @@ export function HomeSideMenu({
   const initial = displayName.trim().charAt(0).toUpperCase() || 'A';
   const reduceMotionEnabled = useReducedMotion();
   const [rendered, setRendered] = useState(visible);
-  const [signingOut, setSigningOut] = useState(false);
-  const [signOutError, setSignOutError] = useState<string | null>(null);
-  const signOutPending = useRef(false);
   const progress = useRef(createAnimatedValue(visible ? 1 : 0)).current;
-  const onClose = () => {
-    if (!signOutPending.current) dismissMenu();
-  };
 
   useEffect(() => {
     if (visible) setRendered(true);
@@ -128,29 +122,23 @@ export function HomeSideMenu({
   }, [onClose, visible]);
 
   const navigateAndClose = (path: string) => {
-    if (signOutPending.current) return;
     onClose();
     router.push(path as never);
   };
 
   const handleAuthPress = async () => {
-    if (signOutPending.current) return;
+    // The menu steps aside either way. For a sign-out, the app-wide cover in
+    // components/sign-out-overlay.tsx shows the progress; it draws in the app's
+    // own window, which this menu's Modal would otherwise sit on top of.
+    onClose();
     if (user) {
-      signOutPending.current = true;
-      setSigningOut(true);
-      setSignOutError(null);
       try {
         await onSignOut();
-        dismissMenu();
       } catch {
-        setSignOutError('Could not sign out. Please try again.');
-      } finally {
-        signOutPending.current = false;
-        setSigningOut(false);
+        showMessageDialog({ title: 'Could not sign out', message: 'Please try again.' });
       }
       return;
     }
-    onClose();
     router.push('/auth' as never);
   };
 
@@ -181,7 +169,7 @@ export function HomeSideMenu({
 
   const closeDrag = useMemo(() => PanResponder?.create?.({
     onMoveShouldSetPanResponderCapture: (_event, gesture) => (
-      !signOutPending.current && gesture.dx < -DRAWER_DRAG_CLAIM_DISTANCE && Math.abs(gesture.dx) > Math.abs(gesture.dy)
+      gesture.dx < -DRAWER_DRAG_CLAIM_DISTANCE && Math.abs(gesture.dx) > Math.abs(gesture.dy)
     ),
     onPanResponderMove: (_event, gesture) => {
       dragX?.setValue(Math.min(0, gesture.dx));
@@ -263,7 +251,6 @@ export function HomeSideMenu({
           }}
         >
           <ScrollView
-            pointerEvents={signingOut ? 'none' : 'auto'}
             showsVerticalScrollIndicator={false}
             contentContainerStyle={{
               flexGrow: 1,
@@ -280,8 +267,6 @@ export function HomeSideMenu({
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Close menu"
-                disabled={signingOut}
-                accessibilityState={{ disabled: signingOut }}
                 onPress={onClose}
                 hitSlop={4}
                 style={({ pressed }) => ({
@@ -421,18 +406,9 @@ export function HomeSideMenu({
 
             <View style={{ flex: 1, minHeight: 16 }} />
 
-            {signOutError ? (
-              <AppText variant="bodySm" color="danger" accessibilityRole="alert" accessibilityLiveRegion="polite">
-                {signOutError}
-              </AppText>
-            ) : null}
-
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={signingOut ? 'Signing out…' : user ? 'Sign out' : 'Sign in'}
-              accessibilityState={{ busy: signingOut, disabled: signingOut }}
-              accessibilityLiveRegion="polite"
-              disabled={signingOut}
+              accessibilityLabel={user ? 'Sign out' : 'Sign in'}
               onPress={() => void handleAuthPress()}
               style={({ pressed }) => ({
                 minHeight: 52,
@@ -443,17 +419,15 @@ export function HomeSideMenu({
                 justifyContent: 'center',
                 gap: 10,
                 borderWidth: 1,
-                borderColor: user || signingOut ? appTheme.semantic.danger.border : PRIMARY,
-                backgroundColor: user || signingOut
+                borderColor: user ? appTheme.semantic.danger.border : PRIMARY,
+                backgroundColor: user
                   ? (pressed ? appTheme.colors.surfaceStrong : appTheme.semantic.danger.background)
                   : (pressed ? PRIMARY_STRONG : PRIMARY),
                 opacity: pressed ? appTheme.opacity.pressed : 1,
               })}
             >
-              {signingOut ? <ActivityIndicator size="small" color={appTheme.colors.danger} /> : user ? <LogOut size={20} color={appTheme.colors.danger} /> : <LogIn size={20} color={ON_PRIMARY} />}
-              <AppText variant="button" color={user || signingOut ? 'danger' : ON_PRIMARY} selectable={false}>
-                {signingOut ? 'Signing out…' : user ? 'Sign out' : 'Sign in'}
-              </AppText>
+              {user ? <LogOut size={20} color={appTheme.colors.danger} /> : <LogIn size={20} color={ON_PRIMARY} />}
+              <Text style={{ color: user ? appTheme.colors.danger : ON_PRIMARY, fontSize: 15, lineHeight: 20, fontWeight: '800' }}>{user ? 'Sign out' : 'Sign in'}</Text>
             </Pressable>
           </ScrollView>
         </AnimatedView>
