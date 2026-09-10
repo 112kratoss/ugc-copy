@@ -618,7 +618,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       if (isSupabaseConfigured) {
         await unregisterMobilePushNotifications(api);
-        await supabase.auth.signOut();
+        const { error } = await supabase.auth.signOut();
+        if (error) throw error;
       }
     } catch (error) {
       feedIdentityTransition?.cancel();

@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
   profileResolve: null as null | ((profile: { credits: number }) => void),
   queryClient: { clear: vi.fn(), fetchQuery: vi.fn() },
   sessionResolve: null as null | ((result: unknown) => void),
+  signOut: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-query', () => ({
@@ -91,7 +92,7 @@ vi.mock('../lib/supabase', () => ({
       },
       signInWithPassword: vi.fn(),
       signUp: vi.fn(),
-      signOut: vi.fn(),
+      signOut: state.signOut,
     },
   },
 }));
@@ -124,6 +125,7 @@ describe('AuthProvider startup performance', () => {
     state.clearPersistedSession.mockReset().mockResolvedValue(undefined);
     state.deleteAccount.mockReset();
     state.queryClient.clear.mockReset();
+    state.signOut.mockReset().mockResolvedValue({ error: null });
   });
 
   it('reveals the persisted user before profile I/O and deduplicates the auth event refresh', async () => {
@@ -173,6 +175,27 @@ describe('AuthProvider startup performance', () => {
     });
     expect(latest.current?.credits).toBe(37);
 
+    renderer.act(() => tree?.unmount());
+  });
+
+  it('surfaces a returned sign-out error without clearing the local session', async () => {
+    const latest: { current: ReturnType<typeof useAuth> | null } = { current: null };
+    function Probe() {
+      latest.current = useAuth();
+      return null;
+    }
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => {
+      tree = renderer.create(<AuthProvider><Probe /></AuthProvider>);
+    });
+    await renderer.act(async () => {
+      state.sessionResolve?.({ data: { session }, error: null });
+    });
+
+    state.signOut.mockResolvedValueOnce({ error: new Error('Service unavailable') });
+    await expect(latest.current?.signOut()).rejects.toThrow('Service unavailable');
+    expect(state.clearPersistedSession).not.toHaveBeenCalled();
+    expect(latest.current?.user?.id).toBe('user-1');
     renderer.act(() => tree?.unmount());
   });
 
