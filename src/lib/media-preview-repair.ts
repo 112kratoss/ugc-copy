@@ -5,6 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendError } from '@/lib/backend-logger';
 import { createGenerationOutputPreview } from '@/lib/generation-output-preview';
+import { isVideoGenerationPreview } from '@/lib/generation-media-preview';
 import { createVideoPosterBuffer } from '@/lib/video-poster';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
 import { createPostMediaRendition, type PostMediaTeaserOutcome } from '@/lib/post-media-rendition';
@@ -1041,4 +1042,151 @@ export async function repairMediaPreviews(
   }
 
   return { attempted, completed, failed: attempted - completed };
+}
+
+export type VideoPosterRegenerationSummary = {
+  candidates: number;
+  regenerated: number;
+  unchanged: number;
+  failed: number;
+};
+
+type ReadyGenerationVideoRow = GenerationRepairRow & { preview_url: string | null };
+type ReadyPostMediaVideoRow = PostMediaRepairRow & { preview_storage_path: string | null };
+
+const VIDEO_SOURCE_EXTENSION = /\.(m4v|mov|mp4|webm)(\?|#|$)/i;
+
+/**
+ * Re-extract the poster of every video that already has one.
+ *
+ * Written for the day the poster moved from one second into the clip to its
+ * first frame: the reel draws the poster under the video surface until the
+ * player has rendered, so a later frame read as the video jumping backwards
+ * on every landing. Unlike the repair sweeps this touches rows that are
+ * already `ready`, and it deliberately leaves them `ready` throughout — the
+ * new poster lands at a new content-hashed path and the row moves to it in
+ * one update, so nothing drops out of a grid while this runs, and clients
+ * pick the new path up as a new cache key. Attempt counters and leases are the
+ * repair sweeps' bookkeeping and are not touched here either.
+ */
+export async function regenerateVideoPosters(
+  supabase: SupabaseClient,
+  options: { dryRun?: boolean; limit?: number; log?: (line: string) => void } = {},
+): Promise<{ generations: VideoPosterRegenerationSummary; posts: VideoPosterRegenerationSummary }> {
+  const log = options.log ?? (() => undefined);
+  const limit = Math.max(1, Math.min(options.limit ?? 500, 500));
+  const generations: VideoPosterRegenerationSummary = { candidates: 0, regenerated: 0, unchanged: 0, failed: 0 };
+  const posts: VideoPosterRegenerationSummary = { candidates: 0, regenerated: 0, unchanged: 0, failed: 0 };
+
+  const generationResult = await supabase
+    .from('generations')
+    .select('id, user_id, output_url, category, preview_url, preview_attempt_count')
+    .eq('status', 'succeeded')
+    .eq('preview_status', 'ready')
+    .not('output_url', 'is', null)
+    .not('preview_url', 'is', null)
+    .order('created_at', { ascending: true })
+    .limit(limit);
+  if (generationResult.error) throw generationResult.error;
+  const generationRows = ((generationResult.data ?? []) as ReadyGenerationVideoRow[])
+    .filter((row) => isVideoGenerationPreview(row.category, null) || VIDEO_SOURCE_EXTENSION.test(row.output_url));
+  generations.candidates = generationRows.length;
+
+  for (const row of generationRows) {
+    if (options.dryRun) {
+      log(`generation ${row.id}: would re-extract poster (currently ${row.preview_url})`);
+      continue;
+    }
+    try {
+      const source = await resolveGenerationRepairSource(supabase, row);
+      const body = await downloadMedia(supabase, source.outputUrl, source.ownerUserId);
+      const preview = await createGenerationOutputPreview({
+        body,
+        category: row.category,
+        contentType: body.type,
+        storagePath: source.outputUrl,
+        supabase,
+      });
+      if (!preview) throw new Error('Media type does not support a visual preview.');
+      if (preview.previewStoragePath === row.preview_url) {
+        generations.unchanged += 1;
+        log(`generation ${row.id}: poster already at the first frame`);
+        continue;
+      }
+      const update = await supabase.from('generations').update({
+        preview_url: preview.previewStoragePath,
+        preview_thumbhash: preview.previewThumbhash,
+        preview_width: preview.previewWidth,
+        preview_height: preview.previewHeight,
+        preview_generated_at: new Date().toISOString(),
+      }).eq('id', row.id);
+      if (update.error) throw update.error;
+      generations.regenerated += 1;
+      log(`generation ${row.id}: ${row.preview_url} -> ${preview.previewStoragePath}`);
+    } catch (error) {
+      generations.failed += 1;
+      log(`generation ${row.id}: failed: ${summarizeMediaToolError(error, 'Poster regeneration failed.')}`);
+    }
+  }
+
+  const postResult = await supabase
+    .from('post_media')
+    .select('id, post_id, storage_path, media_kind, content_type, preview_storage_path, preview_attempt_count')
+    .eq('media_kind', 'video')
+    .eq('preview_status', 'ready')
+    .not('preview_storage_path', 'is', null)
+    .not('storage_path', 'is', null)
+    .order('created_at', { ascending: true })
+    .limit(limit);
+  if (postResult.error) throw postResult.error;
+  const postRows = (postResult.data ?? []) as ReadyPostMediaVideoRow[];
+  posts.candidates = postRows.length;
+
+  for (const row of postRows) {
+    if (options.dryRun) {
+      log(`post_media ${row.id}: would re-extract poster (currently ${row.preview_storage_path})`);
+      continue;
+    }
+    try {
+      const storagePath = await resolvePostMediaRepairPath(supabase, row);
+      const download = await supabase.storage.from(SHOWCASE_MEDIA_BUCKET).download(storagePath);
+      if (download.error || !download.data) {
+        throw download.error ?? new Error('Stored post media could not be downloaded.');
+      }
+      const body = download.data;
+      const preview = await createPostMediaPreview({
+        body,
+        contentType: row.content_type || body.type,
+        storagePath,
+        supabase,
+      });
+      if (!preview) throw new Error('Media type does not support a visual preview.');
+      if (preview.previewStoragePath === row.preview_storage_path) {
+        posts.unchanged += 1;
+        log(`post_media ${row.id}: poster already at the first frame`);
+        continue;
+      }
+      // Only the poster fields. A video row's width/height describe the clip
+      // and a poster result carries none, so the repair's habit of writing
+      // them would blank real dimensions here.
+      const update = await supabase.from('post_media').update({
+        preview_storage_path: preview.previewStoragePath,
+        preview_thumbhash: preview.previewThumbhash,
+        preview_generated_at: new Date().toISOString(),
+      }).eq('id', row.id);
+      if (update.error) throw update.error;
+      posts.regenerated += 1;
+      log(`post_media ${row.id}: ${row.preview_storage_path} -> ${preview.previewStoragePath}`);
+    } catch (error) {
+      posts.failed += 1;
+      log(`post_media ${row.id}: failed: ${summarizeMediaToolError(error, 'Poster regeneration failed.')}`);
+    }
+  }
+
+  if (posts.regenerated > 0) {
+    // Feed pages cache the preview URLs they were built from.
+    invalidateShowcaseFeedCache();
+  }
+
+  return { generations, posts };
 }
