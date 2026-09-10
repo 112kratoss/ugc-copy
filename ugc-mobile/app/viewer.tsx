@@ -866,13 +866,15 @@ export default function ImmersivePreviewViewerScreen() {
             listRef.current?.scrollToOffset({ offset: height * index, animated: false });
           });
         }}
-        // Android reports momentum end only after its scroll view has polled a
-        // few stable frames, ~150-200ms after the page visibly stops. Hand
-        // playback over as soon as the landing page owns most of the screen
-        // instead, so the video is already moving when the page settles (the
-        // same moment Instagram and TikTok switch). Interval momentum is
-        // disabled below, so the rounded page can only ever be a neighbour.
-        onScroll={Platform.OS === 'android' ? (event) => {
+        // Hand playback over as soon as the landing page owns most of the
+        // screen, the moment Instagram and TikTok switch, rather than at
+        // momentum end. On Android that event trails the visible stop by
+        // ~150-200ms (the scroll view polls for stable frames). On iOS it is
+        // prompt, but a phone still needs ~100-200ms to resume a paused player
+        // and render, and that gap showed as the poster, then frame zero.
+        // Paging on iOS and momentum-free interval snapping on Android both
+        // stop at a neighbour, so the rounded page always has a prepared player.
+        onScroll={(event) => {
           const page = Math.max(0, Math.min(items.length - 1, Math.round(event.nativeEvent.contentOffset.y / height)));
           const previous = handoffPageRef.current ?? activeIndex;
           if (page === previous) return;
@@ -881,7 +883,7 @@ export default function ImmersivePreviewViewerScreen() {
             from: items[previous]?.id,
             to: items[page]?.id,
           });
-        } : undefined}
+        }}
         scrollEventThrottle={16}
         // Android's default paging restarts a fixed-duration animation at release.
         // Interval snapping uses its native fling and limits momentum to the next page.
