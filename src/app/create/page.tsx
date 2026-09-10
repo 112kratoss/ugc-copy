@@ -117,7 +117,7 @@ export default async function CreateHubPage() {
             eyebrow="Quick starts"
             title="Try a setup and move."
             actionHref="/showcase"
-            actionLabel="Explore showcase"
+            actionLabel="Go to Explore"
             variant="minimal"
           />
 

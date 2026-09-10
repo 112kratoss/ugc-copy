@@ -182,6 +182,8 @@ function normalizeStep(value: unknown, index: number): TemplateRunStep | null {
     status: stringValue(step, ['status'], 'queued'),
     label: stringValue(step, ['label', 'name'], `${kind === 'approval' ? 'Review' : 'Generation'} ${index + 1}`),
     outputUrl: nullableString(step, ['outputUrl', 'output_url']),
+    ...(step.renditionUrl !== undefined ? { renditionUrl: nullableString(step, ['renditionUrl']) } : {}),
+    ...(step.previewUrl !== undefined ? { previewUrl: nullableString(step, ['previewUrl']) } : {}),
     errorMessage: nullableString(step, ['errorMessage', 'error_message', 'error']),
     failureCode: normalizeGenerationStartFailureCode(first(step, ['failureCode', 'failure_code', 'errorCode', 'error_code'])),
     canRetry: booleanValue(step, ['canRetry', 'can_retry'], false),
@@ -267,6 +269,8 @@ export function normalizeTemplateRun(value: unknown): TemplateRun {
       generationId: stringValue(resultRecord, ['generationId', 'generation_id']),
       kind: mediaKind(first(resultRecord, ['kind', 'mediaKind', 'media_kind']), legacyVideoUrl ? 'video' : 'image'),
       url: resultUrl,
+      ...(resultRecord.renditionUrl !== undefined ? { renditionUrl: nullableString(resultRecord, ['renditionUrl']) } : {}),
+      ...(resultRecord.previewUrl !== undefined ? { previewUrl: nullableString(resultRecord, ['previewUrl']) } : {}),
     } : null,
     estimatedTotalCredits: numberValue(run, ['estimatedTotalCredits', 'estimated_total_credits']),
     estimatedRemainingCredits: numberValue(run, ['estimatedRemainingCredits', 'estimated_remaining_credits'])
@@ -304,10 +308,10 @@ export async function listTemplatePage(options: {
   };
 }
 
-export async function getTemplate(idOrSlug: string, token?: string | null): Promise<MediaTemplate> {
+export async function getTemplate(idOrSlug: string, token?: string | null, signal?: AbortSignal): Promise<MediaTemplate> {
   return normalizeTemplate(await requestJson<unknown>(
     `/api/templates/${encodeURIComponent(idOrSlug)}`,
-    { token }
+    { token, signal }
   ));
 }
 
@@ -318,10 +322,10 @@ export async function createTemplateRun(templateId: string, token: string, idemp
   ));
 }
 
-export async function getTemplateRun(runId: string, token: string): Promise<TemplateRun> {
+export async function getTemplateRun(runId: string, token: string, signal?: AbortSignal): Promise<TemplateRun> {
   return normalizeTemplateRun(await requestJson<unknown>(
     `/api/template-runs/${encodeURIComponent(runId)}`,
-    { token }
+    { token, ...(signal ? { signal } : {}) }
   ));
 }
 

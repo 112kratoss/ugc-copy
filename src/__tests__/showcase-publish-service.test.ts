@@ -86,6 +86,11 @@ function createAdminClientMock(
   options: { postMediaRows?: Array<Record<string, unknown>> } = {},
 ) {
   const removeMock = vi.fn(async () => ({ data: null, error: null }));
+  const downloadMock = vi.fn(async () => ({
+    data: new Blob(['media-bytes'], { type: 'image/jpeg' }),
+    error: null,
+  }));
+  const uploadMock = vi.fn(async () => ({ data: null, error: null }));
   const selects: string[] = [];
   const eqs: Array<{ column: string; value: unknown }> = [];
   const deletedMediaRowIds: string[][] = [];
@@ -146,13 +151,19 @@ function createAdminClientMock(
       storage: {
         from: vi.fn(() => ({
           remove: removeMock,
+          // An exposed publish copies the generation's output into the public
+          // bucket before it writes the post; a private one never gets here.
+          download: downloadMock,
+          upload: uploadMock,
         })),
       },
     } as unknown as SupabaseClient,
     deletedMediaRowIds,
+    downloadMock,
     eqs,
     removeMock,
     selects,
+    uploadMock,
   };
 }
 
@@ -1062,4 +1073,206 @@ describe('publishGenerationToShowcaseForRoute', () => {
       body: { error: 'Could not verify your creator profile right now. Try again.' },
     });
   });
+
+  // A generation-backed post's public copy is only reachable by the preview,
+  // rendition and teaser sweeps through a `post_media` row. Without one the
+  // feed falls back to the legacy cover, which signs the owner's private
+  // preview on every read and serves the full-size copy.
+  it('records the published derivative as post media so the public sweeps can see it', async () => {
+    const generation = {
+      id: 'gen-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: 'A title',
+      description: null,
+      prompt: 'Original prompt',
+    };
+    const adminClient = createAdminClientMock(generation);
+    const ensureGenerationPostCoverMedia = vi.fn(async () => ({
+      outcome: 'created' as const,
+      error: null,
+    }));
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: adminClient.client,
+      body: { generationId: 'gen-1', visibility: 'unlisted' },
+      userId: 'user-1',
+      dependencies: {
+        ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+          outputUrl: mediaGeneration.outputUrl,
+          createdLocation: null,
+        })),
+        listSourceToolsCatalog: vi.fn(async () => [
+          { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image' as const, 'video' as const] },
+        ]),
+        publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'unlisted' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        ensureGenerationPostCoverMedia,
+      } satisfies Partial<ShowcasePublishServiceDependencies>,
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(ensureGenerationPostCoverMedia).toHaveBeenCalledTimes(1);
+    expect(ensureGenerationPostCoverMedia).toHaveBeenCalledWith(expect.objectContaining({
+      postId: 'post-1',
+      generationId: 'gen-1',
+      category: 'image',
+      // Content-addressed from the source URL by the copier.
+      showcaseAssetPath: expect.stringMatching(/^showcase\/gen-1\/example\.[0-9a-f]{12}\.jpg$/),
+    }));
+  });
+
+  it('does not claim the publish failed when only the media bookkeeping row could not be written', async () => {
+    const generation = {
+      id: 'gen-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: 'A title',
+      description: null,
+      prompt: 'Original prompt',
+    };
+    const adminClient = createAdminClientMock(generation);
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: adminClient.client,
+      body: { generationId: 'gen-1', visibility: 'unlisted' },
+      userId: 'user-1',
+      dependencies: {
+        ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+          outputUrl: mediaGeneration.outputUrl,
+          createdLocation: null,
+        })),
+        listSourceToolsCatalog: vi.fn(async () => [
+          { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image' as const, 'video' as const] },
+        ]),
+        publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'unlisted' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        // The post row is already committed; reporting a failure here would
+        // tell the owner nothing was published when it was.
+        ensureGenerationPostCoverMedia: vi.fn(async () => ({
+          outcome: 'failed' as const,
+          error: { message: 'insert rejected' },
+        })),
+      } satisfies Partial<ShowcasePublishServiceDependencies>,
+    });
+
+    expect(result).toMatchObject({ ok: true, body: { postId: 'post-1' } });
+    expect(logBackendErrorMock).toHaveBeenCalledWith(
+      'failed_to_record_generation_post_cover_media',
+      expect.objectContaining({ error: { message: 'insert rejected' } }),
+    );
+  });
+
+  it('leaves a post going private without a cover media row, because its derivative is being removed', async () => {
+    const generation = {
+      id: 'gen-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: 'showcase/gen-1/example.abcdef123456.jpg',
+      title: 'A title',
+      description: null,
+      prompt: 'Original prompt',
+    };
+    const adminClient = createAdminClientMock(generation);
+    const ensureGenerationPostCoverMedia = vi.fn();
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: adminClient.client,
+      body: { generationId: 'gen-1', visibility: 'private' },
+      userId: 'user-1',
+      dependencies: {
+        ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+          outputUrl: mediaGeneration.outputUrl,
+          createdLocation: null,
+        })),
+        listSourceToolsCatalog: vi.fn(async () => [
+          { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image' as const, 'video' as const] },
+        ]),
+        publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'private' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        ensureGenerationPostCoverMedia,
+      } satisfies Partial<ShowcasePublishServiceDependencies>,
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(ensureGenerationPostCoverMedia).not.toHaveBeenCalled();
+  });
+
+
+  // The route's own suite caught this: a client that *throws* rather than
+  // returning an error escaped the publish entirely and answered 500, for a
+  // post that had already been written.
+  it('survives a cover media writer that throws, not just one that returns an error', async () => {
+    const generation = {
+      id: 'gen-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: 'A title',
+      description: null,
+      prompt: 'Original prompt',
+    };
+    const adminClient = createAdminClientMock(generation);
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: adminClient.client,
+      body: { generationId: 'gen-1', visibility: 'unlisted' },
+      userId: 'user-1',
+      dependencies: {
+        ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+          outputUrl: mediaGeneration.outputUrl,
+          createdLocation: null,
+        })),
+        listSourceToolsCatalog: vi.fn(async () => [
+          { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image' as const, 'video' as const] },
+        ]),
+        publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'unlisted' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        ensureGenerationPostCoverMedia: vi.fn(async () => {
+          throw new Error('connection reset');
+        }),
+      } satisfies Partial<ShowcasePublishServiceDependencies>,
+    });
+
+    expect(result).toMatchObject({ ok: true, body: { postId: 'post-1' } });
+    expect(logBackendErrorMock).toHaveBeenCalledWith(
+      'failed_to_record_generation_post_cover_media',
+      expect.objectContaining({ error: expect.any(Error) }),
+    );
+  });
+
 });

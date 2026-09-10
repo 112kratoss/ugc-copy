@@ -827,6 +827,28 @@ export type ExpiredUploadReservationReclaimSummary = {
   objectsDeleted: number;
   absentObjectsReleased: number;
   failed: number;
+  /**
+   * Rows deliberately left for a later run: a protection hold, an unexpired
+   * consumption lease, or a quiescence gate that has not elapsed yet.
+   *
+   * Counted apart from `handled` because `handled` scores a deferral exactly
+   * like a completed release, so a sweep that moved nothing forward reads
+   * identically to one that found nothing to do. Incident #78 and the
+   * 2026-09-06 recurrence both cost a day of diagnosis to that ambiguity.
+   */
+  deferred: number;
+  /**
+   * Rows that took the first of the two passes a release requires. Real
+   * progress, but not a release -- the other half of what `handled` erases.
+   */
+  firstClaims: number;
+  /**
+   * Rows deliberately retained and left charged: a protected mobile draft or a
+   * legacy durable object the sweep must not delete. This is the outcome that
+   * hid the 2026-09-06 backlog -- a held row returns to `consumed`, so the next
+   * run starts the two-pass ladder over and the age clock never stops.
+   */
+  held: number;
   bytesDeleted: number;
   scanLimitReached: boolean;
   timeBudgetReached: boolean;
@@ -968,6 +990,9 @@ export async function reclaimExpiredUploadReservations(
     objectsDeleted: 0,
     absentObjectsReleased: 0,
     failed: 0,
+    deferred: 0,
+    firstClaims: 0,
+    held: 0,
     bytesDeleted: 0,
     scanLimitReached: false,
     timeBudgetReached: false,
@@ -1059,6 +1084,7 @@ export async function reclaimExpiredUploadReservations(
         );
         handled += 1;
         if (!deferred) summary.failed += 1;
+        else summary.deferred += 1;
         continue;
       }
 
@@ -1102,6 +1128,7 @@ export async function reclaimExpiredUploadReservations(
           );
           handled += 1;
           if (!deferred) summary.failed += 1;
+          else summary.deferred += 1;
           continue;
         }
 
@@ -1241,6 +1268,7 @@ export async function reclaimExpiredUploadReservations(
         );
         handled += 1;
         if (!deferred) summary.failed += 1;
+        else summary.deferred += 1;
         continue;
       }
       if (
@@ -1263,6 +1291,7 @@ export async function reclaimExpiredUploadReservations(
         );
         handled += 1;
         if (!deferred) summary.failed += 1;
+        else summary.deferred += 1;
         continue;
       }
 
@@ -1300,6 +1329,7 @@ export async function reclaimExpiredUploadReservations(
           );
           handled += 1;
           if (!deferred) summary.failed += 1;
+          else summary.deferred += 1;
           continue;
         }
         if (row.finalization_status === 'reclaiming' && row.reclaim_not_before) {
@@ -1311,6 +1341,7 @@ export async function reclaimExpiredUploadReservations(
           );
           handled += 1;
           if (!deferred) summary.failed += 1;
+          else summary.deferred += 1;
           continue;
         }
 
@@ -1326,6 +1357,7 @@ export async function reclaimExpiredUploadReservations(
         }, now);
         handled += 1;
         if (firstClaim.error || !firstClaim.row) summary.failed += 1;
+        else summary.firstClaims += 1;
         continue;
       }
 
@@ -1380,6 +1412,8 @@ export async function reclaimExpiredUploadReservations(
           ...(preserveDurably ? { released_at: now.toISOString() } : {}),
         }, now);
         if (update.error || !update.row) summary.failed += 1;
+        // A durable preserve releases the charge; every other preserve keeps it.
+        else if (!preserveDurably) summary.held += 1;
         continue;
       }
 

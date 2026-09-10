@@ -1,4 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import React from 'react';
+import renderer from 'react-test-renderer';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// The module reads `Platform.OS` to decide whether anything downstream will
+// spend the colour, and vitest cannot parse react-native's own entry point.
+const platform = vi.hoisted(() => ({ os: 'ios' as 'ios' | 'android' }));
+vi.mock('react-native', () => ({ Platform: { get OS() { return platform.os; } } }));
 
 import { contrastRatio } from '../lib/color-contrast';
 import {
@@ -182,5 +189,102 @@ describe('choosing which visible card to read', () => {
       { index: 1, isViewable: false, item: { previewThumbhash: 'hidden' } },
     ])).toBeNull();
     expect(selectBottomVisibleAmbientSource([])).toBeNull();
+  });
+});
+
+/**
+ * The colour exists to tint a translucent iOS dock. Android's is an opaque
+ * panel that never adapts, and the tab bar subscribes to this store, so leaving
+ * the wiring live there re-rendered the whole bar on every viewability change
+ * to arrive at a value it throws away.
+ *
+ * The platform flag is read when the module loads, so each case re-imports it.
+ */
+describe('adapting only where a surface spends the colour', () => {
+  afterEach(() => {
+    platform.os = 'ios';
+  });
+
+  async function mountColourProbe(os: 'ios' | 'android') {
+    platform.os = os;
+    vi.resetModules();
+    const module = await import('../lib/tab-bar-ambient');
+    const painted: string[] = [];
+    function Probe() {
+      painted.push(module.useTabBarAmbientColor());
+      return null;
+    }
+
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(React.createElement(Probe));
+    });
+
+    return { module, painted, unmount: () => renderer.act(() => tree.unmount()) };
+  }
+
+  /**
+   * Reading any property of a token means the sampler ran. A handler that stops
+   * at the door never touches them, which is the difference this asserts —
+   * "the colour did not change" alone cannot tell a short-circuit apart from a
+   * bar that simply is not listening.
+   */
+  const EXPLODING_FEED = [{
+    index: 0,
+    get isViewable(): boolean {
+      throw new Error('sampled a feed nothing will read');
+    },
+    item: { previewThumbhash: MEDIA.magenta },
+  }] as never;
+
+  it('repaints the iOS dock when a feed reports media', async () => {
+    const { module, painted, unmount } = await mountColourProbe('ios');
+    expect(painted).toEqual([DEFAULT_TAB_BAR_COLOR]);
+
+    renderer.act(() => {
+      module.setTabBarAmbientSource({ thumbhash: MEDIA.magenta });
+    });
+
+    expect(painted).toHaveLength(2);
+    expect(painted[1]).not.toBe(DEFAULT_TAB_BAR_COLOR);
+    unmount();
+  });
+
+  it('leaves the Android dock neutral without re-rendering the bar', async () => {
+    const { module, painted, unmount } = await mountColourProbe('android');
+    expect(painted).toEqual([DEFAULT_TAB_BAR_COLOR]);
+
+    renderer.act(() => {
+      module.setTabBarAmbientSource({ thumbhash: MEDIA.magenta });
+    });
+
+    expect(painted).toEqual([DEFAULT_TAB_BAR_COLOR]);
+    unmount();
+  });
+
+  it('samples a scrolling feed on iOS and not on Android', async () => {
+    async function handlerFor(os: 'ios' | 'android') {
+      platform.os = os;
+      vi.resetModules();
+      const module = await import('../lib/tab-bar-ambient');
+      let report!: (info: { viewableItems: never }) => void;
+      function Probe() {
+        report = module.useTabBarAmbientFeed(true) as typeof report;
+        return null;
+      }
+      let tree!: renderer.ReactTestRenderer;
+      renderer.act(() => {
+        tree = renderer.create(React.createElement(Probe));
+      });
+      return { report, unmount: () => renderer.act(() => tree.unmount()) };
+    }
+
+    const ios = await handlerFor('ios');
+    expect(() => ios.report({ viewableItems: EXPLODING_FEED })).toThrow('sampled a feed');
+    ios.unmount();
+
+    const android = await handlerFor('android');
+    expect(() => android.report({ viewableItems: EXPLODING_FEED })).not.toThrow();
+    android.unmount();
   });
 });

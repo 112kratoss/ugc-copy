@@ -1,9 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
+import { useInlineMediaPlayback } from '@/app/components/useInlineMediaPlayback';
 import { useMediaLoadingPreferences } from '@/app/components/useMediaLoadingPreferences';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
+
+function subscribeVisibility(onChange: () => void) {
+  document.addEventListener('visibilitychange', onChange);
+  return () => document.removeEventListener('visibilitychange', onChange);
+}
+const getVisible = () => !document.hidden;
+const getServerVisible = () => false;
 
 function safePlay(video: HTMLVideoElement) {
   try {
@@ -28,8 +36,10 @@ export function HoverVideo({
   autoPlay?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const attachVideo = useInlineMediaPlayback(videoRef);
+  const isPageVisible = useSyncExternalStore(subscribeVisibility, getVisible, getServerVisible);
   const wasPlayingRef = useRef(false);
-  const [isNearViewport, setIsNearViewport] = useState(false);
+  const [isInViewport, setIsInViewport] = useState(false);
   const [isHovering, setIsHovering] = useState(false);
   const { prefersReducedMotion, saveData } = useMediaLoadingPreferences();
 
@@ -44,14 +54,14 @@ export function HoverVideo({
     }
 
     const observer = new IntersectionObserver(
-      ([entry]) => setIsNearViewport(Boolean(entry?.isIntersecting)),
-      { rootMargin: '320px 0px', threshold: 0 }
+      ([entry]) => setIsInViewport(Boolean(entry?.isIntersecting)),
+      { threshold: 0 }
     );
     observer.observe(video);
     return () => observer.disconnect();
   }, []);
 
-  const shouldPlay = (isNearViewport || isHovering)
+  const shouldPlay = isInViewport && isPageVisible
     && !prefersReducedMotion
     && !saveData
     && (autoPlay || isHovering);
@@ -81,7 +91,7 @@ export function HoverVideo({
 
   return (
     <video
-      ref={videoRef}
+      ref={attachVideo}
       src={attachedSrc}
       poster={poster ? buildOptimizedPreviewImageUrl(poster) : undefined}
       muted

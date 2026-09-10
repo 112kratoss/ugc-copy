@@ -215,7 +215,11 @@ export function generationToProfileMediaCard(item: GenerationListItem): ProfileM
   //
   // The grid still never paints the source itself: streaming originals into a
   // wall of thumbnails is exactly the egress the derivative exists to avoid.
-  const hasRenderableContent = kind === 'text' ? Boolean(previewText?.trim()) : Boolean(mediaUrl);
+  // A creation whose only source is gone keeps its tile too: the explicit
+  // "no longer available" plate is the honest state, and hiding it would read
+  // as deletion.
+  const sourceUnavailable = Boolean(item.source_unavailable_at);
+  const hasRenderableContent = kind === 'text' ? Boolean(previewText?.trim()) : Boolean(mediaUrl) || sourceUnavailable;
   const isGridReady = !isArchived && item.status === 'succeeded' && hasRenderableContent;
   const label = getGenerationLabel(kind);
 
@@ -237,9 +241,11 @@ export function generationToProfileMediaCard(item: GenerationListItem): ProfileM
     // "Preview unavailable" is true of the poster and false of the creation:
     // the media is right there, one tap away. Only a card with no media to
     // reach keeps the blunt label.
-    previewStatusLabel: previewState === 'videoFallback' || (previewState === 'artFallback' && Boolean(mediaUrl))
-      ? 'Tap to view media'
-      : undefined,
+    previewStatusLabel: sourceUnavailable
+      ? 'File no longer available'
+      : previewState === 'videoFallback' || (previewState === 'artFallback' && Boolean(mediaUrl))
+        ? 'Tap to view media'
+        : undefined,
     isGridReady,
     isArchived,
     badge: label,
@@ -264,7 +270,11 @@ export function ownerPostToProfileMediaCard(item: OwnerPostListItem): ProfileMed
   const isTextPost = item.category === 'text' || item.postFormat === 'text';
   const primaryMedia = item.mediaItems?.[0];
   const descriptor = primaryMedia?.preview;
-  const previewUrl = descriptor?.previewUrl ?? primaryMedia?.previewUrl ?? null;
+  // The media's only source is gone: draw the plate with an explicit label and
+  // never hand the dead address to an image or player.
+  const sourceUnavailable = Boolean(primaryMedia?.sourceUnavailableAt);
+  const previewUrl = sourceUnavailable ? null : descriptor?.previewUrl ?? primaryMedia?.previewUrl ?? null;
+  const mediaUrl = sourceUnavailable ? null : item.mediaUrl;
   const previewText =
     item.body?.trim()
     || item.prompt?.trim()
@@ -277,7 +287,7 @@ export function ownerPostToProfileMediaCard(item: OwnerPostListItem): ProfileMed
     title: item.title || 'Untitled post',
     label: 'Post',
     meta: item.visibility || formatRelativeTime(item.createdAt),
-    mediaUrl: item.mediaUrl,
+    mediaUrl,
     previewUrl,
     previewThumbhash: descriptor?.thumbhash ?? primaryMedia?.previewThumbhash ?? null,
     previewCacheKey: descriptor?.cacheKey ?? primaryMedia?.previewCacheKey ?? previewUrl ?? item.id,
@@ -288,12 +298,14 @@ export function ownerPostToProfileMediaCard(item: OwnerPostListItem): ProfileMed
     previewText,
     previewState: getProfilePreviewState({
       mediaKind: item.mediaKind,
-      mediaUrl: item.mediaUrl,
+      mediaUrl,
       previewKind: isTextPost ? 'text' : undefined,
       previewText,
       previewUrl,
     }),
-    previewStatusLabel: item.mediaKind === 'video' && !previewUrl ? 'Preview unavailable' : undefined,
+    previewStatusLabel: sourceUnavailable
+      ? 'File no longer available'
+      : item.mediaKind === 'video' && !previewUrl ? 'Preview unavailable' : undefined,
     // An image post whose media lives on `posts.output_url` has no `post_media`
     // row to carry a descriptor, so the old check saw no preview and dropped it
     // -- hiding published posts from the grid entirely while the web profile
@@ -308,8 +320,9 @@ export function ownerPostToProfileMediaCard(item: OwnerPostListItem): ProfileMed
     isGridReady: isTextPost
       ? Boolean(previewText.trim())
       : Boolean(
-        (descriptor?.gridReady ?? primaryMedia?.gridReady ?? previewUrl)
-        || (item.mediaKind === 'image' && item.mediaUrl),
+        sourceUnavailable
+        || (descriptor?.gridReady ?? primaryMedia?.gridReady ?? previewUrl)
+        || (item.mediaKind === 'image' && mediaUrl),
       ),
     isArchived: Boolean(item.archivedAt),
     badge: ownerPostBadge(item),

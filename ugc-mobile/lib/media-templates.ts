@@ -191,6 +191,8 @@ function normalizeStep(value: unknown, index: number): TemplateRunStep | null {
     status: stringValue(step, ['status'], 'queued'),
     label: stringValue(step, ['label', 'name'], `${kind === 'approval' ? 'Review' : 'Generation'} ${index + 1}`),
     outputUrl: nullableString(step, ['outputUrl', 'output_url']),
+    ...(step.renditionUrl !== undefined ? { renditionUrl: nullableString(step, ['renditionUrl']) } : {}),
+    ...(step.previewUrl !== undefined ? { previewUrl: nullableString(step, ['previewUrl']) } : {}),
     errorMessage: nullableString(step, ['errorMessage', 'error_message', 'error']),
     failureCode: failureCode(firstValue(step, ['failureCode', 'failure_code', 'errorCode', 'error_code'])),
     canRetry: booleanValue(step, ['canRetry', 'can_retry'], false),
@@ -263,6 +265,8 @@ export function normalizeTemplateRunResponse(value: unknown): TemplateRunRespons
       generationId: canonicalResultUrl ? canonicalGenerationId : null,
       kind: mediaKind(firstValue(result, ['kind', 'mediaKind', 'media_kind']), legacyVideoUrl ? 'video' : 'image'),
       url: resultUrl,
+      ...(result.renditionUrl !== undefined ? { renditionUrl: nullableString(result, ['renditionUrl']) } : {}),
+      ...(result.previewUrl !== undefined ? { previewUrl: nullableString(result, ['previewUrl']) } : {}),
     } : null,
     estimatedTotalCredits: numberValue(run, ['estimatedTotalCredits', 'estimated_total_credits']),
     estimatedRemainingCredits: numberValue(run, ['estimatedRemainingCredits', 'estimated_remaining_credits'])

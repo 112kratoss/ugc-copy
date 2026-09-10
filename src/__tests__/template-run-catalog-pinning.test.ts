@@ -226,6 +226,25 @@ function seedTemplateRun() {
 }
 
 describe('template run catalog pinning', () => {
+  it('delivers a source-matched playback rendition for a completed template result', async () => {
+    const { run, steps } = seedTemplateRun();
+    const source = 'generated_videos/user-1/original.mp4';
+    Object.assign(run, { status: 'succeeded', result_generation_id: 'generation-1', result_url: source });
+    const fake = createFakeSupabase({ runs: [run], steps, generations: [{
+      id: 'generation-1', user_id: 'user-1', template_run_id: 'run-1', status: 'succeeded', output_url: source,
+      playback_rendition_status: 'ready', playback_rendition_source: source,
+      playback_rendition_path: 'generated_videos/user-1/playback/generation-1/clip.mp4',
+    }] });
+    Object.assign(fake.client, { storage: { from: () => ({ createSignedUrls: async (paths: string[]) => ({
+      data: paths.map((path) => ({ path, signedUrl: `https://storage.test/${path}` })), error: null,
+    }) }) } });
+    const { getTemplateRun } = await import('@/lib/template-run-service');
+    const result = await getTemplateRun({ adminClient: fake.client, runId: 'run-1', userId: 'user-1' });
+    // The rendition is addressed through the authenticated media route, never a signed URL.
+    expect(result.result).toMatchObject({ renditionUrl: '/api/media?bucket=generated_videos&path=user-1%2Fplayback%2Fgeneration-1%2Fclip.mp4' });
+    expect(fake.writes).toEqual([]);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.resolveStoredMediaUrl.mockImplementation(async (_client: unknown, value: string) => `signed:${value}`);

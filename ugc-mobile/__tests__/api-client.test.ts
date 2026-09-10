@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ApiError,
+  SessionMergedError,
   UpgradeRequiredError,
   createApiClient,
+  setSessionMergedHandler,
   setUpgradeRequiredHandler,
 } from '../lib/api-client';
 
@@ -269,6 +271,65 @@ describe('mobile api client caching', () => {
     });
     const [, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
     expect(init.signal?.aborted).toBe(true);
+  });
+
+  it('times out a media-link response that sends headers but stalls while sending its body', async () => {
+    vi.useFakeTimers();
+    const responseState: { signal: AbortSignal | null } = { signal: null };
+    let closeBody: () => void = () => undefined;
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      responseState.signal = init?.signal ?? null;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"signedUrl":'));
+          closeBody = () => { try { controller.close(); } catch { /* Already aborted. */ } };
+          init?.signal?.addEventListener('abort', () => controller.error(init.signal?.reason), { once: true });
+        },
+      });
+      return new Response(stream, { headers: { 'Content-Type': 'application/json' } });
+    });
+    const api = createApiClient({ baseUrl: 'https://magicbooklet.test', getAccessToken: async () => 'token', fetcher, requestTimeoutMs: 100 });
+    const result = api.getPostResourceFileUrl('post-1', 'references/video.mp4').catch(error => error);
+    try {
+      await vi.advanceTimersByTimeAsync(150);
+      expect(responseState.signal?.aborted).toBe(true);
+      expect(await result).toMatchObject({ name: 'ApiError', status: 0 });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      closeBody();
+      await result;
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps caller cancellation attached until the response body has finished', async () => {
+    const caller = new AbortController();
+    const responseState: { signal: AbortSignal | null } = { signal: null };
+    let closeBody: () => void = () => undefined;
+    let bodyStarted: () => void = () => undefined;
+    const ready = new Promise<void>(resolve => { bodyStarted = resolve; });
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      responseState.signal = init?.signal ?? null;
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          closeBody = () => { try { controller.close(); } catch { /* Already aborted. */ } };
+          init?.signal?.addEventListener('abort', () => controller.error(init.signal?.reason), { once: true });
+          bodyStarted();
+        },
+      }), { headers: { 'Content-Type': 'application/json' } });
+    });
+    const api = createApiClient({ baseUrl: 'https://magicbooklet.test', getAccessToken: async () => 'token', fetcher });
+    const result = api.quoteGenerationModel({} as never, caller.signal).catch(error => error);
+    try {
+      await ready;
+      await new Promise(resolve => setTimeout(resolve, 0));
+      caller.abort();
+      expect(responseState.signal?.aborted).toBe(true);
+      expect(await result).toMatchObject({ name: 'ApiError', status: 0 });
+    } finally {
+      closeBody();
+      await result;
+    }
   });
 
   it('requests fresh authenticated showcase feed data by default', async () => {
@@ -610,6 +671,26 @@ describe('mobile api client caching', () => {
     const [url] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
     expect(url).toBe('https://magicbooklet.test/api/generations?detail=summary&includeArchived=false&limit=24&cursor=24');
     expect(response.pagination).toEqual({ limit: 24, hasMore: false, nextCursor: null });
+  });
+
+  it('resolves every creation descriptor media URL against the API origin', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ generations: [{
+      id: 'video-1', output_url: '/api/media?path=original.mp4',
+      media: {
+        url: '/api/media?path=original.mp4', previewUrl: '/api/media?path=poster.webp',
+        renditionUrl: '/api/media?path=playback.mp4', teaserUrl: '/api/media?path=teaser.mp4',
+        feedStreamUrl: null,
+      },
+    }] }));
+    const api = createApiClient({ baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1', fetcher: fetcher as unknown as typeof fetch });
+    const { generations: [item] } = await api.listGenerations(true);
+    expect(item.media).toMatchObject({
+      url: 'https://magicbooklet.test/api/media?path=original.mp4',
+      previewUrl: 'https://magicbooklet.test/api/media?path=poster.webp',
+      renditionUrl: 'https://magicbooklet.test/api/media?path=playback.mp4',
+      teaserUrl: 'https://magicbooklet.test/api/media?path=teaser.mp4', feedStreamUrl: null,
+    });
   });
 
   it('preserves template attribution while masking private recipe metadata', async () => {
@@ -1291,5 +1372,118 @@ describe('mobile api client forced-upgrade handling', () => {
 
     await expect(api.fetchGenerationModels()).rejects.toBeInstanceOf(UpgradeRequiredError);
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('mobile api client merged-guest-session handling', () => {
+  afterEach(() => {
+    setSessionMergedHandler(null);
+    vi.useRealTimers();
+  });
+
+  function sessionMergedResponse() {
+    return new Response(JSON.stringify({
+      code: 'SESSION_MERGED',
+      error: 'This guest session has been linked to an account. Sign in to continue.',
+    }), {
+      status: 409,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  function mergedApi(fetcher: ReturnType<typeof vi.fn>) {
+    return createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      clientInfo: {
+        appVersion: '1.0.0',
+        apiVersion: 1,
+        catalogSchemaVersion: 1,
+      },
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+  }
+
+  it('invokes the registered handler exactly once for concurrent 409 SESSION_MERGED responses', async () => {
+    const handler = vi.fn();
+    setSessionMergedHandler(handler);
+    const fetcher = vi.fn(async () => sessionMergedResponse());
+    const api = mergedApi(fetcher);
+
+    // A merged identity fails every authenticated route at once, so a burst is
+    // the normal case here rather than an edge one.
+    const results = await Promise.allSettled([
+      api.getProfile(),
+      api.getOnboardingState(),
+      api.getWelcomeCredits(),
+    ]);
+
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    for (const result of results) {
+      expect(result.status).toBe('rejected');
+      expect((result as PromiseRejectedResult).reason).toBeInstanceOf(SessionMergedError);
+    }
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toMatchObject({
+      name: 'SessionMergedError',
+      status: 409,
+      code: 'SESSION_MERGED',
+    });
+  });
+
+  it('notifies again after the renotify window so a stranded device is re-routed', async () => {
+    vi.useFakeTimers({ now: new Date('2026-09-10T10:00:00.000Z'), toFake: ['Date'] });
+    const handler = vi.fn();
+    setSessionMergedHandler(handler);
+    const fetcher = vi.fn(async () => sessionMergedResponse());
+    const api = mergedApi(fetcher);
+
+    await expect(api.getProfile()).rejects.toBeInstanceOf(SessionMergedError);
+    await expect(api.getProfile()).rejects.toBeInstanceOf(SessionMergedError);
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(new Date('2026-09-10T10:00:11.000Z'));
+    await expect(api.getProfile()).rejects.toBeInstanceOf(SessionMergedError);
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves a mid-deletion account alone: 409 ACCOUNT_DELETING is not a merged session', async () => {
+    // Both failures are 409. Only the merged one may tear down the session —
+    // signing a deleting user out would strand them mid-flow for no reason.
+    const handler = vi.fn();
+    setSessionMergedHandler(handler);
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      code: 'ACCOUNT_DELETING',
+      error: 'This account is being permanently deleted.',
+    }), {
+      status: 409,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    const api = mergedApi(fetcher);
+
+    const error = await api.getProfile().catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).not.toBeInstanceOf(SessionMergedError);
+    expect(error).toMatchObject({ status: 409, code: 'ACCOUNT_DELETING' });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('does not invoke the handler for a 409 that carries no code', async () => {
+    const handler = vi.fn();
+    setSessionMergedHandler(handler);
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      error: 'Conflict',
+    }), {
+      status: 409,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    const api = mergedApi(fetcher);
+
+    const error = await api.getProfile().catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).not.toBeInstanceOf(SessionMergedError);
+    expect(handler).not.toHaveBeenCalled();
   });
 });

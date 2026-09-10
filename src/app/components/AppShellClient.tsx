@@ -33,7 +33,7 @@ import DeferredAppShellAccount from './DeferredAppShellAccount';
 
 const NAV_GROUPS = [
   { label: 'Create', ids: ['home', 'create', 'studio', 'showcase'] },
-  { label: 'Explore', ids: ['search', 'marketplace', 'workflow'] },
+  { label: 'Discover', ids: ['search', 'marketplace', 'workflow'] },
   { label: 'Account', ids: ['invite', 'alerts', 'profile'] },
 ] as const;
 

@@ -23,6 +23,7 @@ type GenerationDeleteRow = {
   user_id: string;
   output_url: string | null;
   showcase_asset_path: string | null;
+  playback_rendition_path?: string | null;
 };
 
 type RemovablePath = {
@@ -139,7 +140,7 @@ export async function deleteOwnerGenerationForRoute({
     const ownerUserIds = await resolveLinkedAccountIds(adminSupabase, userId);
     const { data: generationData, error: generationError } = await adminSupabase
       .from('generations')
-      .select('id, user_id, output_url, showcase_asset_path')
+      .select('id, user_id, output_url, showcase_asset_path, playback_rendition_path')
       .eq('id', generationId)
       .in('user_id', ownerUserIds)
       .is('template_run_id', null)
@@ -190,27 +191,29 @@ export async function deleteOwnerGenerationForRoute({
       }
     }
 
-    if (!hasLinkedPosts) {
-      addUserOwnedStoredMediaPath(
-        removablePaths,
-        generation.output_url,
-        generation.user_id,
-        ['generated_images', 'generated_videos', 'generated_audio'],
-      );
-      addShowcaseMediaPath(removablePaths, generation.showcase_asset_path, generation.id);
-    }
-
-    const { error: deleteError } = await adminSupabase
+    const { data: deletedRows, error: deleteError } = await adminSupabase
       .from('generations')
       .delete()
       .eq('id', generationId)
       .in('user_id', ownerUserIds)
       .is('template_run_id', null)
-      .is('template_run_step_id', null);
+      .is('template_run_step_id', null)
+      .select('id, user_id, output_url, showcase_asset_path, playback_rendition_path');
 
     if (deleteError) {
       logBackendError('failed_to_delete_generation', { error: deleteError });
       return { ok: false, body: { error: 'Failed to delete creation.' }, status: 500 };
+    }
+
+    const deleted = (deletedRows as GenerationDeleteRow[] | null)?.[0];
+    if (!deleted) return { ok: false, body: { error: 'Creation not found.' }, status: 404 };
+    // DELETE RETURNING captures a derivative that finishes after the initial
+    // owner/retention read. Cleaning that old snapshot could strand its bytes.
+    if (!hasLinkedPosts) {
+      addUserOwnedStoredMediaPath(removablePaths, deleted.output_url, deleted.user_id,
+        ['generated_images', 'generated_videos', 'generated_audio']);
+      addShowcaseMediaPath(removablePaths, deleted.showcase_asset_path, deleted.id);
+      addUserOwnedStoredMediaPath(removablePaths, deleted.playback_rendition_path, deleted.user_id, ['generated_videos']);
     }
 
     invalidateFeedCache();

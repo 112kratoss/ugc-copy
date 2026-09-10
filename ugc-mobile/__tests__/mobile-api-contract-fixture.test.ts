@@ -52,6 +52,24 @@ function clientForEndpoint(endpointKey: ContractEndpointKey) {
   });
 }
 
+function withAbsoluteMediaRoutes(value: unknown, base: string): unknown {
+  if (typeof value === 'string') return value.startsWith('/api/media?') ? `${base}${value}` : value;
+  if (Array.isArray(value)) return value.map((item) => withAbsoluteMediaRoutes(item, base));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, withAbsoluteMediaRoutes(v, base)]));
+  }
+  return value;
+}
+
+it('preserves private generation playback without replacing the original download URL', async () => {
+  const payload = await clientForEndpoint('listGenerations').listGenerations(false);
+  const video = payload.generations.find(generation => generation.id === 'private-video-1');
+  // A relative authenticated-route URL is absolutized against the API root.
+  expect(video?.media?.renditionUrl).toBe('https://magicbooklet.test/api/media?bucket=generated_videos&path=owner-1%2Fplayback%2Fprivate-video-1%2Fabc123.mp4');
+  expect(video?.media?.url).toBe(video?.output_url);
+  expect(video?.output_url).toBe('https://storage.example.test/private-video-original.mp4');
+});
+
 const successCases: Array<{
   key: Exclude<ContractEndpointKey, 'mobileUpdateRequired' | 'getPostResourceBundle'>;
   call: (api: MagicbookletApiClient) => Promise<unknown>;
@@ -375,7 +393,9 @@ describe('mobile shared API v1 contract fixture', () => {
 
   it.each(successCases)('consumes the $key response example through the mobile API client', async ({ key, call }) => {
     const api = clientForEndpoint(key);
-    await expect(call(api)).resolves.toEqual(contract.endpoints[key].response);
+    // The wire carries private playback as a relative authenticated-route URL;
+    // the client absolutizes it against its base, so the expectation does too.
+    await expect(call(api)).resolves.toEqual(withAbsoluteMediaRoutes(contract.endpoints[key].response, 'https://magicbooklet.test'));
   });
 
   it('parses the shared update-required response as a typed API error', async () => {

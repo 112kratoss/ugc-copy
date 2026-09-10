@@ -95,3 +95,20 @@ describe('extractWorkflowShareId', () => {
     expect(extractWorkflowShareId('not a url or share id')).toBeNull();
   });
 });
+
+describe('shared media delivery boundary', () => {
+  it.each(['video-input', 'audio-input'] as const)('removes %s media and output bindings', async (kind) => {
+    const { createWorkflowNode } = await import('@/lib/workflow-canvas');
+    const node = createWorkflowNode(kind, { x: 0, y: 0 });
+    Object.assign(node.data, {
+      videoUrl: 'https://private.example/video.mp4',
+      audioUrl: 'https://private.example/audio.mp3',
+      storagePath: 'generated_videos/owner/input.mp4',
+      runState: createNodeRunState({ status: 'succeeded', generationId: 'private-generation', outputUrl: 'https://private.example/result.mp4' }),
+    });
+    const snapshot = createWorkflowShareSnapshotGraph({ nodes: [node], edges: [] });
+    expect(JSON.stringify(snapshot)).not.toContain('private.example');
+    expect(JSON.stringify(snapshot)).not.toContain('generated_videos/owner');
+    expect(snapshot.nodes[0].data).not.toHaveProperty('runState');
+  });
+});

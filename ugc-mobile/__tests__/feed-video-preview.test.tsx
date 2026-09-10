@@ -35,6 +35,12 @@ vi.mock('expo-video', () => ({
 // remount is exactly what replays the 120ms transition that reads as flicker.
 const imageState = vi.hoisted(() => ({ mounts: 0 }));
 const authRevision = vi.hoisted(() => ({ current: '' }));
+const focusState = vi.hoisted(() => ({ focused: true }));
+vi.mock('@react-navigation/native', () => ({ useIsFocused: () => focusState.focused }));
+
+vi.mock('@/components/recoverable-video-preview', () => ({
+  RecoverableVideoPreview: (props: Record<string, unknown>) => React.createElement('video-preview', props),
+}));
 
 vi.mock('expo-image', () => ({
   Image: Object.assign(
@@ -75,6 +81,7 @@ import { FeedVideoPreview } from '../components/feed-video-preview';
 describe('FeedVideoPreview', () => {
   beforeEach(() => {
     authRevision.current = '';
+    focusState.focused = true;
     videoState.player.addListener.mockClear();
     videoState.player.play.mockClear();
     videoState.player.pause.mockClear();
@@ -294,6 +301,20 @@ describe('FeedVideoPreview', () => {
     expect(videoState.player.play).toHaveBeenCalledTimes(2);
     // ...but the poster underneath never remounted, so it never re-faded.
     expect(imageState.mounts).toBe(1);
+  });
+
+  it('pauses on tab blur without changing the feed activation and resumes on return', () => {
+    let tree: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(<FeedVideoPreview {...posterProps} active />); });
+    focusState.focused = false;
+    renderer.act(() => { tree.update(<FeedVideoPreview {...posterProps} active />); });
+    expect(videoState.player.pause).toHaveBeenCalledTimes(1);
+    expect(tree!.root.findAll((node) => String(node.type) === 'video-view')).toHaveLength(0);
+    focusState.focused = true;
+    renderer.act(() => { tree.update(<FeedVideoPreview {...posterProps} active />); });
+    expect(videoState.player.play).toHaveBeenCalledTimes(2);
+    expect(imageState.mounts).toBe(1);
+    renderer.act(() => tree.unmount());
   });
 
   it('pauses the player before unmounting it on deactivation', () => {

@@ -16,6 +16,7 @@ import {
 import {
   buildLegacyPostMediaItems,
   loadPostMediaItemsMap,
+  type PostMediaSummary,
 } from '@/lib/post-media';
 import {
   createServiceClient,
@@ -26,6 +27,7 @@ import {
 } from '@/lib/post-resource-bundles-server';
 import { resolvePostRemixCapability } from '@/lib/post-resource-bundles';
 import {
+  coverNeedsGenerationPreview,
   graftGenerationPreviewOntoCover,
   loadGenerationPreviewInfoMap,
 } from '@/lib/generation-preview-info';
@@ -549,7 +551,14 @@ export async function resolvePostRowsToFeedItems(
     return profilesMap;
   };
 
-  const loadGenerationInfo = () => loadGenerationPreviewInfoMap(adminSupabase, generationIds);
+  const loadGenerationInfo = (mediaItemsPromise: Promise<Map<string, PostMediaSummary[]>>) =>
+    loadGenerationPreviewInfoMap(adminSupabase, generationIds, {
+      signPreviewFor: mediaItemsPromise.then((mediaItemsMap) => new Set(
+        rowsToHydrate
+          .filter((row) => row.generation_id && coverNeedsGenerationPreview(mediaItemsMap.get(row.id)))
+          .map((row) => row.generation_id as string),
+      )),
+    });
 
   const loadSourceTools = async () => {
     const sourceToolsMap = new Map<string, Array<{
@@ -594,18 +603,24 @@ export async function resolvePostRowsToFeedItems(
   const postIds = rowsToHydrate.map((row) => row.id);
   const assetHydrationPromise = getMarketplaceAssetSummaryHydration(postIds, adminSupabase);
   const assetMapPromise = assetHydrationPromise.then(({ assetMap }) => assetMap);
+  // Every read still starts together. Only the preview signing inside
+  // `loadGenerationInfo` waits on the media rows, because only it needs to
+  // know which covers already have a poster of their own — this function runs
+  // once per batch inside the filtering scan below, so a sequential read here
+  // would cost a round trip per batch.
+  const mediaItemsPromise = loadPostMediaItemsMap(adminSupabase, postIds);
   const [
     profilesMap,
-    generationInfoMap,
     assetMap,
     mediaItemsMap,
     sourceToolsMap,
+    generationInfoMap,
   ] = await Promise.all([
     loadProfiles(),
-    loadGenerationInfo(),
     assetMapPromise,
-    loadPostMediaItemsMap(adminSupabase, postIds),
+    mediaItemsPromise,
     loadSourceTools(),
+    loadGenerationInfo(mediaItemsPromise),
   ]);
 
   const resolvedItems = await Promise.all(

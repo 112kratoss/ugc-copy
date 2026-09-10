@@ -254,7 +254,7 @@ function validateSubmittedMediaItems(items: SubmittedPostMediaItem[]): string | 
     mediaKeys.add(item.mediaKey);
 
     if (item.contentType.startsWith('audio/')) {
-      return 'Audio uploads are not supported in Showcase yet.';
+      return 'Audio uploads are not supported in Explore yet.';
     }
 
     if (!getMediaKindFromContentType(item.contentType)) {

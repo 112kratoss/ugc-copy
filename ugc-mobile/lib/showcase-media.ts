@@ -34,6 +34,31 @@ export function getShowcaseMediaPreviewUrl(item: ShowcaseMediaItem) {
   return item.preview?.previewUrl ?? item.previewUrl ?? null;
 }
 
+/** The full-size image must not read or overwrite a thumbnail's disk entry. */
+/**
+ * What a full-screen viewer should fetch for an image.
+ *
+ * The 720px preview is a grid size and reads soft filling a phone, so the
+ * viewer used to load the source instead — 1.2 MB on average, up to 7.9 MB,
+ * which made images the single largest share of Storage egress. The display
+ * rendition sits between the two at around 1440px. The source stays what a
+ * download or a pinch-zoom reaches for.
+ */
+export function getShowcaseViewerImageUrl(item: ShowcaseMediaItem): string {
+  return item.displayUrl || item.url;
+}
+
+export function getShowcaseViewerImageCacheKey(item: ShowcaseMediaItem): string | undefined {
+  const key = item.preview?.cacheKey ?? item.previewCacheKey;
+  if (!key) return undefined;
+  // Preview, display and source are three different objects that can occupy
+  // this slide. Each needs its own entry, or the larger one's bytes are filed
+  // under the smaller one's key and served in its place.
+  if (item.displayUrl) return `${key}:display`;
+  const previewUrl = getShowcaseMediaPreviewUrl(item);
+  return previewUrl && previewUrl !== item.url ? `${key}:source` : key;
+}
+
 export type ShowcaseImageTileSource = 'preview' | 'source-fallback' | 'pending';
 
 /**

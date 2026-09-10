@@ -1,5 +1,9 @@
 'use client';
 
+import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
+
+import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+
 import Link from 'next/link';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -281,66 +285,6 @@ function inferCategoryFromContentType(contentType: string | null | undefined): P
   return null;
 }
 
-/**
- * How long the metadata probe may stall before the file is let through with an
- * unknown duration. Metadata loads resolve in milliseconds when they resolve
- * at all; a codec the browser chokes on must not wedge the composer.
- */
-const VIDEO_METADATA_READ_TIMEOUT_MS = 4000;
-
-/**
- * Reads a picked video's duration from a metadata-only load (the pattern
- * CreateMotionClient uses for reference clips). Resolves null when the browser
- * cannot read it — the caller lets those through for the server layers, whose
- * ffmpeg probe of the actual file is the authoritative check anyway.
- */
-function readVideoFileDurationSeconds(file: File): Promise<number | null> {
-  return new Promise((resolve) => {
-    let probe: HTMLVideoElement;
-    let objectUrl: string;
-    let settled = false;
-    let timeout: ReturnType<typeof setTimeout> | null = null;
-
-    const finish = (value: number | null) => {
-      if (settled) return;
-      settled = true;
-      if (timeout) clearTimeout(timeout);
-      probe.removeEventListener('loadedmetadata', handleLoadedMetadata);
-      probe.removeEventListener('error', handleError);
-      probe.src = '';
-      URL.revokeObjectURL(objectUrl);
-      resolve(value);
-    };
-
-    const handleLoadedMetadata = () => {
-      finish(Number.isFinite(probe.duration) ? probe.duration : null);
-    };
-    const handleError = () => finish(null);
-
-    try {
-      probe = document.createElement('video');
-      // An empty canPlayType means this browser could not decode the file, so
-      // a metadata load would only ever end in the error path — skip straight
-      // to "unknown". (This is also what keeps jsdom-based tests, whose media
-      // elements never fire load events, from hanging here.)
-      if (!probe.canPlayType || probe.canPlayType(file.type) === '') {
-        resolve(null);
-        return;
-      }
-      probe.preload = 'metadata';
-      objectUrl = URL.createObjectURL(file);
-    } catch {
-      resolve(null);
-      return;
-    }
-
-    timeout = setTimeout(() => finish(null), VIDEO_METADATA_READ_TIMEOUT_MS);
-    probe.addEventListener('loadedmetadata', handleLoadedMetadata);
-    probe.addEventListener('error', handleError);
-    probe.src = objectUrl;
-  });
-}
-
 function createComposerMediaItem(file: File, index: number, durationSeconds: number | null = null): ComposerMediaItem {
   return {
     id: `new-${Date.now()}-${index}-${file.name}`,
@@ -373,7 +317,7 @@ function getLockedSummary(selectedKinds: PostResourceKind[]): string {
 }
 
 function getVisibilityStatusLabel(v: PostVisibility): string {
-  if (v === 'public') return 'Visible in Showcase';
+  if (v === 'public') return 'Visible in Explore';
   if (v === 'unlisted') return 'Shareable by link only';
   return 'Saved privately in Studio';
 }
@@ -1353,7 +1297,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         if (!rejections.includes(POST_VIDEO_UPLOAD_BYTES_MESSAGE)) rejections.push(POST_VIDEO_UPLOAD_BYTES_MESSAGE);
         continue;
       }
-      const durationSeconds = await readVideoFileDurationSeconds(candidate);
+      const durationSeconds = await readVideoDurationSeconds(candidate);
       if (durationSeconds !== null && durationSeconds > POST_VIDEO_MAX_DURATION_SECONDS) {
         if (!rejections.includes(POST_VIDEO_DURATION_LIMIT_MESSAGE)) rejections.push(POST_VIDEO_DURATION_LIMIT_MESSAGE);
         continue;
@@ -1949,7 +1893,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     }
 
     if (mediaItems.some((item) => item.contentType?.startsWith('audio/'))) {
-      stopWithError('Audio posts are not supported in Showcase yet.', 'post');
+      stopWithError('Audio posts are not supported in Explore yet.', 'post');
       return;
     }
 
@@ -2259,7 +2203,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           ? 'Back to seller dashboard'
           : entrySurface === 'home'
             ? 'Back to home'
-            : 'Back to showcase';
+            : 'Back to Explore';
 
   return (
     <div className="ui-page ui-page-ambient min-h-screen">
@@ -2653,7 +2597,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                             </div>
                           ) : prefilledGeneration?.outputUrl ? (
                             category === 'video' ? (
-                              <video
+                              <InlineMediaVideo
                                 src={prefilledGeneration.outputUrl}
                                 controls
                                 playsInline
@@ -2703,7 +2647,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                               <div className="text-sm font-semibold text-white">
                                 {mediaItems.length > 0 ? `${mediaItems.length} of 5 media added` : 'Upload images or videos'}
                               </div>
-                              <p className="mt-1 text-xs text-zinc-400">The first item is the Showcase cover.</p>
+                              <p className="mt-1 text-xs text-zinc-400">The first item is the Explore cover.</p>
                             </div>
                           </div>
                           <button
@@ -2769,7 +2713,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         <div className="mt-5 rounded-[24px] border border-white/8 bg-black/50 p-3">
                           {coverPreviewItem?.previewUrl ? (
                             coverPreviewItem.mediaKind === 'video' ? (
-                              <video
+                              <InlineMediaVideo
                                 src={coverPreviewItem.previewUrl}
                                 controls
                                 playsInline
@@ -2840,7 +2784,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                               >
                                 <div className="relative aspect-[4/5] overflow-hidden rounded-md bg-black">
                                   {item.mediaKind === 'video' ? (
-                                    <video
+                                    <InlineMediaVideo
                                       src={item.previewUrl ?? undefined}
                                       muted
                                       playsInline
@@ -2955,7 +2899,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                   <div>
                     <h2 className="text-lg font-semibold text-white">Story</h2>
                     <p className="mt-1 text-xs text-zinc-400">
-                      The public content visible in Showcase.
+                      The public content visible in Explore.
                     </p>
                   </div>
                   <button
@@ -2963,7 +2907,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                     onClick={() => setIsDetailsOpen((current) => !current)}
                     className="inline-flex items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
                   >
-                    {isDetailsOpen ? 'Hide description' : 'Add Showcase description'}
+                    {isDetailsOpen ? 'Hide description' : 'Add Explore description'}
                   </button>
                 </div>
 
@@ -2996,14 +2940,14 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
                 {isDetailsOpen ? (
                   <label className="mt-5 block">
-                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Showcase description</div>
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Explore description</div>
                     <textarea
                       value={description}
                       onChange={(event) => {
                         setDescription(event.target.value);
                         resetFeedback();
                       }}
-                      placeholder="Optional: give the post a short one-line setup for Showcase and previews."
+                      placeholder="Optional: give the post a short one-line setup for Explore and previews."
                       rows={3}
                       className="w-full rounded-[24px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
                     />
@@ -3344,7 +3288,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         className="ui-focus-ring rounded-2xl bg-[var(--ui-primary)] px-5 py-5 text-left transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-70"
                       >
                         <div className="text-sm font-extrabold text-[var(--ui-primary-on)]">Publish public</div>
-                        <p className="mt-1.5 text-xs leading-5 text-[#5c2c20]">Visible in Showcase.</p>
+                        <p className="mt-1.5 text-xs leading-5 text-[#5c2c20]">Visible in Explore.</p>
                       </button>
                     </div>
                   </div>

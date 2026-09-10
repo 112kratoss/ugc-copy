@@ -180,6 +180,73 @@ describe('rendition byte admission (F14)', () => {
     expect(selects).toHaveLength(0);
   });
 
+  // The claim reserves the attempt (migration 20260909060000), so a worker that
+  // added one to what it was handed would double count and trip the 0..3 CHECK.
+  it('writes the attempt the claim already reserved rather than adding to it', async () => {
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    const updates: Array<Record<string, unknown>> = [];
+    const client = {
+      rpc: async () => ({
+        data: [{ id: 'm1', storage_path: 'posts/post-1/clip.mp4', content_type: 'video/mp4', rendition_attempt_count: 1 }],
+        error: null,
+      }),
+      from: () => ({
+        select: () => createSelectChain({ data: [], error: null }),
+        update: (payload: Record<string, unknown>) => {
+          updates.push(payload);
+          return { eq: () => ({ eq: async () => ({ error: null }) }) };
+        },
+      }),
+      storage: {
+        from: () => ({ download: async () => ({ data: null, error: new Error('gone') }) }),
+      },
+    };
+
+    await repairPostMediaRenditions(client as never);
+
+    // The download fails, so this is the failure write.
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({
+      rendition_status: 'failed',
+      rendition_attempt_count: 1,
+    });
+  });
+
+  // Without a lease there is no claim to reserve anything, so the worker has to
+  // do it before the download — otherwise a kill mid-download leaves the budget
+  // untouched and the same source is re-read on the next sweep, forever.
+  it('reserves the attempt with the processing status when it holds no lease', async () => {
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    const updates: Array<Record<string, unknown>> = [];
+    const client = {
+      rpc: async (name: string) => ({
+        data: null,
+        error: { code: 'PGRST202', message: `Could not find the function public.${name}` },
+      }),
+      from: () => ({
+        select: () => createSelectChain({
+          data: [{ id: 'm1', post_id: 'post-1', storage_path: 'posts/post-1/clip.mp4', content_type: 'video/mp4', rendition_attempt_count: 1 }],
+          error: null,
+        }),
+        update: (payload: Record<string, unknown>) => {
+          updates.push(payload);
+          return { eq: async () => ({ error: null }) };
+        },
+      }),
+      storage: {
+        from: () => ({ download: async () => ({ data: null, error: new Error('gone') }) }),
+      },
+    };
+
+    await repairPostMediaRenditions(client as never);
+
+    expect(updates[0]).toEqual({ rendition_status: 'processing', rendition_attempt_count: 2 });
+    expect(updates[updates.length - 1]).toMatchObject({
+      rendition_status: 'failed',
+      rendition_attempt_count: 2,
+    });
+  });
+
   it('honours an explicit byte budget', async () => {
     const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
     const { client, rpcCalls } = createAdmissionClient([]);
@@ -360,6 +427,53 @@ describe('media preview repair retries', () => {
     expect(invalidateFeedCache).toHaveBeenCalledOnce();
   });
 
+  it('marks an external source gone when a second run meets a 404, and only then', async () => {
+    const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 404 } as Response)));
+    const run = async (attemptCount: number) => {
+      const updates: Array<{ table: string; payload: Record<string, unknown> }> = [];
+      const supabase = {
+        from: vi.fn((table: string) => ({
+          select: vi.fn(() => createSelectChain({
+            data: table === 'generations'
+              ? [{
+                  id: 'gen-gone',
+                  user_id: 'user-1',
+                  output_url: 'https://tempfile.provider.example/expired.mp4',
+                  category: 'motion',
+                  preview_attempt_count: attemptCount,
+                }]
+              : [],
+            error: null,
+          })),
+          update: vi.fn((payload: Record<string, unknown>) => {
+            updates.push({ table, payload });
+            return { eq: vi.fn(async () => ({ error: null })) };
+          }),
+        })),
+        storage: { from: vi.fn() },
+      };
+      const summary = await repairMediaPreviews(withAdmissionFallback(supabase) as never, {
+        batchSize: 10,
+        invalidateFeedCache: vi.fn(),
+      });
+      expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
+      return updates.filter((update) => update.table === 'generations' && update.payload.preview_status === 'failed');
+    };
+
+    // First sighting: a failed preview, nothing durable -- a provider blip
+    // must not brand the source gone.
+    const [first] = await run(0);
+    expect(first?.payload).not.toHaveProperty('source_unavailable_at');
+
+    // Second, separate run: the temporary copy is gone for good.
+    const [second] = await run(1);
+    expect(second?.payload).toMatchObject({
+      preview_status: 'failed',
+      source_unavailable_at: expect.any(String),
+    });
+  });
+
   it('fails a generation repair before Storage when its path is outside the exact owner prefix', async () => {
     const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
     const { createGenerationOutputPreview } = await import('@/lib/generation-output-preview');
@@ -421,6 +535,106 @@ describe('media preview repair retries', () => {
 
     expect(storageFrom).not.toHaveBeenCalled();
     expect(previewMocks.createPostMediaPreview).not.toHaveBeenCalled();
+  });
+
+  // A generation-backed post's public copy lives under the generation's prefix,
+  // not the post's. Refusing it left every such post without a preview or a
+  // rendition — the repair claimed the row, threw, and burned all three
+  // attempts. The generation id is read from the owning post, never the path.
+  it('repairs a generation-backed post whose media sits under its own generation prefix', async () => {
+    const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+    const download = vi.fn(async () => ({ data: new Blob(['image'], { type: 'image/png' }), error: null }));
+    const supabase = {
+      from: vi.fn((table: string) => ({
+        select: vi.fn(() => createSelectChain({
+          data: table === 'post_media'
+            ? [{
+                id: 'media-1',
+                post_id: 'post-1',
+                storage_path: 'showcase/gen-1/creation.abcdef123456.png',
+                media_kind: 'image',
+                content_type: 'image/png',
+                preview_attempt_count: 0,
+              }]
+            : table === 'posts'
+              ? [{ id: 'post-1', generation_id: 'gen-1' }]
+              : [],
+          error: null,
+        })),
+        update: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })),
+      })),
+      storage: { from: vi.fn(() => ({ download })) },
+    };
+
+    await expect(repairMediaPreviews(withAdmissionFallback(supabase) as never, {
+      batchSize: 10,
+    })).resolves.toEqual({ attempted: 1, completed: 1, failed: 0 });
+
+    expect(download).toHaveBeenCalledWith('showcase/gen-1/creation.abcdef123456.png');
+  });
+
+  it('refuses a showcase path belonging to a generation the post is not linked to', async () => {
+    const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+    const storageFrom = vi.fn();
+    const supabase = {
+      from: vi.fn((table: string) => ({
+        select: vi.fn(() => createSelectChain({
+          data: table === 'post_media'
+            ? [{
+                id: 'media-1',
+                post_id: 'post-1',
+                storage_path: 'showcase/someone-elses-generation/private.png',
+                media_kind: 'image',
+                content_type: 'image/png',
+                preview_attempt_count: 0,
+              }]
+            : table === 'posts'
+              ? [{ id: 'post-1', generation_id: 'gen-1' }]
+              : [],
+          error: null,
+        })),
+        update: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })),
+      })),
+      storage: { from: storageFrom },
+    };
+
+    await expect(repairMediaPreviews(withAdmissionFallback(supabase) as never, {
+      batchSize: 10,
+    })).resolves.toEqual({ attempted: 1, completed: 0, failed: 1 });
+
+    expect(storageFrom).not.toHaveBeenCalled();
+  });
+
+  it('refuses a showcase path when the post has no linked generation at all', async () => {
+    const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+    const storageFrom = vi.fn();
+    const supabase = {
+      from: vi.fn((table: string) => ({
+        select: vi.fn(() => createSelectChain({
+          data: table === 'post_media'
+            ? [{
+                id: 'media-1',
+                post_id: 'post-1',
+                storage_path: 'showcase/gen-1/creation.abcdef123456.png',
+                media_kind: 'image',
+                content_type: 'image/png',
+                preview_attempt_count: 0,
+              }]
+            : table === 'posts'
+              ? [{ id: 'post-1', generation_id: null }]
+              : [],
+          error: null,
+        })),
+        update: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })),
+      })),
+      storage: { from: storageFrom },
+    };
+
+    await expect(repairMediaPreviews(withAdmissionFallback(supabase) as never, {
+      batchSize: 10,
+    })).resolves.toEqual({ attempted: 1, completed: 0, failed: 1 });
+
+    expect(storageFrom).not.toHaveBeenCalled();
   });
 
   it('keeps the feed cache intact when no preview repair completes', async () => {

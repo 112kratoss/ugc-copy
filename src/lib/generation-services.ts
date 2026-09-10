@@ -1312,6 +1312,7 @@ async function createGenerationPreviewQuietly({
         : null;
     return {
       previewUrl: preview?.previewStoragePath ?? null,
+      displayUrl: preview?.displayStoragePath ?? null,
       previewThumbhash: preview?.previewThumbhash ?? null,
       previewStatus: preview ? 'ready' as const : 'failed' as const,
       previewError: preview ? null : 'Unsupported or invalid visual media.',
@@ -1320,6 +1321,7 @@ async function createGenerationPreviewQuietly({
     logBackendError('generation_preview_poster_failed', { error });
     return {
       previewUrl: null,
+      displayUrl: null,
       previewThumbhash: null,
       previewStatus: 'failed' as const,
       previewError: summarizeMediaToolError(error, 'Preview generation failed.'),
@@ -1419,6 +1421,7 @@ export async function persistGeneratedOutputList(
   const outputs: PersistedGenerationOutput[] = [];
   let primaryPreview = {
     previewUrl: null as string | null,
+    displayUrl: null as string | null,
     previewThumbhash: null as string | null,
     previewStatus: 'pending' as 'pending' | 'ready' | 'failed',
     previewError: null as string | null,
@@ -1474,6 +1477,7 @@ export async function persistGeneratedOutputList(
       if (index === 0) {
         primaryPreview = {
           previewUrl: null,
+          displayUrl: null,
           previewThumbhash: null,
           previewStatus: 'failed',
           previewError: summarizeMediaToolError(error, 'Preview generation failed.'),
@@ -1525,6 +1529,28 @@ export async function persistGeneratedOutputList(
     completedAt: completedAt ?? new Date().toISOString(),
     workflowSettings: updatePayload.workflow_settings as Record<string, unknown> | undefined,
   });
+
+  if (status === 'succeeded' && primaryPreview.displayUrl && primaryOutput) {
+    // Stamped after settlement rather than inside it, on purpose. The
+    // settlement RPC owns the single-effect credit decision and its pgTAP
+    // proof; widening its signature for a cache would put the money path
+    // under review for a resize. A display rendition has a fallback — every
+    // reader serves the source when this is null — so a lost write here costs
+    // one fewer optimisation, and the backfill closes it. Conditioned on the
+    // output so a row that has since been repaired to a different file never
+    // carries a display of one it no longer serves.
+    const { error: displayError } = await supabase
+      .from('generations')
+      .update({ display_url: primaryPreview.displayUrl })
+      .eq('id', generation.id)
+      .eq('output_url', primaryOutput);
+    if (displayError) {
+      logBackendWarning('generation_display_rendition_not_recorded', {
+        predictionId: generation.prediction_id,
+        error: displayError,
+      });
+    }
+  }
 
   return { status, outputs };
 }

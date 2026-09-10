@@ -626,7 +626,7 @@ function ProfileMediaList({
 
 /**
  * `pageTitle` unmodified, and announced as a header — the same two things the
- * other tab roots do (Showcase, Alerts).
+ * other tab roots do (Explore, Alerts).
  *
  * The old title took `sectionTitle` and then overrode `fontWeight` back to
  * `'800'`, which is exactly what every display variant sets `'400'` to avoid.

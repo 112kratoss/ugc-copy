@@ -163,7 +163,8 @@ export function parseVideoProbeOutput(output: string): VideoProbeResult {
   return { width, height, durationSeconds };
 }
 
-async function runFfmpeg(args: string[]): Promise<string> {
+async function runFfmpeg(args: string[], signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
   const ffmpegPath = getFfmpegPath();
 
   return new Promise<string>((resolve, reject) => {
@@ -171,6 +172,7 @@ async function runFfmpeg(args: string[]): Promise<string> {
       stdio: ['ignore', 'ignore', 'pipe'],
       timeout: RENDITION_TIMEOUT_MS,
       killSignal: 'SIGKILL',
+      ...(signal ? { signal } : {}),
     });
     const stderr: Buffer[] = [];
 
@@ -195,12 +197,13 @@ async function runFfmpeg(args: string[]): Promise<string> {
   });
 }
 
-export async function probeVideoFile(inputPath: string): Promise<VideoProbeResult> {
+export async function probeVideoFile(inputPath: string, signal?: AbortSignal): Promise<VideoProbeResult> {
   // `-i` with no output makes ffmpeg exit non-zero after printing stream info.
   try {
-    const output = await runFfmpeg(['-hide_banner', '-i', inputPath]);
+    const output = await runFfmpeg(['-hide_banner', '-i', inputPath], signal);
     return parseVideoProbeOutput(output);
   } catch (error) {
+    signal?.throwIfAborted();
     return parseVideoProbeOutput(error instanceof Error ? error.message : '');
   }
 }
@@ -208,12 +211,14 @@ export async function probeVideoFile(inputPath: string): Promise<VideoProbeResul
 export async function createVideoRenditionFromFile(
   inputPath: string,
   sourceBytes: number,
+  options: { signal?: AbortSignal } = {},
 ): Promise<VideoRenditionResult> {
+  options.signal?.throwIfAborted();
   const tempDir = await mkdtemp(path.join(/* turbopackIgnore: true */ tmpdir(), 'feed-rendition-'));
   const outputPath = path.join(/* turbopackIgnore: true */ tempDir, 'rendition.mp4');
 
   try {
-    await runFfmpeg(buildRenditionArgs(inputPath, outputPath));
+    await runFfmpeg(buildRenditionArgs(inputPath, outputPath), options.signal);
 
     const { size } = await stat(outputPath);
     if (size >= sourceBytes * RENDITION_MIN_SAVING_RATIO) {
@@ -223,7 +228,7 @@ export async function createVideoRenditionFromFile(
       );
     }
 
-    const probe = await probeVideoFile(outputPath);
+    const probe = await probeVideoFile(outputPath, options.signal);
     return {
       buffer: await readFile(outputPath),
       bytes: size,

@@ -101,6 +101,8 @@ export type TemplateRunStepStatus =
   | 'cancelled';
 
 export type TemplateRunStepDto = {
+  renditionUrl?: string | null;
+  previewUrl?: string | null;
   id: string;
   kind: 'generation' | 'approval';
   mediaKind: TemplateMediaKind;
@@ -114,6 +116,8 @@ export type TemplateRunStepDto = {
 };
 
 export type TemplateRunResultDto = {
+  renditionUrl?: string | null;
+  previewUrl?: string | null;
   generationId: string;
   kind: TemplateMediaKind;
   url: string;

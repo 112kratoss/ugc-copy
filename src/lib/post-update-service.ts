@@ -39,8 +39,10 @@ import { createPostMediaPreview } from '@/lib/post-media-preview';
 import { ensureDurableGenerationMedia } from '@/lib/durable-generation-media';
 import {
   createGenerationShowcaseDerivative,
+  ensureGenerationPostCoverMedia,
   normalizeGenerationShowcaseCategory,
   removeGenerationShowcaseDerivative,
+  type GenerationShowcaseCategory,
 } from '@/lib/generation-post-media';
 import { excludePurchasedProofMediaPaths } from '@/lib/purchased-proof-media';
 import {
@@ -222,6 +224,7 @@ export type PostUpdateDependencies = {
   createPostMediaPreview?: typeof createPostMediaPreview;
   listSourceToolsCatalog?: typeof listSourceToolsCatalog;
   createGenerationShowcaseDerivative?: typeof createGenerationShowcaseDerivative;
+  ensureGenerationPostCoverMedia?: typeof ensureGenerationPostCoverMedia;
   removeGenerationShowcaseDerivative?: typeof removeGenerationShowcaseDerivative;
   ensureDurableGenerationMedia?: typeof ensureDurableGenerationMedia;
 };
@@ -275,6 +278,8 @@ function resolveDependencies(dependencies: PostUpdateDependencies | undefined): 
     listSourceToolsCatalog: dependencies?.listSourceToolsCatalog ?? listSourceToolsCatalog,
     createGenerationShowcaseDerivative:
       dependencies?.createGenerationShowcaseDerivative ?? createGenerationShowcaseDerivative,
+    ensureGenerationPostCoverMedia:
+      dependencies?.ensureGenerationPostCoverMedia ?? ensureGenerationPostCoverMedia,
     removeGenerationShowcaseDerivative:
       dependencies?.removeGenerationShowcaseDerivative ?? removeGenerationShowcaseDerivative,
     ensureDurableGenerationMedia: dependencies?.ensureDurableGenerationMedia ?? ensureDurableGenerationMedia,
@@ -1429,6 +1434,12 @@ export async function updateOwnerPostForRoute({
     // generation is kept in step afterwards, its title and caption included.
     const generationUpdate: Record<string, unknown> = {};
     let removableDerivativePath: string | null = null;
+    // The derivative this route creates needs the same `post_media` cover row
+    // the publish route writes; without it the post falls back to the legacy
+    // cover, which signs the owner's private preview on every feed read. This
+    // route is not a rare path for that: going private removes the row, so
+    // publish -> private -> public through the editor lands right back there.
+    let coverMediaToRecord: { showcaseAssetPath: string; category: GenerationShowcaseCategory } | null = null;
     if (isGenerationBacked && post.generation_id) {
       let generation: OwnedGenerationExposureRow | null = null;
       try {
@@ -1463,6 +1474,7 @@ export async function updateOwnerPostForRoute({
             });
             updatePayload.showcase_asset_path = showcaseAssetPath;
             generationUpdate.showcase_asset_path = showcaseAssetPath;
+            coverMediaToRecord = { showcaseAssetPath, category: showcaseCategory };
           } catch (error) {
             logBackendError('failed_to_create_showcase_derivative_for_post_update', { error });
             return {
@@ -1598,6 +1610,26 @@ export async function updateOwnerPostForRoute({
         }
       }
       throw error;
+    }
+
+    if (post.generation_id && coverMediaToRecord) {
+      // Best-effort for the same reason as the publish route: the post is
+      // already committed, so a failure here must not report the edit as
+      // failed. The post serves the legacy way until a later exposure change.
+      try {
+        const coverMedia = await resolvedDependencies.ensureGenerationPostCoverMedia({
+          adminSupabase,
+          postId,
+          generationId: post.generation_id,
+          category: coverMediaToRecord.category,
+          showcaseAssetPath: coverMediaToRecord.showcaseAssetPath,
+        });
+        if (coverMedia.error) {
+          logBackendError('failed_to_record_generation_post_cover_media', { error: coverMedia.error });
+        }
+      } catch (coverMediaError) {
+        logBackendError('failed_to_record_generation_post_cover_media', { error: coverMediaError });
+      }
     }
 
     if (post.generation_id && Object.keys(generationUpdate).length > 0) {

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { hasRepairablePostMediaTeasers, repairPostMediaTeasers } from '@/lib/post-media-teaser-repair';
+import { hasPendingGenerationPlaybackRendition, repairGenerationPlaybackRendition } from '@/lib/generation-playback-rendition';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendError } from '@/lib/backend-logger';
@@ -189,15 +190,50 @@ export async function hasRepairableMediaPreviews(supabase: SupabaseClient): Prom
     if (isMissingRenditionColumnError(renditionResult.error)) return false;
     throw renditionResult.error;
   }
-  return hasRows(renditionResult.data) || await hasRepairablePostMediaTeasers(supabase);
+  return hasRows(renditionResult.data) || await hasRepairablePostMediaTeasers(supabase)
+    || await hasPendingGenerationPlaybackRendition(supabase);
 }
 
-function previewFailure(error: unknown, attemptCount: number) {
+function previewFailure(error: unknown, reservedAttempt: number) {
   return {
     preview_status: 'failed',
-    preview_attempt_count: Math.min(MAX_PREVIEW_ATTEMPTS, attemptCount + 1),
+    preview_attempt_count: Math.min(MAX_PREVIEW_ATTEMPTS, reservedAttempt),
     preview_error: summarizeMediaToolError(error, 'Preview generation failed.'),
   };
+}
+
+/**
+ * Which attempt this run occupies, and how many ran before it.
+ *
+ * The claim RPCs reserve the attempt when they lease a row (migration
+ * 20260909060000), so what they return is already this run's ordinal — a
+ * worker that adds one to it would double count and trip the 0..3 CHECK. The
+ * fallback path, used when the claim RPC is absent, gets a plain row read
+ * instead and has to reserve the attempt itself.
+ *
+ * `Math.max(claimed, 1)` covers the moments during a release when a leased row
+ * was claimed by the previous definition: undercounting by one costs an extra
+ * retry, which is the safe direction.
+ */
+function reserveAttempt(claimed: number | null | undefined, leased: boolean) {
+  const count = claimed ?? 0;
+  const reservedAttempt = leased ? Math.max(count, 1) : count + 1;
+  return { reservedAttempt, priorAttempts: reservedAttempt - 1 };
+}
+
+/**
+ * A provider's temporary copy that answers 404/410 on a second, separate run
+ * is gone for good: those hosts expire outputs that were never imported, and
+ * no later attempt can bring the bytes back. Only `downloadMedia` produces
+ * this message, and only for external sources, so a missing Storage object
+ * never trips it. The marker is what lets the owner API and the clients show
+ * an explicit unavailable state (20260908061500 migration) instead of a
+ * retry that can never succeed.
+ */
+function isGoneExternalSourceError(error: unknown, attemptCount: number): boolean {
+  return attemptCount >= 1
+    && error instanceof Error
+    && /^External media download failed \((404|410)\)\.$/.test(error.message);
 }
 
 const GENERATION_MEDIA_BUCKETS = [
@@ -237,12 +273,28 @@ async function resolveGenerationRepairSource(
   return { outputUrl: current.output_url, ownerUserId: current.user_id };
 }
 
-function getCanonicalPostMediaPath(storagePath: string, postId: string): string | null {
-  if (!postId) return null;
+function getCanonicalPostMediaPath(
+  storagePath: string,
+  scope: { postId: string; generationId: string | null },
+): string | null {
+  if (!scope.postId) return null;
   const canonicalPath = parseCanonicalStorageObjectPath(storagePath, { minimumSegments: 3 });
   if (!canonicalPath) return null;
-  const [namespace, scopedPostId] = canonicalPath.split('/');
-  return namespace === 'posts' && scopedPostId === postId ? canonicalPath : null;
+  const [namespace, scopedId] = canonicalPath.split('/');
+  // Media uploaded to a post lives under the post's own prefix.
+  if (namespace === 'posts') {
+    return scopedId === scope.postId ? canonicalPath : null;
+  }
+  // A generation-backed post serves the public copy of its creation, which the
+  // publish and post-update routes write under the *generation's* prefix, not
+  // the post's. Those rows are as much this post's media as an upload is, and
+  // refusing them left them without a preview or a rendition. The generation
+  // id is read from the owning post row, never from the path, so the scope
+  // stays server-derived exactly as it is for the `posts` namespace.
+  if (namespace === 'showcase') {
+    return scope.generationId && scopedId === scope.generationId ? canonicalPath : null;
+  }
+  return null;
 }
 
 async function resolvePostMediaRepairPath(
@@ -274,7 +326,22 @@ async function resolvePostMediaRepairPath(
     storagePath = current.storage_path;
   }
 
-  const canonicalPath = getCanonicalPostMediaPath(storagePath, postId);
+  // Only a path under the showcase namespace can legitimately sit outside the
+  // post's own prefix, so this lookup is paid by generation-backed rows alone.
+  let generationId: string | null = null;
+  if (parseCanonicalStorageObjectPath(storagePath, { minimumSegments: 3 })?.startsWith('showcase/')) {
+    const { data: linkedPost } = await supabase
+      .from('posts')
+      .select('generation_id')
+      .eq('id', postId)
+      .maybeSingle();
+    const linkedGenerationId = (linkedPost as { generation_id?: unknown } | null)?.generation_id;
+    generationId = typeof linkedGenerationId === 'string' && linkedGenerationId.length > 0
+      ? linkedGenerationId
+      : null;
+  }
+
+  const canonicalPath = getCanonicalPostMediaPath(storagePath, { postId, generationId });
   if (!canonicalPath) throw new Error('Post media repair source is outside the owning post prefix.');
   return canonicalPath;
 }
@@ -314,10 +381,15 @@ async function repairGeneration(
   row: GenerationRepairRow,
   leaseOwner?: string,
 ): Promise<boolean> {
-  const attempts = row.preview_attempt_count ?? 0;
+  const { reservedAttempt, priorAttempts } = reserveAttempt(row.preview_attempt_count, Boolean(leaseOwner));
   try {
     if (!leaseOwner) {
-      await supabase.from('generations').update({ preview_status: 'processing' }).eq('id', row.id);
+      // Persisted with the status: without a lease this is the only moment the
+      // attempt can be reserved before the work starts.
+      await supabase.from('generations').update({
+        preview_status: 'processing',
+        preview_attempt_count: reservedAttempt,
+      }).eq('id', row.id);
     }
     const source = await resolveGenerationRepairSource(supabase, row);
     const body = await downloadMedia(supabase, source.outputUrl, source.ownerUserId);
@@ -332,6 +404,10 @@ async function repairGeneration(
 
     let resultQuery = supabase.from('generations').update({
       preview_url: preview.previewStoragePath,
+      // Null when no display rendition was worth storing (or the output is a
+      // video). Written either way so a repair that replaces the media cannot
+      // leave the old display behind.
+      display_url: preview.displayStoragePath ?? null,
       preview_thumbhash: preview.previewThumbhash,
       preview_status: 'ready',
       // The showcase grid sizes a card from this before the image arrives; see
@@ -339,7 +415,7 @@ async function repairGeneration(
       // the source output's.
       preview_width: preview.previewWidth,
       preview_height: preview.previewHeight,
-      preview_attempt_count: attempts + 1,
+      preview_attempt_count: reservedAttempt,
       preview_error: null,
       preview_generated_at: new Date().toISOString(),
       preview_locked_at: null,
@@ -351,7 +427,12 @@ async function repairGeneration(
     return true;
   } catch (error) {
     const failure = supabase.from('generations').update({
-      ...previewFailure(error, attempts),
+      ...previewFailure(error, reservedAttempt),
+      // Counts runs that already finished, so the marker still needs a second,
+      // separate run rather than firing on the first 404.
+      ...(isGoneExternalSourceError(error, priorAttempts)
+        ? { source_unavailable_at: new Date().toISOString() }
+        : {}),
       preview_locked_at: null,
       preview_locked_by: null,
     }).eq('id', row.id);
@@ -366,10 +447,13 @@ async function repairPostMedia(
   row: PostMediaRepairRow,
   leaseOwner?: string,
 ): Promise<boolean> {
-  const attempts = row.preview_attempt_count ?? 0;
+  const { reservedAttempt } = reserveAttempt(row.preview_attempt_count, Boolean(leaseOwner));
   try {
     if (!leaseOwner) {
-      await supabase.from('post_media').update({ preview_status: 'processing' }).eq('id', row.id);
+      await supabase.from('post_media').update({
+        preview_status: 'processing',
+        preview_attempt_count: reservedAttempt,
+      }).eq('id', row.id);
     }
     const storagePath = await resolvePostMediaRepairPath(supabase, row);
     const download = await supabase.storage.from(SHOWCASE_MEDIA_BUCKET).download(storagePath);
@@ -389,8 +473,12 @@ async function repairPostMedia(
     let resultQuery = supabase.from('post_media').update({
       preview_storage_path: preview.previewStoragePath,
       preview_thumbhash: preview.previewThumbhash,
+      // Null is a normal answer: no display rendition was worth storing, and
+      // readers fall back to the source. Written either way so a repair that
+      // replaces the media cannot leave the old display behind.
+      display_storage_path: preview.displayStoragePath ?? null,
       preview_status: 'ready',
-      preview_attempt_count: attempts + 1,
+      preview_attempt_count: reservedAttempt,
       preview_error: null,
       preview_generated_at: new Date().toISOString(),
       width: preview.width,
@@ -404,7 +492,7 @@ async function repairPostMedia(
     return true;
   } catch (error) {
     const failure = supabase.from('post_media').update({
-      ...previewFailure(error, attempts),
+      ...previewFailure(error, reservedAttempt),
       preview_locked_at: null,
       preview_locked_by: null,
     }).eq('id', row.id);
@@ -419,7 +507,7 @@ async function repairPostMediaRendition(
   row: PostMediaRenditionRepairRow,
   leaseOwner?: string,
 ): Promise<boolean> {
-  const attempts = row.rendition_attempt_count ?? 0;
+  const { reservedAttempt } = reserveAttempt(row.rendition_attempt_count, Boolean(leaseOwner));
   // Field presence, not value: a pre-teaser claim RPC or database returns rows
   // without the field at all, and then no update may reference the columns.
   const teaserColumnsPresent = 'teaser_storage_path' in row;
@@ -443,7 +531,10 @@ async function repairPostMediaRendition(
   });
   try {
     if (!leaseOwner) {
-      await supabase.from('post_media').update({ rendition_status: 'processing' }).eq('id', row.id);
+      await supabase.from('post_media').update({
+        rendition_status: 'processing',
+        rendition_attempt_count: reservedAttempt,
+      }).eq('id', row.id);
     }
     const storagePath = await resolvePostMediaRepairPath(supabase, row);
     const download = await supabase.storage.from(SHOWCASE_MEDIA_BUCKET).download(storagePath);
@@ -474,7 +565,7 @@ async function repairPostMediaRendition(
     if (rendition.status === 'skipped') {
       let skipQuery = supabase.from('post_media').update({
         rendition_status: 'skipped',
-        rendition_attempt_count: attempts + 1,
+        rendition_attempt_count: reservedAttempt,
         rendition_error: `Rendition skipped: ${rendition.reason}.`,
         ...midFlightSpread(),
         rendition_locked_at: null,
@@ -489,7 +580,7 @@ async function repairPostMediaRendition(
     let resultQuery = supabase.from('post_media').update({
       rendition_storage_path: rendition.renditionStoragePath,
       rendition_status: 'ready',
-      rendition_attempt_count: attempts + 1,
+      rendition_attempt_count: reservedAttempt,
       rendition_error: null,
       rendition_generated_at: new Date().toISOString(),
       rendition_bytes: rendition.renditionBytes,
@@ -509,7 +600,7 @@ async function repairPostMediaRendition(
   } catch (error) {
     const failure = supabase.from('post_media').update({
       rendition_status: 'failed',
-      rendition_attempt_count: Math.min(MAX_RENDITION_ATTEMPTS, attempts + 1),
+      rendition_attempt_count: Math.min(MAX_RENDITION_ATTEMPTS, reservedAttempt),
       rendition_error: summarizeMediaToolError(error, 'Rendition generation failed.'),
       // The whole point of teaser-first: a timeout here must not lose the
       // teaser that already uploaded, nor the probed duration.
@@ -888,6 +979,7 @@ export async function repairMediaPreviews(
   } = {}
 ): Promise<RepairSummary> {
   const batchSize = Math.max(1, Math.min(options.batchSize ?? 25, 500));
+  const startedAt = Date.now();
   const lockedBy = options.lockedBy ?? `media-preview:${randomUUID()}`;
   const [generations, postMedia] = await Promise.all([
     claimGenerationPreviewRows(supabase, batchSize, `${lockedBy}:generation`),
@@ -935,8 +1027,14 @@ export async function repairMediaPreviews(
   const teasers = renditions.attempted === 0
     ? await repairPostMediaTeasers(supabase)
     : { attempted: 0, completed: 0, failed: 0 };
-  const completed = results.filter(Boolean).length + templatePosters.completed + renditions.completed + teasers.completed;
-  const attempted = results.length + templatePosters.attempted + renditions.attempted + teasers.attempted;
+  // A private encode gets an otherwise idle invocation, never the remainder
+  // of a busy preview/rendition pass. Leave at least 270s of platform headroom.
+  const privatePlayback = results.length + templatePosters.attempted + renditions.attempted + teasers.attempted === 0
+    && Date.now() - startedAt < 30_000
+    ? await repairGenerationPlaybackRendition(supabase)
+    : { attempted: 0, completed: 0, failed: 0 };
+  const completed = results.filter(Boolean).length + templatePosters.completed + renditions.completed + teasers.completed + privatePlayback.completed;
+  const attempted = results.length + templatePosters.attempted + renditions.attempted + teasers.attempted + privatePlayback.attempted;
 
   if (completed > 0) {
     (options.invalidateFeedCache ?? invalidateShowcaseFeedCache)();

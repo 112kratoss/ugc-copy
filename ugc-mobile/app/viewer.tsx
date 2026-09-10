@@ -3,7 +3,7 @@ import * as Clipboard from 'expo-clipboard';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useVideoPlayer } from 'expo-video';
+import { useVideoPlayer, type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
 import { Copy, FileText, Globe, Heart, ImageOff, Images, Lock, LockKeyhole, MessageCircle, MoreHorizontal, Play, Repeat2, Volume2, VolumeX, Wand2 } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { cloneElement, createContext, useContext, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ReactElement } from 'react';
@@ -13,6 +13,8 @@ import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'reac
 
 import { DoubleTapPressable } from '@/components/double-tap-pressable';
 import { useMediaSource } from '@/lib/use-media-source';
+import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
+import { restoreVideoPlayback } from '@/lib/video-playback-continuity';
 import { createViewerPlaybackHandoff } from '@/lib/viewer-playback-handoff';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { PostDetailsPage } from '@/components/post-details-page';
@@ -88,7 +90,11 @@ import {
   flushShowcaseFeedEvents,
   isBatchedShowcaseFeedEventType,
 } from '@/lib/feed-event-queue';
-import { getShowcasePlaybackUrl } from '@/lib/showcase-media';
+import {
+  getShowcasePlaybackUrl,
+  getShowcaseViewerImageCacheKey,
+  getShowcaseViewerImageUrl,
+} from '@/lib/showcase-media';
 import {
   createShowcaseMediaProgressTracker,
   reportShowcaseMediaProgress,
@@ -105,6 +111,8 @@ import {
 } from '@/lib/post-lifecycle';
 import type { PostLifecycleVisibility } from '@/lib/post-lifecycle-policy';
 import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
+import { useViewerPlaybackGate } from '@/lib/use-viewer-playback-gate';
+import { useStableSignedUrl } from '@/lib/use-stable-signed-url';
 import { verticalHitSlop } from '@/lib/hit-target';
 import { changeViewerPage, isDetailsPageCovering, resolveViewerPosition, settleViewerItem, slidePageKey, type ViewerPosition } from '@/lib/viewer-position';
 
@@ -756,10 +764,10 @@ export default function ImmersivePreviewViewerScreen() {
       .then(() => {
         void AccessibilityInfo.announceForAccessibility(eventType === 'hide_creator'
           ? user
-            ? `${item.creatorLabel} hidden from your Showcase.`
+            ? `${item.creatorLabel} hidden from your feed.`
             : `${item.creatorLabel} hidden for this visit.`
           : user
-            ? 'Post removed. Your Showcase will adapt.'
+            ? 'Post removed. Your feed will adapt.'
             : 'Post removed for this visit.');
         if (!remainingItems.length) {
           requestAnimationFrame(leaveViewer);
@@ -773,11 +781,11 @@ export default function ImmersivePreviewViewerScreen() {
         });
         setActiveIndex(previousActiveIndex);
         showMessageDialog({
-          title: 'Couldn’t update your Showcase',
+          title: 'Couldn’t update your feed',
           message: 'The post was restored. Check your connection and try again.',
         });
         void AccessibilityInfo.announceForAccessibility(
-          'Couldn’t update your Showcase. The post was restored.'
+          'Couldn’t update your feed. The post was restored.'
         );
       });
   };
@@ -1999,9 +2007,10 @@ function ImmersiveMedia({
       >
         <FeedMediaFrame
           kind="image"
-          url={mediaItem.url}
+          url={getShowcaseViewerImageUrl(mediaItem)}
           backdropUrl={mediaItem.previewUrl}
-          cacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
+          backdropCacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
+          cacheKey={getShowcaseViewerImageCacheKey(mediaItem)}
           thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
           transition={120}
           recyclingKey={`viewer:${mediaItem.id}`}
@@ -2024,15 +2033,7 @@ function ImmersiveMedia({
   );
 }
 
-function ActiveVideo({
-  postId,
-  active,
-  slideActive,
-  url,
-  onDoublePress,
-  width,
-  height,
-}: {
+type ActiveVideoProps = {
   postId: string;
   active: boolean;
   slideActive: boolean;
@@ -2040,12 +2041,51 @@ function ActiveVideo({
   onDoublePress: (event: GestureResponderEvent) => void;
   width: number;
   height: number;
-}) {
+};
+
+function ActiveVideo(props: ActiveVideoProps) {
+  const [attempt, setAttempt] = useState(0);
+  // play() cannot revive a failed native source. A new attempt releases the
+  // failed player and resolves the URL again, including an expired signature.
+  return (
+    <ActiveVideoAttempt
+      {...props}
+      // A refreshed signature is still the same media. Keep this component's
+      // previous-player ref so URL renewal preserves pause and position.
+      key={attempt}
+      onRetry={() => setAttempt(value => value + 1)}
+    />
+  );
+}
+
+function ActiveVideoAttempt({
+  postId,
+  active,
+  slideActive,
+  url,
+  onDoublePress,
+  width,
+  height,
+  onRetry,
+}: ActiveVideoProps & { onRetry: () => void }) {
   const [hasFrame, setHasFrame] = useState(false);
   const [hasError, setHasError] = useState(false);
   const reducedMotion = useReducedMotion();
   const audioMuted = useViewerAudioMuted();
-  const { source, requestKey } = useMediaSource(url);
+  // A refetch re-signing the same object must not restart the download.
+  const playbackUrl = useStableSignedUrl(url);
+  const { source, requestKey } = useMediaSource(playbackUrl);
+  // Optimistic: playback is requested below, and the native player reports
+  // `playing` only once it is actually rendering — often a frame or two after
+  // the first frame has already been drawn. Reading `player.playing` here
+  // would flash the paused badge over that first frame; `playingChange` still
+  // corrects this the moment the player really is paused. A gate revoke and a
+  // player replacement are the two pauses the native player never reports for
+  // a source that has not started, so both update this state directly.
+  const [isPlaying, setIsPlaying] = useState(active && !reducedMotion);
+  const previousPlayer = useRef<VideoPlayer | null>(null);
+  const playbackAllowed = useViewerPlaybackGate(previousPlayer, () => setIsPlaying(false));
+  const playbackRequested = useRef(active);
   const player = useVideoPlayer({ ...source, useCaching: true }, (instance) => {
     instance.loop = true;
     instance.muted = !active || isViewerAudioMuted();
@@ -2059,7 +2099,15 @@ function ActiveVideo({
     // takes it the moment anything plays — muted previews included — while its
     // Android default is already `auto`. Setting it makes the platforms agree.
     instance.audioMixingMode = 'auto';
+    // A neighbour is prepared paused; only the active slide may resume, and
+    // a replaced player on the active slide carries the previous decision over.
+    playbackRequested.current = restoreVideoPlayback(instance, previousPlayer.current, active && !reducedMotion,
+      active && playbackAllowed.current && !reducedMotion && (!AppState.currentState || AppState.currentState === 'active'));
   });
+  previousPlayer.current = player;
+  const [status, setStatus] = useState<VideoPlayerStatus>(player.status);
+  const timedOut = useVideoLoadDeadline(player, status);
+  const playbackFailed = hasError || timedOut;
 
   useEffect(() => {
     player.muted = !active || audioMuted;
@@ -2089,38 +2137,70 @@ function ActiveVideo({
     player.currentTime = 0;
   }, [player, slideActive]);
 
-  // Optimistic: playback is requested below, and the native player reports
-  // `playing` only once it is actually rendering — often a frame or two after
-  // the first frame has already been drawn. Reading `player.playing` here
-  // would flash the paused badge over that first frame; `playingChange` still
-  // corrects this the moment the player really is paused.
-  const [isPlaying, setIsPlaying] = useState(active && !reducedMotion);
-
+  // Reduce Motion turning on while the slide is active stops the video and
+  // keeps it stopped until the reader presses Play.
   useEffect(() => {
-    // Preparing a neighbour decodes its first frame without playing audio or
-    // advancing its timeline. Activation resumes that same player and surface.
-    setIsPlaying(active && !reducedMotion);
-    if (!active || reducedMotion) player.pause();
-    else player.play();
-  }, [active, player, reducedMotion]);
+    if (!reducedMotion) return;
+    player.pause();
+    setIsPlaying(false);
+  }, [player, reducedMotion]);
+
+  // Preparing a neighbour decodes its first frame without playing audio or
+  // advancing its timeline. Activation resumes that same player and surface,
+  // and counts as a fresh intent: it re-arms the background gate that may have
+  // been revoked while this player waited as a neighbour, the way a fresh
+  // mount would. A player replaced on the same slide (a re-signed source)
+  // already carried the previous pause/position decision over in its setup
+  // callback; a replaced player that stays paused reports no playingChange,
+  // so the badge follows that decision instead of the optimistic state.
+  const wasActiveRef = useRef(false);
+  useEffect(() => {
+    const becameActive = active && !wasActiveRef.current;
+    wasActiveRef.current = active;
+    if (!active) {
+      setIsPlaying(false);
+      player.pause();
+      return;
+    }
+    if (!becameActive) {
+      setIsPlaying(playbackRequested.current);
+      return;
+    }
+    playbackAllowed.current = !AppState.currentState || AppState.currentState === 'active';
+    const play = playbackAllowed.current && !reducedMotion;
+    setIsPlaying(play);
+    if (play) player.play();
+  }, [active, player]);
 
   useEffect(() => {
     setHasFrame(false);
     setHasError(false);
-  }, [player, url, requestKey]);
+  }, [player, playbackUrl, requestKey]);
 
   useEffect(() => {
     const subscription = player.addListener('playingChange', (event) => {
+      // The gate polices the active slide only: the reel's scroll handoff
+      // starts a neighbour before its active prop flips, and activation
+      // re-arms a gate that neighbour may still hold from a background trip.
+      if (event.isPlaying && active && !playbackAllowed.current) {
+        player.pause();
+        setIsPlaying(false);
+        return;
+      }
       setIsPlaying(event.isPlaying);
     });
     return () => {
       subscription.remove();
     };
-  }, [player]);
+  }, [active, playbackAllowed, player]);
 
   useEffect(() => {
+    // A cached/native failure can arrive before this effect subscribes.
+    setHasError(player.status === 'error');
+    setStatus(player.status);
     const subscription = player.addListener('statusChange', (event) => {
       setHasError(event.status === 'error');
+      setStatus(event.status);
     });
     return () => {
       subscription.remove();
@@ -2142,8 +2222,11 @@ function ActiveVideo({
   const togglePlayback = () => {
     if (!active) return;
     if (player.playing) {
+      playbackAllowed.current = false;
       player.pause();
     } else {
+      playbackAllowed.current = !AppState.currentState || AppState.currentState === 'active';
+      if (!playbackAllowed.current) return;
       player.play();
     }
   };
@@ -2170,8 +2253,23 @@ function ActiveVideo({
           }}
           style={{ width, height }}
         />
-        {active && !isPlaying && hasFrame && !hasError ? <ViewerPlayBadge /> : null}
+        {active && !isPlaying && hasFrame && !playbackFailed ? <ViewerPlayBadge /> : null}
       </DoubleTapPressable>
+      {!playbackFailed && (status === 'loading' || status === 'idle') ? (
+        <View pointerEvents="none" style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
+          <ActivityIndicator accessibilityLabel="Loading video" color={appTheme.colors.primary} />
+        </View>
+      ) : null}
+      {playbackFailed ? (
+        <View style={{ position: 'absolute', left: 32, right: 80, alignItems: 'center' }}>
+          <View style={{ backgroundColor: appTheme.colors.panel, padding: 20, borderRadius: 20, gap: 12 }}>
+            <Text accessibilityRole="alert" style={{ color: appTheme.colors.text, fontSize: 16, textAlign: 'center' }}>
+              Video couldn’t load
+            </Text>
+            <SecondaryButton label="Retry video" onPress={onRetry} />
+          </View>
+        </View>
+      ) : null}
     </View>
   );
 }

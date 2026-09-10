@@ -251,6 +251,8 @@ export interface GenerationListItem {
   linked_post_visibility?: string | null;
   linked_post_archived_at?: string | null;
   archived_at?: string | null;
+  /** Set when the output's only source is gone; the API withholds every address. */
+  source_unavailable_at?: string | null;
 }
 
 export interface GenerationListResponse {
@@ -375,6 +377,8 @@ export interface TemplateRunInput {
 }
 
 export interface TemplateRunStep {
+  renditionUrl?: string | null;
+  previewUrl?: string | null;
   id: string;
   kind: 'generation' | 'approval';
   mediaKind: 'image' | 'video';
@@ -388,6 +392,8 @@ export interface TemplateRunStep {
 }
 
 export interface TemplateRunResult {
+  renditionUrl?: string | null;
+  previewUrl?: string | null;
   /** The canonical generation selected by the backend as this run's result.
    * It is intentionally nullable for legacy runs and must never be inferred
    * from a workflow step id. */
@@ -694,7 +700,16 @@ export interface ShowcaseMediaItem {
   id: string;
   mediaKey?: string;
   url: string;
+  /**
+   * A 1440px WebP for full-screen viewing, between the 720px preview and the
+   * source. Absent or null when one was not worth storing, in which case the
+   * viewer falls back to `url`. The original is still what a download or a
+   * pinch-zoom should reach for.
+   */
+  displayUrl?: string | null;
   renditionUrl?: string | null;
+  /** Present when the media's only source is gone; render an explicit unavailable state. */
+  sourceUnavailableAt?: string | null;
   teaserUrl?: string | null;
   feedStreamUrl?: string | null;
   previewUrl?: string | null;

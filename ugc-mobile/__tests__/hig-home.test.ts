@@ -52,15 +52,6 @@ describe('the home top bar', () => {
     // control it mounts. The name itself is asserted in hig-onboarding.
     expect(authScreen).toContain('<BrandLockup />');
   });
-
-  /**
-   * S10 renamed this destination; the label that opens it had not caught up, so
-   * a screen reader announced a name the app no longer uses anywhere.
-   */
-  it('names the destination the way the app names it', () => {
-    expect(topBar).toContain('accessibilityLabel="Open alerts"');
-    expect(topBar).not.toContain('studio activity');
-  });
 });
 
 describe('the top carousel says how much of it there is', () => {

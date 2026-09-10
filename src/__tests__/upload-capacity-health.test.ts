@@ -220,14 +220,31 @@ describe('upload reclaim backlog SLO (incident #78)', () => {
     expect(report.issues).toEqual([]);
   });
 
-  it('still degrades when eligible work really has gone two days unreclaimed', async () => {
+  it('only warns when eligible work has gone two days unreclaimed', async () => {
+    const { client } = reclaimGatedClient([
+      { ...INCIDENT_78, consumed: true },
+    ]);
+
+    // 2026-09-06: one row that outlived a single daily sweep took the whole
+    // watchdog to 503 at 48 hours; a warning leaves the next sweep to clear it.
+    const report = await collectUploadCapacityHealth(
+      client as never,
+      new Date('2026-08-27T07:00:00.000Z'),
+      ENABLED_RECLAIM_POLICY,
+    );
+
+    expect(report.status).toBe('warning');
+    expect(report.issues.map((issue) => [issue.severity, issue.code])).toEqual([['warning', 'UPLOAD_RECLAIM_BACKLOG']]);
+  });
+
+  it('still degrades when eligible work really has gone four days unreclaimed', async () => {
     const { client } = reclaimGatedClient([
       { ...INCIDENT_78, consumed: true },
     ]);
 
     const report = await collectUploadCapacityHealth(
       client as never,
-      new Date('2026-08-27T07:00:00.000Z'),
+      new Date('2026-08-29T07:00:00.000Z'),
       ENABLED_RECLAIM_POLICY,
     );
 

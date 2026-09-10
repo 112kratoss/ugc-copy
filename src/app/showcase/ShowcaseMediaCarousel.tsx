@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CircleAlert, ChevronLeft, ChevronRight, Images, Maximize2, Play, RotateCcw } from 'lucide-react';
 
+import { useInlineMediaPlayback } from '@/app/components/useInlineMediaPlayback';
 import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
 import { useMediaLoadingPreferences } from '@/app/components/useMediaLoadingPreferences';
 import { resolvePlaybackUrl } from '@/lib/media-descriptor';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 import type { ShowcaseMediaItem } from '@/lib/showcase';
+import UnavailableMediaNote from '@/app/components/UnavailableMediaNote';
 
 interface ShowcaseMediaCarouselProps {
   mediaItems: ShowcaseMediaItem[];
@@ -84,6 +86,7 @@ export default function ShowcaseMediaCarousel({
   const carouselRef = useRef<HTMLDivElement | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const activeVideoRef = useRef<HTMLVideoElement | null>(null);
+  const attachVideo = useInlineMediaPlayback(activeVideoRef);
   const lifecycleStatusRef = useRef<Map<string, 'ready' | 'error'>>(new Map());
   const [failedLoadKeys, setFailedLoadKeys] = useState<Set<string>>(new Set());
   const [loadAttempts, setLoadAttempts] = useState<Record<string, number>>({});
@@ -432,10 +435,13 @@ export default function ShowcaseMediaCarousel({
         }}
       >
         <div className="absolute inset-0 z-[1] h-full w-full">
-          {renderedActiveItem.mediaKind === 'video' ? (
+          {renderedActiveItem.sourceUnavailableAt ? (
+            // The only source is gone: no element, no error overlay, no retry.
+            <UnavailableMediaNote className="h-full w-full" />
+          ) : renderedActiveItem.mediaKind === 'video' ? (
             <>
               <video
-                ref={activeVideoRef}
+                ref={attachVideo}
                 key={activeLoadKey}
                 src={shouldAttachVideo ? activePlaybackUrl : undefined}
                 poster={shouldLoadPoster ? posterUrl ?? undefined : undefined}

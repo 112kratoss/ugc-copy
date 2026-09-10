@@ -11,8 +11,9 @@ import {
 } from '@/lib/generation-input-media';
 import { buildGenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { classifyVisualMedia } from '@/lib/media-contract';
-import { buildVisualMediaDescriptor, type MediaPreviewStatus } from '@/lib/media-descriptor';
+import { buildVisualMediaDescriptor, type MediaPreviewStatus, type VisualMediaDescriptor } from '@/lib/media-descriptor';
 import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
+import { buildMediaProxyUrl } from '@/lib/media-urls';
 import { resolveOwnedStoredMediaUrlMap } from '@/lib/owned-media-url-batch';
 import { toUsablePreviewSize } from '@/lib/preview-dimensions';
 
@@ -23,10 +24,15 @@ type GenerationRow = {
   user_id?: string;
   output_url: string | null;
   preview_url?: string | null;
+  /** Storage path of the 1440px display rendition, beside the preview; null when none was stored. */
+  display_url?: string | null;
   preview_thumbhash?: string | null;
   preview_status?: MediaPreviewStatus;
   preview_width?: number | null;
   preview_height?: number | null;
+  playback_rendition_path?: string | null;
+  playback_rendition_source?: string | null;
+  playback_rendition_status?: string;
   creation_mode?: 'motion' | null;
   showcase_asset_path?: string | null;
   status: string;
@@ -39,6 +45,8 @@ type GenerationRow = {
   template_run_id?: string | null;
   template_run_step_id?: string | null;
   studio_visible?: boolean;
+  /** Set when the output's only source is known to be gone; see the 20260908061500 migration. */
+  source_unavailable_at?: string | null;
 };
 
 type TemplateRunStudioRow = {
@@ -92,6 +100,11 @@ export function projectGenerationForStudio(
   delete projected.user_id;
   delete projected.preview_width;
   delete projected.preview_height;
+  // A storage key, not an address; the signed form travels on `media.displayUrl`.
+  delete projected.display_url;
+  delete projected.playback_rendition_path;
+  delete projected.playback_rendition_source;
+  delete projected.playback_rendition_status;
   if (isTemplateResult) {
     delete projected.prompt;
     projected.model = 'template-workflow';
@@ -184,6 +197,46 @@ function resolveGenerationPreviewUrl(
   return null;
 }
 
+/**
+ * The 1440px display rendition, signed under the owner prefix exactly like the
+ * preview. Null when none was stored, and the viewer then opens `url`, which
+ * is what it did before the column existed.
+ */
+function resolveGenerationDisplayUrl(
+  generation: GenerationRow,
+  resolvedMediaUrls: Map<string, string | null>,
+): string | null {
+  const displaySource = generation.display_url || null;
+  return displaySource ? resolvedMediaUrls.get(displaySource) ?? null : null;
+}
+
+/**
+ * The descriptor is shared with published post media, which attaches its
+ * display address the same way rather than widening the descriptor for one
+ * consumer. Mobile reads `displayUrl || url` for image slides.
+ */
+function withDisplayUrl(media: VisualMediaDescriptor, displayUrl: string | null) {
+  return { ...media, displayUrl };
+}
+
+/**
+ * A ready private rendition is exposed through the authenticated media route
+ * rather than a signed Storage URL. The route redirects to a short signature
+ * on every request, so bytes still come from Storage, but the URL the client
+ * caches by never changes between list fetches: a reopen is a cache hit and a
+ * refetch does not replace a playing source. Originals keep their signed URLs
+ * for downloads and remixes.
+ */
+function readyGenerationPlaybackProxyUrl(generation: GenerationRow): string | null {
+  const path = generation.playback_rendition_path;
+  if (!path || !generation.user_id || generation.playback_rendition_status !== 'ready'
+    || generation.playback_rendition_source !== generation.output_url) return null;
+  const location = getUserOwnedStoredMediaLocation(path, generation.user_id, { allowedBuckets: ['generated_videos'] });
+  if (!location?.filePath.startsWith(`${generation.user_id}/playback/${generation.id}/`)) return null;
+  // `allowedBuckets` above admits only this bucket, so the location's bucket is it.
+  return buildMediaProxyUrl('generated_videos', location.filePath);
+}
+
 function collectOwnerMediaUrlCandidates(
   generations: GenerationRow[],
   summaryOnly: boolean,
@@ -197,6 +250,10 @@ function collectOwnerMediaUrlCandidates(
 
     if (generation.preview_url) {
       candidates.add(generation.preview_url);
+    }
+
+    if (generation.display_url) {
+      candidates.add(generation.display_url);
     }
 
     if (!summaryOnly) {
@@ -295,7 +352,7 @@ async function fetchOwnerGenerations({
   const baseColumns = `id, user_id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, workflow_settings, archived_at, ${projectionColumns}`;
   const columns = statusOnly
     ? statusColumns
-    : `${baseColumns}, preview_url, preview_thumbhash, preview_status, preview_width, preview_height, creation_mode`;
+    : `${baseColumns}, preview_url, display_url, preview_thumbhash, preview_status, preview_width, preview_height, creation_mode, playback_rendition_path, playback_rendition_source, playback_rendition_status, source_unavailable_at`;
 
   // `in` over the linked set, not `eq` on the caller. Anything made before the
   // person registered still carries its guest UUID — the financial tables
@@ -552,10 +609,11 @@ export async function listOwnerGenerationsForRoute({
       ? new Date(Date.now() + 55 * 60 * 1000).toISOString()
       : null;
     const media = outputUrl && classification?.kind
-      ? buildVisualMediaDescriptor({
+      ? withDisplayUrl(buildVisualMediaDescriptor({
         id: generation.id,
         kind: classification.kind,
         url: outputUrl,
+        renditionUrl: readyGenerationPlaybackProxyUrl(generation),
         storageKey: generation.showcase_asset_path || generation.output_url || generation.id,
         previewUrl,
         previewStorageKey: previewSource,
@@ -567,22 +625,32 @@ export async function listOwnerGenerationsForRoute({
         durationSeconds: typeof (generation as GenerationRow & { duration?: unknown }).duration === 'number'
           ? (generation as GenerationRow & { duration: number }).duration
           : null,
-      })
+      }), resolveGenerationDisplayUrl(generation, resolvedMediaUrls))
       : null;
     const rest = projectGenerationForStudio(generation, Boolean(template));
     const linkedPost = linkedPostMap.get(generation.id);
 
+    const sourceUnavailable = Boolean(generation.source_unavailable_at);
+    if (sourceUnavailable) {
+      // The only copy of this output is gone (see the 20260908061500
+      // migration). Withhold every address so clients render an explicit
+      // unavailable state instead of retrying a dead URL; the row's own
+      // `source_unavailable_at` travels with the item as the signal.
+      delete rest.output_url;
+      delete rest.output_urls;
+      delete rest.preview_url;
+    }
     return {
       ...rest,
       origin: template ? 'template' : 'creation',
       template,
       category: canonicalCategory,
       creationMode: generation.creation_mode ?? classification?.creationMode ?? null,
-      media,
-      ...(outputUrl ? { output_url: outputUrl } : {}),
-      preview_url: previewUrl,
+      media: sourceUnavailable ? null : media,
+      ...(outputUrl && !sourceUnavailable ? { output_url: outputUrl } : {}),
+      preview_url: sourceUnavailable ? null : previewUrl,
       ...(outputCount !== null ? { output_count: outputCount } : {}),
-      ...(outputUrls.length > 0 ? { output_urls: outputUrls } : {}),
+      ...(outputUrls.length > 0 && !sourceUnavailable ? { output_urls: outputUrls } : {}),
       ...(summaryOnly ? {} : {
         input_media: inputMedia,
         paywallPrefill,

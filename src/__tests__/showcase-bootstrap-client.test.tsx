@@ -139,8 +139,8 @@ describe('ShowcaseBootstrapClient', () => {
 
     expect(fullClientModuleLoaded).not.toHaveBeenCalled();
     expect(screen.queryByTestId('full-showcase-client')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Showcase' })).toBeInTheDocument();
-    expect(screen.getByRole('navigation', { name: 'Showcase filters' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Explore' })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Explore filters' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Images' })).toHaveAttribute(
       'href',
       '/showcase?category=image'

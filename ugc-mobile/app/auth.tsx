@@ -13,6 +13,7 @@ import {
   describePasswordSignInError,
   describeProviderSignInError,
   validateCredentials,
+  GUEST_SESSION_MERGED,
   type AuthNotice,
 } from '@/lib/auth-error-copy';
 import { isAppleAuthCanceled } from '@/lib/apple-auth';
@@ -51,9 +52,10 @@ const THIRD_PARTY_BUTTON_RADIUS = THIRD_PARTY_BUTTON_HEIGHT / 2;
 const GOOGLE_BUTTON_ASPECT = 216 / 48;
 
 export default function AuthScreen() {
-  const { returnTo, mode: requestedMode } = useLocalSearchParams<{
+  const { returnTo, mode: requestedMode, notice: requestedNotice } = useLocalSearchParams<{
     returnTo?: string | string[];
     mode?: string | string[];
+    notice?: string | string[];
   }>();
   const { user, signInWithPassword, signInWithApple, signInWithGoogle, isAuthConfigured, missingEnvKeys } = useAuth();
   const initialMode = (Array.isArray(requestedMode) ? requestedMode[0] : requestedMode) === 'signup'
@@ -63,7 +65,14 @@ export default function AuthScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [notice, setNotice] = useState<AuthNotice | null>(null);
+  // Seeded from the route so a redirect can say why it sent the person here.
+  // Only a known key maps to copy; an unrecognised one shows nothing rather
+  // than letting a deep link put arbitrary text on the sign-in screen.
+  const initialNotice = (Array.isArray(requestedNotice) ? requestedNotice[0] : requestedNotice)
+    === 'session-merged'
+    ? GUEST_SESSION_MERGED
+    : null;
+  const [notice, setNotice] = useState<AuthNotice | null>(initialNotice);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isAppleSubmitting, setIsAppleSubmitting] = useState(false);
   const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false);
@@ -389,7 +398,7 @@ function AuthPanel({
       {/* Inside the panel and above the action, so it survives the keyboard: the
           password field's Return key is "go", which submits with the keyboard
           up, and the old toast was pinned to the bottom of the screen behind it. */}
-      {notice ? <InlineNotice title={notice.title} body={notice.body} /> : null}
+      {notice ? <InlineNotice title={notice.title} body={notice.body} tone={notice.tone} /> : null}
 
       {mode === 'login' ? (
         <PrimaryButton
@@ -629,22 +638,34 @@ function WorkspaceInput({
   );
 }
 
-function InlineNotice({ title, body }: { title: string; body: string }) {
+/**
+ * `tone` defaults to danger because all but one caller is a sign-in failure.
+ * The exception is the redirect notice, which explains why the person is on
+ * this screen: painting that red would contradict copy written to say nothing
+ * went wrong, and announcing it assertively would interrupt a screen reader
+ * for something that is not an alert.
+ */
+function InlineNotice({ title, body, tone = 'danger' }: {
+  title: string;
+  body: string;
+  tone?: 'danger' | 'info';
+}) {
+  const palette = tone === 'info' ? appTheme.semantic.info : appTheme.semantic.danger;
   return (
     <View
-      accessibilityRole="alert"
-      accessibilityLiveRegion="assertive"
+      accessibilityRole={tone === 'info' ? 'summary' : 'alert'}
+      accessibilityLiveRegion={tone === 'info' ? 'polite' : 'assertive'}
       style={{
         borderRadius: 18,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: appTheme.semantic.danger.border,
-        backgroundColor: appTheme.semantic.danger.background,
+        borderColor: palette.border,
+        backgroundColor: palette.background,
         padding: 12,
         gap: 5,
       }}
     >
-      <Text selectable style={{ color: appTheme.colors.danger, fontSize: 14, lineHeight: 20, fontWeight: '700' }}>
+      <Text selectable style={{ color: palette.foreground, fontSize: 14, lineHeight: 20, fontWeight: '700' }}>
         {title}
       </Text>
       <Text selectable style={{ color: workspace.muted, fontSize: 14, lineHeight: 19, fontWeight: '400' }}>

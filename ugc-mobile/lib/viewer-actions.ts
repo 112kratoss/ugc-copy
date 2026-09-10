@@ -376,7 +376,7 @@ export function getViewerActionGroupLabel(action: string) {
     return 'Safety';
   }
   if (action === 'not-interested' || action === 'hide-creator') {
-    return 'Showcase preferences';
+    return 'Explore preferences';
   }
   if (
     action === 'publish'

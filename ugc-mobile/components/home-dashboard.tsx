@@ -5,7 +5,6 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
-  Bell,
   Crown,
   ImageIcon,
   Play,
@@ -168,7 +167,8 @@ export function HomeDashboard() {
   // Held by the list, not the card: FlashList recycles card views, and local
   // expansion state would follow a recycled view onto an unrelated post.
   const [expandedBodyIds, setExpandedBodyIds] = useState<string[]>([]);
-  const visibleActiveVideoIds = isFocused ? activeVideoIds : [];
+  // FeedVideoPreview owns focus gating; the list only changes for viewability.
+  const visibleActiveVideoIds = activeVideoIds;
 
   const activeChip = HOME_FEED_CHIPS.find((chip) => chip.id === activeChipId) ?? HOME_FEED_CHIPS[0];
   const queryKey = useMemo(
@@ -877,17 +877,6 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: ()
             <Text style={{ color: DASHBOARD_COLORS.text, fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatCreditAmount(credits)}</Text>
             <Plus size={14} color={DASHBOARD_COLORS.coral} />
           </View>
-        </TopBarControl>
-
-        <TopBarControl
-          accessibilityLabel="Open alerts"
-          onPress={() => {
-            haptic.light();
-            router.push('/studio' as never);
-          }}
-          style={{ width: 48 }}
-        >
-          <Bell size={appTheme.icon.default} color={DASHBOARD_COLORS.text} />
         </TopBarControl>
       </View>
     </View>

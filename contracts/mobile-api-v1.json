@@ -158,6 +158,35 @@
             "linked_post_visibility": "public",
             "linked_post_archived_at": null,
             "archived_at": null
+          },
+          {
+            "id": "private-video-1",
+            "output_url": "https://storage.example.test/private-video-original.mp4",
+            "output_urls": ["https://storage.example.test/private-video-original.mp4"],
+            "preview_url": null,
+            "previewUrl": null,
+            "input_media": [],
+            "status": "succeeded",
+            "created_at": "2026-09-06T00:00:00.000Z",
+            "model": "video-model",
+            "category": "video",
+            "duration": 12,
+            "cost": 10,
+            "media": {
+              "id": "private-video-1",
+              "kind": "video",
+              "url": "https://storage.example.test/private-video-original.mp4",
+              "renditionUrl": "/api/media?bucket=generated_videos&path=owner-1%2Fplayback%2Fprivate-video-1%2Fabc123.mp4",
+              "previewUrl": null,
+              "thumbhash": null,
+              "cacheKey": "media:private-video-1",
+              "expiresAt": "2026-09-06T01:00:00.000Z",
+              "width": 610,
+              "height": 1280,
+              "durationSeconds": 12,
+              "status": "pending",
+              "gridReady": false
+            }
           }
         ]
       }

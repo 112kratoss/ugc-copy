@@ -26,6 +26,15 @@ export type OperationalRetentionSummary = {
   expiredUploadReservationsHandled: number;
   expiredUploadObjectsDeleted: number;
   expiredUploadReservationFailures: number;
+  /**
+   * The two halves of `expiredUploadReservationsHandled` that a release does
+   * not account for. Without them a run that advanced nothing is impossible to
+   * tell from one with no work, which is what a zero-failure sweep looked like
+   * while a backlog aged past its SLO.
+   */
+  expiredUploadReservationsDeferred: number;
+  expiredUploadReservationFirstClaims: number;
+  expiredUploadReservationsHeld: number;
   uploadReclaimScanLimitReached: boolean;
   uploadReclaimTimeBudgetReached: boolean;
   oldestExpiredUploadCandidateAt: string | null;
@@ -106,6 +115,9 @@ export async function pruneOperationalBackendData(
     expiredUploadReservationsHandled: uploadReclaim.handled,
     expiredUploadObjectsDeleted: uploadReclaim.objectsDeleted,
     expiredUploadReservationFailures: uploadReclaim.failed,
+    expiredUploadReservationsDeferred: uploadReclaim.deferred,
+    expiredUploadReservationFirstClaims: uploadReclaim.firstClaims,
+    expiredUploadReservationsHeld: uploadReclaim.held,
     uploadReclaimScanLimitReached: uploadReclaim.scanLimitReached,
     uploadReclaimTimeBudgetReached: uploadReclaim.timeBudgetReached,
     oldestExpiredUploadCandidateAt: uploadReclaim.oldestCandidateExpiresAt,

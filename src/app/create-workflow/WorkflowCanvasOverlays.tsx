@@ -1,6 +1,11 @@
 'use client';
 
+import RecoverableMediaAudio from '@/app/components/RecoverableMediaAudio';
+
 import Image from 'next/image';
+import { useEffect, useRef } from 'react';
+import { useAuth } from '@/app/components/AuthProvider';
+import GenerationResultVideo from '@/app/components/GenerationResultVideo';
 import { Layers3, PencilLine, Play, Plus, Trash2, X, ZoomIn } from 'lucide-react';
 import type { WorkflowCanvasEdge, WorkflowCanvasNode } from '@/lib/workflow-canvas';
 import type {
@@ -88,6 +93,21 @@ function PreviewMediaOverlay({
   preview: PreviewMediaState | null;
   onClose: () => void;
 }) {
+  const { session } = useAuth();
+  const closeRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!preview) return;
+    // Node preview buttons stop keyboard propagation. Move focus into the
+    // overlay so Escape reaches the canvas's existing close handler.
+    const previousFocus = document.activeElement;
+    closeRef.current?.focus({ preventScroll: true });
+    return () => {
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) {
+        previousFocus.focus({ preventScroll: true });
+      }
+    };
+  }, [preview]);
+
   if (!preview) {
     return null;
   }
@@ -107,6 +127,7 @@ function PreviewMediaOverlay({
             <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Press Escape to close</div>
           </div>
           <button
+            ref={closeRef}
             type="button"
             onClick={onClose}
             className="rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-zinc-200 hover:bg-white/[0.06]"
@@ -129,14 +150,19 @@ function PreviewMediaOverlay({
         )}
 
         {preview.kind === 'video' && (
-          <div className="rounded-3xl border border-white/10 bg-black/60 p-4">
-            <video src={preview.url} controls autoPlay className="max-h-[76vh] w-full rounded-2xl" />
+          <div className="h-[70vh] overflow-hidden rounded-3xl border border-white/10 bg-black/60 p-4">
+            <GenerationResultVideo
+              generationId={preview.generationId ?? null}
+              outputUrl={preview.url}
+              accessToken={session?.access_token}
+              loop={false}
+            />
           </div>
         )}
 
         {preview.kind === 'audio' && (
           <div className="rounded-3xl border border-white/10 bg-black/60 p-8">
-            <audio src={preview.url} controls autoPlay className="w-full" />
+            <RecoverableMediaAudio src={preview.url} autoPlay className="w-full" />
           </div>
         )}
       </div>

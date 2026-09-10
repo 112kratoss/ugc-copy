@@ -1,5 +1,9 @@
 'use client';
 
+import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
+
+import RecoverableMediaAudio from '@/app/components/RecoverableMediaAudio';
+
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import Image from 'next/image';
 import { AlertCircle, Image as ImageIcon, Loader2, Sparkles, Trash2, Upload, Video, Volume2, X } from 'lucide-react';
@@ -15,6 +19,7 @@ import {
   isValidElementHandle,
 } from '@/lib/image-elements';
 import { getActiveRegistryModels } from '@/lib/generation-model-client';
+import RecoverableMediaVideo from '@/app/components/RecoverableMediaVideo';
 import { getDisplayMediaUrl } from '@/lib/media-urls';
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS, getImageResolutionOptions, getVideoDurationRange, getVideoElementSupport, supportsImageResolutionControl } from '@/lib/client-generation-models';
 import type { EnhancerContext } from '@/lib/prompt-enhancer';
@@ -1608,36 +1613,6 @@ function EdgeSummaryPanel({
   );
 }
 
-async function readVideoDurationSeconds(file: File): Promise<number | null> {
-  const previewUrl = URL.createObjectURL(file);
-
-  try {
-    const durationSeconds = await new Promise<number | null>((resolve) => {
-      const previewVideo = document.createElement('video');
-
-      const cleanup = () => {
-        previewVideo.removeAttribute('src');
-        previewVideo.load();
-      };
-
-      previewVideo.preload = 'metadata';
-      previewVideo.onloadedmetadata = () => {
-        const nextDuration = Number.isFinite(previewVideo.duration) ? previewVideo.duration : null;
-        cleanup();
-        resolve(nextDuration);
-      };
-      previewVideo.onerror = () => {
-        cleanup();
-        resolve(null);
-      };
-      previewVideo.src = previewUrl;
-    });
-
-    return durationSeconds;
-  } finally {
-    URL.revokeObjectURL(previewUrl);
-  }
-}
 
 function formatSecondsLabel(value: number) {
   const rounded = Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1);
@@ -2133,14 +2108,14 @@ function NodeEditorContent({
                     Detected duration: {formatSecondsLabel(videoInput.durationSeconds!)}
                   </div>
                 )}
-                {videoInput.videoUrl && (
-                  <video
-                    src={getDisplayMediaUrl(videoInput.storagePath || videoInput.videoUrl || '')}
-                    className="w-full rounded-2xl border border-white/10"
-                    controls
-                    muted
-                    playsInline
-                  />
+                {(videoInput.storagePath || videoInput.videoUrl) && (
+                  <div className="h-64 overflow-hidden rounded-2xl border border-white/10">
+                    <RecoverableMediaVideo
+                      url={getDisplayMediaUrl(videoInput.storagePath || videoInput.videoUrl || '')}
+                      label="Video input preview"
+                      muted
+                    />
+                  </div>
                 )}
                 <SeedanceAssetStatusCard
                   title="Seedance asset"
@@ -2200,10 +2175,9 @@ function NodeEditorContent({
                   }}
                 />
                 {audioInput.audioUrl && (
-                  <audio
+                  <RecoverableMediaAudio
                     src={getDisplayMediaUrl(audioInput.storagePath || audioInput.audioUrl || '')}
                     className="w-full rounded-2xl border border-white/10"
-                    controls
                   />
                 )}
                 <SeedanceAssetStatusCard

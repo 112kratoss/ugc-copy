@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 
 import { useAuth } from '@/app/components/AuthProvider';
+import TemplateRunMedia from './TemplateRunMedia';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import { finalizeSignedUpload } from '@/lib/upload-finalize-client';
 import {
@@ -142,7 +143,7 @@ function getRunStatusCopy(run: TemplateRun): { title: string; body: string } {
         title: `Your ${run.result?.kind || 'result'} is ready`,
         body: run.isTest
           ? 'Return to the workflow canvas to finish publishing this template.'
-          : 'Publish it to Showcase, download it, or create another version.',
+          : 'Publish it to Explore, download it, or create another version.',
       };
     case 'failed':
       return { title: 'This run could not finish', body: run.errorMessage || 'The workflow stopped before producing a result.' };
@@ -209,6 +210,7 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
   const [inputErrors, setInputErrors] = useState<Record<string, string | null>>({});
   const [validatingInputs, setValidatingInputs] = useState<Record<string, boolean>>({});
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
+  const [resolvedDownload, setResolvedDownload] = useState<{ outputUrl: string; url: string } | null>(null);
   const [isPublishOpen, setIsPublishOpen] = useState(false);
   const [publishedPost, setPublishedPost] = useState<{
     path: string;
@@ -441,7 +443,7 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
         setShareFeedback('Share sheet opened.');
       } else {
         await navigator.clipboard.writeText(shareUrl);
-        setShareFeedback(hasPublicFeedPost ? 'Showcase post link copied.' : 'Result link copied.');
+        setShareFeedback(hasPublicFeedPost ? 'Explore post link copied.' : 'Result link copied.');
       }
     } catch (reason) {
       if (reason instanceof DOMException && reason.name === 'AbortError') return;
@@ -715,6 +717,7 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
                   <TemplateRunStepCard
                     key={step.id}
                     step={step}
+                    mediaRecovery={{ runId: run.id, token: session?.access_token }}
                     disabled={isBusy}
                     availableCredits={credits}
                     retryEnabled={!isRunTerminal(run.status)}
@@ -770,14 +773,9 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start">
           <Surface variant="panel" padding="none" className="overflow-hidden">
             <MediaFrame aspectRatio={result.kind === 'video' ? '16 / 10' : '4 / 5'} className="rounded-none border-0">
-              {result.kind === 'video' ? (
-                <video src={result.url} controls playsInline className="h-full w-full bg-black object-contain">
-                  Your browser does not support video playback.
-                </video>
-              ) : (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={result.url} alt={`${run.templateTitle} result`} className="h-full w-full bg-black object-contain" />
-              )}
+              <TemplateRunMedia runId={run.id} kind={result.kind} url={result.url} token={session?.access_token}
+                renditionUrl={result.renditionUrl} previewUrl={result.previewUrl}
+                alt={`${run.templateTitle} result`} onResolved={setResolvedDownload} />
             </MediaFrame>
           </Surface>
           <Surface variant="panel" padding="lg">
@@ -792,13 +790,13 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
                   <div className="mt-6">
                     <StatusCallout
                       tone="success"
-                      title={publishedPost.visibility === 'public' ? 'Published to Showcase' : 'Saved as a private post'}
+                      title={publishedPost.visibility === 'public' ? 'Published to Explore' : 'Saved as a private post'}
                       body={publishedPost.visibility === 'public'
-                        ? 'Your final template result is now visible in Showcase.'
+                        ? 'Your final template result is now visible in Explore.'
                         : 'Only you can open this post until you publish it publicly.'}
                     />
                     <Button href={publishedPost.path} variant="primary" icon={ArrowRight} className="mt-3 w-full">
-                      {publishedPost.visibility === 'public' ? 'View in Showcase' : 'Open private post'}
+                      {publishedPost.visibility === 'public' ? 'View in Explore' : 'Open private post'}
                     </Button>
                   </div>
                 ) : result.generationId ? (
@@ -808,15 +806,15 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
                     onClick={() => setIsPublishOpen(true)}
                     className="mt-6 w-full"
                   >
-                    Publish to Showcase
+                    Publish to Explore
                   </Button>
                 ) : null}
-                <a href={result.url} download className={`${publishedPost ? 'mt-3' : result.generationId ? 'mt-3' : 'mt-6'} ui-button ui-button-secondary ui-focus-ring w-full`}>
+                <a href={resolvedDownload?.outputUrl === result.url ? resolvedDownload.url : result.url} download className={`${publishedPost ? 'mt-3' : result.generationId ? 'mt-3' : 'mt-6'} ui-button ui-button-secondary ui-focus-ring w-full`}>
                   <Download className="h-4 w-4" aria-hidden />
                   Download {result.kind}
                 </a>
                 <Button variant="secondary" icon={Share2} onClick={handleShare} className="mt-3 w-full">
-                  {publishedPost?.visibility === 'public' ? 'Share Showcase post' : `Share ${result.kind}`}
+                  {publishedPost?.visibility === 'public' ? 'Share Explore post' : `Share ${result.kind}`}
                 </Button>
                 <Button href={createAnotherHref} variant="ghost" icon={RotateCcw} className="mt-2 w-full">Create another version</Button>
               </>

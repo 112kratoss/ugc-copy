@@ -20,7 +20,7 @@ import { OnboardingServerSync } from '@/components/onboarding-server-sync';
 import { OverlayHost } from '@/components/overlay-host';
 import { CriticalUpdateSheet } from '@/components/critical-update-sheet';
 import { useOtaUpdateGate } from '@/lib/use-ota-update-gate';
-import { setUpgradeRequiredHandler } from '@/lib/api-client';
+import { setSessionMergedHandler, setUpgradeRequiredHandler } from '@/lib/api-client';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { notificationBadgeQueryKey } from '@/lib/notification-badge';
 import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
@@ -109,6 +109,7 @@ function RootLayoutNav() {
           <OnboardingServerSync />
           <StartupCoordinator />
           <UpgradeRequiredCoordinator />
+          <SessionMergedCoordinator />
           <OtaUpdateCoordinator />
           <SafeAreaProvider>
             <ThemeProvider value={navigationTheme}>
@@ -325,6 +326,29 @@ function UpgradeRequiredCoordinator() {
       router.replace('/update-required' as never);
     });
     return () => setUpgradeRequiredHandler(null);
+  }, []);
+
+  return null;
+}
+
+function SessionMergedCoordinator() {
+  // Moves the device off a guest session the server has retired (409
+  // SESSION_MERGED). Registered here rather than in the api-client so that lib
+  // keeps its independence from the auth provider and the router.
+  const { abandonMergedGuestSession } = useAuth();
+  const abandonRef = useRef(abandonMergedGuestSession);
+
+  useEffect(() => {
+    abandonRef.current = abandonMergedGuestSession;
+  }, [abandonMergedGuestSession]);
+
+  useEffect(() => {
+    setSessionMergedHandler(() => {
+      void abandonRef.current().catch((error) => {
+        console.warn('Could not abandon the merged guest session', error);
+      });
+    });
+    return () => setSessionMergedHandler(null);
   }, []);
 
   return null;

@@ -1,7 +1,12 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// `tab-bar-ambient` reads `Platform.OS` to skip work on the platform whose dock
+// never adapts, and vitest cannot parse react-native's own entry point. The
+// colours this file asserts are platform-independent.
+vi.mock('react-native', () => ({ Platform: { OS: 'ios' } }));
 
 import { contrastRatio } from '../lib/color-contrast';
 import { MIN_HIT_TARGET_PT } from '../lib/hit-target';
@@ -139,6 +144,12 @@ describe('HIG colour contrast', () => {
     ['success', appTheme.colors.success],
     ['warning', appTheme.colors.warning],
   ];
+
+  it('keeps selected navigation labels readable throughout the capsule transition', () => {
+    for (const foreground of [appTheme.colors.primary, appTheme.colors.muted]) {
+      expect(contrastRatio(foreground, appTheme.colors.navigationSelected)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
 
   it('clears 4.5:1 for body text on every panel surface', () => {
     const failures = foregrounds.flatMap(([name, colour]) => backgrounds

@@ -17,6 +17,12 @@ export interface PostMediaSummary {
   id: string;
   mediaKey: string;
   url: string;
+  /**
+   * A 1440px WebP for full-screen viewing, between the 720px preview and the
+   * source. Null when one was not worth storing, and readers fall back to
+   * `url` — the original remains the download and zoom target either way.
+   */
+  displayUrl: string | null;
   renditionUrl: string | null;
   renditionStatus: PostMediaRenditionStatus;
   teaserUrl: string | null;
@@ -28,6 +34,12 @@ export interface PostMediaSummary {
   previewCacheKey: string;
   gridReady: boolean;
   preview: VisualMediaDescriptor;
+  /**
+   * Present only when the media's only source is known to be gone. `url` still
+   * names the dead address for the record; clients must render an explicit
+   * unavailable state instead of loading or retrying it.
+   */
+  sourceUnavailableAt?: string;
   mediaKind: ShowcaseMediaKind;
   contentType: string | null;
   originalName: string | null;
@@ -46,6 +58,7 @@ export interface PostMediaPersistInput {
   previewAttemptCount?: number;
   previewError?: string | null;
   previewGeneratedAt?: string | null;
+  displayStoragePath?: string | null;
   renditionStoragePath?: string | null;
   renditionStatus?: PostMediaRenditionStatus;
   renditionAttemptCount?: number;
@@ -74,6 +87,7 @@ interface PostMediaDbRow {
   preview_storage_path?: string | null;
   preview_thumbhash?: string | null;
   preview_status?: 'pending' | 'processing' | 'ready' | 'failed';
+  display_storage_path?: string | null;
   preview_attempt_count?: number;
   preview_error?: string | null;
   preview_generated_at?: string | null;
@@ -87,6 +101,8 @@ interface PostMediaDbRow {
   teaser_bytes?: number | null;
   teaser_generated_at?: string | null;
   teaser_error?: string | null;
+  /** Set when the media's only source is known to be gone; see the 20260908061500 migration. */
+  source_unavailable_at?: string | null;
   external_url: string | null;
   media_kind: ShowcaseMediaKind;
   content_type: string | null;
@@ -133,6 +149,15 @@ function isMissingPostMediaRenditionColumnError(error: unknown): boolean {
   const { code, message = '' } = error as SupabaseSchemaError;
   return (code === '42703' || code === 'PGRST204')
     && /rendition_(storage_path|status|attempt_count|error|generated_at|bytes)/.test(message);
+}
+
+function isMissingPostMediaSourceColumnError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const { code, message = '' } = error as SupabaseSchemaError;
+  return (code === '42703' || code === 'PGRST204') && /source_unavailable_at/.test(message);
 }
 
 function isMissingPostMediaTeaserColumnError(error: unknown): boolean {
@@ -209,7 +234,17 @@ async function resolvePostMediaDbRows(
         const previewUrl = row.preview_storage_path
           ? supabase.storage.from(SHOWCASE_MEDIA_BUCKET).getPublicUrl(row.preview_storage_path).data.publicUrl
           : null;
-        const previewStatus = row.preview_status ?? (previewUrl ? 'ready' : 'pending');
+        // Null whenever no display rendition was worth storing; every reader
+        // falls back to `url`, which is what it used before this existed.
+        const displayUrl = row.display_storage_path
+          ? supabase.storage.from(SHOWCASE_MEDIA_BUCKET).getPublicUrl(row.display_storage_path).data.publicUrl
+          : null;
+        // A source known to be gone can never earn a preview: report it failed
+        // so no grid waits on it, and carry the marker so clients say why.
+        const sourceUnavailableAt = row.source_unavailable_at ?? null;
+        const previewStatus = sourceUnavailableAt
+          ? 'failed'
+          : row.preview_status ?? (previewUrl ? 'ready' : 'pending');
         // Only a 'ready' row is served: a path left behind by a half-finished
         // attempt must never reach the feed.
         const renditionUrl = row.rendition_storage_path && row.rendition_status === 'ready'
@@ -252,6 +287,7 @@ async function resolvePostMediaDbRows(
           id: row.id,
           mediaKey: normalizePostMediaKey(row.media_key) ?? defaultPostMediaKey(row.sort_order),
           url,
+          displayUrl,
           renditionUrl,
           renditionStatus,
           teaserUrl,
@@ -269,6 +305,7 @@ async function resolvePostMediaDbRows(
           height: row.height,
           durationSeconds: row.duration_seconds,
           sortOrder: row.sort_order,
+          ...(sourceUnavailableAt ? { sourceUnavailableAt } : {}),
         } satisfies PostMediaSummary;
       })
   );
@@ -291,6 +328,7 @@ export async function loadPostMediaItemsMap(
   const PREVIEW_COLUMNS = 'preview_storage_path, preview_thumbhash, preview_status, preview_attempt_count, preview_error, preview_generated_at';
   const RENDITION_COLUMNS = 'rendition_storage_path, rendition_status, rendition_attempt_count, rendition_error, rendition_generated_at, rendition_bytes';
   const TEASER_COLUMNS = 'teaser_storage_path, teaser_bytes, teaser_generated_at, teaser_error';
+  const SOURCE_COLUMNS = 'source_unavailable_at';
 
   const selectPostMedia = (columns: string) => supabase
     .from('post_media')
@@ -298,9 +336,15 @@ export async function loadPostMediaItemsMap(
     .in('post_id', uniquePostIds)
     .order('sort_order', { ascending: true });
 
-  const fullResult = await selectPostMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}, ${RENDITION_COLUMNS}, ${TEASER_COLUMNS}`);
+  const fullResult = await selectPostMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}, ${RENDITION_COLUMNS}, ${TEASER_COLUMNS}, ${SOURCE_COLUMNS}`);
   let data = fullResult.data as PostMediaDbRow[] | null;
   let error = fullResult.error;
+
+  if (isMissingPostMediaSourceColumnError(error)) {
+    const withoutSource = await selectPostMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}, ${RENDITION_COLUMNS}, ${TEASER_COLUMNS}`);
+    data = withoutSource.data as PostMediaDbRow[] | null;
+    error = withoutSource.error;
+  }
 
   if (isMissingPostMediaTeaserColumnError(error)) {
     const withoutTeaser = await selectPostMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}, ${RENDITION_COLUMNS}`);
@@ -386,6 +430,8 @@ export async function buildLegacyPostMediaItems(params: {
     id: `${params.postId}:cover`,
     mediaKey: defaultPostMediaKey(0),
     url,
+    // Legacy covers predate post_media, so there is no display rendition either.
+    displayUrl: null,
     // Legacy cover rows predate post_media, so there is no rendition to point at.
     renditionUrl: null,
     // 'skipped' here is a placeholder, not a genuine not-smaller verdict, so
@@ -429,6 +475,7 @@ export async function insertPostMediaItems(params: {
       preview_attempt_count: item.previewAttemptCount ?? (item.previewStoragePath ? 1 : 0),
       preview_error: item.previewError ?? null,
       preview_generated_at: item.previewGeneratedAt ?? (item.previewStoragePath ? new Date().toISOString() : null),
+      display_storage_path: item.displayStoragePath ?? null,
       rendition_storage_path: item.renditionStoragePath ?? null,
       rendition_status: item.renditionStatus
         ?? (item.mediaKind === 'video' ? 'pending' : 'skipped'),
@@ -474,6 +521,7 @@ export async function insertPostMediaItems(params: {
         delete fallbackRow.preview_attempt_count;
         delete fallbackRow.preview_error;
         delete fallbackRow.preview_generated_at;
+        delete fallbackRow.display_storage_path;
       }
       if (removeRenditionFields) {
         delete fallbackRow.rendition_storage_path;

@@ -57,6 +57,7 @@ import {
   finalizeUploadForConsumption,
 } from '@/lib/upload-finalization';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
+import { resolveTemplateRunMedia, type TemplateMediaGeneration } from '@/lib/template-run-media-delivery';
 import {
   getIncomingEdges,
   getNodeById,
@@ -103,6 +104,8 @@ const GENERATION_SELECT = [
   'id', 'status', 'prediction_id', 'output_url', 'error_message', 'cost',
   'actual_cost', 'template_run_id', 'template_run_step_id', 'created_at',
   'completed_at',
+  'user_id', 'playback_rendition_path', 'playback_rendition_source',
+  'playback_rendition_status', 'preview_url', 'preview_status',
 ].join(', ');
 
 type TemplateRunRow = {
@@ -155,7 +158,7 @@ type TemplateRunStepRow = {
   created_at: string;
 };
 
-type GenerationRow = {
+type GenerationRow = TemplateMediaGeneration & {
   id: string;
   status: string;
   prediction_id: string | null;
@@ -312,23 +315,29 @@ async function toRunDto(client: SupabaseClient, state: RunState): Promise<Templa
     const step = state.latestSteps.get(node.id);
     return step ? [step] : [];
   });
-  const steps = await Promise.all(orderedLatestSteps.map(async (step) => ({
+  const media = await resolveTemplateRunMedia({
+    client, ownerId: state.run.user_id, runId: state.run.id, generations: state.generations.values(),
+    outputs: [
+      ...orderedLatestSteps.map((step) => ({ url: step.output_url, generationId: step.generation_id, kind: step.media_kind })),
+      { url: state.run.result_url, generationId: state.run.result_generation_id, kind: state.run.output_kind },
+    ],
+  });
+  const steps = orderedLatestSteps.map((step, index) => ({
     id: step.id,
     kind: step.kind,
     mediaKind: step.media_kind,
     status: step.status,
     label: step.label,
-    outputUrl: step.output_url
-      ? await resolveOwnedStoredMediaUrl(client, step.output_url, state.run.user_id)
-      : null,
+    outputUrl: media[index].url,
+    ...(media[index].renditionUrl ? { renditionUrl: media[index].renditionUrl } : {}),
+    ...(media[index].previewUrl ? { previewUrl: media[index].previewUrl } : {}),
     errorMessage: step.error_message,
     failureCode: stepFailureCode(step),
     canRetry: step.can_retry && (step.status === 'failed' || step.status === 'awaiting_approval'),
     estimatedRetryCredits: Math.max(0, step.estimated_credits),
-  })));
-  const resultUrl = state.run.result_url
-    ? await resolveOwnedStoredMediaUrl(client, state.run.result_url, state.run.user_id)
-    : null;
+  }));
+  const resultMedia = media[orderedLatestSteps.length];
+  const resultUrl = resultMedia.url;
   return {
     id: state.run.id,
     templateId: state.run.template_id,
@@ -343,6 +352,8 @@ async function toRunDto(client: SupabaseClient, state: RunState): Promise<Templa
         generationId: state.run.result_generation_id,
         kind: state.run.output_kind,
         url: resultUrl,
+        ...(resultMedia.renditionUrl ? { renditionUrl: resultMedia.renditionUrl } : {}),
+        ...(resultMedia.previewUrl ? { previewUrl: resultMedia.previewUrl } : {}),
       }
       : null,
     estimatedTotalCredits: Math.max(0, state.run.estimated_total_credits),

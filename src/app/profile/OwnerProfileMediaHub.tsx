@@ -23,6 +23,7 @@ import {
   Volume2,
   WalletCards,
 } from 'lucide-react';
+import UnavailableMediaNote from '@/app/components/UnavailableMediaNote';
 
 import { useAuth } from '@/app/components/AuthProvider';
 import { HoverVideo } from '@/app/components/HoverVideo';
@@ -91,7 +92,10 @@ interface OwnerPost {
 
 interface OwnerGeneration {
   id: string;
+  media?: { renditionUrl?: string | null } | null;
   output_url: string | null;
+  /** Set when the only source is gone; the API withholds every address. */
+  source_unavailable_at?: string | null;
   output_urls?: string[] | null;
   preview_url?: string | null;
   status: string;
@@ -142,7 +146,7 @@ function ReelLoadingFallback() {
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 text-sm font-bold text-white backdrop-blur-sm">
       <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-zinc-950 px-5 py-3">
         <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-        Opening Showcase
+        Opening Explore
       </span>
     </div>
   );
@@ -254,10 +258,13 @@ function MediaCard({
   onClick,
   href,
   actionLabel,
+  unavailable = false,
 }: {
   title: string;
   subtitle: string;
   mediaUrl: string | null;
+  /** The media's only source is gone: draw the explicit note, never the address. */
+  unavailable?: boolean;
   previewUrl?: string | null;
   renditionUrl?: string | null;
   mediaKind: 'image' | 'video' | 'audio' | null;
@@ -272,7 +279,9 @@ function MediaCard({
   const content = (
     <>
       <div className="relative aspect-[4/5] overflow-hidden bg-zinc-950">
-        {mediaKind === 'video' && mediaUrl ? (
+        {unavailable ? (
+          <UnavailableMediaNote className="h-full w-full" />
+        ) : mediaKind === 'video' && mediaUrl ? (
           <HoverVideo
             src={resolvePlaybackUrl({ url: mediaUrl, renditionUrl })}
             poster={previewUrl}
@@ -667,9 +676,9 @@ export default function OwnerProfileMediaHub({
     },
     saved: {
       title: 'Nothing saved yet',
-      body: 'Save useful posts from Showcase and they will stay collected here.',
+      body: 'Save useful posts from Explore and they will stay collected here.',
       href: '/showcase',
-      cta: 'Browse Showcase',
+      cta: 'Go to Explore',
     },
     creations: {
       title: 'No raw creations yet',
@@ -788,7 +797,7 @@ export default function OwnerProfileMediaHub({
             <div className="text-xs font-bold uppercase tracking-[0.2em] text-[var(--ui-primary)]">Your media</div>
             <h2 className="mt-2 text-2xl font-semibold tracking-tight text-white sm:text-3xl">From private creation to public post</h2>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-              Showcase viewers see posts in the reel. Your raw creations stay here for preview and editing.
+              Explore viewers see posts in the reel. Your raw creations stay here for preview and editing.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -907,6 +916,7 @@ export default function OwnerProfileMediaHub({
                     title={post.title}
                     subtitle={`${post.visibility} · ${formatShortDate(post.updatedAt)}`}
                     mediaUrl={post.mediaUrl}
+                    unavailable={Boolean(post.mediaItems?.[0]?.sourceUnavailableAt)}
                     previewUrl={post.mediaItems?.[0]?.previewUrl}
                     renditionUrl={post.mediaItems?.[0]?.preview?.renditionUrl ?? post.mediaItems?.[0]?.renditionUrl}
                     mediaKind={post.mediaKind}
@@ -943,6 +953,8 @@ export default function OwnerProfileMediaHub({
                     title={getGenerationTitle(generation)}
                     subtitle={`${generation.status} · ${formatShortDate(generation.created_at)}`}
                     mediaUrl={generation.output_url}
+                    unavailable={Boolean(generation.source_unavailable_at)}
+                    renditionUrl={generation.media?.renditionUrl}
                     previewUrl={generation.preview_url}
                     mediaKind={mediaType === 'text' ? null : mediaType}
                     badges={[
@@ -1009,7 +1021,9 @@ export default function OwnerProfileMediaHub({
         isOpen={Boolean(selectedGeneration)}
         onClose={closeGeneration}
         mediaType={selectedGeneration ? getGenerationMediaType(selectedGeneration) : 'image'}
-        src={selectedGeneration?.output_url ?? null}
+        src={selectedGeneration?.output_url ? resolvePlaybackUrl({
+          url: selectedGeneration.output_url, renditionUrl: selectedGeneration.media?.renditionUrl,
+        }) : null}
         alt={selectedGeneration ? getGenerationTitle(selectedGeneration) : 'Creation preview'}
         title={selectedGeneration ? getGenerationTitle(selectedGeneration) : 'Creation preview'}
         prompt={selectedGeneration?.prompt ?? ''}

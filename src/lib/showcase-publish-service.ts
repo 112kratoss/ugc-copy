@@ -28,6 +28,7 @@ import {
 import { openAllowlistedRemoteMedia } from '@/lib/remote-media-security';
 import {
   createGenerationShowcaseDerivative,
+  ensureGenerationPostCoverMedia,
   getCanonicalGenerationShowcaseAssetPath,
   normalizeGenerationShowcaseCategory,
   removeGenerationShowcaseDerivative,
@@ -125,6 +126,7 @@ export type ShowcasePublishServiceDependencies = {
   listSourceToolsCatalog: typeof listSourceToolsCatalog;
   loadFrozenSoldGenerationBundleForQuality: typeof loadFrozenSoldGenerationBundleForQuality;
   loadExistingGenerationPostContent: typeof loadExistingGenerationPostContent;
+  ensureGenerationPostCoverMedia: typeof ensureGenerationPostCoverMedia;
 };
 
 export type ShowcasePublishServiceResult =
@@ -180,6 +182,8 @@ function resolveDependencies(
       dependencies?.loadFrozenSoldGenerationBundleForQuality ?? loadFrozenSoldGenerationBundleForQuality,
     loadExistingGenerationPostContent:
       dependencies?.loadExistingGenerationPostContent ?? loadExistingGenerationPostContent,
+    ensureGenerationPostCoverMedia:
+      dependencies?.ensureGenerationPostCoverMedia ?? ensureGenerationPostCoverMedia,
   };
 }
 
@@ -854,6 +858,35 @@ export async function publishGenerationToShowcaseForRoute({
       return { ok: false, status: 500, body: { error: MISSING_POST_RESOURCE_BUNDLES_SCHEMA_ERROR } };
     }
     return { ok: false, status: 500, body: { error: 'Failed to sync showcase post' } };
+  }
+
+  if (shouldExposePost && postId && nextShowcaseAssetPath) {
+    // The derivative needs a `post_media` row for the preview, rendition and
+    // teaser sweeps to see it; without one the post falls back to the legacy
+    // cover, which signs the owner's private preview on every feed read.
+    //
+    // The post is already committed at this point, so a failure here cannot
+    // report the publish as failed — that would tell the owner nothing was
+    // published when it was. The post serves the legacy way until a later
+    // publish writes the row.
+    try {
+      const coverMedia = await resolvedDependencies.ensureGenerationPostCoverMedia({
+        adminSupabase,
+        postId,
+        generationId: generation.id,
+        // The category the derivative was copied under, so the row and the
+        // stored file always agree on image versus video.
+        category: detectedCategory ?? 'image',
+        showcaseAssetPath: nextShowcaseAssetPath,
+      });
+      if (coverMedia.error) {
+        logBackendError('failed_to_record_generation_post_cover_media', { error: coverMedia.error });
+      }
+    } catch (coverMediaError) {
+      // A thrown client error must not escape either: everything the caller
+      // asked for is already committed.
+      logBackendError('failed_to_record_generation_post_cover_media', { error: coverMediaError });
+    }
   }
 
   invalidateShowcaseFeedCache();

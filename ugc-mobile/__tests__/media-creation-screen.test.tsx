@@ -1,6 +1,7 @@
 // Define React Native development global
 (global as typeof globalThis & { __DEV__: boolean }).__DEV__ = true;
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -167,8 +168,30 @@ import { catalogV2 } from './generation-model-catalog-v2-fixtures';
 const mountedTrees: renderer.ReactTestRenderer[] = [];
 const createRenderer = renderer.create.bind(renderer);
 
+/**
+ * The screen invalidates the create ring's in-flight count when a run starts,
+ * so it now calls `useQueryClient` and needs a provider. Supplied here, once,
+ * rather than at the sixty-odd render sites below — and with a real client
+ * rather than a module mock, so the screen meets the same react-query it does
+ * in the app. The provider renders only its children, so the serialized tree
+ * these cases assert on is unchanged.
+ */
+const testQueryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+});
+
+const withClient = (element: React.ReactElement) => (
+  <QueryClientProvider client={testQueryClient}>{element}</QueryClientProvider>
+);
+
 vi.spyOn(renderer, 'create').mockImplementation((...args: Parameters<typeof renderer.create>) => {
-  const tree = createRenderer(...args);
+  const [element, ...rest] = args;
+  const tree = createRenderer(withClient(element as React.ReactElement), ...rest);
+  // `update` replaces the root outright, so it would drop the provider and
+  // throw on the next render. Two cases re-render to prove a catalog refresh
+  // does not crash the screen, which is exactly where that would bite.
+  const update = tree.update.bind(tree);
+  tree.update = (next: React.ReactElement) => update(withClient(next));
   mountedTrees.push(tree);
   return tree;
 });

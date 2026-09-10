@@ -154,8 +154,7 @@ describe('S6 — no player holds the audio session while it is silent', () => {
   const playerFiles = [
     'app/viewer.tsx',
     'components/feed-video-preview.tsx',
-    'components/media-lightbox.tsx',
-    'components/media-preview.tsx',
+    'components/recoverable-video-preview.tsx',
   ];
 
   it.each(playerFiles)('%s declares a mixing mode for every player it creates', (name) => {

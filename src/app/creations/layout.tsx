@@ -7,7 +7,7 @@ import { RequireAuth } from '@/app/components/RouteAuthBoundary';
 
 export const metadata: Metadata = createNoIndexMetadata(
     'Studio',
-    'Review and manage your private generation history, downloads, and showcase publishing state inside magicbooklet.'
+    'Review and manage your private generation history, downloads, and publishing state inside magicbooklet.'
 );
 
 export default async function CreationsLayout({ children }: { children: React.ReactNode }) {

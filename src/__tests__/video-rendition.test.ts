@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   buildRenditionArgs,
   buildRenditionScaleFilter,
+  createVideoRenditionFromFile,
   parseVideoProbeOutput,
+  probeVideoFile,
   RENDITION_MAX_HEIGHT,
   RENDITION_MAX_WIDTH,
   RENDITION_MIN_SAVING_RATIO,
@@ -16,6 +18,20 @@ import {
   buildPostMediaTeaserPath,
   isRenditionEligibleVideo,
 } from '@/lib/post-media-rendition';
+
+describe('rendition cancellation', () => {
+  it('rejects an expired encode budget before starting filesystem or process work', async () => {
+    const reason = new Error('Playback budget expired');
+    await expect(createVideoRenditionFromFile('/missing/input.mp4', 1024, {
+      signal: AbortSignal.abort(reason),
+    })).rejects.toBe(reason);
+  });
+
+  it('does not convert an aborted probe into successful unknown metadata', async () => {
+    const reason = new Error('Playback budget expired');
+    await expect(probeVideoFile('/missing/input.mp4', AbortSignal.abort(reason))).rejects.toBe(reason);
+  });
+});
 
 describe('rendition ffmpeg arguments', () => {
   const args = buildRenditionArgs('/tmp/in.mp4', '/tmp/out.mp4');

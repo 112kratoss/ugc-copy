@@ -940,7 +940,7 @@ export default function ShowcaseClient({
             });
         } catch (error) {
             console.error('Failed to fetch more showcase items:', error);
-            setLoadMoreError('Could not load more posts. Your current Showcase is still available.');
+            setLoadMoreError('Could not load more posts. Your current feed is still available.');
         } finally {
             isLoadingMoreRef.current = false;
             setIsLoadingMore(false);
@@ -1156,7 +1156,7 @@ export default function ShowcaseClient({
                             Creator community
                         </div>
                         <h1 className="text-4xl font-extrabold tracking-[-0.035em] text-[var(--ui-text-primary)] sm:text-5xl">
-                            Showcase
+                            Explore
                         </h1>
                         <p className="mt-3 max-w-2xl text-sm leading-6 text-[var(--ui-text-muted)] sm:text-base">
                             Fresh creator posts with optional recipes. Browse the result, then save it, remix it, or open the reusable process.
