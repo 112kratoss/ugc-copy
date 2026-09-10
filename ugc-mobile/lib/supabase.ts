@@ -10,6 +10,7 @@ import {
   secureSessionStorage,
 } from './secure-session-storage';
 import { withSuppressedInvalidRefreshTokenConsoleError } from './supabase-auth-recovery';
+import { createSupabaseAuthFetch } from './supabase-fetch';
 
 export const isSupabaseConfigured = isMobileEnvConfigured();
 export const supabaseAuthStorageKey = getSupabaseAuthStorageKey();
@@ -31,10 +32,20 @@ export const supabaseAuthStorage = Platform.OS === 'web'
     : webMemoryAuthStorage
   : secureSessionStorage;
 
+const supabaseAuthFetch = createSupabaseAuthFetch();
+
+/**
+ * Runs sign-out network work with deadlines on the auth requests it can be
+ * held up by, so a stalled network cannot keep the person signed in, or the
+ * auth lock taken, indefinitely. See lib/supabase-fetch.ts.
+ */
+export const duringSignOut = supabaseAuthFetch.duringSignOut;
+
 export const supabase = createClient(
   isSupabaseConfigured ? env.supabaseUrl : 'https://missing-mobile-env.supabase.co',
   isSupabaseConfigured ? env.supabasePublishableKey : 'missing-mobile-env',
   {
+    global: { fetch: supabaseAuthFetch.fetch },
     auth: {
       // Native refresh tokens are SecureStore-only. Expo web uses the
       // process-local adapter above and never browser-persistent storage.
