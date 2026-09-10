@@ -15,8 +15,8 @@ const PREVIEW_MAX_SIZE = 720;
 /**
  * Poster extraction should be much cheaper than a full rendition. Keep each
  * seek bounded so a corrupt or adversarial video cannot leave ffmpeg alive for
- * the lifetime of the serverless invocation. The one-second seek may retry at
- * zero, so the total ffmpeg wall clock is bounded to twice this value.
+ * the lifetime of the serverless invocation. The first-frame seek may retry at
+ * one second, so the total ffmpeg wall clock is bounded to twice this value.
  */
 export const VIDEO_POSTER_TIMEOUT_MS = 30_000;
 
@@ -47,10 +47,16 @@ export async function createVideoPosterBufferFromFile(inputPath: string) {
   const framePath = path.join(/* turbopackIgnore: true */ tempDir, 'frame.jpg');
 
   try {
+    // The poster is the clip's first frame, the way Instagram and TikTok
+    // choose a cover. The reel draws it under the video surface until the
+    // player has rendered, so a poster taken from later in the clip made every
+    // landing look like the video jumping backwards once playback began at
+    // zero. One second is only the fallback for a source whose first frame
+    // ffmpeg cannot decode.
     try {
-      await runVideoPosterFfmpeg(inputPath, framePath, '00:00:01.000');
-    } catch {
       await runVideoPosterFfmpeg(inputPath, framePath, '00:00:00.000');
+    } catch {
+      await runVideoPosterFfmpeg(inputPath, framePath, '00:00:01.000');
     }
 
     const frame = await readFile(framePath);
