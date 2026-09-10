@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import {
   AudioLines,
@@ -93,6 +94,7 @@ import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse, PromptEnhancementLevel } from '@/lib/types';
 import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
+import { invalidateActiveGenerations } from '@/lib/active-generations';
 import { verticalHitSlop } from '@/lib/hit-target';
 import { haptic } from '@/lib/haptics';
 
@@ -456,6 +458,7 @@ export function MediaCreationScreen({
   // media out of the community feed. Generating and enhancing key off
   // `identityUserId` so a guest can spend the credits they just bought.
   const { user, identityUserId, api, credits, updateCredits } = useAuth();
+  const queryClient = useQueryClient();
   const catalogQuery = useGenerationModelCatalog(api);
   const catalog = catalogQuery.catalog;
   const refetchCatalog = catalogQuery.refetch;
@@ -1334,6 +1337,10 @@ export function MediaCreationScreen({
         );
       }
       startedPredictionId = started.predictionId;
+      // The tab bar's create ring counts the viewer's in-flight runs, and its
+      // poll is off while that count is zero. Tell it a run exists now, or it
+      // stays dark until the app next comes back to the foreground.
+      invalidateActiveGenerations(queryClient, identityUserId);
       setLastPredictionId(started.predictionId);
       setLastGenerationId(started.generationId ?? null);
       if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);

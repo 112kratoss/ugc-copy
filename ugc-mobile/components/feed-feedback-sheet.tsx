@@ -48,7 +48,7 @@ export function FeedFeedbackSheet({
       visible={visible}
     >
       <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-        <SheetBackdrop drag={drag} label="Close Showcase preferences" onPress={onClose} />
+        <SheetBackdrop drag={drag} label="Close feed preferences" onPress={onClose} />
         <SheetPanel
           {...drag.contentPanHandlers}
           style={[
@@ -65,7 +65,7 @@ export function FeedFeedbackSheet({
           >
             <View style={{ gap: 4, paddingBottom: 4 }}>
               <Text accessibilityRole="header" numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}>
-                Shape your Showcase
+                Shape your feed
               </Text>
               <Text numberOfLines={2} style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
                 Choose how you want to manage “{postTitle}” or its creator.
@@ -74,7 +74,7 @@ export function FeedFeedbackSheet({
             <ActionGroup>
               <FeedbackAction
                 body={sessionOnly
-                  ? 'Remove this post from your Showcase for this visit.'
+                  ? 'Remove this post from your feed for this visit.'
                   : 'Remove this post and show fewer recommendations like it.'}
                 icon={EyeOff}
                 label="Not interested"

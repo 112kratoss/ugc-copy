@@ -17,6 +17,8 @@ const routerState = vi.hoisted(() => ({
 const glassState = vi.hoisted(() => ({
   available: false,
   reduceTransparency: false,
+  platform: 'ios',
+  listeners: [] as string[],
 }));
 
 vi.mock('expo-router', () => ({
@@ -24,6 +26,7 @@ vi.mock('expo-router', () => ({
 }));
 
 vi.mock('react-native', () => ({
+  Platform: { get OS() { return glassState.platform; } },
   Pressable: ({ children, style, ...props }: MockProps) =>
     React.createElement('pressable', {
       ...props,
@@ -36,7 +39,10 @@ vi.mock('react-native', () => ({
   useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
   AccessibilityInfo: {
     isReduceTransparencyEnabled: () => Promise.resolve(glassState.reduceTransparency),
-    addEventListener: () => ({ remove: () => {} }),
+    addEventListener: (...args: unknown[]) => {
+      glassState.listeners.push(String(args[0]));
+      return { remove: () => {} };
+    },
   },
 }));
 
@@ -60,6 +66,7 @@ vi.mock('lucide-react-native', () => ({
   ChevronLeft: (props: Record<string, unknown>) => React.createElement('glyph-icon', props),
   Share: (props: Record<string, unknown>) => React.createElement('glyph-icon', props),
   Share2: (props: Record<string, unknown>) => React.createElement('glyph-icon', props),
+  Compass: (props: Record<string, unknown>) => React.createElement('compass-icon', props),
   Bell: (props: Record<string, unknown>) => React.createElement('bell-icon', props),
   Users: (props: Record<string, unknown>) => React.createElement('users-icon', props),
   FilePlus2: (props: Record<string, unknown>) => React.createElement('file-plus-icon', props),
@@ -95,6 +102,7 @@ vi.mock('@/lib/theme', () => ({
       onBadge: '#ffffff',
     },
     icon: { feature: 24 },
+    radii: { pill: 999 },
   },
 }));
 
@@ -106,6 +114,14 @@ let badgeValue: string | null = null;
 vi.mock('@/lib/use-notification-badge', () => ({
   useTabBarBadge: () => badgeValue,
   useUnreadNotificationCount: () => 0,
+}));
+
+// Same seam, same reason: the real hook reaches `useAuth` and boots the native
+// chain behind it, and this file is about what the bar renders.
+let runningGenerations = 0;
+vi.mock('@/lib/use-active-generations', () => ({
+  useTabBarGenerationCount: () => runningGenerations,
+  useActiveGenerationCount: () => runningGenerations,
 }));
 
 import { MagicTabBar } from '../components/magic-tab-bar';
@@ -200,7 +216,81 @@ describe('MagicTabBar', () => {
     routerState.push.mockClear();
     glassState.available = false;
     glassState.reduceTransparency = false;
+    glassState.platform = 'ios';
+    glassState.listeners = [];
     badgeValue = null;
+    runningGenerations = 0;
+  });
+
+  it('keeps Android navigation opaque and routes every destination through tabPress', async () => {
+    glassState.platform = 'android';
+    badgeValue = '3';
+    const { tree, navigation } = await renderTabBarAsync(1);
+    expect(tree.root.findByProps({ testID: 'android-navigation-dock' })).toBeTruthy();
+    expect(adaptiveFallbacks(tree)).toHaveLength(0);
+    // The iOS surfaces are the only consumers of Reduce Transparency, so the
+    // dock does not subscribe to a preference it cannot spend. Reduce Motion is
+    // a different matter: the capsule and the press swell both answer to it.
+    expect(glassState.listeners).not.toContain('reduceTransparencyChanged');
+    expect(glassState.listeners).toContain('reduceMotionChanged');
+    for (const [label, route, key] of [
+      ['Home', 'index', 'home-key'],
+      ['Explore', 'showcase', 'showcase-key'],
+      ['Alerts, 3 unread', 'studio', 'studio-key'],
+      ['Profile', 'profile', 'profile-key'],
+    ]) {
+      const tab = tree.root.findByProps({ accessibilityLabel: label });
+      expect(tab.props.accessibilityState.selected).toBe(route === 'showcase');
+      renderer.act(() => tab.props.onPress());
+      expect(navigation.emit).toHaveBeenLastCalledWith({ type: 'tabPress', target: key, canPreventDefault: true });
+      expect(navigation.navigate).toHaveBeenLastCalledWith(route);
+    }
+    renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Open create menu' }).props.onPress());
+    expect(navigation.jumpTo).not.toHaveBeenCalled();
+    expect(tree.root.findByProps({ accessibilityLabel: 'Post' })).toBeTruthy();
+    renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Create' }).props.onPress());
+    expect(navigation.emit).toHaveBeenLastCalledWith({ type: 'tabPress', target: 'creator-key', canPreventDefault: true });
+    expect(navigation.jumpTo).toHaveBeenCalledWith('creator');
+  });
+
+  it('rings the create control only while runs are in flight, and says so', async () => {
+    glassState.platform = 'android';
+    const idle = await renderTabBarAsync(0);
+    expect(idle.tree.root.findAllByProps({ testID: 'generation-ring' })).toHaveLength(0);
+    expect(idle.tree.root.findByProps({ accessibilityLabel: 'Open create menu' })).toBeTruthy();
+
+    runningGenerations = 2;
+    const busy = await renderTabBarAsync(0);
+    expect(busy.tree.root.findAllByProps({ testID: 'generation-ring' }).length).toBeGreaterThan(0);
+    // A spinning arc with nothing said about it is a decoration; the label is
+    // where the state actually reaches a screen reader.
+    const control = busy.tree.root.findByProps({
+      accessibilityLabel: 'Open create menu, 2 creations in progress',
+    });
+    expect(control.props.accessibilityState.busy).toBe(true);
+  });
+
+  it('counts one run in the singular', async () => {
+    glassState.platform = 'android';
+    runningGenerations = 1;
+    const { tree } = await renderTabBarAsync(0);
+    expect(tree.root.findByProps({
+      accessibilityLabel: 'Open create menu, 1 creation in progress',
+    })).toBeTruthy();
+  });
+
+  it('keeps the Android dock inert when hidden and respects prevented tab presses', async () => {
+    glassState.platform = 'android';
+    const { tree, navigation } = await renderTabBarAsync(0, { hidden: true });
+    const root = tree.root.findAll((node) => String(node.type) === 'view')[0];
+    expect(root.props.pointerEvents).toBe('none');
+    expect(root.props.importantForAccessibility).toBe('no-hide-descendants');
+    navigation.emit.mockReturnValue({ defaultPrevented: true });
+    renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Profile' }).props.onPress());
+    expect(navigation.navigate).not.toHaveBeenCalled();
+    renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Open create menu' }).props.onPress());
+    renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Create' }).props.onPress());
+    expect(navigation.jumpTo).not.toHaveBeenCalled();
   });
 
   it('hides by going invisible and inert without changing the surface tree', async () => {
@@ -349,15 +439,15 @@ describe('MagicTabBar', () => {
     glassState.reduceTransparency = true;
     const solid = await renderTabBarAsync();
     const solidIcon = solid.tree.root
-      .findByProps({ accessibilityLabel: 'Showcase' })
-      .findByType('users-icon' as never);
+      .findByProps({ accessibilityLabel: 'Explore' })
+      .findByType('compass-icon' as never);
 
     glassState.reduceTransparency = false;
     glassState.available = true;
     const glass = await renderTabBarAsync();
     const glassIcon = glass.tree.root
-      .findByProps({ accessibilityLabel: 'Showcase' })
-      .findByType('users-icon' as never);
+      .findByProps({ accessibilityLabel: 'Explore' })
+      .findByType('compass-icon' as never);
 
     // Muted grey is safe against a known opaque bar. Once the surface is
     // translucent the backdrop is whatever post scrolled past, so the label has
@@ -449,7 +539,7 @@ function findBadgeOvals(tree: ReturnType<typeof renderer.create>) {
     const { tree, navigation } = renderTabBar();
 
     renderer.act(() => {
-      tree.root.findByProps({ accessibilityLabel: 'Showcase' }).props.onPress();
+      tree.root.findByProps({ accessibilityLabel: 'Explore' }).props.onPress();
     });
 
     expect(navigation.emit).toHaveBeenCalledWith({

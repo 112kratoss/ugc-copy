@@ -551,7 +551,7 @@ export default function PublishToShowcaseModal({
             </h3>
             <p id="publish-to-showcase-description" className="mt-2 text-sm leading-6 text-zinc-400">
               {mediaOnly
-                ? 'Add a title and caption, then share it to Showcase or keep it private.'
+                ? 'Add a title and caption, then share it to Explore or keep it private.'
                 : 'Title, caption, and optional price.'}
             </p>
           </div>

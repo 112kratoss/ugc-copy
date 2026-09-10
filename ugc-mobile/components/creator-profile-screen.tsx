@@ -333,7 +333,7 @@ export function CreatorProfileScreen({
     // "show people when a command can't be carried out and help them
     // understand why", which means copy that names the situation and a control
     // that moves them on: a missing creator is not retryable, so it offers
-    // Showcase instead of a Retry that would fail the same way.
+    // Explore instead of a Retry that would fail the same way.
     return (
       <View style={{ flex: 1, backgroundColor: appTheme.colors.background, paddingTop: 16, paddingHorizontal: 16, gap: appTheme.spacing.gap }}>
         <Stack.Screen options={{ title: 'Creator' }} />
@@ -345,7 +345,7 @@ export function CreatorProfileScreen({
             : 'Check your connection, then try again.'}
         />
         <SecondaryButton
-          label={notFound ? 'Browse Showcase' : 'Try again'}
+          label={notFound ? 'Go to Explore' : 'Try again'}
           onPress={notFound
             ? () => router.replace('/(tabs)/showcase' as never)
             : () => void profileQuery.refetch()}

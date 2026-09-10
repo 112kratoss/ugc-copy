@@ -6,6 +6,17 @@ export function isGenerationFinished(status: string) {
   return status === 'succeeded' || status === 'failed';
 }
 
+/**
+ * Stated positively rather than as `!isGenerationFinished`, because "not
+ * finished" also covers a run the user cancelled, and a cancelled run is not
+ * something the app should still be reporting as in flight.
+ */
+export function isGenerationInFlight(status: string | null | undefined) {
+  if (!status) return false;
+  const value = status.toLowerCase();
+  return !isGenerationFinished(value) && value !== 'cancelled' && value !== 'canceled';
+}
+
 export function getGenerationOutput(status: GenerationStatusResponse) {
   return status.outputs?.[0] ?? status.output ?? null;
 }

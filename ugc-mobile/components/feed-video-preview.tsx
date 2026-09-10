@@ -1,3 +1,4 @@
+import { useIsFocused } from '@react-navigation/native';
 import { Image, type ImageProps } from 'expo-image';
 import { createVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
 import { Play } from 'lucide-react-native';
@@ -71,7 +72,10 @@ export function FeedVideoPreview({
   const { source: streamSource, requestKey } = useMediaSource(streamUrl || '');
   const { source: posterSource, requestKey: posterRequestKey } = useMediaSource(previewUrl || '');
   const playbackIdentity = `${streamUrl}|${requestKey}`;
-  const canPlay = active && Boolean(streamUrl);
+  // Keep navigation focus at the player boundary. Making it list extraData
+  // rerendered every mounted feed card on each tab switch just to pause one video.
+  const isFocused = useIsFocused();
+  const canPlay = active && isFocused && Boolean(streamUrl);
 
   const [failedPosterUrl, setFailedPosterUrl] = useState<string | null>(null);
   // Both latches are keyed to the stream url rather than being booleans, so a

@@ -22,7 +22,7 @@ describe('PostVisibilityMenu', () => {
     const items = within(menu).getAllByRole('menuitemradio');
     expect(items.map((item) => item.getAttribute('aria-checked'))).toEqual(['false', 'true', 'false']);
     expect(items[0]).toHaveTextContent('Public');
-    expect(items[0]).toHaveTextContent('In the showcase and feed.');
+    expect(items[0]).toHaveTextContent('In Explore and the feed.');
     expect(items[1]).toHaveTextContent('Only people with the link.');
     expect(items[2]).toHaveTextContent('Only you.');
   });

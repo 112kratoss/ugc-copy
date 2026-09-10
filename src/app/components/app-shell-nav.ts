@@ -41,9 +41,9 @@ const isDetailChildOf = (pathname: string, href: string) => {
 
 /**
  * A post and a creator profile are their own surfaces, not sub-pages of the
- * Showcase feed they happen to sit under in the path. Either can be reached
+ * Explore feed they happen to sit under in the path. Either can be reached
  * from Home, `/feed`, Marketplace, Studio, or a shared link, so claiming the
- * Showcase nav item would tell the viewer they are somewhere they are not.
+ * Explore nav item would tell the viewer they are somewhere they are not.
  * Both get their own title below instead.
  */
 const isPostDetailPath = (pathname: string) => isDetailChildOf(pathname, '/showcase');
@@ -96,8 +96,8 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
   },
   {
     id: 'showcase',
-    label: 'Showcase',
-    shortLabel: 'Showcase',
+    label: 'Explore',
+    shortLabel: 'Explore',
     href: '/showcase',
     description: 'Community inspiration and remixable posts',
     icon: Users,

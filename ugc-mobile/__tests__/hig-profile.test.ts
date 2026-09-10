@@ -190,7 +190,7 @@ describe('a creator profile that cannot load', () => {
   });
 
   /** A missing creator is not retryable, so it offers a way on instead. */
-  it('offers Showcase when the creator is gone and a retry when it is not', () => {
-    expect(creator).toContain("label={notFound ? 'Browse Showcase' : 'Try again'}");
+  it('offers Explore when the creator is gone and a retry when it is not', () => {
+    expect(creator).toContain("label={notFound ? 'Go to Explore' : 'Try again'}");
   });
 });

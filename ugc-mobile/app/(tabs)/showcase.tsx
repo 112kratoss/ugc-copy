@@ -3,7 +3,7 @@ import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/r
 import { router, useLocalSearchParams } from 'expo-router';
 import { ImageIcon, MoreVertical, Play, RefreshCw, Search, X } from 'lucide-react-native';
 import { useIsFocused, useScrollToTop } from '@react-navigation/native';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AccessibilityInfo, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -128,8 +128,6 @@ const LOAD_MORE_COOLDOWN_MS = 800;
 const FEED_HORIZONTAL_PADDING = 8;
 /** One relayout per tick instead of one per resolved preview image. */
 const SHOWCASE_ASPECT_RATIO_FLUSH_MS = 50;
-/** Stable empty list so a blurred feed does not churn `extraData`. */
-const NO_ACTIVE_VIDEO_IDS: string[] = [];
 
 export default function ShowcaseScreen() {
   const { api, user } = useAuth();
@@ -141,7 +139,7 @@ export default function ShowcaseScreen() {
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const tabBarMetrics = getMagicTabBarMetrics(width, bottomInset);
-  const gridLayout = getShowcaseGridLayout(width);
+  const gridLayout = useMemo(() => getShowcaseGridLayout(width), [width]);
   const feedRef = useRef<FlashListRef<ShowcaseMasonryCard>>(null);
   useScrollToTop(feedRef);
   const routeFilterId = resolveMobileShowcaseFeedFilterId(routeParams.filter);
@@ -164,8 +162,8 @@ export default function ShowcaseScreen() {
   const activeToolLabel = useMemo(() => activeTool ? formatToolLabel(activeTool) : null, [activeTool]);
   const [activeVideoIds, setActiveVideoIds] = useState<string[]>([]);
   const [resolvedAspectRatios, setResolvedAspectRatios] = useState<Record<string, number>>({});
-  // A fresh `[]` here would defeat the extraData memo on every blurred render.
-  const visibleActiveVideoIds = isFocused ? activeVideoIds : NO_ACTIVE_VIDEO_IDS;
+  // Player-level focus gating avoids invalidating every cell on a tab switch.
+  const visibleActiveVideoIds = activeVideoIds;
   const [isSwipingMedia, setIsSwipingMedia] = useState(false);
   const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
   const [searchVisible, setSearchVisible] = useState(false);
@@ -460,7 +458,7 @@ export default function ShowcaseScreen() {
     void showcaseQuery.refetch().finally(() => setPullRefreshing(false));
   };
 
-  const openPost = (item: ShowcaseFeedItem) => {
+  const openPost = useCallback((item: ShowcaseFeedItem) => {
     haptic.light();
     recordFeedEvent(item, 'open');
     queryClient.setQueryData<ShowcasePostResponse>(createShowcasePostQueryKey(item.id, user?.id), {
@@ -473,7 +471,7 @@ export default function ShowcaseScreen() {
       feedSessionId: feedSession.feedSessionId,
       algorithmVersion: item.recommendation?.algorithmVersion ?? feedSession.algorithmVersion,
     }) as never);
-  };
+  }, [queryClient, user?.id, recordFeedEvent, feedSession.feedSessionId, feedSession.algorithmVersion]);
 
   const applyFeedFeedback = (eventType: 'not_interested' | 'hide_creator') => {
     const item = feedbackItem;
@@ -508,10 +506,10 @@ export default function ShowcaseScreen() {
     void runtime.api.recordShowcaseFeedEvent(request)
       .then(() => AccessibilityInfo.announceForAccessibility(eventType === 'hide_creator'
         ? user
-          ? `${formatCreatorLabel(item.creator.username || item.creator.name)} hidden from your Showcase.`
+          ? `${formatCreatorLabel(item.creator.username || item.creator.name)} hidden from your feed.`
           : `${formatCreatorLabel(item.creator.username || item.creator.name)} hidden for this visit.`
         : user
-          ? 'Post removed. Your Showcase will adapt.'
+          ? 'Post removed. Your feed will adapt.'
           : 'Post removed for this visit.'))
       .catch(() => {
         if (!user) forgetAnonymousShowcaseFeedRemoval(target);
@@ -519,11 +517,11 @@ export default function ShowcaseScreen() {
           queryClient.setQueryData(cachedQueryKey, cachedData);
         });
         showMessageDialog({
-          title: 'Couldn’t update your Showcase',
+          title: 'Couldn’t update your feed',
           message: 'The post was restored. Check your connection and try again.',
         });
         void AccessibilityInfo.announceForAccessibility(
-          'Couldn’t update your Showcase. The post was restored.'
+          'Couldn’t update your feed. The post was restored.'
         );
       });
   };
@@ -558,7 +556,7 @@ export default function ShowcaseScreen() {
           { queryKey: viewerFeedQueryKey },
           (current) => removeShowcaseFeedItemsFromInfiniteData(current, { postId: item.id })
         );
-        void AccessibilityInfo.announceForAccessibility('Content reported and removed from your Showcase.');
+        void AccessibilityInfo.announceForAccessibility('Content reported and removed from your feed.');
       } catch (error) {
         haptic.error();
         showErrorDialog('Could not report content', error);
@@ -622,11 +620,11 @@ export default function ShowcaseScreen() {
     });
   };
 
-  const openCreator = (item: ShowcaseFeedItem) => {
+  const openCreator = useCallback((item: ShowcaseFeedItem) => {
     const username = item.creator.username?.trim();
     if (!username) return;
     router.push(`/creators/${encodeURIComponent(username)}` as never);
-  };
+  }, []);
 
   // Memoized: an inline literal here changes identity on every parent render,
   // which makes FlashList re-render every mounted cell instead of only when
@@ -636,13 +634,13 @@ export default function ShowcaseScreen() {
     [visibleActiveVideoIds, resolvedAspectRatios]
   );
 
-  const renderCard: ListRenderItem<ShowcaseMasonryCard> = ({ item, target, index }) => {
+  const renderCard: ListRenderItem<ShowcaseMasonryCard> = useCallback(({ item, target, index }) => {
     return (
       <MasonryCardCell layout={gridLayout} index={index}>
         <MasonryPin
           card={item}
           layout={gridLayout}
-          activeVideoIds={target === 'Cell' ? visibleActiveVideoIds : []}
+          activeVideo={target === 'Cell' && visibleActiveVideoIds.includes(item.id)}
           resolvedAspectRatio={resolvedAspectRatios[item.id]}
           onAspectRatio={queueAspectRatio}
           onOpenCreator={openCreator}
@@ -652,7 +650,7 @@ export default function ShowcaseScreen() {
         />
       </MasonryCardCell>
     );
-  };
+  }, [gridLayout, visibleActiveVideoIds, resolvedAspectRatios, openCreator, openPost, handleMediaScrollToggle]);
 
   return (
     <WorkspaceSideMenuGestureLayer bottomOffset={tabBarMetrics.contentBottomPadding} enabled={!isSwipingMedia}>
@@ -705,7 +703,7 @@ export default function ShowcaseScreen() {
                     supplements a control, it never replaces one. */}
                 <WorkspaceMenuButton />
                 <Text accessibilityRole="header" selectable style={{ flex: 1, color: appTheme.colors.text, ...appTheme.type.pageTitle }}>
-                  Showcase
+                  Explore
                 </Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                   <IconButton label="Search creators, posts, and recipes" onPress={() => setSearchVisible(true)}>
@@ -713,7 +711,7 @@ export default function ShowcaseScreen() {
                   </IconButton>
                   <IconButton
                     disabled={showcaseQuery.isFetching && !showcaseQuery.isFetchingNextPage}
-                    label="Refresh Showcase"
+                    label="Refresh Explore"
                     onPress={handleRefresh}
                   >
                     <RefreshCw size={appTheme.icon.default} color={appTheme.colors.text} />
@@ -761,10 +759,10 @@ export default function ShowcaseScreen() {
               <View style={{ gap: appTheme.spacing.gap }}>
                 <StatusBlock
                   tone="danger"
-                  title="Could not load Showcase"
+                  title="Could not load Explore"
                   body={showcaseFeedErrorBody(showcaseQuery.error)}
                 />
-                <SecondaryButton label="Retry Showcase" onPress={handleRefresh} />
+                <SecondaryButton label="Retry Explore" onPress={handleRefresh} />
               </View>
             ) : null}
             {isFirstLoad ? <ShowcaseSkeletonGrid layout={gridLayout} /> : null}
@@ -957,10 +955,10 @@ function BottomLoader() {
   );
 }
 
-function MasonryPin({
+const MasonryPin = memo(function MasonryPin({
   card,
   layout,
-  activeVideoIds,
+  activeVideo,
   resolvedAspectRatio,
   onAspectRatio,
   onFeedbackOpen,
@@ -970,7 +968,7 @@ function MasonryPin({
 }: {
   card: ShowcaseMasonryCard;
   layout: ShowcaseGridLayout;
-  activeVideoIds: string[];
+  activeVideo: boolean;
   resolvedAspectRatio?: number;
   onAspectRatio: (cardId: string, ratio: number) => void;
   onFeedbackOpen: (item: ShowcaseFeedItem) => void;
@@ -983,7 +981,7 @@ function MasonryPin({
   const mediaHeight = getShowcaseMediaHeight(card, columnWidth, resolvedAspectRatio);
   const accent = accentColor(card.accent);
   const isVideoCard = isShowcaseVideoPreviewCandidate(card.item);
-  const showActiveVideo = isVideoCard && activeVideoIds.includes(card.id) && Boolean(card.mediaUrl);
+  const showActiveVideo = isVideoCard && activeVideo && Boolean(card.mediaUrl);
   // Reduce Motion turns every preview back into a poster without changing the
   // election, so the badge asks the same question the tile does.
   const reducedMotion = useReducedMotion();
@@ -1065,7 +1063,7 @@ function MasonryPin({
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Showcase controls for ${card.title}`}
+          accessibilityLabel={`Explore controls for ${card.title}`}
           accessibilityHint="Hide this post or this creator from recommendations"
           hitSlop={4}
           onPress={() => onFeedbackOpen(card.item)}
@@ -1085,7 +1083,7 @@ function MasonryPin({
       </View>
     </View>
   );
-}
+});
 
 function formatCreatorLabel(label: string) {
   const clean = label.trim() || 'creator';

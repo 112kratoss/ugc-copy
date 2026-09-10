@@ -1214,7 +1214,7 @@ function VisibilitySheet({
   onChange: (value: PostComposerDraft['visibility']) => void;
 }) {
   const options: Array<{ id: PostComposerDraft['visibility']; label: string; body: string }> = [
-    { id: 'public', label: 'Public', body: 'Visible in Showcase and your profile.' },
+    { id: 'public', label: 'Public', body: 'Visible in Explore and your profile.' },
     { id: 'unlisted', label: 'Unlisted', body: 'Only people with the link can open it.' },
     { id: 'private', label: 'Private', body: 'Only you can see it in Studio.' },
   ];
@@ -3958,10 +3958,10 @@ function StorySection({
   return (
     <MinimalComposerSection
       title="Story"
-      body="The public content visible in Showcase."
+      body="The public content visible in Explore."
       action={(
         <MiniAction
-          label={isDescriptionOpen ? 'Hide description' : 'Add Showcase description'}
+          label={isDescriptionOpen ? 'Hide description' : 'Add Explore description'}
           onPress={onToggleDescription}
         />
       )}
@@ -3977,11 +3977,11 @@ function StorySection({
         />
       </FieldBlock>
       {isDescriptionOpen ? (
-        <FieldBlock label="Showcase description">
+        <FieldBlock label="Explore description">
           <ComposerInput
             value={draft.description}
             onChangeText={(description) => onChange({ description })}
-            placeholder="Optional: give the post a short one-line setup for Showcase and previews."
+            placeholder="Optional: give the post a short one-line setup for Explore and previews."
             multiline
             minHeight={78}
             editable={!disabled}
@@ -4505,7 +4505,7 @@ function PublishActionCard({
 function getPublishActionBody(visibility: PostComposerDraft['visibility']) {
   if (visibility === 'private') return 'Saved privately in Studio.';
   if (visibility === 'unlisted') return 'Share by link.';
-  return 'Visible in Showcase.';
+  return 'Visible in Explore.';
 }
 
 function ComposerInput({

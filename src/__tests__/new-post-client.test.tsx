@@ -1313,7 +1313,7 @@ describe('NewPostClient', () => {
 
     expect(screen.queryByPlaceholderText(/optional: give the post a short one-line setup/i)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /add showcase description/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add explore description/i }));
 
     expect(screen.getByPlaceholderText(/optional: give the post a short one-line setup/i)).toBeInTheDocument();
   });

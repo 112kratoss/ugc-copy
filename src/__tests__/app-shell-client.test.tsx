@@ -187,7 +187,7 @@ describe('AppShellClient', () => {
     expect(screen.getAllByRole('link', { name: 'Marketplace' }).some((link) => link.getAttribute('aria-current') === 'page')).toBe(true);
   });
 
-  it('presents a post as its own surface rather than part of Showcase', () => {
+  it('presents a post as its own surface rather than part of Explore', () => {
     mockedPathname = '/showcase/post-1';
 
     render(
@@ -258,7 +258,7 @@ describe('AppShellClient', () => {
     });
 
     mockedScrollY = 640;
-    fireEvent.click(within(mobileNavigation).getByRole('link', { name: 'Showcase' }));
+    fireEvent.click(within(mobileNavigation).getByRole('link', { name: 'Explore' }));
     homeRender.unmount();
 
     mockedPathname = '/showcase';

@@ -146,7 +146,7 @@ function ReelLoadingFallback() {
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 text-sm font-bold text-white backdrop-blur-sm">
       <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-zinc-950 px-5 py-3">
         <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-        Opening Showcase
+        Opening Explore
       </span>
     </div>
   );
@@ -676,9 +676,9 @@ export default function OwnerProfileMediaHub({
     },
     saved: {
       title: 'Nothing saved yet',
-      body: 'Save useful posts from Showcase and they will stay collected here.',
+      body: 'Save useful posts from Explore and they will stay collected here.',
       href: '/showcase',
-      cta: 'Browse Showcase',
+      cta: 'Go to Explore',
     },
     creations: {
       title: 'No raw creations yet',
@@ -797,7 +797,7 @@ export default function OwnerProfileMediaHub({
             <div className="text-xs font-bold uppercase tracking-[0.2em] text-[var(--ui-primary)]">Your media</div>
             <h2 className="mt-2 text-2xl font-semibold tracking-tight text-white sm:text-3xl">From private creation to public post</h2>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-              Showcase viewers see posts in the reel. Your raw creations stay here for preview and editing.
+              Explore viewers see posts in the reel. Your raw creations stay here for preview and editing.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">

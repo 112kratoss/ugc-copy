@@ -166,7 +166,7 @@ describe('HIG tab bars', () => {
   );
 
   it('names every visible tab', () => {
-    expect(visibleTabs).toEqual(['Home', 'Showcase', 'Alerts', 'Profile']);
+    expect(visibleTabs).toEqual(['Home', 'Explore', 'Alerts', 'Profile']);
   });
 
   /** Tab bars: "Use single words whenever possible." */

@@ -43,13 +43,13 @@ describe('NavbarClient', () => {
   it('keeps public navigation labels stable between server markup and client render', () => {
     const serverMarkup = renderToString(<NavbarClient />);
 
-    expect(serverMarkup).toContain('Community');
+    expect(serverMarkup).toContain('Explore');
     expect(serverMarkup).toContain('Search');
     expect(serverMarkup).not.toContain('Feed');
 
     render(<NavbarClient />);
 
-    expect(screen.getAllByRole('link', { name: 'Community' })).toHaveLength(1);
+    expect(screen.getAllByRole('link', { name: 'Explore' })).toHaveLength(1);
     expect(screen.getAllByRole('link', { name: 'Search' })).toHaveLength(1);
     expect(screen.queryByRole('link', { name: 'Feed' })).not.toBeInTheDocument();
   });

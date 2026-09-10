@@ -193,6 +193,15 @@ describe('immersive viewer actions', () => {
     expect(getViewerActionGroupLabel('share')).toBe('Media actions');
   });
 
+  it('calls the destination Explore in the feed-preference group, not Showcase', () => {
+    // The rename is easy to miss here: this label lives in a function rather
+    // than in JSX, and ~40 legitimate uses of the old word survive as routes,
+    // query keys and identifiers, so a grep for it is mostly noise.
+    expect(getViewerActionGroupLabel('not-interested')).toBe('Explore preferences');
+    expect(getViewerActionGroupLabel('hide-creator')).toBe('Explore preferences');
+    expect(getViewerActionGroupLabel('report-content')).toBe('Safety');
+  });
+
   it('fills the save heart when the post is already saved', () => {
     expect(getSaveHeartIconProps({ isSaved: true })).toMatchObject({
       color: '#ff3b64',

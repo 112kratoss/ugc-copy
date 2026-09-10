@@ -404,7 +404,7 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
                             Creator community
                         </div>
                         <h1 className="text-4xl font-extrabold tracking-[-0.035em] text-[var(--ui-text-primary)] sm:text-5xl">
-                            Showcase
+                            Explore
                         </h1>
                         <p className="mt-3 max-w-2xl text-sm leading-6 text-[var(--ui-text-muted)] sm:text-base">
                             Fresh creator posts with optional recipes. Browse the result, then save it, remix it, or open the reusable process.
@@ -429,7 +429,7 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
                 </header>
 
                 <nav
-                    aria-label="Showcase filters"
+                    aria-label="Explore filters"
                     className="sticky top-[72px] z-30 mb-7 rounded-[28px] border border-[var(--ui-border-default)] bg-[rgba(25,25,28,0.92)] p-3 shadow-[0_12px_30px_rgba(0,0,0,0.24)] backdrop-blur-xl sm:p-4"
                 >
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">

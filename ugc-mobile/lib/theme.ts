@@ -30,6 +30,12 @@ const colors = {
   focus: '#ffaa94',
   selected: '#2a1b1a',
   selectedStrong: '#3a2220',
+  navigationSelected: '#303033',
+  navigationIconFill: '#804331',
+  // The raised create control reads as a lit object: warm at the top where the
+  // light lands, deeper at the bottom. Flat fill made it a sticker.
+  navigationCreateTop: '#FFA463',
+  navigationCreateBottom: '#F4552A',
   pressed: 'rgba(255,122,89,0.13)',
 
   // Semantic colors are deliberately distinct from the brand action.
@@ -246,6 +252,8 @@ export const appTheme = {
   },
   motion: {
     duration: {
+      navigation: 140,
+      navigationSwell: 90,
       state: 180,
       // What `Reveal` actually ships. The token said 240 while the only
       // component that reveals anything ran 360, and since nothing consumed
@@ -266,6 +274,13 @@ export const appTheme = {
       pressedCard: 0.975,
       pressedControl: 0.9,
       selected: 1.12,
+      navigationSwellX: 1.012,
+      navigationSwellY: 1.055,
+      // Volume-conserving: the capsule gains along its travel and gives back
+      // across it, so the lean reads as weight rather than as growth.
+      navigationTravelX: 1.16,
+      navigationTravelY: 0.9,
+      navigationCapsule: 1.045,
     },
     // Springs rather than eased curves: the settle is the point. Friction is
     // high enough that the overshoot reads as responsiveness, not a glitch.
@@ -284,9 +299,18 @@ export const appTheme = {
       // the screen. This sits at ~0.88, so the settle is still felt but the
       // overshoot lands under a pixel.
       panel: { stiffness: 520, damping: 38, mass: 0.9 },
+      navigationSettle: { stiffness: 380, damping: 23, mass: 0.8 },
     },
   },
   shadow: {
+    navigation: {
+      boxShadow: '0 6px 16px rgba(0,0,0,0.24)',
+    },
+    // Coloured rather than neutral: the control should look like it is casting
+    // its own light onto the dock, not merely sitting above it.
+    navigationCreate: {
+      boxShadow: '0 8px 22px rgba(244,85,42,0.45)',
+    },
     panel: {
       boxShadow: '0 14px 34px rgba(0,0,0,0.30)',
     },
