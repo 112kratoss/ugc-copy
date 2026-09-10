@@ -47,6 +47,7 @@ import {
 } from './notifications';
 import {
   clearPersistedSupabaseAuthSession,
+  duringSignOut,
   initializeSupabaseAuth,
   isSupabaseConfigured,
   supabase,
@@ -109,6 +110,9 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 const CACHED_ACCESS_TOKEN_MIN_TTL_MS = 30 * 1000;
+// Push unregistration is best-effort, so sign-out stops waiting for it well
+// before the API client's own 30 s request timeout.
+const SIGN_OUT_PUSH_UNREGISTER_DEADLINE_MS = 10 * 1000;
 
 export { getRegisteredUser, isGuestSession } from './guest-session';
 
@@ -123,6 +127,16 @@ function getUsableCachedAccessToken(session: Session | null, now = Date.now()): 
   return session.expires_at * 1000 - now > CACHED_ACCESS_TOKEN_MIN_TTL_MS
     ? session.access_token
     : null;
+}
+
+async function unregisterPushBeforeSignOut(api: MagicbookletApiClient) {
+  const deadline = new AbortController();
+  const timeoutId = setTimeout(() => deadline.abort(), SIGN_OUT_PUSH_UNREGISTER_DEADLINE_MS);
+  try {
+    await unregisterMobilePushNotifications(api, { signal: deadline.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -616,24 +630,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = async () => {
     const feedIdentityTransition = beginFeedIdentityTransition(sessionRef.current);
     try {
-      if (isSupabaseConfigured) {
-        await unregisterMobilePushNotifications(api);
-        const { error } = await supabase.auth.signOut();
-        if (error) throw error;
+      try {
+        if (isSupabaseConfigured) {
+          // The refresh timer takes the same auth lock as sign-out. Paused, it
+          // can neither queue refresh checks behind a slow sign-out nor save
+          // the old session back after the local clear below.
+          await supabase.auth.stopAutoRefresh();
+          await duringSignOut(async () => {
+            await unregisterPushBeforeSignOut(api);
+            const { error } = await supabase.auth.signOut();
+            // The server could not confirm the sign-out: offline, timed out,
+            // or failing. Finish on this phone anyway, because the person asked
+            // to leave. Other devices keep their sessions until those end.
+            if (error) {
+              console.warn('Sign-out was not confirmed by the server; finishing on this device', error);
+            }
+          });
+        }
+      } catch (error) {
+        // A failure on the phone itself. The session stays, and the side menu
+        // offers a retry.
+        feedIdentityTransition?.cancel();
+        throw error;
       }
-    } catch (error) {
-      feedIdentityTransition?.cancel();
-      throw error;
+      feedIdentityTransition?.commit();
+      if (isSupabaseConfigured) await clearPersistedSupabaseAuthSession();
+      resetAuthState();
+      // Signing out drops back to a guest identity rather than to nothing, so
+      // browsing and buying keep working. The bootstrap latch is cleared because
+      // the previous guest session is gone with the sign-out.
+      guestBootstrapRef.current = false;
+      void ensureGuestSession();
+      router.replace('/auth');
+    } finally {
+      // After the local clear, so the timer resumes on the guest session, or on
+      // the untouched one when sign-out failed on this phone.
+      if (isSupabaseConfigured) void supabase.auth.startAutoRefresh();
     }
-    feedIdentityTransition?.commit();
-    if (isSupabaseConfigured) await clearPersistedSupabaseAuthSession();
-    resetAuthState();
-    // Signing out drops back to a guest identity rather than to nothing, so
-    // browsing and buying keep working. The bootstrap latch is cleared because
-    // the previous guest session is gone with the sign-out.
-    guestBootstrapRef.current = false;
-    void ensureGuestSession();
-    router.replace('/auth');
   };
 
   /**
