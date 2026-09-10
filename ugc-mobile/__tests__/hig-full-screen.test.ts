@@ -139,9 +139,9 @@ describe('S6 — the reel can be silenced without leaving it', () => {
     expect(isViewerAudioMuted()).toBe(true);
   });
 
-  it('drives the player from the store instead of a hard-coded false', () => {
-    expect(viewer).toContain('instance.muted = isViewerAudioMuted();');
-    expect(viewer).toContain('player.muted = audioMuted;');
+  it('honours the mute preference and always silences prepared neighbours', () => {
+    expect(viewer).toContain('instance.muted = !active || isViewerAudioMuted();');
+    expect(viewer).toContain('player.muted = !active || audioMuted;');
     expect(viewer).not.toContain('instance.muted = false;');
   });
 });
@@ -190,7 +190,7 @@ describe('S6 — one play badge, and one meaning for the destructive style', () 
   // Icons: one consistent size, level of detail and stroke thickness across the
   // set. The reel drew this badge four times at three treatments.
   it('draws the not-playing badge from a single component', () => {
-    expect(viewer.match(/<ViewerPlayBadge \/>/g)?.length).toBe(4);
+    expect(viewer.match(/<ViewerPlayBadge \/>/g)?.length).toBe(2);
     expect(viewer.match(/<Play size=/g)?.length).toBe(1);
     expect(viewer).toContain('size={appTheme.icon.hero}');
   });
