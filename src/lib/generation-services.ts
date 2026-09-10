@@ -27,6 +27,7 @@ import {
   VIDEO_MODELS,
   VOICEOVER_MODELS,
   isAudioModel,
+  isGptImage25ModelId,
   isImageModel,
   type ImageOutputFormat,
   type ImageModelId,
@@ -1197,6 +1198,16 @@ export function getKieImageModelId(model: ImageModelId, referenceCount: number):
     return referenceCount > 0 ? 'gpt-image-2-image-to-image' : 'gpt-image-2-text-to-image';
   }
 
+  // GPT Image 2.5 carries its tier in the provider id and dashes the version
+  // (gpt-image-2-5-flare-text-to-image), so the dotted app id never reaches Kie.
+  if (model === 'gpt-image-2.5-flare') {
+    return referenceCount > 0 ? 'gpt-image-2-5-flare-image-to-image' : 'gpt-image-2-5-flare-text-to-image';
+  }
+
+  if (model === 'gpt-image-2.5-sunburst') {
+    return referenceCount > 0 ? 'gpt-image-2-5-sunburst-image-to-image' : 'gpt-image-2-5-sunburst-text-to-image';
+  }
+
   if (model === 'seedream-5-pro') {
     return referenceCount > 0 ? 'seedream/5-pro-image-to-image' : 'seedream/5-pro-text-to-image';
   }
@@ -1785,7 +1796,8 @@ export async function startImageGeneration(params: {
         input.aspect_ratio = aspectRatio;
         input.enable_pro = qualityMode === 'quality';
       }
-    } else if (model === 'gpt-image-2') {
+    } else if (model === 'gpt-image-2' || isGptImage25ModelId(model)) {
+      // GPT Image 2.5 shares GPT Image 2's request schema; only the provider id differs.
       input = {
         prompt: compiledPrompt,
         aspect_ratio: aspectRatio,

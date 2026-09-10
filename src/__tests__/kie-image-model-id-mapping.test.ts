@@ -42,6 +42,16 @@ const VERIFIED_PROVIDER_IDS: Partial<Record<ImageModelId, { text: string; refere
   // `reference_image_urls` is required by the spec, so there is no text-only mode;
   // both columns are the same endpoint and validation enforces the reference.
   'ideogram-character': { text: 'ideogram/character', reference: 'ideogram/character' },
+  // Verified 2026-09-11 against docs.kie.ai/market/gpt/gpt-image-2-5-{flare,sunburst}-*.md.
+  // The tier is part of the id and the version is dashed, unlike the dotted app ids.
+  'gpt-image-2.5-flare': {
+    text: 'gpt-image-2-5-flare-text-to-image',
+    reference: 'gpt-image-2-5-flare-image-to-image',
+  },
+  'gpt-image-2.5-sunburst': {
+    text: 'gpt-image-2-5-sunburst-text-to-image',
+    reference: 'gpt-image-2-5-sunburst-image-to-image',
+  },
   // UNVERIFIED. No published spec was found for z-image under any probed path
   // on docs.kie.ai, so this records current behaviour rather than a confirmed
   // provider id. It is listed so the completeness check below still forces a

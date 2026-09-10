@@ -90,6 +90,9 @@ export const MODEL_ALIASES: Record<string, string> = {
   'kling-3.0-video': 'kling-3.0/video',
   // Identical request schema and official grammar; pro is the fidelity tier.
   'qwen3-pro': 'qwen3',
+  // Same OpenAI image model family, request schema and prompting guide as GPT Image 2.
+  'gpt-image-2.5-flare': 'gpt-image-2',
+  'gpt-image-2.5-sunburst': 'gpt-image-2',
   'wan-2.7-image-pro': 'wan-2.7-image',
   // Same one-shot caption grammar; fast/ultra are speed/quality tiers.
   'imagen-4-fast': 'imagen-4',

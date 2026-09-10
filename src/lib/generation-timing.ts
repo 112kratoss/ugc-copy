@@ -59,6 +59,9 @@ const IMAGE_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {
   'qwen3': 105_000,
   'qwen3-pro': 135_000,
   'ideogram-character': 120_000,
+  // GPT Image 2's figure until real GPT Image 2.5 runs give each tier its own.
+  'gpt-image-2.5-flare': 120_000,
+  'gpt-image-2.5-sunburst': 120_000,
   // Registration audit 2026-08-16: these models had no estimate, which silently
   // disabled their progress bars (estimateGenerationDurationMs returns null).
   'seedream-5-lite': 105_000,

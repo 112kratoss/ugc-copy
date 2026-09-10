@@ -1,0 +1,548 @@
+{
+  "manifestVersion": 1,
+  "mode": "clone-active",
+  "release": {
+    "schemaVersion": 2,
+    "revision": "gpt-image-2-5-20260911",
+    "basedOnRevision": "reference-audit-20260904",
+    "changeNote": "Add GPT Image 2.5 Flare and Sunburst alongside GPT Image 2, which stays. Kie prices both tiers 6/10/16 credits at 1K/2K/4K (kie.ai/gpt-image-2-5 and kie.ai/pricing, read 2026-09-11). Resolution caps: 27:16, 16:27, 9:8, 8:9 and auto at 1K; 1:1 at 2K (model_api_references/gpt-image-2-5.md).",
+    "createdBy": "catalog-operations"
+  },
+  "upgrade": {
+    "legacyDescriptorsToV2": true
+  },
+  "expectedModelIds": [
+    "flux-2-pro",
+    "gemini-omni-video",
+    "gpt-image-2",
+    "grok-imagine-image",
+    "grok-imagine-image-2",
+    "grok-imagine-video",
+    "hailuo-2.3",
+    "happyhorse-1.1",
+    "ideogram-character",
+    "ideogram-v3",
+    "imagen-4",
+    "imagen-4-fast",
+    "imagen-4-ultra",
+    "kling-2.6",
+    "kling-3.0",
+    "kling-3.0-turbo",
+    "kling-3.0-video",
+    "kling-o3",
+    "minimax-h3",
+    "nano-banana-2",
+    "nano-banana-2-lite",
+    "nano-banana-pro",
+    "qwen3",
+    "qwen3-pro",
+    "seedance-1.5-pro",
+    "seedance-2",
+    "seedance-2-5",
+    "seedance-2-fast",
+    "seedance-2-mini",
+    "seedream-5-lite",
+    "seedream-5-pro",
+    "veo-3.1",
+    "wan-2.7",
+    "wan-2.7-image",
+    "wan-2.7-image-pro",
+    "z-image"
+  ],
+  "addsModelIds": [
+    "gpt-image-2.5-flare",
+    "gpt-image-2.5-sunburst"
+  ],
+  "defaults": {
+    "web": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    },
+    "mobile": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    }
+  },
+  "entries": [
+    {
+      "modelId": "gpt-image-2.5-flare",
+      "kind": "image",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "gpt-image-2.5-flare",
+        "kind": "image",
+        "displayName": "GPT Image 2.5 Flare",
+        "description": "Fast GPT Image 2.5 tier for high-volume generation and edits",
+        "badge": "New",
+        "recommended": false,
+        "sortOrder": 190,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "select",
+            "defaultValue": "auto",
+            "options": [
+              {
+                "value": "auto",
+                "label": "auto"
+              },
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "3:2",
+                "label": "3:2"
+              },
+              {
+                "value": "2:3",
+                "label": "2:3"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              },
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "21:9",
+                "label": "21:9"
+              },
+              {
+                "value": "27:16",
+                "label": "27:16"
+              },
+              {
+                "value": "16:27",
+                "label": "16:27"
+              },
+              {
+                "value": "9:8",
+                "label": "9:8"
+              },
+              {
+                "value": "8:9",
+                "label": "8:9"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "1K",
+            "options": [
+              {
+                "value": "1K",
+                "label": "1K"
+              },
+              {
+                "value": "2K",
+                "label": "2K"
+              },
+              {
+                "value": "4K",
+                "label": "4K"
+              }
+            ]
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 16,
+            "supportsNaming": true
+          },
+          "videoReferences": null,
+          "audioReferences": null,
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": false,
+          "endFrame": false,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "references",
+            "label": "Reference images",
+            "default": true,
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 16,
+                "supportsNaming": true
+              }
+            ]
+          }
+        ],
+        "inputConstraints": []
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "kie-task-v1",
+      "adapterConfig": {
+        "settings": {
+          "aspectRatio": {
+            "field": "aspect_ratio"
+          },
+          "resolution": {
+            "field": "resolution"
+          }
+        },
+        "slots": {
+          "imageReferences": {
+            "field": "input_urls",
+            "cardinality": "many",
+            "source": "url"
+          }
+        },
+        "variantSelector": {
+          "type": "slot-presence",
+          "slot": "imageReferences",
+          "present": "reference",
+          "absent": "text"
+        }
+      },
+      "providerModelMap": {
+        "text": "gpt-image-2-5-flare-text-to-image",
+        "reference": "gpt-image-2-5-flare-image-to-image"
+      },
+      "pricingStrategy": "lookup",
+      "pricingConfig": {
+        "dimensions": [
+          {
+            "source": "setting",
+            "key": "resolution",
+            "defaultValue": "1K"
+          }
+        ],
+        "table": {
+          "1K": 6,
+          "2K": 10,
+          "4K": 16
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "normalizedDefaults": {
+          "outputFormat": "jpg",
+          "googleSearch": false
+        },
+        "rules": [
+          {
+            "type": "control-options",
+            "key": "resolution",
+            "options": [
+              "1K"
+            ],
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "aspectRatio",
+                "operator": "in",
+                "value": [
+                  "auto",
+                  "27:16",
+                  "16:27",
+                  "9:8",
+                  "8:9"
+                ]
+              }
+            ],
+            "message": "GPT Image 2.5 Flare renders the automatic aspect ratio, 27:16, 16:27, 9:8 and 8:9 at 1K only."
+          },
+          {
+            "type": "control-options",
+            "key": "resolution",
+            "options": [
+              "1K",
+              "2K"
+            ],
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "aspectRatio",
+                "operator": "equals",
+                "value": "1:1"
+              }
+            ],
+            "message": "GPT Image 2.5 Flare renders 1:1 at 1K or 2K only."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "gpt-image-2.5-sunburst",
+      "kind": "image",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "gpt-image-2.5-sunburst",
+        "kind": "image",
+        "displayName": "GPT Image 2.5 Sunburst",
+        "description": "Premium GPT Image 2.5 tier for polished, campaign-ready images and edits",
+        "badge": "Pro",
+        "recommended": false,
+        "sortOrder": 200,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "select",
+            "defaultValue": "auto",
+            "options": [
+              {
+                "value": "auto",
+                "label": "auto"
+              },
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "3:2",
+                "label": "3:2"
+              },
+              {
+                "value": "2:3",
+                "label": "2:3"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              },
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "21:9",
+                "label": "21:9"
+              },
+              {
+                "value": "27:16",
+                "label": "27:16"
+              },
+              {
+                "value": "16:27",
+                "label": "16:27"
+              },
+              {
+                "value": "9:8",
+                "label": "9:8"
+              },
+              {
+                "value": "8:9",
+                "label": "8:9"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "1K",
+            "options": [
+              {
+                "value": "1K",
+                "label": "1K"
+              },
+              {
+                "value": "2K",
+                "label": "2K"
+              },
+              {
+                "value": "4K",
+                "label": "4K"
+              }
+            ]
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 16,
+            "supportsNaming": true
+          },
+          "videoReferences": null,
+          "audioReferences": null,
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": false,
+          "endFrame": false,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "references",
+            "label": "Reference images",
+            "default": true,
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 16,
+                "supportsNaming": true
+              }
+            ]
+          }
+        ],
+        "inputConstraints": []
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "kie-task-v1",
+      "adapterConfig": {
+        "settings": {
+          "aspectRatio": {
+            "field": "aspect_ratio"
+          },
+          "resolution": {
+            "field": "resolution"
+          }
+        },
+        "slots": {
+          "imageReferences": {
+            "field": "input_urls",
+            "cardinality": "many",
+            "source": "url"
+          }
+        },
+        "variantSelector": {
+          "type": "slot-presence",
+          "slot": "imageReferences",
+          "present": "reference",
+          "absent": "text"
+        }
+      },
+      "providerModelMap": {
+        "text": "gpt-image-2-5-sunburst-text-to-image",
+        "reference": "gpt-image-2-5-sunburst-image-to-image"
+      },
+      "pricingStrategy": "lookup",
+      "pricingConfig": {
+        "dimensions": [
+          {
+            "source": "setting",
+            "key": "resolution",
+            "defaultValue": "1K"
+          }
+        ],
+        "table": {
+          "1K": 6,
+          "2K": 10,
+          "4K": 16
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "normalizedDefaults": {
+          "outputFormat": "jpg",
+          "googleSearch": false
+        },
+        "rules": [
+          {
+            "type": "control-options",
+            "key": "resolution",
+            "options": [
+              "1K"
+            ],
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "aspectRatio",
+                "operator": "in",
+                "value": [
+                  "auto",
+                  "27:16",
+                  "16:27",
+                  "9:8",
+                  "8:9"
+                ]
+              }
+            ],
+            "message": "GPT Image 2.5 Sunburst renders the automatic aspect ratio, 27:16, 16:27, 9:8 and 8:9 at 1K only."
+          },
+          {
+            "type": "control-options",
+            "key": "resolution",
+            "options": [
+              "1K",
+              "2K"
+            ],
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "aspectRatio",
+                "operator": "equals",
+                "value": "1:1"
+              }
+            ],
+            "message": "GPT Image 2.5 Sunburst renders 1:1 at 1K or 2K only."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    }
+  ]
+}

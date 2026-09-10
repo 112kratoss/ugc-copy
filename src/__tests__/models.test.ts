@@ -41,6 +41,16 @@ describe('Model Pricing', () => {
             expect(getImageCost('gpt-image-2', '2K')).toBe(10);
             expect(getImageCost('gpt-image-2', '4K')).toBe(16);
         });
+        it('prices both GPT Image 2.5 tiers like GPT Image 2, with no per-reference charge', () => {
+            // kie.ai/gpt-image-2-5 and kie.ai/pricing, read 2026-09-11: 6 / 10 / 16 credits
+            // for Flare and Sunburst alike, text-to-image and image-to-image alike.
+            for (const modelId of ['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst'] as const) {
+                expect(getImageCost(modelId, '1K')).toBe(6);
+                expect(getImageCost(modelId, '2K')).toBe(10);
+                expect(getImageCost(modelId, '4K')).toBe(16);
+                expect(getImageCost(modelId, '1K', { referenceCount: 16 })).toBe(6);
+            }
+        });
         it('prices the new Kie image models and rounds Seedream reference surcharges', () => {
             expect(getImageCost('nano-banana-2-lite', '1K')).toBe(4);
             expect(getImageCost('seedream-5-pro', '1K')).toBe(7);
@@ -105,6 +115,33 @@ describe('Model Pricing', () => {
             expect(isValidImageResolution('gpt-image-2', '4K', '1:1')).toBe(false);
             expect(isValidImageResolution('gpt-image-2', '2K', '4:5')).toBe(false);
             expect(isValidImageResolution('gpt-image-2', '4K', '16:9')).toBe(true);
+        });
+
+        it('renders the four GPT Image 2.5-only ratios at 1K and the common ratios at every tier', () => {
+            // Kie's spec states these two halves outright; `auto` and 1:1 are decided in
+            // getGptImage25ResolutionOptions and pinned in the test below.
+            for (const modelId of ['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst'] as const) {
+                for (const ratio of ['27:16', '16:27', '9:8', '8:9']) {
+                    expect(getImageResolutionOptions(modelId, ratio), `${modelId} ${ratio}`).toEqual(['1K']);
+                }
+                for (const ratio of ['3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9']) {
+                    expect(getImageResolutionOptions(modelId, ratio), `${modelId} ${ratio}`).toEqual(['1K', '2K', '4K']);
+                }
+                expect(isValidImageResolution(modelId, '2K', '27:16')).toBe(false);
+                expect(isValidImageResolution(modelId, '4K', '16:9')).toBe(true);
+                expect(supportsImageResolutionControl(modelId)).toBe(true);
+            }
+        });
+
+        it("keeps GPT Image 2's auto and square caps on GPT Image 2.5 until a run proves otherwise", () => {
+            // The 2.5 spec is silent on both; offering a combination Kie cannot render fails
+            // at task creation, so the caps stay until a real 2K-auto or 4K-square run lands.
+            for (const modelId of ['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst'] as const) {
+                expect(getImageResolutionOptions(modelId, 'auto')).toEqual(['1K']);
+                expect(getImageResolutionOptions(modelId, '1:1')).toEqual(['1K', '2K']);
+                expect(getImageResolutionOptions(modelId)).toEqual(['1K']);
+                expect(isValidImageResolution(modelId, '4K', '1:1')).toBe(false);
+            }
         });
 
         it('keeps existing image model resolution options unchanged', () => {
@@ -280,6 +317,8 @@ describe('Model Type Checks', () => {
         expect(isImageModel('nano-banana-2')).toBe(true);
         expect(isImageModel('nano-banana-pro')).toBe(true);
         expect(isImageModel('gpt-image-2')).toBe(true);
+        expect(isImageModel('gpt-image-2.5-flare')).toBe(true);
+        expect(isImageModel('gpt-image-2.5-sunburst')).toBe(true);
         expect(isImageModel('seedream-5-pro')).toBe(true);
         expect(isImageModel('flux-2-pro')).toBe(true);
         expect(isImageModel('z-image')).toBe(true);

@@ -2,6 +2,8 @@ import {
   IMAGE_MODELS,
   MOTION_MODELS,
   VIDEO_MODELS,
+  getImageResolutionOptions,
+  isGptImage25ModelId,
   type ImageModelId,
   type VideoModelId,
 } from '@/lib/models';
@@ -234,6 +236,15 @@ const IMAGE_PROVIDER_MODELS: Record<ImageModelId, Record<string, string>> = {
     text: 'ideogram/character',
     reference: 'ideogram/character',
   },
+  // The tier is part of the provider id, and the version is dashed: gpt-image-2-5-*.
+  'gpt-image-2.5-flare': {
+    text: 'gpt-image-2-5-flare-text-to-image',
+    reference: 'gpt-image-2-5-flare-image-to-image',
+  },
+  'gpt-image-2.5-sunburst': {
+    text: 'gpt-image-2-5-sunburst-text-to-image',
+    reference: 'gpt-image-2-5-sunburst-image-to-image',
+  },
 };
 
 /**
@@ -248,6 +259,20 @@ const NANO_BANANA_ADAPTER_CONFIG: Record<string, unknown> = {
     googleSearch: { field: 'google_search' },
   },
   slots: { imageReferences: { field: 'image_input', cardinality: 'many', source: 'url' } },
+};
+
+/**
+ * Shared by GPT Image 2 and both GPT Image 2.5 tiers, for the same reason: all three take
+ * `aspect_ratio`, `resolution` and `input_urls`. GPT Image 2.5 also accepts `background`,
+ * which stays at Kie's `auto` until the create pages expose a control for it.
+ */
+const GPT_IMAGE_ADAPTER_CONFIG: Record<string, unknown> = {
+  settings: {
+    aspectRatio: { field: 'aspect_ratio' },
+    resolution: { field: 'resolution' },
+  },
+  slots: { imageReferences: { field: 'input_urls', cardinality: 'many', source: 'url' } },
+  variantSelector: { type: 'slot-presence', slot: 'imageReferences', present: 'reference', absent: 'text' },
 };
 
 /** Shared by both Qwen tiers, for the same reason. */
@@ -302,14 +327,9 @@ const KIE_TASK_IMAGE_ADAPTER_CONFIGS: Partial<Record<ImageModelId, Record<string
     slots: { imageReferences: { field: 'input_urls', cardinality: 'many', source: 'url' } },
     variantSelector: { type: 'slot-presence', slot: 'imageReferences', present: 'reference', absent: 'text' },
   },
-  'gpt-image-2': {
-    settings: {
-      aspectRatio: { field: 'aspect_ratio' },
-      resolution: { field: 'resolution' },
-    },
-    slots: { imageReferences: { field: 'input_urls', cardinality: 'many', source: 'url' } },
-    variantSelector: { type: 'slot-presence', slot: 'imageReferences', present: 'reference', absent: 'text' },
-  },
+  'gpt-image-2': GPT_IMAGE_ADAPTER_CONFIG,
+  'gpt-image-2.5-flare': GPT_IMAGE_ADAPTER_CONFIG,
+  'gpt-image-2.5-sunburst': GPT_IMAGE_ADAPTER_CONFIG,
 };
 
 const VIDEO_PROVIDER_MODELS: Record<VideoModelId, Record<string, string>> = {
@@ -651,11 +671,52 @@ function videoPricingExpression(model: (typeof VIDEO_MODELS)[VideoModelId]): Pri
   }
 }
 
+function formatList(items: readonly string[]): string {
+  return items.length <= 1
+    ? items.join('')
+    : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
+/**
+ * Quote rules for an image model whose renderable resolutions depend on the aspect ratio,
+ * derived from getImageResolutionOptions so the quote refuses exactly what the create pages
+ * and the start-path check refuse. Aspect ratios that share a cap collapse into one rule.
+ */
+function aspectRatioResolutionRules(modelId: ImageModelId): Array<Record<string, unknown>> {
+  const model = IMAGE_MODELS[modelId];
+  const groups = new Map<string, { options: readonly string[]; aspectRatios: string[] }>();
+  for (const aspectRatio of model.aspectRatios) {
+    const options = getImageResolutionOptions(modelId, aspectRatio);
+    if (options.length === 0) {
+      throw new Error(`${modelId} offers aspect ratio ${aspectRatio} but no resolution renders it.`);
+    }
+    if (options.length === model.resolutions.length) continue;
+    const key = options.join('|');
+    const group = groups.get(key) ?? { options, aspectRatios: [] };
+    group.aspectRatios.push(aspectRatio);
+    groups.set(key, group);
+  }
+  return [...groups.values()].map(({ options, aspectRatios }) => ({
+    type: 'control-options',
+    key: 'resolution',
+    options: [...options],
+    conditions: [aspectRatios.length === 1
+      ? { source: 'setting', key: 'aspectRatio', operator: 'equals', value: aspectRatios[0] }
+      : { source: 'setting', key: 'aspectRatio', operator: 'in', value: aspectRatios }],
+    message: `${model.displayName} renders ${formatList(aspectRatios.map((ratio) => (
+      ratio === 'auto' ? 'the automatic aspect ratio' : ratio
+    )))} at ${options.join(' or ')} only.`,
+  }));
+}
+
 function validationConfigForModel(
   kind: GenerationModelKind,
   modelId: string,
 ): Record<string, unknown> {
   const rules: Array<Record<string, unknown>> = [];
+  if (kind === 'image' && isGptImage25ModelId(modelId)) {
+    rules.push(...aspectRatioResolutionRules(modelId));
+  }
   if (kind === 'image' && modelId === 'ideogram-character') {
     // `reference_image_urls` is required by the provider — there is no text-only
     // mode — so catch the empty case here rather than as a 422 from Kie.

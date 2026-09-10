@@ -12,12 +12,16 @@
  *     --revision image-dropins-20260815 \
  *     --based-on wan-provider-id-fix-20260725 \
  *     --change-note "Add qwen models." \
+ *     [--adds qwen3,qwen3-pro] \
  *     [--expected-exclude seedance-2-5,kling-o3] \
  *     [--acceptance-quotes path/to/quotes.json] \
  *     [--out config/generation-model-catalog/releases/<name>.json]
  *
- * Without --out the manifest prints to stdout. --expected-exclude removes ids
- * from expectedModelIds for staged rollouts where a later release adds them.
+ * Without --out the manifest prints to stdout. --adds names the models this release
+ * introduces: they are written to addsModelIds (staging refuses an entry that is neither
+ * in the base inventory nor declared there) and left out of expectedModelIds, which
+ * describes the release being cloned. --expected-exclude removes further ids from
+ * expectedModelIds for staged rollouts where a later release adds them.
  */
 import { writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
@@ -32,6 +36,7 @@ interface CliArgs {
   revision: string;
   basedOn: string;
   changeNote: string;
+  adds: string[];
   expectedExclude: string[];
   acceptanceQuotesPath: string | null;
   out: string | null;
@@ -62,6 +67,7 @@ function parseArgs(argv: string[]): CliArgs {
     revision: required('revision'),
     basedOn: required('based-on'),
     changeNote: required('change-note'),
+    adds: list(flags.get('adds')),
     expectedExclude: list(flags.get('expected-exclude')),
     acceptanceQuotesPath: flags.get('acceptance-quotes') ?? null,
     out: flags.get('out') ?? null,
@@ -134,11 +140,12 @@ export function emitManifest(options: EmitManifestOptions) {
   });
 
   const expectedExclude = options.expectedExclude ?? [];
+  const adds = options.addsModelIds ?? [];
   const expectedModelIds = options.expectedModelIds
     ? [...options.expectedModelIds].sort()
     : catalog.models
         .map((model) => model.id)
-        .filter((id) => !expectedExclude.includes(id))
+        .filter((id) => !expectedExclude.includes(id) && !adds.includes(id))
         .sort();
 
   const defaults = { web: { ...catalog.defaults }, mobile: { ...catalog.defaults } };
@@ -181,6 +188,7 @@ async function main() {
     revision: args.revision,
     basedOn: args.basedOn,
     changeNote: args.changeNote,
+    addsModelIds: args.adds,
     expectedExclude: args.expectedExclude,
     acceptanceQuotes,
   });

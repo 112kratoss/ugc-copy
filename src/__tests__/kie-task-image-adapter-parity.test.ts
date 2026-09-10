@@ -149,6 +149,21 @@ describe('kie-task-v1 image adapter parity with the legacy payload ladder', () =
     });
   });
 
+  it("gpt image 2.5 sends GPT Image 2's payload under each tier's provider id", () => {
+    // Both tiers share the ladder branch with gpt-image-2, so the golden body is the same
+    // shape; only the model id carries the tier. `background` is deliberately not sent.
+    for (const tier of ['flare', 'sunburst']) {
+      expect(build(`gpt-image-2.5-${tier}`, { ...BASE_SETTINGS, aspectRatio: '16:9', resolution: '4K' }).body).toEqual({
+        model: `gpt-image-2-5-${tier}-text-to-image`,
+        input: { prompt: PROMPT, aspect_ratio: '16:9', resolution: '4K' },
+      });
+      expect(build(`gpt-image-2.5-${tier}`, BASE_SETTINGS, [REF_URL, REF_URL_2]).body).toEqual({
+        model: `gpt-image-2-5-${tier}-image-to-image`,
+        input: { prompt: PROMPT, aspect_ratio: '1:1', resolution: '1K', input_urls: [REF_URL, REF_URL_2] },
+      });
+    }
+  });
+
   it('models with conditional payload logic stay on the legacy adapter', () => {
     // These cannot be expressed with the current transform set; the ladder in
     // generation-services remains their payload builder. Revisit if the adapter
