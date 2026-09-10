@@ -1,11 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 
+import { activeGenerationsQueryKey } from '@/lib/active-generations';
 import { useAuth } from '@/lib/auth';
 import { isGenerationInFlight } from '@/lib/generation';
 
-export function activeGenerationsQueryKey(userId: string | null | undefined) {
-  return ['active-generations', userId] as const;
-}
+export { activeGenerationsQueryKey, invalidateActiveGenerations } from '@/lib/active-generations';
 
 /**
  * How many of the viewer's runs are still working. Split from the tab bar the

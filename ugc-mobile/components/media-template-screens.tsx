@@ -60,6 +60,7 @@ import {
 } from '@/lib/template-run-resume';
 import { formatCreditAmount } from '@/lib/pricing';
 import { appTheme } from '@/lib/theme';
+import { invalidateActiveGenerations } from '@/lib/active-generations';
 import type {
   MediaTemplateDetail,
   MediaTemplateInputSlot,
@@ -385,7 +386,7 @@ function TemplateDetailContent({
 }
 
 export function MediaTemplateRunScreen({ runId }: { runId: string }) {
-  const { api, user, credits, isLoading: isAuthLoading, refreshProfile } = useAuth();
+  const { api, user, identityUserId, credits, isLoading: isAuthLoading, refreshProfile } = useAuth();
   const queryClient = useQueryClient();
   const [message, setMessage] = useState<string | null>(null);
   const [uploadingSlot, setUploadingSlot] = useState<string | null>(null);
@@ -433,7 +434,13 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
 
   const startMutation = useMutation({
     mutationFn: () => api.startTemplateRun(runId),
-    onSuccess: (response) => { applyRun(response); void refreshProfile(); },
+    onSuccess: (response) => {
+      applyRun(response);
+      void refreshProfile();
+      // A workflow run spends the same generation pipeline, so the create ring
+      // should light for it too. Its poll is off at a count of zero.
+      invalidateActiveGenerations(queryClient, identityUserId);
+    },
     onError: (error) => setMessage(errorMessage(error, 'Could not start this workflow.')),
   });
   const retryMutation = useMutation({
