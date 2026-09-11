@@ -27,6 +27,7 @@
     "backfill:media-display-renditions": "tsx --env-file-if-exists=.env.local scripts/backfill-media-display-renditions.ts",
     "backfill:generation-display-renditions": "tsx --env-file-if-exists=.env.local scripts/backfill-generation-display-renditions.ts",
     "backfill:post-media-previews": "npm run backfill:media-previews",
+    "regenerate:video-posters": "tsx --env-file-if-exists=.env.local --tsconfig tsconfig.scripts.json scripts/regenerate-video-posters.ts",
     "backfill:showcase-assets": "node scripts/backfill-showcase-assets.mjs",
     "backfill:showcase-media-cache": "tsx --env-file-if-exists=.env.local scripts/backfill-showcase-media-cache.ts",
     "backfill:private-post-media": "tsx --env-file-if-exists=.env.local scripts/backfill-private-post-media.ts",

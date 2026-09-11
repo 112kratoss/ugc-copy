@@ -213,6 +213,7 @@ describe('AuthProvider startup performance', () => {
     });
 
     expect(state.stopAutoRefresh.mock.invocationCallOrder[0]).toBeLessThan(state.signOut.mock.invocationCallOrder[0]);
+    expect(state.signOut).toHaveBeenCalledWith({ scope: 'local' });
     expect(state.duringSignOut).toHaveBeenCalledOnce();
     expect(state.unregisterPush).toHaveBeenCalledWith(expect.anything(), { signal: expect.any(AbortSignal) });
     expect(state.clearPersistedSession).toHaveBeenCalledOnce();

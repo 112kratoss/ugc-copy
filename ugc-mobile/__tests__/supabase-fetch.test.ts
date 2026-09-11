@@ -5,7 +5,7 @@ import { createSupabaseAuthFetch } from '../lib/supabase-fetch';
 
 const SUPABASE_URL = 'https://project-ref.supabase.co';
 const STORAGE_KEY = 'sb-project-ref-auth-token';
-const LOGOUT_URL = `${SUPABASE_URL}/auth/v1/logout?scope=global`;
+const LOGOUT_URL = `${SUPABASE_URL}/auth/v1/logout?scope=local`;
 const REFRESH_URL = `${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`;
 const SIGN_IN_URL = `${SUPABASE_URL}/auth/v1/token?grant_type=password`;
 
@@ -89,7 +89,7 @@ describe('Supabase auth requests during sign-out', () => {
   it('shows why the deadline exists: a stalled logout holds the auth lock, so getSession waits too', async () => {
     const client = clientWith(stalledFetch() as unknown as typeof fetch, memoryStorage({ [STORAGE_KEY]: storedSession() }));
 
-    const signOut = client.auth.signOut();
+    const signOut = client.auth.signOut({ scope: 'local' });
     const getSession = client.auth.getSession();
 
     expect(await settlesWithin(signOut, 200)).toBe(false);
@@ -104,7 +104,7 @@ describe('Supabase auth requests during sign-out', () => {
     });
     const client = clientWith(authFetch, storage);
 
-    const { error } = await client.auth.signOut();
+    const { error } = await client.auth.signOut({ scope: 'local' });
 
     expect(isAuthRetryableFetchError(error)).toBe(true);
     expect(await settlesWithin(client.auth.getSession(), 200)).toBe(true);

@@ -21,7 +21,7 @@ import { OverlayHost } from '@/components/overlay-host';
 import { SignOutOverlay } from '@/components/sign-out-overlay';
 import { CriticalUpdateSheet } from '@/components/critical-update-sheet';
 import { useOtaUpdateGate } from '@/lib/use-ota-update-gate';
-import { setSessionMergedHandler, setUpgradeRequiredHandler } from '@/lib/api-client';
+import { setSessionMergedHandler, setSessionRejectedHandler, setUpgradeRequiredHandler } from '@/lib/api-client';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { notificationBadgeQueryKey } from '@/lib/notification-badge';
 import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
@@ -111,6 +111,7 @@ function RootLayoutNav() {
           <StartupCoordinator />
           <UpgradeRequiredCoordinator />
           <SessionMergedCoordinator />
+          <SessionRejectedCoordinator />
           <OtaUpdateCoordinator />
           <SafeAreaProvider>
             <ThemeProvider value={navigationTheme}>
@@ -351,6 +352,29 @@ function SessionMergedCoordinator() {
       });
     });
     return () => setSessionMergedHandler(null);
+  }, []);
+
+  return null;
+}
+
+function SessionRejectedCoordinator() {
+  // Checks a session the server refused (401), usually one that ended on
+  // another device, instead of leaving every screen on an error until its token
+  // expires. Registered here for the same reason as SessionMergedCoordinator.
+  const { recoverRejectedSession } = useAuth();
+  const recoverRef = useRef(recoverRejectedSession);
+
+  useEffect(() => {
+    recoverRef.current = recoverRejectedSession;
+  }, [recoverRejectedSession]);
+
+  useEffect(() => {
+    setSessionRejectedHandler(() => {
+      void recoverRef.current().catch((error) => {
+        console.warn('Could not recover the refused session', error);
+      });
+    });
+    return () => setSessionRejectedHandler(null);
   }, []);
 
   return null;

@@ -46,6 +46,37 @@ export const GUEST_SESSION_MERGED: AuthNotice = {
   tone: 'info',
 };
 
+/**
+ * Shown when this device arrives at sign-in because the server refused its
+ * session: it ended somewhere else, most often when the account signed out on
+ * another device.
+ *
+ * Informational, like GUEST_SESSION_MERGED. Nothing failed here and nothing on
+ * the account was lost. It names the usual cause without claiming to be sure of
+ * it, since a removed session or a password change end it the same way, and
+ * points at the one action that resolves it.
+ */
+export const SESSION_ENDED_ELSEWHERE: AuthNotice = {
+  title: 'You were signed out',
+  body: 'Your session on this device ended, usually because the account signed out somewhere else. Sign in again to pick up where you left off.',
+  tone: 'info',
+};
+
+const REDIRECT_NOTICES = new Map<string, AuthNotice>([
+  ['session-merged', GUEST_SESSION_MERGED],
+  ['signed-out', SESSION_ENDED_ELSEWHERE],
+]);
+
+/**
+ * The notice a redirect asked the sign-in screen to show, from its `notice`
+ * route parameter. Only a known key maps to copy; anything else shows nothing,
+ * so a deep link cannot put its own text on the sign-in screen.
+ */
+export function authNoticeForRedirect(key: string | string[] | undefined): AuthNotice | null {
+  const value = Array.isArray(key) ? key[0] : key;
+  return value ? REDIRECT_NOTICES.get(value) ?? null : null;
+}
+
 /** Client-side checks, so a typo costs a glance rather than a round trip. */
 export const INVALID_EMAIL: AuthNotice = {
   title: 'Check the email address',

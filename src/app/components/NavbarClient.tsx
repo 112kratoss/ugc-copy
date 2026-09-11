@@ -183,7 +183,9 @@ export default function NavbarClient() {
   const handleLogout = async () => {
     setIsAccountMenuOpen(false);
     setIsMobileMenuOpen(false);
-    await supabase.auth.signOut();
+    // This browser only. The default (global) also ends the account's session
+    // on the person's phone, which then has every request refused.
+    await supabase.auth.signOut({ scope: 'local' });
     router.push('/');
     router.refresh();
   };

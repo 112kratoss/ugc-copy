@@ -55,8 +55,10 @@ import {
 import {
   isInvalidRefreshTokenError,
   isNetworkRequestFailedError,
+  isSessionEndedRefreshError,
   supabaseNetworkFailureMessage,
 } from './supabase-auth-recovery';
+import { probeSupabaseSession } from './supabase-session-probe';
 
 export type AuthMode = 'login' | 'signup';
 export type {
@@ -105,6 +107,11 @@ interface AuthContextValue {
    * and leaves the device on a fresh guest, ready to sign in.
    */
   abandonMergedGuestSession: () => Promise<void>;
+  /**
+   * Checks a session the server refused (401) with Supabase and, if it has
+   * ended, signs this device out locally and leaves it on a fresh guest.
+   */
+  recoverRejectedSession: () => Promise<void>;
   accountReauthenticationMethods: AccountReauthenticationMethod[];
   deleteAccount: (reauthentication?: AccountDeletionReauthentication) => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -153,6 +160,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const sessionUserIdRef = useRef<string | null>(null);
   const sessionRef = useRef<Session | null>(null);
   const guestBootstrapRef = useRef(false);
+  const rejectedSessionRecoveryRef = useRef<Promise<void> | null>(null);
   const [mergeState, setMergeState] = useState<GuestMergeState>('idle');
   const [mergeOutcome, setMergeOutcome] = useState<GuestAccountMergeStatus | null>(null);
   const authStateVersionRef = useRef(0);
@@ -645,10 +653,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           await supabase.auth.stopAutoRefresh();
           await duringSignOut(async () => {
             await unregisterPushBeforeSignOut(api);
-            const { error } = await supabase.auth.signOut();
+            // This device only. Supabase's default is a global sign-out, which also
+            // ended the account's session on every other phone, and each of those
+            // then had every request refused until its token expired.
+            const { error } = await supabase.auth.signOut({ scope: 'local' });
             // The server could not confirm the sign-out: offline, timed out,
             // or failing. Finish on this phone anyway, because the person asked
-            // to leave. Other devices keep their sessions until those end.
+            // to leave.
             if (error) {
               console.warn('Sign-out was not confirmed by the server; finishing on this device', error);
             }
@@ -656,7 +667,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       } catch (error) {
         // A failure on the phone itself. The session stays, and the side menu
-        // offers a retry.
+        // tells the person to try again.
         feedIdentityTransition?.cancel();
         throw error;
       }
@@ -721,6 +732,79 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     guestBootstrapRef.current = false;
     void ensureGuestSession();
     router.replace('/auth?notice=session-merged');
+  };
+
+  /**
+   * Recovery for a session token the server refused (401), which almost always
+   * means the session ended somewhere else: a sign-out on another device from a
+   * build that still signed out everywhere, for instance.
+   *
+   * The device cannot tell on its own. Its access token is self-contained and
+   * still carries a future expiry, so it would be sent, and refused, on every
+   * request until it ran out: up to an hour of error screens.
+   *
+   * Supabase is asked directly, and only a definitive answer is acted on. The
+   * API answers 401 whenever it cannot verify a token, including while Supabase
+   * Auth itself is failing, so the refusal alone proves nothing; tearing down or
+   * forcing a refresh on it would sign people out during an outage. See
+   * probeSupabaseSession for why the check is not a refresh.
+   */
+  const recoverRejectedSession = () => {
+    if (!isSupabaseConfigured) return Promise.resolve();
+    // Every in-flight request is refused at once; one check answers them all.
+    if (!rejectedSessionRecoveryRef.current) {
+      rejectedSessionRecoveryRef.current = checkRejectedSession().finally(() => {
+        rejectedSessionRecoveryRef.current = null;
+      });
+    }
+    return rejectedSessionRecoveryRef.current;
+  };
+
+  const checkRejectedSession = async () => {
+    const refusedSession = sessionRef.current;
+    if (!refusedSession?.access_token) return;
+
+    const verdict = await probeSupabaseSession({
+      supabaseUrl: env.supabaseUrl,
+      publishableKey: env.supabasePublishableKey,
+      accessToken: refusedSession.access_token,
+    });
+    if (verdict === 'refused') {
+      // Supabase answered, and refused this token without saying the session is
+      // gone: an expired or unverifiable token. It has just answered cleanly, so
+      // a refresh is safe to force, and it settles the question either way.
+      await initializeSupabaseAuth();
+      const { error } = await supabase.auth.refreshSession();
+      if (!isSessionEndedRefreshError(error)) return;
+    } else if (verdict !== 'ended') {
+      // Alive, or no clean answer: nothing to undo. A device still refused
+      // after the api-client's renotify window checks again.
+      return;
+    }
+
+    // A sign-in that finished while the check was running owns the device now.
+    // The refusal was about the identity it replaced.
+    const currentSession = sessionRef.current;
+    if (currentSession && currentSession.user?.id !== refusedSession.user?.id) return;
+
+    const wasGuest = isGuestSession(refusedSession);
+    const feedIdentityTransition = beginFeedIdentityTransition(refusedSession);
+    // Local scope, and no other server call: each would be refused like the
+    // request that started this. The push unregister route is skipped for the
+    // same reason; the local registration is cleared instead.
+    await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
+    await clearPersistedSupabaseAuthSession().catch(() => undefined);
+    // Guests never register for push, so only a registered session has any.
+    if (!wasGuest) await clearLocalMobilePushRegistration().catch(() => undefined);
+    feedIdentityTransition?.commit();
+    resetAuthState();
+    // Same convention as signOut: drop back to a guest rather than to nothing,
+    // so public browsing keeps working.
+    guestBootstrapRef.current = false;
+    void ensureGuestSession();
+    // A guest had nothing to sign back in to and carries on as a fresh one. A
+    // registered person is told why they are suddenly signed out.
+    if (!wasGuest) router.replace('/auth?notice=signed-out');
   };
 
   const deleteAccount = async (reauthentication?: AccountDeletionReauthentication) => {
@@ -808,6 +892,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signOut,
         isSigningOut,
         abandonMergedGuestSession,
+        recoverRejectedSession,
         accountReauthenticationMethods,
         deleteAccount,
         refreshProfile,
