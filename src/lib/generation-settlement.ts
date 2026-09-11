@@ -15,12 +15,12 @@ import {
  * These two functions are the last word on whether a user keeps their credits
  * or gets them back, and both are thin wrappers over atomic RPCs that own the
  * single-effect guarantee. They are isolated here so that guarantee is
- * reviewable without reading the start paths: the money decision is 86 lines,
+ * reviewable without reading the start paths: the money decision is 88 lines,
  * not a region of a 3,300-line file.
  *
  * Credit behavior remains owned by the same RPCs, status mapping, and errors.
  * Successful settlement also attempts deduplicated completed-remix notification
- * delivery; delivery failure cannot reverse settled credits. The 33 pgTAP assertions covering `settle_generation_failed`,
+ * delivery; delivery failure cannot reverse settled credits. The 39 pgTAP assertions covering `settle_generation_failed`,
  * `settle_generation_succeeded`, and `settle_generation_start_failed` continue
  * to be the proof that the RPCs behind these are single-effect under replay.
  */
