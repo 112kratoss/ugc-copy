@@ -1012,6 +1012,105 @@ describe('/api/generate-video route', () => {
     expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 
+  it('stores no reason when the provider fails a video without one', async () => {
+    // "Unknown error" is a display fallback, not the provider's reason. Stored,
+    // it would replace the client's own wording on every later poll and, being
+    // non-blank, could erase a reason an earlier settlement already recorded.
+    currentSupabaseMock = createSupabaseMock(null, {
+      id: 'gen-video-live-failed-2',
+      prediction_id: 'task-video-live-failed-2',
+      user_id: 'user-1',
+      status: 'processing',
+      output_url: null,
+      created_at: '2026-04-15T10:00:00.000Z',
+      completed_at: null,
+      model: 'kling-3.0-video',
+      category: 'video',
+      creation_mode: null,
+    });
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        code: 200,
+        msg: 'success',
+        data: {
+          state: 'fail',
+          completeTime: '2026-04-15T10:01:00.000Z',
+          failMsg: '   ',
+        },
+      }),
+    } as Response)));
+
+    const { GET } = await import('@/app/api/generate-video/route');
+    const response = await GET(
+      new Request('http://localhost/api/generate-video?id=task-video-live-failed-2', {
+        headers: { Authorization: 'Bearer token' },
+      }) as never
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      status: 'failed',
+      error: 'Unknown error',
+    });
+    expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('settle_generation_failed', {
+      p_prediction_id: 'task-video-live-failed-2',
+      p_completed_at: '2026-04-15T10:01:00.000Z',
+      p_error_message: null,
+    });
+  });
+
+  it.each([
+    ['carries no errorMessage', null, null],
+    ['carries an errorMessage', 'The prompt was blocked by the safety filter.', 'The prompt was blocked by the safety filter.'],
+  ])('reads a Veo failure reason from the task, never the response envelope, when it %s', async (_case, errorMessage, stored) => {
+    // A code-200 Veo body's top-level `msg` is "success". Falling back to it
+    // would record "success" as the reason the generation failed.
+    currentSupabaseMock = createSupabaseMock(null, {
+      id: 'gen-video-veo-failed-1',
+      prediction_id: 'task-video-veo-failed-1',
+      user_id: 'user-1',
+      status: 'processing',
+      output_url: null,
+      created_at: '2026-04-15T10:00:00.000Z',
+      completed_at: null,
+      model: 'veo3',
+      category: 'video',
+      creation_mode: null,
+    });
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        code: 200,
+        msg: 'success',
+        data: {
+          taskId: 'task-video-veo-failed-1',
+          successFlag: 2,
+          completeTime: '2026-04-15T10:01:00.000Z',
+          errorMessage,
+        },
+      }),
+    } as Response)));
+
+    const { GET } = await import('@/app/api/generate-video/route');
+    const response = await GET(
+      new Request('http://localhost/api/generate-video?id=task-video-veo-failed-1', {
+        headers: { Authorization: 'Bearer token' },
+      }) as never
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      status: 'failed',
+      error: stored ?? 'Unknown error',
+    });
+    expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('settle_generation_failed', {
+      p_prediction_id: 'task-video-veo-failed-1',
+      p_completed_at: '2026-04-15T10:01:00.000Z',
+      p_error_message: stored,
+    });
+  });
+
   it('settles live provider video success with the atomic backend RPC', async () => {
     const statusSignal = AbortSignal.abort();
     const mediaSignal = AbortSignal.abort();

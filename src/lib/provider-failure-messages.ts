@@ -42,8 +42,9 @@ const PROVIDER_FAILURE_RULES: readonly ProviderFailureRule[] = [
 
 /**
  * Maps a provider failure string to something worth showing a creator, leaving
- * anything unrecognised untouched. Blank input becomes the generic fallback so
- * callers never persist an empty reason.
+ * anything unrecognised untouched. Blank input becomes the generic fallback, a
+ * display message only: to decide what to persist, use
+ * `readProviderFailureReason`, which returns null instead.
  */
 export function describeProviderFailure(raw: string | null | undefined): string {
   const trimmed = typeof raw === 'string' ? raw.trim() : '';
@@ -56,4 +57,35 @@ export function describeProviderFailure(raw: string | null | undefined): string 
   );
 
   return rule ? rule.message : trimmed;
+}
+
+/**
+ * The failure reason to store for a provider task, rewritten for the person who
+ * will read it, or null when the task carries none.
+ *
+ * Pass the task object (`data.data` on a Kie response), never the whole body. A
+ * code-200 body's top-level `msg` is "success", so falling back to it records
+ * "success" as the reason a generation failed. The two shapes polled here
+ * disagree on the field name: the market endpoint reports `failMsg`, the Veo
+ * endpoint `errorMessage`. Both are accepted, and the first non-blank one wins.
+ *
+ * No placeholder is invented for a task with no reason. `settle_generation_failed`
+ * keeps a stored reason only against a blank one, so a stored "Unknown error"
+ * could erase a real reason from an earlier settlement. It would also replace
+ * the client's own wording on every later poll.
+ */
+export function readProviderFailureReason(task: unknown): string | null {
+  if (!task || typeof task !== 'object' || Array.isArray(task)) {
+    return null;
+  }
+
+  const record = task as Record<string, unknown>;
+  for (const key of ['failMsg', 'errorMessage'] as const) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) {
+      return describeProviderFailure(value);
+    }
+  }
+
+  return null;
 }

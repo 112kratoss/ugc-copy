@@ -742,6 +742,53 @@ describe('/api/generate route', () => {
     expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 
+  it('stores no reason when the provider fails a motion render without one', async () => {
+    // The generic wording is for display only; a stored placeholder would
+    // replace the client's own message and could erase a recorded reason.
+    currentSupabaseMock = createSupabaseMock({
+      id: 'gen-motion-live-failed-2',
+      prediction_id: 'task-motion-live-failed-2',
+      user_id: 'user-1',
+      status: 'processing',
+      output_url: null,
+      created_at: '2026-04-15T10:00:00.000Z',
+      completed_at: null,
+      model: 'kling-3.0',
+      category: 'video',
+      creation_mode: 'motion',
+      duration: 6,
+    });
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        code: 200,
+        msg: 'success',
+        data: {
+          state: 'fail',
+          completeTime: '2026-04-15T10:01:00.000Z',
+        },
+      }),
+    } as Response)));
+
+    const { GET } = await import('@/app/api/generate/route');
+    const response = await GET(
+      new Request('http://localhost/api/generate?id=task-motion-live-failed-2', {
+        headers: { Authorization: 'Bearer token' },
+      }) as never
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      status: 'failed',
+      error: 'Unknown error',
+    });
+    expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('settle_generation_failed', {
+      p_prediction_id: 'task-motion-live-failed-2',
+      p_completed_at: '2026-04-15T10:01:00.000Z',
+      p_error_message: null,
+    });
+  });
+
   it('settles live provider motion success with the atomic backend RPC', async () => {
     const statusSignal = AbortSignal.abort();
     const mediaSignal = AbortSignal.abort();
