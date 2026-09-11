@@ -296,9 +296,33 @@ describe('mobile notifications helper', () => {
       expoPushToken: 'ExponentPushToken[old123]',
       deviceId: 'device-1',
       platform: expect.any(String),
-    });
+    }, undefined);
     expect(notificationsMocks.unregisterForNotificationsAsync).toHaveBeenCalledTimes(1);
     expect(secureStoreMocks.deleteItemAsync).toHaveBeenCalledWith('magicbooklet.mobileNotifications.expoPushToken');
+  });
+
+  it('gives the unregister request the caller\'s deadline and still clears local state when it is cut short', async () => {
+    secureStoreMocks.getItemAsync
+      .mockResolvedValueOnce('ExponentPushToken[old123]')
+      .mockResolvedValueOnce('device-1');
+    const deadline = new AbortController();
+    const api = {
+      unregisterMobilePushToken: vi.fn((_body: unknown, signal?: AbortSignal) => new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new Error('Request aborted')), { once: true });
+      })),
+    };
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const { unregisterMobilePushNotifications } = await import('../lib/notifications');
+    const unregistering = unregisterMobilePushNotifications(api as never, { signal: deadline.signal });
+    await vi.waitFor(() => expect(api.unregisterMobilePushToken).toHaveBeenCalledTimes(1));
+    deadline.abort();
+    await unregistering;
+
+    expect(api.unregisterMobilePushToken).toHaveBeenCalledWith(expect.any(Object), deadline.signal);
+    expect(notificationsMocks.unregisterForNotificationsAsync).toHaveBeenCalledTimes(1);
+    expect(secureStoreMocks.deleteItemAsync).toHaveBeenCalledWith('magicbooklet.mobileNotifications.expoPushToken');
+    consoleError.mockRestore();
   });
 
   it('clears only local push state after the backend has deleted the account', async () => {

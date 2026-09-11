@@ -236,7 +236,10 @@ export async function registerForMobilePushNotifications(
   return { status: 'registered' as const, expoPushToken };
 }
 
-export async function unregisterMobilePushNotifications(api: MagicbookletApiClient) {
+export async function unregisterMobilePushNotifications(
+  api: MagicbookletApiClient,
+  { signal }: { signal?: AbortSignal } = {},
+) {
   if (!isNativeMobile()) {
     return;
   }
@@ -250,7 +253,7 @@ export async function unregisterMobilePushNotifications(api: MagicbookletApiClie
       ...(deviceId ? { deviceId } : {}),
       platform,
       ...(!expoPushToken && !deviceId ? { allDevices: true } : {}),
-    });
+    }, signal);
   } catch (error) {
     console.error('Failed to unregister mobile push token', error);
   }

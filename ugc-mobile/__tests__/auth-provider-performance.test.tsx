@@ -11,10 +11,16 @@ const state = vi.hoisted(() => ({
   clearLocalPush: vi.fn(),
   clearPersistedSession: vi.fn(),
   deleteAccount: vi.fn(),
+  duringSignOut: vi.fn(),
   getSession: vi.fn(),
   profileResolve: null as null | ((profile: { credits: number }) => void),
   queryClient: { clear: vi.fn(), fetchQuery: vi.fn() },
+  routerReplace: vi.fn(),
   sessionResolve: null as null | ((result: unknown) => void),
+  signOut: vi.fn(),
+  startAutoRefresh: vi.fn(),
+  stopAutoRefresh: vi.fn(),
+  unregisterPush: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-query', () => ({
@@ -26,7 +32,7 @@ vi.mock('expo-constants', () => ({
 }));
 
 vi.mock('expo-router', () => ({
-  router: { replace: vi.fn() },
+  router: { replace: state.routerReplace },
 }));
 
 vi.mock('react-native', () => ({
@@ -71,7 +77,7 @@ vi.mock('../lib/notifications', () => ({
   clearLocalMobilePushRegistration: state.clearLocalPush,
   registerForMobilePushNotifications: vi.fn(async () => undefined),
   subscribeToMobilePushTokenChanges: vi.fn(() => vi.fn()),
-  unregisterMobilePushNotifications: vi.fn(async () => undefined),
+  unregisterMobilePushNotifications: state.unregisterPush,
 }));
 vi.mock('../lib/supabase-auth-recovery', () => ({
   isInvalidRefreshTokenError: () => false,
@@ -80,6 +86,7 @@ vi.mock('../lib/supabase-auth-recovery', () => ({
 }));
 vi.mock('../lib/supabase', () => ({
   clearPersistedSupabaseAuthSession: state.clearPersistedSession,
+  duringSignOut: state.duringSignOut,
   initializeSupabaseAuth: vi.fn(async () => undefined),
   isSupabaseConfigured: true,
   supabase: {
@@ -91,7 +98,9 @@ vi.mock('../lib/supabase', () => ({
       },
       signInWithPassword: vi.fn(),
       signUp: vi.fn(),
-      signOut: vi.fn(),
+      signOut: state.signOut,
+      startAutoRefresh: state.startAutoRefresh,
+      stopAutoRefresh: state.stopAutoRefresh,
     },
   },
 }));
@@ -124,6 +133,12 @@ describe('AuthProvider startup performance', () => {
     state.clearPersistedSession.mockReset().mockResolvedValue(undefined);
     state.deleteAccount.mockReset();
     state.queryClient.clear.mockReset();
+    state.routerReplace.mockReset();
+    state.signOut.mockReset().mockResolvedValue({ error: null });
+    state.unregisterPush.mockReset().mockResolvedValue(undefined);
+    state.startAutoRefresh.mockReset().mockResolvedValue(undefined);
+    state.stopAutoRefresh.mockReset().mockResolvedValue(undefined);
+    state.duringSignOut.mockReset().mockImplementation((work: () => Promise<unknown>) => work());
   });
 
   it('reveals the persisted user before profile I/O and deduplicates the auth event refresh', async () => {
@@ -173,6 +188,113 @@ describe('AuthProvider startup performance', () => {
     });
     expect(latest.current?.credits).toBe(37);
 
+    renderer.act(() => tree?.unmount());
+  });
+
+  it('finishes signing out on this phone when the server cannot confirm it', async () => {
+    const latest: { current: ReturnType<typeof useAuth> | null } = { current: null };
+    function Probe() {
+      latest.current = useAuth();
+      return null;
+    }
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => {
+      tree = renderer.create(<AuthProvider><Probe /></AuthProvider>);
+    });
+    await renderer.act(async () => {
+      state.sessionResolve?.({ data: { session }, error: null });
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    // What auth-js returns when the logout request is aborted or offline.
+    state.signOut.mockResolvedValueOnce({ error: new Error('Supabase auth request timed out after 10000ms') });
+    await renderer.act(async () => {
+      await latest.current?.signOut();
+    });
+
+    expect(state.stopAutoRefresh.mock.invocationCallOrder[0]).toBeLessThan(state.signOut.mock.invocationCallOrder[0]);
+    expect(state.signOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(state.duringSignOut).toHaveBeenCalledOnce();
+    expect(state.unregisterPush).toHaveBeenCalledWith(expect.anything(), { signal: expect.any(AbortSignal) });
+    expect(state.clearPersistedSession).toHaveBeenCalledOnce();
+    expect(latest.current?.user).toBeNull();
+    expect(state.routerReplace).toHaveBeenCalledWith('/auth');
+    expect(warn).toHaveBeenCalledOnce();
+    // The refresh timer resumes only once the old session has left storage.
+    expect(state.startAutoRefresh).toHaveBeenCalledOnce();
+    expect(state.startAutoRefresh.mock.invocationCallOrder[0])
+      .toBeGreaterThan(state.clearPersistedSession.mock.invocationCallOrder[0]);
+    warn.mockRestore();
+    renderer.act(() => tree?.unmount());
+  });
+
+  it('keeps the session when sign-out fails on the phone itself', async () => {
+    const latest: { current: ReturnType<typeof useAuth> | null } = { current: null };
+    function Probe() {
+      latest.current = useAuth();
+      return null;
+    }
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => {
+      tree = renderer.create(<AuthProvider><Probe /></AuthProvider>);
+    });
+    await renderer.act(async () => {
+      state.sessionResolve?.({ data: { session }, error: null });
+    });
+
+    state.signOut.mockRejectedValueOnce(new Error('Keychain unavailable'));
+    let failure: unknown;
+    await renderer.act(async () => {
+      await latest.current?.signOut().catch((error: unknown) => {
+        failure = error;
+      });
+    });
+
+    expect((failure as Error).message).toBe('Keychain unavailable');
+    expect(state.clearPersistedSession).not.toHaveBeenCalled();
+    expect(latest.current?.user?.id).toBe('user-1');
+    expect(latest.current?.isSigningOut).toBe(false);
+    expect(state.routerReplace).not.toHaveBeenCalled();
+    expect(state.startAutoRefresh).toHaveBeenCalledOnce();
+    renderer.act(() => tree?.unmount());
+  });
+
+  it('reports a sign-out while it runs, and a second tap joins the first', async () => {
+    const latest: { current: ReturnType<typeof useAuth> | null } = { current: null };
+    function Probe() {
+      latest.current = useAuth();
+      return null;
+    }
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => {
+      tree = renderer.create(<AuthProvider><Probe /></AuthProvider>);
+    });
+    await renderer.act(async () => {
+      state.sessionResolve?.({ data: { session }, error: null });
+    });
+    let finishServerSignOut: ((result: { error: null }) => void) | undefined;
+    state.signOut.mockImplementationOnce(() => new Promise((resolve) => {
+      finishServerSignOut = resolve;
+    }));
+
+    let first: Promise<void> | undefined;
+    let second: Promise<void> | undefined;
+    await renderer.act(async () => {
+      first = latest.current?.signOut();
+      second = latest.current?.signOut();
+    });
+
+    expect(second).toBe(first);
+    expect(latest.current?.isSigningOut).toBe(true);
+    expect(state.signOut).toHaveBeenCalledOnce();
+
+    await renderer.act(async () => {
+      finishServerSignOut?.({ error: null });
+      await first;
+    });
+
+    expect(latest.current?.isSigningOut).toBe(false);
+    expect(state.routerReplace).toHaveBeenCalledWith('/auth');
     renderer.act(() => tree?.unmount());
   });
 

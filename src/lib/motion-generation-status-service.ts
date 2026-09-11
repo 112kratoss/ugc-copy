@@ -38,8 +38,9 @@ import {
 } from '@/lib/provider-fetch';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { summarizeMediaToolError } from '@/lib/media-tool-error';
+import { readProviderFailureReason, UNKNOWN_PROVIDER_FAILURE } from '@/lib/provider-failure-messages';
 
-const MOTION_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration';
+const MOTION_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration, error_message';
 
 type MotionStatusGenerationRow = {
   id: string;
@@ -54,6 +55,7 @@ type MotionStatusGenerationRow = {
   creation_mode?: string | null;
   workflow_settings?: unknown;
   duration?: number | null;
+  error_message?: string | null;
 };
 
 export type MotionGenerationStatusDependencies = {
@@ -427,11 +429,13 @@ export async function getMotionGenerationStatusForRoute({
         logBackendError('error_handling_success_status', { error: successError });
       }
     } else if (status === 'failed') {
-      error = data.data.failMsg || 'Unknown error';
+      const reason = readProviderFailureReason(data.data);
+      error = reason ?? UNKNOWN_PROVIDER_FAILURE;
       status = await resolvedDependencies.settleGenerationFailed(
         admin,
         predictionId,
         toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+        reason,
       );
     }
 

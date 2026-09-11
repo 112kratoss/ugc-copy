@@ -10,10 +10,10 @@ import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { BrandLockup, PrimaryButton } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import {
+  authNoticeForRedirect,
   describePasswordSignInError,
   describeProviderSignInError,
   validateCredentials,
-  GUEST_SESSION_MERGED,
   type AuthNotice,
 } from '@/lib/auth-error-copy';
 import { isAppleAuthCanceled } from '@/lib/apple-auth';
@@ -68,10 +68,7 @@ export default function AuthScreen() {
   // Seeded from the route so a redirect can say why it sent the person here.
   // Only a known key maps to copy; an unrecognised one shows nothing rather
   // than letting a deep link put arbitrary text on the sign-in screen.
-  const initialNotice = (Array.isArray(requestedNotice) ? requestedNotice[0] : requestedNotice)
-    === 'session-merged'
-    ? GUEST_SESSION_MERGED
-    : null;
+  const initialNotice = authNoticeForRedirect(requestedNotice);
   const [notice, setNotice] = useState<AuthNotice | null>(initialNotice);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isAppleSubmitting, setIsAppleSubmitting] = useState(false);
