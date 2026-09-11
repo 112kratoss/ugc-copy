@@ -63,6 +63,11 @@ describe('prompt enhancer playbook contract', () => {
       'imagen-4-fast': 'imagen-4',
       'imagen-4-ultra': 'imagen-4',
       'seedance-2-mini': 'seedance-2-fast',
+      // docs.kie.ai/market/gpt/gpt-image-2-5-*.md, read 2026-09-11: the same prompt /
+      // aspect_ratio / resolution / input_urls body as GPT Image 2 (plus an unsent
+      // `background`), from the same OpenAI model family.
+      'gpt-image-2.5-flare': 'gpt-image-2',
+      'gpt-image-2.5-sunburst': 'gpt-image-2',
     });
   });
 

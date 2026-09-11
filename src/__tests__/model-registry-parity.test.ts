@@ -75,6 +75,17 @@ describe('server/client model registry parity', () => {
     expect(pick(clientEntry, IMAGE_SHARED_FIELDS)).toEqual(pick(serverEntry, IMAGE_SHARED_FIELDS));
   });
 
+  it.each(Object.keys(server.IMAGE_MODELS))('offers identical resolutions per aspect ratio for %s', (id) => {
+    // getImageResolutionOptions is hand-mirrored too (GPT Image 2 and 2.5 each carry an
+    // aspect-ratio rule), and the create pages read the client copy while the start path
+    // and the catalog's quote rules read the server one.
+    const modelId = id as keyof typeof server.IMAGE_MODELS;
+    for (const aspectRatio of server.IMAGE_MODELS[modelId].aspectRatios) {
+      expect(client.getImageResolutionOptions(modelId, aspectRatio), `${id} ${aspectRatio}`)
+        .toEqual(server.getImageResolutionOptions(modelId, aspectRatio));
+    }
+  });
+
   it.each(Object.keys(server.VIDEO_MODELS))('keeps video model %s field-identical', (id) => {
     const serverEntry = server.VIDEO_MODELS[id as keyof typeof server.VIDEO_MODELS] as Record<string, unknown>;
     const clientEntry = client.VIDEO_MODELS[id as keyof typeof client.VIDEO_MODELS] as Record<string, unknown>;

@@ -240,6 +240,34 @@ export const IMAGE_MODELS = {
     qualityModes: ['turbo', 'balanced', 'quality'] as const,
     requiresReference: true,
   },
+  'gpt-image-2.5-flare': {
+    id: 'gpt-image-2.5-flare' as const,
+    displayName: 'GPT Image 2.5 Flare',
+    description: 'Fast GPT Image 2.5 tier for high-volume generation and edits',
+    badge: 'New',
+    badgeColor: 'from-amber-500 to-orange-500',
+    accentColor: 'amber',
+    maxImages: 16,
+    supportsGoogleSearch: false,
+    supportsOutputFormat: false,
+    aspectRatios: ['auto', '1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9', '27:16', '16:27', '9:8', '8:9'] as const,
+    resolutions: ['1K', '2K', '4K'] as const,
+    outputFormats: ['jpg'] as const,
+  },
+  'gpt-image-2.5-sunburst': {
+    id: 'gpt-image-2.5-sunburst' as const,
+    displayName: 'GPT Image 2.5 Sunburst',
+    description: 'Premium GPT Image 2.5 tier for polished, campaign-ready images and edits',
+    badge: 'Pro',
+    badgeColor: 'from-orange-500 to-rose-500',
+    accentColor: 'amber',
+    maxImages: 16,
+    supportsGoogleSearch: false,
+    supportsOutputFormat: false,
+    aspectRatios: ['auto', '1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9', '27:16', '16:27', '9:8', '8:9'] as const,
+    resolutions: ['1K', '2K', '4K'] as const,
+    outputFormats: ['jpg'] as const,
+  },
 } as const;
 
 export type ImageModelId = keyof typeof IMAGE_MODELS;
@@ -252,12 +280,26 @@ const GPT_IMAGE_2_SQUARE_RESOLUTIONS = ['1K', '2K'] as const satisfies readonly 
 // Mirrors @/lib/models: Kie renders 5:4 and 4:5 at 1K only.
 const GPT_IMAGE_2_ONE_K_ONLY_ASPECT_RATIOS: readonly string[] = ['auto', '5:4', '4:5'];
 
+const GPT_IMAGE_2_5_MODEL_IDS: readonly string[] = ['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst'];
+const GPT_IMAGE_2_5_ONE_K_RESOLUTIONS = ['1K'] as const satisfies readonly ImageResolution[];
+const GPT_IMAGE_2_5_SQUARE_RESOLUTIONS = ['1K', '2K'] as const satisfies readonly ImageResolution[];
+const GPT_IMAGE_2_5_ONE_K_ONLY_ASPECT_RATIOS: readonly string[] = ['auto', '27:16', '16:27', '9:8', '8:9'];
+
+// Mirrors getGptImage25ResolutionOptions in @/lib/models (which explains the caps);
+// model-registry-parity pins the two copies to identical output.
+function getGptImage25ResolutionOptions(aspectRatio: string): readonly ImageResolution[] {
+  if (GPT_IMAGE_2_5_ONE_K_ONLY_ASPECT_RATIOS.includes(aspectRatio)) return GPT_IMAGE_2_5_ONE_K_RESOLUTIONS;
+  if (aspectRatio === '1:1') return GPT_IMAGE_2_5_SQUARE_RESOLUTIONS;
+  return IMAGE_MODELS['gpt-image-2.5-flare'].resolutions;
+}
+
 export function getImageResolutionOptions(
   modelId: ImageModelId,
   aspectRatio?: string
 ): readonly ImageResolution[] {
   const selectedAspectRatio = aspectRatio ?? IMAGE_MODELS[modelId].aspectRatios[0];
   if (modelId === 'grok-imagine-image') return IMAGE_MODELS[modelId].resolutions;
+  if (GPT_IMAGE_2_5_MODEL_IDS.includes(modelId)) return getGptImage25ResolutionOptions(selectedAspectRatio);
   if (modelId !== 'gpt-image-2') return IMAGE_MODELS[modelId].resolutions;
   if (GPT_IMAGE_2_ONE_K_ONLY_ASPECT_RATIOS.includes(selectedAspectRatio)) return GPT_IMAGE_2_AUTO_RESOLUTIONS;
   if (selectedAspectRatio === '1:1') return GPT_IMAGE_2_SQUARE_RESOLUTIONS;

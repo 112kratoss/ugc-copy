@@ -398,6 +398,47 @@ export const IMAGE_MODELS = {
         /** The provider requires at least one character reference; there is no text-only mode. */
         requiresReference: true,
     },
+    // GPT Image 2.5 ships as two tiers on one request schema (kie.ai/gpt-image-2-5,
+    // read 2026-09-11): Flare for fast, high-volume work and Sunburst for premium
+    // polish. Kie prices both 6/10/16 credits, the same as GPT Image 2, which stays.
+    'gpt-image-2.5-flare': {
+        id: 'gpt-image-2.5-flare' as const,
+        displayName: 'GPT Image 2.5 Flare',
+        description: 'Fast GPT Image 2.5 tier for high-volume generation and edits',
+        badge: 'New',
+        badgeColor: 'from-amber-500 to-orange-500',
+        accentColor: 'amber',
+        maxImages: 16,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: false,
+        aspectRatios: ['auto', '1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9', '27:16', '16:27', '9:8', '8:9'] as const,
+        resolutions: ['1K', '2K', '4K'] as const,
+        outputFormats: ['jpg'] as const,
+        pricing: {
+            '1K': 6,
+            '2K': 10,
+            '4K': 16,
+        },
+    },
+    'gpt-image-2.5-sunburst': {
+        id: 'gpt-image-2.5-sunburst' as const,
+        displayName: 'GPT Image 2.5 Sunburst',
+        description: 'Premium GPT Image 2.5 tier for polished, campaign-ready images and edits',
+        badge: 'Pro',
+        badgeColor: 'from-orange-500 to-rose-500',
+        accentColor: 'amber',
+        maxImages: 16,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: false,
+        aspectRatios: ['auto', '1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9', '27:16', '16:27', '9:8', '8:9'] as const,
+        resolutions: ['1K', '2K', '4K'] as const,
+        outputFormats: ['jpg'] as const,
+        pricing: {
+            '1K': 6,
+            '2K': 10,
+            '4K': 16,
+        },
+    },
 } as const;
 
 export type ImageModelId = keyof typeof IMAGE_MODELS;
@@ -414,6 +455,41 @@ const GPT_IMAGE_2_SQUARE_RESOLUTIONS = ['1K', '2K'] as const satisfies readonly 
  */
 const GPT_IMAGE_2_ONE_K_ONLY_ASPECT_RATIOS: readonly string[] = ['auto', '5:4', '4:5'];
 
+export const GPT_IMAGE_2_5_MODEL_IDS = ['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst'] as const;
+export type GptImage25ModelId = typeof GPT_IMAGE_2_5_MODEL_IDS[number];
+
+export function isGptImage25ModelId(modelId: string): modelId is GptImage25ModelId {
+    return (GPT_IMAGE_2_5_MODEL_IDS as readonly string[]).includes(modelId);
+}
+
+const GPT_IMAGE_2_5_ONE_K_RESOLUTIONS = ['1K'] as const satisfies readonly ImageResolution[];
+const GPT_IMAGE_2_5_SQUARE_RESOLUTIONS = ['1K', '2K'] as const satisfies readonly ImageResolution[];
+/** The four ratios Kie's spec names as 1K-only, plus `auto` (see below). */
+const GPT_IMAGE_2_5_ONE_K_ONLY_ASPECT_RATIOS: readonly string[] = ['auto', '27:16', '16:27', '9:8', '8:9'];
+
+/**
+ * The resolutions Kie can render for GPT Image 2.5 at a given aspect ratio — both tiers
+ * share one schema. The create pages, the start-path check in generation-services and the
+ * catalog's quote rules (generation-model-runtime) all derive from this one function.
+ *
+ * Kie's spec (docs.kie.ai/market/gpt/gpt-image-2-5-*.md, read 2026-09-11): "The 27:16,
+ * 16:27, 9:8 and 8:9 aspect ratios support 1K only. 2K and 4K are available for other
+ * aspect ratios." GPT Image 2's spec also capped `auto` at 1K and 1:1 at 2K (the
+ * GPT_IMAGE_2_* constants above), and the 2.5 spec says nothing about either, so both caps
+ * carry over until a real run shows 2.5 renders them larger. The asymmetry decides it: an
+ * uncapped combination Kie cannot render fails at task creation, while an extra cap only
+ * hides a tier, and a catalog release can lift it.
+ */
+export function getGptImage25ResolutionOptions(aspectRatio: string): readonly ImageResolution[] {
+    if (GPT_IMAGE_2_5_ONE_K_ONLY_ASPECT_RATIOS.includes(aspectRatio)) {
+        return GPT_IMAGE_2_5_ONE_K_RESOLUTIONS;
+    }
+    if (aspectRatio === '1:1') {
+        return GPT_IMAGE_2_5_SQUARE_RESOLUTIONS;
+    }
+    return IMAGE_MODELS['gpt-image-2.5-flare'].resolutions;
+}
+
 export function getImageResolutionOptions(
     modelId: ImageModelId,
     aspectRatio?: string
@@ -422,6 +498,10 @@ export function getImageResolutionOptions(
 
     if (modelId === 'grok-imagine-image') {
         return IMAGE_MODELS[modelId].resolutions;
+    }
+
+    if (isGptImage25ModelId(modelId)) {
+        return getGptImage25ResolutionOptions(selectedAspectRatio);
     }
 
     if (modelId !== 'gpt-image-2') {

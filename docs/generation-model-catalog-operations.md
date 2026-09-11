@@ -232,3 +232,9 @@ entries equal the code build (`buildGenerationModelCatalog` and
 pricing strategy was changed in the manifest alone, so the code build still emitted the
 previous shape and the next emitted release would have carried production back to it. A
 pinned test fails the moment a manifest and the code disagree, whichever side moved.
+
+A release that introduces models names them with `--adds`. Staging refuses any entry that is
+neither in the base release's inventory (`expectedModelIds`) nor declared in `addsModelIds`, and
+`expectedModelIds` describes the release being cloned, so the emitter writes the added ids to
+`addsModelIds` and leaves them out of `expectedModelIds`. Until 2026-09-11 this needed a
+throwaway script (`scripts/tmp-regen3.ts`).
