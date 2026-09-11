@@ -191,6 +191,58 @@ function notifySessionMerged(error: SessionMergedError) {
   }
 }
 
+export const UNAUTHORIZED_CODE = 'UNAUTHORIZED';
+
+/**
+ * Thrown when the server refused the session token this device sent (HTTP 401).
+ *
+ * The usual cause is a session that ended somewhere else: signing out on
+ * another device used to end every session on the account. The device cannot
+ * see that by itself. An access token is self-contained and still carries a
+ * future expiry, so without a recovery it is sent, and refused, on every
+ * request until it runs out, and every screen shows an error whose Retry cannot
+ * succeed. The registered handler asks the auth provider to check the session
+ * with Supabase and recover.
+ */
+export class SessionRejectedError extends ApiError {
+  constructor(message: string, details?: unknown, requestId?: string, code?: string) {
+    super(message, 401, details, requestId, code ?? UNAUTHORIZED_CODE);
+    this.name = 'SessionRejectedError';
+  }
+}
+
+export type SessionRejectedHandler = (error: SessionRejectedError) => void;
+
+// Registered by the app shell (app/_layout.tsx), like the two handlers above.
+// A refused session fails every in-flight request at once, so the same throttle
+// keeps that burst to one recovery, and a device still refused after the window
+// tries again.
+const SESSION_REJECTED_RENOTIFY_INTERVAL_MS = 10_000;
+let sessionRejectedHandler: SessionRejectedHandler | null = null;
+let sessionRejectedNotifiedAt: number | null = null;
+
+export function setSessionRejectedHandler(handler: SessionRejectedHandler | null) {
+  sessionRejectedHandler = handler;
+  sessionRejectedNotifiedAt = null;
+}
+
+function notifySessionRejected(error: SessionRejectedError) {
+  if (!sessionRejectedHandler) return;
+  const now = Date.now();
+  if (
+    sessionRejectedNotifiedAt !== null
+    && now - sessionRejectedNotifiedAt < SESSION_REJECTED_RENOTIFY_INTERVAL_MS
+  ) {
+    return;
+  }
+  sessionRejectedNotifiedAt = now;
+  try {
+    sessionRejectedHandler(error);
+  } catch (handlerError) {
+    console.warn('Session-rejected handler failed', handlerError);
+  }
+}
+
 export interface ApiClientOptions {
   baseUrl: string;
   getAccessToken: () => Promise<string | null>;
@@ -428,7 +480,12 @@ async function parseResponse(response: Response) {
   return response.text();
 }
 
-function throwHttpApiError(status: number, body: unknown, requestId: string | undefined): never {
+function throwHttpApiError(
+  status: number,
+  body: unknown,
+  requestId: string | undefined,
+  sentSessionToken: boolean,
+): never {
   const message =
     typeof body === 'object' && body && 'error' in body
       ? String((body as { error?: unknown }).error)
@@ -447,6 +504,16 @@ function throwHttpApiError(status: number, body: unknown, requestId: string | un
     const mergedError = new SessionMergedError(message, body, requestId);
     notifySessionMerged(mergedError);
     throw mergedError;
+  }
+  // Only a request that presented this device's session token can have had it
+  // refused. A signed-out request to an account-only route is a 401 too, and a
+  // token the caller supplied itself (the feed-event queue draining a previous
+  // identity) says nothing about the current session. A 401 naming any other
+  // code has a different cause.
+  if (status === 401 && sentSessionToken && (code === undefined || code === UNAUTHORIZED_CODE)) {
+    const rejectedError = new SessionRejectedError(message, body, requestId, code);
+    notifySessionRejected(rejectedError);
+    throw rejectedError;
   }
   throw new ApiError(message, status, body, requestId, code);
 }
@@ -514,10 +581,12 @@ export function createApiClient({
       }
       const requestId = headers.get(REQUEST_ID_HEADER) ?? undefined;
 
+      let sentSessionToken = false;
       if (options.auth !== false) {
         const token = await getAccessToken();
         if (token) {
           headers.set('Authorization', `Bearer ${token}`);
+          sentSessionToken = true;
         }
       }
 
@@ -556,7 +625,7 @@ export function createApiClient({
       const responseRequestId = response.headers.get(REQUEST_ID_HEADER) ?? requestId;
 
       if (!response.ok) {
-        throwHttpApiError(response.status, body, responseRequestId);
+        throwHttpApiError(response.status, body, responseRequestId, sentSessionToken);
       }
 
       return body as T;
@@ -891,7 +960,7 @@ export function createApiClient({
       }
       const body = await parseResponse(response);
       if (!response.ok) {
-        throwHttpApiError(response.status, body, response.headers.get(REQUEST_ID_HEADER) ?? undefined);
+        throwHttpApiError(response.status, body, response.headers.get(REQUEST_ID_HEADER) ?? undefined, false);
       }
       return {
         catalog: parseGenerationModelCatalog(

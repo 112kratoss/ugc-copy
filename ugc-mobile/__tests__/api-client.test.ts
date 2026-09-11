@@ -3,9 +3,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiError,
   SessionMergedError,
+  SessionRejectedError,
   UpgradeRequiredError,
   createApiClient,
   setSessionMergedHandler,
+  setSessionRejectedHandler,
   setUpgradeRequiredHandler,
 } from '../lib/api-client';
 
@@ -1485,5 +1487,118 @@ describe('mobile api client merged-guest-session handling', () => {
     expect(error).toBeInstanceOf(ApiError);
     expect(error).not.toBeInstanceOf(SessionMergedError);
     expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+describe('mobile api client refused-token handling', () => {
+  afterEach(() => {
+    setSessionRejectedHandler(null);
+    vi.useRealTimers();
+  });
+
+  // What src/proxy.ts answers when the bearer token names a session Supabase no
+  // longer has — for example one ended by "Sign out" on another device.
+  function refusedTokenResponse(body: Record<string, unknown> = { error: 'Unauthorized', code: 'UNAUTHORIZED' }) {
+    return new Response(JSON.stringify(body), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  function apiWithToken(fetcher: ReturnType<typeof vi.fn>, token: string | null = 'token-1') {
+    return createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => token,
+      clientInfo: {
+        appVersion: '1.0.0',
+        apiVersion: 1,
+        catalogSchemaVersion: 1,
+      },
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+  }
+
+  it('invokes the registered handler exactly once for a burst of refused tokens', async () => {
+    const handler = vi.fn();
+    setSessionRejectedHandler(handler);
+    const fetcher = vi.fn(async () => refusedTokenResponse());
+    const api = apiWithToken(fetcher);
+
+    // A session ended elsewhere fails every request at once — the feed, the
+    // profile, notifications — so a burst is the normal case.
+    const results = await Promise.allSettled([
+      api.getProfile(),
+      api.getShowcaseFeed(),
+      api.getWelcomeCredits(),
+    ]);
+
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    for (const result of results) {
+      expect(result.status).toBe('rejected');
+      expect((result as PromiseRejectedResult).reason).toBeInstanceOf(SessionRejectedError);
+    }
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toMatchObject({
+      name: 'SessionRejectedError',
+      status: 401,
+      code: 'UNAUTHORIZED',
+    });
+  });
+
+  it('leaves a request that carried no token alone: a signed-out 401 has no session to recover', async () => {
+    const handler = vi.fn();
+    setSessionRejectedHandler(handler);
+    const fetcher = vi.fn(async () => refusedTokenResponse());
+    const api = apiWithToken(fetcher, null);
+
+    const error = await api.getProfile().catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).not.toBeInstanceOf(SessionRejectedError);
+    expect(error).toMatchObject({ status: 401 });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('treats a 401 without a code as a refused token too', async () => {
+    // Route adapters that check the token themselves answer 401 with no code.
+    const handler = vi.fn();
+    setSessionRejectedHandler(handler);
+    const fetcher = vi.fn(async () => refusedTokenResponse({ error: 'Authentication required.' }));
+    const api = apiWithToken(fetcher);
+
+    await expect(api.getShowcaseFeed()).rejects.toBeInstanceOf(SessionRejectedError);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a token the caller supplied itself', async () => {
+    // The feed-event queue drains a previous identity's events with that
+    // identity's own token. Its refusal says nothing about the current session.
+    const handler = vi.fn();
+    setSessionRejectedHandler(handler);
+    const fetcher = vi.fn(async () => refusedTokenResponse());
+    const api = apiWithToken(fetcher);
+
+    const error = await api.recordShowcaseFeedEvents([], { accessToken: 'previous-identity-token' })
+      .catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).not.toBeInstanceOf(SessionRejectedError);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('notifies again after the renotify window so a still-refused device retries its recovery', async () => {
+    vi.useFakeTimers({ now: new Date('2026-09-11T10:00:00.000Z'), toFake: ['Date'] });
+    const handler = vi.fn();
+    setSessionRejectedHandler(handler);
+    const fetcher = vi.fn(async () => refusedTokenResponse());
+    const api = apiWithToken(fetcher);
+
+    await expect(api.getProfile()).rejects.toBeInstanceOf(SessionRejectedError);
+    await expect(api.getProfile()).rejects.toBeInstanceOf(SessionRejectedError);
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(new Date('2026-09-11T10:00:11.000Z'));
+    await expect(api.getProfile()).rejects.toBeInstanceOf(SessionRejectedError);
+    expect(handler).toHaveBeenCalledTimes(2);
   });
 });

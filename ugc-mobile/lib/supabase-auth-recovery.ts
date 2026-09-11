@@ -3,6 +3,20 @@ export function isInvalidRefreshTokenError(error: unknown) {
   return message.includes('Invalid Refresh Token:');
 }
 
+/**
+ * Whether a failed refresh means the session has ended for good.
+ *
+ * This is the line auth-js draws before it deletes a stored session and emits
+ * SIGNED_OUT: any auth error except a retryable fetch failure (a network error
+ * or a 5xx, which it keeps the session through). Checked on the same fields
+ * auth-js checks, so the app's teardown never runs for a session auth-js is
+ * still holding, and this module stays free of the client import.
+ */
+export function isSessionEndedRefreshError(error: unknown) {
+  if (typeof error !== 'object' || error === null || !('__isAuthError' in error)) return false;
+  return (error as { name?: unknown }).name !== 'AuthRetryableFetchError';
+}
+
 export function isNetworkRequestFailedError(error: unknown) {
   return getErrorMessage(error).includes('Network request failed');
 }
