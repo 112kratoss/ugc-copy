@@ -9,7 +9,7 @@ import {
     MODEL_KIND_FEATURE_PATHS,
     MODEL_KIND_LABELS,
     getBaselineCost,
-    listPublicModels,
+    listPublicModelsForPrerender,
     toModelSlug,
 } from '@/lib/model-pages';
 import type { GenerationModelKind } from '@/lib/generation-model-catalog';
@@ -28,6 +28,11 @@ import {
  * because nobody else has one to publish — competitors sell monthly seats.
  */
 
+/**
+ * Prerendered at build and regenerated hourly. Unlike the per-model pages, a
+ * static route like this one is rendered by `next build`, which may have no
+ * database, so the catalog is read through `listPublicModelsForPrerender`.
+ */
 export const revalidate = 3600;
 
 export const metadata: Metadata = createMetadata({
@@ -47,7 +52,7 @@ export const metadata: Metadata = createMetadata({
 const KIND_ORDER: GenerationModelKind[] = ['video', 'image', 'motion'];
 
 export default async function ModelsIndexPage() {
-    const models = await listPublicModels();
+    const models = await listPublicModelsForPrerender();
     const rows = await Promise.all(models.map(async (model) => ({
         model,
         cost: await getBaselineCost(model),

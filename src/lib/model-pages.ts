@@ -1,6 +1,8 @@
 import 'server-only';
 
-import { logBackendError } from '@/lib/backend-logger';
+import { PHASE_PRODUCTION_BUILD } from 'next/constants';
+
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 import {
     GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
     type GenerationModelDescriptor,
@@ -50,6 +52,28 @@ export async function listPublicModels(): Promise<GenerationModelDescriptor[]> {
         schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
     });
     return snapshot.catalog.models;
+}
+
+/**
+ * `listPublicModels` for a page the build prerenders.
+ *
+ * `/models` is a static route with `revalidate`, so `next build` renders it
+ * once, and a build may have no database: CI's points at a placeholder Supabase
+ * URL, where the uncaught load failure failed the whole build. Only there is it
+ * tolerated, by rendering an empty index. Production builds reach the database
+ * and prerender the real list. At request time the failure is rethrown, so ISR
+ * keeps serving the last good page instead of caching an empty one.
+ */
+export async function listPublicModelsForPrerender(): Promise<GenerationModelDescriptor[]> {
+    try {
+        return await listPublicModels();
+    } catch (error) {
+        if (process.env.NEXT_PHASE !== PHASE_PRODUCTION_BUILD) {
+            throw error;
+        }
+        logBackendWarning('models_index_prerendered_without_catalog', { error });
+        return [];
+    }
 }
 
 export async function findModelBySlug(slug: string): Promise<GenerationModelDescriptor | null> {
