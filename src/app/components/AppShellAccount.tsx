@@ -253,7 +253,9 @@ export default function AppShellAccount() {
   }, [session?.user?.id]);
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
+    // This browser only. The default (global) also ends the account's session
+    // on the person's phone, which then has every request refused.
+    await supabase.auth.signOut({ scope: 'local' });
     publishAppShellAuthentication(false);
     setSession(null);
     setProfile(null);
