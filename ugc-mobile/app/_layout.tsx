@@ -28,6 +28,7 @@ import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
 import { useReducedMotion } from '@/lib/motion';
 import { navigateToNotificationDeepLink, subscribeToNotificationResponses, subscribeToNotificationsReceived } from '@/lib/notifications';
 import { OnboardingProvider, useOnboarding } from '@/lib/onboarding';
+import { reportStartupMilestone } from '@/lib/startup-interactive';
 import { STARTUP_VERSION_CHECK_FALLBACK_MS, type StartupVersionCheckStatus } from '@/lib/startup-readiness';
 import { appTheme } from '@/lib/theme';
 
@@ -233,6 +234,10 @@ function StartupCoordinator() {
   const pathname = usePathname();
   const [versionCheckStatus, setVersionCheckStatus] =
     useState<StartupVersionCheckStatus>('idle');
+
+  useEffect(() => {
+    if (isHydrated && !isLoading) reportStartupMilestone({ milestone: 'shell-ready', pathname });
+  }, [isHydrated, isLoading, pathname]);
 
   useEffect(() => {
     if (!isHydrated || isLoading) {
