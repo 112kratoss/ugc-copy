@@ -48,7 +48,7 @@ describe('credit mutation security boundary', () => {
       'settle_ai_usage_event(uuid, text, text, jsonb, text)',
       'start_generation(uuid, integer, text, text, text, integer, text, uuid, jsonb, text)',
       'attach_generation_provider_task(uuid, text)',
-      'settle_generation_failed(text, timestamp with time zone)',
+      'settle_generation_failed(text, timestamp with time zone, text)',
       'settle_generation_start_failed(uuid, text)',
       'settle_generation_succeeded(text, text, timestamp with time zone, text, text, text, integer, text, timestamp with time zone, jsonb)',
     ];

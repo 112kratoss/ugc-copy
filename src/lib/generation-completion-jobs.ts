@@ -257,7 +257,17 @@ async function finishUnsuccessfulCompletionJob(params: {
   retryDelaySeconds?: number;
 }): Promise<string | null> {
   if (isExhaustedCompletionAttempt(params.job)) {
-    await settleGenerationFailed(params.creditSupabase, params.job.prediction_id);
+    // `params.error` explains why this attempt was retried ("Generation is
+    // still processing."), which read alone would be a misleading failure
+    // cause: the row is being failed precisely because that never resolved.
+    // Record why it was abandoned, keeping the last observed reason for
+    // operators.
+    await settleGenerationFailed(
+      params.creditSupabase,
+      params.job.prediction_id,
+      null,
+      `The provider never reported a final result after ${params.job.attempt_count} completion attempts (last status: ${params.error})`,
+    );
   }
 
   return finishGenerationCompletionJob(params.supabase, {

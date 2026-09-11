@@ -18,7 +18,13 @@ type CreateMetadataOptions = {
     absoluteTitle?: string;
     keywords?: string[];
     type?: 'website' | 'article';
-    image?: string | MetadataImage;
+    /**
+     * `null` omits the social card entirely, which is how a route hands the job
+     * to a file-based `opengraph-image` convention: an explicit
+     * `openGraph.images` always wins over the generated one, so a caller with a
+     * per-page card has to say "no image here" rather than pass a default.
+     */
+    image?: string | MetadataImage | null;
     noIndex?: boolean;
     publishedTime?: string;
     modifiedTime?: string;
@@ -80,6 +86,10 @@ export const siteConfig = {
     name: 'magicbooklet',
     title: 'magicbooklet',
     defaultTitle: 'magicbooklet: Create the magic. Sell the method.',
+    // The same tagline as `defaultTitle`, addressable on its own so the hero can
+    // show it without the brand prefix reading as part of the sentence. Kept in
+    // sync with `defaultTitle` by hand — both are brand copy, not derived text.
+    tagline: 'Create the magic. Sell the method.',
     description:
         'Create AI images, videos, motion-transfer UGC ads, and reusable content workflows in one production-ready studio.',
     siteUrl: resolveSiteUrl(),
@@ -131,7 +141,8 @@ export function createMetadata({
     const metadataTitle = absoluteTitle || title === siteConfig.name
         ? { absolute: fullTitle }
         : title;
-    const resolvedImage = typeof image === 'string' ? { url: image } : image;
+    const hasImage = image !== null;
+    const resolvedImage = typeof image === 'string' ? { url: image } : (image ?? { url: siteConfig.ogImage });
     // Crawlers lay the card out from these before fetching the asset, so real
     // dimensions win when a caller knows them. Everything else keeps the site
     // card's own 1200x630.
@@ -153,13 +164,17 @@ export function createMetadata({
             url: path,
             siteName: siteConfig.name,
             type,
-            images: [
-                {
-                    url: resolvedImage.url,
-                    ...imageDimensions,
-                    alt: `${siteConfig.name} preview`,
-                },
-            ],
+            ...(hasImage
+                ? {
+                    images: [
+                        {
+                            url: resolvedImage.url,
+                            ...imageDimensions,
+                            alt: `${siteConfig.name} preview`,
+                        },
+                    ],
+                }
+                : {}),
             ...(type === 'article'
                 ? {
                     publishedTime,
@@ -171,7 +186,7 @@ export function createMetadata({
             card: 'summary_large_image',
             title: fullTitle,
             description,
-            images: [resolvedImage.url],
+            ...(hasImage ? { images: [resolvedImage.url] } : {}),
         },
     };
 }
@@ -256,5 +271,184 @@ export function buildArticleSchema({
         },
         mainEntityOfPage: absoluteUrl(path),
         image: absoluteUrl(image),
+    };
+}
+
+type FaqEntry = {
+    question: string;
+    answer: string;
+};
+
+type BreadcrumbEntry = {
+    name: string;
+    path: string;
+};
+
+type MediaSchemaOptions = {
+    name: string;
+    description: string;
+    path: string;
+    uploadDate: string;
+    thumbnailUrl?: string;
+    contentUrl?: string;
+    creatorName?: string;
+};
+
+type ItemListEntry = {
+    name: string;
+    path: string;
+};
+
+/**
+ * FAQ blocks are the cheapest rich result the marketing pages can earn, and
+ * `/pricing` already proves the shape renders. Callers pass plain strings so a
+ * page's visible copy and its structured data cannot drift apart — the same
+ * array feeds both.
+ */
+export function buildFaqSchema(faqs: FaqEntry[]) {
+    return {
+        '@context': 'https://schema.org',
+        '@type': 'FAQPage',
+        mainEntity: faqs.map((faq) => ({
+            '@type': 'Question',
+            name: faq.question,
+            acceptedAnswer: {
+                '@type': 'Answer',
+                text: faq.answer,
+            },
+        })),
+    };
+}
+
+export function buildBreadcrumbSchema(trail: BreadcrumbEntry[]) {
+    return {
+        '@context': 'https://schema.org',
+        '@type': 'BreadcrumbList',
+        itemListElement: trail.map((entry, index) => ({
+            '@type': 'ListItem',
+            position: index + 1,
+            name: entry.name,
+            item: absoluteUrl(entry.path),
+        })),
+    };
+}
+
+/**
+ * Video posts are the product's flagship output and were carrying no media
+ * schema at all, which kept them out of video rich results entirely.
+ *
+ * `thumbnailUrl` is required by Google for a video result, so a post whose
+ * poster frame has not finished rendering falls back to the site card rather
+ * than emitting a schema block that will fail validation.
+ */
+export function buildVideoObjectSchema({
+    name,
+    description,
+    path,
+    uploadDate,
+    thumbnailUrl,
+    contentUrl,
+    creatorName,
+}: MediaSchemaOptions) {
+    return {
+        '@context': 'https://schema.org',
+        '@type': 'VideoObject',
+        name,
+        description,
+        uploadDate,
+        thumbnailUrl: [thumbnailUrl ?? absoluteUrl(siteConfig.ogImage)],
+        ...(contentUrl ? { contentUrl } : {}),
+        url: absoluteUrl(path),
+        ...(creatorName
+            ? { creator: { '@type': 'Person', name: creatorName } }
+            : {}),
+        publisher: {
+            '@type': 'Organization',
+            name: siteConfig.name,
+            logo: {
+                '@type': 'ImageObject',
+                url: absoluteUrl('/icon.png'),
+            },
+        },
+    };
+}
+
+export function buildImageObjectSchema({
+    name,
+    description,
+    path,
+    uploadDate,
+    contentUrl,
+    creatorName,
+}: MediaSchemaOptions) {
+    return {
+        '@context': 'https://schema.org',
+        '@type': 'ImageObject',
+        name,
+        description,
+        uploadDate,
+        ...(contentUrl ? { contentUrl, thumbnailUrl: contentUrl } : {}),
+        url: absoluteUrl(path),
+        ...(creatorName
+            ? { creator: { '@type': 'Person', name: creatorName } }
+            : {}),
+        publisher: {
+            '@type': 'Organization',
+            name: siteConfig.name,
+            logo: {
+                '@type': 'ImageObject',
+                url: absoluteUrl('/icon.png'),
+            },
+        },
+    };
+}
+
+/**
+ * Index pages (`/blog`, `/showcase`, `/templates`) were shipping no structured
+ * data, so a crawler had to infer the listing from markup alone. An ItemList
+ * names the members explicitly and gives the page a reason to be treated as a
+ * hub rather than a thin shell.
+ */
+export function buildItemListSchema(name: string, path: string, items: ItemListEntry[]) {
+    return {
+        '@context': 'https://schema.org',
+        '@type': 'ItemList',
+        name,
+        url: absoluteUrl(path),
+        numberOfItems: items.length,
+        itemListElement: items.map((item, index) => ({
+            '@type': 'ListItem',
+            position: index + 1,
+            name: item.name,
+            url: absoluteUrl(item.path),
+        })),
+    };
+}
+
+export function buildProfilePageSchema({
+    name,
+    handle,
+    path,
+    description,
+    image,
+}: {
+    name: string;
+    handle: string;
+    path: string;
+    description: string;
+    image?: string;
+}) {
+    return {
+        '@context': 'https://schema.org',
+        '@type': 'ProfilePage',
+        url: absoluteUrl(path),
+        mainEntity: {
+            '@type': 'Person',
+            name,
+            alternateName: `@${handle}`,
+            description,
+            ...(image ? { image } : {}),
+            url: absoluteUrl(path),
+        },
     };
 }

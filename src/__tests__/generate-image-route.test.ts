@@ -661,7 +661,7 @@ describe('/api/generate-image route', () => {
       startedAtMs: Date.parse('2026-04-15T10:00:00.000Z'),
       estimatedTotalMs: 145_000,
     });
-    expect(currentSupabaseMock.selects).toContain('id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, workflow_settings');
+    expect(currentSupabaseMock.selects).toContain('id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, workflow_settings, error_message');
     expect(currentSupabaseMock.selects).not.toContain('*');
     expect(currentSupabaseMock.eqs).toEqual(expect.arrayContaining([
       { column: 'prediction_id', value: 'task-image-status-1' },
@@ -838,12 +838,60 @@ describe('/api/generate-image route', () => {
     expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('settle_generation_failed', {
       p_prediction_id: 'task-image-live-failed-1',
       p_completed_at: '2026-04-15T10:01:00.000Z',
+      p_error_message: 'provider failure',
     });
     expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith(
       'refund_generation',
       expect.anything()
     );
     expect(currentSupabaseMock.updates).toHaveLength(0);
+  });
+
+  it('stores no reason when the provider fails an image without one', async () => {
+    // The generic wording is for display only; a stored placeholder would
+    // replace the client's own message and could erase a recorded reason.
+    currentSupabaseMock = createSupabaseMock(null, {
+      id: 'gen-image-live-failed-2',
+      prediction_id: 'task-image-live-failed-2',
+      user_id: 'user-1',
+      status: 'processing',
+      output_url: null,
+      created_at: '2026-04-15T10:00:00.000Z',
+      completed_at: null,
+      model: 'nano-banana-2',
+      category: 'image',
+      workflow_settings: { resolution: '1K' },
+    });
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        code: 200,
+        msg: 'success',
+        data: {
+          state: 'fail',
+          completeTime: '2026-04-15T10:01:00.000Z',
+          failMsg: '',
+        },
+      }),
+    } as Response)));
+
+    const { GET } = await import('@/app/api/generate-image/route');
+    const response = await GET(
+      new Request('http://localhost/api/generate-image?id=task-image-live-failed-2', {
+        headers: { Authorization: 'Bearer token' },
+      }) as never
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      status: 'failed',
+      error: 'Unknown error',
+    });
+    expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('settle_generation_failed', {
+      p_prediction_id: 'task-image-live-failed-2',
+      p_completed_at: '2026-04-15T10:01:00.000Z',
+      p_error_message: null,
+    });
   });
 
   it('throttles provider status checks while returning cached active image state', async () => {

@@ -39,8 +39,9 @@ import {
   withProviderModel,
 } from '@/lib/provider-fetch';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
+import { readProviderFailureReason, UNKNOWN_PROVIDER_FAILURE } from '@/lib/provider-failure-messages';
 
-const VIDEO_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration';
+const VIDEO_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration, error_message';
 
 type VideoStatusGenerationRow = {
   id: string;
@@ -55,6 +56,7 @@ type VideoStatusGenerationRow = {
   creation_mode?: string | null;
   workflow_settings?: unknown;
   duration?: number | null;
+  error_message?: string | null;
 };
 
 export type VideoGenerationStatusDependencies = {
@@ -461,11 +463,15 @@ export async function getVideoGenerationStatusForRoute({
           }
         }
       } else if (successFlag === 2 || successFlag === 3) {
-        error = data.data?.errorMessage || data.msg || 'Unknown error';
+        // The reason is on the task. This body passed the code-200 check above,
+        // so its top-level `msg` is "success" and must never stand in for it.
+        const reason = readProviderFailureReason(data.data);
+        error = reason ?? UNKNOWN_PROVIDER_FAILURE;
         status = await resolvedDependencies.settleGenerationFailed(
           admin,
           predictionId,
           toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+          reason,
         );
       }
     } else {
@@ -519,11 +525,13 @@ export async function getVideoGenerationStatusForRoute({
           logBackendError('error_handling_success_status', { error: parseError });
         }
       } else if (status === 'failed') {
-        error = data.data.failMsg || 'Unknown error';
+        const reason = readProviderFailureReason(data.data);
+        error = reason ?? UNKNOWN_PROVIDER_FAILURE;
         status = await resolvedDependencies.settleGenerationFailed(
           admin,
           predictionId,
           toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
+          reason,
         );
       }
     }

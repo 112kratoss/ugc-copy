@@ -18,15 +18,17 @@ import { ActionSheetHost } from '@/components/action-sheet';
 import { DialogHost } from '@/components/dialog';
 import { OnboardingServerSync } from '@/components/onboarding-server-sync';
 import { OverlayHost } from '@/components/overlay-host';
+import { SignOutOverlay } from '@/components/sign-out-overlay';
 import { CriticalUpdateSheet } from '@/components/critical-update-sheet';
 import { useOtaUpdateGate } from '@/lib/use-ota-update-gate';
-import { setSessionMergedHandler, setUpgradeRequiredHandler } from '@/lib/api-client';
+import { setSessionMergedHandler, setSessionRejectedHandler, setUpgradeRequiredHandler } from '@/lib/api-client';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { notificationBadgeQueryKey } from '@/lib/notification-badge';
 import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
 import { useReducedMotion } from '@/lib/motion';
 import { navigateToNotificationDeepLink, subscribeToNotificationResponses, subscribeToNotificationsReceived } from '@/lib/notifications';
 import { OnboardingProvider, useOnboarding } from '@/lib/onboarding';
+import { reportStartupMilestone } from '@/lib/startup-interactive';
 import { STARTUP_VERSION_CHECK_FALLBACK_MS, type StartupVersionCheckStatus } from '@/lib/startup-readiness';
 import { appTheme } from '@/lib/theme';
 
@@ -110,6 +112,7 @@ function RootLayoutNav() {
           <StartupCoordinator />
           <UpgradeRequiredCoordinator />
           <SessionMergedCoordinator />
+          <SessionRejectedCoordinator />
           <OtaUpdateCoordinator />
           <SafeAreaProvider>
             <ThemeProvider value={navigationTheme}>
@@ -123,6 +126,7 @@ function RootLayoutNav() {
                 <OverlayHost>
                 <ActionSheetHost />
                 <DialogHost />
+                <SignOutOverlay />
                 <Stack
                 screenOptions={{
                   animation: reducedMotion ? 'none' : 'default',
@@ -230,6 +234,10 @@ function StartupCoordinator() {
   const pathname = usePathname();
   const [versionCheckStatus, setVersionCheckStatus] =
     useState<StartupVersionCheckStatus>('idle');
+
+  useEffect(() => {
+    if (isHydrated && !isLoading) reportStartupMilestone({ milestone: 'shell-ready', pathname });
+  }, [isHydrated, isLoading, pathname]);
 
   useEffect(() => {
     if (!isHydrated || isLoading) {
@@ -349,6 +357,29 @@ function SessionMergedCoordinator() {
       });
     });
     return () => setSessionMergedHandler(null);
+  }, []);
+
+  return null;
+}
+
+function SessionRejectedCoordinator() {
+  // Checks a session the server refused (401), usually one that ended on
+  // another device, instead of leaving every screen on an error until its token
+  // expires. Registered here for the same reason as SessionMergedCoordinator.
+  const { recoverRejectedSession } = useAuth();
+  const recoverRef = useRef(recoverRejectedSession);
+
+  useEffect(() => {
+    recoverRef.current = recoverRejectedSession;
+  }, [recoverRejectedSession]);
+
+  useEffect(() => {
+    setSessionRejectedHandler(() => {
+      void recoverRef.current().catch((error) => {
+        console.warn('Could not recover the refused session', error);
+      });
+    });
+    return () => setSessionRejectedHandler(null);
   }, []);
 
   return null;

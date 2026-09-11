@@ -131,7 +131,7 @@ describe('getVideoGenerationStatusForRoute', () => {
     // model, completed_at or workflow_settings, so reading it as the user denies
     // the row and the caller reports a phantom "Generation not found".
     expect(adminClient.selects).toEqual([
-      'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration',
+      'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration, error_message',
     ]);
     expect(adminClient.eqs).toEqual([
       { column: 'prediction_id', value: 'task-video-1' },

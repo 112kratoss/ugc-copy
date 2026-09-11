@@ -4,7 +4,11 @@ import { ArrowRight, CheckCircle2, Newspaper, PlayCircle, Sparkles } from 'lucid
 import { Button, Kicker, SectionHeader, Surface, Text } from '@/app/components/DesignSystem';
 import { JsonLd } from '@/app/components/JsonLd';
 import { PRICING_CURRENCY, PRICING_PLAN_MAP } from '@/lib/pricing';
-import { buildSoftwareApplicationSchema } from '@/lib/seo';
+import {
+    buildBreadcrumbSchema,
+    buildFaqSchema,
+    buildSoftwareApplicationSchema,
+} from '@/lib/seo';
 
 type LandingStep = {
     title: string;
@@ -18,8 +22,21 @@ type LandingLink = {
     label: string;
 };
 
+type LandingSection = {
+    heading: string;
+    eyebrow?: string;
+    body: string[];
+    bullets?: string[];
+};
+
+type LandingFaq = {
+    question: string;
+    answer: string;
+};
+
 type FeatureLandingPageProps = {
     pagePath: string;
+    breadcrumbLabel: string;
     badge: string;
     title: string;
     description: string;
@@ -28,13 +45,24 @@ type FeatureLandingPageProps = {
     secondaryCtaHref: string;
     secondaryCtaLabel: string;
     highlights: string[];
+    /**
+     * Heading for the numbered steps block. Every page used to share one
+     * hardcoded string here, which made the four feature pages read as
+     * near-duplicates of each other to a crawler. Each page now names its own.
+     */
+    stepsHeading: string;
     steps: LandingStep[];
+    /** Long-form prose. This is what carries the page past thin-content weight. */
+    sections: LandingSection[];
+    faqs: LandingFaq[];
+    relatedHeading: string;
     relatedLinks: LandingLink[];
     featureList: string[];
 };
 
 export default function FeatureLandingPage({
     pagePath,
+    breadcrumbLabel,
     badge,
     title,
     description,
@@ -43,27 +71,38 @@ export default function FeatureLandingPage({
     secondaryCtaHref,
     secondaryCtaLabel,
     highlights,
+    stepsHeading,
     steps,
+    sections,
+    faqs,
+    relatedHeading,
     relatedLinks,
     featureList,
 }: FeatureLandingPageProps) {
     return (
         <div className="ui-page ui-page-ambient overflow-hidden">
             <JsonLd
-                data={buildSoftwareApplicationSchema({
-                    name: title,
-                    path: pagePath,
-                    description,
-                    featureList,
-                    offers: [
-                        {
-                            name: `${PRICING_PLAN_MAP.starter.name} credits`,
-                            price: PRICING_PLAN_MAP.starter.priceInr,
-                            priceCurrency: PRICING_CURRENCY,
-                            url: '/pricing',
-                        },
-                    ],
-                })}
+                data={[
+                    buildSoftwareApplicationSchema({
+                        name: title,
+                        path: pagePath,
+                        description,
+                        featureList,
+                        offers: [
+                            {
+                                name: `${PRICING_PLAN_MAP.starter.name} credits`,
+                                price: PRICING_PLAN_MAP.starter.priceInr,
+                                priceCurrency: PRICING_CURRENCY,
+                                url: '/pricing',
+                            },
+                        ],
+                    }),
+                    buildBreadcrumbSchema([
+                        { name: 'Home', path: '/' },
+                        { name: breadcrumbLabel, path: pagePath },
+                    ]),
+                    ...(faqs.length > 0 ? [buildFaqSchema(faqs)] : []),
+                ]}
             />
 
             <div className="fixed inset-0 pointer-events-none">
@@ -123,10 +162,7 @@ export default function FeatureLandingPage({
                 </section>
 
                 <section className="space-y-8">
-                    <SectionHeader
-                        eyebrow="How it works"
-                        title="Move from idea to publish-ready creative without bouncing across tools"
-                    />
+                    <SectionHeader eyebrow="How it works" title={stepsHeading} />
                     <div className="grid gap-6 md:grid-cols-3">
                         {steps.map((step, index) => (
                             <Surface
@@ -146,11 +182,53 @@ export default function FeatureLandingPage({
                     </div>
                 </section>
 
+                {sections.map((section) => (
+                    <section key={section.heading} className="space-y-6">
+                        <SectionHeader eyebrow={section.eyebrow} title={section.heading} />
+                        <div className="max-w-3xl space-y-4">
+                            {section.body.map((paragraph) => (
+                                <Text key={paragraph} variant="body" className="text-base leading-7">
+                                    {paragraph}
+                                </Text>
+                            ))}
+                            {section.bullets && section.bullets.length > 0 ? (
+                                <ul className="mt-2 space-y-3">
+                                    {section.bullets.map((bullet) => (
+                                        <li key={bullet} className="flex items-start gap-3">
+                                            <CheckCircle2 className="mt-1 h-4 w-4 shrink-0 text-emerald-400" />
+                                            <Text variant="bodySm" className="leading-6">{bullet}</Text>
+                                        </li>
+                                    ))}
+                                </ul>
+                            ) : null}
+                        </div>
+                    </section>
+                ))}
+
+                {faqs.length > 0 ? (
+                    <section className="space-y-8">
+                        <SectionHeader
+                            eyebrow="Questions"
+                            title={`${title}: common questions`}
+                        />
+                        <div className="grid gap-4 md:grid-cols-2">
+                            {faqs.map((faq) => (
+                                <Surface
+                                    as="article"
+                                    key={faq.question}
+                                    variant="card"
+                                    padding="lg"
+                                >
+                                    <Text as="h3" variant="cardTitle">{faq.question}</Text>
+                                    <Text variant="bodySm" className="mt-3 leading-6">{faq.answer}</Text>
+                                </Surface>
+                            ))}
+                        </div>
+                    </section>
+                ) : null}
+
                 <section className="space-y-8">
-                    <SectionHeader
-                        eyebrow="Keep exploring"
-                        title="Build authority around the feature, not just a single page"
-                    />
+                    <SectionHeader eyebrow="Keep exploring" title={relatedHeading} />
                     <div className="grid gap-6 md:grid-cols-3">
                         {relatedLinks.map((link) => (
                             <Link
