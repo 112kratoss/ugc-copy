@@ -45,6 +45,21 @@ describe('production release workflow', () => {
     expect(migrationRunner).toContain('out-of-order migration');
   });
 
+  it('builds the staged deployment without Vercel\'s build cache', () => {
+    // The release for #151 restored the previous deployment's build cache, and
+    // the route-only stylesheet came out compiled without the newly added
+    // `models` @source directory: every class unique to /models was missing in
+    // production, while a fresh build of the same commit had them. `--force`
+    // builds without the cache, and `--with-cache` would quietly restore it.
+    const workflow = read('.github/workflows/production-release.yml');
+    const start = workflow.indexOf('npx --yes vercel@57.0.0 deploy');
+    const deploy = workflow.slice(start, workflow.indexOf(')"', start));
+
+    expect(start).toBeGreaterThan(-1);
+    expect(deploy).toContain('--force');
+    expect(deploy).not.toContain('--with-cache');
+  });
+
   it('authorizes a manual configuration redeploy only for green current main', () => {
     const workflow = read('.github/workflows/production-release.yml');
 
