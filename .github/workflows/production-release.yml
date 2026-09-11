@@ -168,10 +168,18 @@ jobs:
             --yes \
             --environment=production \
             --token="${VERCEL_TOKEN}"
+          # --force builds without Vercel's build cache. The release for #151
+          # restored the previous deployment's cache and shipped the route-only
+          # stylesheet compiled without the newly added `models` @source
+          # directory: /models went live missing every class unique to it,
+          # while a fresh build of the same commit had them. A release is rare
+          # enough that a cold build costs little, and a green release must not
+          # ship stale CSS.
           deployment_url="$(
             npx --yes vercel@57.0.0 deploy \
               --prod \
               --skip-domain \
+              --force \
               --yes \
               --token="${VERCEL_TOKEN}" \
               --meta "gitCommitSha=${RELEASE_SHA}" \
