@@ -1,0 +1,143 @@
+{
+  "queriedAtUtc": "2026-09-09 21:38:28 UTC",
+  "projectId": "ildfmhozpibwiopeavfg",
+  "query": "select b.id as bucket_id, b.public, o.metadata->>'cacheControl' as cache_control, count(o.id)::int as objects, coalesce(sum((o.metadata->>'size')::bigint),0)::text as bytes, count(o.id) filter (where o.name like '%preview%')::int as preview_named_objects from storage.buckets b left join storage.objects o on o.bucket_id=b.id group by b.id,b.public,o.metadata->>'cacheControl' order by b.id,cache_control;",
+  "rows": [
+    {
+      "bucket_id": "generated_audio",
+      "public": false,
+      "cache_control": null,
+      "objects": 0,
+      "bytes": "0",
+      "preview_named_objects": 0
+    },
+    {
+      "bucket_id": "generated_images",
+      "public": false,
+      "cache_control": "max-age=300",
+      "objects": 3,
+      "bytes": "177584",
+      "preview_named_objects": 3
+    },
+    {
+      "bucket_id": "generated_images",
+      "public": false,
+      "cache_control": "max-age=31536000",
+      "objects": 49,
+      "bytes": "1388386",
+      "preview_named_objects": 49
+    },
+    {
+      "bucket_id": "generated_images",
+      "public": false,
+      "cache_control": "max-age=3600",
+      "objects": 79,
+      "bytes": "93977614",
+      "preview_named_objects": 0
+    },
+    {
+      "bucket_id": "generated_images",
+      "public": false,
+      "cache_control": "max-age=86400",
+      "objects": 61,
+      "bytes": "5845963",
+      "preview_named_objects": 10
+    },
+    {
+      "bucket_id": "generated_videos",
+      "public": false,
+      "cache_control": "max-age=31536000",
+      "objects": 29,
+      "bytes": "14498827",
+      "preview_named_objects": 14
+    },
+    {
+      "bucket_id": "generated_videos",
+      "public": false,
+      "cache_control": "max-age=3600",
+      "objects": 17,
+      "bytes": "230279521",
+      "preview_named_objects": 0
+    },
+    {
+      "bucket_id": "generated_videos",
+      "public": false,
+      "cache_control": "max-age=86400",
+      "objects": 8,
+      "bytes": "165992",
+      "preview_named_objects": 8
+    },
+    {
+      "bucket_id": "generation_inputs",
+      "public": false,
+      "cache_control": "max-age=3600",
+      "objects": 85,
+      "bytes": "75566404",
+      "preview_named_objects": 0
+    },
+    {
+      "bucket_id": "post_resource_files",
+      "public": false,
+      "cache_control": "max-age=3600",
+      "objects": 2,
+      "bytes": "4935008",
+      "preview_named_objects": 0
+    },
+    {
+      "bucket_id": "profiles",
+      "public": true,
+      "cache_control": "max-age=3600",
+      "objects": 11,
+      "bytes": "2307632",
+      "preview_named_objects": 0
+    },
+    {
+      "bucket_id": "showcase_media",
+      "public": true,
+      "cache_control": "max-age=86400",
+      "objects": 119,
+      "bytes": "152648711",
+      "preview_named_objects": 61
+    },
+    {
+      "bucket_id": "template_assets",
+      "public": false,
+      "cache_control": null,
+      "objects": 0,
+      "bytes": "0",
+      "preview_named_objects": 0
+    },
+    {
+      "bucket_id": "template_inputs",
+      "public": false,
+      "cache_control": null,
+      "objects": 0,
+      "bytes": "0",
+      "preview_named_objects": 0
+    },
+    {
+      "bucket_id": "uploads",
+      "public": false,
+      "cache_control": "max-age=300",
+      "objects": 23,
+      "bytes": "17368277",
+      "preview_named_objects": 0
+    },
+    {
+      "bucket_id": "uploads",
+      "public": false,
+      "cache_control": "max-age=3600",
+      "objects": 65,
+      "bytes": "61011728",
+      "preview_named_objects": 0
+    },
+    {
+      "bucket_id": "uploads",
+      "public": false,
+      "cache_control": "max-age=86400",
+      "objects": 2,
+      "bytes": "23979658",
+      "preview_named_objects": 0
+    }
+  ]
+}

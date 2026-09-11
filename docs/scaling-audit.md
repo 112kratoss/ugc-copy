@@ -6,6 +6,12 @@ Remediation release commit: `277482e3a528d65ddea029db52a3fb5db0a5f4ce`
 Fix state: **deployed; Quality, protected release, and production performance checks passed**
 Status: **NOT CERTIFIED for a current MAU or sustained-RPS claim**
 
+CDN-specific follow-up: the [fresh 2026-09-10 audit](cdn-audit-2026-09-10.md)
+records current production cache behavior, including all 119 public Showcase
+objects on full and ranged requests. It identifies page-rendering, release,
+private-media TTL and monitoring follow-ups; it does not renew this document's
+older performance baseline or certify capacity.
+
 This is the active entry point for scaling decisions. It is intentionally
 short. Detailed source evidence and acceptance criteria are in
 [`scaling-findings-2026-08-22.md`](audits/scaling-findings-2026-08-22.md). Historical

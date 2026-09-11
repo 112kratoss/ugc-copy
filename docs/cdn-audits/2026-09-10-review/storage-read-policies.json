@@ -1,0 +1,61 @@
+{
+  "query": "select policyname, cmd, roles, permissive, qual, with_check from pg_policies where schemaname='storage' and tablename='objects' and cmd in ('SELECT','ALL') order by policyname;",
+  "rows": [
+    {
+      "policyname": "Authenticated users can read own profile media",
+      "cmd": "SELECT",
+      "roles": "{authenticated}",
+      "permissive": "PERMISSIVE",
+      "qual": "((bucket_id = 'profiles'::text) AND ((storage.foldername(name))[1] = (( SELECT auth.uid() AS uid))::text))",
+      "with_check": null
+    },
+    {
+      "policyname": "Users can read own generated audio",
+      "cmd": "SELECT",
+      "roles": "{authenticated}",
+      "permissive": "PERMISSIVE",
+      "qual": "((bucket_id = 'generated_audio'::text) AND ((storage.foldername(name))[1] = (( SELECT auth.uid() AS uid))::text))",
+      "with_check": null
+    },
+    {
+      "policyname": "Users can read own generated images",
+      "cmd": "SELECT",
+      "roles": "{authenticated}",
+      "permissive": "PERMISSIVE",
+      "qual": "((bucket_id = 'generated_images'::text) AND ((storage.foldername(name))[1] = (( SELECT auth.uid() AS uid))::text))",
+      "with_check": null
+    },
+    {
+      "policyname": "Users can read own generated videos",
+      "cmd": "SELECT",
+      "roles": "{authenticated}",
+      "permissive": "PERMISSIVE",
+      "qual": "((bucket_id = 'generated_videos'::text) AND ((storage.foldername(name))[1] = (( SELECT auth.uid() AS uid))::text))",
+      "with_check": null
+    },
+    {
+      "policyname": "Users can read own generation inputs",
+      "cmd": "SELECT",
+      "roles": "{authenticated}",
+      "permissive": "PERMISSIVE",
+      "qual": "((bucket_id = 'generation_inputs'::text) AND ((storage.foldername(name))[1] = (( SELECT auth.uid() AS uid))::text))",
+      "with_check": null
+    },
+    {
+      "policyname": "Users can read own uploads",
+      "cmd": "SELECT",
+      "roles": "{authenticated}",
+      "permissive": "PERMISSIVE",
+      "qual": "((bucket_id = 'uploads'::text) AND ((storage.foldername(name))[1] = (( SELECT auth.uid() AS uid))::text))",
+      "with_check": null
+    },
+    {
+      "policyname": "authenticated_identity_active",
+      "cmd": "ALL",
+      "roles": "{authenticated}",
+      "permissive": "RESTRICTIVE",
+      "qual": "( SELECT current_identity_is_active() AS current_identity_is_active)",
+      "with_check": "( SELECT current_identity_is_active() AS current_identity_is_active)"
+    }
+  ]
+}

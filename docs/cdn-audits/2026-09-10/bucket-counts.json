@@ -1,0 +1,86 @@
+[
+  {
+    "bucket_id": "generated_images",
+    "cache_control": "max-age=300",
+    "objects": 3,
+    "bytes": "177584"
+  },
+  {
+    "bucket_id": "generated_images",
+    "cache_control": "max-age=31536000",
+    "objects": 49,
+    "bytes": "1388386"
+  },
+  {
+    "bucket_id": "generated_images",
+    "cache_control": "max-age=3600",
+    "objects": 79,
+    "bytes": "93977614"
+  },
+  {
+    "bucket_id": "generated_images",
+    "cache_control": "max-age=86400",
+    "objects": 61,
+    "bytes": "5845963"
+  },
+  {
+    "bucket_id": "generated_videos",
+    "cache_control": "max-age=31536000",
+    "objects": 29,
+    "bytes": "14498827"
+  },
+  {
+    "bucket_id": "generated_videos",
+    "cache_control": "max-age=3600",
+    "objects": 17,
+    "bytes": "230279521"
+  },
+  {
+    "bucket_id": "generated_videos",
+    "cache_control": "max-age=86400",
+    "objects": 8,
+    "bytes": "165992"
+  },
+  {
+    "bucket_id": "generation_inputs",
+    "cache_control": "max-age=3600",
+    "objects": 85,
+    "bytes": "75566404"
+  },
+  {
+    "bucket_id": "post_resource_files",
+    "cache_control": "max-age=3600",
+    "objects": 2,
+    "bytes": "4935008"
+  },
+  {
+    "bucket_id": "profiles",
+    "cache_control": "max-age=3600",
+    "objects": 11,
+    "bytes": "2307632"
+  },
+  {
+    "bucket_id": "showcase_media",
+    "cache_control": "max-age=86400",
+    "objects": 119,
+    "bytes": "152648711"
+  },
+  {
+    "bucket_id": "uploads",
+    "cache_control": "max-age=300",
+    "objects": 23,
+    "bytes": "17368277"
+  },
+  {
+    "bucket_id": "uploads",
+    "cache_control": "max-age=3600",
+    "objects": 65,
+    "bytes": "61011728"
+  },
+  {
+    "bucket_id": "uploads",
+    "cache_control": "max-age=86400",
+    "objects": 2,
+    "bytes": "23979658"
+  }
+]
