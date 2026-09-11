@@ -3498,6 +3498,7 @@ describe('generation services', () => {
       args: {
         p_prediction_id: 'task-audio-2',
         p_completed_at: '2026-04-15T10:01:00.000Z',
+        p_error_message: 'provider failure',
       },
     });
     expect(rpcCalls.some((call) => call.fn === 'refund_generation')).toBe(false);
@@ -3551,6 +3552,7 @@ describe('generation services', () => {
       args: {
         p_prediction_id: 'task-audio-3',
         p_completed_at: '2026-04-15T10:02:00.000Z',
+        p_error_message: 'provider failure',
       },
     });
     expect(rpcCalls.some((call) => call.fn === 'refund_generation')).toBe(false);
@@ -3598,6 +3600,7 @@ describe('generation services', () => {
       args: {
         p_prediction_id: 'task-webhook-fail-1',
         p_completed_at: '2026-04-15T10:03:00.000Z',
+        p_error_message: 'provider rejected the request',
       },
     });
     expect(rpcCalls.some((call) => call.fn === 'refund_generation')).toBe(false);

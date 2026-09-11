@@ -15,6 +15,7 @@ import {
   settleGenerationFailed,
   settleGenerationSucceeded,
 } from '@/lib/generation-settlement';
+import { readProviderFailureReason } from '@/lib/provider-failure-messages';
 import { extractKieWebhookTaskId } from '@/lib/kie-webhook';
 import { enqueueGenerationOutputImportJob } from '@/lib/generation-output-import-jobs';
 import { getGenerationKind, normalizeMarketGenerationTiming, toIsoTimestamp } from '@/lib/generation-timing';
@@ -48,7 +49,8 @@ import {
 async function markGenerationFailed(
   creditSupabase: SupabaseClient,
   generation: SyncableGenerationRecord,
-  completedAt?: string | null
+  completedAt?: string | null,
+  errorMessage?: string | null
 ): Promise<'failed' | 'succeeded'> {
   if (!generation.prediction_id) {
     throw new GenerationServiceError('Generation does not have a provider task id.', 500);
@@ -58,6 +60,7 @@ async function markGenerationFailed(
     creditSupabase,
     generation.prediction_id,
     completedAt ?? new Date().toISOString(),
+    errorMessage ?? null,
   );
 }
 
@@ -145,7 +148,12 @@ async function syncSingleGenerationStatusFromProviderPayload(
     }
 
     if (successFlag === 2 || successFlag === 3) {
-      return markGenerationFailed(creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
+      return markGenerationFailed(
+        creditSupabase,
+        generation,
+        toIsoTimestamp(timing.completedAtMs),
+        readProviderFailureReason(taskData),
+      );
     }
 
     return null;
@@ -196,7 +204,12 @@ async function syncSingleGenerationStatusFromProviderPayload(
   }
 
   if (state === 'fail') {
-    return markGenerationFailed(creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
+    return markGenerationFailed(
+      creditSupabase,
+      generation,
+      toIsoTimestamp(timing.completedAtMs),
+      readProviderFailureReason(taskData),
+    );
   }
 
   return null;
@@ -258,7 +271,12 @@ async function syncSingleGenerationStatus(
     }
 
     if (successFlag === 2 || successFlag === 3) {
-      return markGenerationFailed(creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
+      return markGenerationFailed(
+        creditSupabase,
+        generation,
+        toIsoTimestamp(timing.completedAtMs),
+        readProviderFailureReason(data.data),
+      );
     }
 
     const nextStatus = timing.appStatus === 'waiting' ? 'waiting' : 'processing';
@@ -323,7 +341,12 @@ async function syncSingleGenerationStatus(
   }
 
   if (state === 'fail') {
-    return markGenerationFailed(creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
+    return markGenerationFailed(
+      creditSupabase,
+      generation,
+      toIsoTimestamp(timing.completedAtMs),
+      readProviderFailureReason(data.data),
+    );
   }
 
   const nextStatus = timing.appStatus === 'waiting' ? 'waiting' : 'processing';
