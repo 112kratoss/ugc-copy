@@ -21,8 +21,6 @@ const state = vi.hoisted(() => {
   };
 });
 
-vi.mock('react-native-url-polyfill/auto', () => ({}));
-
 vi.mock('react-native', () => ({
   Platform: {
     get OS() {

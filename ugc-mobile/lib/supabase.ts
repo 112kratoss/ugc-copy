@@ -1,5 +1,5 @@
-import 'react-native-url-polyfill/auto';
-
+// No URL polyfill: Expo's runtime installs a spec-compliant URL and
+// URLSearchParams on native (expo/src/winter), which supabase-js uses as is.
 import { createClient } from '@supabase/supabase-js';
 import { Platform } from 'react-native';
 
