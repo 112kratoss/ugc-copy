@@ -90,6 +90,7 @@ import {
   type ShowcaseFeedPageParam,
 } from '@/lib/showcase-feed-query';
 import { formatCreditAmount } from '@/lib/pricing';
+import { reportStartupMilestone } from '@/lib/startup-interactive';
 import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
@@ -360,6 +361,15 @@ export function HomeDashboard() {
   const slidePreviews = useMemo(() => pickHomeSlidePreviews(cards), [cards]);
   const hasItems = cards.length > 0;
   const isFirstLoad = feedQuery.isLoading && !hasItems;
+  // Reported from the commit that first holds real posts, a frame or so before
+  // they are drawn. FlashList's onLoad cannot stand in: it fires once, and on a
+  // cold start that is for the empty list it draws while the page loads.
+  const feedMilestone = hasItems
+    ? 'home-content'
+    : feedQuery.isError || feedQuery.isSuccess ? 'home-empty-or-error' : null;
+  useEffect(() => {
+    if (feedMilestone) reportStartupMilestone({ milestone: feedMilestone, pathname: '/' });
+  }, [feedMilestone]);
   // Bound to the viewer's own pull, never to an incidental refetch. On iOS,
   // `refreshing` flipping true without a drag behind it runs
   // RCTRefreshControl.beginRefreshingProgrammatically, which shifts the scroll
