@@ -35,6 +35,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SHEET_DISMISS_DISTANCE, SHEET_DISMISS_VELOCITY } from '@/components/sheet-chrome';
 import { BrandLockup } from '@/components/ui';
+import { showMessageDialog } from '@/lib/dialog';
 import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { formatUsdCents } from '@/lib/home-view-model';
@@ -126,9 +127,16 @@ export function HomeSideMenu({
   };
 
   const handleAuthPress = async () => {
+    // The menu steps aside either way. For a sign-out, the app-wide cover in
+    // components/sign-out-overlay.tsx shows the progress; it draws in the app's
+    // own window, which this menu's Modal would otherwise sit on top of.
     onClose();
     if (user) {
-      await onSignOut();
+      try {
+        await onSignOut();
+      } catch {
+        showMessageDialog({ title: 'Could not sign out', message: 'Please try again.' });
+      }
       return;
     }
     router.push('/auth' as never);

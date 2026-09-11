@@ -83,6 +83,7 @@ vi.mock('../lib/notifications', () => ({
 vi.mock('../lib/supabase-session-probe', () => ({ probeSupabaseSession: state.probe }));
 vi.mock('../lib/supabase', () => ({
   clearPersistedSupabaseAuthSession: state.clearPersistedSession,
+  duringSignOut: (work: () => Promise<unknown>) => work(),
   initializeSupabaseAuth: vi.fn(async () => undefined),
   isSupabaseConfigured: true,
   supabase: {
@@ -97,6 +98,8 @@ vi.mock('../lib/supabase', () => ({
       signInWithPassword: vi.fn(),
       signUp: vi.fn(),
       signOut: state.signOut,
+      startAutoRefresh: vi.fn(async () => undefined),
+      stopAutoRefresh: vi.fn(async () => undefined),
     },
   },
 }));

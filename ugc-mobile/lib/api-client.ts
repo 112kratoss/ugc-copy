@@ -1173,10 +1173,11 @@ export function createApiClient({
         method: 'POST',
         body: JSON.stringify(body),
       }),
-    unregisterMobilePushToken: (body?: Partial<MobilePushTokenRegistration>) =>
+    unregisterMobilePushToken: (body?: Partial<MobilePushTokenRegistration>, signal?: AbortSignal) =>
       request<{ success: boolean }>('/api/mobile/notifications/unregister', {
         method: 'POST',
         body: JSON.stringify(body ?? {}),
+        signal,
       }),
     listMobileNotifications: (params?: Record<string, QueryValue>) =>
       request<MobileNotificationsResponse>(`/api/mobile/notifications${buildQuery(params)}`),
