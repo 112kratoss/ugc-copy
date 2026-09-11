@@ -3,12 +3,28 @@ import type { Metadata } from 'next';
 import AnonymousHome from '@/app/components/AnonymousHome';
 import { createMetadata, siteConfig } from '@/lib/seo';
 
+/**
+ * The title leads with the category and keeps the brand name second.
+ *
+ * It was previously the brand tagline alone, which named no capability a person
+ * searches for — the highest-authority page in the site was competing for
+ * nothing. The tagline itself is unchanged and now renders visibly in the hero
+ * (`AnonymousHome`), where it reads as brand copy rather than as the page's
+ * only description of what the product does.
+ */
 export const metadata: Metadata = createMetadata({
   title: siteConfig.name,
-  absoluteTitle: siteConfig.defaultTitle,
+  absoluteTitle: `AI Video, Image & Motion Transfer for UGC Ads | ${siteConfig.name}`,
   description:
     'Generate AI images, AI videos, motion-transfer UGC ads, and reusable creative workflows with magicbooklet.',
   path: '/',
+  keywords: [
+    'AI video generator',
+    'AI image generator',
+    'AI motion transfer',
+    'AI UGC ads',
+    'AI ad creative',
+  ],
 });
 
 /**

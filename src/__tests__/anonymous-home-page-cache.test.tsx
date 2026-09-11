@@ -220,21 +220,40 @@ describe('Anonymous home cacheability', () => {
     expect(html).toContain('Child safety');
   });
 
-  it('keeps exactly one h1 after the marketing hero was replaced by the rail', async () => {
+  it('keeps exactly one h1, visible and naming what the product does', async () => {
     const { default: Home } = await import('@/app/page');
 
     const html = await renderPageToHtml(<Home />);
     const container = document.createElement('div');
     container.innerHTML = html;
 
-    // The rail carries no heading of its own, so the h1 the document outline
-    // and the search snippet both rely on is now visually hidden. Losing it
-    // would be invisible in the design and costly everywhere else.
+    // The h1 the document outline and the search snippet both rely on. It was
+    // `sr-only` and read "What will you create today?", which named no
+    // capability anyone searches for — and since the only other headings on `/`
+    // are feed post titles, the site's highest-authority page had nothing to
+    // rank on. Visible and specific now; losing either property is costly.
     const headings = container.querySelectorAll('h1');
 
     expect(headings).toHaveLength(1);
-    expect(headings[0].textContent).toContain('What will you create');
-    expect(headings[0].className).toContain('sr-only');
+    expect(headings[0].textContent).toContain('motion-transfer');
+    expect(headings[0].className).not.toContain('sr-only');
+  });
+
+  it('keeps feed post titles out of the top-level document outline', async () => {
+    const { default: Home } = await import('@/app/page');
+
+    const html = await renderPageToHtml(<Home />);
+    const container = document.createElement('div');
+    container.innerHTML = html;
+
+    // Post titles are user input. As h2s they were top-level sections of `/`,
+    // so the page's outline read as a list of whatever had most recently been
+    // published — "test", "fake mask", "minnal2.0". A post title reaches the
+    // page as a link to its detail route, so no h2 may contain one.
+    const postLinkedHeadings = [...container.querySelectorAll('h2')]
+      .filter((heading) => heading.querySelector('a[href*="/showcase/"]'));
+
+    expect(postLinkedHeadings).toHaveLength(0);
   });
 
   it('renders the rail server-side, repeated for the loop', async () => {

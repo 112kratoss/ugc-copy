@@ -184,11 +184,19 @@ function FeedPostCardView({
             </div>
 
             <div className="flex flex-col gap-2 px-4 pt-2 sm:px-5">
-                <h2 className="text-lg font-extrabold leading-snug tracking-[-0.01em] text-[var(--ui-text-primary)] sm:text-xl">
+                {/*
+                    h3, not h2: a card is an item inside the feed, not a section
+                    of the page. As an h2 every post title on `/` was a
+                    top-level heading, so the document outline of the site's
+                    highest-authority page read as a list of whatever had most
+                    recently been published — "test", "fake mask", "minnal2.0".
+                    Styling is unchanged; this is the outline only.
+                */}
+                <h3 className="text-lg font-extrabold leading-snug tracking-[-0.01em] text-[var(--ui-text-primary)] sm:text-xl">
                     <Link href={detailHref} prefetch={false} className="ui-focus-ring rounded-sm hover:text-white">
                         {card.title}
                     </Link>
-                </h2>
+                </h3>
 
                 {card.metadataLabel ? (
                     <p className="text-xs font-bold tracking-wide text-[var(--ui-text-faint)]">

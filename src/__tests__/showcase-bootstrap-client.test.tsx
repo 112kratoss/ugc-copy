@@ -197,7 +197,7 @@ describe('ShowcaseBootstrapClient', () => {
     try {
       render(<ShowcaseBootstrapClient {...createProps()} />);
 
-      fireEvent.click(screen.getByRole('button', { name: 'Open Priority campaign in viewer' }));
+      fireEvent.click(screen.getByRole('link', { name: 'Open Priority campaign in viewer' }));
 
       expect(await screen.findByTestId('full-showcase-client')).toBeInTheDocument();
       await waitFor(() => expect(demandListener).toHaveBeenCalledTimes(1));
@@ -281,7 +281,7 @@ describe('ShowcaseBootstrapClient', () => {
     const props = createProps();
     render(<ShowcaseBootstrapClient {...props} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open Priority campaign in viewer' }));
+    fireEvent.click(screen.getByRole('link', { name: 'Open Priority campaign in viewer' }));
 
     await waitFor(() => {
       expect(screen.getByTestId('full-showcase-client')).toBeInTheDocument();
@@ -321,5 +321,29 @@ describe('ShowcaseBootstrapClient', () => {
     render(<ShowcaseBootstrapClient {...props} />);
 
     expect(await screen.findByTestId('full-showcase-client')).toBeInTheDocument();
+  });
+  // The reason the cards are anchors at all. They used to be <button onClick>,
+  // so the server-rendered page carried zero hrefs to /showcase/[id] — a
+  // crawler could see every card and follow none of them, which is why no
+  // creation was ever indexed while creator links (plain anchors) were. Keep
+  // the href canonical and query-free: it is the URL the sitemap submits.
+  it('renders each card as a crawlable link to the canonical detail URL', () => {
+    const props = createProps();
+    render(<ShowcaseBootstrapClient {...props} />);
+
+    const link = screen.getByRole('link', { name: 'Open Priority campaign in viewer' });
+
+    expect(link).toHaveAttribute('href', '/showcase/post-priority');
+  });
+
+  // A modified click is the browser's to handle — open in a new tab has to keep
+  // working, which it cannot if the handler swallows every click.
+  it('leaves modified clicks to the browser instead of activating in page', () => {
+    render(<ShowcaseBootstrapClient {...createProps()} />);
+
+    const link = screen.getByRole('link', { name: 'Open Priority campaign in viewer' });
+    fireEvent.click(link, { metaKey: true });
+
+    expect(screen.queryByTestId('full-showcase-client')).not.toBeInTheDocument();
   });
 });

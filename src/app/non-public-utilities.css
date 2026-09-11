@@ -14,6 +14,7 @@
 @source "./ai-motion-transfer";
 @source "./ai-video-generator";
 @source "./ai-workflow-builder";
+@source "./alternatives";
 @source "./auth";
 @source "./blog";
 @source "./cancellation";
@@ -30,6 +31,7 @@
 @source "./home";
 @source "./invite";
 @source "./login";
+@source "./models";
 @source "./notifications";
 @source "./post";
 @source "./pricing";

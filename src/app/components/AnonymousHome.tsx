@@ -103,15 +103,25 @@ function AnonymousHero() {
   return (
     <div>
       {/*
-        The rail replaced the marketing copy that used to carry this heading,
-        but the page still needs exactly one h1 — for the document outline
-        screen-reader users navigate by, and for the search result this
-        statically prerendered page exists to win. Kept in the DOM, out of the
-        design.
+        The page needs exactly one h1 — for the document outline screen-reader
+        users navigate by, and for the search result this statically
+        prerendered page exists to win.
+
+        It used to be `sr-only` and read "What will you create today?", which
+        gave a crawler nothing: the only visible headings on `/` are feed post
+        titles, so the highest-authority page in the site was being read as a
+        page about whatever someone last published. Visible and compact, above
+        the slider, so it states the category without taking the space the feed
+        is meant to occupy.
       */}
-      <Text as="h1" variant="display" className="sr-only">
-        What will you create today?
-      </Text>
+      <div className="mb-6 space-y-2">
+        <Text as="h1" variant="pageTitle" className="max-w-3xl text-3xl sm:text-4xl">
+          Create AI videos, images, and motion-transfer UGC ads
+        </Text>
+        <Text variant="body" className="max-w-2xl">
+          {siteConfig.tagline}
+        </Text>
+      </div>
       <HomeSlider />
     </div>
   );

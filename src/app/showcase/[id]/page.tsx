@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { notFound, redirect } from 'next/navigation';
 import { after } from 'next/server';
 
+import { JsonLd } from '@/app/components/JsonLd';
 import { recordPostShareEvent } from '@/lib/post-share-events';
 import {
   getPostReferenceForShowcaseId,
@@ -10,7 +11,17 @@ import {
   getPublicPostMetaDescription,
   type PublicPostDetail,
 } from '@/lib/public-posts';
-import { createMetadata, type MetadataImage } from '@/lib/seo';
+import {
+  buildBreadcrumbSchema,
+  buildImageObjectSchema,
+  buildVideoObjectSchema,
+  createMetadata,
+  type MetadataImage,
+} from '@/lib/seo';
+import {
+  composeShowcaseTitle,
+  isShowcaseDetailIndexable,
+} from '@/lib/showcase-seo';
 import {
   SHARE_SOURCE_QUERY_PARAM,
   buildShowcaseDetailPath,
@@ -71,6 +82,46 @@ function resolveShowcaseOgImage(detail: PublicPostDetail): MetadataImage | undef
 }
 
 /**
+ * Structured data for the creation itself.
+ *
+ * Video and image posts are the product's core output and were shipping no
+ * media schema at all, which kept every one of them out of video rich results
+ * and image packs. The poster frame already resolved for the social card is
+ * reused as `thumbnailUrl`, which Google requires for a video result.
+ */
+function buildShowcaseMediaSchema(detail: PublicPostDetail) {
+  const path = buildShowcaseDetailPath(detail.id);
+  const ogImage = resolveShowcaseOgImage(detail);
+  const shared = {
+    name: composeShowcaseTitle(detail),
+    description: getPublicPostMetaDescription(detail),
+    path,
+    uploadDate: detail.createdAt,
+    creatorName: detail.creator?.name || undefined,
+  };
+
+  const mediaSchema = detail.mediaKind === 'video'
+    ? buildVideoObjectSchema({
+      ...shared,
+      thumbnailUrl: ogImage?.url,
+      contentUrl: detail.mediaUrl ?? undefined,
+    })
+    : buildImageObjectSchema({
+      ...shared,
+      contentUrl: detail.mediaUrl ?? undefined,
+    });
+
+  return [
+    mediaSchema,
+    buildBreadcrumbSchema([
+      { name: 'Home', path: '/' },
+      { name: 'Showcase', path: '/showcase' },
+      { name: shared.name, path },
+    ]),
+  ];
+}
+
+/**
  * A share visit means someone arrived from a link that left the product. Shared
  * URLs carry `?s=<surface>`; in-app links never do, so the marker is the test —
  * and it names the surface the share came from, which the landing page has no
@@ -109,10 +160,14 @@ export async function generateMetadata({ params }: ShowcaseDetailPageProps): Pro
   }
 
   return createMetadata({
-    title: detail.title,
+    title: composeShowcaseTitle(detail),
     description: getPublicPostMetaDescription(detail),
     path: buildShowcaseDetailPath(detail.id),
     image: resolveShowcaseOgImage(detail),
+    // Unlisted, untitled, and media-less posts stay out of the index. The same
+    // gate runs in `sitemap-entries.ts`, so a URL is never submitted for
+    // indexing and then told not to be indexed.
+    noIndex: !isShowcaseDetailIndexable(detail),
   });
 }
 
@@ -177,12 +232,17 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
   }
 
   return (
-    <ShowcaseDetailBody
-      detail={detail}
-      viewerUserId={auth.session?.user?.id ?? null}
-      accessToken={auth.session?.access_token ?? null}
-      returnContext={returnContext}
-      variant="page"
-    />
+    <>
+      {isShowcaseDetailIndexable(detail) ? (
+        <JsonLd data={buildShowcaseMediaSchema(detail)} />
+      ) : null}
+      <ShowcaseDetailBody
+        detail={detail}
+        viewerUserId={auth.session?.user?.id ?? null}
+        accessToken={auth.session?.access_token ?? null}
+        returnContext={returnContext}
+        variant="page"
+      />
+    </>
   );
 }

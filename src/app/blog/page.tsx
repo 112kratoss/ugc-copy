@@ -2,7 +2,24 @@ import Link from 'next/link';
 import { getSortedPostsData } from '@/lib/blog';
 import { Metadata } from 'next';
 import { ArrowLeft, ArrowRight, Calendar } from 'lucide-react';
-import { createMetadata } from '@/lib/seo';
+import { JsonLd } from '@/app/components/JsonLd';
+import {
+    buildBreadcrumbSchema,
+    buildItemListSchema,
+    createMetadata,
+} from '@/lib/seo';
+
+/**
+ * The feature pages each own a topic; the index links to all of them so the
+ * clusters are connected in both directions rather than only from feature page
+ * to article.
+ */
+const TOPIC_LINKS = [
+    { href: '/ai-motion-transfer', label: 'AI motion transfer' },
+    { href: '/ai-video-generator', label: 'AI video generation' },
+    { href: '/ai-image-generator', label: 'AI image generation' },
+    { href: '/ai-workflow-builder', label: 'AI workflows' },
+];
 
 export const metadata: Metadata = createMetadata({
     title: 'Blog',
@@ -16,6 +33,19 @@ export default function BlogIndex() {
 
     return (
         <div className="min-h-screen bg-black text-white py-24 px-6 md:px-12">
+            <JsonLd
+                data={[
+                    buildItemListSchema(
+                        'magicbooklet blog',
+                        '/blog',
+                        posts.map((post) => ({ name: post.title, path: `/blog/${post.slug}` }))
+                    ),
+                    buildBreadcrumbSchema([
+                        { name: 'Home', path: '/' },
+                        { name: 'Blog', path: '/blog' },
+                    ]),
+                ]}
+            />
             <div className="max-w-4xl mx-auto space-y-12">
                 <div className="space-y-4">
                     <Link href="/" className="inline-flex items-center gap-2 text-zinc-400 hover:text-white transition-colors mb-4">
@@ -23,6 +53,24 @@ export default function BlogIndex() {
                     </Link>
                     <h1 className="text-4xl md:text-5xl font-bold tracking-tight">Blog & Resources</h1>
                     <p className="text-xl text-zinc-400">Insights, tutorials, and strategies for creating high-converting UGC.</p>
+                    <p className="max-w-2xl leading-relaxed text-zinc-400">
+                        Practical guides to producing ad creative with AI — choosing between motion
+                        transfer and text-to-video, writing prompts that behave like shot lists,
+                        building persona libraries, and turning a result that worked once into a
+                        workflow that runs again.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2 pt-2">
+                        <span className="text-sm text-zinc-500">Topics:</span>
+                        {TOPIC_LINKS.map((topic) => (
+                            <Link
+                                key={topic.href}
+                                href={topic.href}
+                                className="ui-focus-ring rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-3 py-1 text-sm text-zinc-300 transition-colors hover:border-[var(--ui-primary)]/40 hover:text-white"
+                            >
+                                {topic.label}
+                            </Link>
+                        ))}
+                    </div>
                 </div>
 
                 <div className="grid gap-8">

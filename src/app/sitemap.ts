@@ -1,7 +1,14 @@
 import { MetadataRoute } from 'next';
 
+import { ALTERNATIVES } from '@/lib/alternatives';
 import { getSortedPostsData } from '@/lib/blog';
+import { listPublicModels, toModelSlug } from '@/lib/model-pages';
 import { siteConfig } from '@/lib/seo';
+import {
+    getIndexableCreators,
+    getIndexableShowcasePosts,
+    getIndexableTemplates,
+} from '@/lib/sitemap-entries';
 
 const INDEXABLE_ROUTES: Array<{
     path: string;
@@ -16,16 +23,37 @@ const INDEXABLE_ROUTES: Array<{
     { path: '/ai-video-generator', changeFrequency: 'weekly', priority: 0.8 },
     { path: '/ai-motion-transfer', changeFrequency: 'weekly', priority: 0.8 },
     { path: '/ai-workflow-builder', changeFrequency: 'weekly', priority: 0.8 },
+    { path: '/templates', changeFrequency: 'daily', priority: 0.75 },
+    { path: '/models', changeFrequency: 'weekly', priority: 0.8 },
+    { path: '/alternatives', changeFrequency: 'monthly', priority: 0.7 },
     { path: '/contact', changeFrequency: 'monthly', priority: 0.55 },
     { path: '/child-safety', changeFrequency: 'yearly', priority: 0.4 },
     { path: '/terms', changeFrequency: 'yearly', priority: 0.3 },
     { path: '/privacy', changeFrequency: 'yearly', priority: 0.3 },
 ];
 
-export default function sitemap(): MetadataRoute.Sitemap {
+/**
+ * Regenerated hourly rather than per request. The generated corpus changes
+ * continuously, so a static sitemap goes stale immediately, but rebuilding it
+ * on every crawler hit would run four unbounded queries against `posts` for a
+ * file whose contents barely move minute to minute.
+ */
+export const revalidate = 3600;
+
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     const baseUrl = siteConfig.siteUrl;
     const now = new Date();
     const posts = getSortedPostsData();
+
+    // Independent reads; one round trip rather than three sequential ones. Each
+    // resolves to an empty list on failure, so a database problem degrades the
+    // sitemap to its static routes instead of failing the response.
+    const [showcasePosts, creators, templates, models] = await Promise.all([
+        getIndexableShowcasePosts(),
+        getIndexableCreators(),
+        getIndexableTemplates(),
+        listPublicModels().catch(() => []),
+    ]);
 
     return [
         ...INDEXABLE_ROUTES.map((route) => ({
@@ -39,6 +67,36 @@ export default function sitemap(): MetadataRoute.Sitemap {
             lastModified: new Date(post.date),
             changeFrequency: 'monthly' as const,
             priority: 0.7,
+        })),
+        ...showcasePosts.map((post) => ({
+            url: `${baseUrl}/showcase/${post.id}`,
+            lastModified: new Date(post.updated_at ?? post.created_at),
+            changeFrequency: 'monthly' as const,
+            priority: 0.6,
+        })),
+        ...creators.map((creator) => ({
+            url: `${baseUrl}/creators/${creator.username}`,
+            lastModified: creator.lastPostedAt ? new Date(creator.lastPostedAt) : now,
+            changeFrequency: 'weekly' as const,
+            priority: 0.5,
+        })),
+        ...templates.map((template) => ({
+            url: `${baseUrl}/templates/${template.slug}`,
+            lastModified: template.updated_at ? new Date(template.updated_at) : now,
+            changeFrequency: 'weekly' as const,
+            priority: 0.55,
+        })),
+        ...ALTERNATIVES.map((entry) => ({
+            url: `${baseUrl}/alternatives/${entry.slug}`,
+            lastModified: now,
+            changeFrequency: 'monthly' as const,
+            priority: 0.7,
+        })),
+        ...models.map((model) => ({
+            url: `${baseUrl}/models/${toModelSlug(model.id)}`,
+            lastModified: now,
+            changeFrequency: 'weekly' as const,
+            priority: 0.65,
         })),
     ];
 }
