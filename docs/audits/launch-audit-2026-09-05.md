@@ -114,7 +114,7 @@ npm run ops:external-gates                       # Supabase advisors + gate lint
 npx --yes vercel@57.0.0 env ls production --format=json   # names only; diff against .env.example
 ```
 
-- Schema parity: run `scripts/schema-fingerprint.sql` on production through the Supabase MCP and on a clean replay via the **Schema baseline** workflow; compare digests per object class.
+- Schema parity: run `scripts/db/schema-fingerprint.sql` on production through the Supabase MCP and on a clean replay via the **Schema baseline** workflow; compare digests per object class.
 - Dispatch `backend-alert-watchdog.yml` manually; it must be green.
 - `PERF_ALLOW_PRODUCTION=1 npm run perf:load:smoke`.
 - Latest `Quality`, `Production release`, and `Production Performance` runs on GitHub are green for the current `main`.
@@ -232,7 +232,7 @@ Sign-off: —
 forward to `/api/webhooks/kie`; the completion and preview-repair crons; media
 import through `MEDIA_IMPORT_HOST_ALLOWLIST` into Storage; posters and
 previews; the database model catalog (`GENERATION_MODEL_CATALOG_SOURCE=database`
-in production); `model_api_references/` staleness; Kie balance and the
+in production); `docs/model-api-references/` staleness; Kie balance and the
 `BACKEND_BUDGET_*` thresholds; ffmpeg and sharp bundling.
 
 **Run:**
@@ -251,7 +251,7 @@ npm run build && npm run build:verify
 
 - `build:verify` asserts only the ffmpeg half. Sharp's libvips has no build-time assertion and a green deploy once shipped without it (crons 500, scheduler stopped). Add a libvips assertion or a post-deploy probe of a sharp route.
 - `vercel.json` declares three crons (`backend-jobs`, `generation-completions`, `media-preview-repair`); the runbook smoke test says "only `/api/cron/backend-jobs`" and `AGENTS.md` says one cron. Reconcile config and docs.
-- `model_api_references/veo-3-1.md` is known stale; verify every published model against docs.kie.ai before launch traffic.
+- `docs/model-api-references/veo-3-1.md` is known stale; verify every published model against docs.kie.ai before launch traffic.
 
 **Exit:** each model family generated once per surface; failure refunds; catalog diff clean; the sharp gap closed.
 
@@ -407,7 +407,7 @@ npx --yes vercel@57.0.0 env ls production --format=json     # names only, diff a
 
 - Schema fingerprint parity (Phase 0 result) resolved.
 - Supabase usage page: egress, MAU, DB size, Storage size, connection count. Egress is the known scaling wall (viewers stream full MP4s; roughly 300–500 MAU on the current plan). Write the number and the trigger to act on it into this section.
-- Scaling findings S1, S2, S3, S5, S6, S7 in `docs/scaling-findings-2026-08-22.md` still read "measurement required" or "revalidate". Either measure them now or record explicitly that launch proceeds without the measurement.
+- Scaling findings S1, S2, S3, S5, S6, S7 in `docs/audits/scaling-findings-2026-08-22.md` still read "measurement required" or "revalidate". Either measure them now or record explicitly that launch proceeds without the measurement.
 - Rotate any secret that has ever appeared in a transcript or a log. Never rotate `ACCOUNT_IDENTITY_FINGERPRINT_SECRET` or `REFERRAL_ATTRIBUTION_HASH_SECRET` (they HMAC stored rows).
 - Decide PITR and Storage backup (Decisions table).
 
