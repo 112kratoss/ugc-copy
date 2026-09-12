@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { ExternalLink, History } from 'lucide-react';
 
-import { Surface, Text } from '@/app/components/DesignSystem';
+import { Surface, Text } from '@/components/DesignSystem';
 import { collectAdminModerationQueue } from '@/lib/admin-moderation-service';
 import { createServiceClient } from '@/lib/server-helpers';
 

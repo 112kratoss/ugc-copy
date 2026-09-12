@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import ResourceMediaPreview from '@/app/components/ResourceMediaPreview';
+import ResourceMediaPreview from '@/components/ResourceMediaPreview';
 
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 

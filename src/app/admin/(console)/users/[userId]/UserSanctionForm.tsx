@@ -5,7 +5,7 @@ import { useId, useState, type FormEvent } from 'react';
 import { ShieldBan, ShieldCheck } from 'lucide-react';
 import clsx from 'clsx';
 
-import { Surface, Text } from '@/app/components/DesignSystem';
+import { Surface, Text } from '@/components/DesignSystem';
 
 /**
  * Mirrors ADMIN_SANCTION_DURATIONS on the server. Fixed choices rather than a

@@ -27,8 +27,8 @@ describe('production performance readiness', () => {
     expect(globalCss).toContain('@import "tailwindcss" source(none)');
     expect(globalCss).toContain('@source "./showcase"');
     expect(globalCss).toContain('@source "./marketplace"');
-    expect(globalCss).not.toContain('@source "./components";');
-    expect(globalCss).toContain('@source "./components/AppShell.tsx";');
+    expect(globalCss).not.toContain('@source "../components";');
+    expect(globalCss).toContain('@source "../components/AppShell.tsx";');
     expect(globalCss).toContain('@source "../lib/client-generation-models.ts";');
   });
 
@@ -193,7 +193,7 @@ describe('production performance readiness', () => {
   it('validates the harness in CI and schedules production budget checks', () => {
     const workflow = readProjectFile('.github/workflows/performance.yml');
     const qualityWorkflow = readProjectFile('.github/workflows/quality.yml');
-    const loadHarness = readProjectFile('scripts/performance-load-test.mjs');
+    const loadHarness = readProjectFile('scripts/perf/performance-load-test.mjs');
     const lighthouseConfig = readProjectFile('config/lighthouse.cjs');
 
     expect(workflow).toContain('workflow_dispatch:');
@@ -210,7 +210,7 @@ describe('production performance readiness', () => {
     expect(workflow).not.toContain('PERF_AUTH_BEARER_TOKEN');
     expect(workflow).not.toContain('PERF_ALLOW_ORIGIN_LOAD');
     expect(workflow).not.toContain('PERF_ALLOW_PRODUCTION_ORIGIN_LOAD');
-    expect(workflow).toContain('node scripts/performance-load-test.mjs --profile "$PERF_PROFILE" --require-signed-in --output performance-load-results.json');
+    expect(workflow).toContain('node scripts/perf/performance-load-test.mjs --profile "$PERF_PROFILE" --require-signed-in --output performance-load-results.json');
     expect(workflow).toContain('Lighthouse ${{ matrix.form_factor }} budgets');
     expect(workflow).toContain('needs: production-load-budgets');
     expect(workflow).toContain('max-parallel: 1');
@@ -242,7 +242,7 @@ describe('production performance readiness', () => {
 
     const output = execFileSync(
       process.execPath,
-      ['scripts/performance-load-test.mjs', '--self-test'],
+      ['scripts/perf/performance-load-test.mjs', '--self-test'],
       { cwd: projectRoot, encoding: 'utf8' },
     );
     expect(output).toContain('Performance load-test self-check passed');
@@ -291,7 +291,7 @@ describe('production performance readiness', () => {
   it('documents every performance harness environment variable', () => {
     const environmentTemplate = readProjectFile('.env.example');
     const performanceSources = [
-      readProjectFile('scripts/performance-load-test.mjs'),
+      readProjectFile('scripts/perf/performance-load-test.mjs'),
       readProjectFile('config/lighthouse.cjs'),
       readProjectFile('.github/workflows/performance.yml'),
     ].join('\n');

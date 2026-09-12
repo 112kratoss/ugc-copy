@@ -13,7 +13,7 @@ import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runti
 
 /**
  * Release 2026-09-11-gpt-image-2-5: GPT Image 2.5 Flare and Sunburst join the catalog next to
- * GPT Image 2, which stays (evidence: model_api_references/gpt-image-2-5.md). Every entry must
+ * GPT Image 2, which stays (evidence: docs/model-api-references/gpt-image-2-5.md). Every entry must
  * equal the code build byte for byte — the shadow verifier diffs projections — so entries are
  * compared against buildGenerationModelCatalog and buildCodeGenerationModelOperations, while
  * provider ids and prices are pinned to the evidence file.

@@ -1,8 +1,8 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
-import { Kicker, SectionHeader, Text } from '@/app/components/DesignSystem';
-import { JsonLd } from '@/app/components/JsonLd';
+import { Kicker, SectionHeader, Text } from '@/components/DesignSystem';
+import { JsonLd } from '@/components/JsonLd';
 import {
     CREDIT_RATE_INR,
     CREDIT_RATE_USD,

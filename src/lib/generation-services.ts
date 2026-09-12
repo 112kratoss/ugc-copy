@@ -2843,7 +2843,7 @@ export async function startVideoGeneration(params: {
       // `aspectRatio` meant veo never saw a ratio and silently fell back to its
       // 16:9 default, so the picker had no effect on the rendered video.
       // `resolution` (720p/1080p/4k) is a valid veo request field.
-      // NOTE: model_api_references/veo-3-1.md is stale on both points — verify
+      // NOTE: docs/model-api-references/veo-3-1.md is stale on both points — verify
       // against https://docs.kie.ai/veo3-api/generate-veo-3-video.md instead.
       body = {
         prompt: compiledPrompt,

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 
-import { Surface, Text } from '@/app/components/DesignSystem';
+import { Surface, Text } from '@/components/DesignSystem';
 import {
   listOpenCreatorPayoutRequests,
   listResolvedCreatorPayoutRequests,

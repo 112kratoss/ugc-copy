@@ -87,7 +87,7 @@ Then:
 
 1. Confirm every repository migration is recorded.
 2. Run the database test suite/pgTAP on the branch.
-3. Run `scripts/schema-fingerprint.sql` and compare its object-class digests to
+3. Run `scripts/db/schema-fingerprint.sql` and compare its object-class digests to
    the expected replay fingerprint.
 4. Run Supabase security and performance advisors.
 5. Verify the deployed product route calls `initialize_workflow_canvas_run(...)`

@@ -15,7 +15,7 @@ import {
   X,
 } from 'lucide-react';
 
-import { useAuth } from '@/app/components/AuthProvider';
+import { useAuth } from '@/components/AuthProvider';
 import {
   createWorkflowGraphHash,
   getWorkflowNodeMediaOutputKind,

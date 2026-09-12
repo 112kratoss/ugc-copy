@@ -6,7 +6,7 @@ import CreateMotionPage from '@/app/create-motion/page';
 import CreateVideoPage from '@/app/create-video/page';
 import NewPostPage from '@/app/post/new/page';
 
-vi.mock('@/app/components/RouteAuthBoundary', () => ({
+vi.mock('@/components/RouteAuthBoundary', () => ({
   RequireAuth: ({ children, returnTo }: { children: React.ReactNode; returnTo: string }) => (
     <div data-testid="auth-boundary" data-return-to={returnTo}>{children}</div>
   ),

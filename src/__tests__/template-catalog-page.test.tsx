@@ -19,13 +19,13 @@ vi.mock('@/lib/media-template-service', () => ({
   }),
 }));
 
-vi.mock('@/app/components/RouteAuthBoundary', () => ({
+vi.mock('@/components/RouteAuthBoundary', () => ({
   OptionalAuth: ({ children }: { children: ReactNode }) => (
     <div data-testid="optional-auth">{children}</div>
   ),
 }));
 
-vi.mock('@/app/components/templates/TemplateCatalogClient', () => ({
+vi.mock('@/components/templates/TemplateCatalogClient', () => ({
   default: (props: unknown) => {
     mocks.catalogProps(props);
     return <div data-testid="template-catalog" />;

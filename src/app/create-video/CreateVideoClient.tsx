@@ -1,12 +1,12 @@
 'use client';
 
-import RecoverableMediaAudio from '@/app/components/RecoverableMediaAudio';
-import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+import RecoverableMediaAudio from '@/components/RecoverableMediaAudio';
+import InlineMediaVideo from '@/components/InlineMediaVideo';
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import GenerationResultVideo from '@/app/components/GenerationResultVideo';
+import GenerationResultVideo from '@/components/GenerationResultVideo';
 import { Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, VolumeX, Play, Camera, ChevronDown, Check, Share2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
@@ -21,11 +21,11 @@ import {
     StudioRunPanel,
     StudioUploadedMediaPreview,
     StudioWorkspacePanel,
-} from '@/app/components/CreatorStudio';
-import StudioModelPicker from '@/app/components/StudioModelPicker';
-import PublicShareButton from '@/app/components/PublicShareButton';
-import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
-import EnhancePromptButton from '@/app/components/EnhancePromptButton';
+} from '@/components/CreatorStudio';
+import StudioModelPicker from '@/components/StudioModelPicker';
+import PublicShareButton from '@/components/PublicShareButton';
+import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
+import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, getVideoElementSupport, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/client-generation-models';
 import { getVideoInputAffordances } from '@/lib/generation-model-affordances';
 import type { GenerationModelDescriptor } from '@/lib/generation-model-catalog';
@@ -36,7 +36,7 @@ import {
     useWebGenerationModelCatalog,
     useWebGenerationModelQuote,
 } from '@/lib/generation-model-client';
-import { useAuth } from '@/app/components/AuthProvider';
+import { useAuth } from '@/components/AuthProvider';
 import type { RemixMediaAssetDescriptor, RemixSourceBundle } from '@/lib/remix-source';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import {

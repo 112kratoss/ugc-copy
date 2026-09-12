@@ -40,6 +40,9 @@ lighthouse-results/
 .DS_Store
 *.pem
 
+# logs (a dev-server log was once committed by accident)
+*.log
+
 # debug
 npm-debug.log*
 yarn-debug.log*
@@ -56,6 +59,13 @@ yarn-error.log*
 
 # vercel
 .vercel
+
+# agent-session scratch: settings.local.json is per-machine, worktrees are full checkouts
+.claude/settings.local.json
+.claude/worktrees/
+
+# supabase cli scratch
+/supabase/snippets/
 
 # typescript
 *.tsbuildinfo

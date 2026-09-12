@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 
-import FeatureLandingPage from '@/app/components/FeatureLandingPage';
+import FeatureLandingPage from '@/components/FeatureLandingPage';
 import { createMetadata } from '@/lib/seo';
 
 export const metadata: Metadata = createMetadata({

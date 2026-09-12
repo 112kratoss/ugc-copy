@@ -1,7 +1,7 @@
 /**
  * The decisions the media integrity audit makes before it downloads anything.
  *
- * They live here rather than inside `scripts/audit-media-previews.ts` so they
+ * They live here rather than inside `scripts/audits/audit-media-previews.ts` so they
  * can be tested without a database or a Storage round trip — the script keeps
  * the I/O and the reporting.
  */

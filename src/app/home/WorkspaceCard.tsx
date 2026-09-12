@@ -4,9 +4,9 @@ import Link from 'next/link';
 import { AlertCircle, ArrowRight, Image as ImageIcon, Music, Play, Plus, Sparkles } from 'lucide-react';
 import { useMemo, useSyncExternalStore } from 'react';
 
-import { useAuth } from '@/app/components/AuthProvider';
-import { StudioGenerationStatus } from '@/app/components/CreatorStudio';
-import { Button, Kicker, Text } from '@/app/components/DesignSystem';
+import { useAuth } from '@/components/AuthProvider';
+import { StudioGenerationStatus } from '@/components/CreatorStudio';
+import { Button, Kicker, Text } from '@/components/DesignSystem';
 import type { CreatorToolAccent } from '@/lib/creator-tools';
 import {
   rankHomeWorkspaceGenerations,

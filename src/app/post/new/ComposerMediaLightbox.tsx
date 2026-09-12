@@ -1,6 +1,6 @@
 'use client';
 
-import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+import InlineMediaVideo from '@/components/InlineMediaVideo';
 
 import { useEffect, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';

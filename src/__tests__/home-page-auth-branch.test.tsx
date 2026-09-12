@@ -20,7 +20,7 @@ vi.mock('@/lib/home-dashboard-service', () => ({
   loadHomeWhatsNewModels: () => loadHomeWhatsNewModelsMock(),
 }));
 
-vi.mock('@/app/components/AnonymousHome', () => ({
+vi.mock('@/components/AnonymousHome', () => ({
   default: () => <div data-testid="anonymous-home" />,
 }));
 

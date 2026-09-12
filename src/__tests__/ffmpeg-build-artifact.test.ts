@@ -11,7 +11,7 @@ import {
   findInlinedRootPaths,
   findMissingRequiredFfmpegRoutes,
   traceContainsFfmpeg,
-} from '../../scripts/check-ffmpeg-build-artifact.mjs';
+} from '../../scripts/build/check-ffmpeg-build-artifact.mjs';
 
 describe('FFmpeg build artifact verification', () => {
   it('recognizes npm, pnpm, and Windows FFmpeg trace paths', () => {

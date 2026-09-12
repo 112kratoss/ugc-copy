@@ -7,7 +7,7 @@ import CreateHubPage from '@/app/create/page';
 const getServerAuthStateMock = vi.fn();
 const getShowcaseFeedPageMock = vi.fn();
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
@@ -20,7 +20,7 @@ vi.mock('next/link', () => ({
   ),
 }));
 
-vi.mock('@/app/components/HoverVideo', () => ({
+vi.mock('@/components/HoverVideo', () => ({
   HoverVideo: ({ src, className }: { src: string; className?: string }) => (
     <video data-testid="hover-video" src={src} className={className} />
   ),

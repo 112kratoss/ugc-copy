@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import clsx from 'clsx';
 
-import { Surface, Text } from '@/app/components/DesignSystem';
+import { Surface, Text } from '@/components/DesignSystem';
 
 export type AdminStatusTone = 'ok' | 'warning' | 'danger' | 'neutral';
 

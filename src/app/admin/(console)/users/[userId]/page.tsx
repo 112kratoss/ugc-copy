@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { ArrowLeft, ExternalLink, ShieldBan } from 'lucide-react';
 
-import { Surface, Text } from '@/app/components/DesignSystem';
+import { Surface, Text } from '@/components/DesignSystem';
 import { listAdminCreditAdjustments } from '@/lib/admin-credit-adjustment-service';
 import {
   getAdminUserAccountState,

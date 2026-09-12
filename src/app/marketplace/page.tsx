@@ -126,7 +126,7 @@ export default function MarketplacePage({ searchParams }: MarketplacePageProps) 
   return (
     <div className="min-h-screen bg-black text-white">
       {/* The emerald and sky bokeh blobs that used to sit here are gone:
-          design-web.md rules out purely atmospheric backgrounds, and they were
+          docs/design/design-web.md rules out purely atmospheric backgrounds, and they were
           spending two of the system's content-type accents on decoration. */}
       <div className="studio-shell relative z-10 py-8 sm:py-10">
         <div className="rounded-[34px] border border-white/8 bg-[linear-gradient(135deg,rgba(5,8,12,0.98),rgba(16,18,25,0.92))] p-6 shadow-[0_28px_90px_rgba(0,0,0,0.5)] sm:p-8">

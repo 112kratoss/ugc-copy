@@ -1,12 +1,12 @@
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import DeferredAppShellAccount from '@/app/components/DeferredAppShellAccount';
-import DeferredGenerationNotifications from '@/app/components/DeferredGenerationNotifications';
+import DeferredAppShellAccount from '@/components/DeferredAppShellAccount';
+import DeferredGenerationNotifications from '@/components/DeferredGenerationNotifications';
 import {
   publishAppShellAuthentication,
   readAppShellAuthentication,
-} from '@/app/components/app-shell-auth-state';
+} from '@/components/app-shell-auth-state';
 
 const authCookieMocks = vi.hoisted(() => ({
   hasSupabaseAuthCookie: vi.fn(),

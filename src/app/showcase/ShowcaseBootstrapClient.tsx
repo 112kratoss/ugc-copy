@@ -5,7 +5,7 @@
 import type { ComponentType, MouseEvent as ReactMouseEvent } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { useAuth } from '@/app/components/AuthProvider';
+import { useAuth } from '@/components/AuthProvider';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 import {

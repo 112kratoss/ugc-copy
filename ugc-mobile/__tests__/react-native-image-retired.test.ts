@@ -23,7 +23,7 @@ const files = ['app', 'components', 'lib'].flatMap((root) => sourceFiles(path.jo
  * Glide at the view's size. React Native's core `Image` decodes through Fresco
  * instead: a second image pipeline, a second cache, and the network path Google
  * Play's "bitmap image optimization" card points at. Phase 5a of
- * docs/android-app-optimization-plan-2026-09-05.md retired its last two uses
+ * docs/plans/android-app-optimization-plan-2026-09-05.md retired its last two uses
  * (the unlock thumbnail and the Google sign-in button), which is what let phase
  * 5b drop Fresco's GIF and WebP add-ons from the binary. This keeps it retired:
  * a new `Image` from react-native would quietly bring the second pipeline back.

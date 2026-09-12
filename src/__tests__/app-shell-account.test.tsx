@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import AppShellAccount from '@/app/components/AppShellAccount';
+import AppShellAccount from '@/components/AppShellAccount';
 
 const mocks = vi.hoisted(() => ({
   getSession: vi.fn(),

@@ -6,10 +6,10 @@ import { SpeedInsights } from "@vercel/speed-insights/next";
 import { siteConfig } from "@/lib/seo";
 
 import "./globals.css";
-import AppShell from "./components/AppShell";
-import DeferredGenerationNotifications from "./components/DeferredGenerationNotifications";
-import FeedbackViewport from "./components/FeedbackViewport";
-import NavigationProgress from "./components/NavigationProgress";
+import AppShell from "@/components/AppShell";
+import DeferredGenerationNotifications from "@/components/DeferredGenerationNotifications";
+import FeedbackViewport from "@/components/FeedbackViewport";
+import NavigationProgress from "@/components/NavigationProgress";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",

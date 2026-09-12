@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import FeedClient from '@/app/feed/FeedClient';
 import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
     useAuth: () => ({ session: null, user: null }),
 }));
 

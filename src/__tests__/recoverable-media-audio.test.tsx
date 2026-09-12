@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import RecoverableMediaAudio from '@/app/components/RecoverableMediaAudio';
+import RecoverableMediaAudio from '@/components/RecoverableMediaAudio';
 afterEach(cleanup);
 it('retries expired stored audio through authenticated media delivery without replaying automatically', async () => {
   const src = 'https://storage.example.com/storage/v1/object/sign/generated_audio/owner/clip.wav?token=expired';

@@ -21,13 +21,13 @@ import {
   getCreatorPublicPostCount,
 } from '@/lib/creator-profile';
 import { buildCreatorProfilePath } from '@/lib/profile';
-import { JsonLd } from '@/app/components/JsonLd';
+import { JsonLd } from '@/components/JsonLd';
 import {
   buildBreadcrumbSchema,
   buildProfilePageSchema,
   createMetadata,
 } from '@/lib/seo';
-import { OptionalAuth } from '@/app/components/RouteAuthBoundary';
+import { OptionalAuth } from '@/components/RouteAuthBoundary';
 import { CreatorContentTabs } from './CreatorContentTabs';
 import { ProfileActions } from './ProfileActions';
 

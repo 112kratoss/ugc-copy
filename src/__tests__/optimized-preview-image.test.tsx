@@ -17,7 +17,7 @@ describe('OptimizedPreviewImage', () => {
   });
 
   it('serves a priority generated WebP directly while retaining Next preload behavior', async () => {
-    const { OptimizedPreviewImage } = await import('@/app/components/OptimizedPreviewImage');
+    const { OptimizedPreviewImage } = await import('@/components/OptimizedPreviewImage');
     const previewUrl = `${SUPABASE_URL}/storage/v1/object/sign/generated_images/user/image.preview.12345678.webp?token=test`;
 
     render(

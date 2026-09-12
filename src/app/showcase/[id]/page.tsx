@@ -3,7 +3,7 @@ import { headers } from 'next/headers';
 import { notFound, redirect } from 'next/navigation';
 import { after } from 'next/server';
 
-import { JsonLd } from '@/app/components/JsonLd';
+import { JsonLd } from '@/components/JsonLd';
 import { recordPostShareEvent } from '@/lib/post-share-events';
 import {
   getPostReferenceForShowcaseId,

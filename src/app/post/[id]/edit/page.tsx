@@ -3,7 +3,7 @@ import { notFound, redirect } from 'next/navigation';
 
 import { getOwnerPostDetail } from '@/lib/owner-posts';
 import { getServerAuthState } from '@/lib/supabase-server';
-import { AuthProvider } from '@/app/components/AuthProvider';
+import { AuthProvider } from '@/components/AuthProvider';
 import type { EditablePostDraft } from '@/app/post/new/post-editor-types';
 import NewPostClient from '@/app/post/new/NewPostClient';
 

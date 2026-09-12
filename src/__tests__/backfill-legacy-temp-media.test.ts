@@ -6,7 +6,7 @@ import {
   isPrivateOrSpecialIp,
   parseGenerationIdArgument,
   runBackfill,
-} from '../../scripts/backfill-legacy-temp-media.mjs';
+} from '../../scripts/backfills/backfill-legacy-temp-media.mjs';
 
 const IMAGE_GENERATION = {
   id: '24f5537e-f5db-4a26-8db3-c3d89f3ed261',

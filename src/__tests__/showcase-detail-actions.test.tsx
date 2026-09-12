@@ -19,14 +19,14 @@ vi.mock('next/navigation', () => ({
   usePathname: () => '/showcase/post-1',
 }));
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
     session: { access_token: 'token', user: { id: 'owner-1' } },
     user: { id: 'owner-1' },
   }),
 }));
 
-vi.mock('@/app/components/PublicShareButton', () => ({
+vi.mock('@/components/PublicShareButton', () => ({
   default: () => <button type="button">Share</button>,
 }));
 
@@ -35,8 +35,8 @@ vi.mock('@/lib/post-lifecycle-client', async (importOriginal) => ({
   ...clientMocks,
 }));
 
-import FeedbackViewport from '@/app/components/FeedbackViewport';
-import { resetFeedbackState } from '@/app/components/feedback-state';
+import FeedbackViewport from '@/components/FeedbackViewport';
+import { resetFeedbackState } from '@/components/feedback-state';
 import ShowcaseDetailActions from '@/app/showcase/[id]/ShowcaseDetailActions';
 
 function renderOwnerTools(overrides: Partial<React.ComponentProps<typeof ShowcaseDetailActions>> = {}) {

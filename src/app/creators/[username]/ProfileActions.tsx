@@ -9,7 +9,7 @@ import { supabase } from '@/lib/supabase';
 import type { EditableCreatorProfile, ProfileApiResponse } from '@/lib/profile';
 import { toEditableCreatorProfile } from '@/lib/profile';
 import CreatorProfileCard from '@/app/creations/CreatorProfileCard';
-import ProfileShareButton from '@/app/components/ProfileShareButton';
+import ProfileShareButton from '@/components/ProfileShareButton';
 
 interface ProfileActionsProps {
   profile: EditableCreatorProfile;

@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 
 import MarketplaceToolFilter from '@/app/marketplace/MarketplaceToolFilter';
-import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
+import TextPostPreviewCard from '@/components/TextPostPreviewCard';
 import {
   describePostResourceKinds,
   formatPostResourceBundleCountSummary,
@@ -30,8 +30,8 @@ import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import type { SourceToolOption } from '@/lib/source-tools';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
-import { HoverVideo } from '@/app/components/HoverVideo';
-import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
+import { HoverVideo } from '@/components/HoverVideo';
+import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
 import { MARKETPLACE_COMPACT_PAGE_SIZE } from '@/lib/marketplace-resource-list-cache-policy';
 
 interface MarketplacePageInfo {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { getActiveAppNavItem, getAppShellTitle, isMinimalAppChromePath } from '@/app/components/app-shell-nav';
+import { getActiveAppNavItem, getAppShellTitle, isMinimalAppChromePath } from '@/components/app-shell-nav';
 
 describe('app shell navigation', () => {
   it('keeps post composer routes in the Studio section', () => {

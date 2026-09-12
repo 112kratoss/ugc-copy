@@ -25,7 +25,7 @@ vi.mock('@/lib/supabase-server', () => ({
   getServerAuthState: getServerAuthStateMock,
 }));
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
   AuthProvider: vi.fn(({ children }) => (
     <div data-testid="auth-provider">{children}</div>
   )),
@@ -67,7 +67,7 @@ describe('EditPostPage', () => {
     });
 
     const { default: EditPostPage } = await import('@/app/post/[id]/edit/page');
-    const { AuthProvider } = await import('@/app/components/AuthProvider');
+    const { AuthProvider } = await import('@/components/AuthProvider');
 
     const result = await EditPostPage({
       params: Promise.resolve({ id: 'post-1' }),

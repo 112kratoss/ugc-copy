@@ -1,4 +1,4 @@
-import { RequireAuth } from '@/app/components/RouteAuthBoundary';
+import { RequireAuth } from '@/components/RouteAuthBoundary';
 
 import CreateVideoClient, { type CreateVideoPrefill } from './CreateVideoClient';
 

@@ -5,11 +5,11 @@ import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Loader2, Heart, Image as ImageIcon, Video, Layers, TrendingUp, ShoppingBag, BookText, BadgeDollarSign, SlidersHorizontal, X, RefreshCw } from 'lucide-react';
-import { useAuth } from '@/app/components/AuthProvider';
-import CreatorIdentity from '@/app/components/CreatorIdentity';
-import PublicShareButton from '@/app/components/PublicShareButton';
-import SkeletonLoader from '@/app/components/SkeletonLoader';
-import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
+import { useAuth } from '@/components/AuthProvider';
+import CreatorIdentity from '@/components/CreatorIdentity';
+import PublicShareButton from '@/components/PublicShareButton';
+import SkeletonLoader from '@/components/SkeletonLoader';
+import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
 import {

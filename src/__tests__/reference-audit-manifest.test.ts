@@ -13,7 +13,7 @@ import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runti
 
 /**
  * Release 2026-09-04-reference-audit: the fixes from
- * docs/model-reference-inputs-audit-2026-09-04.md that live in the catalog — three
+ * docs/audits/model-reference-inputs-audit-2026-09-04.md that live in the catalog — three
  * pass-through prices re-read from kie.ai, and five quote-time rules for contracts Kie
  * enforces that the descriptor alone cannot express. Every entry must equal the code
  * build byte for byte (the shadow verifier diffs projections), so the manifest is checked

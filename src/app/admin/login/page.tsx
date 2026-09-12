@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 
 import { authenticateAdminPage } from '@/lib/admin-auth';
 import { resolveAdminConfig } from '@/lib/admin-identity';
-import { Surface, Text } from '@/app/components/DesignSystem';
+import { Surface, Text } from '@/components/DesignSystem';
 
 import { AdminLoginForm } from './AdminLoginForm';
 

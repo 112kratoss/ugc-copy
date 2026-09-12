@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import CreatorIdentity from '@/app/components/CreatorIdentity';
+import CreatorIdentity from '@/components/CreatorIdentity';
 
 describe('CreatorIdentity', () => {
   it('renders a public creator link when a username exists', () => {

@@ -9,7 +9,7 @@ const migrationPath = path.resolve(
 );
 const scriptPath = path.resolve(
   process.cwd(),
-  'scripts/generation-model-catalog.ts',
+  'scripts/ops/generation-model-catalog.ts',
 );
 const manifestPath = path.resolve(
   process.cwd(),

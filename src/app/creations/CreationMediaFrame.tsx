@@ -1,6 +1,6 @@
 'use client';
 
-import RecoverableMediaAudio from '@/app/components/RecoverableMediaAudio';
+import RecoverableMediaAudio from '@/components/RecoverableMediaAudio';
 
 import { useState, type MouseEvent } from 'react';
 import { AlertTriangle, Loader2, UploadCloud, Volume2 } from 'lucide-react';

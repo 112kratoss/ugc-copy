@@ -7,19 +7,19 @@ import {
   normalizeTemplateRun,
   retryTemplateRunStep,
   startTemplateRun,
-} from '@/app/components/templates/api';
+} from '@/components/templates/api';
 import {
   getTemplateImageDimensionError,
   getTemplateRunErrorCopy,
   validateTemplateInputFileMetadata,
-} from '@/app/components/templates/TemplateRunClient';
+} from '@/components/templates/TemplateRunClient';
 import {
   TemplateCard,
   TemplateRunStepCard,
   TemplateRunStepper,
   TemplateSlotUpload,
-} from '@/app/components/templates/TemplatePrimitives';
-import { shouldPollTemplateRun, type MediaTemplate, type TemplateRunStep } from '@/app/components/templates/types';
+} from '@/components/templates/TemplatePrimitives';
+import { shouldPollTemplateRun, type MediaTemplate, type TemplateRunStep } from '@/components/templates/types';
 
 const template: MediaTemplate = {
   id: 'template-1',

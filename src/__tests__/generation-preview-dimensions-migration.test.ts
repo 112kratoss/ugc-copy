@@ -72,11 +72,11 @@ describe('the columns are actually produced and consumed', () => {
   });
 
   it('has a backfill for the rows whose preview already exists', () => {
-    const script = read('scripts/backfill-generation-preview-dimensions.ts');
+    const script = read('scripts/backfills/backfill-generation-preview-dimensions.ts');
     const packageJson = JSON.parse(read('package.json')) as { scripts: Record<string, string> };
 
     expect(packageJson.scripts['backfill:generation-preview-dimensions']).toContain(
-      'scripts/backfill-generation-preview-dimensions.ts',
+      'scripts/backfills/backfill-generation-preview-dimensions.ts',
     );
     // Measuring the stored preview rather than the source is the whole point:
     // storage egress is this backend's scaling wall.

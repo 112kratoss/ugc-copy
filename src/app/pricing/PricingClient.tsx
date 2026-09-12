@@ -6,7 +6,7 @@ import Script from "next/script";
 import { ArrowLeft, ArrowRight, Check, Crown, Gift, Loader2, Sparkles, Zap, type LucideIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 
-import { JsonLd } from "@/app/components/JsonLd";
+import { JsonLd } from "@/components/JsonLd";
 import { PRICING_CURRENCY, PRICING_PLANS, type PricingPlanId } from "@/lib/pricing";
 import {
     clearRazorpayCheckoutIntentKey,

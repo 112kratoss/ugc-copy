@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 
-import AnonymousHome from '@/app/components/AnonymousHome';
+import AnonymousHome from '@/components/AnonymousHome';
 import { createMetadata, siteConfig } from '@/lib/seo';
 
 /**

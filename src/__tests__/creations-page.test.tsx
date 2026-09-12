@@ -4,8 +4,8 @@ import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreationsPage from '@/app/creations/page';
-import FeedbackViewport from '@/app/components/FeedbackViewport';
-import { resetFeedbackState } from '@/app/components/feedback-state';
+import FeedbackViewport from '@/components/FeedbackViewport';
+import { resetFeedbackState } from '@/components/feedback-state';
 
 const navigationState = vi.hoisted(() => {
   const push = vi.fn();
@@ -31,7 +31,7 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => navigationState.searchParams,
 }));
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
     session: authState.session,
   }),

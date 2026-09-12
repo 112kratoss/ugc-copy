@@ -1,12 +1,12 @@
 import Link from 'next/link';
 import { Suspense, use } from 'react';
 
-import AnonymousHome from '@/app/components/AnonymousHome';
-import { StatusCallout } from '@/app/components/DesignSystem';
-import HomeExperience from '@/app/components/HomeExperience';
-import HomeSlider from '@/app/components/HomeSlider';
-import QuickStartsCard from '@/app/components/QuickStartsCard';
-import WhatsNewModelsCard from '@/app/components/WhatsNewModelsCard';
+import AnonymousHome from '@/components/AnonymousHome';
+import { StatusCallout } from '@/components/DesignSystem';
+import HomeExperience from '@/components/HomeExperience';
+import HomeSlider from '@/components/HomeSlider';
+import QuickStartsCard from '@/components/QuickStartsCard';
+import WhatsNewModelsCard from '@/components/WhatsNewModelsCard';
 import FeedClient from '@/app/feed/FeedClient';
 import StaleSessionRecovery from '@/app/home/StaleSessionRecovery';
 import WorkspaceCard from '@/app/home/WorkspaceCard';

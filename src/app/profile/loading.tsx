@@ -1,4 +1,4 @@
-import TabLoadingShell from '@/app/components/TabLoadingShell';
+import TabLoadingShell from '@/components/TabLoadingShell';
 
 export default function ProfileLoading() {
   return <TabLoadingShell title="Profile" eyebrow="Creator identity" accent="coral" />;

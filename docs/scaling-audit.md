@@ -8,7 +8,7 @@ Status: **NOT CERTIFIED for a current MAU or sustained-RPS claim**
 
 This is the active entry point for scaling decisions. It is intentionally
 short. Detailed source evidence and acceptance criteria are in
-[`scaling-findings-2026-08-22.md`](scaling-findings-2026-08-22.md). Historical
+[`scaling-findings-2026-08-22.md`](audits/scaling-findings-2026-08-22.md). Historical
 investigation is preserved under [`archive/`](archive/), and exact-build
 capacity reports are indexed under [`scaling-certificates/`](scaling-certificates/).
 
@@ -177,8 +177,9 @@ improve one path and regress another. See
   final run above is the first fully green current-commit baseline after closing
   catalog, caching, main-thread, Home LCP, Showcase TTFB and authenticated feed
   tails without widening budgets.
-- The ignored local `certification-artifacts/` directory still contains the raw
-  `c1d494e` certificate bundle. No current-commit certificate bundle exists.
+- The raw `c1d494e` certificate bundle was moved out of the repository folder on
+  2026-09-12 into the workspace archive (`archive/ugc-app-certification-artifacts/`,
+  never tracked). No current-commit certificate bundle exists.
 
 ## Ordered next work
 

@@ -1,6 +1,6 @@
 'use client';
 
-import RecoverableMediaAudio from '@/app/components/RecoverableMediaAudio';
+import RecoverableMediaAudio from '@/components/RecoverableMediaAudio';
 
 import {
   createContext,

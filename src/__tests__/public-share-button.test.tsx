@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import PublicShareButton from '@/app/components/PublicShareButton';
+import PublicShareButton from '@/components/PublicShareButton';
 
 describe('PublicShareButton', () => {
   const fetchMock = vi.fn();

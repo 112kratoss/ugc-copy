@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 
 import '@/app/non-public-utilities.css';
 
-import { RequestHintedOptionalAuth } from '@/app/components/RouteAuthBoundary';
+import { RequestHintedOptionalAuth } from '@/components/RouteAuthBoundary';
 import { createNoIndexMetadata } from '@/lib/seo';
 
 /**

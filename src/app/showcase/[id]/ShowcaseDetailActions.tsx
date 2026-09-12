@@ -5,15 +5,15 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useState } from 'react';
 import { Archive, Loader2, PencilLine, Sparkles, Trash2, Wand2 } from 'lucide-react';
 
-import { useAuth } from '@/app/components/AuthProvider';
-import PostVisibilityMenu from '@/app/components/PostVisibilityMenu';
-import PublicShareButton from '@/app/components/PublicShareButton';
+import { useAuth } from '@/components/AuthProvider';
+import PostVisibilityMenu from '@/components/PostVisibilityMenu';
+import PublicShareButton from '@/components/PublicShareButton';
 import {
   usePostLifecycle,
   type PostLifecycleEvent,
   type PostLifecyclePatch,
   type PostLifecycleTarget,
-} from '@/app/components/usePostLifecycle';
+} from '@/components/usePostLifecycle';
 import type { PostVisibility } from '@/lib/post-lifecycle-client';
 import { getCurrentInternalPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';

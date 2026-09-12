@@ -4,9 +4,9 @@ import { Heart, MessageCircle, Repeat2, ShoppingBag } from 'lucide-react';
 import Link from 'next/link';
 import { memo } from 'react';
 
-import PostCommentAvatar from '@/app/components/PostCommentAvatar';
-import PostComments from '@/app/components/PostComments';
-import PublicShareButton from '@/app/components/PublicShareButton';
+import PostCommentAvatar from '@/components/PostCommentAvatar';
+import PostComments from '@/components/PostComments';
+import PublicShareButton from '@/components/PublicShareButton';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';

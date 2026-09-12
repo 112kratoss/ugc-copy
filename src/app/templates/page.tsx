@@ -1,9 +1,9 @@
 import type { Metadata } from 'next';
 
-import { OptionalAuth } from '@/app/components/RouteAuthBoundary';
-import TemplateCatalogClient from '@/app/components/templates/TemplateCatalogClient';
-import type { MediaTemplate } from '@/app/components/templates/types';
-import { JsonLd } from '@/app/components/JsonLd';
+import { OptionalAuth } from '@/components/RouteAuthBoundary';
+import TemplateCatalogClient from '@/components/templates/TemplateCatalogClient';
+import type { MediaTemplate } from '@/components/templates/types';
+import { JsonLd } from '@/components/JsonLd';
 import { listActiveMediaTemplatesPage } from '@/lib/media-template-service';
 import { createServiceClient } from '@/lib/server-helpers';
 import {

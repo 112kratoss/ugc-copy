@@ -2,14 +2,14 @@ import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import FeedbackViewport from '@/app/components/FeedbackViewport';
+import FeedbackViewport from '@/components/FeedbackViewport';
 import {
   dismissToast,
   pushToast,
   readFeedbackSnapshot,
   requestConfirmation,
   resetFeedbackState,
-} from '@/app/components/feedback-state';
+} from '@/components/feedback-state';
 
 describe('feedback viewport', () => {
   afterEach(() => {

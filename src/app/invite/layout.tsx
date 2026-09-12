@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 
 import '@/app/non-public-utilities.css';
 
-import { RequireAuth } from '@/app/components/RouteAuthBoundary';
+import { RequireAuth } from '@/components/RouteAuthBoundary';
 import { createNoIndexMetadata } from '@/lib/seo';
 
 export const metadata: Metadata = createNoIndexMetadata(

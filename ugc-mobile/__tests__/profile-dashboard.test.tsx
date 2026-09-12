@@ -119,10 +119,6 @@ vi.mock('@/components/media-preview', () => ({
   StableMediaImage: (props: MockProps) => React.createElement('stable-media-image', props),
 }));
 
-vi.mock('@/components/fantasy-portal-art', () => ({
-  FantasyPortalArt: (props: MockProps) => React.createElement('fantasy-portal-art', props),
-}));
-
 // Auth mock
 const authState = vi.hoisted(() => ({
   // Nullable: the signed-out suite below clears it.

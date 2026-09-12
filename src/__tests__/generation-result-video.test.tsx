@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import GenerationResultVideo from '@/app/components/GenerationResultVideo';
+import GenerationResultVideo from '@/components/GenerationResultVideo';
 
 const props = { generationId: 'generation-1', outputUrl: '/original.mp4', accessToken: 'token-1', onOriginalResolved: vi.fn() };
 const descriptor = (renditionUrl: string | null = '/small.mp4') => ({

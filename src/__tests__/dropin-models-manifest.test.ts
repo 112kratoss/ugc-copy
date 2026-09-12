@@ -40,7 +40,7 @@ const videoManifest = load('2026-08-15-video-dropins.json');
 
 /**
  * Provider ids quoted from the `model` parameter enum in Kie's OpenAPI specs, read
- * 2026-08-15 and recorded in model_api_references/dropin-models-2026-08-15.md.
+ * 2026-08-15 and recorded in docs/model-api-references/dropin-models-2026-08-15.md.
  * Two of these diverge from their docs path, which is the trap this table exists to pin:
  *   market/qwen3-pro/*  ->  qwen3/pro-*
  *   market/kling/v3-omni-*  ->  kling-3.0-omni/*

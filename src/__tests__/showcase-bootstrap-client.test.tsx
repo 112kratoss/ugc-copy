@@ -19,7 +19,7 @@ const authState = vi.hoisted(() => ({
 const fullClientModuleLoaded = vi.hoisted(() => vi.fn());
 const fullClientProps = vi.hoisted(() => vi.fn());
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => authState,
 }));
 

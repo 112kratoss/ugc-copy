@@ -22,7 +22,7 @@ they never edit or publish a release.
 - Release manifests:
   `config/generation-model-catalog/releases/`
 - Operations CLI:
-  `scripts/generation-model-catalog.ts`
+  `scripts/ops/generation-model-catalog.ts`
 - Schema-v2 control plane:
   `supabase/migrations/20260724090000_generation_model_catalog_schema_v2.sql`
 - Database contract test:
@@ -75,7 +75,7 @@ both pass against the staged release.
 Validation is local, read-only, and does not require Supabase credentials:
 
 ```sh
-npx tsx scripts/generation-model-catalog.ts validate \
+npx tsx scripts/ops/generation-model-catalog.ts validate \
   --manifest config/generation-model-catalog/releases/2026-07-24-seedance-2-hd.json
 ```
 
@@ -98,7 +98,7 @@ never prints provider mappings, adapter payload mappings, or prices:
 
 ```sh
 npx tsx --env-file-if-exists=.env.local \
-  scripts/generation-model-catalog.ts diff \
+  scripts/ops/generation-model-catalog.ts diff \
   --manifest config/generation-model-catalog/releases/2026-07-24-seedance-2-hd.json
 ```
 
@@ -112,7 +112,7 @@ The first command is a read-only dry run:
 
 ```sh
 npx tsx --env-file-if-exists=.env.local \
-  scripts/generation-model-catalog.ts stage \
+  scripts/ops/generation-model-catalog.ts stage \
   --manifest config/generation-model-catalog/releases/2026-07-24-seedance-2-hd.json
 ```
 
@@ -120,7 +120,7 @@ After reviewing the diff, stage the full release atomically:
 
 ```sh
 npx tsx --env-file-if-exists=.env.local \
-  scripts/generation-model-catalog.ts stage \
+  scripts/ops/generation-model-catalog.ts stage \
   --manifest config/generation-model-catalog/releases/2026-07-24-seedance-2-hd.json \
   --apply \
   --expected-active e271b74557d1e248 \
@@ -155,7 +155,7 @@ Preview publication with a read-only command:
 
 ```sh
 npx tsx --env-file-if-exists=.env.local \
-  scripts/generation-model-catalog.ts publish \
+  scripts/ops/generation-model-catalog.ts publish \
   --manifest config/generation-model-catalog/releases/2026-07-24-seedance-2-hd.json
 ```
 
@@ -164,7 +164,7 @@ exact target revision:
 
 ```sh
 npx tsx --env-file-if-exists=.env.local \
-  scripts/generation-model-catalog.ts publish \
+  scripts/ops/generation-model-catalog.ts publish \
   --manifest config/generation-model-catalog/releases/2026-07-24-seedance-2-hd.json \
   --apply \
   --expected-active e271b74557d1e248 \
@@ -188,7 +188,7 @@ Preview the rollback target without mutating:
 
 ```sh
 npx tsx --env-file-if-exists=.env.local \
-  scripts/generation-model-catalog.ts rollback \
+  scripts/ops/generation-model-catalog.ts rollback \
   --target-revision e271b74557d1e248
 ```
 
@@ -196,7 +196,7 @@ Rollback also requires exact revision confirmation:
 
 ```sh
 npx tsx --env-file-if-exists=.env.local \
-  scripts/generation-model-catalog.ts rollback \
+  scripts/ops/generation-model-catalog.ts rollback \
   --target-revision e271b74557d1e248 \
   --expected-active seedance2-hd-v2-20260724 \
   --apply \
@@ -218,14 +218,14 @@ To make the CLI available as an npm command, add this package script:
 
 ```json
 {
-  "ops:generation-model-catalog": "tsx --env-file-if-exists=.env.local scripts/generation-model-catalog.ts"
+  "ops:generation-model-catalog": "tsx --env-file-if-exists=.env.local scripts/ops/generation-model-catalog.ts"
 }
 ```
 
 ## Every release is emitted, then pinned
 
 Manifests come from `npm run ops:generation-model-catalog:emit` (see the header of
-`scripts/emit-generation-model-catalog-entries.ts`), never from editing JSON by hand, and
+`scripts/ops/emit-generation-model-catalog-entries.ts`), never from editing JSON by hand, and
 each committed release gets a test under `src/__tests__/*-manifest.test.ts` asserting its
 entries equal the code build (`buildGenerationModelCatalog` and
 `buildCodeGenerationModelOperations`). The 2026-09-04 MiniMax release showed why: its
@@ -237,4 +237,4 @@ A release that introduces models names them with `--adds`. Staging refuses any e
 neither in the base release's inventory (`expectedModelIds`) nor declared in `addsModelIds`, and
 `expectedModelIds` describes the release being cloned, so the emitter writes the added ids to
 `addsModelIds` and leaves them out of `expectedModelIds`. Until 2026-09-11 this needed a
-throwaway script (`scripts/tmp-regen3.ts`).
+throwaway script, since removed.

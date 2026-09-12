@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import clsx from 'clsx';
 
-import { Surface, Text } from '@/app/components/DesignSystem';
+import { Surface, Text } from '@/components/DesignSystem';
 import { collectAdminRevenueReport, type AdminRevenueWindow } from '@/lib/admin-revenue-service';
 import { createServiceClient } from '@/lib/server-helpers';
 

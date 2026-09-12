@@ -1,4 +1,4 @@
-import { RequireAuth } from '@/app/components/RouteAuthBoundary';
+import { RequireAuth } from '@/components/RouteAuthBoundary';
 
 import CreateMotionClient, { type CreateMotionPrefill } from './CreateMotionClient';
 

@@ -1,11 +1,11 @@
 'use client';
 
-import RecoverableMediaAudio from '@/app/components/RecoverableMediaAudio';
+import RecoverableMediaAudio from '@/components/RecoverableMediaAudio';
 
 import Image from 'next/image';
 import { useEffect, useRef } from 'react';
-import { useAuth } from '@/app/components/AuthProvider';
-import GenerationResultVideo from '@/app/components/GenerationResultVideo';
+import { useAuth } from '@/components/AuthProvider';
+import GenerationResultVideo from '@/components/GenerationResultVideo';
 import { Layers3, PencilLine, Play, Plus, Trash2, X, ZoomIn } from 'lucide-react';
 import type { WorkflowCanvasEdge, WorkflowCanvasNode } from '@/lib/workflow-canvas';
 import type {

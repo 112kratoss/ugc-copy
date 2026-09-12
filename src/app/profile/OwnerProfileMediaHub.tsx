@@ -23,18 +23,18 @@ import {
   Volume2,
   WalletCards,
 } from 'lucide-react';
-import UnavailableMediaNote from '@/app/components/UnavailableMediaNote';
+import UnavailableMediaNote from '@/components/UnavailableMediaNote';
 
-import { useAuth } from '@/app/components/AuthProvider';
-import { HoverVideo } from '@/app/components/HoverVideo';
+import { useAuth } from '@/components/AuthProvider';
+import { HoverVideo } from '@/components/HoverVideo';
 import MediaDetailsPreviewModal, {
   type MediaDetailsAdditionalMediaItem,
   type MediaDetailsType,
-} from '@/app/components/MediaDetailsPreviewModal';
-import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
-import ProfileShareButton from '@/app/components/ProfileShareButton';
-import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
-import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
+} from '@/components/MediaDetailsPreviewModal';
+import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
+import ProfileShareButton from '@/components/ProfileShareButton';
+import TextPostPreviewCard from '@/components/TextPostPreviewCard';
+import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import { loadShowcaseReelViewer } from '@/app/showcase/showcase-reel-loader';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import { resolvePlaybackUrl } from '@/lib/media-descriptor';

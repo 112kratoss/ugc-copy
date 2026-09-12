@@ -2,8 +2,8 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import NavigationProgress from '@/app/components/NavigationProgress';
-import { publishNavigationStart } from '@/app/components/navigation-progress-state';
+import NavigationProgress from '@/components/NavigationProgress';
+import { publishNavigationStart } from '@/components/navigation-progress-state';
 
 let mockedPathname = '/feed';
 

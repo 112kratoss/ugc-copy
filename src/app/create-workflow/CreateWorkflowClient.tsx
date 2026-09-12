@@ -14,7 +14,7 @@ import { addEdge, type Connection, type ReactFlowInstance } from '@xyflow/react'
 import { Loader2, Sparkles } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
-import { useAuth } from '@/app/components/AuthProvider';
+import { useAuth } from '@/components/AuthProvider';
 import {
   DEFAULT_VIEWPORT,
   createStarterGraph,

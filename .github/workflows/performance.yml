@@ -40,7 +40,7 @@ jobs:
           node-version-file: .nvmrc
 
       - name: Validate performance harness
-        run: node scripts/performance-load-test.mjs --self-test
+        run: node scripts/perf/performance-load-test.mjs --self-test
 
       - name: Run bounded production load test
         env:
@@ -59,7 +59,7 @@ jobs:
           PERF_AUTH_BOT_EMAIL: ${{ secrets.PERF_AUTH_BOT_EMAIL }}
           PERF_AUTH_BOT_PASSWORD: ${{ secrets.PERF_AUTH_BOT_PASSWORD }}
           PERF_REQUIRE_SIGNED_IN: "1"
-        run: node scripts/performance-load-test.mjs --profile "$PERF_PROFILE" --require-signed-in --output performance-load-results.json
+        run: node scripts/perf/performance-load-test.mjs --profile "$PERF_PROFILE" --require-signed-in --output performance-load-results.json
 
       - name: Upload detailed performance report
         if: always()

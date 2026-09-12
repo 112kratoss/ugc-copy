@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { Search } from 'lucide-react';
 
-import { Text } from '@/app/components/DesignSystem';
+import { Text } from '@/components/DesignSystem';
 
 import { getAdminUserAccountStates } from '@/lib/admin-user-sanction-service';
 import { searchAdminUsers } from '@/lib/admin-users-service';

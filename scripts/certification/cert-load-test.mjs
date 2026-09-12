@@ -2,7 +2,7 @@
 /**
  * Phase 1 certification load driver.
  *
- * The existing `scripts/performance-load-test.mjs` cannot do this job and was
+ * The existing `scripts/perf/performance-load-test.mjs` cannot do this job and was
  * not meant to: it asserts every target is a read-only GET, caps origin
  * concurrency at 2 and origin duration at 60s. Certification needs writes,
  * authentication, uploads, webhooks and a one-hour soak at up to 100 RPS.

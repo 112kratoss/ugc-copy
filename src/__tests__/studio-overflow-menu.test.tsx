@@ -2,7 +2,7 @@ import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import StudioOverflowMenu from '@/app/components/StudioOverflowMenu';
+import StudioOverflowMenu from '@/components/StudioOverflowMenu';
 
 describe('StudioOverflowMenu', () => {
   it('keeps the secondary actions behind one named trigger and runs the chosen one', async () => {

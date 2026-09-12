@@ -22,7 +22,7 @@ vi.mock('@/lib/post-lifecycle-client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/post-lifecycle-client')>()),
   ...clientMocks,
 }));
-vi.mock('@/app/components/feedback-state', () => feedbackMocks);
+vi.mock('@/components/feedback-state', () => feedbackMocks);
 vi.mock('@/lib/post-lifecycle-policy', () => policyMocks);
 
 import { PostLifecycleRequestError } from '@/lib/post-lifecycle-client';
@@ -30,7 +30,7 @@ import {
   usePostLifecycle,
   type PostLifecycleTarget,
   type UsePostLifecycleOptions,
-} from '@/app/components/usePostLifecycle';
+} from '@/components/usePostLifecycle';
 
 const basePost: PostLifecycleTarget = {
   id: 'post-1',

@@ -1,4 +1,4 @@
-import TabLoadingShell from '@/app/components/TabLoadingShell';
+import TabLoadingShell from '@/components/TabLoadingShell';
 
 /**
  * The `(feed)` group exists so this stays the *tab's* loading state.

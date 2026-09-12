@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ArrowLeft, Calendar } from 'lucide-react';
 
-import { JsonLd } from '@/app/components/JsonLd';
+import { JsonLd } from '@/components/JsonLd';
 import { buildArticleSchema, createMetadata, siteConfig } from '@/lib/seo';
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {

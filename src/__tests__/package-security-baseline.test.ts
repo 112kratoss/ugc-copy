@@ -122,8 +122,8 @@ describe('package security baseline', () => {
     expect(versionAtLeast(packageLockVersion('eslint-config-next'), '16.3.1')).toBe(true);
   });
 
-  it('does not ship live-looking local service-role secrets in agent workflow docs', () => {
-    const localWorkflow = readFileSync(join(projectRoot, '.agent/workflows/local.md'), 'utf8');
+  it('does not ship live-looking local service-role secrets in the local development guide', () => {
+    const localWorkflow = readFileSync(join(projectRoot, 'docs/local-development.md'), 'utf8');
 
     expect(localWorkflow).not.toMatch(/sb_secret_[A-Za-z0-9_-]{16,}/);
     expect(localWorkflow).not.toMatch(/SUPABASE_SERVICE_ROLE_KEY=(?!your-|\[REDACTED\]|<)[^\s#]+/);

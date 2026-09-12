@@ -5,7 +5,7 @@ import { useId, useState, type FormEvent } from 'react';
 import { Coins } from 'lucide-react';
 import clsx from 'clsx';
 
-import { Surface, Text } from '@/app/components/DesignSystem';
+import { Surface, Text } from '@/components/DesignSystem';
 
 type Intent = 'goodwill' | 'refund' | 'clawback';
 

@@ -71,7 +71,7 @@ vi.mock('@/app/showcase/[id]/PostResourceBundlePanel', () => ({
   },
 }));
 
-vi.mock('@/app/components/PostComments', () => ({
+vi.mock('@/components/PostComments', () => ({
   default: () => <div data-testid="post-comments-component">Comments</div>,
 }));
 

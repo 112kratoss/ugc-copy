@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import TemplateRunMedia from '@/app/components/templates/TemplateRunMedia';
+import TemplateRunMedia from '@/components/templates/TemplateRunMedia';
 
 const props = { runId: 'run-1', kind: 'video' as const, url: '/expired.mp4', token: 'token', alt: 'Result' };
 const run = { id: 'run-1', result: { kind: 'video', url: '/renewed.mp4' }, steps: [{ id: 'step-1', kind: 'generation', mediaKind: 'image', status: 'succeeded', outputUrl: '/renewed.jpg' }] };

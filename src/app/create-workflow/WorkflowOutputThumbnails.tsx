@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { Play } from 'lucide-react';
-import { useAuth } from '@/app/components/AuthProvider';
+import { useAuth } from '@/components/AuthProvider';
 import type { WorkflowCanvasNode } from '@/lib/workflow-canvas';
 
 const ThumbnailContext = createContext<{ urls: Record<string, string>; revision: number; sources: Record<string, string> }>({ urls: {}, revision: 0, sources: {} });

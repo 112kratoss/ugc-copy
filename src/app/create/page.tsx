@@ -1,9 +1,9 @@
 import Link from 'next/link';
 import { ArrowRight, Clapperboard, LayoutTemplate, Plus } from 'lucide-react';
 
-import { CreatorToolPreview } from '@/app/components/CreatorToolPreview';
-import { CreatorToolCard, SectionHeading } from '@/app/components/CreatorStudio';
-import { Kicker, Pill, Text } from '@/app/components/DesignSystem';
+import { CreatorToolPreview } from '@/components/CreatorToolPreview';
+import { CreatorToolCard, SectionHeading } from '@/components/CreatorStudio';
+import { Kicker, Pill, Text } from '@/components/DesignSystem';
 import {
   CREATOR_STARTER_RECIPES,
   CREATOR_TOOLS,

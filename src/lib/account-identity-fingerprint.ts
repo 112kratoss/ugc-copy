@@ -10,7 +10,7 @@
  * whose digest is already present. See 20260829120000.
  *
  * Deliberately not `server-only`: the request path imports this file, and so
- * does `scripts/backfill-welcome-credit-fingerprints.ts`, which runs under tsx
+ * does `scripts/backfills/backfill-welcome-credit-fingerprints.ts`, which runs under tsx
  * where `server-only` throws (same convention as media-upload-staging-paths).
  *
  * Unlike referral risk hashes, these digests are durable — they must match

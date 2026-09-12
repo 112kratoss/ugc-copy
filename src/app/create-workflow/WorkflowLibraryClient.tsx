@@ -31,7 +31,7 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
-import { useAuth } from '@/app/components/AuthProvider';
+import { useAuth } from '@/components/AuthProvider';
 import { getClientE2EAuthState } from '@/lib/e2e-auth';
 import type {
   WorkflowCanvasListItem,
