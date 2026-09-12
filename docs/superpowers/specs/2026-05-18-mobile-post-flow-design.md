@@ -15,7 +15,7 @@ This design follows the approved mockup order:
 7. Preview
 8. Publish
 
-Reference mockups are in `mockups/mobile-post-flow/`.
+Reference mockups were removed from the repository on 2026-09-12; they are kept in the workspace archive (`archive/ugc-app-mockups/mobile-post-flow/`, outside git) and in git history before that date.
 
 ## Goals
 

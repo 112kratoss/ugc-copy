@@ -177,8 +177,9 @@ improve one path and regress another. See
   final run above is the first fully green current-commit baseline after closing
   catalog, caching, main-thread, Home LCP, Showcase TTFB and authenticated feed
   tails without widening budgets.
-- The ignored local `certification-artifacts/` directory still contains the raw
-  `c1d494e` certificate bundle. No current-commit certificate bundle exists.
+- The raw `c1d494e` certificate bundle was moved out of the repository folder on
+  2026-09-12 into the workspace archive (`archive/ugc-app-certification-artifacts/`,
+  never tracked). No current-commit certificate bundle exists.
 
 ## Ordered next work
 

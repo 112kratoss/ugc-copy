@@ -1,3 +1,5 @@
+> Screenshots for this audit were removed from the repository on 2026-09-12. They are kept in the workspace archive (`archive/ugc-app-audits/mobile-ui-ux-redesign-2026-07-10/`, outside git) and in git history before that date.
+
 # Mobile UI/UX Redesign Audit
 
 Date: 2026-07-10

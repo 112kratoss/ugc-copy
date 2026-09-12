@@ -1,3 +1,5 @@
+> Screenshots for this audit were removed from the repository on 2026-09-12. They are kept in the workspace archive (`archive/ugc-app-audits/create-media-critique-2026-06-20/`, outside git) and in git history before that date.
+
 # Create Media Page Critique
 
 Date: 2026-06-20

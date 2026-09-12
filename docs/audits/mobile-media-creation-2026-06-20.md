@@ -1,3 +1,5 @@
+> Screenshots for this audit were removed from the repository on 2026-09-12. They are kept in the workspace archive (`archive/ugc-app-audits/mobile-media-creation-2026-06-20/`, outside git) and in git history before that date.
+
 # Mobile Media Creation Audit
 
 Date: 2026-06-20

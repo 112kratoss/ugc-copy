@@ -237,9 +237,7 @@ const nextConfig: NextConfig = {
   },
   outputFileTracingExcludes: {
     "**/*": [
-      "./audits/**",
       "./docs/model-api-references/**",
-      "./mockups/**",
       "./next.config.ts",
       "./output/**",
       "./package-lock.json",
