@@ -53,7 +53,6 @@
 @source "./components/FeatureLandingPage.tsx";
 @source "./components/GenerationResultVideo.tsx";
 @source "./components/MediaDetailsPreviewModal.tsx";
-@source "./components/NavbarClient.tsx";
 @source "./components/ProfileShareButton.tsx";
 @source "./components/PublishToShowcaseModal.tsx";
 @source "./components/RecoverableMediaVideo.tsx";
@@ -67,7 +66,6 @@
 @source "./components/templates/CreateTemplateRunClient.tsx";
 @source "./components/templates/TemplateCatalogClient.tsx";
 @source "./components/templates/TemplateDetailClient.tsx";
-@source "./components/templates/TemplateEditorClient.tsx";
 @source "./components/templates/TemplatePrimitives.tsx";
 @source "./components/templates/TemplateRunClient.tsx";
 @source "./components/templates/TemplateRunMedia.tsx";
