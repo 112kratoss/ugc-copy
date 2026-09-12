@@ -1,0 +1,141 @@
+{
+  "checkout": "afa8d943d7f92b8ef7b6b63c9a7e86e54f832ea6",
+  "production": "0e99c16dc33f020a31402a0ba2bee77eb255ea59",
+  "branch": "seo/audit-implementation",
+  "mergeBase": "85c137ea49267584932d3fcdcdd700113626f142",
+  "productionOnly_checkoutOnly": "25\t6",
+  "sourceFiles": {
+    "next.config.ts": {
+      "checkoutBlob": "1fa5d704397bf402f65f6eaa600d6b910587f7f3",
+      "productionBlob": "f358af2cef164ef804e14ba16d2da3fb7f9ba4db"
+    },
+    "src/app/components/RouteAuthBoundary.tsx": {
+      "checkoutBlob": "e1d43f9114c1cd325aa42150c93eabdedc695fc5",
+      "productionBlob": "e1d43f9114c1cd325aa42150c93eabdedc695fc5"
+    },
+    "src/app/showcase/(feed)/page.tsx": {
+      "checkoutBlob": "8eb42e15b3f5f8e0ff517806b66b3a46008086ef",
+      "productionBlob": "dd0b9fd25fa91f6235139123399e51e7fd83c401"
+    },
+    "src/app/marketplace/page.tsx": {
+      "checkoutBlob": "02f1da431d7f8fb33cf43491b3e94da611d432ef",
+      "productionBlob": "02f1da431d7f8fb33cf43491b3e94da611d432ef"
+    },
+    "src/lib/media-read-service.ts": {
+      "checkoutBlob": "a642e8f5c38f2415f0cc2213ec72c191eb910831",
+      "productionBlob": "ee1360434cd8539d02e07660662079dc710b2e53"
+    },
+    "src/lib/media-route-adapter-service.ts": {
+      "checkoutBlob": "e90b1aa5edddb1e708f582fd6265eb3c260c4b64",
+      "productionBlob": "e90b1aa5edddb1e708f582fd6265eb3c260c4b64"
+    },
+    "src/lib/generation-media-preview.ts": {
+      "checkoutBlob": "0d57ce6aed41a3d2c0bfb28009b5a8a834f85afb",
+      "productionBlob": "849f3881c75f939408ef2bf164b0d44f034c9a91"
+    },
+    "src/lib/generation-delete-service.ts": {
+      "checkoutBlob": "68db07efe42381ce25f60d7091c94c667f80fde6",
+      "productionBlob": "d33d81feef9427bcee73ad8395d8d889735a5cb8"
+    },
+    "src/lib/preview-images.ts": {
+      "checkoutBlob": "38f36dccfefd638b03b17c1836f10325c5b5990f",
+      "productionBlob": "38f36dccfefd638b03b17c1836f10325c5b5990f"
+    },
+    "src/lib/showcase-media-cache.ts": {
+      "checkoutBlob": "9384690731000a7c8d6b54ae6845ada0ed00398b",
+      "productionBlob": "9384690731000a7c8d6b54ae6845ada0ed00398b"
+    },
+    "src/lib/showcase-feed-route-adapter-service.ts": {
+      "checkoutBlob": "60ad79a15914eb4161f14cd20422ba080828b956",
+      "productionBlob": "60ad79a15914eb4161f14cd20422ba080828b956"
+    },
+    "src/lib/marketplace-resource-list-route-adapter-service.ts": {
+      "checkoutBlob": "68157a43fce20857a325c2fa5e240430e999b378",
+      "productionBlob": "68157a43fce20857a325c2fa5e240430e999b378"
+    },
+    "config/performance-budgets.json": {
+      "checkoutBlob": "4504f3ae55b3a2043cd9bbb897d87420f22ff512",
+      "productionBlob": "4504f3ae55b3a2043cd9bbb897d87420f22ff512"
+    },
+    "scripts/performance-load-test.mjs": {
+      "checkoutBlob": "b944792a972d163044da582d25ff466733ee251c",
+      "productionBlob": "b944792a972d163044da582d25ff466733ee251c"
+    },
+    ".github/workflows/performance.yml": {
+      "checkoutBlob": "457dd86a32a679b489de96a65f17a770f18e7fd8",
+      "productionBlob": "457dd86a32a679b489de96a65f17a770f18e7fd8"
+    },
+    "src/proxy.ts": {
+      "checkoutBlob": "7331c0643fc5afa74884bfee1f57bcebd1b461ce",
+      "productionBlob": "7331c0643fc5afa74884bfee1f57bcebd1b461ce"
+    },
+    "src/lib/generation-playback-rendition.ts": {
+      "checkoutBlob": null,
+      "productionBlob": "42867e05fc926046f207b1a5b8a02c900ea6f17a"
+    },
+    "src/lib/media-preview-repair.ts": {
+      "checkoutBlob": "2e292d450d0c40cb70afa7afbb86571b892a7c04",
+      "productionBlob": "a50d03cad5bdd77a4e7e1065116812964ac5717c"
+    },
+    "src/lib/moderation-ops.ts": {
+      "checkoutBlob": "bb67889802dc0a00af3faa19800c4a89e81d3caa",
+      "productionBlob": "bb67889802dc0a00af3faa19800c4a89e81d3caa"
+    },
+    "src/lib/account-deletion-service.ts": {
+      "checkoutBlob": "cee9555a56f692a8b49c8f4031bfdffbab5ef087",
+      "productionBlob": "cee9555a56f692a8b49c8f4031bfdffbab5ef087"
+    }
+  },
+  "performance.yml": [
+    {
+      "conclusion": "failure",
+      "createdAt": "2026-09-07T08:25:21Z",
+      "databaseId": 34100497652,
+      "headSha": "85c137ea49267584932d3fcdcdd700113626f142",
+      "status": "completed",
+      "url": "https://github.com/112kratoss/ugc-copy/actions/runs/34100497652"
+    },
+    {
+      "conclusion": "failure",
+      "createdAt": "2026-08-31T09:52:25Z",
+      "databaseId": 33379789732,
+      "headSha": "0288ff4827e3e7b1b33f0a78c5b28b06bcfa2f3c",
+      "status": "completed",
+      "url": "https://github.com/112kratoss/ugc-copy/actions/runs/33379789732"
+    },
+    {
+      "conclusion": "failure",
+      "createdAt": "2026-08-24T04:09:00Z",
+      "databaseId": 32688925797,
+      "headSha": "365db15c8ad43bfb87358eb387cd14666bcf6022",
+      "status": "completed",
+      "url": "https://github.com/112kratoss/ugc-copy/actions/runs/32688925797"
+    }
+  ],
+  "production-release.yml": [
+    {
+      "conclusion": "success",
+      "createdAt": "2026-09-09T14:12:21Z",
+      "databaseId": 34362069714,
+      "headSha": "0e99c16dc33f020a31402a0ba2bee77eb255ea59",
+      "status": "completed",
+      "url": "https://github.com/112kratoss/ugc-copy/actions/runs/34362069714"
+    },
+    {
+      "conclusion": "skipped",
+      "createdAt": "2026-09-09T13:59:40Z",
+      "databaseId": 34360669330,
+      "headSha": "d27122714920108a0358b3dff4b2d74816bc50c1",
+      "status": "completed",
+      "url": "https://github.com/112kratoss/ugc-copy/actions/runs/34360669330"
+    },
+    {
+      "conclusion": "skipped",
+      "createdAt": "2026-09-09T13:48:48Z",
+      "databaseId": 34359494883,
+      "headSha": "d27122714920108a0358b3dff4b2d74816bc50c1",
+      "status": "completed",
+      "url": "https://github.com/112kratoss/ugc-copy/actions/runs/34359494883"
+    }
+  ]
+}

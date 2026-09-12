@@ -1,0 +1,26 @@
+{
+  "query": "select bucket_id, metadata->>'cacheControl' as cache_control, case when name like '%/playback/%' then 'playback-path' when name like '%preview%' then 'preview-named' else 'other' end as path_class, count(*)::int as objects, sum((metadata->>'size')::bigint)::text as bytes from storage.objects where bucket_id in ('generated_images','generated_videos') and metadata->>'cacheControl'='max-age=31536000' group by bucket_id,metadata->>'cacheControl',path_class order by bucket_id,path_class;",
+  "rows": [
+    {
+      "bucket_id": "generated_images",
+      "cache_control": "max-age=31536000",
+      "path_class": "preview-named",
+      "objects": 49,
+      "bytes": "1388386"
+    },
+    {
+      "bucket_id": "generated_videos",
+      "cache_control": "max-age=31536000",
+      "path_class": "playback-path",
+      "objects": 15,
+      "bytes": "14184079"
+    },
+    {
+      "bucket_id": "generated_videos",
+      "cache_control": "max-age=31536000",
+      "path_class": "preview-named",
+      "objects": 14,
+      "bytes": "314748"
+    }
+  ]
+}

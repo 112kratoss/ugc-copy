@@ -1,0 +1,29 @@
+{
+  "checkout": "afa8d943d7f92b8ef7b6b63c9a7e86e54f832ea6",
+  "vitest": {
+    "files": 11,
+    "tests": 53,
+    "result": "passed",
+    "paths": [
+      "src/__tests__/api-cache.test.ts",
+      "src/__tests__/showcase-feed-route.test.ts",
+      "src/__tests__/showcase-feed-route-adapter-service.test.ts",
+      "src/__tests__/marketplace-resource-list-cache-policy.test.ts",
+      "src/__tests__/marketplace-resource-list-route-adapter-service.test.ts",
+      "src/__tests__/media-read-service.test.ts",
+      "src/__tests__/media-route-adapter-service.test.ts",
+      "src/__tests__/preview-images.test.ts",
+      "src/__tests__/generation-media-preview.test.ts",
+      "src/__tests__/moderation-ops.test.ts",
+      "src/__tests__/showcase-feed-cache-policy.test.ts"
+    ]
+  },
+  "harness": {
+    "command": "node scripts/performance-load-test.mjs --self-test",
+    "result": "passed",
+    "signedOutEdgeTargets": 5,
+    "signedInEdgeTargets": 1,
+    "originTargets": 1
+  },
+  "limitations": "Checkout checks only; no production build, browser vitals, valid-user live authentication or destructive revocation canary."
+}
