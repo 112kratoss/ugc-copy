@@ -161,7 +161,7 @@ vi.mock('@/lib/use-generation-model-catalog', () => ({
 
 import { createDefaultCreationDraft } from '../lib/media-creation-view-model';
 import { MediaCreationScreen } from '../components/media-creation-screen';
-import { pickMedia, pickMediaList, uploadPickedMedia } from '../lib/media';
+import { pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia } from '../lib/media';
 import { createTestGenerationModelCatalog, remoteImageModel } from './fixtures/generation-model-catalog';
 import { catalogV2 } from './generation-model-catalog-v2-fixtures';
 
@@ -275,6 +275,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     catalogState.error = null;
     catalogState.refetch.mockReset();
     nativeAlertState.alert.mockReset();
+    vi.mocked(pickAudioDocument).mockReset();
     vi.mocked(pickMedia).mockReset();
     vi.mocked(pickMediaList).mockReset();
     vi.mocked(uploadPickedMedia).mockReset();
@@ -500,6 +501,89 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       findPressableByLabelPrefix(tree!.root, 'Generation parameters.').props.onPress();
     });
     expect(collectText(tree!.root)).not.toContain('Choose model');
+  });
+
+  it('uploads every reusable media type from a mode-gated video model', async () => {
+    const catalog = catalogV2();
+    const model = catalog.models.find((candidate) => candidate.id === 'fallback-video-v2')!;
+    const referenceMode = model.inputModes?.find((mode) => mode.key === 'elements')!;
+    referenceMode.slots.push({
+      key: 'audioReferences',
+      kind: 'audio',
+      role: 'reference',
+      label: 'Reference audio',
+      min: 0,
+      max: 3,
+      durationMetadata: 'optional',
+    });
+    catalogState.catalog = catalog;
+    vi.mocked(pickMediaList).mockResolvedValue([
+      { uri: 'file:///product.png', fileName: 'product.png', mimeType: 'image/png', fileSize: 2048 } as never,
+    ]);
+    vi.mocked(pickMedia).mockResolvedValue({
+      uri: 'file:///motion.mp4',
+      fileName: 'motion.mp4',
+      mimeType: 'video/mp4',
+      fileSize: 4096,
+      duration: 5000,
+    } as never);
+    vi.mocked(pickAudioDocument).mockResolvedValue({
+      uri: 'file:///voice.mp3',
+      name: 'voice.mp3',
+      mimeType: 'audio/mpeg',
+      size: 1024,
+    } as never);
+    vi.mocked(uploadPickedMedia)
+      .mockResolvedValueOnce({
+        signedUrl: 'https://cdn.example.com/reference.png',
+        storagePath: 'uploads/user/reference.png',
+        mimeType: 'image/png',
+        fileName: 'product.png',
+        kind: 'image',
+        durationSeconds: null,
+        sizeBytes: 2048,
+      })
+      .mockResolvedValueOnce({
+        signedUrl: 'https://cdn.example.com/reference.mp4',
+        storagePath: 'uploads/user/reference.mp4',
+        mimeType: 'video/mp4',
+        fileName: 'motion.mp4',
+        kind: 'video',
+        durationSeconds: 5,
+        sizeBytes: 4096,
+      })
+      .mockResolvedValueOnce({
+        signedUrl: 'https://cdn.example.com/reference.mp3',
+        storagePath: 'uploads/user/reference.mp3',
+        mimeType: 'audio/mpeg',
+        fileName: 'voice.mp3',
+        kind: 'audio',
+        durationSeconds: null,
+        sizeBytes: 1024,
+      });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="video" />);
+    });
+
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Images 0/5').props.onPress();
+    });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Video 0/3').props.onPress();
+    });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Audio 0/3').props.onPress();
+    });
+
+    expect(pickMediaList).toHaveBeenCalledTimes(1);
+    expect(pickMedia).toHaveBeenCalledTimes(1);
+    expect(pickAudioDocument).toHaveBeenCalledTimes(1);
+    const text = collectText(tree!.root);
+    expect(text).not.toContain('This model does not support image references.');
+    expect(text).not.toContain('This model does not support reference videos.');
+    expect(text).not.toContain('This model does not support audio references.');
   });
 
   it('keeps motion duration source-derived and read-only in parameters', () => {

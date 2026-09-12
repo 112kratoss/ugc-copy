@@ -984,6 +984,7 @@ export function MediaCreationScreen({
       selectedDraft,
       'imageReferences',
       selectedModel?.inputs.imageReferences?.max ?? 0,
+      'elements',
     );
     const remainingSlots = Math.max(0, maxImages - selectedDraft.references.length);
     if (remainingSlots === 0) {
@@ -1090,7 +1091,7 @@ export function MediaCreationScreen({
     const slotKey = target === 'video' ? 'videoReferences' : 'referenceVideo';
     const currentCount = target === 'video' ? videoDraft.referenceVideos.length : motionDraft.referenceVideo ? 1 : 0;
     const legacyLimit = target === 'video' ? selectedModel?.inputs.videoReferences?.max ?? 0 : 1;
-    const maxVideos = catalogInputLimit(selectedModel, selectedDraft, slotKey, legacyLimit);
+    const maxVideos = catalogInputLimit(selectedModel, selectedDraft, slotKey, legacyLimit, 'elements');
     if (currentCount >= maxVideos) {
       setMessage(maxVideos > 0
         ? `This model supports up to ${maxVideos} reference video${maxVideos === 1 ? '' : 's'}.`
@@ -1138,6 +1139,7 @@ export function MediaCreationScreen({
       videoDraft,
       'audioReferences',
       selectedModel?.inputs.audioReferences?.max ?? 0,
+      'elements',
     );
     if (videoDraft.referenceAudios.length >= maxAudios) {
       setMessage(maxAudios > 0
