@@ -1,6 +1,5 @@
 .git
 .next
-.next_dev.log
 node_modules
 coverage
 playwright-report
