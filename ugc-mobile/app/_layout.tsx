@@ -12,7 +12,6 @@ import 'react-native-reanimated';
 import { AppState, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import 'react-native-url-polyfill/auto';
 
 import { ActionSheetHost } from '@/components/action-sheet';
 import { DialogHost } from '@/components/dialog';
