@@ -8,7 +8,13 @@
     "",
     "Update this file in the same commit that ships a new binary, and never to",
     "silence the preflight — a mismatch means the update cannot land, not that",
-    "the record is stale."
+    "the record is stale.",
+    "",
+    "\"setAside\" lists files that landed on main after that binary was built and",
+    "only touch another platform's native code. scripts/publish-ota.mjs removes",
+    "them from its throwaway tree before fingerprinting that platform, so JS from",
+    "main still reaches the binary. Drop the list when that platform ships a new",
+    "binary. This file is not a fingerprint input, so editing it never moves one."
   ],
   "targets": {
     "android": {
@@ -20,6 +26,10 @@
         "alpha",
         "production"
       ],
+      "setAside": [
+        "patches/expo-video+55.0.21.patch"
+      ],
+      "$setAsideNote": "#129 added this iOS-only patch (it edits node_modules/expo-video/ios/Cache/*.swift) after 71 was built from 62e9f57, and @expo/fingerprint hashes patches/ for every platform. Removing just this file makes main fingerprint db146ca3 again (verified 2026-09-10 and 2026-09-12).",
       "$note": "Built from main 62e9f57 (EAS build 21641ad1, workflow run 33969667328) and submitted to the Play closed alpha 2026-09-05 14:07 UTC; a production release 0.1.4 (71) was created from the library the same day and sent for review as a full rollout (which restarted the alpha review). First binary with the full R8 pipeline (#112): optimize base, full mode, optimized resource shrinking, narrowed keeps, React Native core Image retired. Play bundle explorer: App optimization High (70 was Medium), obfuscation 80%, R8 checklist green on Full Mode, Resource Shrinking and Resource Shrinking Optimized (Repackage Classes and AGP 9 outstanding), install size 20.4 MB, -3.27 MB vs 70. Play review landed the same day: 71 has been live on production since 2026-09-05 20:14 IST (full rollout, 177 countries) and is the only Active bundle, so Android users run 71 at this fingerprint."
     },
     "ios": {
