@@ -237,4 +237,4 @@ A release that introduces models names them with `--adds`. Staging refuses any e
 neither in the base release's inventory (`expectedModelIds`) nor declared in `addsModelIds`, and
 `expectedModelIds` describes the release being cloned, so the emitter writes the added ids to
 `addsModelIds` and leaves them out of `expectedModelIds`. Until 2026-09-11 this needed a
-throwaway script (`scripts/tmp-regen3.ts`).
+throwaway script, since removed.
