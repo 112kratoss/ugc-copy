@@ -13,7 +13,7 @@
 
 import { randomBytes, randomInt } from 'node:crypto';
 
-import { ADMIN_PASSWORD_MIN_LENGTH, hashAdminPassword } from '../src/lib/admin-password';
+import { ADMIN_PASSWORD_MIN_LENGTH, hashAdminPassword } from '../../src/lib/admin-password';
 
 // Excludes characters that are easy to misread when copied by hand (0/O, 1/l/I).
 const PASSWORD_ALPHABET = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789-_';

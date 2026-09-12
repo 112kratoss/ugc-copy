@@ -1,8 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 import sharp from 'sharp';
 
-import { toUsablePreviewSize, type PreviewSize } from '../src/lib/preview-dimensions';
-import { getStorageLocation } from '../src/lib/storage-path';
+import { toUsablePreviewSize, type PreviewSize } from '../../src/lib/preview-dimensions';
+import { getStorageLocation } from '../../src/lib/storage-path';
 import {
   logBackfillExecutionMode,
   parseBackfillExecutionMode,

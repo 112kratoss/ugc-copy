@@ -4,7 +4,7 @@ import {
   ACCOUNT_IDENTITY_FINGERPRINT_TABLE,
   deriveAccountIdentityFingerprints,
   recordClaimedIdentityFingerprints,
-} from '../src/lib/account-identity-fingerprint';
+} from '../../src/lib/account-identity-fingerprint';
 import { parseBackfillExecutionMode, logBackfillExecutionMode } from './backfill-execution-mode.mjs';
 
 /**

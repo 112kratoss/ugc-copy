@@ -20,7 +20,7 @@ import {
   runGenerationModelCatalogCli,
   validateCatalogManifest,
   type ActiveCatalogSnapshot,
-} from '../../scripts/generation-model-catalog';
+} from '../../scripts/ops/generation-model-catalog';
 
 const manifestPath = path.resolve(
   process.cwd(),

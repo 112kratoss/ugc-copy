@@ -4,39 +4,39 @@ import sharp from 'sharp';
 import {
   buildDisplayRenditionPath,
   encodeDisplayRendition,
-} from '../src/lib/media-display-rendition';
-import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '../src/lib/showcase-media-cache';
-import { getStorageLocation } from '../src/lib/storage-path';
-import { toStorageUploadBody } from '../src/lib/storage-upload-body';
+} from '../../src/lib/media-display-rendition';
+import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '../../src/lib/showcase-media-cache';
+import { toStorageUploadBody } from '../../src/lib/storage-upload-body';
 import {
   logBackfillExecutionMode,
   parseBackfillExecutionMode,
 } from './backfill-execution-mode.mjs';
 
 /**
- * Build the display rendition for private creations that predate it.
+ * Build the display rendition for post media that predates it.
  *
- * `npm run backfill:media-display-renditions` did this for published post
- * media. Private creations are the other half of F3 and the larger one: a
- * creator opens their own library far more than a stranger opens the feed,
- * and every open downloaded the original. The image path now writes the
- * display rendition at settlement and the repair sweep records it when it
- * rebuilds a preview; this fills in everything made before that shipped, and
- * closes the gap for any row whose post-settlement stamp was lost.
+ * The 720px preview is a grid size; a full-screen viewer reached past it and
+ * loaded the source, which made images 48% of a day's Storage bytes — more
+ * than every video kind together. The preview writer now emits a 1440px WebP
+ * alongside the preview from the same decode, but only for media written after
+ * it shipped. This fills in the rest.
  *
- * Same reasons as its sibling for being a script: bounded, resumable work that
- * downloads and re-encodes every image source has no business in a migration,
- * and it cannot ride the repair sweep, which is keyed on `preview_status`.
+ * It is a script rather than a migration because building one means
+ * downloading and re-encoding every image source: bounded, resumable work that
+ * has no business blocking a release. It is also not folded into the repair
+ * sweep, because the sweep is keyed on `preview_status` and moving a row off
+ * `ready` to trigger it would report `gridReady: false` and drop the post from
+ * the mobile showcase grid while the backfill ran.
  *
- * Sources live in the private `generated_images` bucket and the rendition goes
- * beside them, so the download is service-role and the object is signed for
- * the owner like the preview. A row whose source earns no display (already
- * display-sized, or WebP cannot shrink it by a quarter) is left null and
- * counted as `skipped`; every reader falls back to the source for it.
+ * Rows whose source earns no display rendition (already display-sized, or one
+ * WebP cannot meaningfully shrink) are left null and counted as `skipped`;
+ * every reader falls back to the source for those, exactly as before.
  *
  * Dry run by default; `--execute --project-ref=<ref>` mutates.
  * `--limit=<n>` bounds one pass so the work can be spread out.
  */
+
+const SHOWCASE_BUCKET = 'showcase_media';
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -57,26 +57,24 @@ function readLimit(): number {
 
 type CandidateRow = {
   id: string;
-  output_url: string | null;
+  storage_path: string | null;
+  content_type: string | null;
 };
 
 async function main() {
   const limit = readLimit();
   const { data, error } = await supabase
-    .from('generations')
-    .select('id, output_url')
-    .eq('status', 'succeeded')
-    .eq('category', 'image')
-    .is('display_url', null)
-    .is('archived_at', null)
-    .is('source_unavailable_at', null)
-    .like('output_url', 'generated_images/%')
+    .from('post_media')
+    .select('id, storage_path, content_type')
+    .eq('media_kind', 'image')
+    .not('storage_path', 'is', null)
+    .is('display_storage_path', null)
     .order('created_at', { ascending: true })
     .limit(limit);
 
-  if (error) throw new Error(`Unable to read generations: ${error.message}`);
+  if (error) throw new Error(`Unable to read post media: ${error.message}`);
   const rows = (data ?? []) as CandidateRow[];
-  console.log(`Examining ${rows.length} image creations without a display rendition.`);
+  console.log(`Examining ${rows.length} image rows without a display rendition.`);
 
   let built = 0;
   let skipped = 0;
@@ -85,12 +83,11 @@ async function main() {
   let displayBytesWritten = 0;
 
   for (const row of rows) {
-    const outputUrl = row.output_url;
-    const location = outputUrl ? getStorageLocation(outputUrl) : null;
-    if (!outputUrl || !location) continue;
+    const storagePath = row.storage_path;
+    if (!storagePath) continue;
 
     try {
-      const download = await supabase.storage.from(location.bucket).download(location.filePath);
+      const download = await supabase.storage.from(SHOWCASE_BUCKET).download(storagePath);
       if (download.error || !download.data) {
         throw download.error ?? new Error('source could not be downloaded');
       }
@@ -112,9 +109,7 @@ async function main() {
         continue;
       }
 
-      const displayPath = buildDisplayRenditionPath(outputUrl, display.storagePathHash);
-      const displayLocation = getStorageLocation(displayPath);
-      if (!displayLocation) throw new Error(`display path has no bucket: ${displayPath}`);
+      const displayPath = buildDisplayRenditionPath(storagePath, display.storagePathHash);
       displayBytesWritten += display.body.byteLength;
 
       if (!executionMode.execute) {
@@ -124,21 +119,20 @@ async function main() {
       }
 
       const upload = await supabase.storage
-        .from(displayLocation.bucket)
-        .upload(displayLocation.filePath, toStorageUploadBody(display.body, 'image/webp'), {
+        .from(SHOWCASE_BUCKET)
+        .upload(displayPath, toStorageUploadBody(display.body, 'image/webp'), {
           cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
           contentType: 'image/webp',
           upsert: true,
         });
       if (upload.error) throw upload.error;
 
-      // The object first, the pointer second; and only while the row still
-      // serves the file this was encoded from.
+      // The object first, the pointer second: a path recorded before its bytes
+      // exist would send every viewer to a 404.
       const { error: updateError } = await supabase
-        .from('generations')
-        .update({ display_url: displayPath })
-        .eq('id', row.id)
-        .eq('output_url', outputUrl);
+        .from('post_media')
+        .update({ display_storage_path: displayPath })
+        .eq('id', row.id);
       if (updateError) throw updateError;
 
       built += 1;

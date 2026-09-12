@@ -215,7 +215,7 @@ server-side.
 
 ### F7 — P3: the integrity script reports known-unavailable rows and has no schedule
 
-`scripts/audit-media-previews.ts` does not select `source_unavailable_at` and
+`scripts/audits/audit-media-previews.ts` does not select `source_unavailable_at` and
 reports the three marked records as `missing_preview` /
 `missing_source_and_preview`, so it exits nonzero and cannot give a clean
 health signal. It is also not wired into any workflow or job; upload readback

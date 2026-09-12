@@ -9,13 +9,13 @@
  * qwen3/pro-*) — always read the enum out of the spec body this script prints.
  *
  * Usage:
- *   node scripts/kie-evidence.mjs slugs                 # all market slugs from the sitemap
- *   node scripts/kie-evidence.mjs price <market-slug>   # credit lines from kie.ai/<slug>
- *   node scripts/kie-evidence.mjs spec <docs-path>      # model enum + input fields from docs.kie.ai/market/<path>.md
+ *   node scripts/ops/kie-evidence.mjs slugs                 # all market slugs from the sitemap
+ *   node scripts/ops/kie-evidence.mjs price <market-slug>   # credit lines from kie.ai/<slug>
+ *   node scripts/ops/kie-evidence.mjs spec <docs-path>      # model enum + input fields from docs.kie.ai/market/<path>.md
  *
  * Examples:
- *   node scripts/kie-evidence.mjs price kling-o3
- *   node scripts/kie-evidence.mjs spec bytedance/seedance-2-5
+ *   node scripts/ops/kie-evidence.mjs price kling-o3
+ *   node scripts/ops/kie-evidence.mjs spec bytedance/seedance-2-5
  */
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36';

@@ -1,4 +1,4 @@
-> **Superseded.** Model definitions, controls, and pricing now live in the database catalog released via `scripts/generation-model-catalog.ts`; see `docs/generation-model-catalog-operations.md`. Kept as history of the earlier per-page registry approach.
+> **Superseded.** Model definitions, controls, and pricing now live in the database catalog released via `scripts/ops/generation-model-catalog.ts`; see `docs/generation-model-catalog-operations.md`. Kept as history of the earlier per-page registry approach.
 
 # Model Integration
 

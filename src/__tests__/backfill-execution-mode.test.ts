@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   getSupabaseProjectRef,
   parseBackfillExecutionMode,
-} from '../../scripts/backfill-execution-mode.mjs';
+} from '../../scripts/backfills/backfill-execution-mode.mjs';
 
 describe('backfill execution mode', () => {
   it('defaults to a dry run', () => {

@@ -7,7 +7,7 @@
  * bundle.
  *
  * Server and browser both initialise from here. The server half was blocked
- * for a while by `scripts/check-ffmpeg-build-artifact.mjs`: adding a root
+ * for a while by `scripts/build/check-ffmpeg-build-artifact.mjs`: adding a root
  * `instrumentation.ts` makes Next emit an edge-wrapper chunk containing
  * Turbopack's own path constructor, ``U.P = e => `/ROOT/${e}` ``, and the check
  * flagged every `/ROOT/` literal. That check exists because bundling

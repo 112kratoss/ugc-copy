@@ -654,7 +654,7 @@ Evidence: F4 of the [8 September audit](../audits/media-delivery-audit-2026-09-0
 
 ## The integrity audit can report clean (2026-09-09)
 
-`scripts/audit-media-previews.ts` never selected `source_unavailable_at`, so
+`scripts/audits/audit-media-previews.ts` never selected `source_unavailable_at`, so
 the three records whose only source is gone were reported as
 `missing_preview` / `missing_source_and_preview` on every run. They have no
 preview and never will — the repair job marks them and the product renders them

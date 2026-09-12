@@ -4,7 +4,7 @@ import {
   formatMigrationDrift,
   parseMigrationListOutput,
   summarizeMigrationDrift,
-} from '../../scripts/check-supabase-migration-drift.mjs';
+} from '../../scripts/db/check-supabase-migration-drift.mjs';
 
 describe('Supabase migration drift checker', () => {
   it('detects migrations that exist locally but are missing from remote history', () => {

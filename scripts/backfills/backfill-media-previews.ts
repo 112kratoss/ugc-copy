@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import {
   hasRepairableMediaPreviews,
   repairMediaPreviews,
-} from '../src/lib/media-preview-repair';
+} from '../../src/lib/media-preview-repair';
 import {
   logBackfillExecutionMode,
   parseBackfillExecutionMode,

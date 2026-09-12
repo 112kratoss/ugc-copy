@@ -6,7 +6,7 @@ import {
   listOpenModerationReports,
   resolvePostReport,
   resolveSubjectReport,
-} from '../src/lib/moderation-ops';
+} from '../../src/lib/moderation-ops';
 
 const USAGE = `
 Magicbooklet moderation operations (service role only)

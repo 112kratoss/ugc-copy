@@ -18,8 +18,8 @@ import {
   getPlannerResponseSchema,
   type EnhancerContext,
   type Medium,
-} from '../src/lib/prompt-enhancer';
-import { getEnhancerPlaybookById } from '../src/lib/prompt-enhancer-playbooks';
+} from '../../src/lib/prompt-enhancer';
+import { getEnhancerPlaybookById } from '../../src/lib/prompt-enhancer-playbooks';
 
 interface EvalCase {
   name: string;

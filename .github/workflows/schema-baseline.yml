@@ -12,7 +12,7 @@ name: Schema baseline
 # developer machine here cannot always do either.
 #
 # Two artifacts come out:
-#   * fingerprint.txt — one digest per object class, from scripts/schema-fingerprint.sql.
+#   * fingerprint.txt — one digest per object class, from scripts/db/schema-fingerprint.sql.
 #     Compare against the same query run on production to prove the repository
 #     still rebuilds it.
 #   * schema-*.sql — a real `pg_dump` of the replayed schema, i.e. the baseline
@@ -83,7 +83,7 @@ jobs:
           set -euo pipefail
           # Without ON_ERROR_STOP psql exits 0 after a failed statement, which
           # would hand back an empty fingerprint from a green step.
-          psql "${DB_URL}" -v ON_ERROR_STOP=1 -At -F '|' -f scripts/schema-fingerprint.sql \
+          psql "${DB_URL}" -v ON_ERROR_STOP=1 -At -F '|' -f scripts/db/schema-fingerprint.sql \
             | tee artifacts/fingerprint.txt
           test -s artifacts/fingerprint.txt
         env:

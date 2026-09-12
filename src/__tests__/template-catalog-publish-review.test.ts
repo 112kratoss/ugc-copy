@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { reviewActiveTemplatesForCatalog } from '../../scripts/generation-model-catalog';
+import { reviewActiveTemplatesForCatalog } from '../../scripts/ops/generation-model-catalog';
 
 type Row = Record<string, unknown>;
 
@@ -118,7 +118,7 @@ describe('reviewActiveTemplatesForCatalog', () => {
 
 describe('release lifecycle wiring', () => {
   const source = fs.readFileSync(
-    path.join(process.cwd(), 'scripts/generation-model-catalog.ts'),
+    path.join(process.cwd(), 'scripts/ops/generation-model-catalog.ts'),
     'utf8',
   );
 

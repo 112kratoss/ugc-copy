@@ -3,7 +3,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
   getUserOwnedStoredMediaLocation,
   parseCanonicalStorageObjectPath,
-} from '../src/lib/storage-ownership';
+} from '../../src/lib/storage-ownership';
 import {
   logBackfillExecutionMode,
   parseBackfillExecutionMode,

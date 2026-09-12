@@ -5,7 +5,7 @@ import {
   buildStorageDriftReport,
   seedBacklogIntents,
   type BacklogCategory,
-} from '../src/lib/media-upload-backlog-seed';
+} from '../../src/lib/media-upload-backlog-seed';
 import { parseBackfillExecutionMode, logBackfillExecutionMode } from './backfill-execution-mode.mjs';
 
 /**

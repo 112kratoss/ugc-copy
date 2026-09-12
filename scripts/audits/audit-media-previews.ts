@@ -1,6 +1,6 @@
 /**
  * Read-only integrity audit, including rows marked ready (which repair skips).
- * npx tsx --env-file-if-exists=.env.local scripts/audit-media-previews.ts
+ * npx tsx --env-file-if-exists=.env.local scripts/audits/audit-media-previews.ts
  * --limit=200 bounds rows per table; --after=<uuid> resumes each table by id.
  * --sample=<n> checks n rows drawn from across the corpus instead of the next
  * page, which is what a periodic health check wants: a bounded, representative
@@ -24,8 +24,8 @@ import sharp from 'sharp';
 import {
   classifyPreviewCandidate,
   drawIntegritySample,
-} from '../src/lib/media-integrity-audit';
-import { getStorageLocation } from '../src/lib/storage-path';
+} from '../../src/lib/media-integrity-audit';
+import { getStorageLocation } from '../../src/lib/storage-path';
 
 const args = process.argv.slice(2);
 const limit = Number(args.find((arg) => arg.startsWith('--limit='))?.slice(8) ?? 200);

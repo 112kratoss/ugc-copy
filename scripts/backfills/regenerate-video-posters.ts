@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 
-import { regenerateVideoPosters } from '../src/lib/media-preview-repair';
+import { regenerateVideoPosters } from '../../src/lib/media-preview-repair';
 import {
   logBackfillExecutionMode,
   parseBackfillExecutionMode,

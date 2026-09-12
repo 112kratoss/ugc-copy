@@ -191,7 +191,7 @@ Android and iOS devices before attributing remaining black frames to rendering.
 ## Repeat the integrity audit
 
 ```sh
-npx tsx --env-file-if-exists=.env.local scripts/audit-media-previews.ts
+npx tsx --env-file-if-exists=.env.local scripts/audits/audit-media-previews.ts
 ```
 
 Read-only; uses the configured operator credentials without printing them.

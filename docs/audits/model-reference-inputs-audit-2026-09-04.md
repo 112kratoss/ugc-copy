@@ -296,7 +296,7 @@ Caps are ours → Kie's (✓ = equal). "Combine" is whether frames may accompany
 | `docs/model-api-references/dropin-models-2026-08-15.md` | 2026-08-15 | grok-imagine-image-2 now has an image-edit endpoint taking `image_urls` |
 | `docs/model-api-references/README.md` rule 5, `video-reference-caps-2026-09-03.md` | 2026-09-03 | offer date Sep 17 → Oct 17 |
 
-Re-verify with the committed tooling: `node scripts/kie-evidence.mjs price <slug>` for
+Re-verify with the committed tooling: `node scripts/ops/kie-evidence.mjs price <slug>` for
 credits (it now prints promotion qualifiers) and `spec <docs-path>` for fields, remembering
 that the `price` scan lists every variant's block on a multi-model page in page order.
 

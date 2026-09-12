@@ -27,8 +27,8 @@ import { writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { buildGenerationModelCatalog } from '../src/lib/generation-model-catalog';
-import { buildCodeGenerationModelOperations } from '../src/lib/generation-model-runtime';
+import { buildGenerationModelCatalog } from '../../src/lib/generation-model-catalog';
+import { buildCodeGenerationModelOperations } from '../../src/lib/generation-model-runtime';
 import { validateCatalogManifest } from './generation-model-catalog';
 
 interface CliArgs {

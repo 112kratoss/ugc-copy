@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 
 import sharp from 'sharp';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const imageDir = path.join(root, 'ugc-mobile', 'assets', 'images');
 
 function iconSvg({ transparent = false } = {}) {

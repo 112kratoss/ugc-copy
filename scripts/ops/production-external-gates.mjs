@@ -235,10 +235,10 @@ async function probeRevenueCatWebhook() {
 
 function printUsage() {
   console.log(`Usage:
-  node scripts/production-external-gates.mjs [--check]
-  node scripts/production-external-gates.mjs --print-supabase-auth-patch
-  SUPABASE_MANAGEMENT_API_TOKEN=... node scripts/production-external-gates.mjs --apply-supabase-auth
-  REVENUECAT_WEBHOOK_AUTH_TOKEN='Bearer ...' node scripts/production-external-gates.mjs --probe-revenuecat-webhook
+  node scripts/ops/production-external-gates.mjs [--check]
+  node scripts/ops/production-external-gates.mjs --print-supabase-auth-patch
+  SUPABASE_MANAGEMENT_API_TOKEN=... node scripts/ops/production-external-gates.mjs --apply-supabase-auth
+  REVENUECAT_WEBHOOK_AUTH_TOKEN='Bearer ...' node scripts/ops/production-external-gates.mjs --probe-revenuecat-webhook
 
 Default: --check
 

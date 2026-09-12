@@ -192,7 +192,7 @@ describe('publish-time poster seam', () => {
   );
   const nextConfig = fs.readFileSync(path.join(process.cwd(), 'next.config.ts'), 'utf8');
   const ffmpegCheck = fs.readFileSync(
-    path.join(process.cwd(), 'scripts/check-ffmpeg-build-artifact.mjs'),
+    path.join(process.cwd(), 'scripts/build/check-ffmpeg-build-artifact.mjs'),
     'utf8',
   );
 

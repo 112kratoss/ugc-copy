@@ -1,7 +1,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-import { SHOWCASE_PUBLIC_MEDIA_CACHE_TTL_SECONDS } from '../src/lib/showcase-media-cache';
-import { iterateStorageObjectsV2 } from '../src/lib/storage-list-v2';
+import { SHOWCASE_PUBLIC_MEDIA_CACHE_TTL_SECONDS } from '../../src/lib/showcase-media-cache';
+import { iterateStorageObjectsV2 } from '../../src/lib/storage-list-v2';
 import {
   logBackfillExecutionMode,
   parseBackfillExecutionMode,

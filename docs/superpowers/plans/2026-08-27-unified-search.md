@@ -337,7 +337,7 @@ Reuse `list_marketplace_resource_bundles` and its trigger-maintained trigram doc
 
 **Files:**
 
-- Modify: `scripts/benchmark-local-scaling.mjs` or add a focused search benchmark script
+- Modify: `scripts/db/benchmark-local-scaling.mjs` or add a focused search benchmark script
 - Modify: performance documentation only after measurements exist
 - Add Playwright coverage under `tests/e2e/` for the web search journey
 

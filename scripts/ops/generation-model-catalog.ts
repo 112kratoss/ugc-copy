@@ -74,14 +74,14 @@ const USAGE = `
 Magicbooklet generation-model catalog operations (service role only)
 
 Usage:
-  tsx scripts/generation-model-catalog.ts validate [--manifest <path>] [--json]
-  tsx scripts/generation-model-catalog.ts diff [--manifest <path>] [--json]
-  tsx scripts/generation-model-catalog.ts stage [--manifest <path>] [--json]
-  tsx scripts/generation-model-catalog.ts stage [--manifest <path>] --apply --expected-active <revision> --confirm-revision <new-revision>
-  tsx scripts/generation-model-catalog.ts publish [--manifest <path>] [--json]
-  tsx scripts/generation-model-catalog.ts publish [--manifest <path>] --apply --expected-active <revision> --confirm-revision <new-revision>
-  tsx scripts/generation-model-catalog.ts rollback --target-revision <revision> [--json]
-  tsx scripts/generation-model-catalog.ts rollback --target-revision <revision> --expected-active <revision> --apply --confirm-revision <target-revision>
+  tsx scripts/ops/generation-model-catalog.ts validate [--manifest <path>] [--json]
+  tsx scripts/ops/generation-model-catalog.ts diff [--manifest <path>] [--json]
+  tsx scripts/ops/generation-model-catalog.ts stage [--manifest <path>] [--json]
+  tsx scripts/ops/generation-model-catalog.ts stage [--manifest <path>] --apply --expected-active <revision> --confirm-revision <new-revision>
+  tsx scripts/ops/generation-model-catalog.ts publish [--manifest <path>] [--json]
+  tsx scripts/ops/generation-model-catalog.ts publish [--manifest <path>] --apply --expected-active <revision> --confirm-revision <new-revision>
+  tsx scripts/ops/generation-model-catalog.ts rollback --target-revision <revision> [--json]
+  tsx scripts/ops/generation-model-catalog.ts rollback --target-revision <revision> --expected-active <revision> --apply --confirm-revision <target-revision>
 
 Environment for commands that read or mutate Supabase:
   SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)

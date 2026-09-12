@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-const scriptPath = path.join(process.cwd(), 'scripts', 'production-external-gates.mjs');
+const scriptPath = path.join(process.cwd(), 'scripts', 'ops', 'production-external-gates.mjs');
 
 describe('production external gates helper', () => {
   it('self-tests advisor parsing and the narrow Supabase Auth patch payload', () => {

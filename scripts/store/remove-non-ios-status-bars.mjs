@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import sharp from 'sharp';
 
-const workspace = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const workspace = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const directories = ['app-store-screenshots', 'app-store-screenshots 2'];
 
 for (const directory of directories) {

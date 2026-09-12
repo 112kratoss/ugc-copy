@@ -94,7 +94,7 @@ LLM comparison, and published prompt-rewriting evals).
   feed prompt mentions and the enhancer's preservation safeguards). Mobile
   never sees the mode until its UI can group images — the gating setting is
   unreachable from the catalog-driven mobile UI by design.
-- **Live eval harness**: `npm run eval:enhancer` (scripts/enhancer-eval.ts)
+- **Live eval harness**: `npm run eval:enhancer` (scripts/ops/enhancer-eval.ts)
   runs fixture prompts through the real provider and checks constraint
   obedience; not part of CI (costs money, needs `KIE_AI_API_KEY`).
 

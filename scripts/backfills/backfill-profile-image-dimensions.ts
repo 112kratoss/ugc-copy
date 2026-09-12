@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 
-import { normalizeStoredProfileImage } from '../src/lib/profile-image-normalization';
+import { normalizeStoredProfileImage } from '../../src/lib/profile-image-normalization';
 import {
   logBackfillExecutionMode,
   parseBackfillExecutionMode,

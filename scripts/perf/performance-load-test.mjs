@@ -16,7 +16,7 @@ import {
 } from 'node:zlib';
 import path from 'node:path';
 
-const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DEFAULT_BUDGETS_PATH = path.join(PROJECT_ROOT, 'config', 'performance-budgets.json');
 const DEFAULT_BASE_URL = 'https://magicbooklet.com';
 const DEFAULT_DURATION_SECONDS = 30;

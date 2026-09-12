@@ -11,9 +11,9 @@ Use the committed tool — it sends a browser user agent (Kie's Cloudflare block
 non-browser UAs) and reads the spec bodies:
 
 ```bash
-node scripts/kie-evidence.mjs slugs             # every market slug from the sitemap
-node scripts/kie-evidence.mjs price kling-o3    # credit lines from kie.ai/kling-o3
-node scripts/kie-evidence.mjs spec bytedance/seedance-2-5   # model enum + input fields
+node scripts/ops/kie-evidence.mjs slugs             # every market slug from the sitemap
+node scripts/ops/kie-evidence.mjs price kling-o3    # credit lines from kie.ai/kling-o3
+node scripts/ops/kie-evidence.mjs spec bytedance/seedance-2-5   # model enum + input fields
 ```
 
 ## Rules learned the hard way

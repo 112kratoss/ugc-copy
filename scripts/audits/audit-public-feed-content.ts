@@ -1,7 +1,7 @@
 /**
  * Read-only sweep of everything a logged-out visitor can see, rendered as one
  * contact sheet so a person can actually look at it.
- * npx tsx --env-file-if-exists=.env.local scripts/audit-public-feed-content.ts
+ * npx tsx --env-file-if-exists=.env.local scripts/audits/audit-public-feed-content.ts
  * --limit=200 bounds posts; --out=<dir> chooses the output directory.
  *
  * Why this exists, and why it renders images rather than reporting metadata:
