@@ -46,7 +46,7 @@ vi.mock('next/navigation', () => ({
   }),
 }));
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
     session: authState.session,
     credits: authState.credits,
@@ -63,7 +63,7 @@ vi.mock('framer-motion', () => ({
   useReducedMotion: () => false,
 }));
 
-vi.mock('@/app/components/PublicShareButton', () => ({
+vi.mock('@/components/PublicShareButton', () => ({
   default: ({ label, className }: { label?: string; className?: string }) => (
     <button type="button" className={className}>
       {label ?? 'Share'}

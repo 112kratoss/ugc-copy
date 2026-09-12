@@ -1,10 +1,10 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { CreatorToolPreview } from '@/app/components/CreatorToolPreview';
+import { CreatorToolPreview } from '@/components/CreatorToolPreview';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
-vi.mock('@/app/components/HoverVideo', () => ({
+vi.mock('@/components/HoverVideo', () => ({
   HoverVideo: ({ src, poster }: { src: string; poster?: string | null }) => (
     <video data-testid="tool-preview-video" data-original-src={src} poster={poster ?? undefined} />
   ),

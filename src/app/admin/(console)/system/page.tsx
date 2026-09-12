@@ -2,7 +2,7 @@ import Link from 'next/link';
 import clsx from 'clsx';
 import { CheckCircle2, Mail } from 'lucide-react';
 
-import { Surface, Text } from '@/app/components/DesignSystem';
+import { Surface, Text } from '@/components/DesignSystem';
 import {
   CONTACT_PAGE_SIZE,
   collectAdminSystemSnapshot,

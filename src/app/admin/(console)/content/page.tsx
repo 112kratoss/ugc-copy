@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import clsx from 'clsx';
 
-import { Text } from '@/app/components/DesignSystem';
+import { Text } from '@/components/DesignSystem';
 import {
   collectAdminContentSnapshot,
   type AdminGenerationFilter,

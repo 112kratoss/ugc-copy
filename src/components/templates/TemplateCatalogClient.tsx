@@ -3,14 +3,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowRight, LayoutTemplate, Plus, Search, Sparkles } from 'lucide-react';
 
-import { useAuth } from '@/app/components/AuthProvider';
+import { useAuth } from '@/components/AuthProvider';
 import {
   Button,
   Kicker,
   StatusCallout,
   Surface,
   Text,
-} from '@/app/components/DesignSystem';
+} from '@/components/DesignSystem';
 
 import { listTemplatePage, listTemplates } from './api';
 import { TemplateCard, TemplatePageShell } from './TemplatePrimitives';

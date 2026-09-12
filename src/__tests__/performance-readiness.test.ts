@@ -27,8 +27,8 @@ describe('production performance readiness', () => {
     expect(globalCss).toContain('@import "tailwindcss" source(none)');
     expect(globalCss).toContain('@source "./showcase"');
     expect(globalCss).toContain('@source "./marketplace"');
-    expect(globalCss).not.toContain('@source "./components";');
-    expect(globalCss).toContain('@source "./components/AppShell.tsx";');
+    expect(globalCss).not.toContain('@source "../components";');
+    expect(globalCss).toContain('@source "../components/AppShell.tsx";');
     expect(globalCss).toContain('@source "../lib/client-generation-models.ts";');
   });
 

@@ -17,8 +17,8 @@ import {
   Repeat2,
 } from 'lucide-react';
 
-import { useAuth } from '@/app/components/AuthProvider';
-import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
+import { useAuth } from '@/components/AuthProvider';
+import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import { loadShowcaseReelViewer } from '@/app/showcase/showcase-reel-loader';
 import type { CreatorProfilePageData } from '@/lib/creator-profile';

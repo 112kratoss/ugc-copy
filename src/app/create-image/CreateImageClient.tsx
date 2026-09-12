@@ -16,12 +16,12 @@ import {
     StudioRemixNotice,
     StudioRunPanel,
     StudioWorkspacePanel,
-} from '@/app/components/CreatorStudio';
-import StudioModelPicker from '@/app/components/StudioModelPicker';
-import PublicShareButton from '@/app/components/PublicShareButton';
-import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
-import EnhancePromptButton from '@/app/components/EnhancePromptButton';
-import { useAuth } from '@/app/components/AuthProvider';
+} from '@/components/CreatorStudio';
+import StudioModelPicker from '@/components/StudioModelPicker';
+import PublicShareButton from '@/components/PublicShareButton';
+import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
+import EnhancePromptButton from '@/components/EnhancePromptButton';
+import { useAuth } from '@/components/AuthProvider';
 import type { RemixSourceBundle } from '@/lib/remix-source';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import {

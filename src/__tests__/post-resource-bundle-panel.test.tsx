@@ -27,7 +27,7 @@ vi.mock('next/navigation', () => ({
   }),
 }));
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
     session: authState.session,
     credits: authState.credits,

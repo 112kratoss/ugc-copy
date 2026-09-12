@@ -1,7 +1,7 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import TabLoadingShell from '@/app/components/TabLoadingShell';
+import TabLoadingShell from '@/components/TabLoadingShell';
 
 describe('TabLoadingShell', () => {
   it('renders a stable loading region with the tab title', () => {

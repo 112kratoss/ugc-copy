@@ -3,8 +3,8 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ArrowRight, CheckCircle2 } from 'lucide-react';
 
-import { Button, Kicker, SectionHeader, Surface, Text } from '@/app/components/DesignSystem';
-import { JsonLd } from '@/app/components/JsonLd';
+import { Button, Kicker, SectionHeader, Surface, Text } from '@/components/DesignSystem';
+import { JsonLd } from '@/components/JsonLd';
 import { ALTERNATIVES, findAlternative } from '@/lib/alternatives';
 import {
     buildBreadcrumbSchema,

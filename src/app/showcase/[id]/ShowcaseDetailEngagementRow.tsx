@@ -4,9 +4,9 @@ import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { Eye, Heart, Loader2, MessageCircle, Repeat2 } from 'lucide-react';
 
-import { useAuth } from '@/app/components/AuthProvider';
-import PublicShareButton from '@/app/components/PublicShareButton';
-import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
+import { useAuth } from '@/components/AuthProvider';
+import PublicShareButton from '@/components/PublicShareButton';
+import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import { formatCompactCount } from '@/lib/post-feed-presentation';
 import { getCurrentInternalPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';

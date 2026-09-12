@@ -1,4 +1,4 @@
-import { RequireAuth } from '@/app/components/RouteAuthBoundary';
+import { RequireAuth } from '@/components/RouteAuthBoundary';
 
 import CreateImageClient, { type CreateImagePrefill } from './CreateImageClient';
 

@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 
-import { OptionalAuth } from '@/app/components/RouteAuthBoundary';
-import TemplateDetailClient from '@/app/components/templates/TemplateDetailClient';
+import { OptionalAuth } from '@/components/RouteAuthBoundary';
+import TemplateDetailClient from '@/components/templates/TemplateDetailClient';
 
 export const metadata: Metadata = {
   title: 'Media Template',

@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 
-import { RequireAuth } from '@/app/components/RouteAuthBoundary';
-import TemplateCatalogClient from '@/app/components/templates/TemplateCatalogClient';
+import { RequireAuth } from '@/components/RouteAuthBoundary';
+import TemplateCatalogClient from '@/components/templates/TemplateCatalogClient';
 
 export const metadata: Metadata = {
   title: 'My Templates',

@@ -1,7 +1,7 @@
 'use client';
 
-import ResourceFileLink from '@/app/components/ResourceFileLink';
-import ResourceMediaPreview from '@/app/components/ResourceMediaPreview';
+import ResourceFileLink from '@/components/ResourceFileLink';
+import ResourceMediaPreview from '@/components/ResourceMediaPreview';
 
 import Link from 'next/link';
 import Script from 'next/script';
@@ -23,10 +23,10 @@ import {
   X,
 } from 'lucide-react';
 
-import CreatorIdentity from '@/app/components/CreatorIdentity';
-import PublicShareButton from '@/app/components/PublicShareButton';
-import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
-import { useAuth } from '@/app/components/AuthProvider';
+import CreatorIdentity from '@/components/CreatorIdentity';
+import PublicShareButton from '@/components/PublicShareButton';
+import TextPostPreviewCard from '@/components/TextPostPreviewCard';
+import { useAuth } from '@/components/AuthProvider';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import {
   ShowcaseFeedbackMenu,

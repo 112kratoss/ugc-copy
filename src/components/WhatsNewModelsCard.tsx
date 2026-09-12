@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { ArrowRight, Image as ImageIcon, Play, Rocket } from 'lucide-react';
 
-import { getAccentClasses, Kicker, Pill, Text } from '@/app/components/DesignSystem';
+import { getAccentClasses, Kicker, Pill, Text } from '@/components/DesignSystem';
 import type { HomeWhatsNewModel } from '@/lib/home-dashboard';
 
 // Same kind → glyph mapping the marketing page's model list uses.

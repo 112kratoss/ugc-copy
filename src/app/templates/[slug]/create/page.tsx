@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 
-import { RequireAuth } from '@/app/components/RouteAuthBoundary';
-import CreateTemplateRunClient from '@/app/components/templates/CreateTemplateRunClient';
+import { RequireAuth } from '@/components/RouteAuthBoundary';
+import CreateTemplateRunClient from '@/components/templates/CreateTemplateRunClient';
 
 export const metadata: Metadata = {
   title: 'Use Media Template',

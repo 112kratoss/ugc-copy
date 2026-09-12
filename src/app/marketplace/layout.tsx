@@ -1,4 +1,4 @@
-import { RequestHintedOptionalAuth } from '@/app/components/RouteAuthBoundary';
+import { RequestHintedOptionalAuth } from '@/components/RouteAuthBoundary';
 
 export default async function MarketplaceLayout({
   children,

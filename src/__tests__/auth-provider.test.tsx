@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { Session } from '@supabase/supabase-js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { AuthProvider, useAuth } from '@/app/components/AuthProvider';
+import { AuthProvider, useAuth } from '@/components/AuthProvider';
 
 const authProviderMocks = vi.hoisted(() => ({
   getSession: vi.fn(),
@@ -48,7 +48,7 @@ vi.mock('@/lib/supabase', () => ({
   },
 }));
 
-vi.mock('@/app/components/useSupabaseAuthCookieHint', () => ({
+vi.mock('@/components/useSupabaseAuthCookieHint', () => ({
   useSupabaseAuthCookieHint: () => authCookieState.hasHint,
   useHasHydratedSupabaseAuthCookieHint: () => authCookieState.hasHydrated,
 }));

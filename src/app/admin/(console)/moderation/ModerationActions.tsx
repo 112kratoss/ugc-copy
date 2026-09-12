@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { Check, ShieldOff } from 'lucide-react';
 import clsx from 'clsx';
 
-import { Text } from '@/app/components/DesignSystem';
+import { Text } from '@/components/DesignSystem';
 
 type PostAction = 'take_down' | 'dismiss';
 type SubjectAction = 'resolve' | 'dismiss';

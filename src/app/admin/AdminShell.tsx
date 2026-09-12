@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 
-import { Text } from '@/app/components/DesignSystem';
+import { Text } from '@/components/DesignSystem';
 
 export type AdminNavBadges = {
   moderation?: number;

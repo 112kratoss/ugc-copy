@@ -1,6 +1,6 @@
 'use client';
 
-import ResourceMediaPreview from '@/app/components/ResourceMediaPreview';
+import ResourceMediaPreview from '@/components/ResourceMediaPreview';
 
 import Script from 'next/script';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -15,7 +15,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 
-import { useAuth } from '@/app/components/AuthProvider';
+import { useAuth } from '@/components/AuthProvider';
 import {
   buildPostResourceBundleLockedPreview,
   describePostResourceKinds,

@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useState } from 'react';
 
-import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
+import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
 
 const getSessionMock = vi.hoisted(() => vi.fn());
 const sharePublicGenerationMock = vi.hoisted(() => vi.fn());

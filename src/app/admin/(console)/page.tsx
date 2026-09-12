@@ -8,7 +8,7 @@ import {
   Users,
 } from 'lucide-react';
 
-import { Surface, Text } from '@/app/components/DesignSystem';
+import { Surface, Text } from '@/components/DesignSystem';
 import { collectAdminOverview } from '@/lib/admin-overview-service';
 import { createServiceClient } from '@/lib/server-helpers';
 

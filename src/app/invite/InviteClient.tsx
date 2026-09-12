@@ -16,15 +16,15 @@ import {
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { useAuth } from '@/app/components/AuthProvider';
+import { useAuth } from '@/components/AuthProvider';
 import {
   Kicker,
   Pill,
   StatusCallout,
   Surface,
   Text,
-} from '@/app/components/DesignSystem';
-import SkeletonLoader from '@/app/components/SkeletonLoader';
+} from '@/components/DesignSystem';
+import SkeletonLoader from '@/components/SkeletonLoader';
 
 export const REFERRAL_DISCLOSURE = 'Referral link — I may earn bonus credits if you top up.';
 

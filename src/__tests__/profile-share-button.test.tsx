@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import ProfileShareButton from '@/app/components/ProfileShareButton';
+import ProfileShareButton from '@/components/ProfileShareButton';
 
 describe('ProfileShareButton', () => {
   const shareMock = vi.fn();

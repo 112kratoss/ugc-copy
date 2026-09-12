@@ -8,7 +8,7 @@ import {
   readNavigationToken,
   readServerNavigationToken,
   subscribeToNavigationStart,
-} from '@/app/components/navigation-progress-state';
+} from '@/components/navigation-progress-state';
 
 /** How far the bar creeps while waiting; the last stretch is reserved for arrival. */
 const CEILING = 90;

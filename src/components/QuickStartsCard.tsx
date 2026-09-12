@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
 
-import { getAccentClasses, Kicker } from '@/app/components/DesignSystem';
+import { getAccentClasses, Kicker } from '@/components/DesignSystem';
 import { CREATOR_TOOLS } from '@/lib/creator-tools';
 
 /**

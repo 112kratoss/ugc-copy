@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { Loader2, MoreHorizontal } from 'lucide-react';
 
-import { useAnchoredMenu } from '@/app/components/useAnchoredMenu';
+import { useAnchoredMenu } from '@/components/useAnchoredMenu';
 
 export type StudioOverflowMenuTone = 'default' | 'success' | 'warning' | 'danger';
 

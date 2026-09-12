@@ -11,8 +11,8 @@ Magicbooklet web is a premium dark AI creator studio. The first impression shoul
 Use shared tokens and primitives first:
 
 - Tokens/utilities live in `src/app/globals.css`.
-- Web primitives live in `src/app/components/DesignSystem.tsx`.
-- Existing creator surfaces live in `src/app/components/CreatorStudio.tsx` and `src/app/components/FeatureLandingPage.tsx`.
+- Web primitives live in `src/components/DesignSystem.tsx`.
+- Existing creator surfaces live in `src/components/CreatorStudio.tsx` and `src/components/FeatureLandingPage.tsx`.
 
 ## Research Distilled For Web
 

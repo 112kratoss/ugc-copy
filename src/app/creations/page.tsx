@@ -4,18 +4,18 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } f
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Archive, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, Globe, ImageIcon, Loader2, PencilLine, Plus, RotateCcw, Trash2, UserRound, Volume2, Wand2, Zap } from 'lucide-react';
-import { useAuth } from '@/app/components/AuthProvider';
-import MediaDetailsPreviewModal, { type MediaDetailsType } from '@/app/components/MediaDetailsPreviewModal';
-import PostVisibilityMenu from '@/app/components/PostVisibilityMenu';
-import StudioOverflowMenu, { type StudioOverflowMenuItem } from '@/app/components/StudioOverflowMenu';
-import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
-import SkeletonLoader from '@/app/components/SkeletonLoader';
+import { useAuth } from '@/components/AuthProvider';
+import MediaDetailsPreviewModal, { type MediaDetailsType } from '@/components/MediaDetailsPreviewModal';
+import PostVisibilityMenu from '@/components/PostVisibilityMenu';
+import StudioOverflowMenu, { type StudioOverflowMenuItem } from '@/components/StudioOverflowMenu';
+import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
+import SkeletonLoader from '@/components/SkeletonLoader';
 import {
     usePostLifecycle,
     type PostLifecyclePatch,
     type PostLifecycleTarget,
-} from '@/app/components/usePostLifecycle';
-import { HoverVideo } from '@/app/components/HoverVideo';
+} from '@/components/usePostLifecycle';
+import { HoverVideo } from '@/components/HoverVideo';
 import CreationMediaFrame from '@/app/creations/CreationMediaFrame';
 import StudioCard, {
     STUDIO_GRID_CLASS,
@@ -43,7 +43,7 @@ import { formatUsdCents, getPostResourceKindLabel } from '@/lib/post-resource-bu
 import UnlockLibrary from './UnlockLibrary';
 import { buildShowcaseDetailPath, supportsPublicCreationSharing } from '@/lib/share';
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
-import UnavailableMediaNote from '@/app/components/UnavailableMediaNote';
+import UnavailableMediaNote from '@/components/UnavailableMediaNote';
 
 interface Generation {
     id: string;

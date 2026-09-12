@@ -3,13 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CircleAlert, ChevronLeft, ChevronRight, Images, Maximize2, Play, RotateCcw } from 'lucide-react';
 
-import { useInlineMediaPlayback } from '@/app/components/useInlineMediaPlayback';
-import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
-import { useMediaLoadingPreferences } from '@/app/components/useMediaLoadingPreferences';
+import { useInlineMediaPlayback } from '@/components/useInlineMediaPlayback';
+import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
+import { useMediaLoadingPreferences } from '@/components/useMediaLoadingPreferences';
 import { resolvePlaybackUrl } from '@/lib/media-descriptor';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 import type { ShowcaseMediaItem } from '@/lib/showcase';
-import UnavailableMediaNote from '@/app/components/UnavailableMediaNote';
+import UnavailableMediaNote from '@/components/UnavailableMediaNote';
 
 interface ShowcaseMediaCarouselProps {
   mediaItems: ShowcaseMediaItem[];

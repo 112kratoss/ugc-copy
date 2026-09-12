@@ -12,7 +12,7 @@ import {
 
 import type MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
 import MarketplaceToolFilter from '@/app/marketplace/MarketplaceToolFilter';
-import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
+import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
 export type MarketplaceBootstrapProps = ComponentProps<typeof MarketplaceBrowser>;

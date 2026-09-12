@@ -5,7 +5,7 @@ import { useId, useState } from 'react';
 import { EyeOff, RotateCcw, ShieldOff } from 'lucide-react';
 import clsx from 'clsx';
 
-import { Text } from '@/app/components/DesignSystem';
+import { Text } from '@/components/DesignSystem';
 
 type Action = 'hide' | 'take_down' | 'restore';
 

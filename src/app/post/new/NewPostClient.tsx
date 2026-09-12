@@ -2,7 +2,7 @@
 
 import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
 
-import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+import InlineMediaVideo from '@/components/InlineMediaVideo';
 
 import Link from 'next/link';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -24,7 +24,7 @@ import {
   X,
 } from 'lucide-react';
 
-import { useAuth } from '@/app/components/AuthProvider';
+import { useAuth } from '@/components/AuthProvider';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import {
   assessMarketplaceListingQuality,

@@ -15,7 +15,7 @@ import {
     type ShowcaseFeedPage,
     type ShowcasePriorityPosterData,
 } from '@/lib/showcase';
-import { JsonLd } from '@/app/components/JsonLd';
+import { JsonLd } from '@/components/JsonLd';
 import {
     buildBreadcrumbSchema,
     buildItemListSchema,

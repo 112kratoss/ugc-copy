@@ -16,7 +16,7 @@ import {
   Video,
 } from 'lucide-react';
 
-import { useAuth } from '@/app/components/AuthProvider';
+import { useAuth } from '@/components/AuthProvider';
 import {
   Button,
   Kicker,
@@ -25,9 +25,9 @@ import {
   StatusCallout,
   Surface,
   Text,
-} from '@/app/components/DesignSystem';
+} from '@/components/DesignSystem';
 
-import RecoverableMediaVideo from '@/app/components/RecoverableMediaVideo';
+import RecoverableMediaVideo from '@/components/RecoverableMediaVideo';
 import { getTemplate } from './api';
 import { getTemplateCreatorLabel, TemplatePageShell } from './TemplatePrimitives';
 import type { MediaTemplate } from './types';

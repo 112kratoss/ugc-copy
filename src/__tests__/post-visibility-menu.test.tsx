@@ -2,7 +2,7 @@ import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import PostVisibilityMenu from '@/app/components/PostVisibilityMenu';
+import PostVisibilityMenu from '@/components/PostVisibilityMenu';
 
 describe('PostVisibilityMenu', () => {
   it('names the trigger after the current state and exposes a radio menu of the three states', async () => {

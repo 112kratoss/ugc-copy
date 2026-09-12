@@ -6,11 +6,11 @@ import { buildPostFeedCard } from '@/lib/post-feed-presentation';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/showcase';
 
-vi.mock('@/app/components/PostComments', () => ({
+vi.mock('@/components/PostComments', () => ({
     default: () => <div data-testid="post-comments"><textarea aria-label="Write a comment" /></div>,
 }));
 
-vi.mock('@/app/components/PublicShareButton', () => ({
+vi.mock('@/components/PublicShareButton', () => ({
     default: ({ className }: { className?: string }) => (
         <button type="button" aria-label="Share" className={className} />
     ),

@@ -1,8 +1,8 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import TemplateCatalogClient from '@/app/components/templates/TemplateCatalogClient';
-import type { MediaTemplate } from '@/app/components/templates/types';
+import TemplateCatalogClient from '@/components/templates/TemplateCatalogClient';
+import type { MediaTemplate } from '@/components/templates/types';
 
 const mocks = vi.hoisted(() => ({
   useAuth: vi.fn(),
@@ -10,16 +10,16 @@ const mocks = vi.hoisted(() => ({
   listTemplatePage: vi.fn(),
 }));
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => mocks.useAuth(),
 }));
 
-vi.mock('@/app/components/templates/api', () => ({
+vi.mock('@/components/templates/api', () => ({
   listTemplates: (options: unknown) => mocks.listTemplates(options),
   listTemplatePage: (options: unknown) => mocks.listTemplatePage(options),
 }));
 
-vi.mock('@/app/components/templates/TemplatePrimitives', () => ({
+vi.mock('@/components/templates/TemplatePrimitives', () => ({
   TemplatePageShell: ({ children }: { children: React.ReactNode }) => <main>{children}</main>,
   TemplateCard: ({
     template,

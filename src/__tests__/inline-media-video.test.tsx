@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+import InlineMediaVideo from '@/components/InlineMediaVideo';
 let observers: Array<{ callback: IntersectionObserverCallback; disconnect: ReturnType<typeof vi.fn> }>;
 beforeEach(() => {
   observers = [];

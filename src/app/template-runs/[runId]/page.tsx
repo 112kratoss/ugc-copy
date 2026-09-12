@@ -1,8 +1,8 @@
 import type { Metadata } from 'next';
 import { Suspense } from 'react';
 
-import { RequireAuth } from '@/app/components/RouteAuthBoundary';
-import TemplateRunClient from '@/app/components/templates/TemplateRunClient';
+import { RequireAuth } from '@/components/RouteAuthBoundary';
+import TemplateRunClient from '@/components/templates/TemplateRunClient';
 
 export const metadata: Metadata = {
   title: 'Template Run',

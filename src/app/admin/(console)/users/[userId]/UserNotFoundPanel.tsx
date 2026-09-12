@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { SearchX } from 'lucide-react';
 
-import { Surface, Text } from '@/app/components/DesignSystem';
+import { Surface, Text } from '@/components/DesignSystem';
 
 /**
  * Rendered in place of the support record when a user id does not resolve.

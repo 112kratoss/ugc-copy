@@ -4,7 +4,7 @@ import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import GenerationResultVideo from '@/app/components/GenerationResultVideo';
+import GenerationResultVideo from '@/components/GenerationResultVideo';
 import { Upload, Sparkles, Loader2, Download, Zap, ChevronDown, Check, Play, Share2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
@@ -20,12 +20,12 @@ import {
     StudioRunPanel,
     StudioUploadedMediaPreview,
     StudioWorkspacePanel,
-} from '@/app/components/CreatorStudio';
-import StudioModelPicker from '@/app/components/StudioModelPicker';
-import PublicShareButton from '@/app/components/PublicShareButton';
-import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
-import EnhancePromptButton from '@/app/components/EnhancePromptButton';
-import { useAuth } from '@/app/components/AuthProvider';
+} from '@/components/CreatorStudio';
+import StudioModelPicker from '@/components/StudioModelPicker';
+import PublicShareButton from '@/components/PublicShareButton';
+import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
+import EnhancePromptButton from '@/components/EnhancePromptButton';
+import { useAuth } from '@/components/AuthProvider';
 import type { RemixMediaAssetDescriptor, RemixSourceBundle } from '@/lib/remix-source';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import {

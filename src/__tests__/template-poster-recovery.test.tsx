@@ -1,9 +1,9 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { useTemplatePosterRecovery } from '@/app/components/templates/useTemplatePosterRecovery';
-import { getTemplate } from '@/app/components/templates/api';
-import type { MediaTemplate } from '@/app/components/templates/types';
-vi.mock('@/app/components/templates/api', () => ({ getTemplate: vi.fn() }));
+import { useTemplatePosterRecovery } from '@/components/templates/useTemplatePosterRecovery';
+import { getTemplate } from '@/components/templates/api';
+import type { MediaTemplate } from '@/components/templates/types';
+vi.mock('@/components/templates/api', () => ({ getTemplate: vi.fn() }));
 const template = (id: string) => ({ id, thumbnailUrl: '/same.jpg' } as MediaTemplate);
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(getTemplate).mockImplementation(async id => template(id)); });
 afterEach(() => vi.useRealTimers());

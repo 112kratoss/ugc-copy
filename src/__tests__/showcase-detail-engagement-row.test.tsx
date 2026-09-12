@@ -10,11 +10,11 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: pushMock, refresh: vi.fn() }),
 }));
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => useAuthMock(),
 }));
 
-vi.mock('@/app/components/PublicShareButton', () => ({
+vi.mock('@/components/PublicShareButton', () => ({
   default: () => <button type="button">Share</button>,
 }));
 

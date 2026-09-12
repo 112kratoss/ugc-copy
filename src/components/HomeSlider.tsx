@@ -13,7 +13,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 
-import { getAccentClasses } from '@/app/components/DesignSystem';
+import { getAccentClasses } from '@/components/DesignSystem';
 import {
   HOME_SLIDE_INTERVAL_MS,
   HOME_SLIDE_RESUME_DELAY_MS,

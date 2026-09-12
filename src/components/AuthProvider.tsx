@@ -9,7 +9,7 @@ import {
 import {
     useHasHydratedSupabaseAuthCookieHint,
     useSupabaseAuthCookieHint,
-} from '@/app/components/useSupabaseAuthCookieHint';
+} from '@/components/useSupabaseAuthCookieHint';
 
 type BrowserSupabaseClient = typeof import('@/lib/supabase')['supabase'];
 

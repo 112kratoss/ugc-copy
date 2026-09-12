@@ -4,7 +4,7 @@ import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
-import { hasNavigatedInThisDocument } from '@/app/components/navigation-progress-state';
+import { hasNavigatedInThisDocument } from '@/components/navigation-progress-state';
 
 /**
  * The return affordance on a post page.

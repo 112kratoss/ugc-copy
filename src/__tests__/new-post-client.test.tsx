@@ -23,7 +23,7 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => searchParamsState.value,
 }));
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
     session: {
       access_token: 'test-token',

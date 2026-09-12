@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import PostComments from '@/app/components/PostComments';
+import PostComments from '@/components/PostComments';
 import type { PostComment, PostCommentsPage } from '@/lib/post-comments-client';
 
 const { authState } = vi.hoisted(() => ({
@@ -15,11 +15,11 @@ const { authState } = vi.hoisted(() => ({
     },
 }));
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
     useAuth: () => authState,
 }));
 
-vi.mock('@/app/components/PostCommentAvatar', () => ({
+vi.mock('@/components/PostCommentAvatar', () => ({
     default: ({ name }: { name: string }) => <span aria-hidden="true">{name}</span>,
 }));
 

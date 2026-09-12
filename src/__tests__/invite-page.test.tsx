@@ -7,7 +7,7 @@ import InviteClient, {
   buildReferralShareText,
 } from '@/app/invite/InviteClient';
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
     session: { access_token: 'referral-access-token' },
     isLoading: false,

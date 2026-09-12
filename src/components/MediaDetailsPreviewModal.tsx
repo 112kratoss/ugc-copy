@@ -1,13 +1,13 @@
 'use client';
 
-import InlineMediaVideo from '@/app/components/InlineMediaVideo';
-import RecoverableMediaAudio from '@/app/components/RecoverableMediaAudio';
+import InlineMediaVideo from '@/components/InlineMediaVideo';
+import RecoverableMediaAudio from '@/components/RecoverableMediaAudio';
 
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Check, ChevronDown, Copy, Film, Image as ImageIcon, Maximize2, Volume2, X } from 'lucide-react';
 import { createPortal } from 'react-dom';
 
-import CreatorIdentity from '@/app/components/CreatorIdentity';
+import CreatorIdentity from '@/components/CreatorIdentity';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import type { ShowcaseCreator } from '@/lib/showcase';
 

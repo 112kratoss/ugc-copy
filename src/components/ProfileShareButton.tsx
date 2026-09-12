@@ -2,7 +2,7 @@
 
 import { Check, Loader2, Share2 } from 'lucide-react';
 
-import { useShareAction } from '@/app/components/useShareAction';
+import { useShareAction } from '@/components/useShareAction';
 import { shareCreatorProfile } from '@/lib/share-client';
 import type { ProfileShareSourceSurface } from '@/lib/share';
 

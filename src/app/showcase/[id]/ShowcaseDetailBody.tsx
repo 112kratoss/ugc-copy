@@ -1,8 +1,8 @@
 import Link from 'next/link';
 import { BookText, ShoppingBag } from 'lucide-react';
 
-import PostCommentAvatar from '@/app/components/PostCommentAvatar';
-import PostComments from '@/app/components/PostComments';
+import PostCommentAvatar from '@/components/PostCommentAvatar';
+import PostComments from '@/components/PostComments';
 import { formatRelativeTime, getPostFeedTitle, type PostPreviewKind } from '@/lib/post-feed-presentation';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import { getPostResourceKindLabel, type PostResourceKind } from '@/lib/post-resource-bundles';

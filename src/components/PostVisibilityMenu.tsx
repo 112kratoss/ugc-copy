@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Globe, Link2, Loader2, LockKeyhole } from 'lucide-react';
 
-import { useAnchoredMenu } from '@/app/components/useAnchoredMenu';
+import { useAnchoredMenu } from '@/components/useAnchoredMenu';
 import type { PostVisibility } from '@/lib/post-lifecycle-client';
 
 export const POST_VISIBILITY_OPTIONS: ReadonlyArray<{

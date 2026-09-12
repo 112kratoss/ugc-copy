@@ -54,7 +54,7 @@ vi.mock('next/link', () => ({
   ),
 }));
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => authState,
 }));
 

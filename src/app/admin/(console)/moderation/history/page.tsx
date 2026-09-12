@@ -2,7 +2,7 @@ import { Fragment } from 'react';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 
-import { Text } from '@/app/components/DesignSystem';
+import { Text } from '@/components/DesignSystem';
 import {
   ADMIN_MODERATION_HISTORY_PAGE_SIZE,
   collectAdminModerationHistory,

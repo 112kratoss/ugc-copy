@@ -34,7 +34,7 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
     credits: 10_000,
     isLoading: false,
@@ -46,15 +46,15 @@ vi.mock('@/app/components/AuthProvider', () => ({
   }),
 }));
 
-vi.mock('@/app/components/EnhancePromptButton', () => ({
+vi.mock('@/components/EnhancePromptButton', () => ({
   default: () => null,
 }));
 
-vi.mock('@/app/components/PublicShareButton', () => ({
+vi.mock('@/components/PublicShareButton', () => ({
   default: () => null,
 }));
 
-vi.mock('@/app/components/PublishToShowcaseModal', () => ({
+vi.mock('@/components/PublishToShowcaseModal', () => ({
   default: () => null,
 }));
 

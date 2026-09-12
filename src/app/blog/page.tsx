@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { getSortedPostsData } from '@/lib/blog';
 import { Metadata } from 'next';
 import { ArrowLeft, ArrowRight, Calendar } from 'lucide-react';
-import { JsonLd } from '@/app/components/JsonLd';
+import { JsonLd } from '@/components/JsonLd';
 import {
     buildBreadcrumbSchema,
     buildItemListSchema,

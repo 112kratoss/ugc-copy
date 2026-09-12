@@ -1,8 +1,8 @@
 import Link from 'next/link';
 import { ArrowRight, CheckCircle2, Newspaper, PlayCircle, Sparkles } from 'lucide-react';
 
-import { Button, Kicker, SectionHeader, Surface, Text } from '@/app/components/DesignSystem';
-import { JsonLd } from '@/app/components/JsonLd';
+import { Button, Kicker, SectionHeader, Surface, Text } from '@/components/DesignSystem';
+import { JsonLd } from '@/components/JsonLd';
 import { PRICING_CURRENCY, PRICING_PLAN_MAP } from '@/lib/pricing';
 import {
     buildBreadcrumbSchema,

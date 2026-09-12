@@ -1,6 +1,6 @@
 'use client';
 
-import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+import InlineMediaVideo from '@/components/InlineMediaVideo';
 
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, RotateCcw } from 'lucide-react';

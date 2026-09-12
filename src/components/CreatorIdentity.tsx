@@ -1,6 +1,6 @@
 import Link from 'next/link';
 
-import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
+import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
 import { getUserInitials } from '@/lib/profile';
 import type { ShowcaseCreator } from '@/lib/showcase';
 

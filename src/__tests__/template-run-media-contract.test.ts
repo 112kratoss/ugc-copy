@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import contract from '../../contracts/template-run-media-v1.json';
-import { normalizeTemplateRun, normalizeTemplate } from '@/app/components/templates/api';
+import { normalizeTemplateRun, normalizeTemplate } from '@/components/templates/api';
 
 describe('template media wire contract', () => {
   it('preserves separate originals, playback and poster URLs for steps and final results', () => {

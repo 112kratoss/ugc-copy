@@ -19,9 +19,9 @@ import {
   X,
 } from 'lucide-react';
 
-import { useAuth } from '@/app/components/AuthProvider';
+import { useAuth } from '@/components/AuthProvider';
 import TemplateRunMedia from './TemplateRunMedia';
-import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
+import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
 import { finalizeSignedUpload } from '@/lib/upload-finalize-client';
 import {
   Button,
@@ -31,7 +31,7 @@ import {
   StatusCallout,
   Surface,
   Text,
-} from '@/app/components/DesignSystem';
+} from '@/components/DesignSystem';
 
 import {
   approveTemplateRunStep,

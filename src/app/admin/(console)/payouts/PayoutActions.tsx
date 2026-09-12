@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { BadgeCheck, Ban } from 'lucide-react';
 
-import { Text } from '@/app/components/DesignSystem';
+import { Text } from '@/components/DesignSystem';
 
 type PayoutAction = 'mark_paid' | 'reject';
 

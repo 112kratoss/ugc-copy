@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import TemplateRunClient from '@/app/components/templates/TemplateRunClient';
+import TemplateRunClient from '@/components/templates/TemplateRunClient';
 
 const testState = vi.hoisted(() => ({
   isTest: false,
@@ -15,7 +15,7 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
     session: { access_token: 'session-token' },
     credits: 92,
@@ -24,7 +24,7 @@ vi.mock('@/app/components/AuthProvider', () => ({
   }),
 }));
 
-vi.mock('@/app/components/templates/api', () => ({
+vi.mock('@/components/templates/api', () => ({
   approveTemplateRunStep: vi.fn(),
   cancelTemplateRun: vi.fn(),
   createClientIdempotencyKey: vi.fn(() => 'idempotency-key'),
@@ -36,7 +36,7 @@ vi.mock('@/app/components/templates/api', () => ({
   startTemplateRun: vi.fn(),
 }));
 
-vi.mock('@/app/components/PublishToShowcaseModal', () => ({
+vi.mock('@/components/PublishToShowcaseModal', () => ({
   default: (props: {
     isOpen: boolean;
     generationId: string | null;

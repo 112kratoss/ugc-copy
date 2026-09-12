@@ -1,7 +1,7 @@
 import { Fragment } from 'react';
 import Link from 'next/link';
 
-import { Text } from '@/app/components/DesignSystem';
+import { Text } from '@/components/DesignSystem';
 import { collectAdminActivity, type AdminActivityKind } from '@/lib/admin-activity-service';
 import { createServiceClient } from '@/lib/server-helpers';
 

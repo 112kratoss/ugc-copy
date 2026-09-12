@@ -1,6 +1,6 @@
 'use client';
 
-import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+import InlineMediaVideo from '@/components/InlineMediaVideo';
 
 import Link from 'next/link';
 import TemplateRunMedia from './TemplateRunMedia';
@@ -31,7 +31,7 @@ import {
   StatusCallout,
   Surface,
   Text,
-} from '@/app/components/DesignSystem';
+} from '@/components/DesignSystem';
 import { requiresReplacementGenerationInput } from '@/lib/generation-public-failure';
 
 import type {

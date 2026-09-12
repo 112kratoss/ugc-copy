@@ -13,8 +13,8 @@ describe('top tab performance contracts', () => {
     const firstLoadFiles = [
       'src/app/creations/page.tsx',
       'src/app/showcase/ShowcaseClient.tsx',
-      'src/app/components/PublishToShowcaseModal.tsx',
-      'src/app/components/MediaDetailsPreviewModal.tsx',
+      'src/components/PublishToShowcaseModal.tsx',
+      'src/components/MediaDetailsPreviewModal.tsx',
     ];
 
     for (const file of firstLoadFiles) {

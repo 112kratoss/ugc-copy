@@ -8,7 +8,7 @@ import type { HomeWorkspaceGenerationView } from '@/lib/home-dashboard';
 
 const useAuthMock = vi.fn();
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => useAuthMock(),
 }));
 

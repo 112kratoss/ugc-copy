@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
-import { useInlineMediaPlayback } from '@/app/components/useInlineMediaPlayback';
-import { useMediaLoadingPreferences } from '@/app/components/useMediaLoadingPreferences';
+import { useInlineMediaPlayback } from '@/components/useInlineMediaPlayback';
+import { useMediaLoadingPreferences } from '@/components/useMediaLoadingPreferences';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 
 function subscribeVisibility(onChange: () => void) {

@@ -5,7 +5,7 @@ import { hydrateRoot } from 'react-dom/client';
 import { act } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import AppShellClient from '@/app/components/AppShellClient';
+import AppShellClient from '@/components/AppShellClient';
 
 let mockedPathname = '/';
 let mockedScrollY = 0;

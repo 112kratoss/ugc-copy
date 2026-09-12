@@ -5,13 +5,13 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { useAuth } from '@/app/components/AuthProvider';
-import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
-import { publishNavigationStart } from '@/app/components/navigation-progress-state';
+import { useAuth } from '@/components/AuthProvider';
+import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
+import { publishNavigationStart } from '@/components/navigation-progress-state';
 import FeedMediaLightbox from '@/app/feed/FeedMediaLightbox';
 import FeedPostCard, { type FeedDetailContext } from '@/app/feed/FeedPostCard';
 import WindowedFeedList from '@/app/feed/WindowedFeedList';
-import SkeletonLoader from '@/app/components/SkeletonLoader';
+import SkeletonLoader from '@/components/SkeletonLoader';
 import { FEED_CHIPS, FEED_PAGE_SIZE, getFeedChip, type FeedChipId } from '@/lib/post-feed-chips';
 import { buildPostFeedCards } from '@/lib/post-feed-presentation';
 import {

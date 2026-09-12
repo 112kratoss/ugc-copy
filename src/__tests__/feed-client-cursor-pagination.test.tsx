@@ -5,7 +5,7 @@ import FeedClient from '@/app/feed/FeedClient';
 import { clearShowcaseClientCacheForTests } from '@/lib/showcase-client-cache';
 import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
     useAuth: () => ({ session: null, user: null }),
 }));
 
@@ -13,7 +13,7 @@ vi.mock('next/navigation', () => ({
     useRouter: () => ({ push: vi.fn(), prefetch: vi.fn() }),
 }));
 
-vi.mock('@/app/components/navigation-progress-state', () => ({
+vi.mock('@/components/navigation-progress-state', () => ({
     publishNavigationStart: vi.fn(),
 }));
 

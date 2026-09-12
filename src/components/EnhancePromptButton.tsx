@@ -7,7 +7,7 @@ import {
     PromptEnhancementError,
     type PromptEnhancementResult,
     requestPromptEnhancement,
-} from '@/app/components/enhancePromptClient';
+} from '@/components/enhancePromptClient';
 
 interface EnhancePromptButtonProps {
     prompt: string;

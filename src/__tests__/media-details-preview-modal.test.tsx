@@ -2,7 +2,7 @@ import type { HTMLAttributes, ReactNode } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import MediaDetailsPreviewModal from '@/app/components/MediaDetailsPreviewModal';
+import MediaDetailsPreviewModal from '@/components/MediaDetailsPreviewModal';
 
 vi.mock('framer-motion', () => ({
   AnimatePresence: ({ children }: { children: ReactNode }) => <>{children}</>,

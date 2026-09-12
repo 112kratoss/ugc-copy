@@ -4,8 +4,8 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Loader2, LogIn, Play, RefreshCw } from 'lucide-react';
 
-import { useAuth } from '@/app/components/AuthProvider';
-import { Button, StatusCallout, Surface, Text } from '@/app/components/DesignSystem';
+import { useAuth } from '@/components/AuthProvider';
+import { Button, StatusCallout, Surface, Text } from '@/components/DesignSystem';
 
 import { createClientIdempotencyKey, createTemplateRun, getTemplate } from './api';
 import { TemplatePageShell } from './TemplatePrimitives';

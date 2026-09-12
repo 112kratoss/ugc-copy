@@ -12,7 +12,7 @@ import {
 
 const authState = vi.hoisted(() => ({ credits: 200 as number | null }));
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({ credits: authState.credits }),
 }));
 

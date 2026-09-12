@@ -1,13 +1,13 @@
 import Link from 'next/link';
 import { Suspense, use } from 'react';
 
-import { StatusCallout, Text } from '@/app/components/DesignSystem';
-import HomeExperience from '@/app/components/HomeExperience';
-import HomeSlider from '@/app/components/HomeSlider';
-import { JsonLd } from '@/app/components/JsonLd';
-import QuickStartsCard from '@/app/components/QuickStartsCard';
-import SignInWorkspaceCard from '@/app/components/SignInWorkspaceCard';
-import WhatsNewModelsCard from '@/app/components/WhatsNewModelsCard';
+import { StatusCallout, Text } from '@/components/DesignSystem';
+import HomeExperience from '@/components/HomeExperience';
+import HomeSlider from '@/components/HomeSlider';
+import { JsonLd } from '@/components/JsonLd';
+import QuickStartsCard from '@/components/QuickStartsCard';
+import SignInWorkspaceCard from '@/components/SignInWorkspaceCard';
+import WhatsNewModelsCard from '@/components/WhatsNewModelsCard';
 import FeedClient from '@/app/feed/FeedClient';
 import type { HomeWhatsNewModel } from '@/lib/home-dashboard';
 import { loadHomeFeed, loadHomeWhatsNewModels } from '@/lib/home-dashboard-service';

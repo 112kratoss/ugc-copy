@@ -1,7 +1,7 @@
 import { act, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import GenerationNotifications from '@/app/components/GenerationNotifications';
+import GenerationNotifications from '@/components/GenerationNotifications';
 
 const getSessionMock = vi.fn();
 const onAuthStateChangeMock = vi.fn();

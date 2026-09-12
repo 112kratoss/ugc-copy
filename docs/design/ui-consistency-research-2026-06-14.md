@@ -312,7 +312,7 @@ Mobile:
    - Expand `ugc-mobile/lib/theme.ts`.
 
 2. Create primitives.
-   - Add or refactor shared primitives in `src/app/components`.
+   - Add or refactor shared primitives in `src/components`.
    - Keep API tiny: type role, surface tone, padding, accent, action size.
 
 3. Migrate repeated shells first.

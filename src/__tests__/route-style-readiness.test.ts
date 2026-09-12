@@ -163,14 +163,14 @@ describe('route utility stylesheet readiness', () => {
     const declaredSources = getDeclaredSources(globalsCss);
     const closure = collectPublicImportClosure();
     const expectedComponentSources = [...closure]
-      .filter((file) => file.startsWith(path.join(APP_ROOT, 'components') + path.sep))
-      .map((file) => `./${path.relative(APP_ROOT, file).split(path.sep).join('/')}`)
+      .filter((file) => file.startsWith(path.join(SRC_ROOT, 'components') + path.sep))
+      .map((file) => `../${path.relative(SRC_ROOT, file).split(path.sep).join('/')}`)
       .sort();
     const declaredComponentSources = declaredSources
-      .filter((source) => source.startsWith('./components/'))
+      .filter((source) => source.startsWith('../components/'))
       .sort();
 
-    expect(globalsCss).not.toContain('@source "./components";');
+    expect(globalsCss).not.toContain('@source "../components";');
     expect(declaredComponentSources).toEqual(expectedComponentSources);
 
     const expectedLibSources = [...closure]
@@ -191,12 +191,12 @@ describe('route utility stylesheet readiness', () => {
     const publicClosure = collectPublicImportClosure();
     const privateClosure = collectNonPublicImportClosure();
     const expectedComponentSources = [...privateClosure]
-      .filter((file) => file.startsWith(path.join(APP_ROOT, 'components') + path.sep))
+      .filter((file) => file.startsWith(path.join(SRC_ROOT, 'components') + path.sep))
       .filter((file) => !publicClosure.has(file))
-      .map((file) => `./${path.relative(APP_ROOT, file).split(path.sep).join('/')}`)
+      .map((file) => `../${path.relative(SRC_ROOT, file).split(path.sep).join('/')}`)
       .sort();
     const declaredComponentSources = declaredSources
-      .filter((source) => source.startsWith('./components/'))
+      .filter((source) => source.startsWith('../components/'))
       .sort();
 
     expect(declaredComponentSources).toEqual(expectedComponentSources);

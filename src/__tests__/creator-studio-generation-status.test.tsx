@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { StudioGenerationStatus } from '@/app/components/CreatorStudio';
+import { StudioGenerationStatus } from '@/components/CreatorStudio';
 import type { GenerationTiming } from '@/lib/generation-timing';
 
 describe('StudioGenerationStatus', () => {

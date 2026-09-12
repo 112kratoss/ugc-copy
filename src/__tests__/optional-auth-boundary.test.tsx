@@ -25,7 +25,7 @@ vi.mock('next/headers', () => ({
   }),
 }));
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
   AuthProvider: ({
     children,
     hasResolvedInitialState = false,
@@ -47,7 +47,7 @@ describe('OptionalAuth', () => {
   });
 
   it('does not mount or verify auth for signed-out request-hinted routes', async () => {
-    const { RequestHintedOptionalAuth } = await import('@/app/components/RouteAuthBoundary');
+    const { RequestHintedOptionalAuth } = await import('@/components/RouteAuthBoundary');
 
     render(await RequestHintedOptionalAuth({
       children: (
@@ -61,7 +61,7 @@ describe('OptionalAuth', () => {
   });
 
   it('verifies hinted sessions and mounts resolved auth state', async () => {
-    const { RequestHintedOptionalAuth } = await import('@/app/components/RouteAuthBoundary');
+    const { RequestHintedOptionalAuth } = await import('@/components/RouteAuthBoundary');
     hasAuthHint = true;
     getServerAuthStateMock.mockResolvedValue({ session: null, credits: null });
 
@@ -74,7 +74,7 @@ describe('OptionalAuth', () => {
   });
 
   it('keeps the generic optional boundary client-resolved for cacheable routes', async () => {
-    const { OptionalAuth } = await import('@/app/components/RouteAuthBoundary');
+    const { OptionalAuth } = await import('@/components/RouteAuthBoundary');
 
     render(
       <OptionalAuth>

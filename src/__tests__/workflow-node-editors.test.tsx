@@ -20,7 +20,7 @@ const { requestPromptEnhancementMock } = vi.hoisted(() => ({
   requestPromptEnhancementMock: vi.fn(),
 }));
 
-vi.mock('@/app/components/enhancePromptClient', () => {
+vi.mock('@/components/enhancePromptClient', () => {
   class PromptEnhancementError extends Error {
     remainingCredits?: number;
 

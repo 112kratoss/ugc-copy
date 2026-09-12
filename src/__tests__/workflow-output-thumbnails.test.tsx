@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WorkflowOutputThumbnail, WorkflowOutputThumbnails, useWorkflowOutputGenerationId } from '@/app/create-workflow/WorkflowOutputThumbnails';
 import { createStarterGraph, type WorkflowCanvasNode } from '@/lib/workflow-canvas';
 
-vi.mock('@/app/components/AuthProvider', () => ({ useAuth: () => ({ session: { access_token: 'fixture' } }) }));
+vi.mock('@/components/AuthProvider', () => ({ useAuth: () => ({ session: { access_token: 'fixture' } }) }));
 const makeNodes = (count: number) => Array.from({ length: count }, (_, index) => {
   const node = structuredClone(createStarterGraph().nodes.find((entry) => entry.type === 'video-generate')!);
   node.id = `node-${index}`;

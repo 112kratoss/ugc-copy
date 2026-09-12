@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 import '@/app/non-public-utilities.css';
 
 import { createNoIndexMetadata } from '@/lib/seo';
-import { RequireAuth } from '@/app/components/RouteAuthBoundary';
+import { RequireAuth } from '@/components/RouteAuthBoundary';
 
 export const metadata: Metadata = createNoIndexMetadata(
     'Your unlocks',

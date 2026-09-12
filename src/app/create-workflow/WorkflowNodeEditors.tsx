@@ -2,9 +2,9 @@
 
 import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
 
-import RecoverableMediaAudio from '@/app/components/RecoverableMediaAudio';
+import RecoverableMediaAudio from '@/components/RecoverableMediaAudio';
 
-import EnhancePromptButton from '@/app/components/EnhancePromptButton';
+import EnhancePromptButton from '@/components/EnhancePromptButton';
 import Image from 'next/image';
 import { AlertCircle, Image as ImageIcon, Loader2, Sparkles, Trash2, Upload, Video, Volume2, X } from 'lucide-react';
 import { useRef, useState, type ReactNode } from 'react';
@@ -12,14 +12,14 @@ import { supabase } from '@/lib/supabase';
 import {
   PromptEnhancementError,
   requestPromptEnhancement,
-} from '@/app/components/enhancePromptClient';
+} from '@/components/enhancePromptClient';
 import {
   getMentionQueryAtCaret,
   insertHandleIntoPrompt,
   isValidElementHandle,
 } from '@/lib/image-elements';
 import { getActiveRegistryModels } from '@/lib/generation-model-client';
-import RecoverableMediaVideo from '@/app/components/RecoverableMediaVideo';
+import RecoverableMediaVideo from '@/components/RecoverableMediaVideo';
 import { getDisplayMediaUrl } from '@/lib/media-urls';
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS, getImageResolutionOptions, getVideoDurationRange, getVideoElementSupport, supportsImageResolutionControl } from '@/lib/client-generation-models';
 import type { EnhancerContext } from '@/lib/prompt-enhancer';

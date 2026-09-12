@@ -1,4 +1,4 @@
-import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+import InlineMediaVideo from '@/components/InlineMediaVideo';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { ArrowLeft, ArrowRight, CheckCircle2, Clock3, Expand, Loader2, RefreshCw, Sparkles, X } from 'lucide-react';
@@ -14,7 +14,7 @@ import {
   SectionHeader,
   Surface,
   Text,
-} from '@/app/components/DesignSystem';
+} from '@/components/DesignSystem';
 import {
   CREATOR_TOOLS,
   type CreatorToolAccent,

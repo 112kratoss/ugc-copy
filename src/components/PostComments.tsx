@@ -4,8 +4,8 @@ import { Flag, Loader2, MessageSquare, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import PostCommentAvatar from '@/app/components/PostCommentAvatar';
-import { useAuth } from '@/app/components/AuthProvider';
+import PostCommentAvatar from '@/components/PostCommentAvatar';
+import { useAuth } from '@/components/AuthProvider';
 import {
     POST_COMMENT_MAX_LENGTH,
     adjustReplyCount,

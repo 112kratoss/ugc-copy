@@ -34,27 +34,27 @@ vi.mock('next/dynamic', () => ({
   },
 }));
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
     session: { access_token: 'profile-token', user: { id: 'owner-1' } },
     user: { id: 'owner-1' },
   }),
 }));
 
-vi.mock('@/app/components/HoverVideo', () => ({
+vi.mock('@/components/HoverVideo', () => ({
   HoverVideo: ({ src, poster }: { src: string; poster?: string | null }) => (
     <video data-testid="profile-video" data-src={src} poster={poster ?? undefined} />
   ),
 }));
 
-vi.mock('@/app/components/OptimizedPreviewImage', () => ({
+vi.mock('@/components/OptimizedPreviewImage', () => ({
   OptimizedPreviewImage: ({ previewSrc, alt }: { previewSrc: string; alt: string }) => (
     // eslint-disable-next-line @next/next/no-img-element
     <img src={previewSrc} alt={alt} />
   ),
 }));
 
-vi.mock('@/app/components/MediaDetailsPreviewModal', () => ({
+vi.mock('@/components/MediaDetailsPreviewModal', () => ({
   default: ({ isOpen, title, prompt }: { isOpen: boolean; title: string; prompt?: string }) => isOpen ? (
     <div role="dialog" aria-label={`${title} creation preview`}>
       <span>{title}</span>

@@ -17,7 +17,7 @@ vi.mock('next/link', () => ({
     ),
 }));
 
-vi.mock('@/app/components/navigation-progress-state', () => ({
+vi.mock('@/components/navigation-progress-state', () => ({
     hasNavigatedInThisDocument: () => navigatedInThisDocument,
 }));
 

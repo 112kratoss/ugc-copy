@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import RecoverableMediaVideo from '@/app/components/RecoverableMediaVideo';
+import RecoverableMediaVideo from '@/components/RecoverableMediaVideo';
 afterEach(() => vi.useRealTimers());
 it('renews only after an explicit retry and loads paused', async () => {
  const resolveRetry = vi.fn(async () => ({ url: '/fresh.mp4', poster: '/fresh.webp' }));

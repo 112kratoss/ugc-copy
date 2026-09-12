@@ -1,4 +1,4 @@
-import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
+import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
 import { getUserInitials } from '@/lib/profile';
 
 /**

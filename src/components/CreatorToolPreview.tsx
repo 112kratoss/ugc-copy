@@ -1,7 +1,7 @@
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
-import { HoverVideo } from '@/app/components/HoverVideo';
-import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
+import { HoverVideo } from '@/components/HoverVideo';
+import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
 
 function getCoverMedia(item: ShowcaseFeedItem) {
   return item.mediaItems?.reduce(

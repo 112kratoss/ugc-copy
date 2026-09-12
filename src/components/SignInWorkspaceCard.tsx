@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { ArrowRight, Sparkles } from 'lucide-react';
 
-import { Button, Kicker, Text } from '@/app/components/DesignSystem';
+import { Button, Kicker, Text } from '@/components/DesignSystem';
 
 /**
  * The signed-out counterpart to the dashboard's WorkspaceCard: it holds the

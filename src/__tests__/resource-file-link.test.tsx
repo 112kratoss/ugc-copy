@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import ResourceFileLink from '@/app/components/ResourceFileLink';
+import ResourceFileLink from '@/components/ResourceFileLink';
 let tab: { opener: unknown; closed: boolean; close: ReturnType<typeof vi.fn>; location: { replace: ReturnType<typeof vi.fn> } };
 beforeEach(() => {
   tab = { opener: window, closed: false, close: vi.fn(), location: { replace: vi.fn() } };

@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import InlineMediaAudio from '@/app/components/InlineMediaAudio';
-import InlineMediaVideo from '@/app/components/InlineMediaVideo';
+import InlineMediaAudio from '@/components/InlineMediaAudio';
+import InlineMediaVideo from '@/components/InlineMediaVideo';
 
 let observers: IntersectionObserverCallback[];
 

@@ -5,9 +5,9 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, LoaderCircle, MessageCircle, RefreshCcw, Sparkles } from 'lucide-react';
 
-import { CreatorSearchResult } from '@/app/components/search/CreatorSearchResult';
-import { SearchField } from '@/app/components/search/SearchField';
-import { SearchStateBlock } from '@/app/components/search/SearchStateBlock';
+import { CreatorSearchResult } from '@/components/search/CreatorSearchResult';
+import { SearchField } from '@/components/search/SearchField';
+import { SearchStateBlock } from '@/components/search/SearchStateBlock';
 import {
   PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH,
   PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH,

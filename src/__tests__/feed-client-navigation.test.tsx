@@ -8,7 +8,7 @@ const routerPush = vi.fn();
 const routerPrefetch = vi.fn();
 const publishNavigationStartMock = vi.fn();
 
-vi.mock('@/app/components/AuthProvider', () => ({
+vi.mock('@/components/AuthProvider', () => ({
     useAuth: () => ({ session: null, user: null }),
 }));
 
@@ -16,7 +16,7 @@ vi.mock('next/navigation', () => ({
     useRouter: () => ({ push: routerPush, prefetch: routerPrefetch }),
 }));
 
-vi.mock('@/app/components/navigation-progress-state', () => ({
+vi.mock('@/components/navigation-progress-state', () => ({
     publishNavigationStart: () => publishNavigationStartMock(),
 }));
 
