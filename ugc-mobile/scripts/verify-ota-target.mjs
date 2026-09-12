@@ -109,6 +109,7 @@ function main() {
       matches: actual === target.fingerprint,
       shippedAs: `${target.appVersion} (${target.buildNumber})`,
       tracks: target.tracks ?? [],
+      setAside: target.setAside ?? [],
     };
   });
 
@@ -129,6 +130,14 @@ function main() {
   if (failed.length === 0) {
     process.stdout.write('\nSafe to publish: every fingerprint matches a shipped build.\n');
     return;
+  }
+
+  for (const result of failed.filter((entry) => entry.setAside.length > 0)) {
+    process.stderr.write(
+      `\n${result.platform}: its binary was built without ${result.setAside.join(', ')}, which this tree`
+      + ' carries, so a mismatch here is expected. scripts/publish-ota.mjs sets those files aside'
+      + ' in a throwaway tree before it fingerprints and publishes.\n',
+    );
   }
 
   process.stderr.write(
