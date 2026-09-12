@@ -1,36 +1,55 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Magicbooklet
 
-## Getting Started
+An AI UGC creation platform: image, video, and motion generation (provider: Kie.ai), a public showcase feed with a social layer, unified search, a creator marketplace with paid resource bundles, templates, and a node-based workflow builder. Live at [magicbooklet.com](https://magicbooklet.com).
 
-First, run the development server:
+This repository holds all three parts of the product:
+
+| Part | Where | Runs on |
+|---|---|---|
+| Web app + API | `src/` (Next.js 16 App Router, React 19, Tailwind v4) | Vercel, region `bom1` |
+| Backend of record | `supabase/` (Postgres 17, Auth, Storage, RLS, RPCs, one edge function) | Supabase |
+| Mobile app | `ugc-mobile/` (Expo SDK 55 + expo-router; its own npm workspace) | App Store, Google Play, OTA via expo-updates |
+
+## Start here
+
+- [AGENTS.md](AGENTS.md): every command, the architecture, conventions, and the cautions that matter (also read by coding agents).
+- [docs/README.md](docs/README.md): index of the operational runbooks and reference material.
+- [docs/local-development.md](docs/local-development.md): the local Supabase stack and dev server.
+
+## Quick start (web)
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+nvm use            # Node 24, from .nvmrc
+npm ci
+cp .env.example .env.local   # then fill in the values you have
+npm run dev        # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Gates that CI runs on every pull request, in the same order:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm test && npm run lint && npm run typecheck && npm run typecheck:scripts && npm run typecheck:tests
+npm run build && npm run build:verify
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Mobile lives in `ugc-mobile/` with its own `npm ci`, `npm test`, and `npm run typecheck`; see its README.
 
-## Learn More
+## Layout
 
-To learn more about Next.js, take a look at the following resources:
+```
+.github/workflows/   quality, production release, mobile store release, watchdogs
+config/              catalog release manifests, performance budgets, Lighthouse config
+content/blog/        blog posts (markdown)
+contracts/           versioned web <-> mobile JSON contracts
+docs/                runbooks at the root; design/, audits/, plans/, research/, model-api-references/
+public/              static assets
+scripts/             backfills, ops CLIs, certification harness, build checks
+src/app/             routes (thin route.ts shells) and route-local UI
+src/lib/             route adapters, services, and domain modules (flat, prefix-organised)
+src/__tests__/       all web unit and integration tests
+supabase/            migrations, pgTAP tests, the kie-webhook edge function
+tests/e2e/           Playwright smoke tests
+ugc-mobile/          the Expo app
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Production deploys are owned by the release workflow after `main` passes Quality; nothing deploys by hand. Details: [docs/production-deployment-runbook.md](docs/production-deployment-runbook.md).
