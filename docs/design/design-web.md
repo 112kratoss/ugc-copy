@@ -2,7 +2,7 @@
 
 Audience: AI agents and engineers working in the Next.js web app.
 
-Read this before editing `src/app/**` UI. The long research source is [docs/ui-consistency-research-2026-06-14.md](./docs/ui-consistency-research-2026-06-14.md).
+Read this before editing `src/app/**` UI. The long research source is [docs/ui-consistency-research-2026-06-14.md](./ui-consistency-research-2026-06-14.md).
 
 ## Product North Star
 

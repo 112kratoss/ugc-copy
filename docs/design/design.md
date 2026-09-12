@@ -4,7 +4,7 @@ Use this file as the first stop for UI and UX work. Open the platform guide that
 
 - [Web UI/UX guide](./design-web.md): Next.js, Tailwind, Geist, Lucide, landing pages, creator workflows, feed/showcase, modals, and web primitives.
 - [Mobile UI/UX guide](./design-mobile.md): Expo, React Native, `appTheme`, `components/ui.tsx`, safe areas, tab surfaces, mobile feeds, viewers, and touch controls.
-- [Research source](./docs/ui-consistency-research-2026-06-14.md): Pinterest Gestalt, Material 3, Apple HIG, Shopify Polaris, Atlassian, and the June 2026 Magicbooklet audit.
+- [Research source](./ui-consistency-research-2026-06-14.md): Pinterest Gestalt, Material 3, Apple HIG, Shopify Polaris, Atlassian, and the June 2026 Magicbooklet audit.
 
 Shared north star: Magicbooklet should feel like a premium dark AI creator studio. The product is media-led, fast to output, and consistent through shared tokens, Lucide icons, strict spacing, stable type roles, and reusable primitives.
 

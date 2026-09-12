@@ -2,7 +2,7 @@
 
 Audience: designers, engineers, and AI agents working in the Expo/React Native app at `ugc-mobile/**`.
 
-Read this before editing mobile UI. This file is the mobile source of truth for typography, color, spacing, icons, layout, components, and UX structure. The older research source is [docs/ui-consistency-research-2026-06-14.md](./docs/ui-consistency-research-2026-06-14.md).
+Read this before editing mobile UI. This file is the mobile source of truth for typography, color, spacing, icons, layout, components, and UX structure. The older research source is [docs/ui-consistency-research-2026-06-14.md](./ui-consistency-research-2026-06-14.md).
 
 ## Purpose
 

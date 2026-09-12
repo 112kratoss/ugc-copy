@@ -5,7 +5,7 @@ Living tracker for auditing **every surface of the mobile app** (`ugc-mobile/`) 
 the fixes — visuals, layout, text, motion, haptics, transitions, and states. Update the status board and
 finding log in the same commit as the fixes (same convention as `scaling-audit.md`).
 
-Companion lenses when fixing (not auditing): the `emil-design-eng` skill, `design-mobile.md`
+Companion lenses when fixing (not auditing): the `emil-design-eng` skill, `docs/design/design-mobile.md`
 (tokens/primitives only — page patterns are stale), and the token system in `ugc-mobile/lib/theme.ts`.
 
 ## How to read the HIG (verified mechanism)
@@ -83,7 +83,7 @@ re-read the codebase broadly or ask for past-chat context.
 - **Kickoff prompt** — paste this to start every session:
   > Continue the HIG alignment program: enter the worktree at
   > "/Users/athuls/UGC copy/ugc-app/.claude/worktrees/hig-alignment" (EnterWorktree by path), read
-  > docs/hig-alignment-2026-08-27.md, and execute the next `todo` unit(s) on the status board
+  > docs/archive/hig-alignment-2026-08-27.md, and execute the next `todo` unit(s) on the status board
   > following the doc's method and session rules. Verify on both the iOS simulator and the Android
   > emulator before marking anything done.
 - **Token discipline**: no subagent fan-outs (they multiply context); fetch only the unit's chapters;
