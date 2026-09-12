@@ -1,6 +1,6 @@
 # Prompt-Engineering Research: Google-Family Models on Kie.ai (2026-08-24)
 
-App-side grounding: confirmed against config/generation-model-catalog/releases/2026-08-16-*.json; Kie specs against model_api_references/ (note: veo-3-1.md is stale — live docs supersede on duration/resolution/lite).
+App-side grounding: confirmed against config/generation-model-catalog/releases/2026-08-16-*.json; Kie specs against docs/model-api-references/ (note: veo-3-1.md is stale — live docs supersede on duration/resolution/lite).
 
 Identity mapping (confirmed via Google docs): **nano-banana-2-lite** = gemini-3.1-flash-lite-image, **nano-banana-2** = gemini-3.1-flash-image, **nano-banana-pro** = gemini-3-pro-image, **gemini-omni-video** = gemini-omni-flash-preview, **veo-3.1** variants = veo-3.1-{generate|fast-generate|lite-generate}-preview.
 
@@ -183,7 +183,7 @@ in [location, time]. [Composition: framing, angle, lens, f-stop]. [Lighting + gr
 - "Creative director" controls: "low-angle shot with shallow DOF (f/1.8)", camera hardware ("shot on Fujifilm", "disposable camera flash aesthetic"), film stock/grade, per-line typography ("'GLOW' in flowing Brush Script... '10% OFF' in heavy blocky Impact"), translation of in-image text.
 - 65,536 input tokens; thinking always on.
 
-**Kie endpoint facts** (model_api_references/nano-banana-pro.md, kie.ai/nano-banana)
+**Kie endpoint facts** (docs/model-api-references/nano-banana-pro.md, kie.ai/nano-banana)
 - prompt max 20,000 chars; image_input **≤8 on Kie** (Google takes 14); aspect_ratio 11 options; resolution 1K/2K/4K; output png/jpg. **No google_search on Kie's Pro endpoint** despite model support — Kie surface limitation.
 
 **Community consensus & tricks** (imagine.art, dev.to/googleai, techradar)

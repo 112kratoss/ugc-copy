@@ -4,7 +4,7 @@
  * One entry per prompt grammar. Content is sourced from the 2026-08-24 deep
  * research pass (official prompting guides first, Kie endpoint specs second,
  * labeled community consensus third) — see
- * docs/prompt-enhancer-playbooks-2026-08-24.md for the per-claim sources.
+ * docs/research/prompt-enhancer-playbooks-2026-08-24.md for the per-claim sources.
  *
  * Registry invariants (pinned by prompt-enhancer-playbook-contract.test.ts):
  * - every live model id resolves to a playbook, directly or via MODEL_ALIASES;

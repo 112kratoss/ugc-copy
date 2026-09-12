@@ -104,7 +104,7 @@ subjects) plus a live test generation — tracked as follow-up, not guessed at h
 > **Resolved 2026-08-24:** the live test generation succeeded
 > (kling-3.0-omni/text-to-video, 2-image subject, task
 > 7da3646b6a8362b9aa783c2176d0c71e) and `elements` shipped end to end — see
-> `docs/prompt-enhancer-playbooks-2026-08-24.md` and catalog release
+> `docs/research/prompt-enhancer-playbooks-2026-08-24.md` and catalog release
 > `2026-08-24-kling-o3-subjects.json`.
 
 ### `minimax-h3` → `minimax-h3/text-to-video` · `/image-to-video` · `/reference-to-video`

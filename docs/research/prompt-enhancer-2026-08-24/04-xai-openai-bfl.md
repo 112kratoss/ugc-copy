@@ -1,6 +1,6 @@
 # Prompt-Enhancement Research: xAI / OpenAI / BFL models (Kie.ai endpoints)
 
-Researched 2026-08-24. App-side facts verified against models.ts, generation-services.ts, model_api_references/; provider facts against docs.kie.ai, docs.x.ai, developers.openai.com, docs.bfl.ai. Note: the app's enhancer currently aliases `grok-imagine-image-2` to the `grok-imagine-image` profile (prompt-enhancer.ts:329) — findings below say these two want **different** prompt styles.
+Researched 2026-08-24. App-side facts verified against models.ts, generation-services.ts, docs/model-api-references/; provider facts against docs.kie.ai, docs.x.ai, developers.openai.com, docs.bfl.ai. Note: the app's enhancer currently aliases `grok-imagine-image-2` to the `grok-imagine-image` profile (prompt-enhancer.ts:329) — findings below say these two want **different** prompt styles.
 
 ---
 
@@ -144,7 +144,7 @@ Audio: <SFX/ambience or "no music">.
 - Reads "descriptive natural language, not keyword spam"; write ads "like a creative brief"; photorealism via "candid photography language" + texture/imperfection; camera specs are "high-level look" cues.
 - No negative prompt parameter — constraints in prose ("no watermark, no extra text"). Native prompt cap **32,000 chars**.
 
-**Kie endpoint facts** (model_api_references/gpt-image-2-*.md, verified vs docs.kie.ai)
+**Kie endpoint facts** (docs/model-api-references/gpt-image-2-*.md, verified vs docs.kie.ai)
 - `prompt` required, **max 20,000 chars** (Kie cap); `aspect_ratio` ∈ auto|1:1|5:4|9:16|21:9|16:9|4:3|3:2|4:5|3:4|2:3 (default auto); `resolution` 1K|2K|4K — **auto ratio → 1K only; 1:1 → no 4K**. I2I: `input_urls` (multi-file, 30MB; app allows 16). No quality/moderation/background params via Kie. 6/10/16 credits for 1K/2K/4K.
 
 **Community consensus & tricks** (fal.ai/learn/tools/prompting-gpt-image-2, community.openai.com issue collection)

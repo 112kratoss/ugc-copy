@@ -1,6 +1,6 @@
 # Media delivery audit — second pass, 6 September 2026
 
-Scope and remaining surface coverage: [whole-app plan](media-delivery-plan.md).
+Scope and remaining surface coverage: [whole-app plan](../plans/media-delivery-plan.md).
 Earlier integrity repairs: [first pass](media-delivery-audit-2026-09-05.md).
 Reviewed baseline: `85c137ea49267584932d3fcdcdd700113626f142`.
 
@@ -2145,7 +2145,7 @@ repeated: `release/media2-ios-51` (`23347c1`) and `release/media2-ios-47`
 in `components/ui.tsx` was resolved by keeping the backport's React Native
 `Image` for `CreatorAvatar` and taking the viewport scroll view import. Each
 branch passes typecheck and its suite (189 files / 1,818 tests; 188 files /
-1,809 tests) and `scripts/verify-ota-target.mjs` on a fresh `npm ci`: Android 70
+1,809 tests) and `ugc-mobile/scripts/verify-ota-target.mjs` on a fresh `npm ci`: Android 70
 `17fa2c36` and iOS 51 `e2aa6c79` on the first, Android 65 `b32edbfe` and iOS 47
 `27175069` on the second, Android 71 `db146ca3` on main `0cf34e7`.
 

@@ -3,7 +3,7 @@
 Read from the live OpenAPI bodies under `https://docs.kie.ai/market/<vendor>/<model>.md`
 (61 pages parsed) and the `pricingDesc` blocks on `https://kie.ai/<slug>` (30 pages), with
 `curl`/`fetch` under a browser User-Agent. Credits are Kie credits 1:1 (1 credit = $0.005).
-Full comparison against the catalog: `docs/model-reference-inputs-audit-2026-09-04.md`.
+Full comparison against the catalog: `docs/audits/model-reference-inputs-audit-2026-09-04.md`.
 Shipped as catalog release
 `config/generation-model-catalog/releases/2026-09-04-reference-audit.json` plus the code
 changes on branch `fix/reference-input-audit`.

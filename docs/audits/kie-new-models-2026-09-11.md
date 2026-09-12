@@ -1,7 +1,7 @@
 # Kie.ai — models we can configure next (2026-09-11)
 
 A pass over everything Kie has listed since the 2026-08-15 inventory
-(`docs/kie-missing-models-2026-08-15.md`), checked against our catalog on the release
+(`docs/audits/kie-missing-models-2026-08-15.md`), checked against our catalog on the release
 production runs (`reference-audit-20260904`, 36 models). Kie's sitemap now carries **104
 market slugs** (98 on 2026-08-15).
 
@@ -10,7 +10,7 @@ market slugs** (98 on 2026-08-15).
 - `https://kie.ai/sitemaps/models-0.xml` — every market slug, and its `<lastmod>` is the listing
   date, so sorting on it answers "what is new".
 - `https://kie.ai/<slug>` — the market page, read with a browser User-Agent (Cloudflare 403s
-  anything else). Prices attributed per `model_api_references/README.md` rule 9: each
+  anything else). Prices attributed per `docs/model-api-references/README.md` rule 9: each
   `pricingDesc` belongs to the `model` that follows it.
 - `https://docs.kie.ai/market/<path>.md` — OpenAPI bodies for the `model` enum and inputs.
 - `https://kie.ai/pricing` renders client-side, so `curl` gets no rows; a browser shows the table
@@ -35,7 +35,7 @@ market slugs** (98 on 2026-08-15).
 - **Grok 1.5**: the spec accepts 1080p but no 1080p price is published — expose 480p / 720p only.
 - **Gemini Omni 1.1 Flash**: `audio_ids` and `character_ids` come from the `gemini-omni-audio` and
   `gemini-omni-character` helper endpoints, which carry no published price. Leave both inputs off.
-- **PixVerse V6's 2026-08-15 exclusion** (`model_api_references/dropin-models-2026-08-15.md`) is
+- **PixVerse V6's 2026-08-15 exclusion** (`docs/model-api-references/dropin-models-2026-08-15.md`) is
   resolved on both counts. The "conflicting tiers" were per-mode prices — the 4.5 / 16.2 block sits
   inside the `reference-to-video` object on the market page — and PixVerse now appears on
   kie.ai/pricing. `extend` needs a prior video, so leave it out.
@@ -44,7 +44,7 @@ market slugs** (98 on 2026-08-15).
 
 | Model | Provider id | Credits | Needs |
 | --- | --- | --- | --- |
-| OmniHuman 1.5 (06-15) | `omnihuman-1-5` | 27 per s | Image + audio input, audio < 60 s — the avatar taxonomy decision in `docs/kie-model-catalog-audit-2026-08-15.md` |
+| OmniHuman 1.5 (06-15) | `omnihuman-1-5` | 27 per s | Image + audio input, audio < 60 s — the avatar taxonomy decision in `docs/audits/kie-model-catalog-audit-2026-08-15.md` |
 | Volcengine lip sync (06-15) | `volcengine/video-to-video-lip-sync` | 8 per s | Video + audio input |
 | Gemini 3.1 Flash TTS / 2.5 Pro TTS (07-17) | `google/gemini-3-1-flash-tts`, `google/gemini-2-5-pro-tts` | 140 input / 2,800 audio-output per 1M tokens | Token billing; our ElevenLabs voices bill per character |
 

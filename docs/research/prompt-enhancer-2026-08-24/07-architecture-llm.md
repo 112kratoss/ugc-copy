@@ -11,7 +11,7 @@ Latency figures = OpenRouter P50s. Kie facts from docs.kie.ai + llms.txt + live 
 | Grok | 4.3, 4.5, 4.6 | api.kie.ai/grok/v1/responses | Yes | low→xhigh; JSON-schema documented |
 | Absent | No DeepSeek/Qwen/Llama; Kimi K3 "Coming Soon" | | | |
 
-- Gemini 3 Flash spec example includes `response_format: {type: json_schema}` (also in repo's model_api_references/gemini-3-flash.md) — JSON-schema output passes through though undocumented in schema block.
+- Gemini 3 Flash spec example includes `response_format: {type: json_schema}` (also in repo's docs/model-api-references/gemini-3-flash.md) — JSON-schema output passes through though undocumented in schema block.
 - Kie LLM pricing: NO public per-token table; metered in credits per call (`credits_consumed`, e.g. 0.48), 1 credit ≈ $0.005; Kie claims "30–50% lower than official"; budget at official rates. Platform: 20 req/10s, 100+ concurrent.
 - **Every Gemini Flash tier through 3.7 is a drop-in URL swap from today's integration. GPT (Responses) or Claude (Messages) = second client.**
 

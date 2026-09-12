@@ -40,7 +40,7 @@ App code reaches Fresco's network path in exactly one place: the RN core `Image`
 2. **The device is the gate.** A green build proves nothing here; a missing rule fails silently at runtime in whichever module is unlucky. Both devices (Pixel_9a AVD API 36 and the Galaxy S24 Ultra) run the full smoke in §3 before anything is uploaded.
 3. **Read the outputs before installing.** AGP writes `mapping.txt`, `seeds.txt`, `usage.txt` and `configuration.txt` to `android/app/build/outputs/mapping/release/`. §3 says what to check in them.
 4. **Pin every step in the test.** Each phase flips specific assertions in `__tests__/android-config.test.ts`; the test must fail before the change and pass after. Drift is deliberate or it does not happen.
-5. **Android-only store builds.** `mobile-store-release.yml` takes `platform: android`; do not churn iOS review for R8 work. Each binary moves the Android fingerprint: `ota-targets.json` changes in the same commit that ships it (`scripts/verify-ota-target.mjs` enforces this).
+5. **Android-only store builds.** `mobile-store-release.yml` takes `platform: android`; do not churn iOS review for R8 work. Each binary moves the Android fingerprint: `ota-targets.json` changes in the same commit that ships it (`ugc-mobile/scripts/verify-ota-target.mjs` enforces this).
 6. **Alpha for numbers, production at milestones.** Every phase build goes to the closed alpha so Play scores the bundle (bundle explorer → Details); production promotions happen after phase 3 and after phase 4, each as a **staged rollout** (20 % → 100 % after 48 h with vitals clean). R8 breakage is native: an OTA cannot fix it, so the staged rollout is the only safety net once a build is public.
 7. **One phase per branch and conversation**, with results recorded in §9 of this document in the same PR.
 
@@ -154,7 +154,7 @@ Not schedulable by us; prepare for it: phase 1 done (or the explicit `-dontoptim
 
 | Phase | Change surface | Builds | Gate | Estimate |
 | --- | --- | --- | --- | --- |
-| 0 | `scripts/inspect-r8-output.mjs`, baseline numbers | 1 local | script output matches Play's 80 % within a few points | ½ day |
+| 0 | `ugc-mobile/scripts/inspect-r8-output.mjs`, baseline numbers | 1 local | script output matches Play's 80 % within a few points | ½ day |
 | 1 | plugin swap removed, test | 1 local + alpha | smoke ×2 devices, optimization % on Play | 1 day |
 | 2 | one property, test | 1 local + alpha | smoke ×2 | 1 day |
 | 3a/3b | two properties, `keep.xml` if needed, test | 2 local + alpha | smoke incl. resource rows; **production, staged** | 1 day |

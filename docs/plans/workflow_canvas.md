@@ -3,7 +3,7 @@
 This document is the handoff note for the node-based workflow canvas feature. Use it as the starting context in future conversations.
 
 User-facing usage guide:
-- `future_plans/workflow_canvas_user_guide.md`
+- `docs/plans/workflow_canvas_user_guide.md`
 
 ## Product goal
 
@@ -141,4 +141,4 @@ Current limitation:
 
 Use this note as context:
 
-“Please read `future_plans/workflow_canvas.md` first. I want to continue the workflow canvas feature. Preserve the existing node graph architecture, review current gaps vs the intended Freepik-style experience, and help implement the next missing piece.”
+“Please read `docs/plans/workflow_canvas.md` first. I want to continue the workflow canvas feature. Preserve the existing node graph architecture, review current gaps vs the intended Freepik-style experience, and help implement the next missing piece.”

@@ -161,4 +161,4 @@ When adding a new model, document and update the cost in one pass:
 2. Mirror the same formula in the page estimate.
 3. Update `src/lib/models.ts`.
 4. Update tests.
-5. Update `future_plans/model_integration.md` and this file.
+5. Update `docs/plans/model_integration.md` and this file.

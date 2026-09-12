@@ -65,7 +65,7 @@ function writeOutputs(files: Record<string, string>): string {
 }
 
 /**
- * The plan for widening the R8 shape (docs/android-app-optimization-plan-2026-09-05.md)
+ * The plan for widening the R8 shape (docs/plans/android-app-optimization-plan-2026-09-05.md)
  * reads AGP's R8 outputs before any device launch. These pin the parsers to the
  * file formats and the report to the two records that failed in build 62.
  */

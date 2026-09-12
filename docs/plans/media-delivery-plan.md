@@ -2,11 +2,11 @@
 
 Created: 2026-09-05. Scope: web, Android, iOS, and their shared backend.
 Evidence and repairs from the first pass:
-[media delivery audit](media-delivery-audit-2026-09-05.md).
+[media delivery audit](../audits/media-delivery-audit-2026-09-05.md).
 Second-pass findings and video integrity results:
-[6 September audit](media-delivery-audit-2026-09-06.md).
+[6 September audit](../audits/media-delivery-audit-2026-09-06.md).
 The current finding set, its egress attribution and the remaining priority
-order: [8 September audit](media-delivery-audit-2026-09-08-final.md).
+order: [8 September audit](../audits/media-delivery-audit-2026-09-08-final.md).
 
 ## September 6 checkpoint and release status
 
@@ -276,7 +276,7 @@ physical-device memory/transfer budgets and other renderer families remain open.
 These are development-client correctness checks, not store-binary performance
 certification. All 1,812 mobile tests, mobile typecheck and both production exports
 with bundled-client environment verification pass. No new migration or deployment.
-Details and evidence: `docs/media-delivery-audit-2026-09-06.md`.
+Details and evidence: `docs/audits/media-delivery-audit-2026-09-06.md`.
 
 
 ## Viewer expiry continuity and remaining native players (2026-09-06)
@@ -301,7 +301,7 @@ audio opens externally after resolving a fresh URL; there is no separate native
 audio player. Feed buffering still follows its existing 8-second preference and
 one-active-preview policy; this is source evidence, not measured memory/bytes.
 Web composer, marketplace/resource players, carousel/studio and audio players
-remain explicit follow-up surfaces. Evidence: `docs/media-delivery-audit-2026-09-06.md`.
+remain explicit follow-up surfaces. Evidence: `docs/audits/media-delivery-audit-2026-09-06.md`.
 
 
 ## Web audio and controlled video ownership (2026-09-06)
@@ -325,7 +325,7 @@ CreatorStudio upload/modal, HoverVideo and ShowcaseMediaCarousel remain separate
 playback policies requiring runtime checks. Resource/audio expired-source and
 reconnect recovery, full unlock/share/import journeys, and physical-device
 performance are still open. This checkpoint requires no new migration and is not
-deployed. Details and validation: docs/media-delivery-audit-2026-09-06.md.
+deployed. Details and validation: docs/audits/media-delivery-audit-2026-09-06.md.
 
 
 ## Studio, hover/carousel and resource recovery (2026-09-07)
@@ -352,7 +352,7 @@ Playwright focus overrides recorded real hidden/visible events: Studio, carousel
 and resource audio pause and remain paused on return; hover detaches while hidden.
 These are local component/browser checks, not full purchase/reel journeys, physical
 mobile browser certification, or production-duration session measurements.
-No new migration or deployment. Evidence: docs/media-delivery-audit-2026-09-06.md,
+No new migration or deployment. Evidence: docs/audits/media-delivery-audit-2026-09-06.md,
 “Studio, hover/carousel and resource recovery (2026-09-07)”.
 
 
@@ -624,7 +624,7 @@ points at.
 
 Close by confirming the anonymous home payload carries no `/object/sign/` URL
 and every public video has a `.feed.` rendition. Evidence and the surrounding
-finding set: [8 September audit](media-delivery-audit-2026-09-08-final.md).
+finding set: [8 September audit](../audits/media-delivery-audit-2026-09-08-final.md).
 
 ## Repair attempts are reserved on claim (2026-09-09)
 
@@ -650,7 +650,7 @@ finished, so the unavailable marker continues to need a second, separate run
 rather than firing on a first 404.
 
 No behaviour changes for a healthy row: three attempts before and after.
-Evidence: F4 of the [8 September audit](media-delivery-audit-2026-09-08-final.md).
+Evidence: F4 of the [8 September audit](../audits/media-delivery-audit-2026-09-08-final.md).
 
 ## The integrity audit can report clean (2026-09-09)
 
@@ -677,7 +677,7 @@ Whether to run this on a schedule is a standing cost decision rather than a
 code one — each pass downloads every preview it checks — so it is registered as
 `npm run audit:media-previews` and left to be called at a cadence the owner
 picks. `--sample=25` is the cheap form. Evidence: F7 of the
-[8 September audit](media-delivery-audit-2026-09-08-final.md).
+[8 September audit](../audits/media-delivery-audit-2026-09-08-final.md).
 
 ## The media route reuses a signature it already minted (2026-09-09)
 
@@ -702,7 +702,7 @@ it is one player asking for one object several times in a row, not a shared
 cache. The CDN fragmentation the earlier pass noted is untouched and remains
 uninteresting: a private object has one viewer, and the native disk cache
 already covers repeat opens. Evidence: F5 of the
-[8 September audit](media-delivery-audit-2026-09-08-final.md).
+[8 September audit](../audits/media-delivery-audit-2026-09-08-final.md).
 
 
 ## Profile images are normalised server-side (2026-09-09)
@@ -727,7 +727,7 @@ This is deliberately server-side. A client-side resize on mobile would need
 `expo-image-manipulator`, a native module, which moves the runtime fingerprint
 and so cannot reach any installed build over the air; doing it on the server
 fixes both platforms at once and the next store build owes nothing. Evidence:
-F6 of the [8 September audit](media-delivery-audit-2026-09-08-final.md).
+F6 of the [8 September audit](../audits/media-delivery-audit-2026-09-08-final.md).
 
 
 ## A display size between the preview and the source (2026-09-09)
@@ -765,7 +765,7 @@ pays for its cover. Private creations reach the viewer through
 `generations.preview_url`, whose write path runs through the settlement RPC and
 three status services; giving them the same treatment is the remaining half of
 F3. Evidence: F3 of the
-[8 September audit](media-delivery-audit-2026-09-08-final.md).
+[8 September audit](../audits/media-delivery-audit-2026-09-08-final.md).
 
 
 ## Private creations get the display size (2026-09-09)

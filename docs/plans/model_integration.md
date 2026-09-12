@@ -1,3 +1,5 @@
+> **Superseded.** Model definitions, controls, and pricing now live in the database catalog released via `scripts/generation-model-catalog.ts`; see `docs/generation-model-catalog-operations.md`. Kept as history of the earlier per-page registry approach.
+
 # Model Integration
 
 This document replaces the old feature-specific planning notes for image, motion, and video generation. It describes how model integration works in the codebase today.
@@ -149,7 +151,7 @@ This document replaces the old feature-specific planning notes for image, motion
 
 ## What must be updated when adding a new model today
 
-1. Add or update the provider API reference in `model_api_references/`.
+1. Add or update the provider API reference in `docs/model-api-references/`.
 2. Update the page-level UI config for the relevant feature.
 3. Update the corresponding API route to validate the new model and build the correct payload.
 4. Update cost logic in both the page and the route.

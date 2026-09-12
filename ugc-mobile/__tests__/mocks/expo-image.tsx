@@ -4,7 +4,7 @@ import React from 'react';
  * Test double for `expo-image`. The real package imports `expo-modules-core`
  * from a path vitest cannot resolve, and since the shared avatar in
  * `components/ui.tsx` moved onto expo-image (phase 5a of
- * docs/android-app-optimization-plan-2026-09-05.md) every suite that renders a
+ * docs/plans/android-app-optimization-plan-2026-09-05.md) every suite that renders a
  * UI primitive would otherwise fail to load. The component renders as a host
  * `image` element with its props intact, the shape the per-suite
  * `vi.mock('expo-image', factory)` doubles already used; those factories still

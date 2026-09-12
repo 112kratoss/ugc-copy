@@ -50,7 +50,7 @@ describe('Android native network config', () => {
     // culprit was never isolated.
     //
     // 0.1.4 (build 70) brought R8 back in the narrowest shape and shipped clean.
-    // docs/android-app-optimization-plan-2026-09-05.md widens it from there one
+    // docs/plans/android-app-optimization-plan-2026-09-05.md widens it from there one
     // switch per build, each launched on a device before the next; this pins the
     // exact shape the plan has reached, so any drift is deliberate, never
     // incidental. A green build still proves nothing here.

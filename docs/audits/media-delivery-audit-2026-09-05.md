@@ -1,7 +1,7 @@
 # Media delivery audit — 5 September 2026
 
 Ongoing scope, sequence, and coverage status:
-[whole-app media delivery plan](media-delivery-plan.md).
+[whole-app media delivery plan](../plans/media-delivery-plan.md).
 
 Scope: production media inventory and delivery, with native Android profile
 Creations/Posts inspection and a source review of shared web/mobile media paths.
@@ -164,7 +164,7 @@ The 720px previews are already small: before repair, the readable sample had
 median **27,828 bytes** and P95 **51,656 bytes**. A separate 256/384px grid
 thumbnail can reduce transfer and decode memory further, but choose the size
 from actual tile width and device pixel ratio. Coordinate with phase 5d of
-`docs/android-app-optimization-plan-2026-09-05.md`. Test fast scroll, background/
+`docs/plans/android-app-optimization-plan-2026-09-05.md`. Test fast scroll, background/
 foreground, low connectivity, cold disk cache, and decoder pressure on physical
 Android and iOS devices before attributing remaining black frames to rendering.
 

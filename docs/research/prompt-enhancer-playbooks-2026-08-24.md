@@ -1,6 +1,6 @@
 # Prompt Enhancer Playbooks — 2026-08-24 rebuild
 
-Supersedes `future_plans/prompt-enhancer-playbooks-2026-04-03.md`. Source research:
+Supersedes the 2026-04-03 playbook snapshot (removed 2026-09-12; see git history). Source research:
 `docs/research/prompt-enhancer-2026-08-24/` (seven memos: per-family official
 guidance, Kie endpoint specs, labeled community consensus, competitor teardown,
 LLM comparison, and published prompt-rewriting evals).

@@ -110,7 +110,7 @@ truth is 13 files. The emit step isn't even committed.
 > either platform for models that fit existing kinds.**
 
 Adding a model becomes:
-1. `scripts/kie-evidence` fetches spec + market price, writes `model_api_references/` entry
+1. `scripts/kie-evidence.mjs` fetches spec + market price, writes `docs/model-api-references/` entry
 2. Author one manifest entry (the entry *is* the spec: descriptor + adapterConfig +
    providerModelMap + pricingConfig + validation)
 3. `emit → validate → stage → verify → publish`
@@ -134,9 +134,9 @@ Adding a model becomes:
    Turns "13 places to remember" into one failing test that lists what you forgot. Kills 6–7.
 5. **Unify the seedance predicates** into one exported function; lint/grep-ban bare
    `startsWith('seedance-2')`. Kills traps 4–5.
-6. **Commit the evidence tooling** (`scripts/kie-evidence.ts`: sitemap → market page →
+6. **Commit the evidence tooling** (`scripts/kie-evidence.mjs`: sitemap → market page →
    docs spec, browser-UA fetch, enum extraction) and document the convention in
-   `model_api_references/README`. Shrinks trap 11–12 to a script run.
+   `docs/model-api-references/README.md`. Shrinks trap 11–12 to a script run.
 
 ### Phase 2 — one payload path (the structural fix)
 
@@ -204,7 +204,7 @@ means; may reduce to deleting the by-then-thin registries.
   scripted regeneration. Handles the `passthroughSettingKeys` strip and
   descriptor `schemaVersion` stamping the validator demands.
 - Evidence tooling committed: `scripts/kie-evidence.mjs` (`slugs` / `price` /
-  `spec`) + `model_api_references/README.md` documenting the conventions.
+  `spec`) + `docs/model-api-references/README.md` documenting the conventions.
 - Both fallthroughs closed **at compile time**: `getVideoCost` and the video
   payload ladder end in `satisfies never` + runtime throw; `getVideoInputLimits`
   is a total `Record<VideoModelId, …>` (veo-3.1's silently-defaulted values are

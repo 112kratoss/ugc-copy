@@ -5,7 +5,7 @@ coverage
 playwright-report
 test-results
 output
-model_api_references
+docs/model-api-references
 supabase/backups
 ugc-mobile
 audits

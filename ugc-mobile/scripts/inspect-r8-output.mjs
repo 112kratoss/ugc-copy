@@ -13,7 +13,7 @@
 //                      plugins/android-release.pro
 //   resources.txt      only with resource shrinking: what it removed and why it kept
 //
-// It answers the questions docs/android-app-optimization-plan-2026-09-05.md asks
+// It answers the questions docs/plans/android-app-optimization-plan-2026-09-05.md asks
 // between a build and a device launch:
 //   - the renamed share of classes, the local proxy for Play's obfuscation score
 //     (70% locally read as 80% on Play for build 70);

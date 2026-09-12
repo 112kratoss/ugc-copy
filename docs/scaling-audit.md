@@ -8,7 +8,7 @@ Status: **NOT CERTIFIED for a current MAU or sustained-RPS claim**
 
 This is the active entry point for scaling decisions. It is intentionally
 short. Detailed source evidence and acceptance criteria are in
-[`scaling-findings-2026-08-22.md`](scaling-findings-2026-08-22.md). Historical
+[`scaling-findings-2026-08-22.md`](audits/scaling-findings-2026-08-22.md). Historical
 investigation is preserved under [`archive/`](archive/), and exact-build
 capacity reports are indexed under [`scaling-certificates/`](scaling-certificates/).
 

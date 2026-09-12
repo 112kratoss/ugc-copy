@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Emulator smoke for a release APK — the device gate of
-# docs/android-app-optimization-plan-2026-09-05.md (§3), as run for every phase
+# docs/plans/android-app-optimization-plan-2026-09-05.md (§3), as run for every phase
 # on 2026-09-05. Installs the APK over whatever is on the device (adb install -r
 # keeps the app's data, so a signed-in session is exercised on the first launch),
 # then drives Home, Showcase, the viewer through an app link, the Unlocks screen

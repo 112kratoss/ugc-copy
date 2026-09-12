@@ -1,4 +1,4 @@
-# model_api_references
+# Model API references
 
 Verbatim provider evidence for every model we integrate. Each file records, with a
 capture date and source URLs, the exact `model` enum values, input field names and

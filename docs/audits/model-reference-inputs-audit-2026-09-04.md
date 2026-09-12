@@ -68,7 +68,7 @@ modelling, the September caps for Seedance 2.5 and MiniMax H3, and the pricing o
 - **Kie** (`kie.ai/grok-imagine`, blocks attributed to `grok-imagine/text-to-video` and
   `grok-imagine/image-to-video`): "480p Output: 2.4 credits / sec • 720p Output: 4.5
   credits / sec • 1080p Output: 8 credits / sec". No 1.6 or 3 appears anywhere on the page.
-- **History**: `model_api_references/grok-imagine/text-to-video` (captured 2026-04-27)
+- **History**: `docs/model-api-references/grok-imagine/text-to-video` (captured 2026-04-27)
   recorded 1.6 / 3, so this is a provider price rise, not an original mistake.
 - **Impact**: a 10 s 720p run is billed 30 credits and costs 45. Both spec pages also now
   offer `resolution: 1080p`, which we do not expose.
@@ -104,7 +104,7 @@ modelling, the September caps for Seedance 2.5 and MiniMax H3, and the pricing o
   in the page. The `image_urls` field is additionally described as "Required when elements
   are referenced in the prompt (using @element_name syntax)"; we send it only when a frame
   is attached.
-- **History**: `model_api_references/kling_3.0.md` (captured 2026-06-01) documents
+- **History**: `docs/model-api-references/kling_3.0.md` (captured 2026-06-01) documents
   `element_input_video_urls`, so Kie renamed the field after we built the feature
   (commit `5e5f0b9`, 2026-05-14).
 - **What is not known**: whether Kie still accepts the old name. If it does not, every
@@ -165,7 +165,7 @@ reduced price until October 7, 06:00 (UTC)":
 | seedance-2-mini | 480p | 9.5 / 6 | 3.8 / 2.4 | 2.5× |
 | seedance-2-mini | 720p | 20.5 / 12.5 | 8.2 / 5.0 | 2.5× |
 
-This is exactly the posture `model_api_references/README.md` rule 5 prescribes (pin the
+This is exactly the posture `docs/model-api-references/README.md` rule 5 prescribes (pin the
 undiscounted rate; a release cannot reprice itself on a date), and the Fast figures are the
 same 25 %-off relationship the evidence file recorded. It is flagged because the Mini gap is
 2.5× and both promotions have already been extended once (the 2.5 offer moved from Sep 17
@@ -289,12 +289,12 @@ Caps are ours → Kie's (✓ = equal). "Combine" is whether frames may accompany
 
 | File | Captured | Out of date on |
 | --- | --- | --- |
-| `model_api_references/grok-imagine/text-to-video`, `image-to-video` | 2026-04-27 | price 1.6 / 3 → 2.4 / 4.5 / 8; i2v `image_urls` up to 7; 1080p |
-| `model_api_references/kling_3.0.md` | 2026-06-01 | `element_input_video_urls` gone; `element_input_urls` + `start_time`/`end_time`; `mode: 4K`; `image_urls` required with elements |
-| `model_api_references/bytedance/seedance-2`, `seedance-2-fast` | 2026-07-24 / 04-04 | `reference_image_urls maxItems: 9`; Fast 480p with-video listed 6.8 (promo) |
-| `model_api_references/bytedance/seedance-1.5-pro.md` | 2026-03-18 | per-second pricing (480p 12 s now 21 / 42) |
-| `model_api_references/dropin-models-2026-08-15.md` | 2026-08-15 | grok-imagine-image-2 now has an image-edit endpoint taking `image_urls` |
-| `model_api_references/README.md` rule 5, `video-reference-caps-2026-09-03.md` | 2026-09-03 | offer date Sep 17 → Oct 17 |
+| `docs/model-api-references/grok-imagine/text-to-video`, `image-to-video` | 2026-04-27 | price 1.6 / 3 → 2.4 / 4.5 / 8; i2v `image_urls` up to 7; 1080p |
+| `docs/model-api-references/kling_3.0.md` | 2026-06-01 | `element_input_video_urls` gone; `element_input_urls` + `start_time`/`end_time`; `mode: 4K`; `image_urls` required with elements |
+| `docs/model-api-references/bytedance/seedance-2`, `seedance-2-fast` | 2026-07-24 / 04-04 | `reference_image_urls maxItems: 9`; Fast 480p with-video listed 6.8 (promo) |
+| `docs/model-api-references/bytedance/seedance-1.5-pro.md` | 2026-03-18 | per-second pricing (480p 12 s now 21 / 42) |
+| `docs/model-api-references/dropin-models-2026-08-15.md` | 2026-08-15 | grok-imagine-image-2 now has an image-edit endpoint taking `image_urls` |
+| `docs/model-api-references/README.md` rule 5, `video-reference-caps-2026-09-03.md` | 2026-09-03 | offer date Sep 17 → Oct 17 |
 
 Re-verify with the committed tooling: `node scripts/kie-evidence.mjs price <slug>` for
 credits (it now prints promotion qualifiers) and `spec <docs-path>` for fields, remembering
@@ -310,13 +310,13 @@ that the `price` scan lists every variant's block on a multi-model page in page 
 | 4 | Frames keep their positions; a lone end frame is refused on every model but MiniMax H3, where it travels as `last_frame_url`; a quote-time `min-slot-count` rule says the same before submit; mobile now shows the quote's field message | `generation-services.ts`, `generation-model-runtime.ts`, `media-creation-screen.tsx` | `generation-services.test.ts` (Seedance 2 Mini refused, MiniMax last-only sent), manifest test across six models |
 | 5 | Wan 2.7 reference runs capped at 10 s, at quote time and at start | runtime rule + `generation-services.ts` | manifest test (15 s refused with a clip, accepted without), service test |
 | 6 | GPT Image 2 offers 1K only at 5:4 and 4:5 in both helpers, the mobile mirror, and a quote rule | `models.ts`, `client-generation-models.ts`, `media-creation-view-model.ts`, runtime rule | `models.test.ts`, `workflow-canvas.test.ts`, manifest test |
-| 7 | Not changed: Fast and Mini keep the undiscounted rate per README rule 5 (now dated Oct 7 in the evidence); re-read both pages after Oct 7 06:00 UTC | `model_api_references/reference-audit-2026-09-04.md` | — |
+| 7 | Not changed: Fast and Mini keep the undiscounted rate per README rule 5 (now dated Oct 7 in the evidence); re-read both pages after Oct 7 06:00 UTC | `docs/model-api-references/reference-audit-2026-09-04.md` | — |
 | 8 | Seedance 1.5 Pro 480p 12 s bills 21 / 42 | `models.ts` | `models.test.ts`, manifest test |
 | 9 | Veo quality 4K text-to-video bills 370 | `models.ts` | `models.test.ts`, manifest test |
 | 10 | 15 s combined reference-audio ceiling on Seedance 2 / Fast / Mini and MiniMax H3 as a runtime rule; the web surface now measures audio durations and reports them in the quote. Mobile cannot measure a picked audio file, so the rule stays advisory there | runtime rule, `CreateVideoClient.tsx` | manifest test (16 s refused, 14 s accepted, unreported durations accepted) |
 | 11 | Offer date corrected to Oct 17 in `models.ts`, the September evidence file, the manifest test and README rule 5 | comments and docs | — |
 | 12 | Kling 2.6 image orientation capped at 10 s, at quote time and at start | runtime rule + `generation-services.ts` | manifest test, service test |
-| 13 | New capture `model_api_references/reference-audit-2026-09-04.md`; seven stale files carry supersession banners; README gained rules 9 and 10 (price attribution, silent repricing) | `model_api_references/` | — |
+| 13 | New capture `docs/model-api-references/reference-audit-2026-09-04.md`; seven stale files carry supersession banners; README gained rules 9 and 10 (price attribution, silent repricing) | `docs/model-api-references/` | — |
 | 14 (new) | `minimax-h3` code pricing now emits the reference-adjustment shape production already runs; `minimax-reference-duration-manifest.test.ts` pins the September release to the code build; the runbook now states that every release is emitted and then pinned | `generation-model-runtime.ts`, tests, runbook | manifest tests |
 
 Release manifest: `config/generation-model-catalog/releases/2026-09-04-reference-audit.json`
