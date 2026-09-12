@@ -23,7 +23,18 @@ const eslintConfig = defineConfig([
     // Agent worktrees are full repo copies (including a nested ugc-mobile that
     // escapes the ignore above); they lint inside their own checkout.
     ".claude/worktrees/**",
-    ".codex/worktrees/**",
+    ".codex/**",
+    // Local-only, gitignored evidence and tool output. CI never has these, so
+    // linting them here only makes a local run disagree with the gate.
+    "output/**",
+    "certification-artifacts/**",
+    "lighthouse-results/**",
+    ".lighthouseci/**",
+    ".playwright-cli/**",
+    "supabase/backups/**",
+    "test-results/**",
+    "playwright-report/**",
+    "coverage/**",
   ]),
   {
     // Backend modules log through the structured logger so production lines are

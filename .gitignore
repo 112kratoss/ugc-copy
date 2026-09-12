@@ -60,6 +60,13 @@ yarn-error.log*
 # vercel
 .vercel
 
+# agent-session scratch: settings.local.json is per-machine, worktrees are full checkouts
+.claude/settings.local.json
+.claude/worktrees/
+
+# supabase cli scratch
+/supabase/snippets/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
