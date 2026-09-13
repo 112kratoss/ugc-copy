@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({
   authCallback: null as null | ((event: string, session: unknown) => void),
   clearLocalPush: vi.fn(),
+  clearPersistedHomeFeed: vi.fn(),
   clearPersistedSession: vi.fn(),
   deleteAccount: vi.fn(),
   duringSignOut: vi.fn(),
@@ -69,6 +70,7 @@ vi.mock('../lib/guest-merge-ticket-storage', () => ({
   storeGuestMergeTicket: vi.fn(async () => undefined),
   clearGuestMergeTicket: vi.fn(async () => undefined),
 }));
+vi.mock('../lib/persisted-home-feed', () => ({ clearPersistedHomeFeed: state.clearPersistedHomeFeed }));
 vi.mock('../lib/generation-model-catalog', () => ({ GENERATION_MODEL_CATALOG_SCHEMA_VERSION: 1 }));
 vi.mock('../lib/apple-auth', () => ({ signInWithNativeApple: vi.fn() }));
 vi.mock('../lib/google-auth', () => ({ signInWithGoogleOAuth: vi.fn() }));
@@ -131,6 +133,7 @@ describe('AuthProvider startup performance', () => {
     }));
     state.clearLocalPush.mockReset().mockResolvedValue(undefined);
     state.clearPersistedSession.mockReset().mockResolvedValue(undefined);
+    state.clearPersistedHomeFeed.mockReset().mockResolvedValue(undefined);
     state.deleteAccount.mockReset();
     state.queryClient.clear.mockReset();
     state.routerReplace.mockReset();
@@ -217,6 +220,8 @@ describe('AuthProvider startup performance', () => {
     expect(state.duringSignOut).toHaveBeenCalledOnce();
     expect(state.unregisterPush).toHaveBeenCalledWith(expect.anything(), { signal: expect.any(AbortSignal) });
     expect(state.clearPersistedSession).toHaveBeenCalledOnce();
+    // The home feed saved for the next launch was ranked for the person leaving.
+    expect(state.clearPersistedHomeFeed).toHaveBeenCalledOnce();
     expect(latest.current?.user).toBeNull();
     expect(state.routerReplace).toHaveBeenCalledWith('/auth');
     expect(warn).toHaveBeenCalledOnce();

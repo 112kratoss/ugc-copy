@@ -27,6 +27,7 @@ import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
 import { useReducedMotion } from '@/lib/motion';
 import { navigateToNotificationDeepLink, subscribeToNotificationResponses, subscribeToNotificationsReceived } from '@/lib/notifications';
 import { OnboardingProvider, useOnboarding } from '@/lib/onboarding';
+import { restorePersistedHomeFeed } from '@/lib/persisted-home-feed';
 import { reportStartupMilestone } from '@/lib/startup-interactive';
 import { STARTUP_VERSION_CHECK_FALLBACK_MS, type StartupVersionCheckStatus } from '@/lib/startup-readiness';
 import { appTheme } from '@/lib/theme';
@@ -54,6 +55,11 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// The For You page the last launch saved goes back into the cache while the
+// rest of the app starts, so a returning launch draws posts rather than
+// skeletons once the session is restored. See lib/persisted-home-feed.
+void restorePersistedHomeFeed(queryClient);
 
 // Progress indicators: "perform automatic updates periodically — don't make
 // people manually refresh". React Query's focus refetch is inert on native
