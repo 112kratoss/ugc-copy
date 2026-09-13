@@ -76,12 +76,14 @@ vi.mock('../lib/notifications', () => ({
 vi.mock('../lib/supabase-auth-recovery', () => ({
   isInvalidRefreshTokenError: () => false,
   isNetworkRequestFailedError: () => false,
+  isRetryableRefreshError: () => false,
   supabaseNetworkFailureMessage: () => 'Network unavailable',
 }));
 vi.mock('../lib/supabase', () => ({
   clearPersistedSupabaseAuthSession: state.clearPersistedSession,
   initializeSupabaseAuth: vi.fn(async () => undefined),
   isSupabaseConfigured: true,
+  readPersistedSupabaseSession: vi.fn(async () => null),
   supabase: {
     auth: {
       getSession: state.getSession,

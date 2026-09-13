@@ -9,7 +9,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   isInvalidRefreshTokenError,
   isNetworkRequestFailedError,
+  isRetryableRefreshError,
   isSessionEndedRefreshError,
+  parsePersistedSupabaseSession,
   supabaseNetworkFailureMessage,
   withSuppressedInvalidRefreshTokenConsoleError,
 } from '../lib/supabase-auth-recovery';
@@ -93,5 +95,48 @@ describe('withSuppressedInvalidRefreshTokenConsoleError', () => {
 
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(errorSpy).toHaveBeenCalledWith(expect.objectContaining({ message: 'Network request failed' }));
+  });
+});
+
+describe('isRetryableRefreshError', () => {
+  it('holds for a refresh that failed on the network, which auth-js retries', () => {
+    expect(isRetryableRefreshError(new AuthRetryableFetchError('Network request failed', 0))).toBe(true);
+  });
+
+  it('does not hold for a session that ended, or for anything that is not an auth error', () => {
+    expect(isRetryableRefreshError(
+      new AuthApiError('Invalid Refresh Token: Already Used', 400, 'refresh_token_already_used'),
+    )).toBe(false);
+    expect(isRetryableRefreshError(new AuthSessionMissingError())).toBe(false);
+    expect(isRetryableRefreshError(new Error('Network request failed'))).toBe(false);
+    expect(isRetryableRefreshError(null)).toBe(false);
+  });
+});
+
+describe('parsePersistedSupabaseSession', () => {
+  const stored = {
+    access_token: 'access-token',
+    refresh_token: 'refresh-token',
+    expires_at: 1_790_000_000,
+    expires_in: 3600,
+    token_type: 'bearer',
+    user: { id: 'user-1', is_anonymous: true },
+  };
+
+  it('reads back the session auth-js stored', () => {
+    expect(parsePersistedSupabaseSession(JSON.stringify(stored))).toEqual(stored);
+  });
+
+  it.each([
+    ['nothing stored', null],
+    ['an empty value', ''],
+    ['a value cut off mid-write', JSON.stringify(stored).slice(0, 40)],
+    ['a value that is not an object', JSON.stringify('access-token')],
+    ['a session without a refresh token', JSON.stringify({ ...stored, refresh_token: undefined })],
+    ['a session without an expiry', JSON.stringify({ ...stored, expires_at: undefined })],
+    ['a session without a user', JSON.stringify({ ...stored, user: null })],
+    ['a user without an id', JSON.stringify({ ...stored, user: { id: '' } })],
+  ])('reads %s as no session', (_label, value) => {
+    expect(parsePersistedSupabaseSession(value)).toBeNull();
   });
 });

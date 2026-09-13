@@ -51,11 +51,13 @@ import {
   duringSignOut,
   initializeSupabaseAuth,
   isSupabaseConfigured,
+  readPersistedSupabaseSession,
   supabase,
 } from './supabase';
 import {
   isInvalidRefreshTokenError,
   isNetworkRequestFailedError,
+  isRetryableRefreshError,
   isSessionEndedRefreshError,
   supabaseNetworkFailureMessage,
 } from './supabase-auth-recovery';
@@ -369,9 +371,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    let active = true;
+    // Whether auth-js has answered for this launch. Until it has, the session
+    // stored on the device stands in (see readPersistedSupabaseSession below).
+    let answered = false;
+    let showingStoredSession = false;
+
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (event === 'INITIAL_SESSION' && !nextSession && showingStoredSession && !answered) {
+        // auth-js reports no initial session both when the stored one has ended
+        // and when refreshing it failed on the network. It deletes the stored
+        // session only in the first case, so storage tells the two apart.
+        void readPersistedSupabaseSession()
+          .catch(() => null)
+          .then((stored) => {
+            if (!active || answered || stored) return;
+            answered = true;
+            applySessionState(null);
+          });
+        return;
+      }
+      answered = true;
       applySessionState(nextSession ?? null);
       if (nextSession?.user) {
         void refreshProfileForUser(nextSession.user.id).catch((error) => {
@@ -380,13 +402,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     });
 
-    let active = true;
+    // Lift the startup cover on the session this device already holds. auth-js
+    // hands a session back only after refreshing an expired access token (a
+    // network round trip on most launches more than an hour apart, retried for
+    // up to 30 seconds on a bad connection), and the cover used to wait for it.
+    // Nothing is sent any earlier for this: getAccessToken never sends an expired
+    // token and waits on auth-js for a fresh one, so only what is drawn changes.
+    void readPersistedSupabaseSession()
+      .then((stored) => {
+        if (!active || answered || !stored) return;
+        showingStoredSession = true;
+        applySessionState(stored);
+      })
+      .catch(() => undefined);
+
     void (async () => {
       try {
         await initializeSupabaseAuth();
         const { data, error } = await supabase.auth.getSession();
         if (error) throw error;
         if (!active) return;
+        answered = true;
         const latestSession = data.session ?? null;
         applySessionState(latestSession);
         if (latestSession?.user) {
@@ -403,9 +439,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         if (!active) return;
         if (await recoverInvalidAuthSession(error)) {
+          answered = true;
           resetAuthState();
           return;
         }
+        // Refreshing the stored session failed on the network, and auth-js keeps
+        // it and tries again. Keep showing it rather than dropping the person to
+        // signed out until their next launch.
+        if (showingStoredSession && isRetryableRefreshError(error)) {
+          console.warn('Could not refresh the stored session yet; keeping it', error);
+          return;
+        }
+        answered = true;
         console.warn('Failed to recover mobile auth session', error);
         resetAuthState();
       }

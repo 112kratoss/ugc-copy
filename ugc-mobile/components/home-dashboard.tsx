@@ -768,7 +768,7 @@ export function HomeDashboard() {
         ListHeaderComponent={(
           <View style={{ gap: 18, paddingTop: 10, paddingBottom: 6 }}>
             <View style={{ paddingHorizontal: horizontalPadding }}>
-              <HomeTopBar credits={credits ?? 0} onMenuPress={() => setMenuVisible(true)} />
+              <HomeTopBar credits={credits} onMenuPress={() => setMenuVisible(true)} />
             </View>
 
             <TopSlider
@@ -879,7 +879,7 @@ export function HomeDashboard() {
   );
 }
 
-function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: () => void }) {
+function HomeTopBar({ credits, onMenuPress }: { credits: number | null; onMenuPress: () => void }) {
   return (
     <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
       <TopBarControl
@@ -912,7 +912,9 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: ()
         >
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <Crown size={appTheme.icon.sm} color={appTheme.colors.commerce} fill={`${appTheme.colors.commerce}33`} />
-            <Text style={{ color: DASHBOARD_COLORS.text, fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatCreditAmount(credits)}</Text>
+            {/* A dash until the balance has loaded: a 0 there reads as an empty
+                balance to someone who has credits. */}
+            <Text style={{ color: credits === null ? DASHBOARD_COLORS.muted : DASHBOARD_COLORS.text, fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{credits === null ? '–' : formatCreditAmount(credits)}</Text>
             <Plus size={14} color={DASHBOARD_COLORS.coral} />
           </View>
         </TopBarControl>

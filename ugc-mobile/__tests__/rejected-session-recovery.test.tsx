@@ -86,6 +86,7 @@ vi.mock('../lib/supabase', () => ({
   duringSignOut: (work: () => Promise<unknown>) => work(),
   initializeSupabaseAuth: vi.fn(async () => undefined),
   isSupabaseConfigured: true,
+  readPersistedSupabaseSession: vi.fn(async () => null),
   supabase: {
     auth: {
       getSession: state.getSession,
