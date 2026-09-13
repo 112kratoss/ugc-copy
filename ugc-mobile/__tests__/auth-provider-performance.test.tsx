@@ -16,6 +16,7 @@ const state = vi.hoisted(() => ({
   getSession: vi.fn(),
   profileResolve: null as null | ((profile: { credits: number }) => void),
   queryClient: { clear: vi.fn(), fetchQuery: vi.fn() },
+  readPersistedSession: vi.fn(),
   routerReplace: vi.fn(),
   sessionResolve: null as null | ((result: unknown) => void),
   signOut: vi.fn(),
@@ -84,6 +85,7 @@ vi.mock('../lib/notifications', () => ({
 vi.mock('../lib/supabase-auth-recovery', () => ({
   isInvalidRefreshTokenError: () => false,
   isNetworkRequestFailedError: () => false,
+  isRetryableRefreshError: (error: unknown) => (error as { name?: string } | null)?.name === 'AuthRetryableFetchError',
   supabaseNetworkFailureMessage: () => 'Network unavailable',
 }));
 vi.mock('../lib/supabase', () => ({
@@ -91,6 +93,7 @@ vi.mock('../lib/supabase', () => ({
   duringSignOut: state.duringSignOut,
   initializeSupabaseAuth: vi.fn(async () => undefined),
   isSupabaseConfigured: true,
+  readPersistedSupabaseSession: state.readPersistedSession,
   supabase: {
     auth: {
       getSession: state.getSession,
@@ -134,6 +137,7 @@ describe('AuthProvider startup performance', () => {
     state.clearLocalPush.mockReset().mockResolvedValue(undefined);
     state.clearPersistedSession.mockReset().mockResolvedValue(undefined);
     state.clearPersistedHomeFeed.mockReset().mockResolvedValue(undefined);
+    state.readPersistedSession.mockReset().mockResolvedValue(null);
     state.deleteAccount.mockReset();
     state.queryClient.clear.mockReset();
     state.routerReplace.mockReset();
@@ -142,6 +146,125 @@ describe('AuthProvider startup performance', () => {
     state.startAutoRefresh.mockReset().mockResolvedValue(undefined);
     state.stopAutoRefresh.mockReset().mockResolvedValue(undefined);
     state.duringSignOut.mockReset().mockImplementation((work: () => Promise<unknown>) => work());
+  });
+
+  function renderProvider() {
+    const latest: { current: ReturnType<typeof useAuth> | null } = { current: null };
+    function Probe() {
+      latest.current = useAuth();
+      return null;
+    }
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<AuthProvider><Probe /></AuthProvider>);
+    });
+    return { latest, unmount: () => renderer.act(() => tree?.unmount()) };
+  }
+
+  async function settle() {
+    await renderer.act(async () => {
+      for (let tick = 0; tick < 5; tick += 1) await Promise.resolve();
+    });
+  }
+
+  it('lifts the startup cover on the stored session while auth-js is still refreshing it', async () => {
+    const expired = { ...session, access_token: 'expired-token', expires_at: Math.floor(Date.now() / 1000) - 60 };
+    const refreshed = { ...session, access_token: 'refreshed-token' };
+    const answers: Array<(result: unknown) => void> = [];
+    state.getSession.mockImplementation(() => new Promise((resolve) => answers.push(resolve)));
+    state.readPersistedSession.mockResolvedValue(expired);
+
+    const { latest, unmount } = renderProvider();
+    await settle();
+
+    // auth-js has not answered, and the person is already in.
+    expect(answers).toHaveLength(1);
+    expect(latest.current?.isLoading).toBe(false);
+    expect(latest.current?.user?.id).toBe('user-1');
+
+    // The stored access token has expired, so a request waits on auth-js for a
+    // fresh one rather than sending it.
+    const getAccessToken = (latest.current?.api as unknown as {
+      getAccessTokenForTest: () => Promise<string | null>;
+    }).getAccessTokenForTest;
+    const token = getAccessToken();
+    await settle();
+    expect(answers).toHaveLength(2);
+
+    await renderer.act(async () => {
+      for (const answer of answers) answer({ data: { session: refreshed }, error: null });
+    });
+    await expect(token).resolves.toBe('refreshed-token');
+    await settle();
+    expect(latest.current?.session?.access_token).toBe('refreshed-token');
+    unmount();
+  });
+
+  it('keeps the stored session when refreshing it fails on the network', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    state.readPersistedSession.mockResolvedValue(session);
+    const { latest, unmount } = renderProvider();
+    await settle();
+    expect(latest.current?.user?.id).toBe('user-1');
+
+    // auth-js reports no initial session when its refresh fails on the network,
+    // while keeping the session stored.
+    await renderer.act(async () => {
+      state.authCallback?.('INITIAL_SESSION', null);
+    });
+    await settle();
+    expect(latest.current?.user?.id).toBe('user-1');
+
+    await renderer.act(async () => {
+      state.sessionResolve?.({
+        data: { session: null },
+        error: { __isAuthError: true, name: 'AuthRetryableFetchError', message: 'Network request failed' },
+      });
+    });
+    await settle();
+    expect(latest.current?.user?.id).toBe('user-1');
+    expect(state.clearPersistedSession).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith('Could not refresh the stored session yet; keeping it', expect.anything());
+    warn.mockRestore();
+    unmount();
+  });
+
+  it('signs out on screen once auth-js has deleted the stored session', async () => {
+    state.readPersistedSession.mockResolvedValue(session);
+    const { latest, unmount } = renderProvider();
+    await settle();
+    expect(latest.current?.user?.id).toBe('user-1');
+
+    state.readPersistedSession.mockResolvedValue(null);
+    await renderer.act(async () => {
+      state.authCallback?.('INITIAL_SESSION', null);
+    });
+    await settle();
+    expect(latest.current?.user).toBeNull();
+    unmount();
+  });
+
+  it('never lets a slow storage read replace the answer auth-js has given', async () => {
+    let finishRead: (value: unknown) => void = () => undefined;
+    state.readPersistedSession.mockImplementation(() => new Promise((resolve) => {
+      finishRead = resolve;
+    }));
+    const refreshed = { ...session, access_token: 'refreshed-token' };
+    const { latest, unmount } = renderProvider();
+    await settle();
+
+    await renderer.act(async () => {
+      state.sessionResolve?.({ data: { session: refreshed }, error: null });
+    });
+    await settle();
+    expect(latest.current?.session?.access_token).toBe('refreshed-token');
+
+    await renderer.act(async () => {
+      finishRead({ ...session, access_token: 'stale-token' });
+    });
+    await settle();
+    expect(latest.current?.session?.access_token).toBe('refreshed-token');
+    unmount();
   });
 
   it('reveals the persisted user before profile I/O and deduplicates the auth event refresh', async () => {

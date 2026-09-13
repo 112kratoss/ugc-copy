@@ -1,6 +1,6 @@
 // No URL polyfill: Expo's runtime installs a spec-compliant URL and
 // URLSearchParams on native (expo/src/winter), which supabase-js uses as is.
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type Session } from '@supabase/supabase-js';
 import { Platform } from 'react-native';
 
 import { env, isMobileEnvConfigured } from './env';
@@ -9,7 +9,10 @@ import {
   createMemorySessionStorage,
   secureSessionStorage,
 } from './secure-session-storage';
-import { withSuppressedInvalidRefreshTokenConsoleError } from './supabase-auth-recovery';
+import {
+  parsePersistedSupabaseSession,
+  withSuppressedInvalidRefreshTokenConsoleError,
+} from './supabase-auth-recovery';
 import { createSupabaseAuthFetch } from './supabase-fetch';
 
 export const isSupabaseConfigured = isMobileEnvConfigured();
@@ -115,6 +118,18 @@ export async function clearPersistedSupabaseAuthSession() {
     `${supabaseAuthStorageKey}-code-verifier`,
     `${supabaseAuthStorageKey}-user`,
   ].map((key) => supabaseAuthStorage.removeItem(key)));
+}
+
+/**
+ * The session this device last stored, read without going through auth-js.
+ * auth-js hands a session back only after refreshing an expired access token,
+ * and holds its lock while it does; this read waits on neither. It goes through
+ * the same secure storage auth-js reads, so a damaged value is erased and signed
+ * out exactly as it would be there.
+ */
+export async function readPersistedSupabaseSession(): Promise<Session | null> {
+  if (!isSupabaseConfigured) return null;
+  return parsePersistedSupabaseSession(await supabaseAuthStorage.getItem(supabaseAuthStorageKey));
 }
 
 function getSupabaseAuthStorageKey() {

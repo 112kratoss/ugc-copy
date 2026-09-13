@@ -46,6 +46,7 @@ vi.mock('../lib/secure-session-storage', () => ({
 }));
 
 vi.mock('../lib/supabase-auth-recovery', () => ({
+  parsePersistedSupabaseSession: () => null,
   withSuppressedInvalidRefreshTokenConsoleError: async (operation: () => Promise<void>) => operation(),
 }));
 

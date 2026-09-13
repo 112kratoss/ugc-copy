@@ -1,3 +1,5 @@
+import type { Session } from '@supabase/supabase-js';
+
 export function isInvalidRefreshTokenError(error: unknown) {
   const message = getErrorMessage(error);
   return message.includes('Invalid Refresh Token:');
@@ -15,6 +17,45 @@ export function isInvalidRefreshTokenError(error: unknown) {
 export function isSessionEndedRefreshError(error: unknown) {
   if (typeof error !== 'object' || error === null || !('__isAuthError' in error)) return false;
   return (error as { name?: unknown }).name !== 'AuthRetryableFetchError';
+}
+
+/**
+ * The other side of that line: a refresh that failed on the network or on a
+ * 502/503/504. auth-js keeps the stored session through it and tries again.
+ */
+export function isRetryableRefreshError(error: unknown) {
+  if (typeof error !== 'object' || error === null || !('__isAuthError' in error)) return false;
+  return (error as { name?: unknown }).name === 'AuthRetryableFetchError';
+}
+
+/**
+ * The session auth-js stored, when the stored text is one it would load itself:
+ * an access token, a refresh token, an expiry and a user. Anything else reads
+ * as no session, so a damaged or foreign value can never stand in for one.
+ */
+export function parsePersistedSupabaseSession(stored: string | null): Session | null {
+  if (!stored) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(stored);
+  } catch {
+    return null;
+  }
+  if (typeof value !== 'object' || value === null) return null;
+  const session = value as Record<string, unknown>;
+  const user = session.user as Record<string, unknown> | null | undefined;
+  if (
+    typeof session.access_token !== 'string'
+    || typeof session.refresh_token !== 'string'
+    || typeof session.expires_at !== 'number'
+    || typeof user !== 'object'
+    || user === null
+    || typeof user.id !== 'string'
+    || !user.id
+  ) {
+    return null;
+  }
+  return value as Session;
 }
 
 export function isNetworkRequestFailedError(error: unknown) {
