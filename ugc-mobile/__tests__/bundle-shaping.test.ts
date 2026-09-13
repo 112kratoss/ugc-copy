@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
-import { transformSync, type PluginItem } from '@babel/core';
+import { transformSync, type PluginItem, type TransformOptions } from '@babel/core';
 import { describe, expect, it, vi } from 'vitest';
 
 // Guards the two hooks in bundler/ that keep dead weight out of the native
@@ -154,5 +154,88 @@ describe('RevenueCat browser stand-in', () => {
       .filter((entry) => /require\("\.\/browser\//.test(readFileSync(path.join(dist, entry), 'utf8')));
 
     expect(requirers).toEqual(['purchases.js']);
+  });
+});
+
+describe('react compiler', () => {
+  const metroCaller = {
+    name: 'metro',
+    bundler: 'metro',
+    platform: 'ios',
+    engine: 'hermes',
+    isDev: false,
+    isServer: false,
+    isNodeModule: false,
+  };
+
+  // Runs the project's own babel.config.js the way a production Metro transform does.
+  function compile(code: string, filename: string, caller: Record<string, unknown> = metroCaller) {
+    const result = transformSync(code, {
+      babelrc: false,
+      configFile: path.join(mobileRoot, 'babel.config.js'),
+      cwd: mobileRoot,
+      filename,
+      // Metro's caller carries more than Babel's type declares (platform, isDev, …).
+      caller: caller as unknown as TransformOptions['caller'],
+    });
+    return result?.code ?? '';
+  }
+
+  const component = `
+    import { useState } from 'react';
+    import { Text } from 'react-native';
+    export function Counter({ label }: { label: string }) {
+      const [count, setCount] = useState(0);
+      return <Text onPress={() => setCount(count + 1)}>{label} {count}</Text>;
+    }
+  `;
+
+  it('memoizes app components through the compiler runtime', () => {
+    for (const directory of ['app', 'components', 'lib']) {
+      expect(compile(component, path.join(mobileRoot, directory, 'compiler-fixture.tsx')), directory)
+        .toContain('react/compiler-runtime');
+    }
+  });
+
+  it('leaves dependencies and code outside the app directories alone', () => {
+    const dependency = path.join(mobileRoot, 'node_modules', 'some-package', 'index.tsx');
+    expect(compile(component, dependency, { ...metroCaller, isNodeModule: true })).not.toContain('react/compiler-runtime');
+    expect(compile(component, path.join(mobileRoot, 'bundler', 'compiler-fixture.tsx'))).not.toContain('react/compiler-runtime');
+  });
+
+  it('skips a render that reads the clock, rather than memoizing its first reading', () => {
+    // A memoized render would keep the deadline computed on first mount for as
+    // long as `expiresAt` stays the same, however much time passes.
+    const deadline = (now: string) => `
+      import { Text } from 'react-native';
+      import { describeDeadline } from './deadline';
+      export function Deadline({ expiresAt }: { expiresAt: number }) {
+        const deadline = describeDeadline(expiresAt, ${now});
+        return <Text>{deadline.label}</Text>;
+      }
+    `;
+    const file = path.join(mobileRoot, 'components', 'compiler-fixture.tsx');
+
+    expect(compile(deadline('0'), file)).toContain('react/compiler-runtime');
+    expect(compile(deadline('Date.now()'), file)).not.toContain('react/compiler-runtime');
+  });
+
+  it('is switched on in babel.config.js, not app.json, which feeds the OTA runtime fingerprint', () => {
+    const appJson = JSON.parse(readFileSync(path.join(mobileRoot, 'app.json'), 'utf8'));
+
+    expect(appJson.expo.experiments?.reactCompiler).toBeUndefined();
+  });
+
+  it("keeps Metro's own import handling on, which the imports the compiler inserts rely on", async () => {
+    const config = requireFromMobile('./metro.config.js') as {
+      transformer: { getTransformOptions: (...args: unknown[]) => Promise<{ transform: Record<string, unknown> }> };
+    };
+    const options = await config.transformer.getTransformOptions(
+      [],
+      { dev: false, hot: false, minify: true, platform: 'ios', type: 'module' },
+      async () => [],
+    );
+
+    expect(options.transform.experimentalImportSupport).toBe(true);
   });
 });
