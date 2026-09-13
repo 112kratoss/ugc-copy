@@ -297,7 +297,9 @@ export function HomeDashboard() {
     }
   }, [recordFeedEvent]);
 
-  const viewabilityConfigCallbackPairs = useRef([
+  // Built once from the first render's callbacks, which FlashList needs to stay
+  // stable. State rather than a ref, which render may not read.
+  const [viewabilityConfigCallbackPairs] = useState(() => [
     {
       viewabilityConfig: SHOWCASE_PLAYBACK_VIEWABILITY,
       onViewableItemsChanged: onPlaybackViewableItemsChanged,
@@ -306,7 +308,7 @@ export function HomeDashboard() {
       viewabilityConfig: SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY,
       onViewableItemsChanged: onQualifiedViewableItemsChanged,
     },
-  ]).current;
+  ]);
 
   const feedQuery = useInfiniteQuery({
     queryKey,
@@ -323,12 +325,16 @@ export function HomeDashboard() {
     () => getShowcaseFeedSessionContext(feedQuery.data?.pages),
     [feedQuery.data?.pages]
   );
-  feedEventRuntimeRef.current = {
-    api,
-    isFocused,
-    feedSessionId: feedSession.feedSessionId,
-    algorithmVersion: feedSession.algorithmVersion,
-  };
+  // Written after render, not during it. Its readers all run later: taps, and
+  // the impression callback, which waits for a card to stay on screen a second.
+  useEffect(() => {
+    feedEventRuntimeRef.current = {
+      api,
+      isFocused,
+      feedSessionId: feedSession.feedSessionId,
+      algorithmVersion: feedSession.algorithmVersion,
+    };
+  }, [api, feedSession.algorithmVersion, feedSession.feedSessionId, isFocused]);
 
   const feedItems = useMemo(() => {
     const flattened = flattenShowcaseFeedPages(feedQuery.data?.pages);
@@ -532,15 +538,14 @@ export function HomeDashboard() {
     }
   };
 
-  const remixItem = async (item: ShowcaseFeedItem) => {
+  const remixItem = (item: ShowcaseFeedItem) => {
     if (!user) {
       // The post page is where the Remix button lives, so land them on it
       // rather than the tab root they started from.
       router.push({ pathname: '/auth', params: { returnTo: `/post/${item.id}` } } as never);
       return;
     }
-    setRemixingItemId(item.id);
-    try {
+    const startRemix = async () => {
       const result = await api.remixShowcasePost(item.id);
       recordFeedEvent(item, 'remix_start');
       const href = getNativeRemixCreateHref({
@@ -567,12 +572,16 @@ export function HomeDashboard() {
           message: 'This post cannot be opened in the creator tools right now.',
         });
       }
-    } catch (error) {
-      haptic.error();
-      showErrorDialog('Could not start remix', error);
-    } finally {
-      setRemixingItemId(null);
-    }
+    };
+    setRemixingItemId(item.id);
+    // `.catch` and `.finally` rather than try…finally, which React Compiler
+    // cannot compile.
+    void startRemix()
+      .catch((error) => {
+        haptic.error();
+        showErrorDialog('Could not start remix', error);
+      })
+      .finally(() => setRemixingItemId(null));
   };
 
   const applyFeedFeedback = (eventType: 'not_interested' | 'hide_creator') => {
@@ -705,7 +714,11 @@ export function HomeDashboard() {
     });
   };
 
-  const renderCard: ListRenderItem<HomeFeedCard> = useCallback(({ item: card, index }) => (
+  // Memoized by React Compiler on everything it reads. The hand-written
+  // useCallback it replaces left out the handlers below, so a card could keep
+  // calling an old `remixItem` (and the `user` inside it) until a listed value
+  // happened to change.
+  const renderCard: ListRenderItem<HomeFeedCard> = ({ item: card, index }) => (
     <Reveal index={index} enabled={index < FEED_REVEAL_COUNT} style={{ paddingHorizontal: horizontalPadding, paddingBottom: 14 }}>
       <HomeFeedCardView
         card={card}
@@ -730,7 +743,7 @@ export function HomeDashboard() {
         onShare={() => void shareItem(card.item)}
       />
     </Reveal>
-  ), [contentWidth, expandedBodyIds, horizontalPadding, remixingItemId, visibleActiveVideoIds, toggleSave]);
+  );
 
   return (
     <View style={{ flex: 1, backgroundColor: DASHBOARD_COLORS.background }}>
