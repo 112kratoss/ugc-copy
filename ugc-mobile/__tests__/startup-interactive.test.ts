@@ -61,6 +61,16 @@ describe('reportStartupMilestone', () => {
     });
   });
 
+  it('carries where the home feed came from, even when its posts arrive before the shell', () => {
+    reportStartupMilestone({ milestone: 'home-content', pathname: '/', details: { feedSource: 'persisted' } });
+    reportStartupMilestone({ milestone: 'shell-ready', pathname: '/' });
+
+    expect(appMetrics.markInteractive).toHaveBeenCalledExactlyOnceWith({
+      routeName: '/',
+      params: { feedSource: 'persisted', completedBy: 'shell-ready' },
+    });
+  });
+
   it('marks a launch once, however many milestones follow', () => {
     reportStartupMilestone({ milestone: 'shell-ready', pathname: '/showcase/12' });
     reportStartupMilestone({ milestone: 'home-content', pathname: '/' });

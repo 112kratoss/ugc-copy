@@ -89,6 +89,12 @@ import {
   getShowcaseFeedSessionContext,
   type ShowcaseFeedPageParam,
 } from '@/lib/showcase-feed-query';
+import {
+  PERSISTED_HOME_FEED_CHIP_ID,
+  cancelScheduledPersistHomeFeed,
+  isPersistedHomeFeedData,
+  schedulePersistHomeFeed,
+} from '@/lib/persisted-home-feed';
 import { formatCreditAmount } from '@/lib/pricing';
 import { reportStartupMilestone } from '@/lib/startup-interactive';
 import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
@@ -139,7 +145,7 @@ export function HomeDashboard() {
   // `user` keeps gating the community actions on this screen (remix, save,
   // follow). Only the viewer's own creations strip reads `identityUserId`, so a
   // guest can find what they just generated.
-  const { user, identityUserId, api, credits, signOut } = useAuth();
+  const { user, identityUserId, api, credits, isLoading: isAuthLoading, signOut } = useAuth();
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
@@ -367,9 +373,31 @@ export function HomeDashboard() {
   const feedMilestone = hasItems
     ? 'home-content'
     : feedQuery.isError || feedQuery.isSuccess ? 'home-empty-or-error' : null;
+  // Posts drawn from the page the last launch saved, or from this launch's own
+  // request. The interactive mark carries which, so the two can be told apart.
+  const feedSource = isPersistedHomeFeedData(feedQuery.dataUpdatedAt) ? 'persisted' : 'network';
   useEffect(() => {
-    if (feedMilestone) reportStartupMilestone({ milestone: feedMilestone, pathname: '/' });
-  }, [feedMilestone]);
+    // Held until auth settles. Before then the lane on screen is the signed-out
+    // one, under StartupCoordinator's cover, and a returning member's own lane
+    // replaces it in the same commit that lifts the cover.
+    if (!feedMilestone || isAuthLoading) return;
+    reportStartupMilestone({
+      milestone: feedMilestone,
+      pathname: '/',
+      details: feedMilestone === 'home-content' ? { feedSource } : undefined,
+    });
+  }, [feedMilestone, feedSource, isAuthLoading]);
+  // Saves the lane a cold start lands on, once auth has settled whose lane it
+  // is, so the next launch can draw it before the network answers. The other
+  // lanes are a tap away and not worth the storage.
+  useEffect(() => {
+    if (isAuthLoading || activeChipId !== PERSISTED_HOME_FEED_CHIP_ID || !feedQuery.isSuccess) return;
+    schedulePersistHomeFeed(queryClient, user?.id);
+  }, [activeChipId, feedQuery.dataUpdatedAt, feedQuery.isSuccess, isAuthLoading, queryClient, user?.id]);
+  // A save still waiting when home unmounts is dropped. An error boundary that
+  // replaces home unmounts it too, and a page that failed to draw must not be
+  // the one the next launch restores.
+  useEffect(() => cancelScheduledPersistHomeFeed, []);
   // Bound to the viewer's own pull, never to an incidental refetch. On iOS,
   // `refreshing` flipping true without a drag behind it runs
   // RCTRefreshControl.beginRefreshingProgrammatically, which shifts the scroll

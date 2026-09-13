@@ -22,6 +22,12 @@ export type StartupSnapshot = {
   milestone: StartupMilestone;
   /** The route the app was on when the milestone passed. */
   pathname: string;
+  /**
+   * Context for the interactive mark, such as where the home feed's posts came
+   * from. Kept from every milestone passed, so a detail survives even when its
+   * milestone arrives before the one that completes the launch.
+   */
+  details?: Readonly<Record<string, string>>;
 };
 
 export type StartupProgress = {
@@ -52,20 +58,22 @@ export function isStartupInteractive({ passed }: StartupProgress): boolean {
 
 let marked = false;
 const passed = new Map<StartupMilestone, string>();
+const markDetails = new Map<string, string>();
 
 export function reportStartupMilestone(
-  { milestone, pathname }: StartupSnapshot,
+  { milestone, pathname, details }: StartupSnapshot,
   isInteractive: (progress: StartupProgress) => boolean = isStartupInteractive,
 ) {
   if (marked || passed.has(milestone)) return;
   passed.set(milestone, pathname);
+  for (const [key, value] of Object.entries(details ?? {})) markDetails.set(key, value);
   if (!isInteractive({ passed })) return;
 
   marked = true;
   try {
     AppMetrics.markInteractive({
       routeName: passed.get('shell-ready') ?? pathname,
-      params: { completedBy: milestone },
+      params: { ...Object.fromEntries(markDetails), completedBy: milestone },
     });
   } catch (error) {
     // A metric must never take the launch down with it.
@@ -77,4 +85,5 @@ export function reportStartupMilestone(
 export function resetStartupMilestonesForTests() {
   marked = false;
   passed.clear();
+  markDetails.clear();
 }
