@@ -364,17 +364,18 @@ export default function ImmersivePreviewViewerScreen() {
   );
   // A feed refetch can drop the item from `items` while the sheet is open,
   // which would blank the sheet mid-interaction. Keep the last resolved item
-  // so an open sheet always has content to render.
-  const lastUnlockRemixItemRef = useRef<ImmersivePreviewItem | null>(null);
+  // so an open sheet always has content to render. State rather than a ref,
+  // because render reads it.
+  const [lastUnlockRemixItem, setLastUnlockRemixItem] = useState<ImmersivePreviewItem | null>(null);
   useEffect(() => {
     if (unlockRemixItem) {
-      lastUnlockRemixItemRef.current = unlockRemixItem;
+      setLastUnlockRemixItem(unlockRemixItem);
     } else if (!unlockRemixOpenItemId) {
-      lastUnlockRemixItemRef.current = null;
+      setLastUnlockRemixItem(null);
     }
   }, [unlockRemixItem, unlockRemixOpenItemId]);
   const unlockRemixSheetItem = unlockRemixOpenItemId
-    ? unlockRemixItem ?? lastUnlockRemixItemRef.current
+    ? unlockRemixItem ?? lastUnlockRemixItem
     : null;
 
   useEffect(() => {
@@ -620,69 +621,77 @@ export default function ImmersivePreviewViewerScreen() {
       return;
     }
 
-    if (item.sourceType === 'showcase' && item.showcasePostId) {
-      setRemixingItemId(item.id);
-      try {
-        const response = await api.remixShowcasePost(item.showcasePostId);
-        if (source === 'showcase-feed') {
-          recordViewerFeedEvent(item, 'remix_start');
-        }
-        const nativeHref = getNativeRemixCreateHref({
-          redirectTo: response.redirectTo,
-          recreateTool: item.recreateTool,
-          prompt: response.prefill?.prompt ?? item.recreatePrompt,
-          context: { postId: item.showcasePostId, title: item.title, creatorLabel: item.creatorLabel, thumbnailUrl: item.mediaKind === 'image' ? item.mediaUrl : null },
-        });
-        if (nativeHref) {
-          router.push(nativeHref as never);
-          return;
-        }
-        if (response.redirectTo) {
-          // Leaving the app is the viewer's call, not a silent hand-off.
-          const webUrl = `${env.siteUrl}${response.redirectTo}`;
-          void showConfirmDialog({
-            title: REMIX_NEEDS_WEB_TITLE,
-            message: REMIX_NEEDS_WEB_BODY,
-            cancelLabel: 'Not now',
-            confirmLabel: 'Open web',
-          }).then((openWeb) => {
-            if (openWeb) void Linking.openURL(webUrl);
-          });
-          return;
-        }
-      } catch (error) {
-        haptic.error();
-        showErrorDialog('Could not start remix', error);
-        return;
-      } finally {
-        setRemixingItemId(null);
-      }
+    const context = { postId: item.showcasePostId, title: item.title, creatorLabel: item.creatorLabel, thumbnailUrl: item.mediaKind === 'image' ? item.mediaUrl : null };
+    const openCreateTool = () => {
+      const fallbackHref = getNativeRemixCreateHref({
+        recreateTool: item.recreateTool,
+        prompt: item.recreatePrompt,
+        context,
+      });
+      router.push((fallbackHref ?? `/create/${item.recreateTool}`) as never);
+    };
+
+    const showcasePostId = item.sourceType === 'showcase' ? item.showcasePostId : null;
+    if (!showcasePostId) {
+      openCreateTool();
+      return;
     }
 
-    const fallbackHref = getNativeRemixCreateHref({
-      recreateTool: item.recreateTool,
-      prompt: item.recreatePrompt,
-      context: { postId: item.showcasePostId, title: item.title, creatorLabel: item.creatorLabel, thumbnailUrl: item.mediaKind === 'image' ? item.mediaUrl : null },
-    });
-    router.push((fallbackHref ?? `/create/${item.recreateTool}`) as never);
+    const startRemix = async () => {
+      const response = await api.remixShowcasePost(showcasePostId);
+      if (source === 'showcase-feed') {
+        recordViewerFeedEvent(item, 'remix_start');
+      }
+      const nativeHref = getNativeRemixCreateHref({
+        redirectTo: response.redirectTo,
+        recreateTool: item.recreateTool,
+        prompt: response.prefill?.prompt ?? item.recreatePrompt,
+        context,
+      });
+      if (nativeHref) {
+        router.push(nativeHref as never);
+        return;
+      }
+      if (response.redirectTo) {
+        // Leaving the app is the viewer's call, not a silent hand-off.
+        const webUrl = `${env.siteUrl}${response.redirectTo}`;
+        void showConfirmDialog({
+          title: REMIX_NEEDS_WEB_TITLE,
+          message: REMIX_NEEDS_WEB_BODY,
+          cancelLabel: 'Not now',
+          confirmLabel: 'Open web',
+        }).then((openWeb) => {
+          if (openWeb) void Linking.openURL(webUrl);
+        });
+        return;
+      }
+      openCreateTool();
+    };
+    setRemixingItemId(item.id);
+    // `.catch` and `.finally` rather than try…finally, which React Compiler
+    // cannot compile; this screen re-renders on every swipe.
+    void startRemix()
+      .catch((error) => {
+        haptic.error();
+        showErrorDialog('Could not start remix', error);
+      })
+      .finally(() => setRemixingItemId(null));
   };
 
-  const applyPostVisibility = async (
+  const applyPostVisibility = (
     post: PostLifecyclePost,
     visibility: PostLifecycleVisibility,
     action: string
   ) => {
-    setOwnerActionPending(action);
-    try {
+    const apply = async () => {
       const outcome = await changePostVisibility({ api, post, visibility });
-      if (outcome === 'done') {
-        await refreshViewerMediaCaches(queryClient, user?.id);
-        await sourceQuery.refetch();
-        void AccessibilityInfo.announceForAccessibility(`This post is now ${visibility}.`);
-      }
-    } finally {
-      setOwnerActionPending(null);
-    }
+      if (outcome !== 'done') return;
+      await refreshViewerMediaCaches(queryClient, user?.id);
+      await sourceQuery.refetch();
+      void AccessibilityInfo.announceForAccessibility(`This post is now ${visibility}.`);
+    };
+    setOwnerActionPending(action);
+    return apply().finally(() => setOwnerActionPending(null));
   };
 
   /**

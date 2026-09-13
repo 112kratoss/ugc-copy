@@ -129,6 +129,42 @@ const FEED_HORIZONTAL_PADDING = 8;
 /** One relayout per tick instead of one per resolved preview image. */
 const SHOWCASE_ASPECT_RATIO_FLUSH_MS = 50;
 
+/**
+ * One step of the video election. A plain function rather than a callback that
+ * calls itself: the settle timer dispatches through it again, and React Compiler
+ * will not compile a component whose callback reads its own binding before that
+ * binding is declared.
+ */
+function runShowcaseActivation(
+  refs: {
+    activation: { current: typeof INITIAL_SHOWCASE_ACTIVATION_STATE };
+    settleTimer: { current: ReturnType<typeof setTimeout> | null };
+  },
+  event: ShowcaseActivationEvent,
+  setActiveVideoIds: (ids: string[]) => void,
+) {
+  const previous = refs.activation.current;
+  const next = reduceShowcaseActivation(previous, event, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS);
+  refs.activation.current = next;
+
+  if (refs.settleTimer.current) {
+    clearTimeout(refs.settleTimer.current);
+    refs.settleTimer.current = null;
+  }
+  // A fling whose momentum the platform never announces would otherwise sit
+  // in `settling` forever, so arm a confirm timer whenever we enter it.
+  if (next.scroll === 'settling') {
+    refs.settleTimer.current = setTimeout(
+      () => runShowcaseActivation(refs, { type: 'settleTimeout' }, setActiveVideoIds),
+      SHOWCASE_SETTLE_CONFIRM_MS
+    );
+  }
+
+  // `elect` reuses the previous array when nothing changed, so this is a
+  // pointer comparison rather than a re-render on every scroll event.
+  if (next.activeIds !== previous.activeIds) setActiveVideoIds(next.activeIds);
+}
+
 export default function ShowcaseScreen() {
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
@@ -224,26 +260,7 @@ export default function ShowcaseScreen() {
     if (!isFocused) void flushShowcaseFeedEvents();
   }, [isFocused]);
   const dispatchActivation = useCallback((event: ShowcaseActivationEvent) => {
-    const previous = activationRef.current;
-    const next = reduceShowcaseActivation(previous, event, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS);
-    activationRef.current = next;
-
-    if (settleTimerRef.current) {
-      clearTimeout(settleTimerRef.current);
-      settleTimerRef.current = null;
-    }
-    // A fling whose momentum the platform never announces would otherwise sit
-    // in `settling` forever, so arm a confirm timer whenever we enter it.
-    if (next.scroll === 'settling') {
-      settleTimerRef.current = setTimeout(
-        () => dispatchActivation({ type: 'settleTimeout' }),
-        SHOWCASE_SETTLE_CONFIRM_MS
-      );
-    }
-
-    // `elect` reuses the previous array when nothing changed, so this is a
-    // pointer comparison rather than a re-render on every scroll event.
-    if (next.activeIds !== previous.activeIds) setActiveVideoIds(next.activeIds);
+    runShowcaseActivation({ activation: activationRef, settleTimer: settleTimerRef }, event, setActiveVideoIds);
   }, []);
 
   useEffect(() => () => {
@@ -330,7 +347,9 @@ export default function ShowcaseScreen() {
     onScreenCardIdsRef.current = onScreen;
     releaseHeldAspectRatios();
   }, [releaseHeldAspectRatios]);
-  const viewabilityConfigCallbackPairs = useRef([
+  // Built once from the first render's callbacks, which FlashList needs to stay
+  // stable. State rather than a ref, which render may not read.
+  const [viewabilityConfigCallbackPairs] = useState(() => [
     {
       viewabilityConfig: SHOWCASE_ONSCREEN_VIEWABILITY,
       onViewableItemsChanged: onScreenViewableItemsChanged,
@@ -343,7 +362,7 @@ export default function ShowcaseScreen() {
       viewabilityConfig: SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY,
       onViewableItemsChanged: onQualifiedViewableItemsChanged,
     },
-  ]).current;
+  ]);
   const showcaseQuery = useInfiniteQuery({
     queryKey,
     initialPageParam: { offset: 0 } as ShowcaseFeedPageParam,
@@ -358,12 +377,17 @@ export default function ShowcaseScreen() {
     () => getShowcaseFeedSessionContext(showcaseQuery.data?.pages),
     [showcaseQuery.data?.pages]
   );
-  feedEventRuntimeRef.current = {
-    api,
-    isFocused,
-    feedSessionId: feedSession.feedSessionId,
-    algorithmVersion: feedSession.algorithmVersion,
-  };
+  // Written after render, not during it. Its readers all run later: taps, media
+  // progress, and the impression callback, which waits for a card to stay on
+  // screen a second.
+  useEffect(() => {
+    feedEventRuntimeRef.current = {
+      api,
+      isFocused,
+      feedSessionId: feedSession.feedSessionId,
+      algorithmVersion: feedSession.algorithmVersion,
+    };
+  }, [api, feedSession.algorithmVersion, feedSession.feedSessionId, isFocused]);
   const showcaseItems = useMemo(() => {
     const flattened = flattenShowcaseFeedPages(showcaseQuery.data?.pages);
     // `buildShowcaseMasonry` drops text-only posts; this list stays unfiltered so
@@ -600,9 +624,9 @@ export default function ShowcaseScreen() {
       message: 'Their posts will be hidden, and neither of you will be able to follow the other.',
       confirmLabel: 'Block user',
       destructive: true,
-    }).then(async (confirmed) => {
+    }).then((confirmed) => {
       if (!confirmed) return;
-      try {
+      const block = async () => {
         await api.blockUser(creatorId);
         queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
           { queryKey: viewerFeedQueryKey },
@@ -613,10 +637,13 @@ export default function ShowcaseScreen() {
           queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] }),
         ]);
         void AccessibilityInfo.announceForAccessibility(`${creatorLabel} blocked.`);
-      } catch (error) {
+      };
+      // `.catch` rather than try/catch: React Compiler cannot yet compile
+      // optional chaining inside a try block.
+      return block().catch((error) => {
         haptic.error();
         showErrorDialog('Could not block user', error);
-      }
+      });
     });
   };
 
