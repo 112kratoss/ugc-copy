@@ -17,6 +17,7 @@ import {
 } from './generation-model-catalog';
 import {
   hydrateCreationDraftFromRemixSource,
+  REMIX_RESTORE_WARNING_MESSAGE,
   type CatalogDraftInputAsset,
   type CatalogDraftInputSlots,
   type CreationDraft,
@@ -755,6 +756,19 @@ export function hasCreatorEditedPromptDuringRemix(
   return currentPrompt.trim().length > 0 && currentPrompt !== promptWhenRemixStarted;
 }
 
+/** Media a remix restored into a draft, counted so a later cap can say what it removed. */
+function restoredRemixMediaCount(draft: CreationDraft): number {
+  if (draft.tool === 'image') return draft.references.length;
+  if (draft.tool === 'video') {
+    return draft.references.length
+      + draft.referenceVideos.length
+      + draft.referenceAudios.length
+      + (draft.startFrame ? 1 : 0)
+      + (draft.endFrame ? 1 : 0);
+  }
+  return (draft.characterImage ? 1 : 0) + (draft.referenceVideo ? 1 : 0);
+}
+
 export function hydrateCatalogCreationDraftFromRemixSource(
   baseDraft: CreationDraft,
   bundle: RemixSourceBundle,
@@ -776,7 +790,9 @@ export function hydrateCatalogCreationDraftFromRemixSource(
     : null;
   // The legacy hydrator restores signed media descriptors. Catalog model
   // selection and settings are deliberately reapplied afterwards so a remote
-  // id never has to exist in the bundled registry.
+  // id never has to exist in the bundled registry. It must not cap media:
+  // the draft still names the placeholder model at that point, and the
+  // published descriptor's limits are applied by applyCatalogModelDefaults.
   const legacyBundle = {
     ...bundle,
     workflowSettings: {
@@ -784,11 +800,12 @@ export function hydrateCatalogCreationDraftFromRemixSource(
       model: baseDraft.model,
     },
   } as RemixSourceBundle;
+  const legacyOptions = { capToBundledModel: false };
   const restored: { draft: CreationDraft; warning: string | null } = baseDraft.tool === 'image'
-    ? hydrateCreationDraftFromRemixSource(baseDraft, legacyBundle)
+    ? hydrateCreationDraftFromRemixSource(baseDraft, legacyBundle, legacyOptions)
     : baseDraft.tool === 'video'
-      ? hydrateCreationDraftFromRemixSource(baseDraft, legacyBundle)
-      : hydrateCreationDraftFromRemixSource(baseDraft, legacyBundle);
+      ? hydrateCreationDraftFromRemixSource(baseDraft, legacyBundle, legacyOptions)
+      : hydrateCreationDraftFromRemixSource(baseDraft, legacyBundle, legacyOptions);
   if (!model) return {
     draft: { ...restored.draft, model: requestedModelId, catalogRevision: catalog.revision } as CreationDraft,
     model: null,
@@ -810,6 +827,8 @@ export function hydrateCatalogCreationDraftFromRemixSource(
     catalogRevision: catalog.revision,
     catalogSettings: restoredCatalogSettings,
   } as CreationDraft, model, catalog.revision);
+  const droppedByCatalog = restoredRemixMediaCount(restored.draft) - restoredRemixMediaCount(draft);
+  const restoreWarning = restored.warning ?? (droppedByCatalog > 0 ? REMIX_RESTORE_WARNING_MESSAGE : null);
   const switchedModel = model.id !== requestedModelId;
   const retirementWarning = switchedModel
     ? `${requestedModelId} is no longer available. Switched to ${model.displayName}.`
@@ -817,7 +836,7 @@ export function hydrateCatalogCreationDraftFromRemixSource(
   return {
     draft,
     model,
-    warning: [retirementWarning, restored.warning].filter(Boolean).join(' ') || null,
+    warning: [retirementWarning, restoreWarning].filter(Boolean).join(' ') || null,
     switchedModel,
   };
 }

@@ -930,13 +930,25 @@ type RemixHydrationResult<T extends CreationDraft> = {
   warning: string | null;
 };
 
+export type RemixHydrationOptions = {
+  /**
+   * Cap restored media at the bundled registry's limits for the draft's model (default
+   * true). The catalog path passes false: it restores into a placeholder model and then
+   * applies the published descriptor's own limits. The default video placeholder,
+   * kling-3.0-video, accepts no reusable references, so capping first emptied every one.
+   * Motion drafts have no reference caps and ignore this.
+   */
+  capToBundledModel?: boolean;
+};
+
 function remixRestoreWarning(restoreIssues: readonly string[] | undefined, skippedCount: number) {
   return (restoreIssues?.length ?? 0) > 0 || skippedCount > 0 ? REMIX_RESTORE_WARNING_MESSAGE : null;
 }
 
 function hydrateImageDraftFromRemixSource(
   baseDraft: ImageCreationDraft,
-  bundle: RemixSourceBundle
+  bundle: RemixSourceBundle,
+  { capToBundledModel = true }: RemixHydrationOptions = {},
 ): RemixHydrationResult<ImageCreationDraft> {
   const settings = bundle.workflowSettings ?? {};
   const modelSetting = stringSetting(settings, 'model');
@@ -977,6 +989,10 @@ function hydrateImageDraftFromRemixSource(
     nextDraft = { ...nextDraft, googleSearch };
   }
 
+  if (!capToBundledModel) {
+    return { draft: nextDraft, warning: remixRestoreWarning(bundle.restoreIssues, restoredReferences.skipped) };
+  }
+
   const normalizedDraft = applyModelDefaults(nextDraft) as ImageCreationDraft;
   const droppedReferences = Math.max(0, nextDraft.references.length - normalizedDraft.references.length);
 
@@ -988,7 +1004,8 @@ function hydrateImageDraftFromRemixSource(
 
 function hydrateVideoDraftFromRemixSource(
   baseDraft: VideoCreationDraft,
-  bundle: RemixSourceBundle
+  bundle: RemixSourceBundle,
+  { capToBundledModel = true }: RemixHydrationOptions = {},
 ): RemixHydrationResult<VideoCreationDraft> {
   const settings = bundle.workflowSettings ?? {};
   const modelSetting = stringSetting(settings, 'model');
@@ -1066,16 +1083,20 @@ function hydrateVideoDraftFromRemixSource(
     nextDraft = { ...nextDraft, fixedLens };
   }
 
+  const unresolved = restoredElements.skipped
+    + restoredStartFrame.skipped
+    + restoredEndFrame.skipped
+    + restoredReferenceVideos.skipped
+    + restoredReferenceAudios.skipped;
+  if (!capToBundledModel) {
+    return { draft: nextDraft, warning: remixRestoreWarning(bundle.restoreIssues, unresolved) };
+  }
+
   const normalizedDraft = applyModelDefaults(nextDraft) as VideoCreationDraft;
   const droppedReferences = Math.max(0, nextDraft.references.length - normalizedDraft.references.length)
     + Math.max(0, nextDraft.referenceVideos.length - normalizedDraft.referenceVideos.length)
     + Math.max(0, nextDraft.referenceAudios.length - normalizedDraft.referenceAudios.length);
-  const skipped = restoredElements.skipped
-    + restoredStartFrame.skipped
-    + restoredEndFrame.skipped
-    + restoredReferenceVideos.skipped
-    + restoredReferenceAudios.skipped
-    + droppedReferences;
+  const skipped = unresolved + droppedReferences;
 
   return {
     draft: normalizedDraft,
@@ -1129,22 +1150,26 @@ function hydrateMotionDraftFromRemixSource(
 
 export function hydrateCreationDraftFromRemixSource(
   baseDraft: ImageCreationDraft,
-  bundle: RemixSourceBundle
+  bundle: RemixSourceBundle,
+  options?: RemixHydrationOptions
 ): RemixHydrationResult<ImageCreationDraft>;
 export function hydrateCreationDraftFromRemixSource(
   baseDraft: VideoCreationDraft,
-  bundle: RemixSourceBundle
+  bundle: RemixSourceBundle,
+  options?: RemixHydrationOptions
 ): RemixHydrationResult<VideoCreationDraft>;
 export function hydrateCreationDraftFromRemixSource(
   baseDraft: MotionCreationDraft,
-  bundle: RemixSourceBundle
+  bundle: RemixSourceBundle,
+  options?: RemixHydrationOptions
 ): RemixHydrationResult<MotionCreationDraft>;
 export function hydrateCreationDraftFromRemixSource(
   baseDraft: CreationDraft,
-  bundle: RemixSourceBundle
+  bundle: RemixSourceBundle,
+  options: RemixHydrationOptions = {}
 ): RemixHydrationResult<CreationDraft> {
-  if (baseDraft.tool === 'image') return hydrateImageDraftFromRemixSource(baseDraft, bundle);
-  if (baseDraft.tool === 'video') return hydrateVideoDraftFromRemixSource(baseDraft, bundle);
+  if (baseDraft.tool === 'image') return hydrateImageDraftFromRemixSource(baseDraft, bundle, options);
+  if (baseDraft.tool === 'video') return hydrateVideoDraftFromRemixSource(baseDraft, bundle, options);
   return hydrateMotionDraftFromRemixSource(baseDraft, bundle);
 }
 
