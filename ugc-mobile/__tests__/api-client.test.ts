@@ -37,6 +37,27 @@ function upgradeRequiredResponse() {
 }
 
 describe('mobile api client caching', () => {
+  it('loads full owner details for one creation without changing summary lists', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ generations: [{
+      id: 'gen-1', output_url: '/api/media/output', model: 'nano-banana-2',
+      input_media: [{ id: 'ref-1', mediaType: 'image', role: 'reference_image', url: '/api/media/reference' }],
+    }] }));
+    const api = createApiClient({ baseUrl: 'https://magicbooklet.test', getAccessToken: async () => 'token-1', fetcher: fetcher as typeof fetch });
+    const generation = await api.getGenerationDetails('gen-1');
+    const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    const query = new URL(url).searchParams;
+    expect(query.get('id')).toBe('gen-1');
+    expect(query.get('limit')).toBe('1');
+    expect(query.get('detail')).not.toBe('summary');
+    expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+    expect(generation?.input_media?.[0]).toMatchObject({ mediaType: 'image', url: 'https://magicbooklet.test/api/media/reference' });
+  });
+
+  it('does not substitute a different generation when owner details are unavailable', async () => {
+    const api = createApiClient({ baseUrl: 'https://magicbooklet.test', getAccessToken: async () => 'token-1',
+      fetcher: vi.fn(async () => jsonResponse({ generations: [{ id: 'different-generation' }] })) as typeof fetch });
+    expect(await api.getGenerationDetails('missing-generation')).toBeNull();
+  });
   it('sends authenticated moderation reports and user block mutations', async () => {
     const fetcher = vi.fn(async () => jsonResponse({ success: true, blocked: true }));
     const api = createApiClient({

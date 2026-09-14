@@ -245,7 +245,7 @@ export interface GenerationListItem {
   title?: string | null;
   description?: string | null;
   prompt?: string | null;
-  input_media?: Array<{ url?: string | null; kind?: string | null }>;
+  input_media?: GenerationInputMediaItem[];
   linked_post_id?: string | null;
   linked_post_title?: string | null;
   linked_post_visibility?: string | null;
@@ -516,6 +516,10 @@ export interface GenerationInputMediaItem {
   url?: string | null;
   storagePath?: string | null;
   kind?: RemixAssetKind | string | null;
+  mediaType?: RemixAssetKind | null;
+  role?: string | null;
+  sortOrder?: number;
+  metadata?: Record<string, unknown> | null;
   label?: string | null;
   sourceGenerationId?: string | null;
 }

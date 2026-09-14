@@ -218,6 +218,7 @@ const extendedOperationCases: Array<{
   key: RegisteredOperationKey;
   call: (api: MagicbookletApiClient) => Promise<unknown>;
 }> = [
+  { key: 'getGenerationDetails', call: (api) => api.getGenerationDetails('generation-1') },
   {
     key: 'startGeneration',
     call: (api) => api.startGeneration?.({

@@ -321,6 +321,19 @@ describe('immersive viewer actions', () => {
     })).toBe('/create/motion?remix=gen-2');
   });
 
+  it.each(['image', 'video', 'motion'] as const)('preserves the owner generation when recreating %s, even without a prompt', (tool) => {
+    const href = getNativeRemixCreateHref({
+      generationId: 'owner-generation',
+      recreateTool: tool,
+      prompt: '',
+      context: { postId: 'published-post', title: 'My creation', creatorLabel: '@creator' },
+    });
+    const url = new URL(href!, 'https://magicbooklet.test');
+    expect(url.pathname).toBe(`/create/${tool}`);
+    expect(url.searchParams.get('remix')).toBe('owner-generation');
+    expect(url.searchParams.get('remixPost')).toBe('published-post');
+  });
+
   it('falls back to prompt-only native create navigation when remix metadata is unavailable', () => {
     expect(getNativeRemixCreateHref({
       redirectTo: '/create-image?post=post-1',

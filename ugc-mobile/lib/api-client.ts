@@ -360,7 +360,7 @@ function normalizeGenerationMediaUrls(root: string, item: GenerationListItem): G
       model: 'Magicbooklet template',
       prompt: null,
       input_media: [],
-    } : {}),
+    } : { input_media: item.input_media?.map((media) => ({ ...media, url: absolutizeMediaUrl(root, media.url) })) }),
     output_url: absolutizeMediaUrl(root, item.output_url),
     output_urls: item.output_urls?.map((url) => absolutizeMediaUrl(root, url)).filter((url): url is string => Boolean(url)),
     preview_url: previewUrl,
@@ -759,6 +759,14 @@ export function createApiClient({
         ...response,
         generations: response.generations.map((item) => normalizeGenerationMediaUrls(root, item)),
       };
+    },
+    getGenerationDetails: async (generationId: string): Promise<GenerationListItem | null> => {
+      const id = generationId.trim();
+      if (!id) return null;
+      // Omit detail=summary only for this owner-scoped, single-creation read.
+      const response = await request<GenerationListResponse>(`/api/generations${buildQuery({ id, includeArchived: true, limit: 1 })}`);
+      const generation = response.generations.find((item) => item.id === id);
+      return generation ? normalizeGenerationMediaUrls(root, generation) : null;
     },
     archiveGeneration: (generationId: string) =>
       request(`/api/generations/${generationId}/archive`, { method: 'POST' }),

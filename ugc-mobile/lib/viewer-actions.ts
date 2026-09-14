@@ -43,11 +43,14 @@ function createPromptHref(tool: CreatorToolId, prompt?: string | null) {
 
 export function getNativeRemixCreateHref({
   redirectTo,
+  generationId,
   recreateTool,
   prompt,
   context,
 }: {
   redirectTo?: string | null;
+  /** Owner creations already have an ID; no showcase remix redirect is needed. */
+  generationId?: string | null;
   recreateTool: CreatorToolId;
   prompt?: string | null;
   context?: { postId?: string | null; title: string; creatorLabel: string; thumbnailUrl?: string | null };
@@ -77,6 +80,11 @@ export function getNativeRemixCreateHref({
     }
   }
 
+  if (generationId?.trim()) {
+    const params = new URLSearchParams({ remix: generationId.trim() });
+    if (prompt?.trim()) params.set('prompt', prompt.trim());
+    return withContext(`/create/${recreateTool}?${params}`);
+  }
   return withContext(createPromptHref(recreateTool, prompt));
 }
 

@@ -54,6 +54,10 @@ vi.mock('@/lib/auth', () => ({
   useAuth: () => ({ user: { id: 'viewer-1' }, api: {} }),
 }));
 
+vi.mock('@/components/generation-references', () => ({
+  GenerationReferences: (props: MockProps) => React.createElement('generation-references', props),
+}));
+
 vi.mock('@/components/save-heart', () => ({
   SaveHeart: (props: MockProps) => React.createElement('save-heart', props),
 }));
@@ -154,6 +158,16 @@ function page(props: Partial<React.ComponentProps<typeof PostDetailsPage>> = {})
 }
 
 describe('PostDetailsPage', () => {
+  it('loads owner references only on the active creation details slide', () => {
+    const item = showcaseItem({ sourceType: 'generation', generationId: 'owner-generation',
+      details: { ...showcaseItem().details!, unlock: null } });
+    const tree = render(page({ item }));
+    expect(tree.root.findByType('generation-references' as never).props.generationId).toBe('owner-generation');
+    renderer.act(() => tree.update(page({ item, active: false })));
+    expect(tree.root.findAllByType('generation-references' as never)).toHaveLength(0);
+    renderer.act(() => tree.update(page({ item: showcaseItem({ generationId: 'someone-elses-generation' }) })));
+    expect(tree.root.findAllByType('generation-references' as never)).toHaveLength(0);
+  });
   beforeEach(() => {
     bundleContentProps.mockClear();
     queryState.current = { data: undefined, isError: false, error: null, refetch: vi.fn() };

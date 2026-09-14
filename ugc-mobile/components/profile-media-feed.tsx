@@ -199,8 +199,11 @@ export function ProfileMediaFeedScreen() {
       return;
     }
     const href = getNativeRemixCreateHref({
+      generationId: item.generationId,
       recreateTool: item.recreateTool,
       prompt: item.recreatePrompt,
+      context: { postId: item.showcasePostId, title: item.title, creatorLabel: item.creatorLabel,
+        thumbnailUrl: item.mediaKind === 'image' ? item.mediaUrl : null },
     });
     router.push((href ?? `/create/${item.recreateTool}`) as never);
   }, [user]);

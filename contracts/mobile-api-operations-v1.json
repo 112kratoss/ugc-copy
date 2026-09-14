@@ -86,6 +86,11 @@
       "path": "/api/generations",
       "auth": "required"
     },
+    "getGenerationDetails": {
+      "method": "GET",
+      "path": "/api/generations",
+      "auth": "required"
+    },
     "startGeneration": {
       "method": "POST",
       "path": "/api/generations",

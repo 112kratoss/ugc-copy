@@ -624,6 +624,7 @@ export default function ImmersivePreviewViewerScreen() {
     const context = { postId: item.showcasePostId, title: item.title, creatorLabel: item.creatorLabel, thumbnailUrl: item.mediaKind === 'image' ? item.mediaUrl : null };
     const openCreateTool = () => {
       const fallbackHref = getNativeRemixCreateHref({
+        generationId: item.sourceType !== 'showcase' ? item.generationId : null,
         recreateTool: item.recreateTool,
         prompt: item.recreatePrompt,
         context,

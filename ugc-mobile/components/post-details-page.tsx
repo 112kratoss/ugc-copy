@@ -5,6 +5,7 @@ import { useCallback, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, Text, View } from 'react-native';
 
 import { ResourcePrompt } from '@/components/resource-prompt';
+import { GenerationReferences } from '@/components/generation-references';
 import { PostResourceBundleContent } from '@/components/post-resource-bundle-content';
 import { ResourceAction } from '@/components/resource-action';
 import { CreatorAvatar, Pill } from '@/components/ui';
@@ -306,6 +307,10 @@ export function PostDetailsPage({
             <CopyableText text={captionText} onCopy={copyText} />
           ) : null}
         </DetailSection>
+
+        {active && user && item.sourceType === 'generation' && item.generationId ? (
+          <GenerationReferences key={`${user.id}:${item.generationId}`} generationId={item.generationId} />
+        ) : null}
 
         {/* Most posts carry no unlock. A card announcing that absence is the
             page telling the reader about something that is not there. */}
