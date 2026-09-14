@@ -86,6 +86,8 @@ offline; reopening selection or Retry reconciles it when connected.
   Installed-device checks were not repeated for `ebef768`; the first telemetry
   read showed no launches on the new groups yet.
 
-Open follow-ups: the pre-existing performance-workflow failures above, and a
-device check of the creation screen on both platforms now that the update is
-at 100%.
+Open follow-ups: a device check of the creation screen on both platforms now
+that the update is at 100%. The performance-workflow failures noted above were
+fixed on 2026-09-15 by #164 (the public stylesheet is inlined again) and #165
+(the proxy verifies bearer tokens locally); run 34900530965 passed the load
+and Lighthouse mobile budgets.

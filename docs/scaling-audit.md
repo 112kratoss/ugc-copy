@@ -134,8 +134,24 @@ improve one path and regress another. See
   still exists, its session still exists, it is not banned — plus the
   lifecycle state and `created_at`. Nothing is cached across requests, so the
   admission guarantees are unchanged. The monitor now records `proxy-verify`
-  and `proxy-lifecycle` alongside `proxy-identity`; the numbers from the first
-  post-release run belong here.
+  and `proxy-lifecycle` alongside `proxy-identity`. First post-release run
+  (34900530965, main `8f50cc5`): For You P50/P95/P99 TTFB 1,022/1,638/2,233 ms
+  with no violations, and the load job certified for the first time since
+  2026-08-22. `proxy-verify` P50 1 ms (P99 892 ms is the once-per-instance
+  JWKS fetch), `proxy-lifecycle` P50 275 / P95 806 ms, `proxy-identity` P50
+  277 / P95 848 ms against 555 / 1,617 ms on the previous commit an hour
+  earlier; feed work unchanged at 183 ms P50. What remains is the proxy's
+  single round trip to Supabase: the same PostgREST call costs ~23 ms from the
+  `bom1` route functions, so the next lever is where that lifecycle check
+  runs, not the query.
+- 2026-09-15: the Lighthouse mobile budget, red on every scheduled run since
+  #151 (2026-09-12) turned `experimental.inlineCss` off, is green again after
+  #164 (`d0df4b8`) turned it back on with every public route on the single
+  public stylesheet. Runs 34899010135 and 34900530965 pass the mobile budget
+  (home first contentful paint 993 ms against 2,248 ms on 2026-09-14) and the
+  re-based decoded budgets (home 774,012 / 835,584 B, showcase 587,934 /
+  638,976 B, marketplace 567,065 / 622,592 B); the wire size of the home
+  document is 85 KB.
 - The production catalog was a 100% CDN HIT at 55,915 decoded bytes and P95/P99
   TTFB 78.6/128.2 ms. Public recent feed was P95/P99 92.5/142.2 ms. Home was
   P95 74,746 encoded and 682,097 decoded bytes, both within its budgets.
