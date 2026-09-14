@@ -23,7 +23,8 @@
         ],
         "weight": 2,
         "p95TtfbMs": 1000,
-        "p99TtfbMs": 2000
+        "p99TtfbMs": 2000,
+        "p95DecodedBytes": 835584
       },
       {
         "name": "showcase-page",
@@ -34,7 +35,7 @@
         ],
         "weight": 1,
         "p95EncodedBodyBytes": 278528,
-        "p95DecodedBytes": 557056
+        "p95DecodedBytes": 638976
       },
       {
         "name": "marketplace-page",
@@ -45,7 +46,7 @@
         ],
         "weight": 1,
         "p95EncodedBodyBytes": 294912,
-        "p95DecodedBytes": 589824
+        "p95DecodedBytes": 622592
       },
       {
         "name": "model-catalog-api",

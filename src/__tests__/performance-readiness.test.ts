@@ -10,23 +10,27 @@ const readProjectFile = (relativePath: string) => (
 );
 
 describe('production performance readiness', () => {
-  it('serves the scoped public Tailwind stylesheet externally, without pulling in private utilities', () => {
+  it('inlines the scoped public Tailwind stylesheet without pulling in private utilities', () => {
     const nextConfig = readProjectFile('next.config.ts');
     const globalCss = readProjectFile('src/app/globals.css');
 
-    // `inlineCss` was on to remove the render-blocking stylesheet round trip.
-    // It is off deliberately: Next inlines the stylesheet twice per response —
-    // once in a <style> tag and once again, escaped, inside the RSC flight
-    // payload — which is a documented limitation of the flag. At a ~327 KB
-    // bundle that took /models from 114 KB of HTML to 868 KB, so even a
-    // first-time visitor with a cold cache received roughly twice the bytes.
-    // Turning it back on is only correct if the CSS bundle shrinks by about an
-    // order of magnitude; re-measure before flipping this.
-    expect(nextConfig).toContain('inlineCss: false');
-    expect(nextConfig).toContain('`inlineCss` is deliberately off');
+    // `inlineCss` is on so the public pages paint without a second,
+    // render-blocking request: on the throttled mobile Lighthouse run that
+    // request competed with the script chunks and moved the home page's first
+    // paint from 0.8 s to 2.2 s. Next inlines the sheet twice per response (a
+    // documented limitation), so the sheet a public page inlines has to stay
+    // small: globals.css scans only public routes, and a public route never
+    // links the supplement (route-style-readiness.test.ts pins the split).
+    expect(nextConfig).toContain('inlineCss: true');
+    expect(nextConfig).toContain('`inlineCss` is deliberately on');
     expect(globalCss).toContain('@import "tailwindcss" source(none)');
     expect(globalCss).toContain('@source "./showcase"');
     expect(globalCss).toContain('@source "./marketplace"');
+    expect(globalCss).toContain('@source "./blog"');
+    expect(globalCss).toContain('@source "./templates"');
+    expect(globalCss).not.toContain('@source "./post"');
+    expect(globalCss).not.toContain('@source "./create-image"');
+    expect(globalCss).not.toContain('@source "./admin"');
     expect(globalCss).not.toContain('@source "../components";');
     expect(globalCss).toContain('@source "../components/AppShell.tsx";');
     expect(globalCss).toContain('@source "../lib/client-generation-models.ts";');
@@ -154,6 +158,23 @@ describe('production performance readiness', () => {
     };
 
     expect(budgets.load.targets.length).toBeGreaterThanOrEqual(4);
+    // With `inlineCss` on, every public document carries the public stylesheet
+    // about three times over (the <style> tag plus its escaped copy in the RSC
+    // payload), so the decoded size of a page is dominated by the sheet rather
+    // than its content. The three page targets therefore budget decoded bytes
+    // explicitly, re-based on the measured inlined documents (home 763,979 B,
+    // showcase 586,662 B, marketplace 565,782 B on 2026-09-15) with the same
+    // ~10% headroom the earlier budgets had. Encoded budgets are untouched:
+    // brotli matches the duplicate copy against the first, so the wire cost of
+    // inlining is about one compressed copy (~20 KB).
+    const pageTargets = Object.fromEntries(
+      budgets.load.targets
+        .filter((target) => !target.path.startsWith('/api/'))
+        .map((target) => [target.name, target as typeof target & { p95DecodedBytes?: number }]),
+    );
+    expect(pageTargets['home-page']?.p95DecodedBytes).toBe(835_584);
+    expect(pageTargets['showcase-page']?.p95DecodedBytes).toBe(638_976);
+    expect(pageTargets['marketplace-page']?.p95DecodedBytes).toBe(622_592);
     expect(budgets.load.targets.every((target) => target.method === 'GET')).toBe(true);
     expect(budgets.load.targets.every((target) => target.path.startsWith('/'))).toBe(true);
     expect(budgets.load.targets.some((target) => target.path.includes('sort=recent'))).toBe(true);
