@@ -96,4 +96,20 @@ describe('creation draft resume', () => {
     await clearPersistedCreationDrafts(scope);
     expect(memory.has(creationDraftStorageKey())).toBe(true);
   });
+
+  // Remix restores before 2026-09-15 capped media at the placeholder video model, which
+  // accepts no references, and autosaved the emptied draft. Resuming one of those sessions
+  // would hide the source's references for good, so they must restore afresh instead.
+  it('does not resume remix sessions saved under the previous scope', async () => {
+    const memory = new Map<string, string>();
+    storage.getItem.mockImplementation(async (key: string) => memory.get(key) ?? null);
+    const drafts = { image: createDefaultCreationDraft('image'), video: createDefaultCreationDraft('video'), motion: createDefaultCreationDraft('motion') };
+    const previousScope = JSON.stringify(['remix', 'reader', 'post', 'generation']);
+    memory.set(creationDraftStorageKey(previousScope), JSON.stringify({ ...drafts, remixRestored: true, updatedAt: '2026-09-14T00:00:00.000Z' }));
+
+    const scope = remixDraftScope('reader', { generationId: 'generation', postId: 'post' });
+
+    expect(scope).not.toBe(previousScope);
+    expect(await loadPersistedCreationDrafts(scope)).toBeNull();
+  });
 });

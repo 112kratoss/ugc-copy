@@ -12,9 +12,19 @@ export function creationDraftStorageKey(scope?: string) {
   return scope ? `${CREATION_DRAFT_STORAGE_KEY}:${encodeURIComponent(scope)}` : CREATION_DRAFT_STORAGE_KEY;
 }
 
+/**
+ * Bumped when remix sessions saved under the previous scope must not be resumed.
+ *
+ * 2: remix restores before 2026-09-15 capped media at the placeholder draft model, whose
+ * video default (kling-3.0-video) accepts no references, then autosaved the emptied draft.
+ * Resuming one of those would hide the source's references for good, so they start again
+ * from the source. Unsent edits in such a session are the price of that.
+ */
+const REMIX_DRAFT_SCOPE_VERSION = 2;
+
 export function remixDraftScope(userId: string | null, source?: { generationId?: string | null; postId?: string | null }) {
   if (!source?.generationId && !source?.postId) return undefined;
-  return JSON.stringify(['remix', userId ?? 'guest', source.postId ?? '', source.generationId ?? '']);
+  return JSON.stringify(['remix', REMIX_DRAFT_SCOPE_VERSION, userId ?? 'guest', source.postId ?? '', source.generationId ?? '']);
 }
 
 export type PersistedCreationDrafts = {
