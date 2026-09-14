@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient, type User } from '@supabase/supabase-js';
+import { createClient, isAuthRetryableFetchError, type User } from '@supabase/supabase-js';
 
 import {
   ADMIN_SESSION_COOKIE,
@@ -228,10 +228,12 @@ function applyMobileCompatibilityHeaders(response: NextResponse) {
   return response;
 }
 
+type ProxyIdentityClaims = Record<string, unknown>;
+
 type ProxyIdentityClient = {
   auth: {
-    getUser: () => Promise<{
-      data: { user: User | null };
+    getClaims: (jwt: string) => Promise<{
+      data: { claims: ProxyIdentityClaims } | null;
       error: unknown;
     }>;
   };
@@ -242,6 +244,16 @@ type ProxyIdentityDependencies = {
   createUserClient?: (authorization: string) => ProxyIdentityClient;
   signIdentityAdmission?: typeof signIdentityAdmission;
 };
+
+type ProxyIdentityAdmission = {
+  assertion: string | null;
+  durationMs: number;
+  verifyMs: number;
+  lifecycleMs: number;
+  rejection: NextResponse | null;
+};
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 function createProxyIdentityClient(authorization: string): ProxyIdentityClient {
   return createClient(
@@ -258,31 +270,71 @@ function createProxyIdentityClient(authorization: string): ProxyIdentityClient {
   ) as unknown as ProxyIdentityClient;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function bearerToken(authorization: string): string | null {
+  const match = authorization.match(/^Bearer\s+(\S+)$/iu);
+  return match?.[1] ?? null;
+}
+
+function identityRejection(status: 401 | 403 | 409 | 503, code: string, error: string) {
+  return NextResponse.json({ error, code }, {
+    status,
+    headers: { 'Cache-Control': 'private, no-store' },
+  });
+}
+
+function unauthorizedRejection() {
+  return identityRejection(401, 'UNAUTHORIZED', 'Unauthorized');
+}
+
+function identityUnavailableRejection() {
+  return identityRejection(
+    503,
+    'IDENTITY_CHECK_UNAVAILABLE',
+    'Identity verification is temporarily unavailable. Please try again.',
+  );
+}
+
 /**
  * Central admission for every policy-listed authenticated API route.
  *
- * The proxy uses only the caller's JWT and anon key. The zero-argument RPC can
- * inspect only auth.uid(), so this is an authoritative lifecycle check without
- * putting the service-role credential at the edge. Successful admission is
- * passed to the route in a short-lived HMAC assertion bound to this exact
- * bearer token, method and path. Route adapters verify that assertion and fall
- * back to their own Auth/lifecycle checks when it is absent or invalid.
+ * The proxy uses only the caller's JWT and anon key, and one network round
+ * trip. The token's signature and expiry are verified locally: the project
+ * signs JWTs with an asymmetric key (ES256), so `getClaims()` checks the
+ * signature through WebCrypto against a JWKS cached per instance, and only
+ * falls back to a GoTrue call if the project were ever moved back to a
+ * symmetric secret. Everything GoTrue's `/user` round trip used to establish
+ * beyond the signature — that the account still exists, that the token's
+ * session was not revoked, that the account is not banned — is answered by the
+ * zero-argument `current_identity_admission()` RPC together with the durable
+ * lifecycle state and `created_at`, the one field a JWT does not carry. The RPC
+ * can inspect only auth.uid() and its own claims, so this stays an
+ * authoritative lifecycle check without putting the service-role credential at
+ * the edge.
+ *
+ * Successful admission is passed to the route in a short-lived HMAC assertion
+ * bound to this exact bearer token, method and path. Route adapters verify that
+ * assertion and fall back to their own Auth/lifecycle checks when it is absent
+ * or invalid.
  */
 async function evaluateUserFacingRouteIdentity(
   request: NextRequest,
   dependencies: ProxyIdentityDependencies = {},
-): Promise<{
-  assertion: string | null;
-  durationMs: number;
-  rejection: NextResponse | null;
-}> {
+): Promise<ProxyIdentityAdmission> {
   const startedAt = performance.now();
+  let verifyMs = 0;
+  let lifecycleMs = 0;
   const result = (
     rejection: NextResponse | null,
     assertion: string | null = null,
-  ) => ({
+  ): ProxyIdentityAdmission => ({
     assertion,
     durationMs: performance.now() - startedAt,
+    verifyMs,
+    lifecycleMs,
     rejection,
   });
   const policy = routeIdentityPolicyForPathname(request.nextUrl.pathname);
@@ -294,48 +346,86 @@ async function evaluateUserFacingRouteIdentity(
   // mutation or signing capability.
   const authorization = request.headers.get('authorization')?.trim();
   if (!authorization) return result(null);
+  const token = bearerToken(authorization);
+  if (!token) return result(unauthorizedRejection());
 
   try {
     const client = (dependencies.createUserClient ?? createProxyIdentityClient)(authorization);
-    const { data: { user }, error: authError } = await client.auth.getUser();
-    if (authError || !user) {
-      return result(NextResponse.json(
-        { error: 'Unauthorized', code: 'UNAUTHORIZED' },
-        { status: 401, headers: { 'Cache-Control': 'private, no-store' } },
-      ));
+
+    const verifyStartedAt = performance.now();
+    const { data: verified, error: verifyError } = await client.auth.getClaims(token);
+    verifyMs = performance.now() - verifyStartedAt;
+    if (verifyError || !verified?.claims) {
+      // A signing-key fetch that failed on the network is an outage on our
+      // side, not a bad token; a signature, expiry or parse failure is.
+      return result(isAuthRetryableFetchError(verifyError)
+        ? identityUnavailableRejection()
+        : unauthorizedRejection());
+    }
+    const { claims } = verified;
+    const userId = typeof claims.sub === 'string' && UUID_PATTERN.test(claims.sub)
+      ? claims.sub
+      : null;
+    if (!userId || claims.role !== 'authenticated') {
+      return result(unauthorizedRejection());
     }
 
-    const { data: state, error: stateError } = await client.rpc('current_identity_state');
-    if (
-      stateError
-      || (state !== 'active' && state !== 'merged' && state !== 'deleting')
-    ) {
-      return result(NextResponse.json({
-        error: 'Identity verification is temporarily unavailable. Please try again.',
-        code: 'IDENTITY_CHECK_UNAVAILABLE',
-      }, { status: 503, headers: { 'Cache-Control': 'private, no-store' } }));
+    const lifecycleStartedAt = performance.now();
+    const { data: admission, error: admissionError } = await client.rpc('current_identity_admission');
+    lifecycleMs = performance.now() - lifecycleStartedAt;
+    if (admissionError) return result(identityUnavailableRejection());
+    // NULL means the account no longer exists (or is soft-deleted): a still
+    // valid token for a deleted user is refused, as GoTrue would have.
+    if (admission === null) return result(unauthorizedRejection());
+    if (!isRecord(admission)) return result(identityUnavailableRejection());
+    if (admission.session_valid !== true || admission.banned === true) {
+      return result(unauthorizedRejection());
+    }
+
+    const state = admission.state;
+    if (state !== 'active' && state !== 'merged' && state !== 'deleting') {
+      return result(identityUnavailableRejection());
     }
 
     if (state === 'merged') {
-      return result(NextResponse.json({
-        error: 'This guest session has been linked to an account. Sign in to continue.',
-        code: 'SESSION_MERGED',
-      }, { status: 409, headers: { 'Cache-Control': 'private, no-store' } }));
+      return result(identityRejection(
+        409,
+        'SESSION_MERGED',
+        'This guest session has been linked to an account. Sign in to continue.',
+      ));
     }
 
     if (state === 'deleting') {
-      return result(NextResponse.json({
-        error: 'This account is being permanently deleted.',
-        code: 'ACCOUNT_DELETING',
-      }, { status: 409, headers: { 'Cache-Control': 'private, no-store' } }));
+      return result(identityRejection(
+        409,
+        'ACCOUNT_DELETING',
+        'This account is being permanently deleted.',
+      ));
     }
 
-    if (policy === 'registered' && user.is_anonymous === true) {
-      return result(NextResponse.json({
-        error: 'Create an account to use this feature.',
-        code: 'REGISTRATION_REQUIRED',
-      }, { status: 403, headers: { 'Cache-Control': 'private, no-store' } }));
+    const isAnonymous = claims.is_anonymous === true;
+    if (policy === 'registered' && isAnonymous) {
+      return result(identityRejection(
+        403,
+        'REGISTRATION_REQUIRED',
+        'Create an account to use this feature.',
+      ));
     }
+
+    // Built field by field from the verified claims plus the RPC's created_at,
+    // the same way the server render path rebuilds its user (F8): nothing here
+    // comes from a caller-controlled object.
+    const user: User = {
+      id: userId,
+      aud: typeof claims.aud === 'string' ? claims.aud : 'authenticated',
+      role: 'authenticated',
+      email: typeof claims.email === 'string' ? claims.email : undefined,
+      phone: typeof claims.phone === 'string' ? claims.phone : undefined,
+      is_anonymous: isAnonymous,
+      app_metadata: isRecord(claims.app_metadata) ? claims.app_metadata : {},
+      user_metadata: isRecord(claims.user_metadata) ? claims.user_metadata : {},
+      created_at: typeof admission.created_at === 'string' ? admission.created_at : '',
+    };
 
     let assertion: string | null = null;
     try {
@@ -357,10 +447,7 @@ async function evaluateUserFacingRouteIdentity(
     }
     return result(null, assertion);
   } catch {
-    return result(NextResponse.json({
-      error: 'Identity verification is temporarily unavailable. Please try again.',
-      code: 'IDENTITY_CHECK_UNAVAILABLE',
-    }, { status: 503, headers: { 'Cache-Control': 'private, no-store' } }));
+    return result(identityUnavailableRejection());
   }
 }
 
@@ -373,7 +460,7 @@ export async function guardUserFacingRouteIdentity(
 
 function createAdmittedNextResponse(
   request: NextRequest,
-  admission: { assertion: string | null; durationMs: number },
+  admission: ProxyIdentityAdmission,
 ): NextResponse {
   const requestHeaders = new Headers(request.headers);
   // Never let a caller supply an internal assertion or timing value. Only this
@@ -388,9 +475,15 @@ function createAdmittedNextResponse(
     || Boolean(request.headers.get('Authorization'))
       && (performanceMonitorMode === 'warmup' || performanceMonitorMode === 'load');
   if (timingEnabled) {
+    // The total plus its two network-facing phases, so the production monitor
+    // can tell a slow signing-key fetch from a slow lifecycle lookup.
     requestHeaders.set(
       IDENTITY_PROXY_TIMING_HEADER,
-      `proxy-identity;dur=${admission.durationMs.toFixed(2)}`,
+      [
+        `proxy-identity;dur=${admission.durationMs.toFixed(2)}`,
+        `proxy-verify;dur=${admission.verifyMs.toFixed(2)}`,
+        `proxy-lifecycle;dur=${admission.lifecycleMs.toFixed(2)}`,
+      ].join(', '),
     );
   }
   return NextResponse.next({ request: { headers: requestHeaders } });

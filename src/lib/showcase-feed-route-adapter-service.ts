@@ -101,9 +101,12 @@ async function handleShowcaseFeedGET(
       phaseTimings.set(phase, (phaseTimings.get(phase) ?? 0) + Math.max(0, durationMs));
     };
     if (timingEnabled) {
-      const proxyTiming = request.headers.get(IDENTITY_PROXY_TIMING_HEADER)
-        ?.match(/^proxy-identity;dur=(\d+(?:\.\d+)?)$/u);
-      if (proxyTiming) recordPhase('proxy_identity', Number(proxyTiming[1]));
+      // The proxy reports its total plus the verify/lifecycle phases behind
+      // it; each entry is `proxy-<phase>;dur=<ms>`.
+      for (const entry of request.headers.get(IDENTITY_PROXY_TIMING_HEADER)?.split(',') ?? []) {
+        const proxyTiming = entry.trim().match(/^(proxy-[a-z]+(?:-[a-z]+)*);dur=(\d+(?:\.\d+)?)$/u);
+        if (proxyTiming) recordPhase(proxyTiming[1].replace(/-/g, '_'), Number(proxyTiming[2]));
+      }
     }
     const searchParams = new URL(request.url).searchParams;
     const limit = Math.min(parsePositiveInt(searchParams.get('limit'), SHOWCASE_PAGE_SIZE), 24);
