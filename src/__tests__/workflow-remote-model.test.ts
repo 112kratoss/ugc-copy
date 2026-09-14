@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   quote: vi.fn(),
   pinnedQuote: vi.fn(),
   start: vi.fn(),
+  startImage: vi.fn(),
   operation: vi.fn(),
 }));
 vi.mock('@/lib/server-helpers', () => ({
@@ -23,7 +24,7 @@ vi.mock('@/lib/generation-model-catalog-store', () => ({
 }));
 vi.mock('@/lib/generation-services', () => ({
   startCatalogGeneration: mocks.start,
-  startImageGeneration: vi.fn(),
+  startImageGeneration: mocks.startImage,
   startMotionGeneration: vi.fn(),
   startVideoGeneration: vi.fn(),
   startSoundEffectGeneration: vi.fn(),
@@ -70,6 +71,77 @@ beforeEach(() => {
     predictionId: 'p1',
     cost: 7,
   });
+  mocks.startImage.mockResolvedValue({
+    generationId: 'g2',
+    predictionId: 'p2',
+    cost: 5,
+  });
+});
+it('keeps a bundled model on its model-specific branch when the editor only recorded an empty settings object', async () => {
+  const value = graph();
+  value.nodes[1].data.model = 'nano-banana-2';
+  value.nodes[1].data.catalogSettings = {};
+  const result = await executeWorkflowRunnableNode({
+    supabase: {} as SupabaseClient,
+    userId: 'u1',
+    node: value.nodes[1],
+    graph: value,
+    catalogRevision: 'active',
+  });
+  expect(result.status).toBe('processing');
+  expect(mocks.operation).not.toHaveBeenCalled();
+  expect(mocks.start).not.toHaveBeenCalled();
+  expect(mocks.startImage).toHaveBeenCalledWith(
+    expect.objectContaining({ model: 'nano-banana-2', prompt: 'Preserve my prompt' }),
+  );
+});
+it('runs a bundled model through the catalog only when catalog-only settings were recorded', async () => {
+  const value = graph();
+  value.nodes[1].data.model = 'nano-banana-2';
+  value.nodes[1].data.catalogSettings = { background: 'transparent' };
+  mocks.operation.mockResolvedValue({
+    catalog: { models: [{ ...fixture.details.models[0], id: 'nano-banana-2' }] },
+    operation: { modelId: 'nano-banana-2', kind: 'image', adapterKey: 'kie-task-v1' },
+  });
+  await executeWorkflowRunnableNode({
+    supabase: {} as SupabaseClient,
+    userId: 'u1',
+    node: value.nodes[1],
+    graph: value,
+    catalogRevision: 'active',
+  });
+  expect(mocks.startImage).not.toHaveBeenCalled();
+  expect(mocks.start).toHaveBeenCalledWith(
+    expect.objectContaining({ settings: expect.objectContaining({ background: 'transparent' }) }),
+  );
+});
+it('reports missing inputs and a missing revision as blocked steps, not failures', async () => {
+  const image = createWorkflowNode('image-generate', { x: 0, y: 0 });
+  image.data.model = 'future-image-model';
+  const value = normalizeWorkflowGraph({ nodes: [image], edges: [], version: 2 });
+  const unprompted = await executeWorkflowRunnableNode({
+    supabase: {} as SupabaseClient,
+    userId: 'u1',
+    node: value.nodes[0],
+    graph: value,
+    catalogRevision: 'active',
+  });
+  expect(unprompted).toMatchObject({
+    status: 'blocked',
+    error_message: 'Image generator is missing a prompt input.',
+  });
+  const unpinned = await executeWorkflowRunnableNode({
+    supabase: {} as SupabaseClient,
+    userId: 'u1',
+    node: graph().nodes[1],
+    graph: graph(),
+    catalogRevision: null,
+  });
+  expect(unpinned).toMatchObject({
+    status: 'blocked',
+    error_message: 'Refresh model settings before running this workflow.',
+  });
+  expect(mocks.start).not.toHaveBeenCalled();
 });
 it('round-trips a remote model and dispatches its descriptor settings', async () => {
   const value = graph();

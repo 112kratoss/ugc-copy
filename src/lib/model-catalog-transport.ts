@@ -2,17 +2,25 @@ import { Buffer } from 'node:buffer';
 import type { GenerationModelDescriptor } from './generation-model-catalog';
 export {
   MODEL_CATALOG_BUDGETS,
+  MODEL_CATALOG_ID_PATTERN,
+  MODEL_CATALOG_REVISION_PATTERN,
+  isModelCatalogId,
   isModelCatalogKind,
+  isModelCatalogPlatform,
+  isModelCatalogRevision,
 } from '../../ugc-mobile/lib/model-catalog-protocol';
 export type {
   ModelCatalogCurrent,
   ModelCatalogPage,
+  ModelCatalogPlatform,
   ModelCatalogSummary,
   ModelCatalogKind,
 } from '../../ugc-mobile/lib/model-catalog-protocol';
-import type {
-  ModelCatalogKind,
-  ModelCatalogSummary,
+import {
+  isModelCatalogId,
+  type ModelCatalogKind,
+  type ModelCatalogPlatform,
+  type ModelCatalogSummary,
 } from '../../ugc-mobile/lib/model-catalog-protocol';
 
 export class ModelCatalogTransportError extends Error {
@@ -34,14 +42,17 @@ export function catalogSummary(
 export function catalogBytes(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), 'utf8');
 }
+/** A cursor is only valid for the revision, platform and category it was issued for. */
 export function encodeCatalogCursor(
   revision: string,
   kind: ModelCatalogKind | null,
   after: { id: string; sortOrder: number },
+  platform: ModelCatalogPlatform = 'web',
 ): string {
   return Buffer.from(
     JSON.stringify({
       revision,
+      platform,
       kind,
       id: after.id,
       sortOrder: after.sortOrder,
@@ -52,6 +63,7 @@ export function decodeCatalogCursor(
   cursor: string | null,
   revision: string,
   kind: ModelCatalogKind | null,
+  platform: ModelCatalogPlatform = 'web',
 ): { id: string; sortOrder: number } | null {
   if (cursor === null) return null;
   try {
@@ -62,10 +74,9 @@ export function decodeCatalogCursor(
     );
     if (
       parsed.revision !== revision ||
+      parsed.platform !== platform ||
       parsed.kind !== kind ||
-      typeof parsed.id !== 'string' ||
-      !parsed.id ||
-      parsed.id.length > 120 ||
+      !isModelCatalogId(parsed.id) ||
       !Number.isFinite(parsed.sortOrder) ||
       parsed.sortOrder < 0
     )

@@ -1035,14 +1035,14 @@ export async function resolveCatalogProbeTargets(baseUrl, targets, fetchImpl = g
     if (!response.ok) throw new Error(`Catalog probe discovery failed (${response.status}).`);
     return JSON.parse(await readBoundedAuthResponse(response));
   };
-  const current = await read('/api/model-catalog/v1/current');
+  const current = await read('/api/model-catalog/v1/current?platform=web');
   assert.match(current.revision, /^[A-Za-z0-9._-]{1,128}$/);
-  const page = await read(`/api/model-catalog/v1/models?revision=${encodeURIComponent(current.revision)}&limit=8`);
+  const page = await read(`/api/model-catalog/v1/models?platform=web&revision=${encodeURIComponent(current.revision)}&limit=8`);
   assert.ok(Array.isArray(page.models) && page.models.length > 0, 'Catalog probe needs published models.');
   const ids = page.models.map(model => model.id);
   assert.ok(ids.every(id => typeof id === 'string' && /^[A-Za-z0-9._-]{1,120}$/.test(id)));
   for (const target of targets) {
-    const query = new URLSearchParams({ revision: current.revision });
+    const query = new URLSearchParams({ platform: 'web', revision: current.revision });
     if (target.catalogProbe === 'models') target.path = `/api/model-catalog/v1/models?${query}&limit=50`;
     else if (target.catalogProbe === 'detail') target.path = `/api/model-catalog/v1/models/${encodeURIComponent(ids[0])}?${query}`;
     else if (target.catalogProbe === 'details') { query.set('ids', ids.join(',')); target.path = `/api/model-catalog/v1/details?${query}`; }

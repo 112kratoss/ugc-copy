@@ -932,7 +932,7 @@ export function createApiClient({
       request<CreatePostResponse>('/api/posts', { method: 'POST', body }),
     listSourceTools: () =>
       request<{ tools: SourceToolOption[] }>('/api/source-tools'),
-    fetchModelCatalogCurrent: (etag?: string) => readCatalogTransport('/current', etag),
+    fetchModelCatalogCurrent: (query: string, etag?: string) => readCatalogTransport(`/current?${query}`, etag),
     fetchModelCatalogPage: (query: string) => readCatalogTransport(`/models?${query}`),
     fetchModelCatalogDetails: (query: string) => readCatalogTransport(`/details?${query}`),
     fetchModelCatalogModel: (id: string, query: string) => readCatalogTransport(`/models/${encodeURIComponent(id)}?${query}`),

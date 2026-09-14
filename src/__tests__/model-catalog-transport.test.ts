@@ -22,6 +22,21 @@ describe('bounded model catalog transport', () => {
     expect(() => decodeCatalogCursor(cursor, 'release-1', 'video')).toThrow();
     expect(() => decodeCatalogCursor('garbage', 'release-1', null)).toThrow();
   });
+  it('binds pagination to the platform whose availability produced the page', () => {
+    const cursor = encodeCatalogCursor(
+      'release-1',
+      'image',
+      { id: 'new-model', sortOrder: 10 },
+      'mobile',
+    );
+    expect(decodeCatalogCursor(cursor, 'release-1', 'image', 'mobile')).toEqual(
+      { id: 'new-model', sortOrder: 10 },
+    );
+    expect(() =>
+      decodeCatalogCursor(cursor, 'release-1', 'image', 'web'),
+    ).toThrow();
+    expect(() => decodeCatalogCursor(cursor, 'release-1', 'image')).toThrow();
+  });
   it('supports weak, strong, multiple and wildcard conditional etags', () => {
     expect(matchesCatalogEtag('W/"a"', '"a"')).toBe(true);
     expect(matchesCatalogEtag('"b", W/"a"', '"a"')).toBe(true);

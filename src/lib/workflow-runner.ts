@@ -12,6 +12,7 @@ import {
   startVoiceoverGeneration,
   type TemplateGenerationContext,
 } from '@/lib/generation-services';
+import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import {
   getHeldProviderSubmissionGenerationId,
   getPublicGenerationStartFailure,
@@ -305,6 +306,27 @@ function buildBlockedError(message: string): WorkflowRunnableExecutionResult {
     output_snapshot: null,
     error_message: message,
   };
+}
+
+const CATALOG_EXECUTION_NODE_TYPES = new Set<string>(['image-generate', 'video-generate', 'motion-generate']);
+
+/**
+ * A model with no bundled registry entry can only run through the published
+ * catalog. A bundled model keeps its model-specific branch unless the editor
+ * recorded catalog-only settings for it: the editor writes an empty object on
+ * every model change, and that alone must not move an existing graph onto a
+ * different execution path.
+ */
+function usesCatalogExecution(node: { type: string; data: { model?: unknown; catalogSettings?: unknown } }): boolean {
+  if (!CATALOG_EXECUTION_NODE_TYPES.has(node.type)) return false;
+  const modelId = String(node.data.model ?? '');
+  const bundled = node.type === 'image-generate'
+    ? Object.hasOwn(IMAGE_MODELS, modelId)
+    : node.type === 'video-generate'
+      ? Object.hasOwn(VIDEO_MODELS, modelId)
+      : Object.hasOwn(MOTION_MODELS, modelId);
+  const settings = node.data.catalogSettings;
+  return !bundled || Boolean(settings && typeof settings === 'object' && Object.keys(settings).length > 0);
 }
 
 function buildStaticOutputSnapshot(node: WorkflowCanvasNode) {
@@ -707,21 +729,28 @@ export async function executeWorkflowRunnableNode(params: {
     };
   }
 
-  // New catalog settings are persisted with the graph. Generic adapters can
-  // execute these models without adding their IDs to a server registry.
-  if (node.data.catalogSettings && ['image-generate', 'video-generate', 'motion-generate'].includes(node.type)) {
-    if (!catalogRevision) throw new Error('Refresh model settings before running this workflow.');
+  // Catalog settings are persisted with the graph. Generic adapters can execute
+  // these models without adding their IDs to a server registry.
+  if (usesCatalogExecution(node)) {
+    if (!catalogRevision) return buildBlockedError('Refresh model settings before running this workflow.');
     const { catalog, operation } = await loadGenerationModelOperationByRevision({
       modelId: String(node.data.model), revision: catalogRevision, schemaVersion: 3,
     });
     if (operation.adapterKey === 'kie-task-v1') {
       const descriptor = catalog.models.find(model => model.id === node.data.model)!;
+      const references = getRunnableElementPayload(graph, node.id).references;
+      // The same missing-input conditions the model-specific branches report as
+      // blocked steps, so a fixable graph never records a failed run.
+      if (node.type === 'image-generate' && !inputs.prompt) return buildBlockedError('Image generator is missing a prompt input.');
+      if (node.type === 'video-generate' && !node.data.isMultiShot && !inputs.prompt) return buildBlockedError('Video generator is missing a prompt input.');
+      if (node.type === 'motion-generate' && (!inputs.videoUrls.length || !(references.length || inputs.imageReferences.length))) {
+        return buildBlockedError('Motion control requires both an image input and a video input.');
+      }
       const settings = Object.fromEntries(descriptor.controls.map(control => [control.key,
         node.data.catalogSettings?.[control.key]
           ?? node.data[control.key === 'resolution' && node.type === 'motion-generate' ? 'mode' : control.key]
           ?? control.defaultValue,
       ])) as Record<string, CatalogPrimitive>;
-      const references = getRunnableElementPayload(graph, node.id).references;
       const assets: CatalogGenerationInputAsset[] = references.map(reference => ({
         slot: descriptor.kind === 'motion' ? 'characterImage' : 'imageReferences', kind: 'image',
         url: reference.url, storagePath: reference.storagePath, handle: reference.handle,

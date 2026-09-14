@@ -1,10 +1,11 @@
 'use client';
 import { useMemo, useState } from 'react';
 import type {
-  CatalogCondition,
   CatalogPrimitive,
   GenerationModelDescriptor,
 } from '@/lib/generation-model-catalog';
+// The condition evaluator is the one the server runtime and the native app use.
+import { catalogConditionsMatch } from '../../ugc-mobile/lib/model-catalog-protocol';
 
 type Settings = Record<string, CatalogPrimitive>;
 
@@ -17,44 +18,6 @@ export function catalogChoiceDefault(
   return control?.type === 'choice' ? control.defaultValue : fallback;
 }
 
-export function catalogControlConditionsMatch(
-  conditions: CatalogCondition[] | undefined,
-  settings: Settings,
-  counts: Record<string, number> = {},
-) {
-  return (
-    !conditions ||
-    conditions.every((condition) => {
-      const actual =
-        condition.source === 'setting'
-          ? settings[condition.key]
-          : (counts[condition.key] ?? 0);
-      const expected = condition.value;
-      switch (condition.operator) {
-        case 'equals':
-          return actual === expected;
-        case 'notEquals':
-          return actual !== expected;
-        case 'in':
-          return Array.isArray(expected) && expected.includes(actual);
-        case 'notIn':
-          return Array.isArray(expected) && !expected.includes(actual);
-        case 'greaterThan':
-          return (
-            typeof actual === 'number' &&
-            typeof expected === 'number' &&
-            actual > expected
-          );
-        case 'greaterThanOrEqual':
-          return (
-            typeof actual === 'number' &&
-            typeof expected === 'number' &&
-            actual >= expected
-          );
-      }
-    })
-  );
-}
 export function useAdditionalCatalogSettings(
   descriptor: GenerationModelDescriptor | undefined,
   handledKeys: readonly string[],
@@ -117,11 +80,7 @@ export default function CatalogAdditionalControls({
     descriptor?.controls.filter(
       (control) =>
         !handledKeys.includes(control.key) &&
-        catalogControlConditionsMatch(
-          control.conditions,
-          settings,
-          inputCounts,
-        ),
+        catalogConditionsMatch(control.conditions, settings, inputCounts),
     ) ?? [];
   if (!controls.length) return null;
   return (

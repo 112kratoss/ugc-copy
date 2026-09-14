@@ -18,17 +18,11 @@ import type {
 } from '@/lib/generation-model-catalog';
 
 const WEB_CATALOG_SCHEMA_VERSION = 3;
-const WEB_CATALOG_CACHE_KEY = `generation-model-catalog:v${WEB_CATALOG_SCHEMA_VERSION}`;
+/** The single-fetch cache written before the paged transport; removed once on mount. */
+const LEGACY_WEB_CATALOG_CACHE_KEY = `generation-model-catalog:v${WEB_CATALOG_SCHEMA_VERSION}`;
 
 type Registry = Record<string, Record<string, unknown>>;
 type CatalogRegistries = { image: Registry; video: Registry; motion: Registry };
-type WebStorage = Pick<Storage, 'getItem' | 'setItem'>;
-type WebCatalogCacheEnvelope = {
-  catalog: GenerationModelCatalog;
-  etag: string | null;
-  fetchedAt: number;
-};
-
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -218,21 +212,6 @@ export function parseClientGenerationModelCatalog(value: unknown): GenerationMod
   return catalog;
 }
 
-function parseWebCatalogCache(value: string | null): WebCatalogCacheEnvelope | null {
-  if (!value) return null;
-  const parsed = JSON.parse(value) as unknown;
-  if (isRecord(parsed) && 'catalog' in parsed) {
-    return {
-      catalog: parseClientGenerationModelCatalog(parsed.catalog),
-      etag: typeof parsed.etag === 'string' ? parsed.etag : null,
-      fetchedAt: typeof parsed.fetchedAt === 'number' && Number.isFinite(parsed.fetchedAt)
-        ? parsed.fetchedAt
-        : 0,
-    };
-  }
-  return { catalog: parseClientGenerationModelCatalog(parsed), etag: null, fetchedAt: 0 };
-}
-
 function choiceControl(model: GenerationModelDescriptor, key: string) {
   return model.controls.find((control): control is Extract<CatalogControl, { type: 'choice' }> => control.key === key && control.type === 'choice');
 }
@@ -351,25 +330,6 @@ export function applyGenerationModelCatalogToRegistries(
   }
 }
 
-/**
- * Pickers render this list in order. Sorting by the catalog's own `sortOrder` is what
- * finally makes that field (and `recommended`) mean something on web — the registries are
- * keyed objects, so without this the UI showed bundled insertion order and every
- * catalog-only model landed at the end regardless of where the catalog placed it.
- * Entries with no sort order keep their relative position behind the sorted ones.
- */
-export function getActiveRegistryModels<T extends Record<string, unknown>>(registry: Record<string, T>): T[] {
-  return Object.values(registry)
-    .filter((model) => model.catalogActive !== false)
-    .map((model, index) => ({ model, index }))
-    .sort((a, b) => {
-      const aOrder = typeof a.model.catalogSortOrder === 'number' ? a.model.catalogSortOrder : Number.MAX_SAFE_INTEGER;
-      const bOrder = typeof b.model.catalogSortOrder === 'number' ? b.model.catalogSortOrder : Number.MAX_SAFE_INTEGER;
-      return aOrder === bOrder ? a.index - b.index : aOrder - bOrder;
-    })
-    .map((entry) => entry.model);
-}
-
 export function resolveCatalogModelId(
   catalog: GenerationModelCatalog,
   kind: GenerationModelDescriptor['kind'],
@@ -468,52 +428,6 @@ export function reconcileWebCatalogGenerationDraft(
   };
 }
 
-export async function loadWebGenerationModelCatalog({
-  fetcher = fetch,
-  storage = typeof window !== 'undefined' ? window.localStorage : undefined,
-  forceRefresh = false,
-}: {
-  fetcher?: typeof fetch;
-  storage?: WebStorage;
-  forceRefresh?: boolean;
-} = {}): Promise<GenerationModelCatalog> {
-  const cachedEnvelope = (() => {
-    try {
-      return parseWebCatalogCache(storage?.getItem(WEB_CATALOG_CACHE_KEY) ?? null);
-    } catch {
-      return null;
-    }
-  })();
-  try {
-    const headers = new Headers();
-    if (!forceRefresh && cachedEnvelope?.etag) headers.set('If-None-Match', cachedEnvelope.etag);
-    const response = await fetcher(
-      `/api/generation-models?platform=web&schemaVersion=${WEB_CATALOG_SCHEMA_VERSION}${forceRefresh ? '&refresh=1' : ''}`,
-      forceRefresh
-        ? { cache: 'no-store', headers }
-        : (headers.has('If-None-Match') ? { headers } : undefined),
-    );
-    if (response.status === 304 && cachedEnvelope) {
-      storage?.setItem(WEB_CATALOG_CACHE_KEY, JSON.stringify({
-        ...cachedEnvelope,
-        fetchedAt: Date.now(),
-      }));
-      return cachedEnvelope.catalog;
-    }
-    if (!response.ok) throw new Error(`Catalog request failed with ${response.status}.`);
-    const catalog = parseClientGenerationModelCatalog(await response.json());
-    storage?.setItem(WEB_CATALOG_CACHE_KEY, JSON.stringify({
-      catalog,
-      etag: (response.headers as Headers | undefined)?.get('etag') ?? null,
-      fetchedAt: Date.now(),
-    } satisfies WebCatalogCacheEnvelope));
-    return catalog;
-  } catch (error) {
-    if (!forceRefresh && cachedEnvelope) return cachedEnvelope.catalog;
-    throw error;
-  }
-}
-
 function seedCatalogSummaryRegistry(summary: ModelCatalogSummary) {
   const registry = (summary.kind === 'image' ? IMAGE_MODELS : summary.kind === 'video' ? VIDEO_MODELS : MOTION_MODELS) as unknown as Registry;
   // Placeholder metadata is for rendering only. Quote/start remain disabled until details load.
@@ -537,7 +451,7 @@ export function useWebGenerationModelCatalog(options: {
     if (!response.ok) throw new Error(body.error ?? 'Could not load model settings.');
     return { body, etag: response.headers.get('etag'), notModified: false };
   }, value => parseClientGenerationModelCatalog({ schemaVersion: 3, revision: 'detail', defaults: { image: null, video: null, motion: null }, models: [value] }).models[0],
-  typeof window === 'undefined' ? undefined : { getItem: key => window.localStorage.getItem(key), setItem: (key,value) => window.localStorage.setItem(key,value) }));
+  typeof window === 'undefined' ? undefined : { getItem: key => window.localStorage.getItem(key), setItem: (key,value) => window.localStorage.setItem(key,value) }, 'web'));
   const [state, setState] = useState<CatalogSessionState<GenerationModelDescriptor>>(session.getSnapshot);
   const [retryVersion, setRetryVersion] = useState(0);
   const selectedKey = (options.selectedIds ?? []).join(',');
@@ -554,6 +468,7 @@ export function useWebGenerationModelCatalog(options: {
       if (next.current) applyGenerationModelCatalogToRegistries({ schemaVersion: 3, revision: next.current.revision, defaults: next.current.defaults, models: next.details }, undefined, false);
       setState(next);
     };
+    try { window.localStorage.removeItem(LEGACY_WEB_CATALOG_CACHE_KEY); } catch { /* Storage is optional. */ }
     const unsubscribe = session.subscribe(update); void session.initialize(); return unsubscribe;
   }, [session]);
   useEffect(() => { if (options.pickerOpen) void session.refresh(); }, [options.pickerOpen, session]);

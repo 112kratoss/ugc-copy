@@ -1,5 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { catalogConditionsMatch as sharedCatalogConditionsMatch } from './model-catalog-protocol';
+
 export const LEGACY_GENERATION_MODEL_CATALOG_SCHEMA_VERSION = 1;
 export const GENERATION_MODEL_CATALOG_SCHEMA_VERSION = 3;
 export const GENERATION_MODEL_CATALOG_CACHE_KEY = 'generation-model-catalog:v3';
@@ -781,19 +783,8 @@ export function catalogConditionsMatch(
   settings: Record<string, CatalogPrimitive>,
   inputCounts: Record<string, number> = {},
 ) {
-  return (conditions ?? []).every((condition) => {
-    const actual = condition.source === 'setting'
-      ? settings[condition.key]
-      : inputCounts[condition.key] ?? 0;
-    const expected = condition.value;
-    if (condition.operator === 'equals') return actual === expected;
-    if (condition.operator === 'notEquals') return actual !== expected;
-    const expectedValues = Array.isArray(expected) ? expected : [expected];
-    if (condition.operator === 'in') return expectedValues.includes(actual as never);
-    if (condition.operator === 'notIn') return !expectedValues.includes(actual as never);
-    if (typeof actual !== 'number' || typeof expected !== 'number') return false;
-    return condition.operator === 'greaterThan' ? actual > expected : actual >= expected;
-  });
+  // One operator table is shared with the server runtime and the web pickers.
+  return sharedCatalogConditionsMatch(conditions, settings, inputCounts);
 }
 
 export function getActiveCatalogInputModes(

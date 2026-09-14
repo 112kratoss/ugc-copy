@@ -1,8 +1,10 @@
+import { projectGenerationModelDescriptor } from './generation-model-catalog';
 import { parsePublishedModelDescriptor } from './generation-model-descriptor-parser';
 import {
   catalogBytes,
   catalogSummary,
   MODEL_CATALOG_BUDGETS,
+  type ModelCatalogPlatform,
 } from './model-catalog-transport';
 
 type Entry = {
@@ -11,34 +13,64 @@ type Entry = {
   webEnabled: boolean;
   mobileEnabled: boolean;
 };
-export function measureModelCatalogRelease(release: {
+type Release = {
   revision: string;
   schemaVersion: number;
-  defaults: Record<'web' | 'mobile', Record<string, string | null>>;
+  defaults: Record<ModelCatalogPlatform, Record<string, string | null>>;
   entries: Entry[];
-}) {
-  const entries = release.entries;
-  for (const kind of ['image', 'video', 'motion'])
-    if (release.defaults.web[kind] !== release.defaults.mobile[kind])
-      throw new Error(
-        `Catalog defaults must match on web and mobile (${kind}).`,
-      );
-  if (entries.some((e) => e.webEnabled !== e.mobileEnabled))
-    throw new Error('Model availability must match on web and mobile.');
-  const models = entries
-    .filter((e) => e.webEnabled)
+};
+export type ModelCatalogPlatformMeasurement = {
+  modelCount: number;
+  currentBytes: number;
+  maxDetailBytes: number;
+  maxPageBytes: number;
+  maxBatchBytes: number;
+  legacyBytes: number;
+};
+const PLATFORMS: ModelCatalogPlatform[] = ['web', 'mobile'];
+
+/**
+ * Every transport response is bounded per platform: a platform sees only the
+ * entries enabled for it and its own defaults, so web-only or mobile-only
+ * availability stays a supported release shape.
+ */
+export function measureModelCatalogRelease(release: Release) {
+  const platforms = Object.fromEntries(
+    PLATFORMS.map((platform) => [platform, measurePlatform(release, platform)]),
+  ) as Record<ModelCatalogPlatform, ModelCatalogPlatformMeasurement>;
+  const max = (key: keyof ModelCatalogPlatformMeasurement) =>
+    Math.max(...PLATFORMS.map((platform) => platforms[platform][key]));
+  const legacyBytes = max('legacyBytes');
+  return {
+    currentBytes: max('currentBytes'),
+    maxDetailBytes: max('maxDetailBytes'),
+    maxPageBytes: max('maxPageBytes'),
+    maxBatchBytes: max('maxBatchBytes'),
+    legacyBytes,
+    legacyBudgetWarning: legacyBytes > 57344,
+    platforms,
+  };
+}
+
+function measurePlatform(
+  release: Release,
+  platform: ModelCatalogPlatform,
+): ModelCatalogPlatformMeasurement {
+  const models = release.entries
+    .filter((e) => (platform === 'mobile' ? e.mobileEnabled : e.webEnabled))
     .map((e) => {
       const model = parsePublishedModelDescriptor(
         e.publicDescriptor,
         e.modelId,
         release.schemaVersion,
-        { web: true, mobile: true },
+        { web: e.webEnabled, mobile: e.mobileEnabled },
       );
       if (model.minClientSchemaVersion > 3)
         throw new Error(
           `Deploy compatible clients before publishing ${e.modelId}.`,
         );
-      return model;
+      // Measure the same projection the read service serves.
+      return projectGenerationModelDescriptor(model, 3);
     })
     .sort((a, b) => a.sortOrder - b.sortOrder || (a.id < b.id ? -1 : 1));
   const wireModels = models.map((model) => {
@@ -53,7 +85,7 @@ export function measureModelCatalogRelease(release: {
   };
   const current = {
     ...envelope,
-    defaults: release.defaults.web,
+    defaults: release.defaults[platform],
     counts: Object.fromEntries(
       ['image', 'video', 'motion'].map((kind) => [
         kind,
@@ -63,7 +95,9 @@ export function measureModelCatalogRelease(release: {
   };
   const currentBytes = catalogBytes(current);
   if (currentBytes > MODEL_CATALOG_BUDGETS.current)
-    throw new Error('Catalog revision response exceeds its byte budget.');
+    throw new Error(
+      `Catalog revision response exceeds its byte budget (${platform}).`,
+    );
   let maxDetailBytes = 0,
     maxPageBytes = 0;
   for (const model of wireModels) {
@@ -85,7 +119,9 @@ export function measureModelCatalogRelease(release: {
     missingIds: [],
   });
   if (maxBatchBytes > MODEL_CATALOG_BUDGETS.details)
-    throw new Error('Catalog detail batch exceeds its byte budget.');
+    throw new Error(
+      `Catalog detail batch exceeds its byte budget (${platform}).`,
+    );
   // Every contiguous window is a possible page, not just pages beginning at multiples of 50.
   for (const kind of [null, 'image', 'video', 'motion']) {
     const summaries = models
@@ -102,19 +138,21 @@ export function measureModelCatalogRelease(release: {
     }
   }
   if (maxPageBytes > MODEL_CATALOG_BUDGETS.models)
-    throw new Error('Catalog summary page exceeds its byte budget.');
+    throw new Error(
+      `Catalog summary page exceeds its byte budget (${platform}).`,
+    );
   const legacyBytes = catalogBytes({
     schemaVersion: 3,
     revision: release.revision,
-    defaults: release.defaults.web,
+    defaults: release.defaults[platform],
     models: wireModels,
   });
   return {
+    modelCount: models.length,
     currentBytes,
     maxDetailBytes,
     maxPageBytes,
     maxBatchBytes,
     legacyBytes,
-    legacyBudgetWarning: legacyBytes > 57344,
   };
 }

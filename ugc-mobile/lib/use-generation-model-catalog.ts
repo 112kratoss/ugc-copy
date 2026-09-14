@@ -9,10 +9,10 @@ type GenerationCatalogApi = Pick<ReturnType<typeof createApiClient>, 'fetchModel
 
 export function useGenerationModelCatalog(api: GenerationCatalogApi, options: { kind?: ModelCatalogKind; selectedIds?: string[]; pickerOpen?: boolean } = {}) {
   const session = useMemo(() => new ModelCatalogSession<GenerationModelDescriptor>((path,etag) => {
-    if (path.endsWith('/current')) return api.fetchModelCatalogCurrent(etag);
     const query = path.slice(path.indexOf('?') + 1);
+    if (path.includes('/current?')) return api.fetchModelCatalogCurrent(query, etag);
     return path.includes('/details?') ? api.fetchModelCatalogDetails(query) : api.fetchModelCatalogPage(query);
-  }, parseModelCatalogDetail, AsyncStorage), [api]);
+  }, parseModelCatalogDetail, AsyncStorage, 'mobile'), [api]);
   const [state, setState] = useState<CatalogSessionState<GenerationModelDescriptor>>(session.getSnapshot);
   const [retryVersion, setRetryVersion] = useState(0);
   const selectedKey = (options.selectedIds ?? []).join(',');

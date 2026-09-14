@@ -7,7 +7,7 @@ import {
 import { parseModelCatalogDetail } from '../lib/generation-model-catalog';
 function transport() {
   return vi.fn<CatalogTransport>(async (path) => ({
-    body: path.endsWith('/current')
+    body: path.includes('/current?')
       ? fixture.current
       : path.includes('/models?')
         ? fixture.page
@@ -96,7 +96,7 @@ describe('model catalog session', () => {
     );
     await session.initialize();
     expect(request).toHaveBeenCalledWith(
-      '/api/model-catalog/v1/current',
+      '/api/model-catalog/v1/current?platform=web',
       '"cached"',
     );
     expect(session.getSnapshot().details).toHaveLength(1);
@@ -112,12 +112,68 @@ describe('model catalog session', () => {
     await fresh.initialize();
     expect(fresh.getSnapshot().current).toEqual(fixture.current);
   });
+  it('moves malformed model ids straight to missingIds instead of sending them with the batch', async () => {
+    const request = transport();
+    const session = new ModelCatalogSession(request, parseModelCatalogDetail);
+    await session.initialize();
+    await session.ensureDetails(['bad id', 'future-image-model']);
+    const detailCalls = request.mock.calls.filter(([path]) =>
+      path.includes('/details?'),
+    );
+    expect(detailCalls).toHaveLength(1);
+    expect(
+      new URL('https://test' + detailCalls[0][0]).searchParams.get('ids'),
+    ).toBe('future-image-model');
+    expect(session.getSnapshot().missingIds).toEqual(['bad id']);
+    expect(session.getSnapshot().details.map((m) => m.id)).toEqual([
+      'future-image-model',
+    ]);
+  });
+  it('sends its platform on every read and does not rewrite a restored cache before the network answers', async () => {
+    const storage = {
+      getItem: vi.fn(async () =>
+        JSON.stringify({
+          current: fixture.current,
+          etag: '"cached"',
+          entries: [
+            {
+              revision: fixture.current.revision,
+              descriptor: fixture.details.models[0],
+            },
+          ],
+        }),
+      ),
+      setItem: vi.fn(async () => {}),
+    };
+    const request = transport();
+    request.mockResolvedValueOnce({
+      body: null,
+      etag: '"cached"',
+      notModified: true,
+    });
+    const session = new ModelCatalogSession(
+      request,
+      parseModelCatalogDetail,
+      storage,
+      'mobile',
+    );
+    await session.initialize();
+    await session.loadPage('image');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(session.getSnapshot().details).toHaveLength(1);
+    for (const [path] of request.mock.calls)
+      expect(new URL('https://test' + path).searchParams.get('platform')).toBe(
+        'mobile',
+      );
+    // A 304 keeps the restored revision; only the page result is worth a write.
+    expect(storage.setItem).toHaveBeenCalledTimes(1);
+  });
   it('batches eight at a time with two workers and deduplicates matching requests', async () => {
     let concurrent = 0,
       maxConcurrent = 0;
     const request = transport();
     request.mockImplementation(async (path) => {
-      if (path.endsWith('/current'))
+      if (path.includes('/current?'))
         return { body: fixture.current, etag: null, notModified: false };
       const ids = new URL('https://test' + path).searchParams
         .get('ids')!
@@ -153,7 +209,7 @@ it('bounds cached revisions and descriptors while protecting an open draft', asy
     const ids =
       new URL('https://test' + path).searchParams.get('ids')?.split(',') ?? [];
     return {
-      body: path.endsWith('/current')
+      body: path.includes('/current?')
         ? { ...fixture.current, revision }
         : {
             ...fixture.details,

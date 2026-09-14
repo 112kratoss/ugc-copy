@@ -2,7 +2,11 @@ import 'server-only';
 import { createHash } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { createApiTraceHeaders } from './api-cache';
-import { logBackendError, logBackendInfo } from './backend-logger';
+import {
+  logBackendError,
+  logBackendInfo,
+  logBackendWarning,
+} from './backend-logger';
 import {
   readModelCatalogCurrent,
   readModelCatalogPage,
@@ -12,10 +16,14 @@ import {
   catalogBytes,
   decodeCatalogCursor,
   encodeCatalogCursor,
+  isModelCatalogId,
   isModelCatalogKind,
+  isModelCatalogPlatform,
+  isModelCatalogRevision,
   matchesCatalogEtag,
   ModelCatalogTransportError,
   MODEL_CATALOG_BUDGETS,
+  type ModelCatalogPlatform,
 } from './model-catalog-transport';
 
 type Dependencies = {
@@ -29,8 +37,17 @@ const defaults: Dependencies = {
   page: readModelCatalogPage,
   details: readModelCatalogDetails,
 };
+function platformParam(value: string | null): ModelCatalogPlatform {
+  const platform = value ?? 'web';
+  if (!isModelCatalogPlatform(platform))
+    throw new ModelCatalogTransportError(
+      'INVALID_PLATFORM',
+      'Choose web or mobile.',
+    );
+  return platform;
+}
 function revisionParam(value: string | null): string {
-  if (!value || value.length > 128 || !/^[A-Za-z0-9._-]+$/.test(value))
+  if (!isModelCatalogRevision(value))
     throw new ModelCatalogTransportError(
       'INVALID_REVISION',
       'A published catalog revision is required.',
@@ -41,7 +58,7 @@ function modelIds(values: string[]): string[] {
   if (
     !values.length ||
     values.length > 8 ||
-    values.some((id) => !/^[A-Za-z0-9._-]{1,120}$/.test(id))
+    values.some((id) => !isModelCatalogId(id))
   )
     throw new ModelCatalogTransportError(
       'INVALID_MODEL_IDS',
@@ -61,8 +78,9 @@ export function createModelCatalogRouteHandler(
     const trace = createApiTraceHeaders(request);
     try {
       const params = new URL(request.url).searchParams;
+      const platform = platformParam(params.get('platform'));
       let body: unknown;
-      if (endpoint === 'current') body = await dependencies.current();
+      if (endpoint === 'current') body = await dependencies.current(platform);
       else {
         const revision = revisionParam(params.get('revision'));
         if (endpoint === 'models') {
@@ -82,8 +100,10 @@ export function createModelCatalogRouteHandler(
             params.get('cursor'),
             revision,
             kind,
+            platform,
           );
           const rows = await dependencies.page({
+            platform,
             revision,
             kind,
             after,
@@ -96,7 +116,12 @@ export function createModelCatalogRouteHandler(
             models,
             nextCursor:
               rows.length > limit && models.length
-                ? encodeCatalogCursor(revision, kind, models[models.length - 1])
+                ? encodeCatalogCursor(
+                    revision,
+                    kind,
+                    models[models.length - 1],
+                    platform,
+                  )
                 : null,
           };
         } else {
@@ -105,7 +130,7 @@ export function createModelCatalogRouteHandler(
               ? [(await context!.params).id ?? '']
               : (params.get('ids') ?? '').split(','),
           );
-          const models = await dependencies.details(revision, ids);
+          const models = await dependencies.details(revision, ids, platform);
           const missingIds = ids.filter(
             (id) => !models.some((m) => m.id === id),
           );
@@ -159,6 +184,7 @@ export function createModelCatalogRouteHandler(
         : 200;
       logBackendInfo('model_catalog_read', {
         endpoint,
+        platform,
         transportVersion: 1,
         revision: (body as { revision: string }).revision,
         status,
@@ -170,9 +196,13 @@ export function createModelCatalogRouteHandler(
         : NextResponse.json(body, { headers });
     } catch (error) {
       const known = error instanceof ModelCatalogTransportError;
-      logBackendError('model_catalog_read_failed', {
+      // A malformed cursor or an unknown revision is the caller's mistake;
+      // only origin failures and oversized responses are backend errors.
+      const log = known && error.status < 500 ? logBackendWarning : logBackendError;
+      log('model_catalog_read_failed', {
         error,
         endpoint,
+        code: known ? error.code : 'CATALOG_UNAVAILABLE',
         elapsedMs: Date.now() - started,
       });
       return NextResponse.json(

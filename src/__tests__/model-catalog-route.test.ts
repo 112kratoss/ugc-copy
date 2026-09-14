@@ -93,6 +93,44 @@ describe('model catalog route', () => {
     expect(cached.status).toBe(304);
     expect(await cached.text()).toBe('');
   });
+  it('scopes every read to the requested platform and binds cursors to it', async () => {
+    const deps = dependencies();
+    const current = createModelCatalogRouteHandler('current', deps);
+    await current(new Request('https://example.test/current'));
+    expect(deps.current).toHaveBeenLastCalledWith('web');
+    await current(new Request('https://example.test/current?platform=mobile'));
+    expect(deps.current).toHaveBeenLastCalledWith('mobile');
+    const models = createModelCatalogRouteHandler('models', deps);
+    const first = await (
+      await models(
+        new Request(
+          'https://example.test/models?platform=mobile&revision=published-1&kind=image',
+        ),
+      )
+    ).json();
+    expect(deps.page).toHaveBeenLastCalledWith(
+      expect.objectContaining({ platform: 'mobile', kind: 'image' }),
+    );
+    expect(
+      (
+        await models(
+          new Request(
+            `https://example.test/models?platform=web&revision=published-1&kind=image&cursor=${first.nextCursor}`,
+          ),
+        )
+      ).status,
+    ).toBe(400);
+    await createModelCatalogRouteHandler('details', deps)(
+      new Request(
+        'https://example.test/details?platform=mobile&revision=published-1&ids=model-0000',
+      ),
+    );
+    expect(deps.details).toHaveBeenLastCalledWith(
+      'published-1',
+      ['model-0000'],
+      'mobile',
+    );
+  });
   it('reports missing batch items without returning another model or private fields', async () => {
     const response = await createModelCatalogRouteHandler(
       'details',
@@ -133,6 +171,7 @@ describe('model catalog route', () => {
       'revision=published-1&limit=51',
       'revision=published-1&kind=other',
       'revision=published-1&cursor=bad',
+      'revision=published-1&platform=desktop',
       'kind=image',
     ]) {
       expect(

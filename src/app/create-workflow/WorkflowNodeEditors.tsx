@@ -1199,7 +1199,7 @@ function getPromptEnhancementTargetOption(
       target,
       title: data.title,
       mediumLabel: 'Image',
-      modelLabel: IMAGE_MODELS[data.model].displayName,
+      modelLabel: IMAGE_MODELS[data.model]?.displayName ?? data.model,
       accentClassName: 'border-blue-500/20 bg-blue-500/10 text-blue-100',
     };
   }
@@ -1210,7 +1210,7 @@ function getPromptEnhancementTargetOption(
       target,
       title: data.title,
       mediumLabel: 'Video',
-      modelLabel: VIDEO_MODELS[data.model].displayName,
+      modelLabel: VIDEO_MODELS[data.model]?.displayName ?? data.model,
       accentClassName: 'border-rose-500/20 bg-rose-500/10 text-rose-100',
     };
   }
@@ -1242,7 +1242,7 @@ function getPromptEnhancementTargetOption(
     target,
     title: data.title,
     mediumLabel: 'Motion',
-    modelLabel: MOTION_MODELS[data.model].displayName,
+    modelLabel: MOTION_MODELS[data.model]?.displayName ?? data.model,
     accentClassName: 'border-amber-500/20 bg-amber-500/10 text-amber-100',
   };
 }
@@ -2251,6 +2251,23 @@ function NodeEditorContent({
           {imageGenerateNode && imageGenerateNode.elements.length > 0 && (
             <LegacyHandledReferencesCard elements={imageGenerateNode.elements} />
           )}
+        </>
+      )}
+
+      {selectedKind === 'video-generate' && videoGenerateNode && !videoModel && (
+        // The registry has no entry for this model yet (its descriptor is still
+        // loading, or the catalog no longer publishes it). The Model select must
+        // stay reachable so an unavailable model can be replaced.
+        <>
+          <SelectField
+            label="Model"
+            value={videoGenerateNode.model}
+            onChange={(value) => onUpdateNode(node.id, { ...node.data, model: value, catalogSettings: {} } as Partial<WorkflowNodeData>)}
+            options={getModelOptions('video')}
+          />
+          <p className="text-sm leading-relaxed text-zinc-400">
+            This model’s settings are not loaded. Wait for model settings, retry them above, or choose another model.
+          </p>
         </>
       )}
 

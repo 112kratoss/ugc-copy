@@ -80,7 +80,7 @@
       },
       {
         "name": "model-catalog-current-api",
-        "path": "/api/model-catalog/v1/current",
+        "path": "/api/model-catalog/v1/current?platform=web",
         "method": "GET",
         "expectedStatuses": [
           200

@@ -36,16 +36,18 @@ describe('materialized catalog release gates', () => {
       expect(measured.legacyBudgetWarning).toBe(true);
     },
   );
-  it('rejects platform drift, including defaults', () => {
-    const candidate = release(1);
-    candidate.entries[0].mobileEnabled = false;
-    expect(() => measureModelCatalogRelease(candidate)).toThrow(
-      'availability must match',
-    );
-    candidate.entries[0].mobileEnabled = true;
-    candidate.defaults.mobile.image = 'other';
-    expect(() => measureModelCatalogRelease(candidate)).toThrow(
-      'defaults must match',
+  it('measures each platform against its own availability and defaults', () => {
+    const candidate = release(3);
+    candidate.entries[1].mobileEnabled = false;
+    candidate.defaults.mobile.image = 'future-2';
+    const measured = measureModelCatalogRelease(candidate);
+    expect(measured.platforms.web.modelCount).toBe(3);
+    expect(measured.platforms.mobile.modelCount).toBe(2);
+    expect(measured.currentBytes).toBe(
+      Math.max(
+        measured.platforms.web.currentBytes,
+        measured.platforms.mobile.currentBytes,
+      ),
     );
   });
   it('gates actual UTF-8 descriptor bytes', () => {

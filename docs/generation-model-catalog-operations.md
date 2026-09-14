@@ -243,23 +243,30 @@ throwaway script, since removed.
 
 The additive `/api/model-catalog/v1` transport retains descriptor schema 3 and
 leaves `/api/generation-models` schemas 1–3 available for installed clients.
-Supabase remains the published authority for both platforms. New releases must
-have matching web/mobile defaults and availability; the CLI checks the fully
-materialized release during staging and rechecks the stored draft before publish.
-Provider adapters must deploy before a catalog release that uses them.
+Supabase remains the published authority for both platforms. Every read takes
+`platform=web|mobile` (default `web`) and returns only the entries enabled for
+that platform, with that platform's defaults, so web-only or mobile-only
+availability and per-platform defaults stay a supported release shape. The CLI
+measures each platform's byte budgets on the fully materialized release during
+staging and rechecks the stored draft before publish. Provider adapters must
+deploy before a catalog release that uses them.
 
-| GET endpoint | Response | Decoded UTF-8 ceiling |
+| GET endpoint (every one takes `platform=`) | Response | Decoded UTF-8 ceiling |
 | --- | --- | --- |
-| `/current` | Revision, common defaults, category counts | 2 KiB |
-| `/models?revision=…&kind=…&cursor=…&limit=…` | Ordered summaries and `nextCursor` | 16 KiB |
-| `/models/{id}?revision=…` | One descriptor in a details envelope | 16 KiB |
-| `/details?revision=…&ids=…` | Up to eight descriptors and `missingIds` | 128 KiB |
+| `/current?platform=…` | Revision, platform defaults, category counts | 2 KiB |
+| `/models?platform=…&revision=…&kind=…&cursor=…&limit=…` | Ordered summaries and `nextCursor` | 16 KiB |
+| `/models/{id}?platform=…&revision=…` | One descriptor in a details envelope | 16 KiB |
+| `/details?platform=…&revision=…&ids=…` | Up to eight descriptors and `missingIds` | 128 KiB |
 
-Lists default to 32 and cap at 50. Cursors bind revision, category, sort order,
-and model ID. Keep using the same revision until paging completes, including
-when another release becomes active. Missing batch IDs are explicit; a missing
-single model is a 404. Invalid requests are 400; unpublished/unknown revisions
-are 404. Error responses are not cached.
+Lists default to 32 and cap at 50. Cursors bind revision, platform, category,
+sort order, and model ID. Keep using the same revision until paging completes,
+including when another release becomes active. Model IDs and revisions share one
+character set (`[A-Za-z0-9._-]`, at most 120 and 128 characters); clients treat
+an ID outside it as missing instead of sending it, so one malformed selection
+cannot fail the batch that carries the default. Missing batch IDs are explicit;
+a missing single model is a 404. Invalid requests are 400; unpublished/unknown
+revisions are 404. Error responses are not cached, and the server logs them as
+warnings rather than backend errors.
 
 `/current` has a 30-second edge lifetime and a 30-second origin lifetime, with
 no stale-while-revalidate window. Published revision responses are immutable,

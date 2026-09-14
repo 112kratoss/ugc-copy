@@ -1,8 +1,10 @@
 import {
+  isModelCatalogId,
   parseModelCatalogCurrent,
   parseModelCatalogPage,
   type ModelCatalogCurrent,
   type ModelCatalogKind,
+  type ModelCatalogPlatform,
   type ModelCatalogSummary,
   type ModelCatalogDetails,
 } from './model-catalog-protocol';
@@ -28,6 +30,7 @@ export type CatalogSessionState<T> = {
 };
 const STORAGE_KEY = 'model-catalog:transport-v1';
 const BASE = '/api/model-catalog/v1';
+const CACHE_LIMIT = 100;
 
 /** Each session owns one visible revision. Historical cache entries cannot become current by accident. */
 export class ModelCatalogSession<T extends CatalogDescriptorIdentity> {
@@ -52,10 +55,12 @@ export class ModelCatalogSession<T extends CatalogDescriptorIdentity> {
   private detailWaiters: Array<() => void> = [];
   private pendingDetailGroups = 0;
   private saveQueue: Promise<void> = Promise.resolve();
+  private writePending = false;
   constructor(
     private transport: CatalogTransport,
     private parseDescriptor: (value: unknown) => T,
     private storage?: CatalogPersistence,
+    private platform: ModelCatalogPlatform = 'web',
   ) {}
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => {
@@ -77,6 +82,9 @@ export class ModelCatalogSession<T extends CatalogDescriptorIdentity> {
     this.pending.set(key, promise);
     return promise;
   }
+  private query(entries: Record<string, string>) {
+    return new URLSearchParams({ platform: this.platform, ...entries });
+  }
   async initialize() {
     return this.run('initialize', async () => {
       if (this.initialized) return;
@@ -87,7 +95,7 @@ export class ModelCatalogSession<T extends CatalogDescriptorIdentity> {
           const value = JSON.parse(raw);
           const current = parseModelCatalogCurrent(value.current);
           if (Array.isArray(value.entries))
-            for (const entry of value.entries.slice(-100)) {
+            for (const entry of value.entries.slice(-CACHE_LIMIT)) {
               if (typeof entry.revision !== 'string') continue;
               try {
                 const descriptor = this.parseDescriptor(entry.descriptor);
@@ -110,11 +118,13 @@ export class ModelCatalogSession<T extends CatalogDescriptorIdentity> {
               .filter((e) => e.revision === current.revision)
               .map((e) => e.descriptor),
           });
+          // Restored entries are already on disk; prune in memory without
+          // rewriting the same blob before any network result arrives.
+          this.prune(current);
         }
       } catch {
         /* Storage is optional; network loading still proceeds. */
       }
-      this.persist();
       await this.refresh();
     });
   }
@@ -123,7 +133,7 @@ export class ModelCatalogSession<T extends CatalogDescriptorIdentity> {
       this.update({ loading: true, error: null });
       try {
         const result = await this.transport(
-          `${BASE}/current`,
+          `${BASE}/current?${this.query({})}`,
           this.etag ?? undefined,
         );
         if (result.notModified && this.state.current) return;
@@ -165,7 +175,7 @@ export class ModelCatalogSession<T extends CatalogDescriptorIdentity> {
       `page:${current.revision}:${key}:${cursor ?? ''}`,
       async () => {
         try {
-          const params = new URLSearchParams({
+          const params = this.query({
             revision: current.revision,
             limit: '32',
           });
@@ -202,12 +212,20 @@ export class ModelCatalogSession<T extends CatalogDescriptorIdentity> {
     const revision = this.state.current?.revision;
     if (!revision) return;
     const wanted = [...new Set(requested.filter(Boolean))];
+    // An ID the server would reject with 400 must not poison the batch that
+    // carries the default and the other selections: it is simply missing.
+    const invalid = wanted.filter((id) => !isModelCatalogId(id));
+    if (invalid.some((id) => !this.state.missingIds.includes(id)))
+      this.update({
+        missingIds: [...new Set([...this.state.missingIds, ...invalid])],
+      });
     const waiting = wanted
       .map((id) => this.pendingIds.get(`${revision}:${id}`))
       .filter((value): value is Promise<void> => Boolean(value));
     const ids = wanted
       .filter(
         (id) =>
+          isModelCatalogId(id) &&
           !this.cached.has(`${revision}:${id}`) &&
           !this.state.details.some((model) => model.id === id) &&
           !this.state.missingIds.includes(id) &&
@@ -230,7 +248,7 @@ export class ModelCatalogSession<T extends CatalogDescriptorIdentity> {
           while (batches.length) {
             const batch = batches.shift()!;
             try {
-              const params = new URLSearchParams({
+              const params = this.query({
                 revision,
                 ids: batch.join(','),
               });
@@ -321,9 +339,8 @@ export class ModelCatalogSession<T extends CatalogDescriptorIdentity> {
     this.update({ missingIds: [], error: null });
     await this.refresh();
   };
-  private persist() {
-    const current = this.state.current;
-    if (!current) return;
+  /** Keeps the current revision plus the most recent other one, and at most CACHE_LIMIT descriptors. */
+  private prune(current: ModelCatalogCurrent) {
     const revisions = [
       current.revision,
       ...[...new Set([...this.cached.values()].map((e) => e.revision))]
@@ -333,7 +350,7 @@ export class ModelCatalogSession<T extends CatalogDescriptorIdentity> {
     for (const [key, entry] of this.cached)
       if (!revisions.includes(entry.revision)) this.cached.delete(key);
     for (const [key, entry] of this.cached) {
-      if (this.cached.size <= 100) break;
+      if (this.cached.size <= CACHE_LIMIT) break;
       if (
         !(
           entry.revision === current.revision &&
@@ -344,7 +361,7 @@ export class ModelCatalogSession<T extends CatalogDescriptorIdentity> {
     }
     // Open workflows may reference more than the persistence cap. Keep their
     // live descriptors, while disk and the reusable cache remain bounded.
-    while (this.cached.size > 100)
+    while (this.cached.size > CACHE_LIMIT)
       this.cached.delete(this.cached.keys().next().value!);
     const retained = this.state.details.filter(
       (descriptor) =>
@@ -353,7 +370,26 @@ export class ModelCatalogSession<T extends CatalogDescriptorIdentity> {
     );
     if (retained.length !== this.state.details.length)
       this.update({ details: retained });
-    const entries = [...this.cached.values()].slice(-100);
+  }
+  /**
+   * Prunes now, but serializes and writes once per tick: a burst of pages and
+   * detail batches must not rewrite the whole descriptor blob for each event.
+   */
+  private persist() {
+    const current = this.state.current;
+    if (!current) return;
+    this.prune(current);
+    if (this.writePending) return;
+    this.writePending = true;
+    void Promise.resolve().then(() => {
+      this.writePending = false;
+      this.flush();
+    });
+  }
+  private flush() {
+    const current = this.state.current;
+    if (!current) return;
+    const entries = [...this.cached.values()].slice(-CACHE_LIMIT);
     const value = JSON.stringify({
       current,
       etag: this.etag,

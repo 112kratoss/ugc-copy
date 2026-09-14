@@ -3,8 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 import contractFixture from '../../contracts/generation-model-catalog-v1.json';
 import {
   applyGenerationModelCatalogToRegistries,
-  getActiveRegistryModels,
-  loadWebGenerationModelCatalog,
   parseClientGenerationModelCatalog,
   reconcileWebCatalogGenerationDraft,
   requestWebGenerationStart,
@@ -99,7 +97,6 @@ describe('web generation model catalog client', () => {
       catalogActive: true,
     });
     expect(registries.image['retired-image']).toMatchObject({ catalogActive: false });
-    expect(getActiveRegistryModels(registries.image).map((model) => model.id)).toEqual(['fixture-image']);
     expect(resolveCatalogModelId(catalog, 'image', 'retired-image')).toBeNull();
   });
 
@@ -134,38 +131,6 @@ describe('web generation model catalog client', () => {
     });
 
     expect(draft).toBeNull();
-  });
-
-  it('uses the last valid local catalog when the network request fails', async () => {
-    const storage = {
-      getItem: vi.fn(() => JSON.stringify(contractFixture)),
-      setItem: vi.fn(),
-    };
-    const fetcher = vi.fn(async () => {
-      throw new Error('offline');
-    });
-
-    await expect(loadWebGenerationModelCatalog({ fetcher: fetcher as unknown as typeof fetch, storage })).resolves.toMatchObject({
-      revision: '0123456789abcdef',
-    });
-  });
-
-  it('bypasses the browser cache when refreshing after a catalog conflict', async () => {
-    const fetcher = vi.fn(async () => new Response(JSON.stringify(contractFixture), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }));
-
-    await loadWebGenerationModelCatalog({
-      fetcher: fetcher as unknown as typeof fetch,
-      storage: undefined,
-      forceRefresh: true,
-    });
-
-    expect(fetcher).toHaveBeenCalledWith(
-      '/api/generation-models?platform=web&schemaVersion=3&refresh=1',
-      { cache: 'no-store', headers: expect.any(Headers) }
-    );
   });
 
   it('starts generation through the unified catalog-backed endpoint', async () => {

@@ -7,6 +7,7 @@ import {
   type ImageModelId,
   type VideoModelId,
 } from '@/lib/models';
+import { catalogConditionMatches } from '../../ugc-mobile/lib/model-catalog-protocol';
 
 import type {
   CatalogCondition,
@@ -1086,22 +1087,13 @@ export function generationModelConditionMatches(
   inputValue: GenerationModelRuntimeInputs | GenerationModelRuntimeInputs['counts'],
 ): boolean {
   const inputs = normalizedRuntimeInputs(inputValue);
-  const actual = conditionActualValue(condition, settings, inputs);
-  const expected = condition.value;
-  switch (condition.operator) {
-    case 'equals':
-      return actual === expected;
-    case 'notEquals':
-      return actual !== expected;
-    case 'in':
-      return Array.isArray(expected) && expected.includes(actual);
-    case 'notIn':
-      return Array.isArray(expected) && !expected.includes(actual);
-    case 'greaterThan':
-      return typeof actual === 'number' && typeof expected === 'number' && actual > expected;
-    case 'greaterThanOrEqual':
-      return typeof actual === 'number' && typeof expected === 'number' && actual >= expected;
-  }
+  // The operator table is shared with both clients so the control the server
+  // applies is the control the pickers show.
+  return catalogConditionMatches(
+    condition.operator,
+    conditionActualValue(condition, settings, inputs),
+    condition.value,
+  );
 }
 
 function allConditionsMatch(

@@ -22,8 +22,10 @@ offline; reopening selection or Retry reconciles it when connected.
   refresh and model removal. Motion options use published descriptors.
 - Workflow remote model IDs, referenced-descriptor batching, persisted catalog
   settings and execution through the existing generic adapter/credit pipeline.
-- Materialized release parity and UTF-8 payload checks. Legacy aggregate size is
-  reported without disabling models to satisfy the old ceiling.
+- Per-platform reads (`platform=web|mobile` on every endpoint, bound into
+  cursors) with UTF-8 payload checks measured for each platform's availability
+  and defaults, so web-only or mobile-only releases stay publishable. Legacy
+  aggregate size is reported without disabling models to satisfy the old ceiling.
 - Mobile CORS/operation contract, shared future-model fixture, endpoint performance
   targets, backend read/cache logs and the updated catalog operations runbook.
 
@@ -37,12 +39,14 @@ offline; reopening selection or Retry reconciles it when connected.
 - iOS and Android production JavaScript exports with source maps pass, using
   isolated Metro caches and non-production placeholder configuration.
 - Expo dependency alignment and all 20 Expo Doctor checks pass.
-- Clean local migration replay and all 64 database files / 1,182 assertions pass,
-  including the new published-only reads and 500-model SQL pagination fixture.
-- Web full run: 787 files / 5,668 tests, with one obsolete persistence source
-  assertion failing. That assertion was updated to match preserved references;
-  its focused file rerun passes (2 tests). All other 5,667 tests passed.
-- Mobile full suite: 207 files, 2,025 tests pass. This includes native compilation
+- Clean local migration replay and all 64 database files / 1,196 assertions pass,
+  including the published-only, platform-scoped reads, the current-revision
+  projection and no-active-release case, and the 500-model SQL pagination fixture.
+- Web full run: 787 files / 5,671 tests pass, including the canvas and editor
+  guards for catalog-only model ids, the runner's bundled-model routing, and
+  the platform-scoped transport, read-service and cursor tests.
+- Mobile full suite: 207 files, 2,027 tests pass, including malformed-id
+  isolation and the coalesced cache write. This includes native compilation
   of the sheet backdrop, added after an iOS runtime crash exposed a JSX alias bug.
 - Shared transport tests cover synthetic 100/500-model payloads and pagination,
   cursor category/revision binding, missing models, shadow rejection, ETags,

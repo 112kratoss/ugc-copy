@@ -11,6 +11,7 @@ import {
   ModelCatalogTransportError,
   type ModelCatalogCurrent,
   type ModelCatalogKind,
+  type ModelCatalogPlatform,
   type ModelCatalogSummary,
 } from './model-catalog-transport';
 import { parseModelCatalogCurrent } from '../../ugc-mobile/lib/model-catalog-protocol';
@@ -49,13 +50,13 @@ function cached<T>(
 export function clearModelCatalogReadCache() {
   reads.clear();
 }
-function codeCatalog() {
+function codeCatalog(platform: ModelCatalogPlatform) {
   const source =
     process.env.GENERATION_MODEL_CATALOG_SOURCE ??
     (process.env.NODE_ENV === 'production' ? 'database' : 'code');
   // Shadow mode must never make an unpublished release public.
   return source === 'code'
-    ? buildGenerationModelCatalog({ platform: 'web', schemaVersion: 3 })
+    ? buildGenerationModelCatalog({ platform, schemaVersion: 3 })
     : null;
 }
 async function rpc(
@@ -72,8 +73,10 @@ async function rpc(
     );
   return data;
 }
-export async function readModelCatalogCurrent(): Promise<ModelCatalogCurrent> {
-  const code = codeCatalog();
+export async function readModelCatalogCurrent(
+  platform: ModelCatalogPlatform,
+): Promise<ModelCatalogCurrent> {
+  const code = codeCatalog(platform);
   if (code)
     return {
       transportVersion: 1,
@@ -86,17 +89,20 @@ export async function readModelCatalogCurrent(): Promise<ModelCatalogCurrent> {
         motion: code.models.filter((m) => m.kind === 'motion').length,
       },
     };
-  return cached('current', 30_000, async () =>
-    parseModelCatalogCurrent(await rpc('read_model_catalog_v1_current')),
+  return cached(`current:${platform}`, 30_000, async () =>
+    parseModelCatalogCurrent(
+      await rpc('read_model_catalog_v1_current', { p_platform: platform }),
+    ),
   );
 }
 export async function readModelCatalogPage(input: {
+  platform: ModelCatalogPlatform;
   revision: string;
   kind: ModelCatalogKind | null;
   after: { id: string; sortOrder: number } | null;
   limit: number;
 }): Promise<ModelCatalogSummary[]> {
-  const code = codeCatalog();
+  const code = codeCatalog(input.platform);
   if (code) {
     if (code.revision !== input.revision)
       throw new ModelCatalogTransportError(
@@ -125,6 +131,7 @@ export async function readModelCatalogPage(input: {
     async () =>
       (await rpc('read_model_catalog_v1_page', {
         p_revision: input.revision,
+        p_platform: input.platform,
         p_kind: input.kind,
         p_after_sort: input.after?.sortOrder ?? null,
         p_after_id: input.after?.id ?? null,
@@ -132,8 +139,12 @@ export async function readModelCatalogPage(input: {
       })) as ModelCatalogSummary[],
   );
 }
-export async function readModelCatalogDetails(revision: string, ids: string[]) {
-  const code = codeCatalog();
+export async function readModelCatalogDetails(
+  revision: string,
+  ids: string[],
+  platform: ModelCatalogPlatform,
+) {
+  const code = codeCatalog(platform);
   if (code) {
     if (code.revision !== revision)
       throw new ModelCatalogTransportError(
@@ -144,16 +155,19 @@ export async function readModelCatalogDetails(revision: string, ids: string[]) {
     return code.models.filter((m) => ids.includes(m.id));
   }
   return cached(
-    `details:${revision}:${ids.join(',')}`,
+    `details:${platform}:${revision}:${ids.join(',')}`,
     60 * 60_000,
     async () => {
       const rows = (await rpc('read_model_catalog_v1_details', {
         p_revision: revision,
         p_ids: ids,
+        p_platform: platform,
       })) as Array<{
         modelId: string;
         descriptor: unknown;
         releaseSchemaVersion: number;
+        webEnabled?: boolean;
+        mobileEnabled?: boolean;
       }>;
       return rows.map((row) =>
         projectGenerationModelDescriptor(
@@ -161,7 +175,9 @@ export async function readModelCatalogDetails(revision: string, ids: string[]) {
             row.descriptor,
             row.modelId,
             row.releaseSchemaVersion,
-            { web: true, mobile: true },
+            // The RPC only returns rows enabled for the requested platform;
+            // the descriptor still reports both flags truthfully.
+            { web: row.webEnabled === true, mobile: row.mobileEnabled === true },
           ),
           3,
         ),

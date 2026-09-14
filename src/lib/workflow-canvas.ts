@@ -1,4 +1,5 @@
 import type { CatalogPrimitive } from '@/lib/generation-model-catalog';
+import { isModelCatalogId } from '../../ugc-mobile/lib/model-catalog-protocol';
 import type { Edge, Node, Viewport } from '@xyflow/react';
 import {
   buildElementHandle,
@@ -1500,16 +1501,19 @@ function normalizeWorkflowMultiPrompts(value: unknown): WorkflowMultiPrompt[] {
   return prompts.length > 0 ? prompts : [{ id: 'shot-1', prompt: '', duration: 5 }];
 }
 
+// Catalog-published models need no bundled registry entry, so a model id is
+// accepted by shape (the same shape the catalog routes accept) and resolved
+// against the published catalog at render and run time.
 function isVideoModel(value: unknown): value is VideoGenerateNodeData['model'] {
-  return typeof value === 'string' && /^[A-Za-z0-9._-]{1,120}$/.test(value);
+  return isModelCatalogId(value);
 }
 
 function isImageModel(value: unknown): value is ImageGenerateNodeData['model'] {
-  return typeof value === 'string' && /^[A-Za-z0-9._-]{1,120}$/.test(value);
+  return isModelCatalogId(value);
 }
 
 function isMotionModel(value: unknown): value is MotionGenerateNodeData['model'] {
-  return typeof value === 'string' && /^[A-Za-z0-9._-]{1,120}$/.test(value);
+  return isModelCatalogId(value);
 }
 
 function getPreferredOption(options: readonly string[], ...preferredValues: Array<string | undefined>): string {
