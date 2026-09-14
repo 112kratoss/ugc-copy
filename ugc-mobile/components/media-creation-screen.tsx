@@ -55,6 +55,7 @@ import {
   getActiveCatalogInputSlots,
   getCatalogModel,
   getCatalogModels,
+  catalogConditionsMatch,
   type CatalogControl,
   type CatalogInputSlot,
   type CatalogPrimitive,
@@ -93,6 +94,7 @@ import { generationWaitDetail, generationWaitPhase, generationWaitTitle } from '
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse, PromptEnhancementLevel } from '@/lib/types';
+import type { ModelCatalogSummary } from '@/lib/model-catalog-protocol';
 import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
 import { invalidateActiveGenerations } from '@/lib/active-generations';
 import { verticalHitSlop } from '@/lib/hit-target';
@@ -459,9 +461,6 @@ export function MediaCreationScreen({
   // `identityUserId` so a guest can spend the credits they just bought.
   const { user, identityUserId, api, credits, updateCredits } = useAuth();
   const queryClient = useQueryClient();
-  const catalogQuery = useGenerationModelCatalog(api);
-  const catalog = catalogQuery.catalog;
-  const refetchCatalog = catalogQuery.refetch;
   const [activeTool, setActiveTool] = useState<CreatorToolId>(isTool(initialTool) ? initialTool : 'image');
   const [imageDraft, setImageDraft] = useState<ImageCreationDraft>(() => ({
     ...createDefaultCreationDraft('image'),
@@ -551,6 +550,10 @@ export function MediaCreationScreen({
     motion: motionDraft.prompt,
   });
   const [modelPickerVisible, setModelPickerVisible] = useState(false);
+  const catalogQuery = useGenerationModelCatalog(api, { kind: activeTool, selectedIds: [imageDraft.model, videoDraft.model, motionDraft.model], pickerOpen: modelPickerVisible });
+  const catalog = catalogQuery.catalog;
+  const refetchCatalog = catalogQuery.refetch;
+  const loadCatalogDetails = catalogQuery.loadDetails;
   const [parametersVisible, setParametersVisible] = useState(false);
   const [workspaceVisible, setWorkspaceVisible] = useState(false);
   const [generationStartedAt, setGenerationStartedAt] = useState<number | null>(null);
@@ -675,14 +678,8 @@ export function MediaCreationScreen({
       setter((draft) => {
         const fallback = defaultId ? getCatalogModel(catalog, defaultId) : null;
         const current = getCatalogModel(catalog, draft.model);
-        const currentIsCompatible = Boolean(
-          current?.kind === kind
-          && current.minClientSchemaVersion <= catalog.schemaVersion
-          && (Number(catalog.schemaVersion) === 1 || current.availability?.mobile)
-        );
         const shouldUseUntouchedDefault = Boolean(
           fallback?.kind === kind
-          && currentIsCompatible
           && !draft.catalogRevision
           && !modelSelectionTouched.current[kind]
           && !hasStartedCreationDraft(draft)
@@ -694,6 +691,10 @@ export function MediaCreationScreen({
             catalog.revision,
           ) as T;
         }
+        if (!current) {
+          if (catalogQuery.missingIds.includes(draft.model)) setCatalogNotice('This model is no longer available. Your draft is saved; choose another model.');
+          return draft;
+        }
         const result = reconcileCreationDraftWithCatalog(draft, catalog);
         if (result.warning) setCatalogNotice(result.warning);
         return result.draft as T;
@@ -702,7 +703,7 @@ export function MediaCreationScreen({
     reconcile<ImageCreationDraft>('image', catalog.defaults.image, setImageDraft);
     reconcile<VideoCreationDraft>('video', catalog.defaults.video, setVideoDraft);
     reconcile<MotionCreationDraft>('motion', catalog.defaults.motion, setMotionDraft);
-  }, [catalog]);
+  }, [catalog, catalogQuery.missingIds]);
 
   const rawDraft: CreationDraft = activeTool === 'image' ? imageDraft : activeTool === 'video' ? videoDraft : motionDraft;
   // Nothing selects a reference mode any more — every slot a model declares is on screen
@@ -805,7 +806,7 @@ export function MediaCreationScreen({
       ? validateCatalogCreationDraft(currentDraft, currentCatalogModel, { credits, quotedCost: activeQuote.cost })
       : catalog
         ? {
-            errors: ['This model is no longer available. Review the refreshed settings.'],
+            errors: [catalogQuery.missingIds.includes(currentDraft.model) ? 'This model is no longer available. Choose another model.' : catalogQuery.error ? 'Model settings unavailable. Retry before generating.' : 'Loading model settings…'],
             warnings: [],
             cost: 0,
             canGenerate: false,
@@ -907,14 +908,16 @@ export function MediaCreationScreen({
     const draftWhenRemixStarted = latestDrafts.current[targetTool];
 
     void api.getRemixSourceBundle(generationId, { postId: remixSource?.postId ?? null })
-      .then((bundle) => {
+      .then(async (bundle) => {
+        const modelId = typeof bundle.workflowSettings.model === 'string' ? bundle.workflowSettings.model : bundle.generation.model;
+        const restoredCatalog = await loadCatalogDetails([modelId]);
         if (isCancelled) return;
         const baseDraft = targetTool === 'image'
           ? createDefaultCreationDraft('image')
           : targetTool === 'video'
             ? createDefaultCreationDraft('video')
             : createDefaultCreationDraft('motion');
-        const restored = hydrateCatalogCreationDraftFromRemixSource(baseDraft, bundle, catalog);
+        const restored = hydrateCatalogCreationDraftFromRemixSource(baseDraft, bundle, restoredCatalog);
         const creatorPrompt = draftPromptsRef.current[targetTool];
         const prompt = hasCreatorEditedPromptDuringRemix(creatorPrompt, promptWhenRemixStarted)
           ? creatorPrompt
@@ -957,7 +960,7 @@ export function MediaCreationScreen({
         remixHydrationKeyRef.current = null;
       }
     };
-  }, [api, catalog, draftsHydrated, initialTool, remixSource?.generationId, remixSource?.postId, remixRetry, user]);
+  }, [api, catalog, loadCatalogDetails, draftsHydrated, initialTool, remixSource?.generationId, remixSource?.postId, remixRetry, user]);
 
   const updatePrompt = (prompt: string) => {
     if (activeTool === 'image') setImageDraft((draft) => ({ ...draft, prompt }));
@@ -1376,7 +1379,7 @@ export function MediaCreationScreen({
     const creatorModels = catalog ? getCatalogModels(catalog, activeTool) : [];
     const selectedCreatorModel = currentCatalogModel?.kind === activeTool
       ? currentCatalogModel
-      : creatorModels[0] ?? null;
+      : null;
     const activeGenerationStatus = generationTool === activeTool ? status : null;
     const activeOutputUrl = generationTool === activeTool ? outputUrl : null;
     const parameterSummary = creatorParameterSummary(currentDraft, selectedCreatorModel);
@@ -1418,8 +1421,8 @@ export function MediaCreationScreen({
         >
           <CompactCreatorHeader
             activeTool={activeTool}
-            modelName={selectedCreatorModel?.displayName ?? 'Loading models'}
-            modelDisabled={!selectedCreatorModel}
+            modelName={selectedCreatorModel?.displayName ?? (catalogQuery.missingIds.includes(currentDraft.model) ? 'Choose another model' : 'Loading model settings…')}
+            modelDisabled={!catalogQuery.current && !catalog}
             onChangeTool={changeTool}
             onOpenModels={() => setModelPickerVisible(true)}
             onClose={onClose ? () => void closeCreator() : undefined}
@@ -1540,7 +1543,10 @@ export function MediaCreationScreen({
 
         <SearchableModelPickerModal
           visible={modelPickerVisible}
-          items={creatorModels}
+          loading={catalogQuery.isLoadingModels}
+          error={catalogQuery.error?.message}
+          onRetry={refetchCatalog}
+          items={catalogQuery.summaries.filter(model => model.kind === activeTool)}
           value={currentDraft.model}
           onClose={() => setModelPickerVisible(false)}
           onChange={(modelId) => {
@@ -1634,7 +1640,7 @@ export function MediaCreationScreen({
 
   if (activeTool === 'image') {
     const imageModels = catalog ? getCatalogModels(catalog, 'image') : [];
-    const selectedImageModel = currentCatalogModel?.kind === 'image' ? currentCatalogModel : imageModels[0] ?? null;
+    const selectedImageModel = currentCatalogModel?.kind === 'image' ? currentCatalogModel : null;
     const activeGenerationStatus = generationTool === 'image' ? status : null;
     const activeOutputUrl = generationTool === 'image' ? outputUrl : null;
     const imageRecord = imageDraft as unknown as Record<string, unknown>;
@@ -1680,8 +1686,8 @@ export function MediaCreationScreen({
         >
           <CompactCreatorHeader
             activeTool={activeTool}
-            modelName={selectedImageModel?.displayName ?? 'Loading models'}
-            modelDisabled={!selectedImageModel}
+            modelName={selectedImageModel?.displayName ?? (catalogQuery.missingIds.includes(currentDraft.model) ? 'Choose another model' : 'Loading model settings…')}
+            modelDisabled={!catalogQuery.current && !catalog}
             onChangeTool={changeTool}
             onOpenModels={() => setModelPickerVisible(true)}
             onClose={onClose ? () => void closeCreator() : undefined}
@@ -1806,7 +1812,10 @@ export function MediaCreationScreen({
 
         <SearchableModelPickerModal
           visible={modelPickerVisible}
-          items={imageModels}
+          loading={catalogQuery.isLoadingModels}
+          error={catalogQuery.error?.message}
+          onRetry={refetchCatalog}
+          items={catalogQuery.summaries.filter(model => model.kind === 'image')}
           value={imageDraft.model}
           onClose={() => setModelPickerVisible(false)}
           onChange={(modelId) => {
@@ -3542,9 +3551,15 @@ function SearchableModelPickerModal({
   value,
   onClose,
   onChange,
+  loading,
+  error,
+  onRetry,
 }: {
   visible: boolean;
-  items: ReturnType<typeof getCatalogModels>;
+  loading?: boolean;
+  error?: string;
+  onRetry?: () => void;
+  items: ModelCatalogSummary[];
   value: string;
   onClose: () => void;
   onChange: (modelId: string) => void;
@@ -3602,7 +3617,9 @@ function SearchableModelPickerModal({
                 </Pressable>
               );
             })}
-            {filteredItems.length === 0 ? <Text style={{ color: appTheme.colors.muted, textAlign: 'center', paddingVertical: 28 }}>No models found.</Text> : null}
+            {loading ? <Text accessibilityRole="text" style={{ color: appTheme.colors.muted, paddingVertical: 12 }}>Loading models…</Text> : null}
+            {error ? <Pressable accessibilityRole="button" onPress={onRetry} style={{ minHeight: 44, justifyContent: 'center' }}><Text style={{ color: appTheme.colors.text }}>{error} Tap to retry.</Text></Pressable> : null}
+            {!loading && !error && filteredItems.length === 0 ? <Text style={{ color: appTheme.colors.muted, textAlign: 'center', paddingVertical: 28 }}>No models found.</Text> : null}
           </ScrollView>
         </SheetPanel>
       </View>
@@ -3985,7 +4002,7 @@ function CatalogEssentialControls({
   hiddenControlKeys?: readonly string[];
 }) {
   const controls = model.controls.filter((control) => (
-    ['aspectRatio', 'resolution', 'duration'].includes(control.key) && !hiddenControlKeys.includes(control.key)
+    ['aspectRatio', 'resolution', 'duration'].includes(control.key) && !hiddenControlKeys.includes(control.key) && catalogConditionsMatch(control.conditions, getCatalogDraftSettings(draft, model), buildCatalogQuoteRequest(draft, model, 'conditions').inputCounts ?? {})
   ));
   return (
     <>
@@ -4147,7 +4164,7 @@ function CatalogAdvancedControls({ model, draft, onChange, hiddenControlKeys = [
   hiddenControlKeys?: readonly string[];
 }) {
   const controls = model.controls.filter((control) => (
-    !['aspectRatio', 'resolution', 'duration'].includes(control.key) && !hiddenControlKeys.includes(control.key)
+    !['aspectRatio', 'resolution', 'duration'].includes(control.key) && !hiddenControlKeys.includes(control.key) && catalogConditionsMatch(control.conditions, getCatalogDraftSettings(draft, model), buildCatalogQuoteRequest(draft, model, 'conditions').inputCounts ?? {})
   ));
   return (
     <>

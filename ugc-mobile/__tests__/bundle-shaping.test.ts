@@ -197,6 +197,18 @@ describe('react compiler', () => {
     }
   });
 
+  it('keeps the sheet backdrop press target a component after native compilation', () => {
+    const file = path.join(mobileRoot, 'components', 'sheet-chrome.tsx');
+    const source = readFileSync(file, 'utf8');
+    for (const platform of ['ios', 'android']) {
+      const compiled = compile(source, file, { ...metroCaller, platform });
+      // Lowercase aliases can become host-name strings during JSX compilation.
+      // Native has no view manager for these names, so opening any sheet crashes.
+      expect(compiled).not.toMatch(/(?:jsx|createElement)\w*\)?\(["'](?:pressableApi|nativePressable)["']/);
+      expect(compiled).toMatch(/(?:jsx|createElement)\w*\)?\(NativePressable[,)]/);
+    }
+  });
+
   it('leaves dependencies and code outside the app directories alone', () => {
     const dependency = path.join(mobileRoot, 'node_modules', 'some-package', 'index.tsx');
     expect(compile(component, dependency, { ...metroCaller, isNodeModule: true })).not.toContain('react/compiler-runtime');

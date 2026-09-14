@@ -538,6 +538,25 @@ export function createApiClient({
     value?: unknown;
   }>();
 
+  async function readCatalogTransport(path: string, etag?: string) {
+    const headers = new Headers({ [REQUEST_ID_HEADER]: createMobileRequestId(), 'x-magicbooklet-client': 'mobile' });
+    if (clientInfo) {
+      headers.set('x-magicbooklet-app-version', clientInfo.appVersion);
+      headers.set('x-magicbooklet-api-version', String(clientInfo.apiVersion));
+      headers.set('x-magicbooklet-catalog-schema-version', String(clientInfo.catalogSchemaVersion));
+    }
+    if (etag) headers.set('If-None-Match', etag);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+    try {
+      const response = await fetcher(`${root}/api/model-catalog/v1${path}`, { headers, signal: controller.signal });
+      if (response.status === 304) return { body: null, etag: response.headers.get('etag') ?? etag ?? null, notModified: true };
+      const body = await parseResponse(response);
+      if (!response.ok) throwHttpApiError(response.status, body, response.headers.get(REQUEST_ID_HEADER) ?? undefined, false);
+      return { body, etag: response.headers.get('etag'), notModified: false };
+    } finally { clearTimeout(timeout); }
+  }
+
   async function request<T>(
     path: string,
     init: RequestInit = {},
@@ -913,6 +932,10 @@ export function createApiClient({
       request<CreatePostResponse>('/api/posts', { method: 'POST', body }),
     listSourceTools: () =>
       request<{ tools: SourceToolOption[] }>('/api/source-tools'),
+    fetchModelCatalogCurrent: (etag?: string) => readCatalogTransport('/current', etag),
+    fetchModelCatalogPage: (query: string) => readCatalogTransport(`/models?${query}`),
+    fetchModelCatalogDetails: (query: string) => readCatalogTransport(`/details?${query}`),
+    fetchModelCatalogModel: (id: string, query: string) => readCatalogTransport(`/models/${encodeURIComponent(id)}?${query}`),
     listGenerationModels: async (): Promise<GenerationModelCatalog> => {
       const response = await request<unknown>(
         `/api/generation-models?platform=mobile&schemaVersion=${catalogSchemaVersion}`,

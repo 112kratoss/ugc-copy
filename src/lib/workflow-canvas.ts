@@ -1,3 +1,4 @@
+import type { CatalogPrimitive } from '@/lib/generation-model-catalog';
 import type { Edge, Node, Viewport } from '@xyflow/react';
 import {
   buildElementHandle,
@@ -69,6 +70,7 @@ export interface WorkflowNodeRunState {
 }
 
 interface BaseWorkflowNodeData extends Record<string, unknown> {
+  catalogSettings?: Record<string, CatalogPrimitive>;
   title: string;
   subtitle?: string;
   managed?: boolean;
@@ -1138,6 +1140,7 @@ export function normalizeNodeData(type: WorkflowNodeKind, data?: Partial<Workflo
         ...assistantMetadata,
         title,
         subtitle,
+        ...((data as MotionGenerateNodeData | undefined)?.model && !MOTION_MODELS[(data as MotionGenerateNodeData).model] ? { catalogSettings: data?.catalogSettings ?? {} } : {}),
         model: isMotionModel((data as MotionGenerateNodeData | undefined)?.model)
           ? (data as MotionGenerateNodeData).model
           : (base as MotionGenerateNodeData).model,
@@ -1241,6 +1244,7 @@ function normalizeImageGenerateNodeData(params: {
   const { base, data, assistantMetadata, title, subtitle, runState } = params;
   const model = isImageModel(data?.model) ? data.model : DEFAULT_IMAGE_GENERATE_MODEL;
   const modelConfig = IMAGE_MODELS[model];
+  if (!modelConfig) return { ...base, ...data, ...assistantMetadata, catalogSettings: data?.catalogSettings ?? {}, title, subtitle, model, referenceHandle: normalizeWorkflowReferenceHandle(data?.referenceHandle), referenceBindings: normalizeWorkflowReferenceBindings(data?.referenceBindings), elements: normalizeWorkflowReferenceElements(data?.elements), runState };
   const aspectRatio = normalizeStringOption(
     data?.aspectRatio,
     modelConfig.aspectRatios,
@@ -1288,6 +1292,7 @@ function normalizeVideoGenerateNodeData(params: {
   const { base, data, assistantMetadata, title, subtitle, runState } = params;
   const model = isVideoModel(data?.model) ? data.model : DEFAULT_VIDEO_GENERATE_MODEL;
   const modelConfig = VIDEO_MODELS[model];
+  if (!modelConfig) return { ...base, ...data, ...assistantMetadata, catalogSettings: data?.catalogSettings ?? {}, title, subtitle, model, multiPrompts: normalizeWorkflowMultiPrompts(data?.multiPrompts), referenceBindings: normalizeWorkflowReferenceBindings(data?.referenceBindings), elements: normalizeWorkflowReferenceElements(data?.elements), runState };
 
   return {
     ...base,
@@ -1336,6 +1341,7 @@ function normalizeAssistantNodeMetadata(
   data: Partial<BaseWorkflowNodeData> | undefined
 ) {
   return {
+    ...(data?.catalogSettings && typeof data.catalogSettings === 'object' ? { catalogSettings: Object.fromEntries(Object.entries(data.catalogSettings).filter(([, value]) => ['string', 'boolean'].includes(typeof value) || (typeof value === 'number' && Number.isFinite(value)))) } : {}),
     managed: data?.managed === true,
     regionId: typeof data?.regionId === 'string' && data.regionId.trim() ? data.regionId.trim() : null,
     roleKey: typeof data?.roleKey === 'string' && data.roleKey.trim() ? data.roleKey.trim() : null,
@@ -1495,15 +1501,15 @@ function normalizeWorkflowMultiPrompts(value: unknown): WorkflowMultiPrompt[] {
 }
 
 function isVideoModel(value: unknown): value is VideoGenerateNodeData['model'] {
-  return typeof value === 'string' && value in VIDEO_MODELS;
+  return typeof value === 'string' && /^[A-Za-z0-9._-]{1,120}$/.test(value);
 }
 
 function isImageModel(value: unknown): value is ImageGenerateNodeData['model'] {
-  return typeof value === 'string' && value in IMAGE_MODELS;
+  return typeof value === 'string' && /^[A-Za-z0-9._-]{1,120}$/.test(value);
 }
 
 function isMotionModel(value: unknown): value is MotionGenerateNodeData['model'] {
-  return typeof value === 'string' && value in MOTION_MODELS;
+  return typeof value === 'string' && /^[A-Za-z0-9._-]{1,120}$/.test(value);
 }
 
 function getPreferredOption(options: readonly string[], ...preferredValues: Array<string | undefined>): string {
@@ -2524,7 +2530,7 @@ export function inspectWorkflowNodeCapabilities(
     .map((reference) => reference.handle)
     .filter((handle): handle is string => Boolean(handle));
 
-  if (node.type === 'image-generate') {
+  if (node.type === 'image-generate' && IMAGE_MODELS[(node.data as ImageGenerateNodeData).model]) {
     const data = normalizeNodeData('image-generate', node.data as Partial<WorkflowNodeData>) as ImageGenerateNodeData;
     const model = IMAGE_MODELS[data.model];
     legacyElementCount = data.elements.length;
@@ -2579,7 +2585,7 @@ export function inspectWorkflowNodeCapabilities(
     }
   }
 
-  if (node.type === 'video-generate') {
+  if (node.type === 'video-generate' && VIDEO_MODELS[(node.data as VideoGenerateNodeData).model]) {
     const data = normalizeNodeData('video-generate', node.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
     const model = VIDEO_MODELS[data.model];
     const isSeedance2Family = isSeedance2VideoModel(data.model);
@@ -2787,7 +2793,7 @@ export function inspectWorkflowNodeCapabilities(
     }
   }
 
-  if (node.type === 'motion-generate') {
+  if (node.type === 'motion-generate' && MOTION_MODELS[(node.data as MotionGenerateNodeData).model]) {
     const data = normalizeNodeData('motion-generate', node.data as Partial<WorkflowNodeData>) as MotionGenerateNodeData;
     const model = MOTION_MODELS[data.model];
     referenceImageCount = countIncomingEdgesForTargetHandle(graph, node.id, 'reference-image');

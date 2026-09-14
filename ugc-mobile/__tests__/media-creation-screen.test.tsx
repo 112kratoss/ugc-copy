@@ -45,6 +45,7 @@ const authState = vi.hoisted(() => ({
   },
 }));
 
+const EMPTY_MISSING_IDS = vi.hoisted(() => [] as string[]);
 const catalogState = vi.hoisted(() => ({
   catalog: null as unknown,
   isLoading: false,
@@ -155,8 +156,10 @@ vi.mock('@/lib/auth', () => ({
   useAuth: () => authState,
 }));
 
+const loadCatalogDetails = async () => catalogState.catalog;
+
 vi.mock('@/lib/use-generation-model-catalog', () => ({
-  useGenerationModelCatalog: () => catalogState,
+  useGenerationModelCatalog: () => ({ ...catalogState, loadDetails: loadCatalogDetails, summaries: (catalogState.catalog as {models?: unknown[]} | null)?.models ?? [], missingIds: EMPTY_MISSING_IDS, isLoadingModels: false }),
 }));
 
 import { createDefaultCreationDraft } from '../lib/media-creation-view-model';
@@ -274,6 +277,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     catalogState.isUnavailable = false;
     catalogState.error = null;
     catalogState.refetch.mockReset();
+    EMPTY_MISSING_IDS.length = 0;
     nativeAlertState.alert.mockReset();
     vi.mocked(pickAudioDocument).mockReset();
     vi.mocked(pickMedia).mockReset();
@@ -343,14 +347,15 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     catalogState.catalog = createTestGenerationModelCatalog();
+    EMPTY_MISSING_IDS.push(remoteImageModel.id);
     expect(() => {
       renderer.act(() => {
         tree!.update(<MediaCreationScreen initialTool="image" />);
       });
     }).not.toThrow();
 
-    expect(collectText(tree!.root)).toContain('Nano Banana 2.0');
-    expect(collectText(tree!.root)).toContain('Model updated');
+    expect(collectText(tree!.root)).toContain('Choose another model');
+    expect(collectText(tree!.root)).toContain('This model is no longer available. Your draft is saved; choose another model.');
   });
 
   it('waits for a debounced server quote before enabling generation', async () => {
@@ -373,7 +378,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     vi.useRealTimers();
   });
 
-  it('switches a retired draft model to the catalog default with a notice', async () => {
+  it('uses the published default for an untouched new draft', async () => {
     const catalog = createTestGenerationModelCatalog();
     catalog.models = catalog.models.filter((model) => model.id !== 'nano-banana-2');
     catalog.defaults.image = 'nano-banana-pro';
@@ -384,8 +389,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     const text = collectText(tree!.root);
-    expect(text).toContain('Model updated');
-    expect(text).toContain('Your previous image model is no longer available. Switched to Nano Banana Pro.');
+    expect(text).not.toContain('Your previous image model is no longer available. Switched to Nano Banana Pro.');
     expect(text).toContain('Nano Banana Pro');
   });
 

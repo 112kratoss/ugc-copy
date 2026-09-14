@@ -380,7 +380,7 @@ describe('CreateWorkflowPage', () => {
   let orderedCanvasIds: string[];
   let nextCanvasIdNumber: number;
   let nextShareIdNumber: number;
-  const workflowCatalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 1 });
+  const workflowCatalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 3 });
 
   function buildShareId(value: number) {
     return `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
@@ -473,6 +473,16 @@ describe('CreateWorkflowPage', () => {
     vi.stubGlobal('fetch', vi.fn(async (input, init) => {
       const url = String(input);
       const method = init?.method || 'GET';
+
+      if (url.includes('/api/model-catalog/v1/') && method === 'GET') {
+        const parsed = new URL(url, 'http://localhost');
+        const body = parsed.pathname.endsWith('/current')
+          ? { transportVersion: 1, descriptorSchemaVersion: 3, revision: workflowCatalog.revision, defaults: workflowCatalog.defaults, counts: Object.fromEntries(['image', 'video', 'motion'].map(kind => [kind, workflowCatalog.models.filter(model => model.kind === kind).length])) }
+          : parsed.pathname.endsWith('/models')
+            ? { transportVersion: 1, revision: workflowCatalog.revision, models: workflowCatalog.models.map(model => ({ id: model.id, kind: model.kind, displayName: model.displayName, description: model.description, badge: model.badge ?? null, recommended: model.recommended, sortOrder: model.sortOrder })), nextCursor: null }
+            : { transportVersion: 1, descriptorSchemaVersion: 3, revision: workflowCatalog.revision, models: workflowCatalog.models.filter(model => (parsed.searchParams.get('ids') ?? '').split(',').includes(model.id)), missingIds: [] };
+        return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+      }
 
       if (url.includes('/api/generation-models') && method === 'GET') {
         return {

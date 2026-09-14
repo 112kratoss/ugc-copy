@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   applyCatalogModelDefaults,
+  reconcileCreationDraftWithCatalog,
   buildCatalogGenerationPayload,
   buildCatalogQuoteRequest,
   getCatalogCreationSectionSummary,
@@ -122,10 +123,14 @@ describe('catalog-backed mobile creation drafts', () => {
     );
   });
 
-  it('selects the catalog default when a retired model is absent', () => {
+  it('preserves the draft when a retired model is absent', () => {
     const catalog = createTestGenerationModelCatalog();
-    expect(catalog.models.some((model) => model.id === 'retired-image')).toBe(false);
-    expect(catalog.defaults.image).toBe('nano-banana-2');
+    const draft = { ...createDefaultCreationDraft('image'), model: 'retired-image', prompt: 'Keep this prompt' };
+    const result = reconcileCreationDraftWithCatalog(draft, catalog);
+    expect(result.draft).toEqual(draft);
+    expect(result.model).toBeNull();
+    expect(result.switchedModel).toBe(false);
+    expect(result.warning).toContain('Choose a replacement');
   });
 
   it('includes Gemini prepared voice and character IDs in quotes and generation payloads', () => {

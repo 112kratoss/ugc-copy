@@ -92,6 +92,7 @@ vi.mock('@/lib/generation-model-client', async () => {
   return {
     ...actual,
     useWebGenerationModelCatalog: () => ({
+      summaries: [], missingIds: [], detailsReady: true, isLoadingModels: false,
       catalog: {
         revision: 'test-catalog-rev',
         schemaVersion: 1,
@@ -208,7 +209,7 @@ describe('CreateImageClient persisted elements', () => {
     expect(URL.revokeObjectURL).toHaveBeenCalledWith(expect.stringContaining('blob:'));
   });
 
-  it('persists the clamped element set when restored media exceeds the model limit', async () => {
+  it('preserves restored media exceeding the model limit and explains how to resolve it', async () => {
     const restoredRecords = Array.from({ length: 15 }, (_, index) => ({
       id: `restored-${index + 1}`,
       displayName: `Restored ${index + 1}`,
@@ -219,9 +220,9 @@ describe('CreateImageClient persisted elements', () => {
     render(<CreateImageClient prefill={{}} />);
 
     await waitFor(() => {
-      expect(setPersistedImageElementRecordsMock).toHaveBeenCalledTimes(1);
+      expect(screen.getAllByText('15/14')).not.toHaveLength(0);
     });
-    expect(setPersistedImageElementRecordsMock.mock.calls[0]?.[1]).toHaveLength(14);
-    expect(screen.getAllByText('14/14')).not.toHaveLength(0);
+    expect(setPersistedImageElementRecordsMock).not.toHaveBeenCalled();
+    expect(screen.getByText(/Your references are preserved/)).toBeInTheDocument();
   });
 });

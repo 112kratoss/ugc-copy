@@ -297,6 +297,7 @@ export function getImageResolutionOptions(
   modelId: ImageModelId,
   aspectRatio?: string
 ): readonly ImageResolution[] {
+  if (!IMAGE_MODELS[modelId]) return [];
   const selectedAspectRatio = aspectRatio ?? IMAGE_MODELS[modelId].aspectRatios[0];
   if (modelId === 'grok-imagine-image') return IMAGE_MODELS[modelId].resolutions;
   if (GPT_IMAGE_2_5_MODEL_IDS.includes(modelId)) return getGptImage25ResolutionOptions(selectedAspectRatio);
@@ -314,7 +315,7 @@ export function getImageQualityModes(modelId: ImageModelId): readonly ImageQuali
   // Mirrors the server implementation: driven by the entry's declared modes so
   // the two copies cannot disagree about which models expose a quality picker.
   const model = IMAGE_MODELS[modelId];
-  return 'qualityModes' in model ? model.qualityModes as readonly ImageQualityMode[] : [];
+  return model && 'qualityModes' in model ? model.qualityModes as readonly ImageQualityMode[] : [];
 }
 
 export const VIDEO_MODELS = {
@@ -586,17 +587,17 @@ export function getVideoReferenceSupport(modelId: VideoModelId): { videos: numbe
 
 export function getVideoDurationRange(modelId: VideoModelId): { min: number; max: number; default: number } | null {
   const model = VIDEO_MODELS[modelId];
-  return 'singleShotDurationRange' in model ? model.singleShotDurationRange : null;
+  return model && 'singleShotDurationRange' in model ? model.singleShotDurationRange : null;
 }
 
 export function getDefaultVideoDuration(modelId: VideoModelId): number {
-  return getVideoDurationRange(modelId)?.default ?? VIDEO_MODELS[modelId].durations[0];
+  return getVideoDurationRange(modelId)?.default ?? (VIDEO_MODELS[modelId]?.durations[0] ?? 5);
 }
 
 export function isValidVideoDuration(modelId: VideoModelId, durationSeconds: number): boolean {
   const range = getVideoDurationRange(modelId);
   if (range) return durationSeconds >= range.min && durationSeconds <= range.max;
-  return (VIDEO_MODELS[modelId].durations as readonly number[]).includes(durationSeconds);
+  return ((VIDEO_MODELS[modelId]?.durations ?? []) as readonly number[]).includes(durationSeconds);
 }
 
 export function clampVideoDuration(modelId: VideoModelId, durationSeconds: number): number {
@@ -604,7 +605,7 @@ export function clampVideoDuration(modelId: VideoModelId, durationSeconds: numbe
   if (range) return Math.min(range.max, Math.max(range.min, durationSeconds));
   return isValidVideoDuration(modelId, durationSeconds)
     ? durationSeconds
-    : VIDEO_MODELS[modelId].durations[0];
+    : (VIDEO_MODELS[modelId]?.durations[0] ?? 5);
 }
 
 const AUDIO_MODEL_IDS = [

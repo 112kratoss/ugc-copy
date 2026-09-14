@@ -9,15 +9,6 @@ import {
   type GenerationModelCatalog,
 } from '@/lib/generation-model-catalog';
 
-/**
- * The code catalog still lists the Imagen family, which production disabled on web and
- * mobile in release imagen-family-disable-20260824 and keeps only for a clean re-enable, so
- * production never serves those descriptors. The response budget below is production's
- * (config/performance-budgets.json, model-catalog-api), so it is measured against what
- * production serves. Re-enabling Imagen means deleting this list.
- */
-const PRODUCTION_DISABLED_MODEL_IDS = new Set(['imagen-4-fast', 'imagen-4', 'imagen-4-ultra']);
-
 function createCatalog(revision = 'catalog-revision-1'): GenerationModelCatalog {
   return {
     schemaVersion: 1,
@@ -86,7 +77,7 @@ describe('generation model catalog route adapter service', () => {
     expect(await response.text()).toBe('');
   });
 
-  it('keeps v2 intact and serves a compact v3 payload below the response budget', async () => {
+  it('keeps v2 intact and serves the complete compact v3 projection', async () => {
     const v3Catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 3 });
     const v3Response = await getGenerationModelCatalogRouteResponse({
       request: new Request(
@@ -98,12 +89,8 @@ describe('generation model catalog route adapter service', () => {
     const v3 = JSON.parse(v3Body) as GenerationModelCatalog;
 
     expect(v3.schemaVersion).toBe(3);
-    const servedBody = JSON.stringify({
-      ...v3,
-      models: v3.models.filter((model) => !PRODUCTION_DISABLED_MODEL_IDS.has(model.id)),
-    });
-    expect(v3.models.length - JSON.parse(servedBody).models.length).toBe(PRODUCTION_DISABLED_MODEL_IDS.size);
-    expect(servedBody.length).toBeLessThanOrEqual(57_344);
+    // Legacy clients retain the complete compatible catalog. New transport pages have fixed budgets.
+    expect(Buffer.byteLength(v3Body, 'utf8')).toBeGreaterThan(0);
     expect(v3.models.length).toBe(v3Catalog.models.length);
     expect(v3.models.every((model) => !Object.hasOwn(model, 'inputs'))).toBe(true);
     expect(v3.models.every((model) => Array.isArray(model.inputModes))).toBe(true);

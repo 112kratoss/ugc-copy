@@ -12,7 +12,6 @@ import type {
 import {
   catalogConditionsMatch,
   getActiveCatalogInputSlots,
-  getCatalogDefaultModel,
   getCatalogModel,
   normalizeCatalogSettings,
 } from './generation-model-catalog';
@@ -671,7 +670,7 @@ export function reconcileCreationDraftWithCatalog(
     && existing.minClientSchemaVersion <= catalog.schemaVersion
     && (catalog.schemaVersion === 1 || existing.availability?.mobile)
     ? existing
-    : getCatalogDefaultModel(catalog, draft.tool);
+    : null;
   if (!selected) {
     return {
       draft,
@@ -679,7 +678,7 @@ export function reconcileCreationDraftWithCatalog(
       switchedModel: false,
       previousModelId,
       discardedSettingKeys: [],
-      warning: `No ${draft.tool} generation model is currently available.`,
+      warning: `${previousModelId} is unavailable. Choose a replacement; your draft has been preserved.`,
     };
   }
 
@@ -689,7 +688,7 @@ export function reconcileCreationDraftWithCatalog(
     if (current !== undefined) sourceSettings[control.key] = current;
   }
   const normalizedSettings = normalizeCatalogSettings(selected, sourceSettings);
-  const discardedSettingKeys = Object.keys(sourceSettings).filter((key) => !(key in normalizedSettings));
+  const discardedSettingKeys = Object.keys(sourceSettings).filter((key) => !(key in normalizedSettings) || normalizedSettings[key] !== sourceSettings[key]);
   const reconciled = applyCatalogModelDefaults({
     ...draft,
     model: selected.id,
@@ -774,16 +773,7 @@ export function hydrateCatalogCreationDraftFromRemixSource(
     && requestedModel.minClientSchemaVersion <= catalog.schemaVersion
     && (catalog.schemaVersion === 1 || requestedModel.availability?.mobile)
     ? requestedModel
-    : getCatalogDefaultModel(catalog, baseDraft.tool);
-  if (!model) {
-    return {
-      draft: baseDraft,
-      model: null,
-      warning: `No ${baseDraft.tool} generation model is currently available.`,
-      switchedModel: false,
-    };
-  }
-
+    : null;
   // The legacy hydrator restores signed media descriptors. Catalog model
   // selection and settings are deliberately reapplied afterwards so a remote
   // id never has to exist in the bundled registry.
@@ -799,6 +789,12 @@ export function hydrateCatalogCreationDraftFromRemixSource(
     : baseDraft.tool === 'video'
       ? hydrateCreationDraftFromRemixSource(baseDraft, legacyBundle)
       : hydrateCreationDraftFromRemixSource(baseDraft, legacyBundle);
+  if (!model) return {
+    draft: { ...restored.draft, model: requestedModelId, catalogRevision: catalog.revision } as CreationDraft,
+    model: null,
+    warning: `${requestedModelId} is unavailable. Choose a replacement; your draft has been preserved.`,
+    switchedModel: false,
+  };
   const restoredCatalogSettings = remixCatalogSettings(bundle, model);
   const projectedControlValues = Object.fromEntries(model.controls.map((control) => {
     const value = restoredCatalogSettings[control.key] ?? control.defaultValue;

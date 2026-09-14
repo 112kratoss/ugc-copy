@@ -1,6 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { createContext, useCallback, useEffect, useMemo, useState } from 'react';
+import { ModelCatalogSession, type CatalogSessionState } from '../../ugc-mobile/lib/model-catalog-session';
+import type { ModelCatalogKind, ModelCatalogSummary } from '../../ugc-mobile/lib/model-catalog-protocol';
 
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import type {
@@ -27,7 +29,6 @@ type WebCatalogCacheEnvelope = {
   fetchedAt: number;
 };
 
-let catalogRequest: Promise<GenerationModelCatalog> | null = null;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -260,11 +261,12 @@ export function applyGenerationModelCatalogToRegistries(
     image: IMAGE_MODELS as unknown as Registry,
     video: VIDEO_MODELS as unknown as Registry,
     motion: MOTION_MODELS as unknown as Registry,
-  }
+  },
+  complete = true,
 ) {
-  markRetired(registries.image, activeIds(catalog, 'image'));
-  markRetired(registries.video, activeIds(catalog, 'video'));
-  markRetired(registries.motion, activeIds(catalog, 'motion'));
+  if (complete) markRetired(registries.image, activeIds(catalog, 'image'));
+  if (complete) markRetired(registries.video, activeIds(catalog, 'video'));
+  if (complete) markRetired(registries.motion, activeIds(catalog, 'motion'));
 
   for (const model of catalog.models) {
     if (model.kind === 'image') {
@@ -379,9 +381,7 @@ export function resolveCatalogModelId(
     return defaultId;
   }
   if (catalog.models.some((model) => model.kind === kind && model.id === selectedId)) return selectedId;
-  return defaultId && catalog.models.some((model) => model.kind === kind && model.id === defaultId)
-    ? defaultId
-    : catalog.models.find((model) => model.kind === kind)?.id ?? null;
+  return null;
 }
 
 export type WebCatalogGenerationDraft = {
@@ -514,47 +514,67 @@ export async function loadWebGenerationModelCatalog({
   }
 }
 
-export function useWebGenerationModelCatalog() {
-  const [refreshVersion, setRefreshVersion] = useState(0);
-  const [state, setState] = useState<{
-    catalog: GenerationModelCatalog | null;
-    error: Error | null;
-  }>({ catalog: null, error: null });
-
-  useEffect(() => {
-    let active = true;
-    catalogRequest ??= loadWebGenerationModelCatalog({ forceRefresh: refreshVersion > 0 });
-    void catalogRequest
-      .then((catalog) => {
-        if (!active) return;
-        applyGenerationModelCatalogToRegistries(catalog);
-        setState({ catalog, error: null });
-      })
-      .catch((error) => {
-        if (active) {
-          setState((current) => ({
-            catalog: current.catalog,
-            error: error instanceof Error ? error : new Error('Could not load model settings.'),
-          }));
-        }
-        catalogRequest = null;
-      });
-    return () => {
-      active = false;
-    };
-  }, [refreshVersion]);
-
-  const refetch = useCallback(() => {
-    catalogRequest = null;
-    setRefreshVersion((current) => current + 1);
-  }, []);
-
-  return {
-    ...state,
-    isLoading: !state.catalog && !state.error,
-    revision: state.catalog?.revision ?? null,
-    refetch,
+function seedCatalogSummaryRegistry(summary: ModelCatalogSummary) {
+  const registry = (summary.kind === 'image' ? IMAGE_MODELS : summary.kind === 'video' ? VIDEO_MODELS : MOTION_MODELS) as unknown as Registry;
+  // Placeholder metadata is for rendering only. Quote/start remain disabled until details load.
+  registry[summary.id] = {
+    aspectRatios: [], resolutions: [], durations: [5], modeOptions: [], outputFormats: ['jpg'],
+    maxImages: 0, maxDuration: 30, maxVideoDuration: 30, characterOrientations: ['video', 'image'],
+    badgeColor: 'from-sky-500 to-cyan-500', accentColor: 'blue',
+    ...registry[summary.id], ...summary, badge: summary.badge ?? '', catalogManaged: true,
+    catalogActive: true, catalogSortOrder: summary.sortOrder, catalogRecommended: summary.recommended,
   };
+}
+
+export function useWebGenerationModelCatalog(options: {
+  kind?: ModelCatalogKind; selectedIds?: string[]; pickerOpen?: boolean;
+} = {}) {
+  const [session] = useState(() => new ModelCatalogSession<GenerationModelDescriptor>(async (path, etag) => {
+    const headers = new Headers(); if (etag) headers.set('If-None-Match', etag);
+    const response = await fetch(path, { headers });
+    if (response.status === 304) return { body: null, etag: response.headers.get('etag') ?? etag ?? null, notModified: true };
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error ?? 'Could not load model settings.');
+    return { body, etag: response.headers.get('etag'), notModified: false };
+  }, value => parseClientGenerationModelCatalog({ schemaVersion: 3, revision: 'detail', defaults: { image: null, video: null, motion: null }, models: [value] }).models[0],
+  typeof window === 'undefined' ? undefined : { getItem: key => window.localStorage.getItem(key), setItem: (key,value) => window.localStorage.setItem(key,value) }));
+  const [state, setState] = useState<CatalogSessionState<GenerationModelDescriptor>>(session.getSnapshot);
+  const [retryVersion, setRetryVersion] = useState(0);
+  const selectedKey = (options.selectedIds ?? []).join(',');
+  const { current, details, nextCursors, error } = state;
+  useEffect(() => {
+    let registryRevision: string | null = null;
+    const update = () => {
+      const next = session.getSnapshot();
+      if (next.current && next.current.revision !== registryRevision) {
+        registryRevision = next.current.revision;
+        for (const registry of [IMAGE_MODELS, VIDEO_MODELS, MOTION_MODELS]) markRetired(registry as unknown as Registry, new Set());
+      }
+      next.summaries.forEach(seedCatalogSummaryRegistry);
+      if (next.current) applyGenerationModelCatalogToRegistries({ schemaVersion: 3, revision: next.current.revision, defaults: next.current.defaults, models: next.details }, undefined, false);
+      setState(next);
+    };
+    const unsubscribe = session.subscribe(update); void session.initialize(); return unsubscribe;
+  }, [session]);
+  useEffect(() => { if (options.pickerOpen) void session.refresh(); }, [options.pickerOpen, session]);
+  useEffect(() => {
+    if (!current) return;
+    const ids = selectedKey ? selectedKey.split(',') : [];
+    const defaultIds = options.kind ? [current.defaults[options.kind]] : Object.values(current.defaults);
+    session.pin(ids); void session.ensureDetails([...ids, ...defaultIds.filter((id): id is string => Boolean(id))]);
+  }, [session, current, selectedKey, options.kind, retryVersion]);
+  useEffect(() => {
+    const key = options.kind ?? 'all';
+    if (!current || error) return;
+    if (nextCursors[key] === undefined || (options.pickerOpen && nextCursors[key])) void session.loadPage(options.kind ?? null);
+  }, [session, options.kind, options.pickerOpen, current, nextCursors, error, retryVersion]);
+  const refetch = useCallback(() => { void session.retry().then(() => setRetryVersion(v => v + 1)); }, [session]);
+  const selectedIds = selectedKey ? selectedKey.split(',') : [];
+  const detailsReady = Boolean(current && selectedIds.every(id => details.some(m => m.id === id)));
+  const catalog = useMemo(() => current ? { schemaVersion: 3, revision: current.revision, defaults: current.defaults, models: details } : null, [current, details]);
+  return { catalog, current: current, summaries: state.summaries, missingIds: state.missingIds,
+    detailsReady, isLoadingModels: Boolean(options.pickerOpen && nextCursors[options.kind ?? 'all'] !== null && !error), error: error, isLoading: !current, isLoadingDetails: state.loadingDetails,
+    revision: current?.revision ?? null, refetch };
 }
 
 export class WebCatalogRequestError extends Error {
@@ -659,11 +679,13 @@ export type WebGenerationQuoteStatus = 'idle' | 'pending' | 'ready' | 'error';
 
 export function resolveWebGenerationQuoteUi({
   hasCatalog,
+  catalogLoading = false,
   quoteStatus,
   quotedCost,
   quoteErrorMessage,
 }: {
   hasCatalog: boolean;
+  catalogLoading?: boolean;
   quoteStatus: WebGenerationQuoteStatus;
   quotedCost: number | null | undefined;
   quoteErrorMessage: string | null | undefined;
@@ -671,9 +693,9 @@ export function resolveWebGenerationQuoteUi({
   if (!hasCatalog) {
     return {
       costCredits: null,
-      costLabel: 'Unavailable',
+      costLabel: catalogLoading ? 'Loading settings…' : 'Unavailable',
       blocksGenerate: true,
-      message: 'Model settings are unavailable. Retry before generating.',
+      message: catalogLoading ? 'Loading the selected model’s settings…' : 'Model settings are unavailable. Retry before generating.',
     };
   }
 
@@ -780,3 +802,5 @@ export function useWebGenerationModelQuote(input: GenerationModelQuoteInput | nu
   }
   return { status: 'pending' as const, quote: null, error: null };
 }
+
+export const WorkflowModelCatalogContext = createContext<ReturnType<typeof useWebGenerationModelCatalog> | null>(null);

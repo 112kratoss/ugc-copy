@@ -5,6 +5,7 @@ import { logBackendError } from '@/lib/backend-logger';
 import { enqueueWorkflowRunStepJob } from '@/lib/workflow-run-jobs';
 import {
   startImageGeneration,
+  startCatalogGeneration,
   startMotionGeneration,
   startSoundEffectGeneration,
   startVideoGeneration,
@@ -54,10 +55,13 @@ import {
   type SeedanceAssetMetadata,
 } from '@/lib/seedance-assets';
 import {
+  loadGenerationModelOperationByRevision,
   quotePublishedGenerationModel,
   quotePublishedGenerationModelAtRevision,
 } from '@/lib/generation-model-catalog-store';
-import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
+import { buildUnifiedGenerationQuoteInput, type UnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
+import type { CatalogGenerationInputAsset } from '@/lib/generation-model-adapters';
+import type { CatalogPrimitive, GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 
 export interface WorkflowRunExecutionResult {
   runId: string;
@@ -701,6 +705,62 @@ export async function executeWorkflowRunnableNode(params: {
       },
       error_message: null,
     };
+  }
+
+  // New catalog settings are persisted with the graph. Generic adapters can
+  // execute these models without adding their IDs to a server registry.
+  if (node.data.catalogSettings && ['image-generate', 'video-generate', 'motion-generate'].includes(node.type)) {
+    if (!catalogRevision) throw new Error('Refresh model settings before running this workflow.');
+    const { catalog, operation } = await loadGenerationModelOperationByRevision({
+      modelId: String(node.data.model), revision: catalogRevision, schemaVersion: 3,
+    });
+    if (operation.adapterKey === 'kie-task-v1') {
+      const descriptor = catalog.models.find(model => model.id === node.data.model)!;
+      const settings = Object.fromEntries(descriptor.controls.map(control => [control.key,
+        node.data.catalogSettings?.[control.key]
+          ?? node.data[control.key === 'resolution' && node.type === 'motion-generate' ? 'mode' : control.key]
+          ?? control.defaultValue,
+      ])) as Record<string, CatalogPrimitive>;
+      const references = getRunnableElementPayload(graph, node.id).references;
+      const assets: CatalogGenerationInputAsset[] = references.map(reference => ({
+        slot: descriptor.kind === 'motion' ? 'characterImage' : 'imageReferences', kind: 'image',
+        url: reference.url, storagePath: reference.storagePath, handle: reference.handle,
+        label: reference.displayName, sourceGenerationId: reference.sourceGenerationId,
+      }));
+      for (const url of inputs.videoUrls) assets.push({ slot: descriptor.kind === 'motion' ? 'referenceVideo' : 'videoReferences', kind: 'video', url });
+      for (const url of inputs.audioUrls) assets.push({ slot: 'audioReferences', kind: 'audio', url });
+      if (inputs.startFrameUrl) assets.push({ slot: 'startFrame', kind: 'image', url: inputs.startFrameUrl });
+      if (inputs.endFrameUrl) assets.push({ slot: 'endFrame', kind: 'image', url: inputs.endFrameUrl });
+      // Resolve standard workflow handles to descriptor-defined slot names.
+      const slots = [...new Map((descriptor.inputModes ?? []).flatMap(mode => mode.slots).map(slot => [slot.key, slot])).values()];
+      for (const asset of assets) {
+        if (!slots.some(slot => slot.key === asset.slot)) {
+          const role = asset.slot === 'startFrame' || asset.slot === 'endFrame' ? asset.slot : 'reference';
+          const candidates = slots.filter(slot => slot.kind === asset.kind && slot.role === role);
+          if (candidates.length === 1) asset.slot = candidates[0].key;
+        }
+        if (asset.kind === 'video') {
+          const source = graph.nodes.find(candidate => candidate.type === 'video-input' && [candidate.data.videoUrl, candidate.data.storagePath].includes(asset.url));
+          if (typeof source?.data.durationSeconds === 'number') asset.durationSeconds = source.data.durationSeconds;
+        }
+      }
+      const request: UnifiedGenerationRequest = {
+        kind: descriptor.kind, modelId: descriptor.id, catalogRevision, settings,
+        prompt: inputs.prompt ?? '', inputs: assets, sourceGenerationId: null,
+        shots: node.type === 'video-generate' && node.data.isMultiShot
+          ? (node.data as VideoGenerateNodeData).multiPrompts.map(shot => ({ prompt: shot.prompt, duration: shot.duration })) : [],
+      };
+      // Normal runs still compare with the active revision. Only the trusted
+      // template engine may use quoteAtPinnedRevision.
+      const quote = await quoteRunnableNode(buildUnifiedGenerationQuoteInput(request));
+      const result = await startCatalogGeneration({
+        supabase, creditSupabase, userId, operation, catalogRevision: quote.catalogRevision,
+        prompt: request.prompt, settings: quote.normalizedSettings, inputs: assets, shots: request.shots,
+        quotedCostCredits: quote.costCredits, clientRequestKeyHash, persistInputMedia, privateRecipe, templateContext,
+      });
+      return { status: 'processing', generation_id: result.generationId ?? null,
+        output_snapshot: { predictionId: result.predictionId, cost: result.cost }, input_snapshot: inputs, error_message: null };
+    }
   }
 
   if (node.type === 'image-generate') {

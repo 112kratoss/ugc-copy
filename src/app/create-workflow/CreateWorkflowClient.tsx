@@ -39,8 +39,8 @@ import {
 } from '@/lib/workflow-canvas';
 import { getClientE2EAuthState } from '@/lib/e2e-auth';
 import {
-  resolveCatalogModelId,
   useWebGenerationModelCatalog,
+  WorkflowModelCatalogContext,
 } from '@/lib/generation-model-client';
 import {
   uploadWorkflowAssetWithSignedIntent,
@@ -170,8 +170,6 @@ export default function CreateWorkflowClient({
 }) {
   const router = useRouter();
   const { credits, refreshSessionState, session, updateCredits } = useAuth();
-  const modelCatalog = useWebGenerationModelCatalog();
-  const modelCatalogRevision = modelCatalog.catalog?.revision ?? null;
   const e2eAuth = useMemo(() => getClientE2EAuthState(), []);
   const effectiveSession = session ?? e2eAuth?.session ?? null;
   const canvasSectionRef = useRef<HTMLElement | null>(null);
@@ -205,6 +203,11 @@ export default function CreateWorkflowClient({
   const [approvingStepId, setApprovingStepId] = useState<string | null>(null);
   const [nodePopupPosition, setNodePopupPosition] = useState<CanvasAnchoredPopupPosition | null>(null);
   const [nodes, setNodes] = useState<WorkflowCanvasNode[]>(starter.nodes);
+  const modelCatalog = useWebGenerationModelCatalog({
+    selectedIds: nodes.filter(node => ['image-generate', 'video-generate', 'motion-generate'].includes(node.type)).map(node => String(node.data.model ?? '')).filter(Boolean),
+    pickerOpen: activeInspectorPanel === 'parameters',
+  });
+  const modelCatalogRevision = modelCatalog.catalog?.revision ?? null;
   const [edges, setEdges] = useState<WorkflowCanvasEdge[]>(starter.edges.map((edge) => decorateWorkflowEdge(edge)));
   const [changeKey, setChangeKey] = useState(0);
   const [openNodeRunMenuId, setOpenNodeRunMenuId] = useState<string | null>(null);
@@ -218,54 +221,8 @@ export default function CreateWorkflowClient({
   }, []);
 
   useEffect(() => {
-    if (!modelCatalog.catalog) {
-      return;
-    }
-
-    let migratedCount = 0;
-    const nextNodes = nodes.map((node) => {
-      const kind = node.type === 'image-generate'
-        ? 'image'
-        : node.type === 'video-generate'
-          ? 'video'
-          : node.type === 'motion-generate'
-            ? 'motion'
-            : null;
-      if (!kind) {
-        return node;
-      }
-
-      const selectedModel = typeof node.data.model === 'string' ? node.data.model : '';
-      const replacementModel = resolveCatalogModelId(modelCatalog.catalog!, kind, selectedModel);
-      if (!replacementModel || replacementModel === selectedModel) {
-        return node;
-      }
-
-      migratedCount += 1;
-      return {
-        ...node,
-        data: normalizeNodeData(node.type, {
-          ...node.data,
-          model: replacementModel,
-        } as Partial<WorkflowNodeData>),
-      };
-    });
-
-    if (migratedCount > 0) {
-      let cancelled = false;
-      queueMicrotask(() => {
-        if (cancelled) {
-          return;
-        }
-        setNodes(nextNodes);
-        markCanvasChanged();
-        setError(`${migratedCount} retired workflow model${migratedCount === 1 ? ' was' : 's were'} replaced with current defaults. Review settings before running.`);
-      });
-      return () => {
-        cancelled = true;
-      };
-    }
-  }, [markCanvasChanged, modelCatalog.catalog, nodes]);
+    if (modelCatalog.missingIds.length) setError(`Unavailable models: ${modelCatalog.missingIds.join(', ')}. Choose replacements before running; your workflow has been preserved.`);
+  }, [modelCatalog.missingIds]);
 
   const authHeaders = useCallback(async () => {
     const token = effectiveSession?.access_token;
@@ -992,6 +949,10 @@ export default function CreateWorkflowClient({
       return;
     }
 
+    if (!modelCatalog.detailsReady) {
+      setError(modelCatalog.error?.message ?? 'Wait for model settings to load, or choose replacements for unavailable models.');
+      return;
+    }
     setError(null);
     setActiveInspectorPanel(null);
     setOpenNodeRunMenuId(null);
@@ -1057,6 +1018,8 @@ export default function CreateWorkflowClient({
     graph,
     hasUnsavedChanges,
     modelCatalogRevision,
+    modelCatalog.detailsReady,
+    modelCatalog.error,
     persistCanvas,
     saveState,
     setManualSelection,
@@ -1504,7 +1467,7 @@ export default function CreateWorkflowClient({
   }
 
   return (
-    <>
+    <WorkflowModelCatalogContext.Provider value={modelCatalog}>
       <div className="h-[calc(100vh-4rem)] overflow-hidden bg-[#060606] text-white">
         <div className="flex h-full">
           <WorkflowCanvasChrome
@@ -1741,6 +1704,6 @@ export default function CreateWorkflowClient({
         onDiscard={() => resolveUnsavedDecision('discard')}
         onSave={() => resolveUnsavedDecision('save')}
       />
-    </>
+    </WorkflowModelCatalogContext.Provider>
   );
 }

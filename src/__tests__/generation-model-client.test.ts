@@ -100,7 +100,7 @@ describe('web generation model catalog client', () => {
     });
     expect(registries.image['retired-image']).toMatchObject({ catalogActive: false });
     expect(getActiveRegistryModels(registries.image).map((model) => model.id)).toEqual(['fixture-image']);
-    expect(resolveCatalogModelId(catalog, 'image', 'retired-image')).toBe('fixture-image');
+    expect(resolveCatalogModelId(catalog, 'image', 'retired-image')).toBeNull();
   });
 
   it('prefers the server default when resolving a fresh active selection', () => {
@@ -115,7 +115,7 @@ describe('web generation model catalog client', () => {
     expect(resolveCatalogModelId(catalog, 'image', 'bundled-active-image', { preferDefault: true })).toBe('fixture-image');
   });
 
-  it('reconciles a retired model to the remote default while preserving compatible draft content', () => {
+  it('requires explicit replacement of a retired model instead of silently changing the draft', () => {
     const catalog = parseClientGenerationModelCatalog(contractFixture);
     const draft = reconcileWebCatalogGenerationDraft(catalog, {
       kind: 'image',
@@ -133,19 +133,7 @@ describe('web generation model catalog client', () => {
       ],
     });
 
-    expect(draft).toMatchObject({
-      modelId: 'fixture-image',
-      catalogRevision: '0123456789abcdef',
-      prompt: 'Keep this prompt',
-      settings: {
-        aspectRatio: '9:16',
-      },
-      inputs: [
-        { slot: 'imageReferences', kind: 'image' },
-      ],
-    });
-    expect(draft?.settings).not.toHaveProperty('removedControl');
-    expect(draft?.inputs).toHaveLength(1);
+    expect(draft).toBeNull();
   });
 
   it('uses the last valid local catalog when the network request fails', async () => {

@@ -1,0 +1,133 @@
+{
+  "current": {
+    "transportVersion": 1,
+    "descriptorSchemaVersion": 3,
+    "revision": "fixture-published-v1",
+    "defaults": {
+      "image": "future-image-model",
+      "video": null,
+      "motion": null
+    },
+    "counts": {
+      "image": 1,
+      "video": 0,
+      "motion": 0
+    }
+  },
+  "page": {
+    "transportVersion": 1,
+    "revision": "fixture-published-v1",
+    "models": [
+      {
+        "id": "future-image-model",
+        "kind": "image",
+        "displayName": "Future Image Model",
+        "description": "Contract fixture for schema-v1 clients.",
+        "badge": "New",
+        "recommended": true,
+        "sortOrder": 0
+      }
+    ],
+    "nextCursor": null
+  },
+  "details": {
+    "transportVersion": 1,
+    "descriptorSchemaVersion": 3,
+    "revision": "fixture-published-v1",
+    "models": [
+      {
+        "id": "future-image-model",
+        "kind": "image",
+        "displayName": "Future Image Model",
+        "description": "Contract fixture for schema-v1 clients.",
+        "badge": "New",
+        "recommended": true,
+        "sortOrder": 0,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "1:1",
+            "options": [
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              }
+            ]
+          },
+          {
+            "key": "googleSearch",
+            "label": "Google Search",
+            "type": "boolean",
+            "presentation": "toggle",
+            "defaultValue": false
+          },
+          {
+            "key": "background",
+            "label": "Background",
+            "type": "choice",
+            "presentation": "select",
+            "defaultValue": "auto",
+            "options": [
+              {
+                "value": "auto",
+                "label": "Automatic"
+              },
+              {
+                "value": "transparent",
+                "label": "Transparent"
+              }
+            ],
+            "minClientSchemaVersion": 2,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "googleSearch",
+                "operator": "equals",
+                "value": false
+              }
+            ]
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": true,
+          "outputFormat": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "default",
+            "label": "Image",
+            "default": true,
+            "slots": [
+              {
+                "key": "imageReferences",
+                "label": "Reference images",
+                "kind": "image",
+                "role": "reference",
+                "min": 0,
+                "max": 2,
+                "supportsNaming": true
+              }
+            ]
+          }
+        ],
+        "inputConstraints": []
+      }
+    ],
+    "missingIds": []
+  }
+}

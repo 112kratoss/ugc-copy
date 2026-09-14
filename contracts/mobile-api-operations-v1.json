@@ -486,6 +486,26 @@
       "method": "PATCH",
       "path": "/api/mobile/notifications/preferences",
       "auth": "required"
+    },
+    "fetchModelCatalogCurrent": {
+      "method": "GET",
+      "path": "/api/model-catalog/v1/current",
+      "auth": "none"
+    },
+    "fetchModelCatalogPage": {
+      "method": "GET",
+      "path": "/api/model-catalog/v1/models",
+      "auth": "none"
+    },
+    "fetchModelCatalogDetails": {
+      "method": "GET",
+      "path": "/api/model-catalog/v1/details",
+      "auth": "none"
+    },
+    "fetchModelCatalogModel": {
+      "method": "GET",
+      "path": "/api/model-catalog/v1/models/:id",
+      "auth": "none"
     }
   },
   "fallbackRoutes": [

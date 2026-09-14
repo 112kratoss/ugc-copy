@@ -47,6 +47,7 @@
 
 /* Shared components that are reachable only from the route set above. Keep
  * this closure explicit so public-only component utilities are not rescanned. */
+@source "../components/CatalogAdditionalControls.tsx";
 @source "../components/CreatorStudio.tsx";
 @source "../components/CreatorToolPreview.tsx";
 @source "../components/EnhancePromptButton.tsx";

@@ -25,7 +25,13 @@ export default function StudioModelPicker({
     accent,
     desktopInset = 'flush',
     children,
+    loading,
+    error,
+    onRetry,
 }: {
+    loading?: boolean;
+    error?: string;
+    onRetry?: () => void;
     isOpen: boolean;
     query: string;
     onQueryChange: (query: string) => void;
@@ -53,6 +59,8 @@ export default function StudioModelPicker({
                     style={{ transformOrigin: 'top' }}
                     data-testid="studio-model-picker"
                 >
+                    {loading ? <p role="status" className="px-4 py-2 text-sm text-zinc-300">Loading models…</p> : null}
+                    {error ? <button type="button" onClick={onRetry} className="min-h-11 px-4 text-left text-sm text-zinc-300">{error} Retry</button> : null}
                     <div className="shrink-0 border-b border-white/8 p-3">
                         <div className="relative">
                             <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />

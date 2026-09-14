@@ -154,7 +154,7 @@ describe('catalog-v2 mobile drafts', () => {
     );
   });
 
-  it('preserves compatible draft content and moves retired ids to the published default', () => {
+  it('preserves retired drafts and requires an explicit replacement', () => {
     const retired = remoteVideoModel('retired-video-v2');
     const normalizedOriginal = applyCatalogModelDefaults({
       ...createDefaultCreationDraft('video'),
@@ -177,20 +177,10 @@ describe('catalog-v2 mobile drafts', () => {
     const nextCatalog = catalogV2([remoteVideoModel('fallback-video-v2')]);
     const result = reconcileCreationDraftWithCatalog(original, nextCatalog);
 
-    expect(result).toMatchObject({
-      switchedModel: true,
-      previousModelId: 'retired-video-v2',
-      discardedSettingKeys: ['removedSetting'],
-      draft: {
-        model: 'fallback-video-v2',
-        prompt: 'Preserve this prompt.',
-        catalogRevision: 'catalog-v2-revision',
-        catalogSettings: {
-          resolution: '1080p',
-        },
-      },
-    });
-    expect(result.warning).toContain('is no longer available');
+    expect(result.draft).toEqual(original);
+    expect(result.model).toBeNull();
+    expect(result.switchedModel).toBe(false);
+    expect(result.warning).toContain('Choose a replacement');
   });
 
   it('warns when a refresh removes settings and preserves inactive slot drafts', () => {
@@ -290,8 +280,9 @@ describe('catalog-v2 mobile drafts', () => {
       },
       catalog,
     );
-    expect(retired.switchedModel).toBe(true);
-    expect(retired.draft.model).toBe('fallback-video-v2');
-    expect(retired.warning).toContain('is no longer available');
+    expect(retired.switchedModel).toBe(false);
+    expect(retired.draft.model).toBe('retired-remote-model');
+    expect(retired.draft.prompt).toBe('Restore this remote workflow.');
+    expect(retired.warning).toContain('Choose a replacement');
   });
 });

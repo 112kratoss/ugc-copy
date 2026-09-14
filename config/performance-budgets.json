@@ -18,7 +18,9 @@
         "name": "home-page",
         "path": "/",
         "method": "GET",
-        "expectedStatuses": [200],
+        "expectedStatuses": [
+          200
+        ],
         "weight": 2,
         "p95TtfbMs": 1000,
         "p99TtfbMs": 2000
@@ -27,7 +29,9 @@
         "name": "showcase-page",
         "path": "/showcase",
         "method": "GET",
-        "expectedStatuses": [200],
+        "expectedStatuses": [
+          200
+        ],
         "weight": 1,
         "p95EncodedBodyBytes": 278528,
         "p95DecodedBytes": 557056
@@ -36,7 +40,9 @@
         "name": "marketplace-page",
         "path": "/marketplace",
         "method": "GET",
-        "expectedStatuses": [200],
+        "expectedStatuses": [
+          200
+        ],
         "weight": 1,
         "p95EncodedBodyBytes": 294912,
         "p95DecodedBytes": 589824
@@ -45,20 +51,25 @@
         "name": "model-catalog-api",
         "path": "/api/generation-models?platform=web",
         "method": "GET",
-        "expectedStatuses": [200],
+        "expectedStatuses": [
+          200
+        ],
         "weight": 2,
         "p95EncodedBodyBytes": 28672,
         "p95DecodedBytes": 57344,
         "p95TtfbMs": 800,
         "p99TtfbMs": 1500,
         "p95TotalMs": 1000,
-        "p99TotalMs": 1800
+        "p99TotalMs": 1800,
+        "bodyBudgetMode": "warn"
       },
       {
         "name": "showcase-feed-api",
         "path": "/api/showcase/feed?sort=recent&limit=12",
         "method": "GET",
-        "expectedStatuses": [200],
+        "expectedStatuses": [
+          200
+        ],
         "weight": 2,
         "p95EncodedBodyBytes": 24576,
         "p95DecodedBytes": 49152,
@@ -66,6 +77,69 @@
         "p99TtfbMs": 2500,
         "p95TotalMs": 1600,
         "p99TotalMs": 3200
+      },
+      {
+        "name": "model-catalog-current-api",
+        "path": "/api/model-catalog/v1/current",
+        "method": "GET",
+        "expectedStatuses": [
+          200
+        ],
+        "weight": 1,
+        "p95EncodedBodyBytes": 2048,
+        "p95DecodedBytes": 2048,
+        "p95TtfbMs": 800,
+        "p99TtfbMs": 1500,
+        "p95TotalMs": 1000,
+        "p99TotalMs": 1800
+      },
+      {
+        "name": "model-catalog-summary-api",
+        "path": "/api/model-catalog/v1/models",
+        "method": "GET",
+        "expectedStatuses": [
+          200
+        ],
+        "weight": 1,
+        "p95EncodedBodyBytes": 16384,
+        "p95DecodedBytes": 16384,
+        "p95TtfbMs": 800,
+        "p99TtfbMs": 1500,
+        "p95TotalMs": 1000,
+        "p99TotalMs": 1800,
+        "catalogProbe": "models"
+      },
+      {
+        "name": "model-catalog-detail-api",
+        "path": "/api/model-catalog/v1/models/model",
+        "method": "GET",
+        "expectedStatuses": [
+          200
+        ],
+        "weight": 1,
+        "p95EncodedBodyBytes": 16384,
+        "p95DecodedBytes": 16384,
+        "p95TtfbMs": 800,
+        "p99TtfbMs": 1500,
+        "p95TotalMs": 1000,
+        "p99TotalMs": 1800,
+        "catalogProbe": "detail"
+      },
+      {
+        "name": "model-catalog-batch-api",
+        "path": "/api/model-catalog/v1/details",
+        "method": "GET",
+        "expectedStatuses": [
+          200
+        ],
+        "weight": 1,
+        "p95EncodedBodyBytes": 131072,
+        "p95DecodedBytes": 131072,
+        "p95TtfbMs": 800,
+        "p99TtfbMs": 1500,
+        "p95TotalMs": 1000,
+        "p99TotalMs": 1800,
+        "catalogProbe": "details"
       }
     ],
     "signedInTargets": [
@@ -74,7 +148,9 @@
         "path": "/api/showcase/feed?sort=for-you&limit=12",
         "method": "GET",
         "auth": "bearer",
-        "expectedStatuses": [200],
+        "expectedStatuses": [
+          200
+        ],
         "weight": 1,
         "minRequests": 10,
         "maxRequestsPerRun": 40,
@@ -91,8 +167,13 @@
         "name": "showcase-feed-origin",
         "path": "/api/showcase/feed?sort=recent&limit=12&cursor=perf-origin",
         "method": "GET",
-        "expectedStatuses": [200],
-        "expectedCacheStatuses": ["MISS", "BYPASS"],
+        "expectedStatuses": [
+          200
+        ],
+        "expectedCacheStatuses": [
+          "MISS",
+          "BYPASS"
+        ],
         "cacheBust": true,
         "weight": 1,
         "minRequests": 10,

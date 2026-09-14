@@ -1,3 +1,4 @@
+import { measureModelCatalogRelease } from '../../src/lib/model-catalog-release-policy';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -1272,6 +1273,7 @@ export function materializeCatalogManifest(
 
 export function validateMaterializedCatalog(release: MaterializedCatalogRelease): void {
   if (release.schemaVersion !== 2) throw new Error('Only schema v2 releases may be staged.');
+  measureModelCatalogRelease(release);
   if (release.entries.length === 0) throw new Error('A catalog release must contain models.');
   const ids = new Set<string>();
   for (const entry of release.entries) {
@@ -1468,11 +1470,12 @@ async function queryActiveCatalogEntries(
 
 export async function loadActiveCatalog(
   client: SupabaseClient,
+  releaseId?: string,
 ): Promise<ActiveCatalogSnapshot> {
   const { data: releaseData, error: releaseError } = await client
     .from('generation_model_catalog_releases')
     .select('id, schema_version, revision, defaults')
-    .eq('status', 'active')
+    .eq(releaseId ? 'id' : 'status', releaseId ?? 'active')
     .maybeSingle();
   if (releaseError) throw releaseError;
   if (!releaseData) throw new Error('No active catalog release is published.');
@@ -1805,6 +1808,14 @@ export async function runGenerationModelCatalogCli(
     if (expectedActive !== manifest.release.basedOnRevision) {
       throw new Error('--expected-active must exactly match the manifest base revision.');
     }
+    const staged = await loadActiveCatalog(client, releaseId);
+    if (staged.schemaVersion !== 2 || staged.revision !== manifest.release.revision) {
+      throw new Error('The staged catalog does not match the publish request.');
+    }
+    validateMaterializedCatalog({
+      ...staged, schemaVersion: 2,
+      changeNote: manifest.release.changeNote, createdBy: manifest.release.createdBy,
+    });
     const { data, error } = await client.rpc('publish_generation_model_catalog', {
       p_release_id: releaseId,
       p_expected_active_revision: expectedActive,
@@ -1822,7 +1833,7 @@ export async function runGenerationModelCatalogCli(
 
   const active = await loadActiveCatalog(client);
   const materialized = materializeCatalogManifest(manifest, active);
-  const diff = buildCatalogDiff(active, materialized);
+  const diff = { ...buildCatalogDiff(active, materialized), payload: measureModelCatalogRelease(materialized) };
   if (command === 'diff') {
     print(output, json, {
       operation: 'diff',

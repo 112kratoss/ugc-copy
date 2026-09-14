@@ -15,15 +15,14 @@ describe('creator media persistence hooks', () => {
     expect(source).not.toContain('eslint-disable-line react-hooks/exhaustive-deps');
   });
 
-  it('keeps video element persistence stable and declares it as an effect dependency', () => {
+  it('keeps video element persistence stable without hook-rule suppression', () => {
     const source = readFileSync(
       join(projectRoot, 'src/app/create-video/CreateVideoClient.tsx'),
       'utf8'
     );
 
     expect(source).toContain('const persistVideoElements = useCallback(async');
-    expect(source).toContain(
-      '}, [canUseVideoElements, elements, persistVideoElements, videoElementSupport.maxElements]);'
-    );
+    // Capacity changes now preserve draft media; interaction tests cover that behavior.
+    expect(source).not.toContain('eslint-disable-line react-hooks/exhaustive-deps');
   });
 });
