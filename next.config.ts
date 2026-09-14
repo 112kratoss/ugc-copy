@@ -168,29 +168,28 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: __dirname,
   },
-  // `inlineCss` is deliberately off.
+  // `inlineCss` is deliberately on.
   //
-  // It was enabled to remove the render-blocking stylesheet round trip, which is
-  // the right trade when the stylesheet is small. This one is not: the
-  // source-scoped bundle is ~327 KB, and Next inlines it *twice* per response —
-  // once in a <style> tag for SSR and once again, escaped, inside the RSC flight
-  // payload. That duplication is a documented limitation of the flag, not
-  // something callers can opt out of.
+  // With it off, a public page paints only after a second request for the
+  // stylesheet, and on a throttled phone that request shares the pipe with a
+  // dozen script chunks. The Lighthouse mobile monitor measured the home page's
+  // first contentful paint at 2.2 s with the sheet external (run 34891084213)
+  // and 0.8 s with it inlined (run 32591925400) against a 1.8 s budget; the
+  // sheet itself took 1.5 s to arrive once it competed with the scripts.
   //
-  // Measured on /models, same commit, production builds:
-  //   on  -> 868 KB of HTML (311 KB inline <style> + 499 KB flight payload)
-  //   off -> 114 KB of HTML + 327 KB of external CSS, cacheable and shared
-  //
-  // So even a first-time visitor with a cold cache receives roughly half the
-  // bytes with it off, in exchange for one round trip; every page after the
-  // first receives 114 KB instead of 868 KB. Re-enabling it only makes sense if
-  // the CSS bundle shrinks by roughly an order of magnitude.
-  //
-  // The route-scoped CSS split it was paired with still stands: public routes
-  // exclude utilities used only by authenticated tools, and private routes add
-  // their supplemental utilities from route layouts.
+  // Inlining duplicates the sheet per response — once in a <style> tag for SSR
+  // and once, escaped, inside the RSC flight payload — a documented limitation
+  // of the flag. On the wire that costs about one compressed copy, because
+  // brotli matches the second against the first (the home document went from
+  // 53 KB to 76 KB compressed). So what matters is the size of the sheet a
+  // public page inlines, and that is kept small by the route-scoped split:
+  // `globals.css` scans only the routes a signed-out visitor can land on, and
+  // signed-in surfaces add `non-public-utilities.css` from their own layouts.
+  // A public route must never import the supplement: with inlining on it would
+  // carry both sheets twice, which is how a blog post once reached 800 KB of
+  // HTML. `route-style-readiness.test.ts` pins that split.
   experimental: {
-    inlineCss: false,
+    inlineCss: true,
   },
   // ffmpeg-static resolves its binary from `__dirname`. Bundled, Turbopack
   // inlines that as its virtual root ("/ROOT/node_modules/ffmpeg-static") — a

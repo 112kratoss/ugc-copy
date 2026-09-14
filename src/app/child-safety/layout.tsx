@@ -1,7 +1,5 @@
 import type { Metadata } from 'next';
 
-import '@/app/non-public-utilities.css';
-
 import { createMetadata, siteConfig } from '@/lib/seo';
 
 export const metadata: Metadata = createMetadata({

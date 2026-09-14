@@ -937,11 +937,15 @@ async function runSelfTest(budgetsPath) {
   const unsafeConfig = structuredClone(config);
   unsafeConfig.load.targets[0].path = '/\\evil.example/performance';
   assert.throws(() => validateBudgets(unsafeConfig, 'edge'), /backslashes/);
+  // Drop a target's own budget as well as the default, so the check exercises
+  // the validator even when every target declares its budgets explicitly.
   const missingDecodedBudgetConfig = structuredClone(config);
   delete missingDecodedBudgetConfig.load.defaults.p95DecodedBytes;
+  delete missingDecodedBudgetConfig.load.targets[0].p95DecodedBytes;
   assert.throws(() => validateBudgets(missingDecodedBudgetConfig, 'edge'), /p95DecodedBytes must be positive/);
   const missingEncodedBudgetConfig = structuredClone(config);
   delete missingEncodedBudgetConfig.load.defaults.p95EncodedBodyBytes;
+  delete missingEncodedBudgetConfig.load.targets[0].p95EncodedBodyBytes;
   assert.throws(() => validateBudgets(missingEncodedBudgetConfig, 'edge'), /p95EncodedBodyBytes must be positive/);
   const bodyBudgetResult = summarizeTarget({
     ...targets[0],

@@ -11,7 +11,37 @@ const PROJECT_ROOT = process.cwd();
 const SRC_ROOT = path.join(PROJECT_ROOT, 'src');
 const APP_ROOT = path.join(SRC_ROOT, 'app');
 const SUPPLEMENT_IMPORT = "import '@/app/non-public-utilities.css';";
-const PUBLIC_ROUTE_DIRECTORIES = new Set(['feed', 'marketplace', 'showcase']);
+// Every route a signed-out visitor can land on: the marketing and SEO pages,
+// share landings (`/creators/[username]`, `/r/[code]`), the
+// template catalog and the sign-in/auth screens. These routes render with the
+// root `globals.css` alone. With `experimental.inlineCss` on, a public route
+// that also linked the supplement would inline both sheets twice per response.
+// Signed-in-only pages that live inside these directories (`/templates/mine`,
+// `/templates/new`, `/creators/[username]` actions) are scanned by the public
+// sheet too; their component closure is already part of it. `/post` is not
+// public: it holds only the composer and the edit page.
+const PUBLIC_ROUTE_DIRECTORIES = new Set([
+  'ai-image-generator',
+  'ai-motion-transfer',
+  'ai-video-generator',
+  'ai-workflow-builder',
+  'alternatives',
+  'auth',
+  'blog',
+  'child-safety',
+  'contact',
+  'creators',
+  'feed',
+  'login',
+  'marketplace',
+  'models',
+  'pricing',
+  'privacy',
+  'r',
+  'showcase',
+  'templates',
+  'terms',
+]);
 const SOURCE_EXTENSIONS = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
 const DYNAMIC_UTILITY_STRING = /['"`](?:[^'"`]*\s)?(?:from|via|to|bg|text|border|ring|shadow)-(?:\[[^\]]+\]|[a-z]+-\d{2,3})(?:\s+[^'"`]*)?['"`]/;
 
@@ -75,7 +105,7 @@ function collectImportClosure(entryFiles: string[]): Set<string> {
 }
 
 function collectPublicImportClosure(): Set<string> {
-  const routeSources = ['showcase', 'marketplace'].flatMap((directory) => (
+  const routeSources = [...PUBLIC_ROUTE_DIRECTORIES].flatMap((directory) => (
     walkFiles(path.join(APP_ROOT, directory)).filter((file) => /\.(?:ts|tsx|js|jsx)$/.test(file))
   ));
 
@@ -133,9 +163,18 @@ describe('route utility stylesheet readiness', () => {
     expect(supplementalCss).not.toContain('@source "./marketplace";');
     expect(supplementalCss).not.toContain('@source "./feed";');
 
+    const globalsCss = readFileSync(path.join(APP_ROOT, 'globals.css'), 'utf8');
+    const publicSources = new Set(getDeclaredSources(globalsCss));
     for (const publicDirectory of PUBLIC_ROUTE_DIRECTORIES) {
-      expect(readFileSync(path.join(APP_ROOT, publicDirectory, 'layout.tsx'), 'utf8'))
-        .not.toContain('non-public-utilities.css');
+      const layoutPath = path.join(APP_ROOT, publicDirectory, 'layout.tsx');
+      if (existsSync(layoutPath)) {
+        expect(readFileSync(layoutPath, 'utf8'), `${publicDirectory} must not link the supplement`)
+          .not.toContain('non-public-utilities.css');
+      }
+      expect(publicSources.has(`./${publicDirectory}`), `${publicDirectory} must be scanned by globals.css`)
+        .toBe(true);
+      expect(declaredSources.has(`./${publicDirectory}`), `${publicDirectory} must not be scanned by the supplement`)
+        .toBe(false);
     }
     expect(readFileSync(path.join(APP_ROOT, 'layout.tsx'), 'utf8'))
       .not.toContain('non-public-utilities.css');

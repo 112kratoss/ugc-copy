@@ -10,38 +10,21 @@
  * without growing the home, showcase, or marketplace stylesheet graph.
  */
 @source "./admin";
-@source "./ai-image-generator";
-@source "./ai-motion-transfer";
-@source "./ai-video-generator";
-@source "./ai-workflow-builder";
-@source "./alternatives";
-@source "./auth";
-@source "./blog";
 @source "./cancellation";
-@source "./child-safety";
-@source "./contact";
 @source "./create";
 @source "./create-image";
 @source "./create-motion";
 @source "./create-video";
 @source "./create-workflow";
 @source "./creations";
-@source "./creators";
 @source "./delete-account";
 @source "./home";
 @source "./invite";
-@source "./login";
-@source "./models";
 @source "./notifications";
 @source "./post";
-@source "./pricing";
-@source "./privacy";
 @source "./profile";
-@source "./r";
 @source "./search";
 @source "./template-runs";
-@source "./templates";
-@source "./terms";
 @source "./unlocks";
 @source "./welcome-reward";
 
@@ -51,12 +34,9 @@
 @source "../components/CreatorStudio.tsx";
 @source "../components/CreatorToolPreview.tsx";
 @source "../components/EnhancePromptButton.tsx";
-@source "../components/FeatureLandingPage.tsx";
 @source "../components/GenerationResultVideo.tsx";
 @source "../components/MediaDetailsPreviewModal.tsx";
-@source "../components/ProfileShareButton.tsx";
 @source "../components/PublishToShowcaseModal.tsx";
-@source "../components/RecoverableMediaVideo.tsx";
 @source "../components/RecoverableMediaAudio.tsx";
 @source "../components/StudioOverflowMenu.tsx";
 @source "../components/StudioModelPicker.tsx";
@@ -64,15 +44,7 @@
 @source "../components/search/CreatorSearchResult.tsx";
 @source "../components/search/SearchField.tsx";
 @source "../components/search/SearchStateBlock.tsx";
-@source "../components/templates/CreateTemplateRunClient.tsx";
-@source "../components/templates/TemplateCatalogClient.tsx";
-@source "../components/templates/TemplateDetailClient.tsx";
-@source "../components/templates/TemplatePrimitives.tsx";
 @source "../components/templates/TemplateRunClient.tsx";
-@source "../components/templates/TemplateRunMedia.tsx";
-@source "../components/templates/api.ts";
-@source "../components/templates/types.ts";
-@source "../components/templates/useTemplatePosterRecovery.ts";
 
 /* Model and tool registries expose complete class tokens through data fields
  * (for example gradient badge colors) that route components compose at run
