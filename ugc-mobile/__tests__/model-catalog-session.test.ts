@@ -3,7 +3,7 @@ import fixture from '../../contracts/model-catalog-transport-v1.json';
 import {
   ModelCatalogSession,
   type CatalogTransport,
-} from '../lib/model-catalog-session';
+} from '../lib/model-catalog/session';
 import { parseModelCatalogDetail } from '../lib/generation-model-catalog';
 function transport() {
   return vi.fn<CatalogTransport>(async (path) => ({

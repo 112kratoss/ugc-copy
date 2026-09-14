@@ -1,5 +1,5 @@
 import type { CatalogPrimitive } from '@/lib/generation-model-catalog';
-import { isModelCatalogId } from '../../ugc-mobile/lib/model-catalog-protocol';
+import { isModelCatalogId } from '../../ugc-mobile/lib/model-catalog/protocol';
 import type { Edge, Node, Viewport } from '@xyflow/react';
 import {
   buildElementHandle,

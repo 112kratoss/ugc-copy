@@ -4,7 +4,7 @@ import { parseClientGenerationModelCatalog } from '@/lib/generation-model-client
 import {
   parseModelCatalogCurrent,
   parseModelCatalogPage,
-} from '../../ugc-mobile/lib/model-catalog-protocol';
+} from '../../ugc-mobile/lib/model-catalog/protocol';
 it('web consumes the same future-model transport contract as mobile', () => {
   expect(parseModelCatalogCurrent(fixture.current)).toEqual(fixture.current);
   expect(parseModelCatalogPage(fixture.page, fixture.current.revision)).toEqual(

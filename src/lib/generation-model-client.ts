@@ -1,8 +1,8 @@
 'use client';
 
 import { createContext, useCallback, useEffect, useMemo, useState } from 'react';
-import { ModelCatalogSession, type CatalogSessionState } from '../../ugc-mobile/lib/model-catalog-session';
-import type { ModelCatalogKind, ModelCatalogSummary } from '../../ugc-mobile/lib/model-catalog-protocol';
+import { ModelCatalogSession, type CatalogSessionState } from '../../ugc-mobile/lib/model-catalog/session';
+import type { ModelCatalogKind, ModelCatalogSummary } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import type {

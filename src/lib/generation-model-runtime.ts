@@ -7,7 +7,7 @@ import {
   type ImageModelId,
   type VideoModelId,
 } from '@/lib/models';
-import { catalogConditionMatches } from '../../ugc-mobile/lib/model-catalog-protocol';
+import { catalogConditionMatches } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 import type {
   CatalogCondition,

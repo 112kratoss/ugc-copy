@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { createApiClient } from './api-client';
 import { parseModelCatalogDetail, type GenerationModelDescriptor, type GenerationModelCatalogV3 } from './generation-model-catalog';
-import { ModelCatalogSession, type CatalogSessionState } from './model-catalog-session';
-import type { ModelCatalogKind } from './model-catalog-protocol';
+import { ModelCatalogSession, type CatalogSessionState } from './model-catalog/session';
+import type { ModelCatalogKind } from './model-catalog/protocol';
 
 type GenerationCatalogApi = Pick<ReturnType<typeof createApiClient>, 'fetchModelCatalogCurrent' | 'fetchModelCatalogPage' | 'fetchModelCatalogDetails'>;
 

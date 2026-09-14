@@ -5,7 +5,7 @@ import type {
   GenerationModelDescriptor,
 } from '@/lib/generation-model-catalog';
 // The condition evaluator is the one the server runtime and the native app use.
-import { catalogConditionsMatch } from '../../ugc-mobile/lib/model-catalog-protocol';
+import { catalogConditionsMatch } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 type Settings = Record<string, CatalogPrimitive>;
 

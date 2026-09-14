@@ -14,7 +14,7 @@ import {
   type ModelCatalogPlatform,
   type ModelCatalogSummary,
 } from './model-catalog-transport';
-import { parseModelCatalogCurrent } from '../../ugc-mobile/lib/model-catalog-protocol';
+import { parseModelCatalogCurrent } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 const reads = new Map<string, { expires: number; value: Promise<unknown> }>();
 const MAX_CACHED_READS = 128;

@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { catalogConditionsMatch as sharedCatalogConditionsMatch } from './model-catalog-protocol';
+import { catalogConditionsMatch as sharedCatalogConditionsMatch } from './model-catalog/protocol';
 
 export const LEGACY_GENERATION_MODEL_CATALOG_SCHEMA_VERSION = 1;
 export const GENERATION_MODEL_CATALOG_SCHEMA_VERSION = 3;

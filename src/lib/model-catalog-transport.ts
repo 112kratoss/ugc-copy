@@ -8,20 +8,20 @@ export {
   isModelCatalogKind,
   isModelCatalogPlatform,
   isModelCatalogRevision,
-} from '../../ugc-mobile/lib/model-catalog-protocol';
+} from '../../ugc-mobile/lib/model-catalog/protocol';
 export type {
   ModelCatalogCurrent,
   ModelCatalogPage,
   ModelCatalogPlatform,
   ModelCatalogSummary,
   ModelCatalogKind,
-} from '../../ugc-mobile/lib/model-catalog-protocol';
+} from '../../ugc-mobile/lib/model-catalog/protocol';
 import {
   isModelCatalogId,
   type ModelCatalogKind,
   type ModelCatalogPlatform,
   type ModelCatalogSummary,
-} from '../../ugc-mobile/lib/model-catalog-protocol';
+} from '../../ugc-mobile/lib/model-catalog/protocol';
 
 export class ModelCatalogTransportError extends Error {
   constructor(

@@ -94,7 +94,7 @@ import { generationWaitDetail, generationWaitPhase, generationWaitTitle } from '
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse, PromptEnhancementLevel } from '@/lib/types';
-import type { ModelCatalogSummary } from '@/lib/model-catalog-protocol';
+import type { ModelCatalogSummary } from '@/lib/model-catalog/protocol';
 import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
 import { invalidateActiveGenerations } from '@/lib/active-generations';
 import { verticalHitSlop } from '@/lib/hit-target';

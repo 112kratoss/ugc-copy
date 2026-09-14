@@ -7,7 +7,7 @@ import {
   type ModelCatalogPlatform,
   type ModelCatalogSummary,
   type ModelCatalogDetails,
-} from './model-catalog-protocol';
+} from './protocol';
 
 export type CatalogTransport = (
   path: string,
