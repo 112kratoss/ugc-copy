@@ -56,15 +56,36 @@ offline; reopening selection or Retry reconciles it when connected.
   build 52. Android requires the existing guarded publisher's declared setAside
   procedure for build 71; fingerprints and native configuration were not changed.
 
-## Release gates still required
+## Release record — 2026-09-14/15
 
-Repository Quality must pass for the exact release commits. Run the protected
-production workflow, verify the new APIs against the published Supabase revision,
-and measure production latency/transfer size. Finish installed Android UI checks
-(the computer-control surface cannot operate the emulator; ADB authorization is
-pending) and broader iOS video/motion/workflow checks before publishing mobile.
+- PR #163 merged as `c162beb` after Repository Quality passed on `200bcf9`. The
+  first two Quality runs failed in the web job: Vite resolves the nearest
+  tsconfig for every file it transforms, and the shared modules under
+  `ugc-mobile/lib` reached `ugc-mobile/tsconfig.json`, whose `extends` only
+  resolves with the mobile dependencies installed. They now live in
+  `ugc-mobile/lib/model-catalog/` with a self-contained `tsconfig.json`.
+- The first production release (`c162beb`) applied the migration and deployed
+  the edge function, then failed in the staged Vercel build: `.vercelignore`
+  excluded the whole mobile workspace, so the same two files never reached the
+  builder. `ebef768` re-includes only that folder (pinned by
+  `vercelignore-shared-catalog-modules.test.ts`); its release promoted at
+  ~17:55 UTC on 2026-09-14 and passed the post-promotion health check.
+- Verified on production for `platform=web` and `platform=mobile`: current
+  revision `gpt-image-2-5-20260911` with counts 18/15/2, conditional 304,
+  immutable page and detail responses, 400/404 error paths, and the legacy
+  `/api/generation-models` still serving 56,385 bytes.
+- Production Performance run 34882051241: the four catalog targets passed with
+  0% errors and P95 TTFB of 40–83 ms against 800 ms budgets. The workflow itself
+  is red for reasons that predate this work (the signed-in showcase feed's TTFB
+  and the Lighthouse mobile budget, failing on every scheduled run since
+  2026-08-24).
+- OTA published through `publish-ota.mjs` at `ebef768` for both platforms at a
+  10% rollout on 2026-09-15 (iOS group `1e9d0703…` on build 52, Android group
+  `71db8612…` on build 71 with the expo-video patch set aside), then raised to
+  100% the same day at the owner's call, ahead of the 24-hour telemetry window.
+  Installed-device checks were not repeated for `ebef768`; the first telemetry
+  read showed no launches on the new groups yet.
 
-Publish through the guarded OTA script only after both shipped runtime preflights
-pass. Start at 10%, then wait at least 24 hours of healthy telemetry and successful
-device checks before 100%. No production migration, deployment, catalog publish,
-or OTA has been performed as part of this implementation yet.
+Open follow-ups: the pre-existing performance-workflow failures above, and a
+device check of the creation screen on both platforms now that the update is
+at 100%.
