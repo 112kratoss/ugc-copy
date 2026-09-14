@@ -1,0 +1,21 @@
+{
+  // These modules are compiled by three toolchains: Metro for the app, and
+  // Next.js plus Vitest for the web workspace, which never installs
+  // ugc-mobile/node_modules. Vite resolves the nearest tsconfig.json for every
+  // TypeScript file it transforms, and ugc-mobile/tsconfig.json extends
+  // expo/tsconfig.base, which only resolves with the mobile dependencies
+  // installed. This self-contained config stops that lookup here. The mobile
+  // typecheck still covers these files through ugc-mobile/tsconfig.json.
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM"],
+    "types": [],
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["./*.ts"]
+}

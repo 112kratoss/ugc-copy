@@ -5,12 +5,14 @@ import { logBackendError } from '@/lib/backend-logger';
 import { enqueueWorkflowRunStepJob } from '@/lib/workflow-run-jobs';
 import {
   startImageGeneration,
+  startCatalogGeneration,
   startMotionGeneration,
   startSoundEffectGeneration,
   startVideoGeneration,
   startVoiceoverGeneration,
   type TemplateGenerationContext,
 } from '@/lib/generation-services';
+import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import {
   getHeldProviderSubmissionGenerationId,
   getPublicGenerationStartFailure,
@@ -54,10 +56,13 @@ import {
   type SeedanceAssetMetadata,
 } from '@/lib/seedance-assets';
 import {
+  loadGenerationModelOperationByRevision,
   quotePublishedGenerationModel,
   quotePublishedGenerationModelAtRevision,
 } from '@/lib/generation-model-catalog-store';
-import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
+import { buildUnifiedGenerationQuoteInput, type UnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
+import type { CatalogGenerationInputAsset } from '@/lib/generation-model-adapters';
+import type { CatalogPrimitive, GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 
 export interface WorkflowRunExecutionResult {
   runId: string;
@@ -301,6 +306,27 @@ function buildBlockedError(message: string): WorkflowRunnableExecutionResult {
     output_snapshot: null,
     error_message: message,
   };
+}
+
+const CATALOG_EXECUTION_NODE_TYPES = new Set<string>(['image-generate', 'video-generate', 'motion-generate']);
+
+/**
+ * A model with no bundled registry entry can only run through the published
+ * catalog. A bundled model keeps its model-specific branch unless the editor
+ * recorded catalog-only settings for it: the editor writes an empty object on
+ * every model change, and that alone must not move an existing graph onto a
+ * different execution path.
+ */
+function usesCatalogExecution(node: { type: string; data: { model?: unknown; catalogSettings?: unknown } }): boolean {
+  if (!CATALOG_EXECUTION_NODE_TYPES.has(node.type)) return false;
+  const modelId = String(node.data.model ?? '');
+  const bundled = node.type === 'image-generate'
+    ? Object.hasOwn(IMAGE_MODELS, modelId)
+    : node.type === 'video-generate'
+      ? Object.hasOwn(VIDEO_MODELS, modelId)
+      : Object.hasOwn(MOTION_MODELS, modelId);
+  const settings = node.data.catalogSettings;
+  return !bundled || Boolean(settings && typeof settings === 'object' && Object.keys(settings).length > 0);
 }
 
 function buildStaticOutputSnapshot(node: WorkflowCanvasNode) {
@@ -701,6 +727,69 @@ export async function executeWorkflowRunnableNode(params: {
       },
       error_message: null,
     };
+  }
+
+  // Catalog settings are persisted with the graph. Generic adapters can execute
+  // these models without adding their IDs to a server registry.
+  if (usesCatalogExecution(node)) {
+    if (!catalogRevision) return buildBlockedError('Refresh model settings before running this workflow.');
+    const { catalog, operation } = await loadGenerationModelOperationByRevision({
+      modelId: String(node.data.model), revision: catalogRevision, schemaVersion: 3,
+    });
+    if (operation.adapterKey === 'kie-task-v1') {
+      const descriptor = catalog.models.find(model => model.id === node.data.model)!;
+      const references = getRunnableElementPayload(graph, node.id).references;
+      // The same missing-input conditions the model-specific branches report as
+      // blocked steps, so a fixable graph never records a failed run.
+      if (node.type === 'image-generate' && !inputs.prompt) return buildBlockedError('Image generator is missing a prompt input.');
+      if (node.type === 'video-generate' && !node.data.isMultiShot && !inputs.prompt) return buildBlockedError('Video generator is missing a prompt input.');
+      if (node.type === 'motion-generate' && (!inputs.videoUrls.length || !(references.length || inputs.imageReferences.length))) {
+        return buildBlockedError('Motion control requires both an image input and a video input.');
+      }
+      const settings = Object.fromEntries(descriptor.controls.map(control => [control.key,
+        node.data.catalogSettings?.[control.key]
+          ?? node.data[control.key === 'resolution' && node.type === 'motion-generate' ? 'mode' : control.key]
+          ?? control.defaultValue,
+      ])) as Record<string, CatalogPrimitive>;
+      const assets: CatalogGenerationInputAsset[] = references.map(reference => ({
+        slot: descriptor.kind === 'motion' ? 'characterImage' : 'imageReferences', kind: 'image',
+        url: reference.url, storagePath: reference.storagePath, handle: reference.handle,
+        label: reference.displayName, sourceGenerationId: reference.sourceGenerationId,
+      }));
+      for (const url of inputs.videoUrls) assets.push({ slot: descriptor.kind === 'motion' ? 'referenceVideo' : 'videoReferences', kind: 'video', url });
+      for (const url of inputs.audioUrls) assets.push({ slot: 'audioReferences', kind: 'audio', url });
+      if (inputs.startFrameUrl) assets.push({ slot: 'startFrame', kind: 'image', url: inputs.startFrameUrl });
+      if (inputs.endFrameUrl) assets.push({ slot: 'endFrame', kind: 'image', url: inputs.endFrameUrl });
+      // Resolve standard workflow handles to descriptor-defined slot names.
+      const slots = [...new Map((descriptor.inputModes ?? []).flatMap(mode => mode.slots).map(slot => [slot.key, slot])).values()];
+      for (const asset of assets) {
+        if (!slots.some(slot => slot.key === asset.slot)) {
+          const role = asset.slot === 'startFrame' || asset.slot === 'endFrame' ? asset.slot : 'reference';
+          const candidates = slots.filter(slot => slot.kind === asset.kind && slot.role === role);
+          if (candidates.length === 1) asset.slot = candidates[0].key;
+        }
+        if (asset.kind === 'video') {
+          const source = graph.nodes.find(candidate => candidate.type === 'video-input' && [candidate.data.videoUrl, candidate.data.storagePath].includes(asset.url));
+          if (typeof source?.data.durationSeconds === 'number') asset.durationSeconds = source.data.durationSeconds;
+        }
+      }
+      const request: UnifiedGenerationRequest = {
+        kind: descriptor.kind, modelId: descriptor.id, catalogRevision, settings,
+        prompt: inputs.prompt ?? '', inputs: assets, sourceGenerationId: null,
+        shots: node.type === 'video-generate' && node.data.isMultiShot
+          ? (node.data as VideoGenerateNodeData).multiPrompts.map(shot => ({ prompt: shot.prompt, duration: shot.duration })) : [],
+      };
+      // Normal runs still compare with the active revision. Only the trusted
+      // template engine may use quoteAtPinnedRevision.
+      const quote = await quoteRunnableNode(buildUnifiedGenerationQuoteInput(request));
+      const result = await startCatalogGeneration({
+        supabase, creditSupabase, userId, operation, catalogRevision: quote.catalogRevision,
+        prompt: request.prompt, settings: quote.normalizedSettings, inputs: assets, shots: request.shots,
+        quotedCostCredits: quote.costCredits, clientRequestKeyHash, persistInputMedia, privateRecipe, templateContext,
+      });
+      return { status: 'processing', generation_id: result.generationId ?? null,
+        output_snapshot: { predictionId: result.predictionId, cost: result.cost }, input_snapshot: inputs, error_message: null };
+    }
   }
 
   if (node.type === 'image-generate') {

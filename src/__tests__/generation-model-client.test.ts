@@ -3,8 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 import contractFixture from '../../contracts/generation-model-catalog-v1.json';
 import {
   applyGenerationModelCatalogToRegistries,
-  getActiveRegistryModels,
-  loadWebGenerationModelCatalog,
   parseClientGenerationModelCatalog,
   reconcileWebCatalogGenerationDraft,
   requestWebGenerationStart,
@@ -99,8 +97,7 @@ describe('web generation model catalog client', () => {
       catalogActive: true,
     });
     expect(registries.image['retired-image']).toMatchObject({ catalogActive: false });
-    expect(getActiveRegistryModels(registries.image).map((model) => model.id)).toEqual(['fixture-image']);
-    expect(resolveCatalogModelId(catalog, 'image', 'retired-image')).toBe('fixture-image');
+    expect(resolveCatalogModelId(catalog, 'image', 'retired-image')).toBeNull();
   });
 
   it('prefers the server default when resolving a fresh active selection', () => {
@@ -115,7 +112,7 @@ describe('web generation model catalog client', () => {
     expect(resolveCatalogModelId(catalog, 'image', 'bundled-active-image', { preferDefault: true })).toBe('fixture-image');
   });
 
-  it('reconciles a retired model to the remote default while preserving compatible draft content', () => {
+  it('requires explicit replacement of a retired model instead of silently changing the draft', () => {
     const catalog = parseClientGenerationModelCatalog(contractFixture);
     const draft = reconcileWebCatalogGenerationDraft(catalog, {
       kind: 'image',
@@ -133,51 +130,7 @@ describe('web generation model catalog client', () => {
       ],
     });
 
-    expect(draft).toMatchObject({
-      modelId: 'fixture-image',
-      catalogRevision: '0123456789abcdef',
-      prompt: 'Keep this prompt',
-      settings: {
-        aspectRatio: '9:16',
-      },
-      inputs: [
-        { slot: 'imageReferences', kind: 'image' },
-      ],
-    });
-    expect(draft?.settings).not.toHaveProperty('removedControl');
-    expect(draft?.inputs).toHaveLength(1);
-  });
-
-  it('uses the last valid local catalog when the network request fails', async () => {
-    const storage = {
-      getItem: vi.fn(() => JSON.stringify(contractFixture)),
-      setItem: vi.fn(),
-    };
-    const fetcher = vi.fn(async () => {
-      throw new Error('offline');
-    });
-
-    await expect(loadWebGenerationModelCatalog({ fetcher: fetcher as unknown as typeof fetch, storage })).resolves.toMatchObject({
-      revision: '0123456789abcdef',
-    });
-  });
-
-  it('bypasses the browser cache when refreshing after a catalog conflict', async () => {
-    const fetcher = vi.fn(async () => new Response(JSON.stringify(contractFixture), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }));
-
-    await loadWebGenerationModelCatalog({
-      fetcher: fetcher as unknown as typeof fetch,
-      storage: undefined,
-      forceRefresh: true,
-    });
-
-    expect(fetcher).toHaveBeenCalledWith(
-      '/api/generation-models?platform=web&schemaVersion=3&refresh=1',
-      { cache: 'no-store', headers: expect.any(Headers) }
-    );
+    expect(draft).toBeNull();
   });
 
   it('starts generation through the unified catalog-backed endpoint', async () => {

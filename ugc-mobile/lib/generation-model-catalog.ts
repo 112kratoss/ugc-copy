@@ -1,5 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { catalogConditionsMatch as sharedCatalogConditionsMatch } from './model-catalog/protocol';
+
 export const LEGACY_GENERATION_MODEL_CATALOG_SCHEMA_VERSION = 1;
 export const GENERATION_MODEL_CATALOG_SCHEMA_VERSION = 3;
 export const GENERATION_MODEL_CATALOG_CACHE_KEY = 'generation-model-catalog:v3';
@@ -8,7 +10,13 @@ export type GenerationModelCatalogSchemaVersion = 1 | 2 | 3;
 export type GenerationModelKind = 'image' | 'video' | 'motion';
 export type CatalogPrimitive = string | number | boolean;
 
-export interface CatalogChoiceControl {
+interface CatalogControlCompatibility {
+  conditions?: CatalogCondition[];
+  minClientSchemaVersion?: number;
+}
+
+export interface CatalogChoiceControl extends CatalogControlCompatibility {
+  normalizedValueType?: 'string' | 'number';
   key: string;
   label: string;
   type: 'choice';
@@ -17,7 +25,7 @@ export interface CatalogChoiceControl {
   options: Array<{ value: string; label: string }>;
 }
 
-export interface CatalogBooleanControl {
+export interface CatalogBooleanControl extends CatalogControlCompatibility {
   key: string;
   label: string;
   type: 'boolean';
@@ -25,7 +33,7 @@ export interface CatalogBooleanControl {
   defaultValue: boolean;
 }
 
-export interface CatalogIntegerControl {
+export interface CatalogIntegerControl extends CatalogControlCompatibility {
   key: string;
   label: string;
   type: 'integer';
@@ -65,6 +73,7 @@ export interface CatalogInputSlot {
   min: number;
   max: number;
   supportsNaming?: boolean;
+  maxNamed?: number;
   durationMetadata?: 'optional' | 'required';
   maxDurationSeconds?: number;
   conditions?: CatalogCondition[];
@@ -230,6 +239,17 @@ function isPrimitive(value: unknown): value is CatalogPrimitive {
 }
 
 function parseControl(value: unknown): CatalogControl | null {
+  const base = parseBaseControl(value);
+  if (!base || !isRecord(value)) return null;
+  const conditions = parseConditions(value.conditions);
+  if (conditions === null || (value.minClientSchemaVersion !== undefined && (!Number.isInteger(value.minClientSchemaVersion) || Number(value.minClientSchemaVersion) < 1))) return null;
+  if (base.type === 'choice' && value.normalizedValueType !== undefined && value.normalizedValueType !== 'string' && value.normalizedValueType !== 'number') return null;
+  return { ...base, ...(conditions ? { conditions } : {}),
+    ...(value.minClientSchemaVersion === undefined ? {} : { minClientSchemaVersion: Number(value.minClientSchemaVersion) }),
+    ...(base.type === 'choice' && value.normalizedValueType ? { normalizedValueType: value.normalizedValueType as 'string' | 'number' } : {}) };
+}
+
+function parseBaseControl(value: unknown): CatalogControl | null {
   if (!isRecord(value) || !isString(value.key) || !isString(value.label)) return null;
   if (value.type === 'choice') {
     if (
@@ -370,6 +390,7 @@ function parseInputSlot(value: unknown): CatalogInputSlot | null {
     min: value.min as number,
     max: value.max as number,
     ...(typeof value.supportsNaming === 'boolean' ? { supportsNaming: value.supportsNaming } : {}),
+    ...(Number.isInteger(value.maxNamed) && Number(value.maxNamed) >= 0 ? { maxNamed: Number(value.maxNamed) } : {}),
     ...(value.durationMetadata === 'optional' || value.durationMetadata === 'required'
       ? { durationMetadata: value.durationMetadata }
       : {}),
@@ -629,6 +650,12 @@ function parseModel(
   };
 }
 
+export function parseModelCatalogDetail(value: unknown): GenerationModelDescriptor {
+  const model = parseModel(value, 3);
+  if (!model) throw new Error('Invalid model settings.');
+  return model;
+}
+
 export function parseGenerationModelCatalog(
   value: unknown,
   expectedSchemaVersion: GenerationModelCatalogSchemaVersion = LEGACY_GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
@@ -756,19 +783,8 @@ export function catalogConditionsMatch(
   settings: Record<string, CatalogPrimitive>,
   inputCounts: Record<string, number> = {},
 ) {
-  return (conditions ?? []).every((condition) => {
-    const actual = condition.source === 'setting'
-      ? settings[condition.key]
-      : inputCounts[condition.key] ?? 0;
-    const expected = condition.value;
-    if (condition.operator === 'equals') return actual === expected;
-    if (condition.operator === 'notEquals') return actual !== expected;
-    const expectedValues = Array.isArray(expected) ? expected : [expected];
-    if (condition.operator === 'in') return expectedValues.includes(actual as never);
-    if (condition.operator === 'notIn') return !expectedValues.includes(actual as never);
-    if (typeof actual !== 'number' || typeof expected !== 'number') return false;
-    return condition.operator === 'greaterThan' ? actual > expected : actual >= expected;
-  });
+  // One operator table is shared with the server runtime and the web pickers.
+  return sharedCatalogConditionsMatch(conditions, settings, inputCounts);
 }
 
 export function getActiveCatalogInputModes(

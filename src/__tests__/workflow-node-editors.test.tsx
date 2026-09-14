@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { WorkflowModelCatalogContext, type useWebGenerationModelCatalog } from '@/lib/generation-model-client';
+import { buildGenerationModelCatalog } from '@/lib/generation-model-catalog';
 import { WorkflowCanvasInspector } from '@/app/create-workflow/WorkflowNodeEditors';
 import {
   createStarterGraph,
@@ -83,6 +85,11 @@ function renderInteractiveInspector(
     const selectedNode = graph.nodes.find((node) => node.id === (options?.selectedNodeId ?? graph.nodes[0]?.id)) ?? null;
 
     return (
+      <WorkflowModelCatalogContext.Provider value={{
+        catalog: buildGenerationModelCatalog({ platform: 'web', schemaVersion: 3 }),
+        summaries: buildGenerationModelCatalog({ platform: 'web', schemaVersion: 3 }).models,
+        error: null,
+      } as unknown as ReturnType<typeof useWebGenerationModelCatalog>}>
       <div className="relative h-[800px]">
         <WorkflowCanvasInspector
           activePanel="parameters"
@@ -133,6 +140,7 @@ function renderInteractiveInspector(
           onUploadAsset={uploadAsset}
         />
       </div>
+      </WorkflowModelCatalogContext.Provider>
     );
   }
 

@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  applyGenerationModelCatalogToRegistries,
-  getActiveRegistryModels,
-} from '@/lib/generation-model-client';
+import { applyGenerationModelCatalogToRegistries } from '@/lib/generation-model-client';
 import type { GenerationModelCatalog } from '@/lib/generation-model-catalog';
 
 /**
@@ -147,15 +144,14 @@ describe('catalog-first web exposure', () => {
     expect(video.catalogInputs).toBeDefined();
   });
 
-  it('keeps upserted models visible through getActiveRegistryModels', () => {
+  it('marks upserted models active and ordered so the pickers can show them', () => {
     const registries = { image: {}, video: {}, motion: {} } as Parameters<
       typeof applyGenerationModelCatalogToRegistries
     >[1];
     applyGenerationModelCatalogToRegistries(syntheticCatalog(), registries);
-    const active = getActiveRegistryModels(
-      (registries as { image: Record<string, Record<string, unknown>> }).image,
-    );
-    expect(active.map((model) => model.id)).toContain('future-image-model');
+    const image = (registries as { image: Record<string, Record<string, unknown>> }).image['future-image-model'];
+    expect(image.catalogActive).toBe(true);
+    expect(image.catalogSortOrder).toBe(500);
   });
 
   it('preserves existing static-entry styling when the catalog overlays it', () => {

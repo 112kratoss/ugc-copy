@@ -238,3 +238,71 @@ neither in the base release's inventory (`expectedModelIds`) nor declared in `ad
 `expectedModelIds` describes the release being cloned, so the emitter writes the added ids to
 `addsModelIds` and leaves them out of `expectedModelIds`. Until 2026-09-11 this needed a
 throwaway script, since removed.
+
+## Scalable public transport (v1)
+
+The additive `/api/model-catalog/v1` transport retains descriptor schema 3 and
+leaves `/api/generation-models` schemas 1–3 available for installed clients.
+Supabase remains the published authority for both platforms. Every read takes
+`platform=web|mobile` (default `web`) and returns only the entries enabled for
+that platform, with that platform's defaults, so web-only or mobile-only
+availability and per-platform defaults stay a supported release shape. The CLI
+measures each platform's byte budgets on the fully materialized release during
+staging and rechecks the stored draft before publish. Provider adapters must
+deploy before a catalog release that uses them.
+
+| GET endpoint (every one takes `platform=`) | Response | Decoded UTF-8 ceiling |
+| --- | --- | --- |
+| `/current?platform=…` | Revision, platform defaults, category counts | 2 KiB |
+| `/models?platform=…&revision=…&kind=…&cursor=…&limit=…` | Ordered summaries and `nextCursor` | 16 KiB |
+| `/models/{id}?platform=…&revision=…` | One descriptor in a details envelope | 16 KiB |
+| `/details?platform=…&revision=…&ids=…` | Up to eight descriptors and `missingIds` | 128 KiB |
+
+Lists default to 32 and cap at 50. Cursors bind revision, platform, category,
+sort order, and model ID. Keep using the same revision until paging completes,
+including when another release becomes active. Model IDs and revisions share one
+character set (`[A-Za-z0-9._-]`, at most 120 and 128 characters); clients treat
+an ID outside it as missing instead of sending it, so one malformed selection
+cannot fail the batch that carries the default. Missing batch IDs are explicit;
+a missing single model is a 404. Invalid requests are 400; unpublished/unknown
+revisions are 404. Error responses are not cached, and the server logs them as
+warnings rather than backend errors.
+
+`/current` has a 30-second edge lifetime and a 30-second origin lifetime, with
+no stale-while-revalidate window. Published revision responses are immutable,
+with weak/strong conditional ETag support. Public RPCs are service-role-only,
+read active or previously activated retired releases, and never select provider
+or pricing columns for public responses. Shadows remain operator-only.
+
+Clients check on creation-screen entry and when model selection opens. There
+is **no periodic polling or five-minute freshness guarantee**. An already open
+picker may keep its revision until the customer closes and reopens it; restarting
+the app also refreshes it. Offline clients retain validated cached data and retry
+when the customer opens selection or uses Retry. Quotes and normal generation
+starts continue rejecting a stale revision. Public historical descriptors never
+authorize historical purchases; trusted template pins remain a separate path.
+
+Pickers progressively read summaries while open. Selected/default descriptors
+load independently of list pages. Workflows request groups of eight with at most
+two detail requests in flight. Persistence retains at most 100 descriptors across
+two revisions, prioritizing open drafts; a workflow with more references retains
+its live descriptors without expanding disk storage. Missing models preserve
+drafts and require explicit replacements. Loading a descriptor cannot submit a
+request or silently change its model.
+
+Release payload measurements use UTF-8 bytes, including the full materialized
+release. The old 57,344-byte aggregate ceiling remains a reported regression
+signal rather than a reason to disable models. Legacy response status, parsing,
+and latency are still gates. The performance harness discovers a published
+revision before testing page/detail/batch targets; compressed sizes are reported
+separately. Server logs record transport, revision, endpoint, status, decoded
+bytes, latency, and errors through the existing backend logger.
+
+Rollout sequence remains additive backend/migration → web → guarded mobile OTA.
+Run Repository Quality, migration replay/database tests, browser checks, installed
+iOS/Android checks, production health/performance checks, and the exact shipped
+runtime fingerprint checks. Publish OTA only through `ugc-mobile/scripts/publish-ota.mjs`
+at 10%, then increase to 100% after at least 24 hours of healthy telemetry and
+successful device checks. Keep the activity locks and legacy endpoints. Roll back
+a client release for client failures; use atomic catalog rollback for model
+configuration failures. Do not edit fingerprints to make a preflight pass.

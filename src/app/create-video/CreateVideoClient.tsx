@@ -23,6 +23,7 @@ import {
     StudioWorkspacePanel,
 } from '@/components/CreatorStudio';
 import StudioModelPicker from '@/components/StudioModelPicker';
+import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
 import PublicShareButton from '@/components/PublicShareButton';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
@@ -30,7 +31,6 @@ import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDurati
 import { getVideoInputAffordances } from '@/lib/generation-model-affordances';
 import type { GenerationModelDescriptor } from '@/lib/generation-model-catalog';
 import {
-    getActiveRegistryModels,
     resolveCatalogModelId,
     resolveWebGenerationQuoteUi,
     useWebGenerationModelCatalog,
@@ -620,11 +620,11 @@ export interface CreateVideoPrefill {
     duration?: string | null;
 }
 
+const CATALOG_HANDLED_KEYS = ['mode', 'aspectRatio', 'sound', 'duration', 'resolution', 'fixedLens', 'isMultiShot', 'referenceMode'] as const;
+
 export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPrefill }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
-    const modelCatalog = useWebGenerationModelCatalog();
-    const refetchModelCatalog = modelCatalog.refetch;
     const remixId = prefill.remixId ?? null;
     const remixPostId = prefill.remixPostId ?? null;
     const prefillPrompt = prefill.prompt ?? null;
@@ -685,6 +685,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [promptQualityWarnings, setPromptQualityWarnings] = useState<PromptEnhancementWarning[]>([]);
     const [multiPromptQualityWarnings, setMultiPromptQualityWarnings] = useState<Record<string, PromptEnhancementWarning[]>>({});
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
+    const modelCatalog = useWebGenerationModelCatalog({ kind: 'video', selectedIds: [selectedModel], pickerOpen: isModelDropdownOpen });
+    const catalogDescriptor = modelCatalog.catalog?.models.find(item => item.id === selectedModel);
+    const refetchModelCatalog = modelCatalog.refetch;
     const [modelSearchQuery, setModelSearchQuery] = useState('');
     const modelDropdownRef = useRef<HTMLDivElement>(null);
     const hasResolvedInitialCatalogModel = useRef(false);
@@ -734,19 +737,21 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         if (remixId) return;
         // A route prefill intentionally seeds the editable form once it is available.
         if (prefillPrompt) setPrompt(prefillPrompt);
-        const isCatalogModel = Boolean(modelCatalog.catalog?.models.some((candidate) => candidate.kind === 'video' && candidate.id === prefillModel));
-        if (prefillModel && (prefillModel in VIDEO_MODELS || isCatalogModel)) setSelectedModel(prefillModel as VideoModelId);
+        if (prefillModel) setSelectedModel(prefillModel as VideoModelId);
         if (prefillAspectRatio) setAspectRatio(prefillAspectRatio);
         if (prefillDuration) {
             const nextDuration = Number(prefillDuration);
             if (!Number.isNaN(nextDuration)) setSingleDuration(nextDuration);
         }
-    }, [modelCatalog.catalog, prefillPrompt, prefillModel, prefillAspectRatio, prefillDuration, remixId]);
+    }, [prefillPrompt, prefillModel, prefillAspectRatio, prefillDuration, remixId]);
 
-    const videoModel = VIDEO_MODELS[selectedModel];
-    const videoModelOptions = getActiveRegistryModels(
-        VIDEO_MODELS as unknown as Record<string, typeof VIDEO_MODELS[VideoModelId]>
-    );
+
+    useEffect(() => {
+        if (modelCatalog.missingIds.includes(selectedModel)) setCatalogNotice('This model is no longer available. Your draft is saved; choose another model.');
+        else if (modelCatalog.error) setCatalogNotice(modelCatalog.error.message);
+    }, [modelCatalog.missingIds, modelCatalog.error, selectedModel]);
+    const videoModel = VIDEO_MODELS[selectedModel] ?? VIDEO_MODELS['kling-3.0-video'];
+    const videoModelOptions = modelCatalog.summaries.filter(item => item.kind === 'video').map(item => ({ ...(VIDEO_MODELS as unknown as Record<string, typeof VIDEO_MODELS[keyof typeof VIDEO_MODELS]>)[item.id], ...item, badge: item.badge ?? '' }));
     const normalizedModelSearchQuery = modelSearchQuery.trim().toLowerCase();
     const filteredVideoModelOptions = normalizedModelSearchQuery
         ? videoModelOptions.filter((modelOption) => {
@@ -765,6 +770,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         if (!modelCatalog.catalog) return;
         const preferDefault = !hasResolvedInitialCatalogModel.current && !remixId && !prefillModel;
         const nextModelId = resolveCatalogModelId(modelCatalog.catalog, 'video', selectedModel, { preferDefault });
+        if (!nextModelId) return;
         hasResolvedInitialCatalogModel.current = true;
         if (nextModelId && nextModelId !== selectedModel) {
             const nextModel = (VIDEO_MODELS as unknown as Record<string, typeof videoModel>)[nextModelId];
@@ -1001,7 +1007,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         const used = new Set<string>();
         return klingSubjects.map((subject, index) => buildKlingSubjectHandle(subject.displayName, index, used));
     })();
-    const quoteRequest = useMemo(() => modelCatalog.catalog ? {
+    const additionalSettings = useAdditionalCatalogSettings(catalogDescriptor, CATALOG_HANDLED_KEYS);
+    const quoteRequest = useMemo(() => modelCatalog.catalog && modelCatalog.detailsReady ? {
         kind: 'video' as const,
         modelId: selectedModel,
         settings: {
@@ -1013,6 +1020,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             fixedLens: currentFixedLens,
             isMultiShot: currentIsMultiShot,
             referenceMode: klingSubjectsActive ? 'subjects' : activeReferenceMode,
+            ...additionalSettings.settings,
         },
         inputCounts: {
             images: klingSubjectsActive
@@ -1071,7 +1079,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 : [],
         },
         catalogRevision: modelCatalog.catalog.revision,
-    } : null, [activeReferenceMode, activeSupportsEndFrame, characterIds.length, currentAspectRatio, currentFixedLens, currentIsMultiShot, currentMode, currentResolution, currentSound, elements.length, endImageFile, endImageUrl, frameReferenceCount, isGeminiOmniVideoModel, klingSubjects, klingSubjectsActive, klingVideoElements.length, modelCatalog.catalog, videoElementsSlotActive, preparedAudioIds.length, referenceAudios, referenceVideos, selectedModel, startImageFile, startImageUrl, totalDuration]);
+    } : null, [activeReferenceMode, activeSupportsEndFrame, characterIds.length, currentAspectRatio, currentFixedLens, currentIsMultiShot, currentMode, currentResolution, currentSound, elements.length, endImageFile, endImageUrl, frameReferenceCount, isGeminiOmniVideoModel, klingSubjects, klingSubjectsActive, klingVideoElements.length, modelCatalog.catalog, videoElementsSlotActive, preparedAudioIds.length, referenceAudios, referenceVideos, selectedModel, startImageFile, startImageUrl, totalDuration, modelCatalog.detailsReady, additionalSettings.settings]);
     const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token);
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED' && quoteState.error?.code !== 'MODEL_UNAVAILABLE') return;
@@ -1080,7 +1088,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         refetchModelCatalog();
     }, [refetchModelCatalog, quoteState.error?.code]);
     const quoteUi = resolveWebGenerationQuoteUi({
-        hasCatalog: Boolean(modelCatalog.catalog),
+        hasCatalog: Boolean(modelCatalog.catalog && modelCatalog.detailsReady),
+        catalogLoading: !modelCatalog.detailsReady && !modelCatalog.error && !modelCatalog.missingIds.includes(selectedModel),
         quoteStatus: quoteState.status,
         quotedCost: quoteState.quote?.costCredits,
         quoteErrorMessage: quoteState.error?.message,
@@ -1299,26 +1308,29 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     }, [klingVideoElements, klingSubjects]);
 
     useEffect(() => {
+        if (!modelCatalog.detailsReady) return;
         if (videoModel.modeOptions?.length) {
             if (!videoModel.modeOptions.some((option) => option.value === mode)) {
                 // Switching models reconciles controls to values supported by the provider.
-                setMode(videoModel.modeOptions[0].value);
+                setMode(catalogChoiceDefault(catalogDescriptor, 'mode', videoModel.modeOptions[0].value));
+                setCatalogNotice('Model settings changed. Unsupported choices were reset; your prompt and references are preserved.');
             }
         } else if (mode !== '') {
             setMode('');
         }
 
         if (!(videoModel.aspectRatios as readonly string[]).includes(aspectRatio)) {
-            setAspectRatio(videoModel.aspectRatios[0]);
+            setAspectRatio(catalogChoiceDefault(catalogDescriptor, 'aspectRatio', videoModel.aspectRatios[0]));
         }
 
         if (!isValidVideoDuration(selectedModel, singleDuration)) {
-            setSingleDuration(getDefaultVideoDuration(selectedModel));
+            const declared = catalogDescriptor?.controls.find(control => control.key === 'duration')?.defaultValue;
+            setSingleDuration(typeof declared === 'number' || typeof declared === 'string' ? Number(declared) : getDefaultVideoDuration(selectedModel));
         }
 
         if (videoModel.resolutions?.length) {
             if (!(videoModel.resolutions as readonly string[]).includes(resolution)) {
-                setResolution(videoModel.resolutions[0]);
+                setResolution(catalogChoiceDefault(catalogDescriptor, 'resolution', videoModel.resolutions[0]));
             }
         } else if (resolution !== '') {
             setResolution('');
@@ -1335,19 +1347,16 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         if (!videoModel.supportsMultiShot) {
             setIsMultiShot(false);
         }
-    }, [selectedModel, videoModel, mode, aspectRatio, singleDuration, resolution]);
+    }, [selectedModel, videoModel, mode, aspectRatio, singleDuration, resolution, modelCatalog.detailsReady, catalogDescriptor]);
 
     useEffect(() => {
         if (!canUseVideoElements || elements.length <= videoElementSupport.maxElements) {
             return;
         }
 
-        const nextElements = hydrateVideoElements(elements.slice(0, videoElementSupport.maxElements));
-        elements.slice(videoElementSupport.maxElements).forEach((element) => revokeObjectUrl(element.previewUrl));
-        // Capability changes must enforce the provider's current element limit.
-        commitElements(nextElements);
-        void persistVideoElements(nextElements);
-    }, [canUseVideoElements, elements, persistVideoElements, videoElementSupport.maxElements]);
+        if (!modelCatalog.detailsReady) return;
+        setError(`This model supports ${videoElementSupport.maxElements} reference images. Your references are preserved; remove extras or choose another model.`);
+    }, [canUseVideoElements, elements.length, modelCatalog.detailsReady, videoElementSupport.maxElements]);
 
     useEffect(() => {
         if (!remixId) return;
@@ -3083,6 +3092,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     fixedLens: currentFixedLens,
                     isMultiShot: currentIsMultiShot,
                     referenceMode: klingSubjectsActive ? 'subjects' : activeReferenceMode,
+            ...additionalSettings.settings,
                 },
                 inputs: [
                     ...requestElements.map((element, index) => ({
@@ -3319,6 +3329,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
                             <StudioModelPicker
                                 isOpen={isModelDropdownOpen}
+                                loading={modelCatalog.isLoadingModels}
+                                error={modelCatalog.error?.message}
+                                onRetry={modelCatalog.refetch}
                                 query={modelSearchQuery}
                                 onQueryChange={setModelSearchQuery}
                                 onDismiss={() => {
@@ -3333,7 +3346,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             >
                                             {filteredVideoModelOptions.map((modelOption) => {
                                                 const isActive = selectedModel === modelOption.id;
-                                                const modelOptionDurationRange = getVideoDurationRange(modelOption.id);
+                                                const modelOptionDurationRange = getVideoDurationRange(modelOption.id as VideoModelId);
 
                                                 return (
                                                     <button
@@ -3341,7 +3354,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                         type="button"
                                                         role="option"
                                                         aria-selected={isActive}
-                                                        onClick={() => handleSelectModel(modelOption.id)}
+                                                        onClick={() => handleSelectModel(modelOption.id as VideoModelId)}
                                                         className={`w-full text-left px-5 py-4 flex items-center gap-3 transition-all ${isActive ? 'bg-white/5' : 'hover:bg-white/[0.03]'}`}
                                                     >
                                                         <div className="flex-1 min-w-0">
@@ -3379,6 +3392,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                 );
                                             })}
                             </StudioModelPicker>
+                            <CatalogAdditionalControls descriptor={catalogDescriptor} handledKeys={CATALOG_HANDLED_KEYS} settings={{ mode: currentMode, aspectRatio: currentAspectRatio, sound: currentSound, duration: totalDuration, resolution: currentResolution, fixedLens: currentFixedLens, isMultiShot: currentIsMultiShot, referenceMode: activeReferenceMode, ...additionalSettings.settings }} onChange={additionalSettings.onChange} />
                         </motion.div>
 
                         {videoModel.supportsMultiShot && (

@@ -40,7 +40,7 @@ function optionalNativeExport<T>(read: () => T) {
 const animatedApi = optionalNativeExport(() => ReactNative.Animated);
 const panResponderApi = optionalNativeExport(() => ReactNative.PanResponder);
 const easingApi = optionalNativeExport(() => ReactNative.Easing);
-const pressableApi = optionalNativeExport(() => ReactNative.Pressable);
+const NativePressable = optionalNativeExport(() => ReactNative.Pressable);
 
 /**
  * How far the sheet has to travel before releasing dismisses it.
@@ -534,17 +534,15 @@ export function SheetBackdrop({
   label?: string;
   color?: string;
 }) {
-  const Pressable = pressableApi;
-
   return (
     <AnimatedView
       style={[{ position: 'absolute', inset: 0, backgroundColor: color }, drag.backdropStyle]}
     >
-      {Pressable ? (
+      {NativePressable ? (
         label ? (
-          <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={{ flex: 1 }} />
+          <NativePressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={{ flex: 1 }} />
         ) : (
-          <Pressable accessible={false} onPress={onPress} style={{ flex: 1 }} />
+          <NativePressable accessible={false} onPress={onPress} style={{ flex: 1 }} />
         )
       ) : null}
     </AnimatedView>

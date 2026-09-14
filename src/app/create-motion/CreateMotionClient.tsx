@@ -22,6 +22,7 @@ import {
     StudioWorkspacePanel,
 } from '@/components/CreatorStudio';
 import StudioModelPicker from '@/components/StudioModelPicker';
+import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
 import PublicShareButton from '@/components/PublicShareButton';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
@@ -58,7 +59,6 @@ import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useTicker } from '@/lib/use-ticker';
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
 import {
-    getActiveRegistryModels,
     resolveCatalogModelId,
     resolveWebGenerationQuoteUi,
     useWebGenerationModelCatalog,
@@ -93,13 +93,16 @@ interface UploadPreviewState {
     title: string;
 }
 
+const CATALOG_HANDLED_KEYS = ['resolution', 'characterOrientation', 'duration'] as const;
+
 export default function CreateMotionClient({ prefill }: { prefill: CreateMotionPrefill }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
-    const modelCatalog = useWebGenerationModelCatalog();
-    const refetchModelCatalog = modelCatalog.refetch;
     const [selectedModel, setSelectedModel] = useState<ModelId>('kling-3.0');
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
+    const modelCatalog = useWebGenerationModelCatalog({ kind: 'motion', selectedIds: [selectedModel], pickerOpen: isModelDropdownOpen });
+    const catalogDescriptor = modelCatalog.catalog?.models.find(item => item.id === selectedModel);
+    const refetchModelCatalog = modelCatalog.refetch;
     const [modelSearchQuery, setModelSearchQuery] = useState('');
     const dropdownRef = useRef<HTMLDivElement>(null);
     const hasResolvedInitialCatalogModel = useRef(false);
@@ -162,12 +165,16 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         if (remixId) return;
         // A route prefill intentionally seeds the editable form once it is available.
         if (prefillPrompt) setPrompt(prefillPrompt);
-        const isCatalogModel = Boolean(modelCatalog.catalog?.models.some((candidate) => candidate.kind === 'motion' && candidate.id === prefillModel));
-        if (prefillModel && (prefillModel in MOTION_MODELS || isCatalogModel)) setSelectedModel(prefillModel as ModelId);
-    }, [modelCatalog.catalog, prefillPrompt, prefillModel, remixId]);
+        if (prefillModel) setSelectedModel(prefillModel as ModelId);
+    }, [prefillPrompt, prefillModel, remixId]);
 
-    const model = MOTION_MODELS[selectedModel];
-    const motionModelOptions = getActiveRegistryModels(MOTION_MODELS as unknown as Record<string, typeof MOTION_MODELS[ModelId]>);
+
+    useEffect(() => {
+        if (modelCatalog.missingIds.includes(selectedModel)) setCatalogNotice('This model is no longer available. Your draft is saved; choose another model.');
+        else if (modelCatalog.error) setCatalogNotice(modelCatalog.error.message);
+    }, [modelCatalog.missingIds, modelCatalog.error, selectedModel]);
+    const model = MOTION_MODELS[selectedModel] ?? MOTION_MODELS['kling-3.0'];
+    const motionModelOptions = modelCatalog.summaries.filter(item => item.kind === 'motion').map(item => ({ ...(MOTION_MODELS as unknown as Record<string, typeof MOTION_MODELS[keyof typeof MOTION_MODELS]>)[item.id], ...item, badge: item.badge ?? '' }));
     const normalizedModelSearchQuery = modelSearchQuery.trim().toLowerCase();
     const filteredMotionModelOptions = normalizedModelSearchQuery
         ? motionModelOptions.filter((motionModel) => [
@@ -182,6 +189,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         if (!modelCatalog.catalog) return;
         const preferDefault = !hasResolvedInitialCatalogModel.current && !remixId && !prefillModel;
         const nextModelId = resolveCatalogModelId(modelCatalog.catalog, 'motion', selectedModel, { preferDefault });
+        if (!nextModelId) return;
         hasResolvedInitialCatalogModel.current = true;
         if (nextModelId && nextModelId !== selectedModel) {
             const nextModel = (MOTION_MODELS as unknown as Record<string, typeof model>)[nextModelId];
@@ -191,6 +199,20 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
             }
         }
     }, [modelCatalog.catalog, selectedModel, model, prefillModel, remixId]);
+    useEffect(() => {
+        if (!modelCatalog.detailsReady) return;
+        let changed = false;
+        if (!(model.resolutions as readonly string[]).includes(mode)) {
+            setMode(catalogChoiceDefault(catalogDescriptor, 'resolution', model.resolutions[0]) as typeof mode);
+            changed = true;
+        }
+        if (!(model.characterOrientations as readonly string[]).includes(characterOrientation)) {
+            setCharacterOrientation(catalogChoiceDefault(catalogDescriptor, 'characterOrientation', model.characterOrientations[0]) as typeof characterOrientation);
+            changed = true;
+        }
+        if (changed) setCatalogNotice('Model settings changed. Unsupported choices were reset; your prompt and references are preserved.');
+    }, [catalogDescriptor, characterOrientation, mode, model, modelCatalog.detailsReady]);
+
     const revokeObjectUrl = (url: string | null) => {
         if (url?.startsWith('blob:')) {
             URL.revokeObjectURL(url);
@@ -628,6 +650,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                         duration: effectiveDuration,
                         characterOrientation,
                         resolution: mode,
+                        ...additionalSettings.settings,
                     },
                     prompt,
                     inputs: [
@@ -689,13 +712,14 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         }
     };
 
-    const quoteRequest = useMemo(() => modelCatalog.catalog ? {
+    const additionalSettings = useAdditionalCatalogSettings(catalogDescriptor, CATALOG_HANDLED_KEYS);
+    const quoteRequest = useMemo(() => modelCatalog.catalog && modelCatalog.detailsReady ? {
         kind: 'motion' as const,
         modelId: selectedModel,
-        settings: { resolution: mode, characterOrientation, duration },
+        settings: { resolution: mode, characterOrientation, duration, ...additionalSettings.settings },
         inputCounts: { images: characterImage ? 1 : 0, videos: referenceVideo ? 1 : 0, audios: 0 },
         catalogRevision: modelCatalog.catalog.revision,
-    } : null, [characterImage, characterOrientation, duration, mode, modelCatalog.catalog, referenceVideo, selectedModel]);
+    } : null, [characterImage, characterOrientation, duration, mode, modelCatalog.catalog, referenceVideo, selectedModel, modelCatalog.detailsReady, additionalSettings.settings]);
     const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token);
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED' && quoteState.error?.code !== 'MODEL_UNAVAILABLE') return;
@@ -704,7 +728,8 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         refetchModelCatalog();
     }, [refetchModelCatalog, quoteState.error?.code]);
     const quoteUi = resolveWebGenerationQuoteUi({
-        hasCatalog: Boolean(modelCatalog.catalog),
+        hasCatalog: Boolean(modelCatalog.catalog && modelCatalog.detailsReady),
+        catalogLoading: !modelCatalog.detailsReady && !modelCatalog.error && !modelCatalog.missingIds.includes(selectedModel),
         quoteStatus: quoteState.status,
         quotedCost: quoteState.quote?.costCredits,
         quoteErrorMessage: quoteState.error?.message,
@@ -861,6 +886,9 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
 
                                 <StudioModelPicker
                                     isOpen={isModelDropdownOpen}
+                                loading={modelCatalog.isLoadingModels}
+                                error={modelCatalog.error?.message}
+                                onRetry={modelCatalog.refetch}
                                     query={modelSearchQuery}
                                     onQueryChange={setModelSearchQuery}
                                     onDismiss={() => {
@@ -914,6 +942,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                                 );
                                             })}
                                 </StudioModelPicker>
+                            <CatalogAdditionalControls descriptor={catalogDescriptor} handledKeys={CATALOG_HANDLED_KEYS} settings={{ resolution: mode, characterOrientation, duration, ...additionalSettings.settings }} inputCounts={{ images: characterImage ? 1 : 0, videos: referenceVideo ? 1 : 0, audios: 0 }} onChange={additionalSettings.onChange} />
                             </StudioControlCard>
                         </motion.div>
 
@@ -1070,7 +1099,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                 <div>
                                     <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Character orientation</div>
                                     <div className="grid grid-cols-2 gap-2">
-                                        {(['video', 'image'] as const).map((option) => (
+                                        {model.characterOrientations.map((option) => (
                                             <button
                                                 key={option}
                                                 onClick={() => setCharacterOrientation(option)}
@@ -1088,7 +1117,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                 <div>
                                     <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Quality mode</div>
                                     <div className="grid grid-cols-2 gap-2">
-                                        {(['720p', '1080p'] as const).map((quality) => (
+                                        {model.resolutions.map((quality) => (
                                             <button
                                                 key={quality}
                                                 onClick={() => setMode(quality)}
@@ -1097,7 +1126,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                                     : 'border border-white/8 bg-black/40 text-zinc-400 hover:bg-white/[0.05] hover:text-white'
                                                     }`}
                                             >
-                                                {quality === '720p' ? 'Standard 720p' : 'Pro 1080p'}
+                                                {quality === '720p' ? 'Standard 720p' : quality === '1080p' ? 'Pro 1080p' : quality}
                                             </button>
                                         ))}
                                     </div>

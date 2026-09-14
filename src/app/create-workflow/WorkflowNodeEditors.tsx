@@ -7,7 +7,7 @@ import RecoverableMediaAudio from '@/components/RecoverableMediaAudio';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import Image from 'next/image';
 import { AlertCircle, Image as ImageIcon, Loader2, Sparkles, Trash2, Upload, Video, Volume2, X } from 'lucide-react';
-import { useRef, useState, type ReactNode } from 'react';
+import { useContext, useRef, useState, type ReactNode } from 'react';
 import { supabase } from '@/lib/supabase';
 import {
   PromptEnhancementError,
@@ -18,7 +18,8 @@ import {
   insertHandleIntoPrompt,
   isValidElementHandle,
 } from '@/lib/image-elements';
-import { getActiveRegistryModels } from '@/lib/generation-model-client';
+import { WorkflowModelCatalogContext } from '@/lib/generation-model-client';
+import CatalogAdditionalControls from '@/components/CatalogAdditionalControls';
 import RecoverableMediaVideo from '@/components/RecoverableMediaVideo';
 import { getDisplayMediaUrl } from '@/lib/media-urls';
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS, getImageResolutionOptions, getVideoDurationRange, getVideoElementSupport, supportsImageResolutionControl } from '@/lib/client-generation-models';
@@ -95,17 +96,6 @@ const AUDIO_MODEL_LABELS: Record<string, string> = {
   'text-to-dialogue-v3': 'ElevenLabs Text-to-Dialogue V3',
   'sound-effect-v2': 'ElevenLabs Sound Effect V2',
 };
-
-function getActiveModelOptions(registry: unknown): Array<{ value: string; label: string }> {
-  return getActiveRegistryModels(registry as Record<string, {
-    id: string;
-    displayName: string;
-    catalogActive?: boolean;
-  }>).map((model) => ({
-    value: model.id,
-    label: model.displayName,
-  }));
-}
 
 type SelectOption = string | { value: string; label: string };
 
@@ -1209,7 +1199,7 @@ function getPromptEnhancementTargetOption(
       target,
       title: data.title,
       mediumLabel: 'Image',
-      modelLabel: IMAGE_MODELS[data.model].displayName,
+      modelLabel: IMAGE_MODELS[data.model]?.displayName ?? data.model,
       accentClassName: 'border-blue-500/20 bg-blue-500/10 text-blue-100',
     };
   }
@@ -1220,7 +1210,7 @@ function getPromptEnhancementTargetOption(
       target,
       title: data.title,
       mediumLabel: 'Video',
-      modelLabel: VIDEO_MODELS[data.model].displayName,
+      modelLabel: VIDEO_MODELS[data.model]?.displayName ?? data.model,
       accentClassName: 'border-rose-500/20 bg-rose-500/10 text-rose-100',
     };
   }
@@ -1252,7 +1242,7 @@ function getPromptEnhancementTargetOption(
     target,
     title: data.title,
     mediumLabel: 'Motion',
-    modelLabel: MOTION_MODELS[data.model].displayName,
+    modelLabel: MOTION_MODELS[data.model]?.displayName ?? data.model,
     accentClassName: 'border-amber-500/20 bg-amber-500/10 text-amber-100',
   };
 }
@@ -1832,6 +1822,13 @@ function NodeEditorContent({
   onUpdateNode,
   onUploadAsset,
 }: NodeEditorContentProps) {
+  const modelCatalog = useContext(WorkflowModelCatalogContext);
+  const descriptor = modelCatalog?.catalog?.models.find(model => model.id === node.data.model);
+  const getModelOptions = (kind: 'image' | 'video' | 'motion') => (modelCatalog?.summaries ?? [])
+    .filter(model => model.kind === kind).map(model => ({ value: model.id, label: model.displayName }));
+  const catalogSettings = Object.fromEntries((descriptor?.controls ?? []).map(control => [control.key,
+    node.data.catalogSettings?.[control.key] ?? node.data[control.key === 'resolution' && node.type === 'motion-generate' ? 'mode' : control.key] ?? control.defaultValue,
+  ])) as Record<string, string | number | boolean>;
   const selectedKind = node.type as WorkflowNodeKind;
   const imageGenerateNode = selectedKind === 'image-generate' ? node.data as ImageGenerateNodeData : null;
   const imageModel = imageGenerateNode ? IMAGE_MODELS[imageGenerateNode.model] : null;
@@ -2193,14 +2190,20 @@ function NodeEditorContent({
         </div>
       )}
 
+      {descriptor && <CatalogAdditionalControls descriptor={descriptor}
+        handledKeys={node.type === 'image-generate' ? ['aspectRatio', 'resolution', 'outputFormat', 'googleSearch'] : node.type === 'video-generate' ? ['aspectRatio', 'duration', 'mode', 'sound', 'resolution', 'fixedLens', 'isMultiShot', 'referenceMode'] : ['resolution', 'characterOrientation']}
+        settings={catalogSettings}
+        inputCounts={{ images: resolvedInputs.imageReferences.length, videos: resolvedInputs.videoUrls.length, audios: resolvedInputs.audioUrls.length }}
+        onChange={(key, value) => onUpdateNode(node.id, { ...node.data, catalogSettings: { ...node.data.catalogSettings, [key]: value } })} />}
+      {modelCatalog?.error && <button type="button" onClick={modelCatalog.refetch}>Retry model settings</button>}
       {selectedKind === 'image-generate' && (
         <>
           <CapabilityLimitsCard graph={graph} node={node} />
           <SelectField
             label="Model"
             value={imageGenerateNode?.model || ''}
-            onChange={(value) => onUpdateNode(node.id, { ...node.data, model: value } as Partial<WorkflowNodeData>)}
-            options={getActiveModelOptions(IMAGE_MODELS)}
+            onChange={(value) => onUpdateNode(node.id, { ...node.data, model: value, catalogSettings: {} } as Partial<WorkflowNodeData>)}
+            options={getModelOptions('image')}
           />
           <SelectField
             label="Aspect ratio"
@@ -2251,14 +2254,31 @@ function NodeEditorContent({
         </>
       )}
 
+      {selectedKind === 'video-generate' && videoGenerateNode && !videoModel && (
+        // The registry has no entry for this model yet (its descriptor is still
+        // loading, or the catalog no longer publishes it). The Model select must
+        // stay reachable so an unavailable model can be replaced.
+        <>
+          <SelectField
+            label="Model"
+            value={videoGenerateNode.model}
+            onChange={(value) => onUpdateNode(node.id, { ...node.data, model: value, catalogSettings: {} } as Partial<WorkflowNodeData>)}
+            options={getModelOptions('video')}
+          />
+          <p className="text-sm leading-relaxed text-zinc-400">
+            This model’s settings are not loaded. Wait for model settings, retry them above, or choose another model.
+          </p>
+        </>
+      )}
+
       {selectedKind === 'video-generate' && videoGenerateNode && videoModel && (
         <>
           <CapabilityLimitsCard graph={graph} node={node} />
           <SelectField
             label="Model"
             value={videoGenerateNode.model}
-            onChange={(value) => onUpdateNode(node.id, { ...node.data, model: value } as Partial<WorkflowNodeData>)}
-            options={getActiveModelOptions(VIDEO_MODELS)}
+            onChange={(value) => onUpdateNode(node.id, { ...node.data, model: value, catalogSettings: {} } as Partial<WorkflowNodeData>)}
+            options={getModelOptions('video')}
           />
           {(videoModel.supportsMultiShot || videoGenerateNode.isMultiShot) && (
             <CheckboxField
@@ -2504,8 +2524,8 @@ function NodeEditorContent({
           <SelectField
             label="Model"
             value={motionGenerateNode?.model || ''}
-            onChange={(value) => onUpdateNode(node.id, { ...node.data, model: value } as Partial<WorkflowNodeData>)}
-            options={getActiveModelOptions(MOTION_MODELS)}
+            onChange={(value) => onUpdateNode(node.id, { ...node.data, model: value, catalogSettings: {} } as Partial<WorkflowNodeData>)}
+            options={getModelOptions('motion')}
           />
           <SelectField
             label="Resolution"
@@ -2527,7 +2547,7 @@ function NodeEditorContent({
           <SelectField
             label="Model"
             value={(node.data as VoiceoverGenerateNodeData).model}
-            onChange={(value) => onUpdateNode(node.id, { ...node.data, model: value } as Partial<WorkflowNodeData>)}
+            onChange={(value) => onUpdateNode(node.id, { ...node.data, model: value, catalogSettings: {} } as Partial<WorkflowNodeData>)}
             options={[...VOICEOVER_MODEL_OPTIONS]}
           />
           <TextField
@@ -2676,7 +2696,7 @@ function NodeEditorContent({
           <SelectField
             label="Model"
             value={(node.data as SoundEffectsGenerateNodeData).model}
-            onChange={(value) => onUpdateNode(node.id, { ...node.data, model: value } as Partial<WorkflowNodeData>)}
+            onChange={(value) => onUpdateNode(node.id, { ...node.data, model: value, catalogSettings: {} } as Partial<WorkflowNodeData>)}
             options={['sound-effect-v2']}
           />
           <NumberField

@@ -556,20 +556,33 @@ function AudioPreview({ url, dragging }: { url: string; dragging?: boolean }) {
   return <RecoverableMediaAudio src={url} className="nodrag nopan mt-3 w-full rounded-xl border border-white/10" />;
 }
 
+/**
+ * Catalog-published models may have no bundled registry entry when a node
+ * renders: their descriptor loads after the first paint, and a retired one
+ * never does. Every registry read on the canvas therefore tolerates a missing
+ * model and falls back to the id, instead of throwing inside React Flow.
+ */
+export function getWorkflowModelDisplayName(
+  registry: Record<string, { displayName: string }>,
+  modelId: string,
+): string {
+  return registry[modelId]?.displayName ?? modelId;
+}
+
 export function getImageGenerateNodeSummary(data: ImageGenerateNodeData): string[] {
-  const model = IMAGE_MODELS[data.model];
-  const details = data.model === 'grok-imagine-image'
+  const model = IMAGE_MODELS[data.model] as (typeof IMAGE_MODELS)[keyof typeof IMAGE_MODELS] | undefined;
+  const details = (data.model === 'grok-imagine-image'
     ? ['Multi-output']
-    : model.supportsOutputFormat
-    ? [data.resolution, data.outputFormat.toUpperCase()]
-    : [data.resolution];
+    : model?.supportsOutputFormat
+    ? [data.resolution, data.outputFormat?.toUpperCase()]
+    : [data.resolution]).filter((detail): detail is string => Boolean(detail));
   const handledReferenceCount = data.referenceBindings.filter((binding) => Boolean(binding.handle)).length;
 
-  if (model.supportsGoogleSearch && data.googleSearch) {
+  if (model?.supportsGoogleSearch && data.googleSearch) {
     details.push('Google Search');
   }
 
-  const summary = [`Aspect ${data.aspectRatio}`, details.join(' • ')];
+  const summary = [data.aspectRatio ? `Aspect ${data.aspectRatio}` : 'Catalog settings', details.join(' • ')].filter(Boolean);
   if (data.referenceBindings.length > 0) {
     summary.push(`Refs ${data.referenceBindings.length}`);
     if (handledReferenceCount > 0) {
@@ -604,29 +617,31 @@ export function getImageGenerateNodeSummaryWithCapabilities(
 }
 
 export function getVideoGenerateNodeSummary(data: VideoGenerateNodeData): string[] {
-  const model = VIDEO_MODELS[data.model];
+  const model = VIDEO_MODELS[data.model] as (typeof VIDEO_MODELS)[keyof typeof VIDEO_MODELS] | undefined;
   const details: string[] = [];
-  const activeMode = model.modeOptions.find((option) => option.value === data.mode);
+  const activeMode = model?.modeOptions.find((option) => option.value === data.mode);
   const handledReferenceCount = data.referenceBindings.filter((binding) => Boolean(binding.handle)).length;
 
   if (activeMode) {
     details.push(activeMode.label);
   }
 
-  if (model.resolutions.length > 0 && data.resolution) {
+  if (model && model.resolutions.length > 0 && data.resolution) {
     details.push(data.resolution);
   }
 
-  if (model.supportsSound) {
+  if (model?.supportsSound) {
     details.push(data.sound ? 'Native audio on' : 'Silent');
   }
 
-  if (model.supportsFixedLens && data.fixedLens) {
+  if (model?.supportsFixedLens && data.fixedLens) {
     details.push('Fixed lens');
   }
 
-  const durationLabel = model.durations.length === 1 ? `${data.duration}s fixed` : `${data.duration}s`;
-  const summary = [`${data.aspectRatio} • ${durationLabel}`, details.join(' • ')].filter(Boolean);
+  const durationLabel = data.duration === undefined
+    ? null
+    : model?.durations.length === 1 ? `${data.duration}s fixed` : `${data.duration}s`;
+  const summary = [[data.aspectRatio, durationLabel].filter(Boolean).join(' • ') || 'Catalog settings', details.join(' • ')].filter(Boolean);
 
   if (data.isMultiShot) {
     summary.push(`${data.multiPrompts.length} shots`);
@@ -851,7 +866,7 @@ const ImageGenerateNode = memo(function ImageGenerateNode({ data, dragging }: No
       dragging={dragging}
       icon={<ImageIcon className="h-4 w-4" />}
       title={typed.title}
-      subtitle={IMAGE_MODELS[typed.model].displayName}
+      subtitle={getWorkflowModelDisplayName(IMAGE_MODELS, typed.model)}
       status={typed.runState.status}
       runtime={runtime}
       minHeight={previewUrl ? undefined : 132}
@@ -895,7 +910,7 @@ const VideoGenerateNode = memo(function VideoGenerateNode({ data, dragging }: No
       dragging={dragging}
       icon={<Clapperboard className="h-4 w-4" />}
       title={typed.title}
-      subtitle={VIDEO_MODELS[typed.model].displayName}
+      subtitle={getWorkflowModelDisplayName(VIDEO_MODELS, typed.model)}
       status={typed.runState.status}
       runtime={runtime}
       minHeight={previewUrl ? undefined : 156}

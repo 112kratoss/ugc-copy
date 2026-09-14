@@ -146,6 +146,7 @@ vi.mock('@/lib/generation-model-client', async () => {
   return {
     ...actual,
     useWebGenerationModelCatalog: () => ({
+      summaries: [], missingIds: [], detailsReady: true, isLoadingModels: false,
       catalog: {
         revision: 'test-catalog-rev',
         schemaVersion: 1,
@@ -395,7 +396,7 @@ describe('CreateVideoClient Kling video elements', () => {
     expect(setPersistedImageElementRecordsMock.mock.calls[1]?.[1]).toEqual([]);
   });
 
-  it('persists the clamped video element set when model capacity decreases', async () => {
+  it('preserves saved video references and explains a decreased model capacity', async () => {
     getPersistedImageElementRecordsMock.mockResolvedValueOnce(
       Array.from({ length: 3 }, (_, index) => ({
         id: `saved-element-${index + 1}`,
@@ -406,10 +407,9 @@ describe('CreateVideoClient Kling video elements', () => {
 
     render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
 
-    await waitFor(() => {
-      expect(setPersistedImageElementRecordsMock).toHaveBeenCalledTimes(1);
-    });
-    expect(setPersistedImageElementRecordsMock.mock.calls[0]?.[1]).toHaveLength(2);
+    expect(await screen.findByText(/Your references are preserved/)).toBeInTheDocument();
+    expect(screen.getByAltText('Saved element 3')).toBeInTheDocument();
+    expect(setPersistedImageElementRecordsMock).not.toHaveBeenCalled();
   });
 
   it('keeps the Kling video elements panel visible in single-shot and multi-shot modes', async () => {

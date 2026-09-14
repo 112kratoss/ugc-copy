@@ -18,6 +18,7 @@ import {
     StudioWorkspacePanel,
 } from '@/components/CreatorStudio';
 import StudioModelPicker from '@/components/StudioModelPicker';
+import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
 import PublicShareButton from '@/components/PublicShareButton';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
@@ -81,7 +82,6 @@ import {
 import { getImageInputAffordances } from '@/lib/generation-model-affordances';
 import type { GenerationModelDescriptor } from '@/lib/generation-model-catalog';
 import {
-    getActiveRegistryModels,
     resolveCatalogModelId,
     resolveWebGenerationQuoteUi,
     useWebGenerationModelCatalog,
@@ -178,11 +178,11 @@ export interface CreateImagePrefill {
     aspectRatio?: string | null;
 }
 
+const CATALOG_HANDLED_KEYS = ['aspectRatio', 'resolution', 'qualityMode', 'googleSearch'] as const;
+
 export default function CreateImageClient({ prefill }: { prefill: CreateImagePrefill }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
-    const modelCatalog = useWebGenerationModelCatalog();
-    const refetchModelCatalog = modelCatalog.refetch;
     const [selectedModel, setSelectedModel] = useState<ModelId>('nano-banana-2');
     const [prompt, setPrompt] = useState('');
 
@@ -209,6 +209,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const [error, setError] = useState<string | null>(null);
     const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
+    const modelCatalog = useWebGenerationModelCatalog({ kind: 'image', selectedIds: [selectedModel], pickerOpen: isModelDropdownOpen });
+    const catalogDescriptor = modelCatalog.catalog?.models.find(item => item.id === selectedModel);
+    const refetchModelCatalog = modelCatalog.refetch;
     const [modelSearchQuery, setModelSearchQuery] = useState('');
     const dropdownRef = useRef<HTMLDivElement>(null);
     const hasResolvedInitialCatalogModel = useRef(false);
@@ -250,15 +253,17 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         if (remixId) return;
         // A route prefill intentionally seeds the editable form once it is available.
         if (prefillPrompt) setPrompt(prefillPrompt);
-        const isCatalogModel = Boolean(modelCatalog.catalog?.models.some((candidate) => candidate.kind === 'image' && candidate.id === prefillModel));
-        if (prefillModel && (prefillModel in IMAGE_MODELS || isCatalogModel)) setSelectedModel(prefillModel as ModelId);
+        if (prefillModel) setSelectedModel(prefillModel as ModelId);
         if (prefillAspectRatio) setAspectRatio(prefillAspectRatio);
-    }, [modelCatalog.catalog, prefillPrompt, prefillModel, prefillAspectRatio, remixId]);
+    }, [prefillPrompt, prefillModel, prefillAspectRatio, remixId]);
 
-    const model = IMAGE_MODELS[selectedModel];
-    const imageModelOptions = getActiveRegistryModels(
-        IMAGE_MODELS as unknown as Record<string, typeof IMAGE_MODELS[ImageModelId]>
-    );
+
+    useEffect(() => {
+        if (modelCatalog.missingIds.includes(selectedModel)) setCatalogNotice('This model is no longer available. Your draft is saved; choose another model.');
+        else if (modelCatalog.error) setCatalogNotice(modelCatalog.error.message);
+    }, [modelCatalog.missingIds, modelCatalog.error, selectedModel]);
+    const model = IMAGE_MODELS[selectedModel] ?? IMAGE_MODELS['nano-banana-2'];
+    const imageModelOptions = modelCatalog.summaries.filter(item => item.kind === 'image').map(item => ({ ...(IMAGE_MODELS as unknown as Record<string, typeof IMAGE_MODELS[keyof typeof IMAGE_MODELS]>)[item.id], ...item, badge: item.badge ?? '' }));
     const normalizedModelSearchQuery = modelSearchQuery.trim().toLowerCase();
     const filteredImageModelOptions = normalizedModelSearchQuery
         ? imageModelOptions.filter((imageModel) => [
@@ -274,6 +279,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         if (!modelCatalog.catalog) return;
         const preferDefault = !hasResolvedInitialCatalogModel.current && !remixId && !prefillModel;
         const nextModelId = resolveCatalogModelId(modelCatalog.catalog, 'image', selectedModel, { preferDefault });
+        if (!nextModelId) return;
         hasResolvedInitialCatalogModel.current = true;
         if (nextModelId && nextModelId !== selectedModel) {
             const nextModel = (IMAGE_MODELS as unknown as Record<string, typeof model>)[nextModelId];
@@ -317,33 +323,33 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
 
     // When model or aspect changes, clamp model-specific controls.
     useEffect(() => {
+        if (!modelCatalog.detailsReady) return;
         if (elements.length > model.maxImages) {
-            const nextElements = hydrateImageElements(elements.slice(0, model.maxImages));
-            elements.slice(model.maxImages).forEach((element) => revokePreviewUrl(element.previewUrl));
-            // Model changes must immediately enforce the provider's reference limit.
-            commitElements(nextElements);
-            void persistUploadedImageElements(nextElements);
+            setError(`This model now supports ${model.maxImages} reference images. Your references are preserved; remove extras or choose another model.`);
         }
 
         const nextAspectRatio = (model.aspectRatios as readonly string[]).includes(aspectRatio)
             ? aspectRatio
-            : model.aspectRatios[0];
+            : catalogChoiceDefault(catalogDescriptor, 'aspectRatio', model.aspectRatios[0]);
         if (nextAspectRatio !== aspectRatio) {
             setAspectRatio(nextAspectRatio);
+            setCatalogNotice('Model settings changed. Unsupported choices were reset; your prompt and references are preserved.');
         }
 
         const nextResolutionOptions = getImageResolutionOptions(selectedModel, nextAspectRatio);
         if (!nextResolutionOptions.includes(resolution)) {
-            setResolution(nextResolutionOptions[0]);
+            const preferred = catalogChoiceDefault(catalogDescriptor, 'resolution', nextResolutionOptions[0]) as ImageResolution;
+            setResolution(nextResolutionOptions.includes(preferred) ? preferred : nextResolutionOptions[0]);
+            setCatalogNotice('Model settings changed. Unsupported choices were reset; your prompt and references are preserved.');
         }
         if (!model.supportsGoogleSearch) {
             setGoogleSearch(false);
         }
         const qualityModes = getImageQualityModes(selectedModel);
         if (qualityModes.length > 0 && !qualityModes.includes(qualityMode)) {
-            setQualityMode(qualityModes[0]);
+            setQualityMode(catalogChoiceDefault(catalogDescriptor, 'qualityMode', qualityModes[0]) as ImageQualityMode);
         }
-    }, [aspectRatio, commitElements, elements, model, persistUploadedImageElements, qualityMode, resolution, selectedModel]);
+    }, [aspectRatio, catalogDescriptor, elements.length, model, modelCatalog.detailsReady, qualityMode, resolution, selectedModel]);
 
     // Close dropdown on click outside
     useEffect(() => {
@@ -467,7 +473,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             );
 
             if (savedElementRecords.length > 0) {
-                const clampedRecords = savedElementRecords.slice(0, model.maxImages);
+                const clampedRecords = savedElementRecords;
                 const restoredElements = hydrateImageElements(
                     clampedRecords.map((element) => ({
                         id: element.id,
@@ -493,7 +499,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
 
             if (savedFiles.length === 0) return;
 
-            const clampedFiles = savedFiles.slice(0, model.maxImages);
+            const clampedFiles = savedFiles;
             const restoredElements = hydrateImageElements(clampedFiles.map((file, index) => ({
                 id: savedDrafts?.[index]?.id,
                 displayName: savedDrafts?.[index]?.displayName,
@@ -508,7 +514,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         } catch (err) {
             console.error('Error loading persisted image elements:', err);
         }
-    }, [commitElements, model.maxImages, persistUploadedImageElements, remixId]);
+    }, [commitElements, persistUploadedImageElements, remixId]);
 
     useEffect(() => {
         if (hasRestoredPersistedMedia.current) return;
@@ -802,13 +808,14 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         throw new Error(BACKGROUND_PROCESSING_ERROR);
     };
 
-    const quoteRequest = useMemo(() => modelCatalog.catalog ? {
+    const additionalSettings = useAdditionalCatalogSettings(catalogDescriptor, CATALOG_HANDLED_KEYS);
+    const quoteRequest = useMemo(() => modelCatalog.catalog && modelCatalog.detailsReady ? {
         kind: 'image' as const,
         modelId: selectedModel,
-        settings: { aspectRatio, resolution, qualityMode, outputFormat: 'jpg', googleSearch },
+        settings: { aspectRatio, resolution, qualityMode, outputFormat: 'jpg', googleSearch, ...additionalSettings.settings },
         inputCounts: { images: elements.length, videos: 0, audios: 0 },
         catalogRevision: modelCatalog.catalog.revision,
-    } : null, [aspectRatio, elements.length, googleSearch, modelCatalog.catalog, qualityMode, resolution, selectedModel]);
+    } : null, [aspectRatio, elements.length, googleSearch, modelCatalog.catalog, qualityMode, resolution, selectedModel, modelCatalog.detailsReady, additionalSettings.settings]);
     const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token);
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED' && quoteState.error?.code !== 'MODEL_UNAVAILABLE') return;
@@ -817,7 +824,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         refetchModelCatalog();
     }, [refetchModelCatalog, quoteState.error?.code]);
     const quoteUi = resolveWebGenerationQuoteUi({
-        hasCatalog: Boolean(modelCatalog.catalog),
+        hasCatalog: Boolean(modelCatalog.catalog && modelCatalog.detailsReady),
+        catalogLoading: !modelCatalog.detailsReady && !modelCatalog.error && !modelCatalog.missingIds.includes(selectedModel),
         quoteStatus: quoteState.status,
         quotedCost: quoteState.quote?.costCredits,
         quoteErrorMessage: quoteState.error?.message,
@@ -1259,6 +1267,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
 
                             <StudioModelPicker
                                 isOpen={isModelDropdownOpen}
+                                loading={modelCatalog.isLoadingModels}
+                                error={modelCatalog.error?.message}
+                                onRetry={modelCatalog.refetch}
                                 query={modelSearchQuery}
                                 onQueryChange={setModelSearchQuery}
                                 onDismiss={() => {
@@ -1315,6 +1326,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                             );
                                         })}
                             </StudioModelPicker>
+                            <CatalogAdditionalControls descriptor={catalogDescriptor} handledKeys={CATALOG_HANDLED_KEYS} settings={{ aspectRatio, resolution, qualityMode, googleSearch, ...additionalSettings.settings }} inputCounts={{ images: elements.length, videos: 0, audios: 0 }} onChange={additionalSettings.onChange} />
                         </motion.div>
 
                         <motion.div

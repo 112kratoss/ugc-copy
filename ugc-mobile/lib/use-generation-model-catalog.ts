@@ -1,107 +1,50 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState } from 'react-native';
-
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { createApiClient } from './api-client';
-import {
-  GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
-  loadCachedGenerationModelCatalogEnvelope,
-  saveCachedGenerationModelCatalog,
-  type GenerationModelCatalogV3,
-  type GenerationModelCatalogCacheEnvelope,
-} from './generation-model-catalog';
+import { parseModelCatalogDetail, type GenerationModelDescriptor, type GenerationModelCatalogV3 } from './generation-model-catalog';
+import { ModelCatalogSession, type CatalogSessionState } from './model-catalog/session';
+import type { ModelCatalogKind } from './model-catalog/protocol';
 
-const CATALOG_STALE_TIME_MS = 5 * 60 * 1000;
-const QUERY_KEY = ['generation-model-catalog', GENERATION_MODEL_CATALOG_SCHEMA_VERSION] as const;
+type GenerationCatalogApi = Pick<ReturnType<typeof createApiClient>, 'fetchModelCatalogCurrent' | 'fetchModelCatalogPage' | 'fetchModelCatalogDetails'>;
 
-type GenerationCatalogApi = Pick<ReturnType<typeof createApiClient>, 'fetchGenerationModels'>;
-
-export function useGenerationModelCatalog(api: GenerationCatalogApi) {
-  const queryClient = useQueryClient();
-  const [cachedCatalog, setCachedCatalog] = useState<GenerationModelCatalogV3 | null>(null);
-  const [hasNetworkCatalog, setHasNetworkCatalog] = useState(false);
-  const [cacheReady, setCacheReady] = useState(false);
-  const cacheEnvelopeRef = useRef<GenerationModelCatalogCacheEnvelope | null>(null);
-  const forceRefreshRef = useRef(false);
-
+export function useGenerationModelCatalog(api: GenerationCatalogApi, options: { kind?: ModelCatalogKind; selectedIds?: string[]; pickerOpen?: boolean } = {}) {
+  const session = useMemo(() => new ModelCatalogSession<GenerationModelDescriptor>((path,etag) => {
+    const query = path.slice(path.indexOf('?') + 1);
+    if (path.includes('/current?')) return api.fetchModelCatalogCurrent(query, etag);
+    return path.includes('/details?') ? api.fetchModelCatalogDetails(query) : api.fetchModelCatalogPage(query);
+  }, parseModelCatalogDetail, AsyncStorage, 'mobile'), [api]);
+  const [state, setState] = useState<CatalogSessionState<GenerationModelDescriptor>>(session.getSnapshot);
+  const [retryVersion, setRetryVersion] = useState(0);
+  const selectedKey = (options.selectedIds ?? []).join(',');
+  const { current, details, nextCursors, error } = state;
+  useEffect(() => { setState(session.getSnapshot()); const unsubscribe = session.subscribe(() => setState(session.getSnapshot())); void session.initialize(); return unsubscribe; }, [session]);
+  // Refresh only on entry or opening model selection. No timer or forced restart.
+  useEffect(() => { if (options.pickerOpen) void session.refresh(); }, [options.pickerOpen, session]);
   useEffect(() => {
-    let active = true;
-    void loadCachedGenerationModelCatalogEnvelope(
-      undefined,
-      GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
-    ).then((envelope) => {
-      if (!active || !envelope) return;
-      cacheEnvelopeRef.current = envelope;
-      const catalog = envelope.catalog as GenerationModelCatalogV3;
-      setCachedCatalog(catalog);
-      if (!queryClient.getQueryData(QUERY_KEY)) {
-        queryClient.setQueryData(QUERY_KEY, envelope.catalog, {
-          updatedAt: envelope.fetchedAt,
-        });
-      }
-    }).finally(() => {
-      if (active) setCacheReady(true);
-    });
-    return () => {
-      active = false;
-    };
-  }, [queryClient]);
-
-  const query = useQuery({
-    queryKey: QUERY_KEY,
-    queryFn: async () => {
-      const forceRefresh = forceRefreshRef.current;
-      forceRefreshRef.current = false;
-      const response = await api.fetchGenerationModels({
-        etag: cacheEnvelopeRef.current?.etag ?? null,
-        forceRefresh,
-      });
-      const catalog = (response.catalog ?? cacheEnvelopeRef.current?.catalog) as GenerationModelCatalogV3 | undefined;
-      if (!catalog) throw new Error('The saved model catalog could not be restored.');
-      const envelope = {
-        catalog,
-        etag: response.etag,
-        fetchedAt: Date.now(),
-      } satisfies GenerationModelCatalogCacheEnvelope;
-      cacheEnvelopeRef.current = envelope;
-      setCachedCatalog(catalog);
-      await saveCachedGenerationModelCatalog(catalog, undefined, envelope);
-      setHasNetworkCatalog(true);
-      return catalog;
-    },
-    enabled: cacheReady,
-    staleTime: CATALOG_STALE_TIME_MS,
-    retry: 1,
-  });
-
-  const dataUpdatedAt = query.dataUpdatedAt;
-  const refetch = query.refetch;
-  useEffect(() => AppState.addEventListener('change', (state) => {
-    const lastFetch = Math.max(dataUpdatedAt, cacheEnvelopeRef.current?.fetchedAt ?? 0);
-    if (state === 'active' && (!lastFetch || Date.now() - lastFetch >= CATALOG_STALE_TIME_MS)) {
-      void refetch();
+    if (!current) return;
+    const ids = selectedKey ? selectedKey.split(',') : [];
+    const defaults = options.kind ? [current.defaults[options.kind]] : Object.values(current.defaults);
+    session.pin(ids); void session.ensureDetails([...ids, ...defaults.filter((id): id is string => Boolean(id))]);
+  }, [session, current, selectedKey, options.kind, retryVersion]);
+  useEffect(() => {
+    const key = options.kind ?? 'all'; if (!current || error) return;
+    if (nextCursors[key] === undefined || (options.pickerOpen && nextCursors[key])) void session.loadPage(options.kind ?? null);
+  }, [session, options.kind, options.pickerOpen, current, nextCursors, error, retryVersion]);
+  const refetch = useCallback(() => { void session.retry().then(() => setRetryVersion(v => v + 1)); }, [session]);
+  const loadDetails = useCallback(async (ids: string[]) => {
+    await session.ensureDetails(ids);
+    const next = session.getSnapshot();
+    if (!next.current) throw new Error('Model catalog is unavailable.');
+    if (ids.some(id => !next.details.some(model => model.id === id) && !next.missingIds.includes(id))) {
+      throw new Error(next.error?.message ?? 'Could not load model settings.');
     }
-  }).remove, [dataUpdatedAt, refetch]);
-
-  const forceRefetch = useCallback(() => {
-    forceRefreshRef.current = true;
-    return refetch();
-  }, [refetch]);
-
-  const catalog = (query.data ?? cachedCatalog) as GenerationModelCatalogV3 | null;
-  const unavailableError = !catalog && query.error instanceof Error ? query.error : null;
-  return {
-    catalog,
-    isLoading: !catalog && query.isPending,
-    isRefreshing: Boolean(catalog && query.isFetching),
-    isUnavailable: Boolean(cacheReady && !catalog && !query.isPending),
-    status: !catalog
-      ? query.isPending ? 'loading' as const : 'unavailable' as const
-      : query.isFetching ? 'refreshing' as const : 'ready' as const,
-    error: unavailableError,
-    refreshError: catalog && query.error instanceof Error ? query.error : null,
-    refetch: forceRefetch,
-    retry: forceRefetch,
-    isUsingCache: Boolean(cachedCatalog && !hasNetworkCatalog),
-  };
+    return { schemaVersion: 3, revision: next.current.revision, defaults: next.current.defaults, models: next.details } as GenerationModelCatalogV3;
+  }, [session]);
+  const catalog = useMemo(() => current ? { schemaVersion: 3, revision: current.revision, defaults: current.defaults, models: details } as GenerationModelCatalogV3 : null, [current, details]);
+  return { catalog, current: current, summaries: state.summaries, missingIds: state.missingIds,
+    isLoadingModels: Boolean(options.pickerOpen && nextCursors[options.kind ?? 'all'] !== null && !error),
+    isLoading: !catalog && state.loading, isRefreshing: state.loading || state.loadingDetails,
+    isUnavailable: Boolean(error && (!catalog || (options.selectedIds ?? []).some(id => !details.some(model => model.id === id)))),
+    status: !catalog ? state.loading ? 'loading' as const : 'unavailable' as const : 'ready' as const,
+    error: error, refreshError: error, loadDetails, refetch, retry: refetch, isUsingCache: Boolean(catalog && error) };
 }
