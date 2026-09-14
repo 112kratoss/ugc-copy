@@ -87,7 +87,7 @@ improve one path and regress another. See
 
 | ID | Finding | Severity | Status | Required outcome |
 |---|---|---:|---|---|
-| S1 | Authenticated requests repeated network identity admission | High | DEPLOYED; EDGE PASS — MIXED LOAD | One proxy admission plus route reuse is timed; prove it across the full signed-in mix |
+| S1 | Authenticated requests repeated network identity admission | High | DEPLOYED; EDGE PASS — MIXED LOAD | One proxy admission plus route reuse is timed; the proxy now verifies the JWT locally and makes one database round trip (`current_identity_admission()`); prove it across the full signed-in mix |
 | S2 | Upload admission was globally serialized and O(active reservations) | High | DEPLOYED; LOCAL DB PASS — E2E LOAD | Database function passed 10k/100k/1m and 50-way concurrency; measure the complete sign/Auth/PostgREST/Storage path |
 | S3 | Upload reclaim lacked scan/time bounds and growth visibility | High | DEPLOYED — LOAD | Prove steady-state drain/backlog age under protected-row fixtures; the clean local replay passes |
 | S4 | No green current production performance baseline | High | CLOSED — MONITORED | Keep the exact-commit production workflow green; this is not a capacity certificate |
@@ -122,6 +122,20 @@ improve one path and regress another. See
   feed work at 300.2 ms, and the single proxy identity boundary at 882.6 ms.
   This closes the duplicate-write tail and makes the remaining admission cost
   explicit; it does not certify the entire authenticated workload.
+- 2026-09-15 follow-up on that remaining admission cost: the four production
+  runs between 2026-08-22 and 2026-09-14 put the proxy identity boundary at a
+  440–1,238 ms median and 506–2,037 ms P95 while the feed's own work stayed at
+  a 172–232 ms median, and the two runs that broke the 1,800 ms TTFB budget
+  were the two with the slowest boundary. The boundary was two network calls:
+  GoTrue `/user` and `current_identity_state()`. The proxy now verifies the
+  JWT locally (`auth.getClaims()` against the project's ES256 JWKS, cached per
+  instance) and makes one database round trip, `current_identity_admission()`,
+  which returns everything the GoTrue call used to establish — the account
+  still exists, its session still exists, it is not banned — plus the
+  lifecycle state and `created_at`. Nothing is cached across requests, so the
+  admission guarantees are unchanged. The monitor now records `proxy-verify`
+  and `proxy-lifecycle` alongside `proxy-identity`; the numbers from the first
+  post-release run belong here.
 - The production catalog was a 100% CDN HIT at 55,915 decoded bytes and P95/P99
   TTFB 78.6/128.2 ms. Public recent feed was P95/P99 92.5/142.2 ms. Home was
   P95 74,746 encoded and 682,097 decoded bytes, both within its budgets.

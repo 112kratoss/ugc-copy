@@ -1,47 +1,66 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { AuthApiError, AuthRetryableFetchError } from '@supabase/supabase-js';
 import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { guardUserFacingRouteIdentity, proxy } from '@/proxy';
 import { routeIdentityPolicyForPathname } from '@/lib/route-identity-policy';
 
+const SUBJECT = '11111111-1111-4111-8111-111111111111';
+const SESSION = '22222222-2222-4222-8222-222222222222';
+const CREATED_AT = '2026-08-22T00:00:00+00:00';
+
 function identityClient(options: {
   anonymous?: boolean;
-  authError?: unknown;
+  claims?: Record<string, unknown> | null;
+  claimsError?: unknown;
+  admission?: unknown;
+  admissionError?: unknown;
   state?: unknown;
-  stateError?: unknown;
+  sessionValid?: boolean;
+  banned?: boolean;
 } = {}) {
+  const claims = options.claims === undefined
+    ? {
+        sub: SUBJECT,
+        aud: 'authenticated',
+        role: 'authenticated',
+        session_id: SESSION,
+        email: 'identity@example.invalid',
+        is_anonymous: options.anonymous ?? false,
+        app_metadata: { provider: 'email' },
+        user_metadata: { full_name: 'Identity One', secret_note: 'never forwarded' },
+        exp: Math.floor(Date.now() / 1000) + 3_600,
+      }
+    : options.claims;
+  const admission = options.admission !== undefined
+    ? options.admission
+    : {
+        state: 'state' in options ? options.state : 'active',
+        created_at: CREATED_AT,
+        banned: options.banned ?? false,
+        session_valid: options.sessionValid ?? true,
+      };
   return {
     auth: {
-      getUser: vi.fn(async () => ({
-        data: {
-          user: options.authError
-            ? null
-            : {
-                id: 'identity-1',
-                aud: 'authenticated',
-                role: 'authenticated',
-                is_anonymous: options.anonymous ?? false,
-                app_metadata: {},
-                user_metadata: {},
-                created_at: '2026-08-22T00:00:00.000Z',
-              },
-        },
-        error: options.authError ?? null,
-      })),
+      getClaims: vi.fn(async () => (
+        options.claimsError || claims === null
+          ? { data: null, error: options.claimsError ?? new AuthApiError('invalid JWT', 401, 'bad_jwt') }
+          : { data: { claims }, error: null }
+      )),
     },
     rpc: vi.fn(async () => ({
-      data: options.state ?? 'active',
-      error: options.stateError ?? null,
+      data: options.admissionError ? null : admission,
+      error: options.admissionError ?? null,
     })),
   };
 }
 
-function authenticatedRequest(pathname: string) {
+function authenticatedRequest(pathname: string, authorization = 'Bearer signed-user-token') {
   return new NextRequest(`https://magicbooklet.test${pathname}`, {
-    headers: { Authorization: 'Bearer signed-user-token' },
+    headers: { Authorization: authorization },
   });
 }
 
@@ -58,6 +77,36 @@ describe('central route identity admission', () => {
     expect(routeIdentityPolicyForPathname('/api/generations/abc/restore')).toBe('guest');
     expect(routeIdentityPolicyForPathname('/api/showcase/posts/post-1/comments')).toBe('registered');
     expect(routeIdentityPolicyForPathname('/api/webhooks/kie')).toBe('service');
+  });
+
+  it('verifies the bearer token locally and asks the database exactly once', async () => {
+    const client = identityClient();
+    const signIdentityAdmission = vi.fn(async () => 'signed-assertion');
+    await expect(guardUserFacingRouteIdentity(
+      authenticatedRequest('/api/generations'),
+      { createUserClient: () => client, signIdentityAdmission },
+    )).resolves.toBeNull();
+
+    expect(client.auth.getClaims).toHaveBeenCalledTimes(1);
+    expect(client.auth.getClaims).toHaveBeenCalledWith('signed-user-token');
+    expect(client.rpc).toHaveBeenCalledTimes(1);
+    expect(client.rpc).toHaveBeenCalledWith('current_identity_admission');
+    expect(signIdentityAdmission).toHaveBeenCalledTimes(1);
+    const [{ user, state }] = signIdentityAdmission.mock.calls[0] as unknown as [{
+      user: Record<string, unknown>;
+      state: string;
+    }];
+    expect(state).toBe('active');
+    // The signed user is rebuilt from the verified claims plus the RPC's
+    // created_at — nothing is copied from a caller-controlled object.
+    expect(user).toMatchObject({
+      id: SUBJECT,
+      aud: 'authenticated',
+      role: 'authenticated',
+      email: 'identity@example.invalid',
+      is_anonymous: false,
+      created_at: CREATED_AT,
+    });
   });
 
   it('rejects merged and deleting tokens before route adapters run', async () => {
@@ -101,10 +150,78 @@ describe('central route identity admission', () => {
     }
   });
 
+  it('answers 401 for a token that fails signature, expiry or parsing', async () => {
+    const client = identityClient({ claims: null });
+    const response = await guardUserFacingRouteIdentity(
+      authenticatedRequest('/api/generations'),
+      { createUserClient: () => client },
+    );
+
+    expect(response?.status).toBe(401);
+    await expect(response?.json()).resolves.toMatchObject({ code: 'UNAUTHORIZED' });
+    expect(client.rpc).not.toHaveBeenCalled();
+  });
+
+  it('answers 503, not 401, when the signing keys cannot be fetched', async () => {
+    const response = await guardUserFacingRouteIdentity(
+      authenticatedRequest('/api/generations'),
+      { createUserClient: () => identityClient({ claimsError: new AuthRetryableFetchError('fetch failed', 0) }) },
+    );
+
+    expect(response?.status).toBe(503);
+    await expect(response?.json()).resolves.toMatchObject({ code: 'IDENTITY_CHECK_UNAVAILABLE' });
+  });
+
+  it('refuses a revoked session, a banned account, and an account that no longer exists', async () => {
+    for (const client of [
+      identityClient({ sessionValid: false }),
+      identityClient({ banned: true }),
+      identityClient({ admission: null }),
+    ]) {
+      const response = await guardUserFacingRouteIdentity(
+        authenticatedRequest('/api/generations'),
+        { createUserClient: () => client },
+      );
+
+      expect(response?.status).toBe(401);
+      await expect(response?.json()).resolves.toMatchObject({ code: 'UNAUTHORIZED' });
+    }
+  });
+
+  it('refuses claims without an authenticated role or a well-formed subject before any lookup', async () => {
+    for (const claims of [
+      { sub: SUBJECT, role: 'anon' },
+      { sub: 'not-a-uuid', role: 'authenticated' },
+      { role: 'authenticated' },
+    ]) {
+      const client = identityClient({ claims });
+      const response = await guardUserFacingRouteIdentity(
+        authenticatedRequest('/api/generations'),
+        { createUserClient: () => client },
+      );
+
+      expect(response?.status).toBe(401);
+      expect(client.rpc).not.toHaveBeenCalled();
+    }
+  });
+
+  it('refuses a malformed Authorization header without contacting Supabase', async () => {
+    const createUserClient = vi.fn(() => identityClient());
+    const response = await guardUserFacingRouteIdentity(
+      authenticatedRequest('/api/generations', 'Token signed-user-token'),
+      { createUserClient },
+    );
+
+    expect(response?.status).toBe(401);
+    expect(createUserClient).not.toHaveBeenCalled();
+  });
+
   it('fails closed with 503 when durable state lookup fails or is missing', async () => {
     for (const client of [
-      identityClient({ stateError: new Error('database unavailable') }),
+      identityClient({ admissionError: new Error('database unavailable') }),
       identityClient({ state: 'unknown' }),
+      identityClient({ state: null }),
+      identityClient({ admission: 'active' }),
     ]) {
       const response = await guardUserFacingRouteIdentity(
         authenticatedRequest('/api/workflow-canvases/canvas-1/run'),
@@ -129,7 +246,7 @@ describe('central route identity admission', () => {
       .toBeNull();
   });
 
-  it('forwards trusted proxy timing to the authenticated production monitor', async () => {
+  it('forwards trusted proxy timing, split by phase, to the authenticated production monitor', async () => {
     const request = new NextRequest('https://magicbooklet.test/api/showcase/feed?sort=for-you', {
       headers: {
         Authorization: 'Bearer signed-user-token',
@@ -142,10 +259,11 @@ describe('central route identity admission', () => {
     });
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('x-middleware-request-x-magicbooklet-proxy-timing'))
-      .toMatch(/^proxy-identity;dur=\d+(?:\.\d+)?$/);
-    expect(response.headers.get('x-middleware-request-x-magicbooklet-proxy-timing'))
-      .not.toContain('caller-value');
+    const timing = response.headers.get('x-middleware-request-x-magicbooklet-proxy-timing');
+    expect(timing).toMatch(
+      /^proxy-identity;dur=\d+(?:\.\d+)?, proxy-verify;dur=\d+(?:\.\d+)?, proxy-lifecycle;dur=\d+(?:\.\d+)?$/,
+    );
+    expect(timing).not.toContain('caller-value');
   });
 
   it('admits active guests only on guest-enabled routes', async () => {
