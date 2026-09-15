@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   generation: null as Record<string, unknown> | null,
+  selectedColumns: [] as string[],
   resolveRemixAccess: vi.fn(),
   loadGenerationInputMediaMap: vi.fn(),
   buildLegacyGenerationInputMedia: vi.fn(),
@@ -12,7 +13,10 @@ const mocks = vi.hoisted(() => ({
 const adminClient = {
   from: vi.fn(() => {
     const builder = {
-      select: () => builder,
+      select: (columns: string) => {
+        mocks.selectedColumns.push(columns);
+        return builder;
+      },
       eq: () => builder,
       maybeSingle: async () => ({ data: mocks.generation, error: null }),
     };
@@ -52,6 +56,7 @@ vi.mock('@/lib/post-resource-bundles-server', () => ({
   loadGenerationRecipeRemixInputMediaByPostId: mocks.loadGenerationRecipeRemixInputMediaByPostId,
 }));
 
+import { buildCatalogInputMediaCandidates } from '@/lib/catalog-input-media-candidates';
 import { loadRemixSourceBundle, RemixSourceError } from '@/lib/remix-source-server';
 
 const LOCKED_PROMPT = 'The prompt a buyer pays for';
@@ -90,6 +95,7 @@ beforeEach(() => {
       referenceImageUrls: ['https://cdn.example/private-face.png'],
     },
   };
+  mocks.selectedColumns.length = 0;
   mocks.resolveRemixAccess.mockReset();
   mocks.loadGenerationInputMediaMap.mockReset().mockResolvedValue(new Map());
   mocks.buildLegacyGenerationInputMedia.mockReset().mockResolvedValue([]);
@@ -202,5 +208,134 @@ describe('loadRemixSourceBundle access', () => {
       referenceImageUrls: ['https://cdn.example/private-face.png'],
     });
     expect(mocks.loadGenerationInputMediaMap).toHaveBeenCalled();
+  });
+});
+
+// Audit, additional risk: a motion model onboarded through the generic catalog
+// path is stored the catalog's way. The record is a 'video' generation marked
+// by creation_mode, its inputs are slots, and its durable rows took the plain
+// reference roles. Remix only knew the legacy motion shape, so it restored the
+// character image as a video reference and the motion creator got nothing.
+describe('remixing a motion generation made through the catalog', () => {
+  const OWNER_ACCESS = { allowed: true, basis: 'owner', post: null, includeSharedInputMedia: true, recipeEntitled: false };
+  const CATALOG_INPUTS = [
+    { slot: 'characterImage', kind: 'image', label: 'Character image', storagePath: 'uploads/creator-1/hero.png' },
+    { slot: 'referenceVideo', kind: 'video', label: 'Reference video', storagePath: 'uploads/creator-1/moves.mp4', durationSeconds: 8 },
+  ] as const;
+
+  function catalogMotionGeneration() {
+    return {
+      id: 'gen-1',
+      user_id: 'creator-1',
+      is_public: true,
+      share_input_media_for_remix: true,
+      output_url: null,
+      showcase_asset_path: null,
+      category: 'video',
+      creation_mode: 'motion',
+      model: 'kling-2.6',
+      prompt: 'Dance like the clip',
+      title: 'Dance',
+      // What startCatalogGeneration writes: settings at the top level and the
+      // inputs as slots, with no legacy characterImage or referenceVideo keys.
+      workflow_settings: {
+        model: 'kling-2.6',
+        catalogRevision: 'rev-1',
+        resolution: '720p',
+        characterOrientation: 'video',
+        duration: 8,
+        inputs: CATALOG_INPUTS,
+      },
+    };
+  }
+
+  /** Durable rows as the catalog path persisted them before motion slots had motion roles. */
+  const ROWS_WITH_REFERENCE_ROLES = [
+    {
+      id: 'row-0',
+      generationId: 'gen-1',
+      mediaType: 'image',
+      role: 'reference_image',
+      label: 'Character image',
+      url: 'https://signed.example/hero.png',
+      storagePath: 'generation_inputs/creator-1/gen-1/00-reference_image.png',
+      sourceGenerationId: null,
+      sortOrder: 0,
+      metadata: { slot: 'characterImage', displayName: 'Character image', sourceStoragePath: 'uploads/creator-1/hero.png' },
+    },
+    {
+      id: 'row-1',
+      generationId: 'gen-1',
+      mediaType: 'video',
+      role: 'reference_video',
+      label: 'Reference video',
+      url: 'https://signed.example/moves.mp4',
+      storagePath: 'generation_inputs/creator-1/gen-1/01-reference_video.mp4',
+      sourceGenerationId: null,
+      sortOrder: 1,
+      metadata: { slot: 'referenceVideo', durationSeconds: 8, sourceStoragePath: 'uploads/creator-1/moves.mp4' },
+    },
+  ];
+
+  beforeEach(() => {
+    mocks.generation = catalogMotionGeneration();
+    mocks.resolveRemixAccess.mockResolvedValue(OWNER_ACCESS);
+  });
+
+  it('restores its durable inputs into the motion creator, reading the slot where the role is generic', async () => {
+    mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', ROWS_WITH_REFERENCE_ROLES]]));
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(mocks.selectedColumns.join(' ')).toContain('creation_mode');
+    expect(bundle.inputs.video).toBeUndefined();
+    expect(bundle.inputs.motion).toEqual({
+      characterImage: expect.objectContaining({ kind: 'image', url: 'https://signed.example/hero.png' }),
+      referenceVideo: expect.objectContaining({ kind: 'video', url: 'https://signed.example/moves.mp4' }),
+    });
+    // The fixture has no output, which is its own issue; neither input is one.
+    expect(bundle.restoreIssues.filter((issue) => issue.startsWith('motion-') || issue.startsWith('video-'))).toEqual([]);
+  });
+
+  // The round trip for a generation started now: the rows the catalog start
+  // keeps, read back the way loadGenerationInputMediaMap returns them, restore
+  // into the motion creator.
+  it('restores what a new catalog motion start keeps', async () => {
+    const candidates = buildCatalogInputMediaCandidates(
+      'motion',
+      CATALOG_INPUTS.map((input) => ({ ...input, url: `https://provider.example/${input.slot}` })),
+    );
+    expect(candidates.map((candidate) => candidate.role)).toEqual(['character_image', 'motion_reference_video']);
+    const rows = candidates.map((candidate, index) => ({
+      id: `row-${index}`,
+      generationId: 'gen-1',
+      mediaType: candidate.mediaType,
+      role: candidate.role,
+      label: candidate.label ?? '',
+      url: `https://signed.example/durable-${index}`,
+      storagePath: `generation_inputs/creator-1/gen-1/0${index}-${candidate.role}`,
+      sourceGenerationId: candidate.sourceGenerationId ?? null,
+      sortOrder: candidate.sortOrder ?? index,
+      metadata: { ...candidate.metadata, sourceStoragePath: candidate.sourceStoragePath ?? null },
+    }));
+    mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', rows]]));
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.inputs.video).toBeUndefined();
+    expect(bundle.inputs.motion).toEqual({
+      characterImage: expect.objectContaining({ kind: 'image', label: 'Character image', url: 'https://signed.example/durable-0' }),
+      referenceVideo: expect.objectContaining({ kind: 'video', label: 'Reference video', url: 'https://signed.example/durable-1' }),
+    });
+  });
+
+  it('restores from its own input slots when no durable copy was made', async () => {
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.inputs.video).toBeUndefined();
+    expect(bundle.inputs.motion).toEqual({
+      characterImage: expect.objectContaining({ kind: 'image', storagePath: 'uploads/creator-1/hero.png', url: 'https://signed.example/upload' }),
+      referenceVideo: expect.objectContaining({ kind: 'video', storagePath: 'uploads/creator-1/moves.mp4', url: 'https://signed.example/upload' }),
+    });
   });
 });

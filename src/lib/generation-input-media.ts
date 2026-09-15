@@ -12,7 +12,7 @@ import {
   isAllowlistedRemoteMediaUrl,
   openAllowlistedRemoteMedia,
 } from '@/lib/remote-media-security';
-import { normalizeRemixMediaAssetDescriptor, type RemixMediaAssetDescriptor } from '@/lib/remix-source';
+import { motionInputDescriptors, normalizeRemixMediaAssetDescriptor, type RemixMediaAssetDescriptor } from '@/lib/remix-source';
 import type { SeedanceAssetCollections, SeedanceAssetMetadata } from '@/lib/seedance-assets';
 import {
   getCanonicalStoredMediaLocation,
@@ -864,11 +864,13 @@ export async function buildLegacyGenerationInputMedia(params: {
     }));
   }
 
+  // Legacy motion starts name these two inputs; the catalog path keeps them as slots.
+  const motionInputs = motionInputDescriptors(params.workflowSettings);
   const characterImage = await resolveDescriptorLegacyItem({
     supabase: params.supabase,
     generationId: params.generationId,
     ownerUserId: params.ownerUserId,
-    descriptor: normalizeRemixMediaAssetDescriptor(params.workflowSettings.characterImage, 'image'),
+    descriptor: motionInputs.characterImage,
     mediaType: 'image',
     role: 'character_image',
     fallbackLabel: 'Character image',
@@ -882,7 +884,7 @@ export async function buildLegacyGenerationInputMedia(params: {
     supabase: params.supabase,
     generationId: params.generationId,
     ownerUserId: params.ownerUserId,
-    descriptor: normalizeRemixMediaAssetDescriptor(params.workflowSettings.referenceVideo, 'video'),
+    descriptor: motionInputs.referenceVideo,
     mediaType: 'video',
     role: 'motion_reference_video',
     fallbackLabel: 'Motion reference video',

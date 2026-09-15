@@ -75,6 +75,52 @@ export interface RemixSourceBundle {
  * not read that default as creator input, so the value also has to have changed
  * since the restore began.
  */
+/**
+ * Motion is a creation mode, not a category. The legacy motion start marks it
+ * in workflow_settings; the catalog path stores a 'video' generation and marks
+ * only the creation_mode column.
+ */
+export function isMotionGeneration(source: {
+  category?: string | null;
+  creationMode?: string | null;
+  workflowSettings?: Record<string, unknown> | null;
+}): boolean {
+  return source.category === 'motion'
+    || source.creationMode === 'motion'
+    || source.workflowSettings?.creationMode === 'motion';
+}
+
+/**
+ * An input a catalog-path generation recorded under one of its model's slots.
+ * Legacy starts wrote named keys (characterImage, referenceVideo) into
+ * workflow_settings, and the catalog path writes an `inputs` list of slots
+ * instead, so a reader that only knows the named keys finds nothing.
+ */
+function catalogInputSlotDescriptor(
+  workflowSettings: Record<string, unknown>,
+  slot: string,
+  expectedKind: RemixAssetKind,
+): RemixMediaAssetDescriptor | null {
+  const inputs: unknown[] = Array.isArray(workflowSettings.inputs) ? workflowSettings.inputs : [];
+  const input = inputs.find((candidate) => (
+    typeof candidate === 'object' && candidate !== null && (candidate as { slot?: unknown }).slot === slot
+  ));
+  return input ? normalizeRemixMediaAssetDescriptor(input, expectedKind) : null;
+}
+
+/** A motion generation's two inputs, from the legacy named keys or the catalog's slots. */
+export function motionInputDescriptors(workflowSettings: Record<string, unknown>): {
+  characterImage: RemixMediaAssetDescriptor | null;
+  referenceVideo: RemixMediaAssetDescriptor | null;
+} {
+  return {
+    characterImage: normalizeRemixMediaAssetDescriptor(workflowSettings.characterImage, 'image')
+      ?? catalogInputSlotDescriptor(workflowSettings, 'characterImage', 'image'),
+    referenceVideo: normalizeRemixMediaAssetDescriptor(workflowSettings.referenceVideo, 'video')
+      ?? catalogInputSlotDescriptor(workflowSettings, 'referenceVideo', 'video'),
+  };
+}
+
 export function hasCreatorEditedPromptDuringRemix(
   currentPrompt: string,
   promptWhenRemixStarted: string

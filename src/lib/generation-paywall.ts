@@ -12,7 +12,7 @@ import {
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 import type { GenerationInputMediaItem, GenerationInputMediaType } from '@/lib/generation-input-media';
-import { normalizeRemixMediaAssetDescriptor } from '@/lib/remix-source';
+import { isMotionGeneration, motionInputDescriptors, normalizeRemixMediaAssetDescriptor } from '@/lib/remix-source';
 
 export interface GenerationPaywallPrefill {
   resourceKinds: PostResourceKind[];
@@ -25,6 +25,8 @@ export interface GenerationPaywallPrefill {
 
 export interface GenerationPaywallPrefillSource {
   category: string | null | undefined;
+  /** The generation's creation_mode: how a catalog-path motion generation says it is one. */
+  creationMode?: string | null;
   model: string | null | undefined;
   prompt: string | null | undefined;
   workflowSettings: Record<string, unknown> | null | undefined;
@@ -247,7 +249,7 @@ function getSavedReferenceCount(kindCounts: Partial<Record<GenerationInputMediaT
 export function hasRecoverableGenerationRemixInputs(source: GenerationPaywallPrefillSource): boolean {
   const workflowSettings =
     source.workflowSettings && typeof source.workflowSettings === 'object' ? source.workflowSettings : {};
-  const isMotionWorkflow = source.category === 'motion' || workflowSettings.creationMode === 'motion';
+  const isMotionWorkflow = isMotionGeneration({ category: source.category, creationMode: source.creationMode, workflowSettings });
 
   if (source.category === 'image') {
     return countRecoverableDescriptors(workflowSettings.elements) > 0;
@@ -263,9 +265,10 @@ export function hasRecoverableGenerationRemixInputs(source: GenerationPaywallPre
   }
 
   if (isMotionWorkflow) {
+    const motionInputs = motionInputDescriptors(workflowSettings);
     return (
-      hasRecoverableDescriptor(workflowSettings.characterImage, 'image') &&
-      hasRecoverableDescriptor(workflowSettings.referenceVideo, 'video')
+      hasRecoverableDescriptor(motionInputs.characterImage, 'image') &&
+      hasRecoverableDescriptor(motionInputs.referenceVideo, 'video')
     );
   }
 
@@ -375,8 +378,9 @@ function buildVideoNotes(modelLabel: string | null, workflowSettings: Record<str
 
 function buildMotionNotes(modelLabel: string | null, workflowSettings: Record<string, unknown>): string[] {
   const details: string[] = [];
-  const hasCharacterImage = hasRecoverableDescriptor(workflowSettings.characterImage, 'image');
-  const hasReferenceVideo = hasRecoverableDescriptor(workflowSettings.referenceVideo, 'video');
+  const motionInputs = motionInputDescriptors(workflowSettings);
+  const hasCharacterImage = hasRecoverableDescriptor(motionInputs.characterImage, 'image');
+  const hasReferenceVideo = hasRecoverableDescriptor(motionInputs.referenceVideo, 'video');
   const inputs: string[] = [];
 
   if (modelLabel) {
@@ -414,7 +418,7 @@ export function buildGenerationPaywallNotes(source: GenerationPaywallPrefillSour
   const workflowSettings =
     source.workflowSettings && typeof source.workflowSettings === 'object' ? source.workflowSettings : {};
   const modelLabel = getModelDisplayName(workflowSettings, source.model);
-  const isMotionWorkflow = source.category === 'motion' || workflowSettings.creationMode === 'motion';
+  const isMotionWorkflow = isMotionGeneration({ category: source.category, creationMode: source.creationMode, workflowSettings });
 
   const details =
     source.category === 'image'

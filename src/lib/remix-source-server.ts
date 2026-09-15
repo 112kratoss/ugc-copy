@@ -22,6 +22,8 @@ import {
 } from '@/lib/remix-access';
 import {
   type RemixMediaAssetDescriptor,
+  isMotionGeneration,
+  motionInputDescriptors,
   normalizeRemixMediaAssetDescriptor,
   type RemixResolvedAsset,
   type RemixResolvedImageElement,
@@ -47,6 +49,7 @@ type RemixSourceGenerationRow = {
   model: string | null;
   prompt: string | null;
   title: string | null;
+  creation_mode?: string | null;
   workflow_settings: Record<string, unknown> | null;
 };
 
@@ -56,7 +59,7 @@ type ResultGenerationRow = Pick<
 >;
 
 const GENERATION_SELECT =
-  'id, user_id, is_public, share_input_media_for_remix, output_url, showcase_asset_path, category, model, prompt, title, workflow_settings';
+  'id, user_id, is_public, share_input_media_for_remix, output_url, showcase_asset_path, category, creation_mode, model, prompt, title, workflow_settings';
 
 export class RemixSourceError extends Error {
   status: number;
@@ -274,7 +277,11 @@ export async function loadRemixSourceBundle(
     typedGeneration.workflow_settings && typeof typedGeneration.workflow_settings === 'object'
       ? typedGeneration.workflow_settings
       : {};
-  const isMotionWorkflow = typedGeneration.category === 'motion' || workflowSettings.creationMode === 'motion';
+  const isMotionWorkflow = isMotionGeneration({
+    category: typedGeneration.category,
+    creationMode: typedGeneration.creation_mode,
+    workflowSettings,
+  });
   const includeInputMedia = isOwner || access.includeSharedInputMedia;
   const effectiveWorkflowSettings = sanitizeWorkflowSettingsForRemix(workflowSettings, includeInputMedia);
   const durableInputMediaMap = includeInputMedia
@@ -460,8 +467,12 @@ export async function loadRemixSourceBundle(
     }
 
     if (isMotionWorkflow) {
-      const characterImage = accessibleInputMedia.find((item) => item.role === 'character_image');
-      const referenceVideo = accessibleInputMedia.find((item) => item.role === 'motion_reference_video');
+      // The catalog path stored these under plain reference roles until motion
+      // slots got motion roles; for those rows the slot says which is which.
+      const characterImage = accessibleInputMedia.find((item) => item.role === 'character_image')
+        ?? accessibleInputMedia.find((item) => item.mediaType === 'image' && item.metadata?.slot === 'characterImage');
+      const referenceVideo = accessibleInputMedia.find((item) => item.role === 'motion_reference_video')
+        ?? accessibleInputMedia.find((item) => item.mediaType === 'video' && item.metadata?.slot === 'referenceVideo');
       if (characterImage && !characterImage.url) {
         restoreIssues.push('motion-character-image');
       }
@@ -501,14 +512,15 @@ export async function loadRemixSourceBundle(
     }
 
     if (isMotionWorkflow) {
+      const motionInputs = motionInputDescriptors(workflowSettings);
       bundle.inputs.motion = {
         characterImage: await resolveAssetDescriptor(
-          workflowSettings.characterImage,
+          motionInputs.characterImage,
           'image',
           'motion-character-image'
         ),
         referenceVideo: await resolveAssetDescriptor(
-          workflowSettings.referenceVideo,
+          motionInputs.referenceVideo,
           'video',
           'motion-reference-video'
         ),

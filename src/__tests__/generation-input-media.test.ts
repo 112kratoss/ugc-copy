@@ -360,4 +360,31 @@ describe('generation input media loading', () => {
     expect(storageFrom).not.toHaveBeenCalled();
     expect(from).not.toHaveBeenCalled();
   });
+
+  // A motion model onboarded through the catalog keeps its inputs as slots.
+  // Read only by their legacy names, the owner inputs view and the input repair
+  // saw a motion generation with no inputs at all.
+  it('builds a catalog motion generation’s inputs from its slots', async () => {
+    const { buildLegacyGenerationInputMedia } = await import('@/lib/generation-input-media');
+
+    const result = await buildLegacyGenerationInputMedia({
+      supabase: { storage: { from: vi.fn() }, from: vi.fn() } as never,
+      generationId: 'gen-1',
+      ownerUserId: 'user-1',
+      category: 'video',
+      workflowSettings: {
+        model: 'kling-2.6',
+        inputs: [
+          { slot: 'characterImage', kind: 'image', label: 'Hero', storagePath: 'uploads/user-1/hero.png' },
+          { slot: 'referenceVideo', kind: 'video', storagePath: 'uploads/user-1/moves.mp4', durationSeconds: 8 },
+        ],
+      },
+      urlMode: 'none',
+    });
+
+    expect(result).toEqual([
+      expect.objectContaining({ mediaType: 'image', role: 'character_image', label: 'Hero', storagePath: 'uploads/user-1/hero.png' }),
+      expect.objectContaining({ mediaType: 'video', role: 'motion_reference_video', label: 'Motion reference video', storagePath: 'uploads/user-1/moves.mp4' }),
+    ]);
+  });
 });
