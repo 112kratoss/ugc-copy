@@ -46,6 +46,9 @@ export function ordinaryDraftScope(identityUserId: string) {
  */
 const REMIX_DRAFT_SCOPE_VERSION = 4;
 
+/** How saved drafts are keyed on this build, as support diagnostics name it. */
+export const CREATION_DRAFT_FORMAT = `${CREATION_DRAFT_STORAGE_KEY.slice(CREATION_DRAFT_STORAGE_KEY.lastIndexOf('.') + 1)} per identity, remix ${REMIX_DRAFT_SCOPE_VERSION}`;
+
 export function remixDraftScope(userId: string | null, source?: { generationId?: string | null; postId?: string | null }) {
   if (!source?.generationId && !source?.postId) return undefined;
   // Sessions with no identity once shared a 'guest' scope. With no one to keep a

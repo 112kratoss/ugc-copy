@@ -17,6 +17,11 @@ function draftMedia(draft: CreationDraft): MediaDraft[] {
   return media.filter((item): item is MediaDraft => Boolean(item));
 }
 
+/** How many pieces of media a draft holds. Support diagnostics report the count, never the media. */
+export function countDraftMedia(draft: CreationDraft): number {
+  return draftMedia(draft).length;
+}
+
 /** The draft with `map` applied to each piece of media, and the same draft when nothing changed. */
 function mapDraftMedia<T extends CreationDraft>(draft: T, map: (media: MediaDraft) => MediaDraft): T {
   const mapList = (list: MediaDraft[]) => {

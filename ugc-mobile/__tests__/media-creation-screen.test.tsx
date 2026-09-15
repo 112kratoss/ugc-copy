@@ -175,6 +175,7 @@ vi.mock('@/lib/use-generation-model-catalog', () => ({
 import { AppState } from 'react-native';
 import { createDefaultCreationDraft } from '../lib/media-creation-view-model';
 import { MediaCreationScreen } from '../components/media-creation-screen';
+import { readCreatorSession, resetCreatorSessionForTests } from '../lib/creator-session-diagnostics';
 import { pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia } from '../lib/media';
 import { createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel } from './fixtures/generation-model-catalog';
 import { catalogV2 } from './generation-model-catalog-v2-fixtures';
@@ -263,6 +264,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     draftStorage.setItem.mockReset().mockResolvedValue(undefined);
     draftStorage.removeItem.mockReset().mockResolvedValue(undefined);
     routerState.push.mockClear();
+    resetCreatorSessionForTests();
     authState.updateCredits.mockClear();
     authState.credits = 999;
     authState.user = { id: 'user-123', email: 'creator@example.com' };
@@ -2779,6 +2781,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       await settle();
 
       expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
+      // What Settings' support line will say about this draft.
+      expect(readCreatorSession()).toMatchObject({ tool: 'video', outcome: 'recovered', referenceCount: 1 });
       expect(thumbnail(tree, 'My girl').props.url).toBe(fresh);
       expect(tree.root.findAllByProps({ accessibilityLabel: 'Open details for Other' })).toHaveLength(0);
       expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('My edited scene: @girl is crying');
@@ -2795,6 +2799,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       const tree = await openRemix();
 
       expect(authState.api.getRemixSourceBundle).not.toHaveBeenCalled();
+      expect(readCreatorSession()).toMatchObject({ tool: 'video', outcome: 'resumed', referenceCount: 1 });
       expect(thumbnail(tree, 'My girl').props.url).toBe(good);
     });
 

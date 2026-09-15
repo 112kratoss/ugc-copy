@@ -33,8 +33,9 @@ import { acquireActivityLock } from '@/lib/app-activity';
 import { showConfirmDialog } from '@/lib/dialog';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
-import { needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaUrl } from '@/lib/remix-draft-recovery';
-import { clearPersistedCreationDrafts, loadOrdinaryCreationDrafts, loadPersistedCreationDrafts, ordinaryDraftScope, persistCreationDrafts, remixDraftScope } from '@/lib/creation-draft-resume';
+import { countDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaUrl } from '@/lib/remix-draft-recovery';
+import { recordCreatorSession } from '@/lib/creator-session-diagnostics';
+import { CREATION_DRAFT_FORMAT, clearPersistedCreationDrafts, loadOrdinaryCreationDrafts, loadPersistedCreationDrafts, ordinaryDraftScope, persistCreationDrafts, remixDraftScope } from '@/lib/creation-draft-resume';
 import {
   clearPendingGenerationAttempt,
   GENERATION_ATTEMPT_CHOICE_MESSAGE,
@@ -659,6 +660,13 @@ function IdentityCreationScreen({
       const keepsUnsavedWork = !persisted && hydratedScopeRef.current === null && draftScope !== null
         && JSON.stringify(latestDrafts.current) !== lastSavedFingerprint.current;
       hydratedScopeRef.current = draftScope;
+      recordCreatorSession({
+        tool: initialTool,
+        outcome: persisted ? 'resumed' : 'new',
+        referenceCount: countDraftMedia(persisted ? persisted[initialTool] : latestDrafts.current[initialTool]),
+        catalogRevision: null,
+        draftFormat: CREATION_DRAFT_FORMAT,
+      });
       lastSavedFingerprint.current = keepsUnsavedWork
         ? ''
         : JSON.stringify(persisted ? { image: persisted.image, video: persisted.video, motion: persisted.motion } : latestDrafts.current);
@@ -1014,12 +1022,26 @@ function IdentityCreationScreen({
         if (restored.draft.tool === 'image') setImageDraft(merged as ImageCreationDraft);
         if (restored.draft.tool === 'video') setVideoDraft(merged as VideoCreationDraft);
         if (restored.draft.tool === 'motion') setMotionDraft(merged as MotionCreationDraft);
+        recordCreatorSession({
+          tool: targetTool,
+          outcome: recoveringRemixReferences.current ? 'recovered' : 'restored',
+          referenceCount: countDraftMedia(merged as CreationDraft),
+          catalogRevision: restoredCatalog.revision,
+          draftFormat: CREATION_DRAFT_FORMAT,
+        });
         remixResolvedRef.current = true;
         setRemixRestoreWarning(restored.warning);
       })
       .catch((error) => {
         if (isCancelled) return;
         remixHydrationKeyRef.current = null;
+        recordCreatorSession({
+          tool: targetTool,
+          outcome: 'restore_failed',
+          referenceCount: countDraftMedia(latestDrafts.current[targetTool]),
+          catalogRevision: catalog?.revision ?? null,
+          draftFormat: CREATION_DRAFT_FORMAT,
+        });
         setRemixRestoreFailed(true);
         setRemixRestoreWarning(error instanceof Error ? error.message : REMIX_RESTORE_WARNING_MESSAGE);
       })

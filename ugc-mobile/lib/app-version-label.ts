@@ -49,6 +49,12 @@ function readUpdateGroup(manifest: unknown): string | null {
   return typeof group === 'string' && group ? group : null;
 }
 
+/** The OTA runtime and channel this binary takes updates on, or nulls where expo-updates is off, as in a dev client. */
+export function readUpdateRuntime(): { runtimeVersion: string | null; channel: string | null } {
+  if (!Updates.isEnabled) return { runtimeVersion: null, channel: null };
+  return { runtimeVersion: Updates.runtimeVersion ?? null, channel: Updates.channel ?? null };
+}
+
 export function readAppVersionParts(): AppVersionParts {
   // expo-application is not a direct dependency. Adding it would change package.json, a runtime
   // fingerprint input, and cut this line off from OTA updates. Its native module is linked anyway

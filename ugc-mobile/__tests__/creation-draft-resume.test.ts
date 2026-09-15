@@ -11,6 +11,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 import {
+  CREATION_DRAFT_FORMAT,
   clearPersistedCreationDrafts,
   creationDraftStorageKey,
   loadOrdinaryCreationDrafts,
@@ -135,6 +136,10 @@ describe('creation draft resume', () => {
       image: { prompt: 'account A private prompt' },
     });
     expect(memory.has(PHONE_WIDE_KEY)).toBe(false);
+  });
+
+  it('names its draft format for support diagnostics', () => {
+    expect(CREATION_DRAFT_FORMAT).toBe('v1 per identity, remix 4');
   });
 
   it('keeps no remix session for a creator with no identity', () => {
