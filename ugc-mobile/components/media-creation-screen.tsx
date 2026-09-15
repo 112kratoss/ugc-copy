@@ -17,7 +17,7 @@ import {
   Wand2,
   X,
 } from 'lucide-react-native';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { ActivityIndicator, AppState, Modal, Pressable, ScrollView, Switch, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -32,7 +32,8 @@ import {
 import { acquireActivityLock } from '@/lib/app-activity';
 import { showConfirmDialog } from '@/lib/dialog';
 import { useAuth } from '@/lib/auth';
-import { needsRemixReferenceRecovery, recoverRemixReferences } from '@/lib/remix-draft-recovery';
+import { env } from '@/lib/env';
+import { needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaUrl } from '@/lib/remix-draft-recovery';
 import { clearPersistedCreationDrafts, loadOrdinaryCreationDrafts, loadPersistedCreationDrafts, ordinaryDraftScope, persistCreationDrafts, remixDraftScope } from '@/lib/creation-draft-resume';
 import {
   clearPendingGenerationAttempt,
@@ -643,9 +644,11 @@ function IdentityCreationScreen({
         setImageDraft(persisted.image);
         setVideoDraft(persisted.video);
         setMotionDraft(persisted.motion);
-        // A previous failed restore may have been saved as complete. Re-read its
-        // source without resetting the creator's other saved fields.
-        recoveringRemixReferences.current = Boolean(remixScope && persisted.remixRestored && needsRemixReferenceRecovery(persisted[initialTool]));
+        // A previous failed restore may have been saved as complete, or the links
+        // it saved may have run out since. Re-read its source without resetting
+        // the creator's other saved fields.
+        recoveringRemixReferences.current = Boolean(remixScope && persisted.remixRestored
+          && needsRemixReferenceRecovery(persisted[initialTool], { now: Date.now(), storageBaseUrl: env.supabaseUrl }));
         resumedRemixRef.current = Boolean(remixScope && persisted.remixRestored && !recoveringRemixReferences.current);
         remixResolvedRef.current = resumedRemixRef.current;
         savedRemixEdits.current = persisted.remixEditedKeys ?? {};
@@ -1553,6 +1556,35 @@ function IdentityCreationScreen({
     </View>
   ) : null;
 
+  // A reference whose link has stopped working, renewed from where it came from
+  // (audit A6). Media from a remix source can only be signed again by reading
+  // that source again, behind its own access gate; the creator's own upload is
+  // signed again directly. The draft keeps the new link, so a resume does not
+  // start from the dead one.
+  const renewReferenceLink = async (media: MediaDraft): Promise<string> => {
+    const sourceGenerationId = remixSource?.generationId?.trim();
+    let url: string | null = null;
+    if (sourceGenerationId) {
+      try {
+        url = remixSourceMediaUrl(await api.getRemixSourceBundle(sourceGenerationId, { postId: remixSource?.postId ?? null }), media);
+      } catch (error) {
+        if (!media.storagePath) throw error;
+      }
+    }
+    if (!url && media.storagePath) {
+      url = (await api.createMediaReadUrl({ storagePath: media.storagePath })).signedUrl;
+    }
+    if (!url) throw new Error('This reference can’t be refreshed. Remove it and add it again.');
+    const renewed = url;
+    setImageDraft((draft) => replaceDraftMediaUrl(draft, media.id, renewed));
+    setVideoDraft((draft) => replaceDraftMediaUrl(draft, media.id, renewed));
+    setMotionDraft((draft) => replaceDraftMediaUrl(draft, media.id, renewed));
+    return renewed;
+  };
+  const withReferenceLinkRenewal = (tree: ReactElement) => (
+    <ReferenceLinkRenewal.Provider value={renewReferenceLink}>{tree}</ReferenceLinkRenewal.Provider>
+  );
+
   if (activeTool !== 'image') {
     const creatorModels = catalog ? getCatalogModels(catalog, activeTool) : [];
     const selectedCreatorModel = currentCatalogModel?.kind === activeTool
@@ -1580,7 +1612,7 @@ function IdentityCreationScreen({
         : 'generate';
     const contentBottom = bottomInset + 108;
 
-    return (
+    return withReferenceLinkRenewal(
       <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
         <KeyboardAvoidingArea iosScrollViewAdjustsInsets>
         <ScrollView
@@ -1849,7 +1881,7 @@ function IdentityCreationScreen({
         : 'generate';
     const imageContentBottom = bottomInset + 108;
 
-    return (
+    return withReferenceLinkRenewal(
       <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
         <KeyboardAvoidingArea iosScrollViewAdjustsInsets>
         <ScrollView
@@ -4713,7 +4745,14 @@ function ToggleRow({ title, value, onValueChange }: { title: string; value: bool
   );
 }
 
+/** Renews a reference's link from where it came from. The creator screen supplies it. */
+const ReferenceLinkRenewal = createContext<((media: MediaDraft) => Promise<string>) | null>(null);
+
 function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: number }) {
+  // A saved link can have run out. Retrying the thumbnail then fetches a fresh
+  // one instead of asking for the dead link again.
+  const renewLink = useContext(ReferenceLinkRenewal);
+  const resolveRetryUrl = renewLink ? () => renewLink(media) : undefined;
   const width = size ?? 58;
   const height = size ?? 72;
   if (media.kind === 'audio') {
@@ -4758,6 +4797,7 @@ function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: numb
           contentFit="cover"
           transition={80}
           style={{ width: '100%', height: '100%' }}
+          resolveRetryUrl={resolveRetryUrl}
         />
       ) : (
         <MediaPreview
@@ -4766,6 +4806,7 @@ function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: numb
           height={height}
           radius={16}
           nativeControls={false}
+          resolveRetryUrl={resolveRetryUrl}
         />
       )}
       {kind === 'video' ? (

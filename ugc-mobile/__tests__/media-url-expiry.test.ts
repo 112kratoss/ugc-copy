@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getPrivateMediaExpiry, resolveMediaUrlForExpiry } from '../lib/media-url-expiry';
+import { getPrivateMediaExpiry, resolveMediaUrlForExpiry, signedStorageUrlExpiresAt } from '../lib/media-url-expiry';
 
 const storage = 'https://project.supabase.co';
 const api = 'https://magicbooklet.com';
@@ -28,5 +28,25 @@ describe('private signed media expiry', () => {
     `${storage}/storage/v1/object/sign/generated_images/a?token=invalid`,
   ])('does not redirect unsupported or invalid URLs', (url) => {
     expect(resolveMediaUrlForExpiry(url, storage, api, 2_000_000)).toBe(url);
+  });
+
+  // A draft's uploads and a remix source's media are signed in buckets the proxy
+  // does not serve. Their links still run out, and a saved draft must be able to tell.
+  it('dates a signed link in any bucket without offering a replacement for it', () => {
+    const upload = signed(1000, 'uploads/owner/reference.png');
+    expect(signedStorageUrlExpiresAt(upload, storage)).toBe(1_000_000);
+    expect(resolveMediaUrlForExpiry(upload, storage, api, 2_000_000)).toBe(upload);
+  });
+  it.each([
+    signed(1000, 'uploads/owner/reference.png').replace(storage, 'https://evil.test'),
+    signed(1000, 'uploads/owner/reference.png').replace('/sign/', '/public/'),
+    signed(-1, 'uploads/owner/reference.png'),
+    `${storage}/storage/v1/object/sign/uploads/a?token=invalid`,
+    'not a url',
+  ])('cannot date %s', (url) => {
+    expect(signedStorageUrlExpiresAt(url, storage)).toBeNull();
+  });
+  it('cannot date anything without a storage origin to check against', () => {
+    expect(signedStorageUrlExpiresAt(signed(1000, 'uploads/owner/reference.png'), '')).toBeNull();
   });
 });

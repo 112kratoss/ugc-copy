@@ -45,6 +45,7 @@ const authState = vi.hoisted(() => ({
     getMotionGeneration: vi.fn(),
     quoteGenerationModel: vi.fn(),
     getRemixSourceBundle: vi.fn(),
+    createMediaReadUrl: vi.fn(),
   },
 }));
 
@@ -159,6 +160,12 @@ vi.mock('@/lib/auth', () => ({
   useAuth: () => authState,
 }));
 
+// Reference links are dated against the storage origin, so the suite fixes one.
+vi.mock('@/lib/env', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/env')>();
+  return { ...actual, env: { ...actual.env, supabaseUrl: 'https://project.supabase.co' } };
+});
+
 const loadCatalogDetails = async () => catalogState.catalog;
 
 vi.mock('@/lib/use-generation-model-catalog', () => ({
@@ -271,6 +278,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     authState.api.getMotionGeneration.mockReset();
     authState.api.quoteGenerationModel.mockReset();
     authState.api.getRemixSourceBundle.mockReset();
+    authState.api.createMediaReadUrl.mockReset();
     authState.api.quoteGenerationModel.mockResolvedValue({
       modelId: 'nano-banana-2',
       catalogRevision: 'test-catalog-rev',
@@ -2698,6 +2706,140 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(tree.root.findByProps({accessibilityLabel:'Generation prompt'}).props.value).toBe(video.prompt);
     expect(collectText(tree.root)).not.toContain('Unknown element mention');
     await renderer.act(async()=>{tree.unmount();});
+  });
+
+  // Audit A6. Source media are restored behind signed links that last an hour,
+  // and a saved draft keeps them. Diagnostic counterexample 6: a saved remix
+  // whose rail still held its references was never read again, so links that
+  // had run out stayed dead, and the thumbnail's retry asked for the same link.
+  describe('reference links that have run out', () => {
+    const STORAGE = 'https://project.supabase.co';
+    const signed = (path: string, expiresAtMs: number) => (
+      `${STORAGE}/storage/v1/object/sign/${path}?token=head.${Buffer.from(JSON.stringify({ exp: Math.floor(expiresAtMs / 1000) })).toString('base64url')}.signature`
+    );
+    const girlPath = 'uploads/owner/girl.png';
+    const otherPath = 'uploads/owner/other.png';
+    const settle = () => renderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
+    const thumbnail = (tree: renderer.ReactTestRenderer, name: string) => tree.root
+      .findByProps({ accessibilityLabel: `Open details for ${name}` })
+      .find((node) => String(node.type) === 'stable-media-image');
+    const sourceBundle = (girlUrl: string) => ({
+      generation: { id: 'gen-girl', title: 'Original', prompt: 'The girl from @girl is crying', category: 'video', model: 'seedance-2' },
+      result: null,
+      inputs: {
+        video: {
+          referenceMode: 'elements',
+          startFrame: null,
+          endFrame: null,
+          elements: [
+            { id: 'girl', displayName: 'Girl', handle: '@girl', url: girlUrl, storagePath: girlPath, sourceGenerationId: null },
+            { id: 'other', displayName: 'Other', handle: '@other', url: signed(otherPath, Date.now() + 3_600_000), storagePath: otherPath, sourceGenerationId: null },
+          ],
+          referenceVideos: [],
+          referenceAudios: [],
+        },
+      },
+      workflowSettings: { model: 'seedance-2', referenceMode: 'elements', duration: 4, aspectRatio: '16:9', resolution: '480p' },
+      restoreIssues: [],
+    });
+    /** A completed remix, then edited: the girl renamed, @other removed, the frame made vertical. */
+    const savedRemix = (girlUrl: string) => JSON.stringify({
+      image: createDefaultCreationDraft('image'),
+      video: {
+        ...createDefaultCreationDraft('video'),
+        model: 'seedance-2',
+        prompt: 'My edited scene: @girl is crying',
+        aspectRatio: '9:16',
+        resolution: '480p',
+        duration: 4,
+        references: [{ id: 'girl', kind: 'image', url: girlUrl, storagePath: girlPath, fileName: 'girl.png', displayName: 'My girl', handle: '@girl', sourceGenerationId: null }],
+      },
+      motion: createDefaultCreationDraft('motion'),
+      updatedAt: new Date().toISOString(),
+      remixRestored: true,
+      remixEditedKeys: { video: ['prompt', 'references', 'aspectRatio'] },
+    });
+    const openRemix = async () => {
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(<MediaCreationScreen initialTool="video" remixSource={{ generationId: 'gen-girl', postId: 'post-girl' }} />); });
+      await settle();
+      return tree;
+    };
+
+    beforeEach(() => {
+      catalogState.catalog = createRemixRestoreCatalog();
+    });
+
+    it('reads the source again for a saved remix whose links have expired, and keeps every edit', async () => {
+      const fresh = signed(girlPath, Date.now() + 3_600_000);
+      draftStorage.getItem.mockResolvedValue(savedRemix(signed(girlPath, Date.now() - 60_000)));
+      authState.api.getRemixSourceBundle.mockResolvedValue(sourceBundle(fresh));
+
+      const tree = await openRemix();
+      await settle();
+
+      expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
+      expect(thumbnail(tree, 'My girl').props.url).toBe(fresh);
+      expect(tree.root.findAllByProps({ accessibilityLabel: 'Open details for Other' })).toHaveLength(0);
+      expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('My edited scene: @girl is crying');
+      expect(JSON.parse(draftStorage.setItem.mock.lastCall![1]).video).toMatchObject({
+        aspectRatio: '9:16',
+        references: [expect.objectContaining({ id: 'girl', displayName: 'My girl', url: fresh })],
+      });
+    });
+
+    it('resumes a saved remix whose links are still good without reading the source', async () => {
+      const good = signed(girlPath, Date.now() + 3_600_000);
+      draftStorage.getItem.mockResolvedValue(savedRemix(good));
+
+      const tree = await openRemix();
+
+      expect(authState.api.getRemixSourceBundle).not.toHaveBeenCalled();
+      expect(thumbnail(tree, 'My girl').props.url).toBe(good);
+    });
+
+    it('renews a remix thumbnail from its source when it is retried', async () => {
+      draftStorage.getItem.mockResolvedValue(savedRemix(signed(girlPath, Date.now() + 3_600_000)));
+      const renewedLink = `${STORAGE}/storage/v1/object/sign/${girlPath}?token=renewed`;
+      authState.api.getRemixSourceBundle.mockResolvedValue(sourceBundle(renewedLink));
+      const tree = await openRemix();
+
+      let renewed: string | undefined;
+      await renderer.act(async () => { renewed = await thumbnail(tree, 'My girl').props.resolveRetryUrl(); });
+
+      expect(renewed).toBe(renewedLink);
+      expect(authState.api.getRemixSourceBundle).toHaveBeenCalledWith('gen-girl', { postId: 'post-girl' });
+      expect(authState.api.createMediaReadUrl).not.toHaveBeenCalled();
+      expect(thumbnail(tree, 'My girl').props.url).toBe(renewedLink);
+    });
+
+    it("renews the creator's own upload by signing it again when it is retried", async () => {
+      catalogState.catalog = createTestGenerationModelCatalog();
+      const ownPath = 'uploads/user-123/product.png';
+      draftStorage.getItem.mockResolvedValue(JSON.stringify({
+        image: {
+          ...createDefaultCreationDraft('image'),
+          prompt: 'A product shot with @product',
+          references: [{ id: 'product', kind: 'image', url: signed(ownPath, Date.now() - 60_000), storagePath: ownPath, fileName: 'product.png', displayName: 'Product', handle: '@product', sourceGenerationId: null }],
+        },
+        video: createDefaultCreationDraft('video'),
+        motion: createDefaultCreationDraft('motion'),
+        updatedAt: new Date().toISOString(),
+      }));
+      const renewedLink = `${STORAGE}/storage/v1/object/sign/${ownPath}?token=renewed`;
+      authState.api.createMediaReadUrl.mockResolvedValue({ success: true, signedUrl: renewedLink, expiresInSeconds: 3600 });
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(<MediaCreationScreen initialTool="image" />); });
+      await settle();
+
+      let renewed: string | undefined;
+      await renderer.act(async () => { renewed = await thumbnail(tree, 'Product').props.resolveRetryUrl(); });
+
+      expect(renewed).toBe(renewedLink);
+      expect(authState.api.createMediaReadUrl).toHaveBeenCalledWith({ storagePath: ownPath });
+      expect(authState.api.getRemixSourceBundle).not.toHaveBeenCalled();
+      expect(thumbnail(tree, 'Product').props.url).toBe(renewedLink);
+    });
   });
 
 });
