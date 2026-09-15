@@ -10,7 +10,12 @@ const SOURCE_ID = '0f0e0d0c-0b0a-4901-8807-060504030201';
 function createSupabaseMock(result: {
   data: Record<string, unknown> | null;
   error: Error | null;
-}) {
+}, {
+  linkedProfiles = [],
+}: {
+  /** Guest profiles and the account each was linked into (`merged_into_user_id`). */
+  linkedProfiles?: Array<{ id: string; mergedIntoUserId: string }>;
+} = {}) {
   const calls = {
     tables: [] as string[],
     selects: [] as string[],
@@ -32,13 +37,28 @@ function createSupabaseMock(result: {
     },
     maybeSingle: vi.fn(async () => result),
   };
+  const profilesQuery = {
+    select() {
+      return profilesQuery;
+    },
+    async eq(column: string, value: unknown) {
+      return {
+        data: column === 'merged_into_user_id'
+          ? linkedProfiles
+            .filter((profile) => profile.mergedIntoUserId === value)
+            .map(({ id }) => ({ id }))
+          : [],
+        error: null,
+      };
+    },
+  };
 
   return {
     calls,
     supabase: {
       from: vi.fn((table: string) => {
         calls.tables.push(table);
-        return query;
+        return table === 'profiles' ? profilesQuery : query;
       }),
     },
   };
@@ -70,7 +90,7 @@ describe('source generation validation', () => {
   });
 
   it('resolves sources the requesting user owns even when private', async () => {
-    const { supabase } = createSupabaseMock({
+    const { calls, supabase } = createSupabaseMock({
       data: {
         id: SOURCE_ID,
         user_id: 'user-1',
@@ -84,6 +104,52 @@ describe('source generation validation', () => {
       'user-1',
       SOURCE_ID,
     )).resolves.toBe(SOURCE_ID);
+    // A direct owner match costs generation start no linked-account lookup.
+    expect(calls.tables).toEqual(['generations']);
+  });
+
+  it('resolves a private source made under a guest identity linked to the requesting user', async () => {
+    // Recreate restores creations made before registering, which keep their
+    // guest UUID. Rejecting them here fails the generation that restore set up.
+    const { calls, supabase } = createSupabaseMock({
+      data: {
+        id: SOURCE_ID,
+        user_id: 'guest-1',
+        is_public: false,
+      },
+      error: null,
+    }, {
+      linkedProfiles: [{ id: 'guest-1', mergedIntoUserId: 'user-1' }],
+    });
+
+    await expect(resolveSourceGenerationId(
+      supabase as never,
+      'user-1',
+      SOURCE_ID,
+    )).resolves.toBe(SOURCE_ID);
+    expect(calls.tables).toEqual(['generations', 'profiles']);
+  });
+
+  it('rejects a private source made under a guest identity linked to another account', async () => {
+    const { supabase } = createSupabaseMock({
+      data: {
+        id: SOURCE_ID,
+        user_id: 'guest-1',
+        is_public: false,
+      },
+      error: null,
+    }, {
+      linkedProfiles: [{ id: 'guest-1', mergedIntoUserId: 'other-user' }],
+    });
+
+    await expect(resolveSourceGenerationId(
+      supabase as never,
+      'user-1',
+      SOURCE_ID,
+    )).rejects.toMatchObject({
+      name: 'SourceGenerationValidationError',
+      status: 400,
+    });
   });
 
   it('rejects private sources owned by someone else', async () => {

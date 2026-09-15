@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { isOwnOrLinkedAccountId } from '@/lib/account-identity';
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class SourceGenerationValidationError extends Error {
@@ -44,7 +46,10 @@ export async function resolveSourceGenerationId(
     throw new SourceGenerationValidationError('Failed to validate the remix source.', 500);
   }
 
-  if (!data || (!data.is_public && data.user_id !== userId)) {
+  // A private source is still the caller's own when it was made under a guest
+  // identity since linked to them. Recreate restores exactly those creations,
+  // and they keep their guest UUID for good.
+  if (!data || (!data.is_public && !(await isOwnOrLinkedAccountId(adminSupabase, userId, data.user_id)))) {
     throw new SourceGenerationValidationError('Source generation not found or inaccessible.');
   }
 

@@ -1,4 +1,5 @@
 import 'server-only';
+import { isOwnOrLinkedAccountId } from '@/lib/account-identity';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -260,7 +261,10 @@ export async function loadRemixSourceBundle(
   }
 
   const typedGeneration = generation as RemixSourceGenerationRow;
-  const isOwner = typedGeneration.user_id === user.id;
+  // Owned means the caller's id or a guest identity since linked to it: work
+  // made before registering keeps its guest UUID, and the owner library lists
+  // it through the same linked-account set that Recreate starts from.
+  const isOwner = await isOwnOrLinkedAccountId(adminSupabase, user.id, typedGeneration.user_id);
   if (!isOwner && !typedGeneration.is_public) {
     throw new RemixSourceError('Remix source not found', 404);
   }
@@ -269,13 +273,13 @@ export async function loadRemixSourceBundle(
   // the same block gate the remix endpoint enforces, a block is one hop from
   // being bypassed: prompt, settings and shared media come back regardless.
   // 404 rather than 403, matching the line above — the gate should not
-  // confirm that the source exists.
-  const blocked = await isRemixSourceBlockedForViewer({
+  // confirm that the source exists. Owners never reach the lookup.
+  const blocked = !isOwner && await isRemixSourceBlockedForViewer({
     adminSupabase,
     ownerUserId: typedGeneration.user_id,
     viewerUserId: user.id,
   });
-  if (!isOwner && blocked) {
+  if (blocked) {
     throw new RemixSourceError('Remix source not found', 404);
   }
 

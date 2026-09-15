@@ -251,6 +251,26 @@ export async function resolveLinkedAccountIds(
 }
 
 /**
+ * Whether one row's owner is this account or a guest identity linked to it:
+ * the single-row form of `resolveLinkedAccountIds`, for gates that hold one
+ * `user_id` rather than filtering a query with `in(...)`.
+ *
+ * The account's own id answers without a lookup, so only rows that are not
+ * directly the caller's pay for the profiles query. A failed lookup reads as
+ * "not linked": the gate then treats the row as someone else's, which is the
+ * pre-guest behaviour and never hands one account another's work.
+ */
+export async function isOwnOrLinkedAccountId(
+  admin: SupabaseClient,
+  userId: string,
+  ownerUserId: string | null | undefined,
+): Promise<boolean> {
+  if (!ownerUserId) return false;
+  if (ownerUserId === userId) return true;
+  return (await resolveLinkedAccountIds(admin, userId)).includes(ownerUserId);
+}
+
+/**
  * The identity for an optional-auth route.
  *
  * Public surfaces treat a guest as an unsigned viewer unless they are explicitly

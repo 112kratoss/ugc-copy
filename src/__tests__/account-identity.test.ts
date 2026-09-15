@@ -5,6 +5,7 @@ import {
   ACCOUNT_DELETING,
   IDENTITY_CHECK_UNAVAILABLE,
   isGuestUser,
+  isOwnOrLinkedAccountId,
   requireIdentity,
   requireRegisteredUser,
   resolveLinkedAccountIds,
@@ -102,6 +103,41 @@ describe('account identity', () => {
         .resolves.toEqual(['user-1']);
       await expect(resolveLinkedAccountIds(adminFor({ profilesError: new Error('nope') }), 'user-1'))
         .resolves.toEqual(['user-1']);
+    });
+  });
+
+  describe('isOwnOrLinkedAccountId', () => {
+    it('accepts the account itself without a lookup', async () => {
+      const admin = adminFor();
+
+      await expect(isOwnOrLinkedAccountId(admin, 'user-1', 'user-1')).resolves.toBe(true);
+      expect(admin.from).not.toHaveBeenCalled();
+    });
+
+    it('accepts a guest identity linked to the account', async () => {
+      await expect(isOwnOrLinkedAccountId(adminFor({ linkedIds: ['guest-1'] }), 'user-1', 'guest-1'))
+        .resolves.toBe(true);
+    });
+
+    it('rejects ids that are not linked, and rows with no owner', async () => {
+      await expect(isOwnOrLinkedAccountId(adminFor({ linkedIds: ['guest-1'] }), 'user-1', 'guest-2'))
+        .resolves.toBe(false);
+
+      const admin = adminFor();
+      await expect(isOwnOrLinkedAccountId(admin, 'user-1', null)).resolves.toBe(false);
+      expect(admin.from).not.toHaveBeenCalled();
+    });
+
+    it('treats a failed lookup as not linked', async () => {
+      // The gates using this 404 or reject on false, so a lookup outage can hide
+      // linked history for a request but can never widen access.
+      await expect(isOwnOrLinkedAccountId(adminFor({ throwOnProfiles: true }), 'user-1', 'guest-1'))
+        .resolves.toBe(false);
+      await expect(isOwnOrLinkedAccountId(
+        adminFor({ linkedIds: ['guest-1'], profilesError: new Error('nope') }),
+        'user-1',
+        'guest-1',
+      )).resolves.toBe(false);
     });
   });
 

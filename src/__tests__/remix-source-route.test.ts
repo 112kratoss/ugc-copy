@@ -54,6 +54,8 @@ let currentUserId: string | null = 'user-1';
 let generationRows = new Map<string, GenerationRow>();
 let postRows = new Map<string, PostRow>();
 let signedUploads = new Map<string, string | null>();
+// Guest profiles linked into a registered account (profiles.merged_into_user_id).
+let linkedProfileRows: Array<{ id: string; merged_into_user_id: string }> = [];
 let inputMediaRows: Array<{
   id: string;
   generation_id: string;
@@ -74,6 +76,33 @@ const resolveOwnedStoredMediaUrlMock = vi.fn(
     return `https://signed.example.com/${encodeURIComponent(outputUrl)}`;
   }
 );
+
+/** A creation made while its owner was still a guest, so it keeps the guest UUID. */
+function createGuestMadeGeneration(overrides: Partial<GenerationRow> = {}): GenerationRow {
+  return {
+    id: 'guest-made-1',
+    user_id: 'guest-1',
+    is_public: false,
+    share_input_media_for_remix: false,
+    output_url: 'generated_images/guest-1/guest-made-1.png',
+    showcase_asset_path: null,
+    category: 'image',
+    model: 'nano-banana-2',
+    prompt: 'Made before signing up.',
+    title: 'Guest creation',
+    workflow_settings: {
+      elements: [
+        {
+          id: 'el-1',
+          displayName: 'Bottle',
+          handle: '@bottle',
+          storagePath: 'uploads/guest-1/bottle.png',
+        },
+      ],
+    },
+    ...overrides,
+  };
+}
 
 function createRouteRequest(url: string) {
   return {
@@ -127,6 +156,18 @@ function createAdminClientMock() {
                     display_name: 'Creator',
                     avatar_url: null,
                   }],
+                  error: null,
+                };
+              },
+              async eq(column: string, value: unknown) {
+                if (column !== 'merged_into_user_id') {
+                  throw new Error(`Unexpected profiles filter column: ${column}`);
+                }
+
+                return {
+                  data: linkedProfileRows
+                    .filter((row) => row.merged_into_user_id === value)
+                    .map((row) => ({ id: row.id })),
                   error: null,
                 };
               },
@@ -275,6 +316,11 @@ vi.mock('@/lib/server-helpers', () => ({
         error: currentUserId ? null : { message: 'Unauthorized' },
       })),
     },
+    // `authenticated` holds no grant on prompt, workflow_settings or is_public,
+    // so every table read in this loader must stay on the service client.
+    from: vi.fn((table: string) => {
+      throw new Error(`The user client must not read ${table}`);
+    }),
   })),
   createServiceClient: vi.fn(() => createAdminClientMock()),
   resolveOwnedStoredMediaUrl: (...args: Parameters<typeof resolveOwnedStoredMediaUrlMock>) =>
@@ -289,6 +335,7 @@ describe('/api/remix-source route', () => {
     generationRows = new Map();
     postRows = new Map();
     signedUploads = new Map();
+    linkedProfileRows = [];
     inputMediaRows = [];
     gateState.rateLimitAllowed = true;
     gateState.blocked = false;
@@ -754,6 +801,67 @@ describe('/api/remix-source route', () => {
 
     expect(response.status).toBe(200);
     expect((await response.json()).generation.prompt).toBe('My own prompt');
+  });
+
+  // Creations made before someone registered keep their guest UUID. The owner
+  // library lists them through the linked-account set, and Recreate reaches
+  // this loader from there, so ownership here has to agree with that set.
+  it.each([
+    { visibility: 'private', isPublic: false },
+    { visibility: 'public but unshared', isPublic: true },
+  ])('restores a $visibility creation made under a guest id linked to the caller', async ({ isPublic }) => {
+    linkedProfileRows = [{ id: 'guest-1', merged_into_user_id: 'user-1' }];
+    generationRows.set('guest-made-1', createGuestMadeGeneration({ is_public: isPublic }));
+    inputMediaRows = [
+      {
+        id: 'input-ref-1',
+        generation_id: 'guest-made-1',
+        user_id: 'guest-1',
+        media_type: 'image',
+        role: 'reference_image',
+        label: 'Bottle',
+        storage_path: 'generation_inputs/guest-1/guest-made-1/00-reference-image.png',
+        source_generation_id: null,
+        sort_order: 0,
+        metadata: { id: 'el-1', displayName: 'Bottle', handle: '@bottle' },
+      },
+    ];
+
+    const { GET } = await import('@/app/api/remix-source/route');
+    const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=guest-made-1'));
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.generation).toMatchObject({
+      id: 'guest-made-1',
+      prompt: 'Made before signing up.',
+      model: 'nano-banana-2',
+    });
+    const referenceUrl = 'https://signed.example.com/generation-inputs/guest-1/guest-made-1/00-reference-image.png';
+    expect(data.inputMedia).toEqual([
+      expect.objectContaining({ id: 'input-ref-1', url: referenceUrl }),
+    ]);
+    expect(data.inputs.image.elements).toEqual([
+      expect.objectContaining({ url: referenceUrl }),
+    ]);
+    // An owner restore keeps the descriptors a non-owner remix would redact.
+    expect(data.workflowSettings.elements).toHaveLength(1);
+    // Media is still signed under the prefix it was stored under: the guest's.
+    expect(data.result.url).toBe('https://signed.example.com/generated_images%2Fguest-1%2Fguest-made-1.png');
+    expect(data.restoreIssues).toEqual([]);
+  });
+
+  it('still hides a guest-made creation from an account the guest was not linked to', async () => {
+    currentUserId = 'user-2';
+    linkedProfileRows = [{ id: 'guest-1', merged_into_user_id: 'user-1' }];
+    generationRows.set('guest-made-1', createGuestMadeGeneration());
+
+    const { GET } = await import('@/app/api/remix-source/route');
+    const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=guest-made-1'));
+
+    // The same 404 as any other non-owner, so the gate confirms nothing.
+    expect(response.status).toBe(404);
+    expect((await response.json()).error).toBe('Remix source not found');
   });
 
   it('rate limits the hydration endpoint the way its paired remix endpoint is limited', async () => {
