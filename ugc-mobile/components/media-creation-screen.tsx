@@ -34,6 +34,17 @@ import { showConfirmDialog } from '@/lib/dialog';
 import { useAuth } from '@/lib/auth';
 import { needsRemixReferenceRecovery, recoverRemixReferences } from '@/lib/remix-draft-recovery';
 import { clearPersistedCreationDrafts, loadPersistedCreationDrafts, persistCreationDrafts, remixDraftScope } from '@/lib/creation-draft-resume';
+import {
+  clearPendingGenerationAttempt,
+  GENERATION_ATTEMPT_CHOICE_MESSAGE,
+  GENERATION_ATTEMPT_UNCONFIRMED_MESSAGE,
+  isAmbiguousGenerationStartFailure,
+  loadPendingGenerationAttempt,
+  reusableAttemptKey,
+  savePendingGenerationAttempt,
+  type GenerationAttemptRoute,
+  type PendingGenerationAttempt,
+} from '@/lib/generation-attempts';
 import { createDraftSaveQueue } from '@/lib/draft-save-queue';
 import { SheetBackdrop, SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { useReducedMotion } from '@/lib/motion';
@@ -557,6 +568,24 @@ export function MediaCreationScreen({
   useEffect(() => () => {
     generationPollControllerRef.current?.abort();
   }, []);
+
+  // A start whose response never arrived, kept per identity so a restart can
+  // still check it instead of letting the next press start a second run.
+  const [pendingAttempt, setPendingAttempt] = useState<PendingGenerationAttempt | null>(null);
+  useEffect(() => {
+    setPendingAttempt(null);
+    if (!identityUserId) return;
+    let active = true;
+    void loadPendingGenerationAttempt(identityUserId).then(
+      (attempt) => {
+        if (active) setPendingAttempt((current) => current ?? attempt);
+      },
+      () => undefined,
+    );
+    return () => {
+      active = false;
+    };
+  }, [identityUserId]);
 
   useEffect(() => {
     let active = true;
@@ -1259,7 +1288,92 @@ export function MediaCreationScreen({
     }
   };
 
-  const generate = async () => {
+  const forgetPendingAttempt = async (identity: string) => {
+    setPendingAttempt((current) => (current?.identityUserId === identity ? null : current));
+    await clearPendingGenerationAttempt(identity).catch(() => undefined);
+  };
+
+  const sendGenerationAttempt = (attempt: PendingGenerationAttempt): Promise<GenerationStartResponse> => {
+    // Parsed back from what was saved, so a check replays the exact request the
+    // server hashed under this key.
+    const body = JSON.parse(attempt.requestJson) as never;
+    if (attempt.route === 'unified') {
+      if (!api.startGeneration) {
+        return Promise.reject(new Error('This version of the app can’t check that generation. Start a new run instead.'));
+      }
+      return api.startGeneration(body, attempt.idempotencyKey);
+    }
+    if (attempt.route === 'image') return api.startImageGeneration(body, attempt.idempotencyKey);
+    if (attempt.route === 'video') return api.startVideoGeneration(body, attempt.idempotencyKey);
+    return api.startMotionGeneration(body, attempt.idempotencyKey);
+  };
+
+  const runGenerationAttempt = async (
+    attempt: PendingGenerationAttempt,
+    { draft, request }: { draft: CreationDraft; request: CatalogGenerationRequest | null },
+  ) => {
+    activeGenerationRequestKeyRef.current = attempt.idempotencyKey;
+    generationPollControllerRef.current?.abort();
+    const pollController = new AbortController();
+    generationPollControllerRef.current = pollController;
+    setIsGenerating(true);
+    let startedPredictionId: string | null = null;
+    try {
+      // Saved before the request leaves the phone, so a response lost to a
+      // dropped connection or a restart can still be checked under this key.
+      setPendingAttempt(attempt);
+      await savePendingGenerationAttempt(attempt).catch(() => undefined);
+      const started = await sendGenerationAttempt(attempt);
+      startedPredictionId = started.predictionId;
+      void forgetPendingAttempt(attempt.identityUserId);
+      // The tab bar's create ring counts the viewer's in-flight runs, and its
+      // poll is off while that count is zero. Tell it a run exists now, or it
+      // stays dark until the app next comes back to the foreground.
+      invalidateActiveGenerations(queryClient, identityUserId);
+      setLastPredictionId(started.predictionId);
+      setLastGenerationId(started.generationId ?? null);
+      if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
+      const finalStatus = await pollGenerationForTool(attempt.tool, started.predictionId, pollController);
+      await finishGenerationPolling(finalStatus, attempt.tool);
+    } catch (error) {
+      if (pollController.signal.aborted) return;
+      const details = error && typeof error === 'object' && 'details' in error
+        ? (error as { details?: { code?: string } }).details
+        : null;
+      if (startedPredictionId) {
+        setPollingInterrupted(true);
+        setMessage(error instanceof Error ? error.message : 'Could not refresh generation progress.');
+      } else if (isAmbiguousGenerationStartFailure(error)) {
+        // The server may have started this run. The attempt stays, and checking
+        // it replays this request under this key, which cannot start another.
+        setMessage(GENERATION_ATTEMPT_UNCONFIRMED_MESSAGE);
+      } else {
+        void forgetPendingAttempt(attempt.identityUserId);
+        if (details?.code === 'CATALOG_CHANGED' || details?.code === 'MODEL_UNAVAILABLE') {
+          void refetchCatalog();
+          setMessage('The model catalog changed before generation started. Review the refreshed options and generate again.');
+        } else if (details?.code === REFERENCE_DURATION_CHANGED_CODE) {
+          // Nothing was charged. Taking the measured lengths refreshes the quote to
+          // the price the server will charge, and the viewer confirms it.
+          if (request) {
+            replaceDraft(applyVerifiedInputDurations(draft, request, readVerifiedInputDurations(details)));
+          }
+          setMessage('We measured your reference media, and it changes the cost. Check the new price, then generate again.');
+        } else {
+          setMessage(error instanceof Error ? error.message : 'Generation failed.');
+        }
+      }
+      haptic.error();
+    } finally {
+      if (generationPollControllerRef.current === pollController) {
+        generationPollControllerRef.current = null;
+      }
+      activeGenerationRequestKeyRef.current = null;
+      setIsGenerating(false);
+    }
+  };
+
+  const generate = async ({ newRun = false }: { newRun?: boolean } = {}) => {
     if (activeGenerationRequestKeyRef.current) return;
     if (pollingInterrupted) {
       setWorkspaceVisible(true);
@@ -1287,6 +1401,31 @@ export function MediaCreationScreen({
       }
       return;
     }
+    const route: GenerationAttemptRoute = api.startGeneration ? 'unified' : currentDraft.tool;
+    // Kept so a refusal that measured the references can be matched back to the draft's media.
+    const unifiedRequest = route === 'unified'
+      ? buildUnifiedCatalogGenerationRequest(
+        currentDraft,
+        currentCatalogModel,
+        catalog?.revision ?? '',
+        activeQuote.normalizedSettings ?? undefined,
+      )
+      : null;
+    const catalogRevision = catalog?.revision ?? '';
+    const normalizedSettings = activeQuote.normalizedSettings ?? undefined;
+    const requestJson = JSON.stringify(unifiedRequest
+      ?? (currentDraft.tool === 'image'
+        ? buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalogRevision, normalizedSettings)
+        : currentDraft.tool === 'video'
+          ? buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalogRevision, normalizedSettings)
+          : buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalogRevision, normalizedSettings)));
+    // An unchanged press after a lost response is the same attempt, under the same key.
+    const reusedKey = newRun ? null : reusableAttemptKey(pendingAttempt, identityUserId, route, requestJson);
+    if (pendingAttempt && !newRun && !reusedKey) {
+      setPromptMessage(null);
+      setMessage(GENERATION_ATTEMPT_CHOICE_MESSAGE);
+      return;
+    }
     setMessage(null);
     setPromptMessage(null);
     setStatus(null);
@@ -1298,82 +1437,70 @@ export function MediaCreationScreen({
     // and coming back must not restart the clock the wait is reporting.
     setGenerationStartedAt(Date.now());
     setWorkspaceVisible(true);
-    const idempotencyKey = createMobileGenerationIdempotencyKey(currentDraft.tool);
-    activeGenerationRequestKeyRef.current = idempotencyKey;
-    generationPollControllerRef.current?.abort();
-    const pollController = new AbortController();
-    generationPollControllerRef.current = pollController;
-    setIsGenerating(true);
     if (guided) void trackOnboardingEvent(api, 'first_generation_started', { goal: currentDraft.tool, step: 'creator' });
-    let startedPredictionId: string | null = null;
-    // Kept so a refusal that measured the references can be matched back to the draft's media.
-    let unifiedRequest: CatalogGenerationRequest | null = null;
-    try {
-      let started: GenerationStartResponse;
-      if (api.startGeneration) {
-        unifiedRequest = buildUnifiedCatalogGenerationRequest(
-          currentDraft,
-          currentCatalogModel,
-          catalog?.revision ?? '',
-          activeQuote.normalizedSettings ?? undefined,
-        );
-        started = await api.startGeneration(unifiedRequest, idempotencyKey);
-      } else if (currentDraft.tool === 'image') {
-        started = await api.startImageGeneration(
-          buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? '', activeQuote.normalizedSettings ?? undefined),
-          idempotencyKey
-        );
-      } else if (currentDraft.tool === 'video') {
-        started = await api.startVideoGeneration(
-          buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? '', activeQuote.normalizedSettings ?? undefined),
-          idempotencyKey
-        );
-      } else {
-        started = await api.startMotionGeneration(
-          buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? '', activeQuote.normalizedSettings ?? undefined),
-          idempotencyKey
-        );
-      }
-      startedPredictionId = started.predictionId;
-      // The tab bar's create ring counts the viewer's in-flight runs, and its
-      // poll is off while that count is zero. Tell it a run exists now, or it
-      // stays dark until the app next comes back to the foreground.
-      invalidateActiveGenerations(queryClient, identityUserId);
-      setLastPredictionId(started.predictionId);
-      setLastGenerationId(started.generationId ?? null);
-      if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
-      const finalStatus = await pollGenerationForTool(currentDraft.tool, started.predictionId, pollController);
-      await finishGenerationPolling(finalStatus, currentDraft.tool);
-    } catch (error) {
-      if (pollController.signal.aborted) return;
-      const details = error && typeof error === 'object' && 'details' in error
-        ? (error as { details?: { code?: string } }).details
-        : null;
-      if (startedPredictionId) {
-        setPollingInterrupted(true);
-        setMessage(error instanceof Error ? error.message : 'Could not refresh generation progress.');
-      } else if (details?.code === 'CATALOG_CHANGED' || details?.code === 'MODEL_UNAVAILABLE') {
-        void refetchCatalog();
-        setMessage('The model catalog changed before generation started. Review the refreshed options and generate again.');
-      } else if (details?.code === REFERENCE_DURATION_CHANGED_CODE) {
-        // Nothing was charged. Taking the measured lengths refreshes the quote to
-        // the price the server will charge, and the viewer confirms it.
-        if (unifiedRequest) {
-          replaceDraft(applyVerifiedInputDurations(currentDraft, unifiedRequest, readVerifiedInputDurations(details)));
-        }
-        setMessage('We measured your reference media, and it changes the cost. Check the new price, then generate again.');
-      } else {
-        setMessage(error instanceof Error ? error.message : 'Generation failed.');
-      }
-      haptic.error();
-    } finally {
-      if (generationPollControllerRef.current === pollController) {
-        generationPollControllerRef.current = null;
-      }
-      activeGenerationRequestKeyRef.current = null;
-      setIsGenerating(false);
-    }
+    await runGenerationAttempt({
+      version: 1,
+      identityUserId,
+      tool: currentDraft.tool,
+      route,
+      idempotencyKey: reusedKey ?? createMobileGenerationIdempotencyKey(currentDraft.tool),
+      requestJson,
+      createdAt: reusedKey && pendingAttempt ? pendingAttempt.createdAt : new Date().toISOString(),
+    }, { draft: currentDraft, request: unifiedRequest });
   };
+
+  /** Replays the unconfirmed attempt as it was saved, whatever the draft says now. */
+  const checkPendingAttempt = async () => {
+    const attempt = pendingAttempt;
+    if (!attempt || activeGenerationRequestKeyRef.current || attempt.identityUserId !== identityUserId) return;
+    setMessage(null);
+    setPromptMessage(null);
+    setStatus(null);
+    setLastGenerationId(null);
+    setLastPredictionId(null);
+    setPollingInterrupted(false);
+    setGenerationTool(attempt.tool);
+    const attemptedAt = Date.parse(attempt.createdAt);
+    setGenerationStartedAt(Number.isFinite(attemptedAt) ? attemptedAt : Date.now());
+    setWorkspaceVisible(true);
+    let request: CatalogGenerationRequest | null = null;
+    if (attempt.route === 'unified') {
+      try {
+        request = JSON.parse(attempt.requestJson) as CatalogGenerationRequest;
+      } catch {
+        request = null;
+      }
+    }
+    await runGenerationAttempt(attempt, { draft: latestDrafts.current[attempt.tool], request });
+  };
+
+  /** The explicit choice to run again while the last run may still exist. */
+  const startNewRun = async () => {
+    if (activeGenerationRequestKeyRef.current || !identityUserId) return;
+    await forgetPendingAttempt(identityUserId);
+    await generate({ newRun: true });
+  };
+
+  const pendingAttemptMedium = pendingAttempt?.tool === 'image'
+    ? 'image'
+    : pendingAttempt?.tool === 'video'
+      ? 'video'
+      : 'motion video';
+  const pendingAttemptNotice = pendingAttempt && !isGenerating ? (
+    <View style={{ gap: 8 }}>
+      <SlimCreatorBanner
+        label="Generation not confirmed"
+        body={`Your last ${pendingAttemptMedium} may already be running. Checking it can’t start a second run.`}
+      />
+      <View style={{ flexDirection: 'row', gap: 12 }}>
+        <SecondaryButton label="Check again" onPress={() => void checkPendingAttempt()} />
+        <SecondaryButton
+          label={withCreditCost('Start a new run', activeQuote.status === 'ready' ? activeQuote.cost : null)}
+          onPress={() => void startNewRun()}
+        />
+      </View>
+    </View>
+  ) : null;
 
   if (activeTool !== 'image') {
     const creatorModels = catalog ? getCatalogModels(catalog, activeTool) : [];
@@ -1470,6 +1597,7 @@ export function MediaCreationScreen({
           {referenceNotice ? (
             <SlimCreatorBanner label="Reference updated" body={referenceNotice} onDismiss={() => setReferenceNotice(null)} />
           ) : null}
+          {pendingAttemptNotice}
 
           {activeTool === 'video' ? (
             <VideoCreatorComposer
@@ -1596,6 +1724,9 @@ export function MediaCreationScreen({
           error={activeGenerationStatus?.status === 'failed' ? activeGenerationStatus.error?.trim() || message : message}
           pollingInterrupted={pollingInterrupted && generationTool === activeTool}
           onResumePolling={() => void resumeGenerationPolling()}
+          attemptUnconfirmed={Boolean(pendingAttempt) && !isGenerating && pendingAttempt?.tool === activeTool}
+          onCheckAttempt={() => void checkPendingAttempt()}
+          onStartNewRun={() => void startNewRun()}
           showNotificationPrompt={showNotificationPrompt}
           onEnableNotifications={() => {
             void import('@/lib/notifications').then(({ registerForMobilePushNotifications }) => (
@@ -1735,6 +1866,7 @@ export function MediaCreationScreen({
           {referenceNotice ? (
             <SlimCreatorBanner label="Reference updated" body={referenceNotice} onDismiss={() => setReferenceNotice(null)} />
           ) : null}
+          {pendingAttemptNotice}
 
           <ImagePromptComposer
             draft={imageDraft}
@@ -1858,6 +1990,9 @@ export function MediaCreationScreen({
           error={status?.status === 'failed' ? status.error?.trim() || message : message}
           pollingInterrupted={pollingInterrupted && generationTool === 'image'}
           onResumePolling={() => void resumeGenerationPolling()}
+          attemptUnconfirmed={Boolean(pendingAttempt) && !isGenerating && pendingAttempt?.tool === 'image'}
+          onCheckAttempt={() => void checkPendingAttempt()}
+          onStartNewRun={() => void startNewRun()}
           showNotificationPrompt={showNotificationPrompt}
           onEnableNotifications={() => {
             void import('@/lib/notifications').then(({ registerForMobilePushNotifications }) => (
@@ -3770,6 +3905,9 @@ function GenerationWorkspace({
   error,
   pollingInterrupted,
   onResumePolling,
+  attemptUnconfirmed,
+  onCheckAttempt,
+  onStartNewRun,
   showNotificationPrompt,
   onEnableNotifications,
   onDismissNotifications,
@@ -3794,6 +3932,10 @@ function GenerationWorkspace({
   error: string | null | undefined;
   pollingInterrupted: boolean;
   onResumePolling: () => void;
+  /** A start whose response was lost: checking replays it under its key; a new run is a separate choice. */
+  attemptUnconfirmed: boolean;
+  onCheckAttempt: () => void;
+  onStartNewRun: () => void;
   showNotificationPrompt: boolean;
   onEnableNotifications: () => void;
   onDismissNotifications: () => void;
@@ -3810,7 +3952,9 @@ function GenerationWorkspace({
   const failed = status?.status === 'failed' || (!isGenerating && !succeeded && Boolean(error) && !pollingInterrupted);
   const medium = tool === 'image' ? 'image' : tool === 'video' ? 'video' : 'motion video';
   const previewKind = tool === 'image' ? 'image' : 'video';
-  const waiting = visible && !succeeded && !failed && !pollingInterrupted;
+  // A start that could not be confirmed is not a live run, whether or not its
+  // message is still showing, so the clock stops for it too.
+  const waiting = visible && !succeeded && !failed && !pollingInterrupted && !attemptUnconfirmed;
   const elapsedSeconds = useGenerationElapsedSeconds(waiting ? startedAt : null);
   const waitPhase = generationWaitPhase(status?.status);
   const waitTitle = generationWaitTitle(waitPhase, medium);
@@ -3821,11 +3965,11 @@ function GenerationWorkspace({
         <View style={{ minHeight: safeAreaInsets.top + 60, paddingTop: safeAreaInsets.top, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
           <View style={{ flex: 1, gap: 2 }}>
             <Text style={{ color: appTheme.colors.text, fontSize: 20, fontWeight: '800' }}>
-              {succeeded ? `Your ${medium}` : pollingInterrupted ? 'Generation is still running' : failed ? 'Generation failed' : `Creating ${medium}`}
+              {succeeded ? `Your ${medium}` : pollingInterrupted ? 'Generation is still running' : attemptUnconfirmed ? 'Generation not confirmed' : failed ? 'Generation failed' : `Creating ${medium}`}
             </Text>
             <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11 }}>{settingsSummary}</Text>
           </View>
-          <Pressable accessibilityRole="button" accessibilityLabel={succeeded || failed ? 'Back to creator' : 'Minimize generation'} onPress={onMinimize} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+          <Pressable accessibilityRole="button" accessibilityLabel={succeeded || failed || attemptUnconfirmed ? 'Back to creator' : 'Minimize generation'} onPress={onMinimize} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
             <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
           </Pressable>
         </View>
@@ -3869,6 +4013,24 @@ function GenerationWorkspace({
                 </Text>
               </View>
               <PrimaryButton label="Retry status check" onPress={onResumePolling} />
+              <SecondaryButton label="Back to creator" onPress={onMinimize} />
+            </View>
+          ) : attemptUnconfirmed ? (
+            <View style={{ flex: 1, minHeight: 560, justifyContent: 'center', gap: 18 }}>
+              <View style={{ height: 310, borderRadius: 28, borderWidth: 1, borderColor: appTheme.colors.borderStrong, backgroundColor: appTheme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28 }}>
+                <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
+                  <Sparkles size={28} color={appTheme.colors.amber} />
+                </View>
+                <Text style={{ color: appTheme.colors.text, fontSize: 20, fontWeight: '800', textAlign: 'center' }}>We couldn’t confirm this {medium} started</Text>
+                <Text accessibilityRole="alert" selectable style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 19, textAlign: 'center' }}>
+                  {error || GENERATION_ATTEMPT_UNCONFIRMED_MESSAGE}
+                </Text>
+              </View>
+              {/* Checking replays the same request under the same key, so it can
+                  only find the run or start it once. A new run is priced, because
+                  it may be a second charge. */}
+              <PrimaryButton label="Check again" onPress={onCheckAttempt} />
+              <SecondaryButton label={withCreditCost('Start a new run', retryCost)} onPress={onStartNewRun} />
               <SecondaryButton label="Back to creator" onPress={onMinimize} />
             </View>
           ) : failed ? (

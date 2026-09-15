@@ -2170,6 +2170,166 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     vi.useRealTimers();
   });
 
+  // Audit A3, counterexample 3: a retry after a lost start response sent the
+  // same request under a new idempotency key, so the server could start and
+  // charge a second run.
+  it('checks a start whose response was lost under the same key, saved before it was sent', async () => {
+    vi.useFakeTimers();
+    catalogState.catalog = catalogV2();
+    const attemptKey = 'magicbooklet.generation.pendingAttempt.v1:user-123';
+    const startGeneration = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('Could not reach Magicbooklet.'), {
+        status: 0,
+        details: { cause: 'Network request failed' },
+      }))
+      .mockResolvedValueOnce({
+        success: true,
+        predictionId: 'unified-video-prediction',
+        generationId: 'unified-video-generation',
+        status: 'processing',
+        remainingCredits: 970,
+        idempotentReplay: true,
+      });
+    authState.api.startGeneration = startGeneration;
+    authState.api.getVideoGeneration.mockResolvedValue({
+      status: 'succeeded',
+      output: 'https://cdn.example.com/unified-output.mp4',
+    });
+    authState.api.quoteGenerationModel.mockResolvedValue({
+      modelId: 'fallback-video-v2',
+      catalogRevision: 'catalog-v2-revision',
+      normalizedSettings: { referenceMode: 'elements', resolution: '720p', duration: 7 },
+      costCredits: 29,
+    });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="video" />);
+    });
+    renderer.act(() => {
+      tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('Create a remote cinematic reveal.');
+    });
+    await renderer.act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Generate · 29 credits').props.onPress();
+    });
+
+    const firstKey = startGeneration.mock.calls[0]?.[1];
+    const savedAt = draftStorage.setItem.mock.calls.findIndex(([key]) => key === attemptKey);
+    expect(savedAt).toBeGreaterThanOrEqual(0);
+    expect(draftStorage.setItem.mock.invocationCallOrder[savedAt])
+      .toBeLessThan(startGeneration.mock.invocationCallOrder[0]);
+    expect(collectText(tree!.root)).toContain('Generation not confirmed');
+
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Check again').props.onPress();
+    });
+
+    expect(startGeneration).toHaveBeenCalledTimes(2);
+    expect(startGeneration.mock.calls[1]?.[1]).toBe(firstKey);
+    expect(startGeneration.mock.calls[1]?.[0]).toEqual(startGeneration.mock.calls[0]?.[0]);
+    expect(authState.api.getVideoGeneration).toHaveBeenCalledWith('unified-video-prediction');
+    expect(draftStorage.removeItem).toHaveBeenCalledWith(attemptKey);
+    vi.useRealTimers();
+  });
+
+  it('offers to check a start a restart left unconfirmed, replaying the saved request and key', async () => {
+    vi.useFakeTimers();
+    catalogState.catalog = catalogV2();
+    const attemptKey = 'magicbooklet.generation.pendingAttempt.v1:user-123';
+    const savedRequest = {
+      kind: 'video',
+      modelId: 'fallback-video-v2',
+      catalogRevision: 'catalog-v2-revision',
+      settings: { duration: 7 },
+      prompt: 'The run from before the restart.',
+      inputs: [],
+    };
+    draftStorage.getItem.mockImplementation(async (key: string) => (key === attemptKey
+      ? JSON.stringify({
+        version: 1,
+        identityUserId: 'user-123',
+        tool: 'video',
+        route: 'unified',
+        idempotencyKey: 'video:before-restart',
+        requestJson: JSON.stringify(savedRequest),
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+      })
+      : null));
+    const startGeneration = vi.fn().mockResolvedValue({
+      success: true,
+      predictionId: 'restored-prediction',
+      generationId: 'restored-generation',
+      status: 'processing',
+      remainingCredits: 970,
+      idempotentReplay: true,
+    });
+    authState.api.startGeneration = startGeneration;
+    authState.api.getVideoGeneration.mockResolvedValue({
+      status: 'succeeded',
+      output: 'https://cdn.example.com/restored-output.mp4',
+    });
+    authState.api.quoteGenerationModel.mockResolvedValue({
+      modelId: 'fallback-video-v2',
+      catalogRevision: 'catalog-v2-revision',
+      normalizedSettings: { referenceMode: 'elements', resolution: '720p', duration: 7 },
+      costCredits: 29,
+    });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="video" />);
+    });
+    await renderer.act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(collectText(tree!.root)).toContain('Generation not confirmed');
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Check again').props.onPress();
+    });
+
+    expect(startGeneration).toHaveBeenCalledWith(savedRequest, 'video:before-restart');
+    expect(authState.api.getVideoGeneration).toHaveBeenCalledWith('restored-prediction');
+    vi.useRealTimers();
+  });
+
+  it('forgets an attempt the server refused outright', async () => {
+    vi.useFakeTimers();
+    catalogState.catalog = catalogV2();
+    const attemptKey = 'magicbooklet.generation.pendingAttempt.v1:user-123';
+    authState.api.startGeneration = vi.fn().mockRejectedValue(Object.assign(new Error('This model needs a shorter prompt.'), {
+      status: 422,
+      details: { code: 'INVALID_GENERATION_REQUEST' },
+    }));
+    authState.api.quoteGenerationModel.mockResolvedValue({
+      modelId: 'fallback-video-v2',
+      catalogRevision: 'catalog-v2-revision',
+      normalizedSettings: { referenceMode: 'elements', resolution: '720p', duration: 7 },
+      costCredits: 29,
+    });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="video" />);
+    });
+    renderer.act(() => {
+      tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('Create a remote cinematic reveal.');
+    });
+    await renderer.act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Generate · 29 credits').props.onPress();
+    });
+
+    expect(draftStorage.removeItem).toHaveBeenCalledWith(attemptKey);
+    expect(collectText(tree!.root)).not.toContain('Generation not confirmed');
+    vi.useRealTimers();
+  });
+
   it('opens the shared video result workspace and posts with the generation id', async () => {
     vi.useFakeTimers();
     authState.api.startVideoGeneration.mockResolvedValue({
@@ -2223,8 +2383,11 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       await vi.advanceTimersByTimeAsync(200);
     });
 
-    renderer.act(() => {
+    // The start never settles here, so the press is not awaited; flushing lets
+    // the attempt save that precedes every start land first.
+    await renderer.act(async () => {
       void findPressableByText(tree!.root, 'Generate · 8 credits').props.onPress();
+      await vi.advanceTimersByTimeAsync(0);
     });
     expect(collectText(tree!.root)).toContain('Creating image');
     expect(collectText(tree!.root)).toContain('Minimize');
@@ -2324,8 +2487,9 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(collectText(tree!.root)).toContain('Back to creator');
 
     authState.api.startImageGeneration.mockReturnValueOnce(new Promise(() => undefined));
-    renderer.act(() => {
+    await renderer.act(async () => {
       void findPressableByText(tree!.root, 'Try again · 8 credits').props.onPress();
+      await vi.advanceTimersByTimeAsync(0);
     });
     expect(authState.api.startImageGeneration).toHaveBeenCalledTimes(2);
     expect(promptInput.props.value).toBe('Create a dramatic studio portrait.');
