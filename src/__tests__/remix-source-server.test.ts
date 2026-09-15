@@ -339,3 +339,66 @@ describe('remixing a motion generation made through the catalog', () => {
     });
   });
 });
+
+// Audit, additional risk: keeping a generation's inputs fails one item at a
+// time, and each failure is only logged. A generation that kept some of its
+// inputs restored as though it had kept them all, so a remix showed half a
+// recipe with nothing to say the rest was missing.
+describe('a recipe whose inputs were only partly kept', () => {
+  const OWNER_ACCESS = { allowed: true, basis: 'owner', post: null, includeSharedInputMedia: true, recipeEntitled: false };
+  const KEPT_IMAGE = {
+    id: 'row-0',
+    generationId: 'gen-1',
+    mediaType: 'image',
+    role: 'reference_image',
+    label: 'Girl',
+    url: 'https://signed.example/girl.png',
+    storagePath: 'generation_inputs/creator-1/gen-1/00-reference_image.png',
+    sourceGenerationId: null,
+    sortOrder: 0,
+    metadata: { handle: '@girl', displayName: 'Girl', sourceStoragePath: 'uploads/creator-1/girl.png' },
+  };
+  /** What the recipe itself says it used, read without signing anything. */
+  const DECLARED_IMAGE = { ...KEPT_IMAGE, id: 'legacy-0', url: null, storagePath: 'uploads/creator-1/girl.png', metadata: { legacy: true } };
+  const DECLARED_CLIP = {
+    id: 'legacy-1',
+    generationId: 'gen-1',
+    mediaType: 'video',
+    role: 'reference_video',
+    label: 'Clip',
+    url: null,
+    storagePath: null,
+    sourceGenerationId: null,
+    sortOrder: 1,
+    metadata: { legacy: true, sourceUrl: 'https://cdn.example/clip.mp4' },
+  };
+
+  beforeEach(() => {
+    mocks.resolveRemixAccess.mockResolvedValue(OWNER_ACCESS);
+    mocks.generation = {
+      ...mocks.generation,
+      category: 'video',
+      model: 'seedance-2',
+      workflow_settings: { model: 'seedance-2', referenceMode: 'elements' },
+    };
+    mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', [KEPT_IMAGE]]]));
+  });
+
+  it('says some media could not be restored when the recipe used more than was kept', async () => {
+    mocks.buildLegacyGenerationInputMedia.mockResolvedValue([DECLARED_IMAGE, DECLARED_CLIP]);
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.inputs.video?.elements).toEqual([expect.objectContaining({ handle: '@girl', url: 'https://signed.example/girl.png' })]);
+    expect(bundle.restoreIssues).toContain('input-media-not-kept:video');
+    expect(mocks.buildLegacyGenerationInputMedia).toHaveBeenCalledWith(expect.objectContaining({ generationId: 'gen-1', urlMode: 'none' }));
+  });
+
+  it('adds nothing when everything the recipe used was kept', async () => {
+    mocks.buildLegacyGenerationInputMedia.mockResolvedValue([DECLARED_IMAGE]);
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.restoreIssues.filter((issue) => issue.startsWith('input-media-not-kept'))).toEqual([]);
+  });
+});

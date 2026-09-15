@@ -7,6 +7,7 @@ import type { NextRequest } from 'next/server';
 import { normalizeSubmittedElementDescriptors } from '@/lib/image-elements';
 import {
   buildLegacyGenerationInputMedia,
+  findUncapturedInputMediaTypes,
   loadGenerationInputMediaMap,
   sanitizeWorkflowSettingsForRemix,
   toRemixAssetDescriptor,
@@ -317,6 +318,22 @@ export async function loadRemixSourceBundle(
   const accessibleInputMedia = includeInputMedia ? inputMedia : recipeInputMedia;
 
   const restoreIssues: string[] = [];
+  // Keeping inputs fails one item at a time, so the kept rows can hold less
+  // than the recipe used. Say so: otherwise a remix restores the kept part as
+  // if it were the whole recipe. Read without signing anything.
+  if (includeInputMedia && hasDurableInputMedia) {
+    const declaredInputMedia = await buildLegacyGenerationInputMedia({
+      supabase: adminSupabase,
+      generationId: typedGeneration.id,
+      ownerUserId: typedGeneration.user_id,
+      category: typedGeneration.category,
+      workflowSettings,
+      urlMode: 'none',
+    });
+    for (const { mediaType } of findUncapturedInputMediaTypes(declaredInputMedia, inputMedia)) {
+      restoreIssues.push(`input-media-not-kept:${mediaType}`);
+    }
+  }
   const referencedGenerationCache = new Map<string, Promise<ResultGenerationRow | null>>();
 
   const resolveDescriptorUrl = async (

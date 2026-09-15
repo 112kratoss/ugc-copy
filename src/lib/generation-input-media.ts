@@ -320,6 +320,10 @@ export async function persistGenerationInputMedia(params: {
     return;
   }
 
+  // Each failure below is logged where it happens, which says nothing about
+  // the generation as a whole. These add up to whether its recipe was kept.
+  let kept = 0;
+  const notKeptRoles: string[] = [];
   for (const [index, candidate] of candidates.entries()) {
     let consumptionClaim: UploadConsumptionClaim | null = null;
     let createdInputPath: string | null = null;
@@ -334,6 +338,7 @@ export async function persistGenerationInputMedia(params: {
         params.downloadRemoteMedia,
       );
       if (!downloaded) {
+        notKeptRoles.push(candidate.role);
         continue;
       }
       consumptionClaim = downloaded.consumptionClaim;
@@ -390,6 +395,7 @@ export async function persistGenerationInputMedia(params: {
       }
       durableMutationOutcomeUnknown = false;
       durableInputPersisted = true;
+      kept += 1;
 
       const completed = await completeNullableUploadByteConsumption(supabase, {
         claim: consumptionClaim,
@@ -424,7 +430,17 @@ export async function persistGenerationInputMedia(params: {
         }
       }
       logBackendError('failed_to_persist_generation_input_media', { error: error });
+      if (!durableInputPersisted) notKeptRoles.push(candidate.role);
     }
+  }
+
+  if (notKeptRoles.length > 0) {
+    logBackendWarning('generation_input_media_capture_incomplete', {
+      generationId,
+      expected: candidates.length,
+      kept,
+      notKeptRoles: notKeptRoles.join(','),
+    });
   }
 }
 
@@ -933,6 +949,36 @@ export function toRemixImageElement(item: GenerationInputMediaItem, index: numbe
     sourceGenerationId: item.sourceGenerationId,
     url: item.url,
   };
+}
+
+/**
+ * The media types a generation used more of than it kept.
+ *
+ * Keeping a generation's inputs fails one item at a time, so its durable rows
+ * can fall short of what its recipe used. Counted per media type rather than
+ * per role, since the catalog path and the legacy readers do not always name
+ * the same input the same way. Only inputs that could have been kept count:
+ * ones with a stored copy, a source generation, or a source URL.
+ */
+export function findUncapturedInputMediaTypes(
+  declared: GenerationInputMediaItem[],
+  kept: GenerationInputMediaItem[],
+): { mediaType: GenerationInputMediaType; missing: number }[] {
+  const countByType = (items: GenerationInputMediaItem[]) => {
+    const counts = new Map<GenerationInputMediaType, number>();
+    for (const item of items) counts.set(item.mediaType, (counts.get(item.mediaType) ?? 0) + 1);
+    return counts;
+  };
+  const keepable = declared.filter((item) => (
+    item.storagePath
+    || item.sourceGenerationId
+    || (typeof item.metadata?.sourceUrl === 'string' && item.metadata.sourceUrl)
+  ));
+  const keptCounts = countByType(kept);
+  return [...countByType(keepable)].flatMap(([mediaType, declaredCount]) => {
+    const missing = declaredCount - (keptCounts.get(mediaType) ?? 0);
+    return missing > 0 ? [{ mediaType, missing }] : [];
+  });
 }
 
 export function toRemixAssetDescriptor(item: GenerationInputMediaItem): RemixMediaAssetDescriptor & { url: string | null } {

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
+
 describe('generation input media persistence', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -132,6 +134,46 @@ describe('generation input media persistence', () => {
     expect(download).not.toHaveBeenCalled();
     expect(upload).not.toHaveBeenCalled();
     expect(insert).not.toHaveBeenCalled();
+  });
+
+  // Each failure to keep an input is logged where it happens, and nothing said
+  // that a generation as a whole had kept only part of its recipe.
+  it('reports a generation that kept only some of its inputs', async () => {
+    const { persistGenerationInputMedia } = await import('@/lib/generation-input-media');
+    const { setBackendLogSink } = await import('@/lib/backend-logger');
+    const records: unknown[] = [];
+    const restoreSink = setBackendLogSink((record) => { records.push(record); });
+    try {
+      const downloadRemoteMedia = vi.fn()
+        .mockResolvedValueOnce({ blob: new Blob(['image'], { type: 'image/png' }), sourceName: 'kept.png' })
+        .mockRejectedValueOnce(new Error('The provider link expired'));
+      const supabase = {
+        storage: { from: vi.fn(() => ({ upload: vi.fn(async () => ({ error: null })) })) },
+        from: vi.fn(() => ({ insert: vi.fn(async () => ({ error: null })) })),
+      };
+
+      await persistGenerationInputMedia({
+        supabase: supabase as never,
+        generationId: 'gen-1',
+        userId: 'user-1',
+        candidates: [
+          { mediaType: 'image', role: 'reference_image', sourceUrl: 'https://provider.example.com/kept.png' },
+          { mediaType: 'image', role: 'start_frame', sourceUrl: 'https://provider.example.com/lost.png' },
+        ],
+        downloadRemoteMedia,
+      });
+    } finally {
+      restoreSink();
+    }
+
+    expect(records).toContainEqual(expect.objectContaining({
+      level: 'warn',
+      msg: 'generation_input_media_capture_incomplete',
+      generationId: 'gen-1',
+      expected: 2,
+      kept: 1,
+      notKeptRoles: 'start_frame',
+    }));
   });
 });
 
@@ -386,5 +428,50 @@ describe('generation input media loading', () => {
       expect.objectContaining({ mediaType: 'image', role: 'character_image', label: 'Hero', storagePath: 'uploads/user-1/hero.png' }),
       expect.objectContaining({ mediaType: 'video', role: 'motion_reference_video', label: 'Motion reference video', storagePath: 'uploads/user-1/moves.mp4' }),
     ]);
+  });
+});
+
+// Keeping a generation's inputs fails one item at a time. Comparing what its
+// recipe used with what it kept is how a partly kept recipe gets noticed.
+describe('uncaptured input media', () => {
+  const item = (overrides: Partial<GenerationInputMediaItem>): GenerationInputMediaItem => ({
+    id: 'item',
+    generationId: 'gen-1',
+    mediaType: 'image',
+    role: 'reference_image',
+    label: 'Reference',
+    url: null,
+    storagePath: null,
+    sourceGenerationId: null,
+    sortOrder: 0,
+    metadata: {},
+    ...overrides,
+  });
+
+  it('names each media type the recipe used more of than it kept', async () => {
+    const { findUncapturedInputMediaTypes } = await import('@/lib/generation-input-media');
+    const declared = [
+      item({ storagePath: 'uploads/user-1/a.png' }),
+      item({ sourceGenerationId: 'gen-0' }),
+      item({ mediaType: 'video', role: 'reference_video', metadata: { sourceUrl: 'https://cdn.example/clip.mp4' } }),
+    ];
+    const kept = [item({ storagePath: 'generation_inputs/user-1/gen-1/00-reference_image.png' })];
+
+    expect(findUncapturedInputMediaTypes(declared, kept)).toEqual([
+      { mediaType: 'image', missing: 1 },
+      { mediaType: 'video', missing: 1 },
+    ]);
+  });
+
+  it('ignores inputs that could never have been kept, and roles two readers name differently', async () => {
+    const { findUncapturedInputMediaTypes } = await import('@/lib/generation-input-media');
+    // No stored copy, source generation or source URL: nothing to keep.
+    expect(findUncapturedInputMediaTypes([item({})], [])).toEqual([]);
+    // The legacy reader names a catalog motion input character_image; a row
+    // kept before motion roles existed calls it reference_image.
+    expect(findUncapturedInputMediaTypes(
+      [item({ role: 'character_image', storagePath: 'uploads/user-1/hero.png' })],
+      [item({ role: 'reference_image', storagePath: 'generation_inputs/user-1/gen-1/00-reference_image.png' })],
+    )).toEqual([]);
   });
 });
