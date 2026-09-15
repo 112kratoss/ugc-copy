@@ -100,7 +100,8 @@ describe('creation draft resume', () => {
   // Remix restores before 2026-09-15 capped media at the placeholder video model, which
   // accepts no references, and autosaved the emptied draft (the unversioned scope). A
   // version 2 session saved while that fix was verified had lost a reference and its
-  // @mention. Resuming either would hide the source's references, so both restore afresh.
+  // @mention. A version 3 session could carry the catalog's own defaults saved as creator
+  // edits. Resuming any of them reopens the wrong draft, so all of them restore afresh.
   it('does not resume remix sessions saved under earlier scopes', async () => {
     const memory = new Map<string, string>();
     storage.getItem.mockImplementation(async (key: string) => memory.get(key) ?? null);
@@ -108,6 +109,7 @@ describe('creation draft resume', () => {
     const earlierScopes = [
       JSON.stringify(['remix', 'reader', 'post', 'generation']),
       JSON.stringify(['remix', 2, 'reader', 'post', 'generation']),
+      JSON.stringify(['remix', 3, 'reader', 'post', 'generation']),
     ];
     for (const earlierScope of earlierScopes) {
       memory.set(creationDraftStorageKey(earlierScope), JSON.stringify({ ...drafts, remixRestored: true, updatedAt: '2026-09-15T02:05:00.000Z' }));

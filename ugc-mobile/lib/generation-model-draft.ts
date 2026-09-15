@@ -716,6 +716,61 @@ export function reconcileCreationDraftWithCatalog(
   };
 }
 
+/** Whether the creator has put anything into a draft yet: a prompt, a shot prompt or an input. */
+export function hasStartedCreationDraft(draft: CreationDraft) {
+  if (draft.prompt.trim()) return true;
+  if (draft.tool === 'image') return draft.references.length > 0;
+  if (draft.tool === 'video') {
+    return draft.references.length > 0
+      || draft.referenceVideos.length > 0
+      || draft.referenceAudios.length > 0
+      || Boolean(draft.startFrame)
+      || Boolean(draft.endFrame)
+      || draft.multiPrompts.some((shot) => shot.prompt.trim());
+  }
+  return Boolean(draft.characterImage) || Boolean(draft.referenceVideo);
+}
+
+export interface CatalogDraftNormalization {
+  draft: CreationDraft;
+  /** The reconciliation notice, when there is one, for the "Model updated" banner. */
+  warning: string | null;
+  /** The draft's model is not in this catalog, so the draft comes back untouched. */
+  missingModel: boolean;
+}
+
+/**
+ * What the create screen does to a draft each time a catalog arrives, as one pure step.
+ *
+ * An untouched draft takes the catalog's default model and that model's published defaults;
+ * any other draft is reconciled against its own model. A remix restore compares the live
+ * draft with baselines passed through this same step, so the screen's own normalization,
+ * which lands while the source is still loading, never reads as an edit the creator made.
+ */
+export function normalizeCreationDraftForCatalog(
+  draft: CreationDraft,
+  catalog: GenerationModelCatalog,
+  options: { modelSelectionTouched: boolean },
+): CatalogDraftNormalization {
+  const defaultId = catalog.defaults[draft.tool];
+  const fallback = defaultId ? getCatalogModel(catalog, defaultId) : null;
+  if (
+    fallback?.kind === draft.tool
+    && !draft.catalogRevision
+    && !options.modelSelectionTouched
+    && !hasStartedCreationDraft(draft)
+  ) {
+    return {
+      draft: applyCatalogModelInitialDefaults(draft, fallback, catalog.revision),
+      warning: null,
+      missingModel: false,
+    };
+  }
+  if (!getCatalogModel(catalog, draft.model)) return { draft, warning: null, missingModel: true };
+  const result = reconcileCreationDraftWithCatalog(draft, catalog);
+  return { draft: result.draft, warning: result.warning, missingModel: false };
+}
+
 function remixCatalogSettings(
   bundle: RemixSourceBundle,
   model: GenerationModelDescriptor,

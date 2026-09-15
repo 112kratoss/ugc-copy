@@ -89,3 +89,71 @@ export const remoteImageModel = model('remote-image-v1', 'image', 'Remote Image 
   ],
   inputs: { imageReferences: { max: 3, supportsNaming: true }, videoReferences: null, audioReferences: null, startFrame: false, endFrame: false },
 });
+
+function choiceControl(
+  key: string,
+  label: string,
+  defaultValue: string,
+  values: string[],
+  presentation: 'chips' | 'select' = 'chips',
+): CatalogControl {
+  return { key, label, type: 'choice', presentation, defaultValue, options: values.map((value) => ({ value, label: value })) };
+}
+
+/**
+ * The production mobile descriptors a Recreate meets (revision gpt-image-2-5-20260911): their
+ * controls, defaults, capabilities and input limits. Every tool's catalog default disagrees with
+ * the bundled default draft — video at 16:9 against 9:16, image at `auto` against 4:5, motion in
+ * the model itself (kling-2.6 against kling-3.0) — and the remixed models lack some of the
+ * default model's controls.
+ */
+export function createRemixRestoreCatalog(): GenerationModelCatalog {
+  return {
+    schemaVersion: 1,
+    revision: 'gpt-image-2-5-20260911',
+    defaults: { image: 'nano-banana-2', video: 'kling-3.0-video', motion: 'kling-2.6' },
+    models: [
+      model('nano-banana-2', 'image', 'Nano Banana 2.0', {
+        controls: [
+          choiceControl('aspectRatio', 'Aspect ratio', 'auto', ['auto', '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'], 'select'),
+          choiceControl('resolution', 'Resolution', '1K', ['1K', '2K', '4K']),
+          choiceControl('outputFormat', 'Output format', 'jpg', ['jpg', 'png']),
+          { key: 'googleSearch', label: 'Google Search', type: 'boolean', presentation: 'toggle', defaultValue: false },
+        ],
+        capabilities: { multiShot: false, sound: false, fixedLens: false, googleSearch: true, outputFormat: true },
+        inputs: { imageReferences: { max: 14, supportsNaming: true }, videoReferences: null, audioReferences: null, startFrame: false, endFrame: false },
+      }),
+      model('gpt-image-2', 'image', 'GPT Image 2', {
+        controls: [
+          choiceControl('aspectRatio', 'Aspect ratio', 'auto', ['auto', '1:1', '5:4', '9:16', '21:9', '16:9', '4:3', '3:2', '4:5', '3:4', '2:3'], 'select'),
+          choiceControl('resolution', 'Resolution', '1K', ['1K', '2K', '4K']),
+        ],
+        inputs: { imageReferences: { max: 16, supportsNaming: true }, videoReferences: null, audioReferences: null, startFrame: false, endFrame: false },
+      }),
+      model('kling-3.0-video', 'video', 'Kling 3.0 Cinematic', {
+        controls: [
+          choiceControl('aspectRatio', 'Aspect ratio', '16:9', ['16:9', '9:16', '1:1']),
+          choiceControl('mode', 'Quality mode', 'std', ['std', 'pro']),
+          { key: 'duration', label: 'Duration', type: 'integer', presentation: 'stepper', defaultValue: 5, min: 3, max: 15, step: 1, unit: 'seconds' },
+          { key: 'sound', label: 'Sound', type: 'boolean', presentation: 'toggle', defaultValue: false },
+          { key: 'isMultiShot', label: 'Multi-shot', type: 'boolean', presentation: 'toggle', defaultValue: false },
+        ],
+        capabilities: { multiShot: true, sound: true, fixedLens: false, googleSearch: false, outputFormat: false },
+        inputs: { imageReferences: null, videoReferences: { max: 3 }, audioReferences: null, startFrame: true, endFrame: true },
+      }),
+      model('seedance-2', 'video', 'Seedance 2', {
+        controls: [
+          choiceControl('aspectRatio', 'Aspect ratio', '16:9', ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9']),
+          choiceControl('resolution', 'Resolution', '480p', ['480p', '720p', '1080p', '4k']),
+          { key: 'duration', label: 'Duration', type: 'integer', presentation: 'stepper', defaultValue: 15, min: 4, max: 15, step: 1, unit: 'seconds' },
+          { key: 'sound', label: 'Sound', type: 'boolean', presentation: 'toggle', defaultValue: false },
+          choiceControl('referenceMode', 'Input mode', 'frames', ['frames', 'elements']),
+        ],
+        inputs: { imageReferences: { max: 5, supportsNaming: true }, videoReferences: { max: 3 }, audioReferences: { max: 3 }, startFrame: true, endFrame: true },
+      }),
+      model('kling-2.6', 'motion', 'Kling 2.6', {
+        inputs: { imageReferences: { max: 1, supportsNaming: false }, videoReferences: { max: 1 }, audioReferences: null, startFrame: false, endFrame: false },
+      }),
+    ],
+  };
+}

@@ -24,8 +24,14 @@ export function creationDraftStorageKey(scope?: string) {
  * reference and, with it, the @mention in the prompt. Remix drafts never expire and clear
  * only after a successful generation, so Recreate reopened it on every tap. Sessions saved
  * under 2 start again from the source too; 2 had been live for a few hours.
+ *
+ * 4: until 2026-09-15 a restore that began in the same commit as the catalog's first
+ * normalization counted that normalization as the creator's edits, and saved them. A
+ * Seedance 2 remix reopened at 16:9 carrying Kling's mode and isMultiShot, an image remix
+ * at `auto`, and a motion remix as the empty default draft marked restored. Sessions saved
+ * under 3 start again from the source.
  */
-const REMIX_DRAFT_SCOPE_VERSION = 3;
+const REMIX_DRAFT_SCOPE_VERSION = 4;
 
 export function remixDraftScope(userId: string | null, source?: { generationId?: string | null; postId?: string | null }) {
   if (!source?.generationId && !source?.postId) return undefined;
