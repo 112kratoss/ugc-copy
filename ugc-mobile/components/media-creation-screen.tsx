@@ -33,7 +33,7 @@ import { acquireActivityLock } from '@/lib/app-activity';
 import { showConfirmDialog } from '@/lib/dialog';
 import { useAuth } from '@/lib/auth';
 import { needsRemixReferenceRecovery, recoverRemixReferences } from '@/lib/remix-draft-recovery';
-import { clearPersistedCreationDrafts, loadPersistedCreationDrafts, persistCreationDrafts, remixDraftScope } from '@/lib/creation-draft-resume';
+import { clearPersistedCreationDrafts, loadOrdinaryCreationDrafts, loadPersistedCreationDrafts, ordinaryDraftScope, persistCreationDrafts, remixDraftScope } from '@/lib/creation-draft-resume';
 import {
   clearPendingGenerationAttempt,
   GENERATION_ATTEMPT_CHOICE_MESSAGE,
@@ -428,16 +428,7 @@ function createMobileGenerationIdempotencyKey(prefix: CreatorToolId) {
   return `${prefix}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
 }
 
-export function MediaCreationScreen({
-  initialTool = 'image',
-  insideTab = false,
-  initialPrompt,
-  remixSource,
-  guided = false,
-  onClose,
-  registerBeforeClose,
-  onDirtyChange,
-}: {
+type MediaCreationScreenProps = {
   initialTool?: CreatorToolId;
   insideTab?: boolean;
   initialPrompt?: string | null;
@@ -454,13 +445,46 @@ export function MediaCreationScreen({
   /** Reports the first edit of the session, so the route can take the native
    *  pop gesture away from a screen whose exit now has to save something. */
   onDirtyChange?: (dirty: boolean) => void;
-}) {
+};
+
+/**
+ * What the creator holds belongs to the identity it opened under: the drafts,
+ * a run it is watching, a start it could not confirm. The Create tab is keyed
+ * by tool, not identity, so it can stay mounted through a sign-out and the next
+ * sign-in; when the identity changes, the screen starts again for the new one
+ * instead of carrying the last person's work onto it (audit A5).
+ *
+ * The one change it stays mounted through is an ordinary session getting its
+ * first identity — signing in from Generate, or a guest session arriving once
+ * the phone is online. Nothing typed before then was saved anywhere, and it
+ * belongs to the person who now has an identity.
+ */
+export function MediaCreationScreen(props: MediaCreationScreenProps) {
+  const { identityUserId } = useAuth();
+  const [opened, setOpened] = useState({ identityUserId, generation: 0 });
+  if (opened.identityUserId !== identityUserId) {
+    const keepsWork = opened.identityUserId === null && !props.remixSource;
+    setOpened({ identityUserId, generation: keepsWork ? opened.generation : opened.generation + 1 });
+  }
+  return <IdentityCreationScreen key={opened.generation} {...props} />;
+}
+
+function IdentityCreationScreen({
+  initialTool = 'image',
+  insideTab = false,
+  initialPrompt,
+  remixSource,
+  guided = false,
+  onClose,
+  registerBeforeClose,
+  onDirtyChange,
+}: MediaCreationScreenProps) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   // `user` still gates remix restore, which pulls another creator's source
   // media out of the community feed. Generating and enhancing key off
   // `identityUserId` so a guest can spend the credits they just bought.
-  const { user, identityUserId, api, credits, updateCredits } = useAuth();
+  const { user, identityUserId, session, api, credits, updateCredits } = useAuth();
   const queryClient = useQueryClient();
   const [activeTool, setActiveTool] = useState<CreatorToolId>(isTool(initialTool) ? initialTool : 'image');
   const [imageDraft, setImageDraft] = useState<ImageCreationDraft>(() => ({
@@ -516,8 +540,14 @@ export function MediaCreationScreen({
   const remixResolvedRef = useRef(false);
   const [remixRetry, setRemixRetry] = useState(0);
   const [remixRestoreFailed, setRemixRestoreFailed] = useState(false);
-  const draftScope = remixDraftScope(identityUserId, remixSource);
-  const draftWriter = useMemo(() => createDraftSaveQueue((drafts: { image: ImageCreationDraft; video: VideoCreationDraft; motion: MotionCreationDraft; remixRestored?: boolean; remixEditedKeys?: Partial<Record<CreatorToolId, string[]>> }) => persistCreationDrafts(drafts, draftScope)), [draftScope]);
+  const remixScope = remixDraftScope(identityUserId, remixSource);
+  // Every saved draft is kept under an identity, a registered account or a
+  // guest session. With no identity yet there is no one to keep it for, so
+  // nothing is written until there is.
+  const draftScope = remixScope ?? (identityUserId ? ordinaryDraftScope(identityUserId) : null);
+  const draftWriter = useMemo(() => createDraftSaveQueue((drafts: { image: ImageCreationDraft; video: VideoCreationDraft; motion: MotionCreationDraft; remixRestored?: boolean; remixEditedKeys?: Partial<Record<CreatorToolId, string[]>> }) => (
+    draftScope ? persistCreationDrafts(drafts, draftScope) : Promise.resolve()
+  )), [draftScope]);
   const [dirty, setDirty] = useState(false);
   const latestDrafts = useRef({ image: imageDraft, video: videoDraft, motion: motionDraft });
   // The timers, the background flush and the close guard all need the newest
@@ -530,6 +560,9 @@ export function MediaCreationScreen({
   const remixBaseline = useRef(latestDrafts.current);
   const savedRemixEdits = useRef<Partial<Record<CreatorToolId, string[]>>>({});
   const lastSavedFingerprint = useRef(JSON.stringify(latestDrafts.current));
+  // The scope the drafts on screen were loaded under: undefined before the
+  // first load, null while there was no identity to load them for.
+  const hydratedScopeRef = useRef<string | null | undefined>(undefined);
 
   const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -594,8 +627,16 @@ export function MediaCreationScreen({
     resumedRemixRef.current = false;
     recoveringRemixReferences.current = false;
     remixResolvedRef.current = false;
+    // Read when the scope changes rather than tracked: the session object is
+    // replaced on every token refresh, and reloading then would pull the drafts
+    // out from under someone typing.
+    const signedInAt = session?.user?.last_sign_in_at ?? null;
     // A prompt-only entry has its own seed; a remix can resume its own session.
-    const load = initialPrompt && !draftScope ? Promise.resolve(null) : loadPersistedCreationDrafts(draftScope);
+    const load = !identityUserId || (initialPrompt && !remixScope)
+      ? Promise.resolve(null)
+      : remixScope
+        ? loadPersistedCreationDrafts(remixScope)
+        : loadOrdinaryCreationDrafts({ identityUserId, signedInAt });
     void load.then((persisted) => {
       if (!active) return;
       if (persisted) {
@@ -604,19 +645,29 @@ export function MediaCreationScreen({
         setMotionDraft(persisted.motion);
         // A previous failed restore may have been saved as complete. Re-read its
         // source without resetting the creator's other saved fields.
-        recoveringRemixReferences.current = Boolean(draftScope && persisted.remixRestored && needsRemixReferenceRecovery(persisted[initialTool]));
-        resumedRemixRef.current = Boolean(draftScope && persisted.remixRestored && !recoveringRemixReferences.current);
+        recoveringRemixReferences.current = Boolean(remixScope && persisted.remixRestored && needsRemixReferenceRecovery(persisted[initialTool]));
+        resumedRemixRef.current = Boolean(remixScope && persisted.remixRestored && !recoveringRemixReferences.current);
         remixResolvedRef.current = resumedRemixRef.current;
         savedRemixEdits.current = persisted.remixEditedKeys ?? {};
       }
-      lastSavedFingerprint.current = JSON.stringify(persisted ? { image: persisted.image, video: persisted.video, motion: persisted.motion } : latestDrafts.current);
+      // Typed while there was no identity, by the person this one belongs to
+      // (see MediaCreationScreen). With no draft of their own to resume, it
+      // stays on screen, and an empty fingerprint has the autosave keep it for them.
+      const keepsUnsavedWork = !persisted && hydratedScopeRef.current === null && draftScope !== null
+        && JSON.stringify(latestDrafts.current) !== lastSavedFingerprint.current;
+      hydratedScopeRef.current = draftScope;
+      lastSavedFingerprint.current = keepsUnsavedWork
+        ? ''
+        : JSON.stringify(persisted ? { image: persisted.image, video: persisted.video, motion: persisted.motion } : latestDrafts.current);
       setDraftsHydrated(true);
     }).catch(() => { if (active) setDraftLoadError(true); });
     return () => { active = false; };
   }, [draftScope, initialPrompt, draftLoadAttempt]);
 
   const saveLatestDraft = async () => {
-    if (!draftsHydrated) return;
+    // Without a scope nothing is saved, and the fingerprint stays as it was so
+    // the work still reads as unsaved when an identity arrives.
+    if (!draftsHydrated || !draftScope) return;
     if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
     autosaveTimer.current = null;
     // If a keystroke lands during a slow write, flush that newer snapshot too.
@@ -1256,7 +1307,7 @@ export function MediaCreationScreen({
 
     setMessage(null);
     haptic.success();
-    void clearPersistedCreationDrafts(draftScope).catch(() => undefined);
+    if (draftScope) void clearPersistedCreationDrafts(draftScope).catch(() => undefined);
     if (guided) {
       setShowNotificationPrompt(true);
       void trackOnboardingEvent(api, 'first_generation_succeeded', { goal: tool, step: 'creator' });

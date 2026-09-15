@@ -28,6 +28,9 @@ const authState = vi.hoisted(() => ({
   // Generating keys off the backend identity, not registration, so guests can
   // spend the credits they bought. For a registered user the two are the same.
   identityUserId: 'user-123' as string | null,
+  // A draft from a build that kept one for the whole phone is resumed only for
+  // the session that saved it, judged by when that session signed in.
+  session: null as { user: { id: string; last_sign_in_at?: string | null } } | null,
   isGuest: false,
   credits: 999,
   updateCredits: vi.fn(),
@@ -257,6 +260,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     authState.credits = 999;
     authState.user = { id: 'user-123', email: 'creator@example.com' };
     authState.identityUserId = 'user-123';
+    authState.session = null;
     authState.isGuest = false;
     authState.api.startGeneration = undefined;
     authState.api.startImageGeneration.mockReset();
@@ -725,6 +729,111 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     await renderer.act(async () => { tree.root.findByProps({ accessibilityLabel: 'Close creator' }).props.onPress(); });
     expect(onClose).not.toHaveBeenCalled();
     expect(collectText(tree.root)).toContain('Draft not saved');
+  });
+
+  // Audit A5. The ordinary Create draft was one key for the whole phone, so
+  // whoever signed in next opened the last person's prompt and references.
+  // Remix sessions were already kept per account.
+  describe('a phone shared by more than one identity', () => {
+    const PHONE_WIDE_DRAFT_KEY = 'magicbooklet.creation.drafts.v1';
+    const memory = new Map<string, string>();
+    const signInAs = (id: string, signedInAt = '2026-09-16T09:00:00.000Z') => {
+      authState.user = { id, email: `${id}@example.com` };
+      authState.identityUserId = id;
+      authState.session = { user: { id, last_sign_in_at: signedInAt } };
+    };
+    const promptOf = (tree: renderer.ReactTestRenderer) => tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value;
+    const type = (tree: renderer.ReactTestRenderer, text: string) => renderer.act(() => {
+      tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText(text);
+    });
+    // Past the autosave delay, and past every storage read a load makes.
+    const settle = () => renderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
+    const keysHolding = (text: string) => [...memory.entries()].filter(([, value]) => value.includes(text)).map(([key]) => key);
+    const phoneWideDraft = (prompt: string, updatedAt: string) => JSON.stringify({
+      image: { ...createDefaultCreationDraft('image'), prompt },
+      video: createDefaultCreationDraft('video'),
+      motion: createDefaultCreationDraft('motion'),
+      updatedAt,
+    });
+
+    beforeEach(() => {
+      memory.clear();
+      draftStorage.getItem.mockImplementation(async (key: string) => memory.get(key) ?? null);
+      draftStorage.setItem.mockImplementation(async (key: string, value: string) => { memory.set(key, value); });
+      draftStorage.removeItem.mockImplementation(async (key: string) => { memory.delete(key); });
+    });
+
+    it("never opens one account's draft for the next account", async () => {
+      signInAs('account-a');
+      let tab!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tab = renderer.create(<MediaCreationScreen initialTool="image" insideTab />); });
+      await settle();
+      type(tab, 'account A private prompt');
+      await settle();
+      expect(keysHolding('account A private prompt')).toHaveLength(1);
+
+      // The Create tab stays mounted through a sign-out and the next sign-in.
+      signInAs('account-b');
+      await renderer.act(async () => { tab.update(<MediaCreationScreen initialTool="image" insideTab />); });
+      await settle();
+      expect(promptOf(tab)).toBe('');
+
+      let opened!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { opened = renderer.create(<MediaCreationScreen initialTool="image" />); });
+      await settle();
+      expect(promptOf(opened)).toBe('');
+      type(opened, 'account B prompt');
+      await settle();
+      expect(keysHolding('account B prompt')).toHaveLength(1);
+      expect(keysHolding('account A private prompt')).toHaveLength(1);
+      expect(keysHolding('account B prompt')[0]).not.toBe(keysHolding('account A private prompt')[0]);
+
+      // Account A's draft is still there, for account A.
+      signInAs('account-a');
+      let back!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { back = renderer.create(<MediaCreationScreen initialTool="image" />); });
+      await settle();
+      expect(promptOf(back)).toBe('account A private prompt');
+    });
+
+    it('keeps what was typed with no identity for the person who then gets one', async () => {
+      authState.user = null;
+      authState.identityUserId = null;
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(<MediaCreationScreen initialTool="image" insideTab />); });
+      await settle();
+      type(tree, 'typed while signed out');
+      await settle();
+      // There is no one to keep it for yet, so it is written nowhere.
+      expect(keysHolding('typed while signed out')).toEqual([]);
+
+      // Signing in from Generate, or the guest session arriving once the phone is online.
+      signInAs('account-a');
+      await renderer.act(async () => { tree.update(<MediaCreationScreen initialTool="image" insideTab />); });
+      await settle();
+      expect(promptOf(tree)).toBe('typed while signed out');
+      expect(keysHolding('typed while signed out')).toEqual([expect.stringContaining('account-a')]);
+    });
+
+    it('resumes a phone-wide draft from an older build only for the session that saved it', async () => {
+      // Saved at 08:00, and account B signed in at 09:00: someone else wrote it.
+      memory.set(PHONE_WIDE_DRAFT_KEY, phoneWideDraft('the last person’s prompt', '2026-09-16T08:00:00.000Z'));
+      signInAs('account-b', '2026-09-16T09:00:00.000Z');
+      let next!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { next = renderer.create(<MediaCreationScreen initialTool="image" />); });
+      await settle();
+      expect(promptOf(next)).toBe('');
+      expect(keysHolding('the last person’s prompt')).toEqual([]);
+
+      // Saved at 09:30, inside a session that signed in at 09:00: it is theirs, and moves under their key.
+      memory.set(PHONE_WIDE_DRAFT_KEY, phoneWideDraft('my own unfinished prompt', '2026-09-16T09:30:00.000Z'));
+      signInAs('account-c', '2026-09-16T09:00:00.000Z');
+      let own!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { own = renderer.create(<MediaCreationScreen initialTool="image" />); });
+      await settle();
+      expect(promptOf(own)).toBe('my own unfinished prompt');
+      expect(keysHolding('my own unfinished prompt')).toEqual([expect.stringContaining('account-c')]);
+    });
   });
 
   it('hydrates remix prompt and references from the remix-source bundle', async () => {
