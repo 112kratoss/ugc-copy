@@ -1,13 +1,16 @@
 import { useEffect } from 'react';
 import * as ReactNative from 'react-native';
 import Animated, {
+  KeyboardState,
   useAnimatedKeyboard,
+  useAnimatedReaction,
   useAnimatedStyle,
+  useDerivedValue,
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
 
-import { getKeyboardLift } from '@/lib/keyboard';
+import { getKeyboardLift, resolveKeyboardHeight } from '@/lib/keyboard';
 
 /**
  * Keyboard avoidance that tracks the keyboard frame every frame.
@@ -51,11 +54,20 @@ const keyboardApi = optionalNativeExport(() => ReactNative.Keyboard);
 const platformApi = optionalNativeExport(() => ReactNative.Platform);
 
 /**
- * Back-stop for surfaces the animated tracker cannot see.
+ * What React Native's keyboard events say: a height, and whether the keyboard
+ * was last reported hidden.
  *
+ * The height is a back-stop for surfaces the animated tracker cannot see.
  * `useAnimatedKeyboard` reads the activity window's insets, which a few hosts
  * do not share. Callers take the larger of the two sources, so wherever the
  * animated tracker works it wins outright and this contributes nothing.
+ *
+ * The hidden flag covers the tracker's opposite failure: a keyboard that leaves
+ * without a closing animation, which Android's tracker never notices (see
+ * `resolveKeyboardHeight`). These events come from the window's own insets on
+ * every layout, so they do. Measured on the Pixel 9a emulator with the model
+ * picker opened over the prompt's keyboard: the tracker still read open at 336
+ * while these events had already reported the hide.
  *
  * It does not rescue an Android `Modal`: that window receives neither the
  * insets nor these JS events — both were measured returning nothing from inside
@@ -66,8 +78,9 @@ const platformApi = optionalNativeExport(() => ReactNative.Platform);
  * which slides in regardless; snapping the content while the keys animate
  * underneath would read as a glitch rather than as calm.
  */
-function useKeyboardFallbackHeight() {
-  const fallback = useSharedValue(0);
+function useReportedKeyboard() {
+  const height = useSharedValue(0);
+  const hidden = useSharedValue(false);
 
   useEffect(() => {
     if (!keyboardApi?.addListener) return;
@@ -79,12 +92,14 @@ function useKeyboardFallbackHeight() {
     const hideEvent = isIos ? 'keyboardWillHide' : 'keyboardDidHide';
 
     const show = keyboardApi.addListener(showEvent, (event) => {
-      fallback.value = withTiming(event.endCoordinates.height, {
+      hidden.value = false;
+      height.value = withTiming(event.endCoordinates.height, {
         duration: event.duration || FALLBACK_KEYBOARD_DURATION,
       });
     });
     const hide = keyboardApi.addListener(hideEvent, (event) => {
-      fallback.value = withTiming(0, {
+      hidden.value = true;
+      height.value = withTiming(0, {
         duration: event?.duration || FALLBACK_KEYBOARD_DURATION,
       });
     });
@@ -93,9 +108,34 @@ function useKeyboardFallbackHeight() {
       show.remove();
       hide.remove();
     };
-  }, [fallback]);
+  }, [height, hidden]);
 
-  return fallback;
+  return { height, hidden };
+}
+
+/** The keyboard height a surface gives way to, resolved from both sources. */
+function useKeyboardHeight() {
+  const keyboard = useAnimatedKeyboard();
+  const { height: reportedHeight, hidden: reportedHidden } = useReportedKeyboard();
+
+  // Once the tracker animates again its frames are current, whatever the last event
+  // said. Clearing on the UI thread means a show event that lands late (the JS thread
+  // busy as the prompt takes focus) cannot drop the content behind the new keyboard.
+  useAnimatedReaction(
+    () => keyboard.state.value,
+    (state, previous) => {
+      if (state !== previous && (state === KeyboardState.OPENING || state === KeyboardState.CLOSING)) {
+        reportedHidden.value = false;
+      }
+    },
+  );
+
+  return useDerivedValue(() => resolveKeyboardHeight({
+    trackedHeight: keyboard.height.value,
+    trackerSettledOpen: keyboard.state.value === KeyboardState.OPEN,
+    reportedHeight: reportedHeight.value,
+    reportedHidden: reportedHidden.value,
+  }));
 }
 
 export const KEYBOARD_AVOIDING_AREA_TEST_ID = 'keyboard-avoiding-area';
@@ -138,17 +178,13 @@ export function KeyboardAvoidingArea({
   /** Stable handle for tests asserting a surface gives way to the keyboard. */
   testID?: string;
 }) {
-  const keyboard = useAnimatedKeyboard();
-  const fallback = useKeyboardFallbackHeight();
+  const keyboardHeight = useKeyboardHeight();
   const deferToNativeInsets = iosScrollViewAdjustsInsets && platformApi?.OS === 'ios';
 
   const areaStyle = useAnimatedStyle(() => ({
     paddingBottom: deferToNativeInsets
       ? 0
-      : getKeyboardLift({
-        keyboardHeight: Math.max(keyboard.height.value, fallback.value),
-        reservedBottomInset,
-      }),
+      : getKeyboardLift({ keyboardHeight: keyboardHeight.value, reservedBottomInset }),
   }));
 
   return (
@@ -164,16 +200,12 @@ type LiftOptions = {
 };
 
 export function useKeyboardLiftStyle({ reservedBottomInset = 0 }: LiftOptions = {}) {
-  const keyboard = useAnimatedKeyboard();
-  const fallback = useKeyboardFallbackHeight();
+  const keyboardHeight = useKeyboardHeight();
 
   return useAnimatedStyle(() => ({
     transform: [
       {
-        translateY: -getKeyboardLift({
-          keyboardHeight: Math.max(keyboard.height.value, fallback.value),
-          reservedBottomInset,
-        }),
+        translateY: -getKeyboardLift({ keyboardHeight: keyboardHeight.value, reservedBottomInset }),
       },
     ],
   }));

@@ -36,6 +36,9 @@ export function useAnimatedStyle<T>(factory: () => T): T {
   return factory();
 }
 
+/** Reactions fire on the UI thread when a shared value changes, which a rendered test tree never does. */
+export function useAnimatedReaction<T>(_prepare: () => T, _react: (value: T, previous: T | null) => void) {}
+
 /** Closed keyboard: the state every test starts from unless it mocks this module. */
 export function useAnimatedKeyboard() {
   return {

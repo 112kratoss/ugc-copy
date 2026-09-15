@@ -40,3 +40,40 @@ export function getKeyboardLift({
 
   return Math.max(0, keyboardHeight - reservedBottomInset);
 }
+
+/**
+ * The keyboard height to give way to, chosen between the two sources that track it.
+ *
+ * Reanimated's tracker follows the keyboard frame by frame, but on Android it
+ * learns the keyboard has closed only from a closing animation. A keyboard that
+ * leaves without one, because a native Modal (the model picker) or another app's
+ * window took focus while it was open, leaves the tracker settled open at the old
+ * height until the next animation, and the screen keeps a keyboard-sized black
+ * hole with no keyboard in it. React Native's keyboard events read the window's
+ * insets on every layout, so they see that hide.
+ *
+ * So the tracker leads while the keyboard moves, keeping the surface in step with
+ * the keys; a reported hide beats a tracker that has settled open; and otherwise
+ * the larger source wins, which still covers a keyboard the tracker never saw open.
+ */
+export function resolveKeyboardHeight({
+  trackedHeight,
+  trackerSettledOpen,
+  reportedHeight,
+  reportedHidden,
+}: {
+  /** `useAnimatedKeyboard().height`. */
+  trackedHeight: number;
+  /** Whether the tracker's state is OPEN: settled rather than animating. */
+  trackerSettledOpen: boolean;
+  /** The height from React Native's keyboard events, eased toward its target. */
+  reportedHeight: number;
+  /** Whether those events last said the keyboard is hidden. */
+  reportedHidden: boolean;
+}) {
+  'worklet';
+
+  if (trackerSettledOpen && reportedHidden) return reportedHeight;
+
+  return Math.max(trackedHeight, reportedHeight);
+}
