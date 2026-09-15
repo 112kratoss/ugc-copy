@@ -162,10 +162,11 @@ vi.mock('@/lib/use-generation-model-catalog', () => ({
   useGenerationModelCatalog: () => ({ ...catalogState, loadDetails: loadCatalogDetails, summaries: (catalogState.catalog as {models?: unknown[]} | null)?.models ?? [], missingIds: EMPTY_MISSING_IDS, isLoadingModels: false }),
 }));
 
+import { AppState } from 'react-native';
 import { createDefaultCreationDraft } from '../lib/media-creation-view-model';
 import { MediaCreationScreen } from '../components/media-creation-screen';
 import { pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia } from '../lib/media';
-import { createTestGenerationModelCatalog, remoteImageModel } from './fixtures/generation-model-catalog';
+import { createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel } from './fixtures/generation-model-catalog';
 import { catalogV2 } from './generation-model-catalog-v2-fixtures';
 
 const mountedTrees: renderer.ReactTestRenderer[] = [];
@@ -874,6 +875,213 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(2);
     expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('Restored prompt');
     expect(collectText(tree.root)).not.toContain('Restoring the original prompt, settings, and references…');
+  });
+
+  // The catalog reaches the screen after it mounts, so a restore usually starts in the same commit
+  // as the catalog's first normalization of the default drafts, or after it. These cases deliver it
+  // that way. Each update renders a fresh element: re-rendering the same element object lets React
+  // skip the screen, and the catalog would never arrive.
+  describe('remix restore while the catalog is still loading', () => {
+    const girlSource = {
+      generation: { id: 'gen-girl', title: 'The girl from @girl is crying', prompt: 'The girl from @girl is crying', category: 'video', model: 'seedance-2' },
+      result: null,
+      inputs: {
+        video: {
+          referenceMode: 'elements',
+          startFrame: null,
+          endFrame: null,
+          elements: [{ id: 'element-girl', displayName: 'Girl', handle: '@girl', url: 'https://cdn.example.com/girl.png', storagePath: 'generation_inputs/owner/gen-girl/girl.png', sourceGenerationId: 'gen-girl' }],
+          referenceVideos: [],
+          referenceAudios: [],
+        },
+      },
+      workflowSettings: { model: 'seedance-2', mode: '', aspectRatio: '9:16', resolution: '480p', duration: 4, sound: false, referenceMode: 'elements' },
+      restoreIssues: [],
+    };
+    const motionSource = {
+      generation: { id: 'gen-dance', title: 'Dance', prompt: 'Dance like the reference clip', category: 'video', model: 'kling-2.6' },
+      result: null,
+      inputs: {
+        motion: {
+          characterImage: { kind: 'image', url: 'https://cdn.example.com/hero.png', storagePath: 'generation_inputs/owner/gen-dance/hero.png', mediaType: 'image', fileName: 'hero.png' },
+          referenceVideo: { kind: 'video', url: 'https://cdn.example.com/moves.mp4', storagePath: 'generation_inputs/owner/gen-dance/moves.mp4', mediaType: 'video', fileName: 'moves.mp4' },
+        },
+      },
+      workflowSettings: { model: 'kling-2.6', mode: '720p', characterOrientation: 'video', duration: 8 },
+      restoreIssues: [],
+    };
+    const imageSource = {
+      generation: { id: 'gen-poster', title: 'Poster', prompt: 'A poster of @hero_product on a beach', category: 'image', model: 'gpt-image-2' },
+      result: null,
+      inputs: {
+        image: {
+          elements: [{ id: 'element-hero', displayName: 'Hero Product', handle: '@hero_product', url: 'https://cdn.example.com/hero.png', storagePath: 'generation_inputs/owner/gen-poster/hero.png', sourceGenerationId: 'gen-poster' }],
+        },
+      },
+      workflowSettings: { model: 'gpt-image-2', aspectRatio: '9:16', resolution: '2K' },
+      restoreIssues: [],
+    };
+
+    const creator = (tool: 'image' | 'video' | 'motion', generationId: string) => (
+      <MediaCreationScreen initialTool={tool} remixSource={{ generationId, postId: `post-${generationId}` }} />
+    );
+
+    const wait = (ms: number) => renderer.act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+    });
+
+    const lastSavedSession = () => {
+      const calls = draftStorage.setItem.mock.calls;
+      return calls.length ? JSON.parse(calls[calls.length - 1][1] as string) : null;
+    };
+
+    /** Mounts before the catalog exists, delivers it, lets a network-delayed source land, then runs one more catalog update. */
+    async function restoreWithLateCatalog(
+      tool: 'image' | 'video' | 'motion',
+      generationId: string,
+      source: unknown,
+      { sameCommitAsDraftRead = false }: { sameCommitAsDraftRead?: boolean } = {},
+    ) {
+      catalogState.catalog = null;
+      let releaseSource: (value: unknown) => void = () => {};
+      authState.api.getRemixSourceBundle.mockReturnValue(new Promise((resolve) => { releaseSource = resolve; }));
+      let releaseDraftRead: (value: string | null) => void = () => {};
+      if (sameCommitAsDraftRead) {
+        draftStorage.getItem.mockReturnValueOnce(new Promise((resolve) => { releaseDraftRead = resolve; }));
+      }
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(creator(tool, generationId)); });
+      await renderer.act(async () => {
+        if (sameCommitAsDraftRead) releaseDraftRead(null);
+        catalogState.catalog = createRemixRestoreCatalog();
+        tree.update(creator(tool, generationId));
+      });
+      await renderer.act(async () => {
+        releaseSource(source);
+        await Promise.resolve();
+      });
+      await wait(450);
+      await renderer.act(async () => {
+        catalogState.catalog = createRemixRestoreCatalog();
+        tree.update(creator(tool, generationId));
+      });
+      await wait(450);
+      return tree;
+    }
+
+    it('restores a Seedance 2 source as it was when the catalog arrives after the saved draft', async () => {
+      const tree = await restoreWithLateCatalog('video', 'gen-girl', girlSource);
+
+      expect(collectText(tree.root)).not.toContain('Model updated');
+      expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('The girl from @girl is crying');
+      const video = lastSavedSession()?.video;
+      expect(video).toMatchObject({ model: 'seedance-2', aspectRatio: '9:16' });
+      expect(video.catalogSettings).toEqual({ aspectRatio: '9:16', resolution: '480p', duration: 4, sound: false, referenceMode: 'elements' });
+    });
+
+    it('restores a Seedance 2 source as it was when the catalog and the saved draft land in one commit', async () => {
+      const tree = await restoreWithLateCatalog('video', 'gen-girl', girlSource, { sameCommitAsDraftRead: true });
+
+      expect(collectText(tree.root)).not.toContain('Model updated');
+      const video = lastSavedSession()?.video;
+      expect(video).toMatchObject({ model: 'seedance-2', aspectRatio: '9:16' });
+      expect(video.catalogSettings).toEqual({ aspectRatio: '9:16', resolution: '480p', duration: 4, sound: false, referenceMode: 'elements' });
+    });
+
+    it('does not save the catalog defaults as edits when the app leaves while the source loads', async () => {
+      catalogState.catalog = null;
+      authState.api.getRemixSourceBundle.mockReturnValue(new Promise(() => {}));
+      let first!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { first = renderer.create(creator('video', 'gen-girl')); });
+      await renderer.act(async () => {
+        catalogState.catalog = createRemixRestoreCatalog();
+        first.update(creator('video', 'gen-girl'));
+      });
+      const appStateListeners = vi.mocked(AppState.addEventListener).mock.calls;
+      const onAppStateChange = appStateListeners[appStateListeners.length - 1][1] as (state: string) => void;
+      await renderer.act(async () => {
+        onAppStateChange('background');
+        await Promise.resolve();
+      });
+
+      const interrupted = lastSavedSession();
+      expect(interrupted).toMatchObject({ remixRestored: false });
+      for (const tool of ['image', 'video', 'motion'] as const) {
+        expect(interrupted.remixEditedKeys[tool]).toEqual([]);
+      }
+
+      renderer.act(() => { first.unmount(); });
+      mountedTrees.splice(mountedTrees.indexOf(first), 1);
+      draftStorage.getItem.mockResolvedValue(JSON.stringify(interrupted));
+      draftStorage.setItem.mockClear();
+      authState.api.getRemixSourceBundle.mockResolvedValue(girlSource);
+      let reopened!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { reopened = renderer.create(creator('video', 'gen-girl')); });
+      await wait(450);
+      await renderer.act(async () => {
+        catalogState.catalog = createRemixRestoreCatalog();
+        reopened.update(creator('video', 'gen-girl'));
+      });
+
+      expect(collectText(reopened.root)).not.toContain('Model updated');
+      expect(lastSavedSession()?.video).toMatchObject({ model: 'seedance-2', aspectRatio: '9:16' });
+    });
+
+    it("keeps a motion source's prompt and inputs when the catalog default model differs from the draft's", async () => {
+      await restoreWithLateCatalog('motion', 'gen-dance', motionSource);
+
+      expect(lastSavedSession()?.motion).toMatchObject({
+        model: 'kling-2.6',
+        prompt: 'Dance like the reference clip',
+        duration: 8,
+        characterImage: expect.objectContaining({ fileName: 'hero.png' }),
+        referenceVideo: expect.objectContaining({ fileName: 'moves.mp4' }),
+      });
+    });
+
+    it("keeps an image source's aspect ratio and settings when the catalog default has other controls", async () => {
+      const tree = await restoreWithLateCatalog('image', 'gen-poster', imageSource);
+
+      expect(collectText(tree.root)).not.toContain('Model updated');
+      const image = lastSavedSession()?.image;
+      expect(image).toMatchObject({ model: 'gpt-image-2', aspectRatio: '9:16', resolution: '2K' });
+      expect(image.catalogSettings).toEqual({ aspectRatio: '9:16', resolution: '2K' });
+    });
+
+    it('keeps a prompt typed and a model chosen while the source was still loading', async () => {
+      const withWan = () => {
+        const catalog = createRemixRestoreCatalog();
+        const seedance = catalog.models.find((model) => model.id === 'seedance-2')!;
+        return { ...catalog, models: [...catalog.models, { ...seedance, id: 'wan-2.7', displayName: 'Wan 2.7' }] };
+      };
+      catalogState.catalog = null;
+      let releaseSource: (value: unknown) => void = () => {};
+      authState.api.getRemixSourceBundle.mockReturnValue(new Promise((resolve) => { releaseSource = resolve; }));
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(creator('video', 'gen-girl')); });
+      await renderer.act(async () => {
+        catalogState.catalog = withWan();
+        tree.update(creator('video', 'gen-girl'));
+      });
+
+      renderer.act(() => {
+        tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('my own take');
+      });
+      renderer.act(() => {
+        findPressableByLabelPrefix(tree.root, 'Selected model').props.onPress();
+      });
+      renderer.act(() => {
+        findPressableByText(tree.root, 'Wan 2.7').props.onPress();
+      });
+      await renderer.act(async () => {
+        releaseSource(girlSource);
+        await Promise.resolve();
+      });
+      await wait(450);
+
+      expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('my own take');
+      expect(lastSavedSession()?.video).toMatchObject({ model: 'wan-2.7', prompt: 'my own take' });
+    });
   });
 
   it('prefills prompt-only create deep links without remix hydration', async () => {

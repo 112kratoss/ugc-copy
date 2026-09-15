@@ -40,7 +40,6 @@ import { CloseGlyph } from '@/lib/platform-glyphs';
 import { trackOnboardingEvent } from '@/lib/onboarding';
 import { getGenerationOutput, pollGenerationStatus } from '@/lib/generation';
 import {
-  applyCatalogModelInitialDefaults,
   applyCatalogModelDefaults,
   buildCatalogGenerationPayload,
   buildCatalogQuoteRequest,
@@ -48,7 +47,7 @@ import {
   getCatalogDraftSettings,
   hasCreatorEditedPromptDuringRemix,
   hydrateCatalogCreationDraftFromRemixSource,
-  reconcileCreationDraftWithCatalog,
+  normalizeCreationDraftForCatalog,
   validateCatalogCreationDraft,
 } from '@/lib/generation-model-draft';
 import {
@@ -398,20 +397,6 @@ function replaceMediaInList(items: MediaDraft[], id: string, upload: Parameters<
   return items.map((media) => (media.id === id ? replaceMediaDraftMedia(media, upload) : media));
 }
 
-function hasStartedCreationDraft(draft: CreationDraft) {
-  if (draft.prompt.trim()) return true;
-  if (draft.tool === 'image') return draft.references.length > 0;
-  if (draft.tool === 'video') {
-    return draft.references.length > 0
-      || draft.referenceVideos.length > 0
-      || draft.referenceAudios.length > 0
-      || Boolean(draft.startFrame)
-      || Boolean(draft.endFrame)
-      || draft.multiPrompts.some((shot) => shot.prompt.trim());
-  }
-  return Boolean(draft.characterImage) || Boolean(draft.referenceVideo);
-}
-
 function promptValidationMessage(error: string) {
   if (error === 'Prompt is required.') return 'Add a prompt before generating.';
   if (error === 'All multi-shot entries need a text prompt.') return error;
@@ -601,9 +586,14 @@ export function MediaCreationScreen({
       saved = latestDrafts.current;
       const fingerprint = JSON.stringify(saved);
       if (fingerprint === lastSavedFingerprint.current) return;
-      const remixEditedKeys = Object.fromEntries((['image', 'video', 'motion'] as const).map((tool) => [tool,
-        Object.keys(saved[tool]).filter((key) => JSON.stringify((saved[tool] as unknown as Record<string, unknown>)[key]) !== JSON.stringify((remixBaseline.current[tool] as unknown as Record<string, unknown>)[key])),
-      ]));
+      const remixEditedKeys = Object.fromEntries((['image', 'video', 'motion'] as const).map((tool) => {
+        // Compare with the baseline as the catalog leaves it, so the screen's own
+        // normalization is never saved as something the creator changed.
+        const baseline = catalog
+          ? normalizeCreationDraftForCatalog(remixBaseline.current[tool], catalog, { modelSelectionTouched: false }).draft
+          : remixBaseline.current[tool];
+        return [tool, Object.keys(saved[tool]).filter((key) => JSON.stringify((saved[tool] as unknown as Record<string, unknown>)[key]) !== JSON.stringify((baseline as unknown as Record<string, unknown>)[key]))];
+      }));
       await draftWriter.save({ ...saved, remixRestored: remixResolvedRef.current, remixEditedKeys });
       lastSavedFingerprint.current = fingerprint;
     } while (saved.image !== latestDrafts.current.image || saved.video !== latestDrafts.current.video || saved.motion !== latestDrafts.current.motion);
@@ -672,37 +662,21 @@ export function MediaCreationScreen({
     if (!catalog) return;
     const reconcile = <T extends CreationDraft>(
       kind: CreatorToolId,
-      defaultId: string | null,
       setter: (updater: (draft: T) => T) => void
     ) => {
       setter((draft) => {
-        const fallback = defaultId ? getCatalogModel(catalog, defaultId) : null;
-        const current = getCatalogModel(catalog, draft.model);
-        const shouldUseUntouchedDefault = Boolean(
-          fallback?.kind === kind
-          && !draft.catalogRevision
-          && !modelSelectionTouched.current[kind]
-          && !hasStartedCreationDraft(draft)
-        );
-        if (shouldUseUntouchedDefault && fallback) {
-          return applyCatalogModelInitialDefaults(
-            draft,
-            fallback,
-            catalog.revision,
-          ) as T;
-        }
-        if (!current) {
+        const result = normalizeCreationDraftForCatalog(draft, catalog, { modelSelectionTouched: modelSelectionTouched.current[kind] });
+        if (result.missingModel) {
           if (catalogQuery.missingIds.includes(draft.model)) setCatalogNotice('This model is no longer available. Your draft is saved; choose another model.');
           return draft;
         }
-        const result = reconcileCreationDraftWithCatalog(draft, catalog);
         if (result.warning) setCatalogNotice(result.warning);
         return result.draft as T;
       });
     };
-    reconcile<ImageCreationDraft>('image', catalog.defaults.image, setImageDraft);
-    reconcile<VideoCreationDraft>('video', catalog.defaults.video, setVideoDraft);
-    reconcile<MotionCreationDraft>('motion', catalog.defaults.motion, setMotionDraft);
+    reconcile<ImageCreationDraft>('image', setImageDraft);
+    reconcile<VideoCreationDraft>('video', setVideoDraft);
+    reconcile<MotionCreationDraft>('motion', setMotionDraft);
   }, [catalog, catalogQuery.missingIds]);
 
   const rawDraft: CreationDraft = activeTool === 'image' ? imageDraft : activeTool === 'video' ? videoDraft : motionDraft;
@@ -905,7 +879,14 @@ export function MediaCreationScreen({
     setIsRestoringRemix(true);
     remixResolvedRef.current = false;
     const promptWhenRemixStarted = draftPromptsRef.current[targetTool];
-    const draftWhenRemixStarted = latestDrafts.current[targetTool];
+    // Taken as this catalog leaves the draft. The reconcile effect above normalizes the same
+    // draft in this commit, but its update has not rendered yet; the raw draft would make the
+    // catalog's own defaults read as edits made while the source loaded, spread over the restore.
+    const draftWhenRemixStarted = normalizeCreationDraftForCatalog(
+      latestDrafts.current[targetTool],
+      catalog,
+      { modelSelectionTouched: modelSelectionTouched.current[targetTool] },
+    ).draft;
 
     void api.getRemixSourceBundle(generationId, { postId: remixSource?.postId ?? null })
       .then(async (bundle) => {
