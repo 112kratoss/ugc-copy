@@ -15,6 +15,8 @@ const authState = vi.hoisted(() => ({
 
 const routerPush = vi.hoisted(() => vi.fn());
 const openUrl = vi.hoisted(() => vi.fn());
+const VERSION_LABEL = 'Version 0.1.4 (52) · update 00b2999e';
+const versionLabel = vi.hoisted(() => ({ value: null as string | null }));
 
 vi.mock('expo-router', () => ({
   router: { push: routerPush },
@@ -66,6 +68,11 @@ vi.mock('@/lib/env', () => ({
   env: { siteUrl: 'https://site.example' },
 }));
 
+vi.mock('@/lib/app-version-label', () => ({
+  formatAppVersionLabel: () => versionLabel.value,
+  readAppVersionParts: () => ({ version: null, build: null, update: null }),
+}));
+
 import SettingsScreen from '../app/settings';
 
 function renderScreen() {
@@ -90,6 +97,7 @@ beforeEach(() => {
   routerPush.mockClear();
   openUrl.mockClear();
   authState.user = { id: 'user-1', email: 'creator@example.com' };
+  versionLabel.value = VERSION_LABEL;
 });
 
 describe('settings screen (HIG S16)', () => {
@@ -146,5 +154,19 @@ describe('settings screen (HIG S16)', () => {
     expect(deletion.props.accessibilityRole).toBe('link');
     renderer.act(() => { (deletion.props.onPress as () => void)(); });
     expect(openUrl).toHaveBeenCalledWith('https://site.example/delete-account');
+  });
+
+  it('ends with the version line: store version, build and running update', () => {
+    const tree = renderScreen();
+    const texts = tree.root.findAll((node) => String(node.type) === 'text');
+    expect(texts.at(-1)?.props.children).toBe(VERSION_LABEL);
+    expect(texts.at(-1)?.props.variant).toBe('caption');
+  });
+
+  it('leaves the version line out when no version can be read', () => {
+    versionLabel.value = null;
+    const tree = renderScreen();
+    const texts = tree.root.findAll((node) => String(node.type) === 'text');
+    expect(texts.some((node) => String(node.props.children).startsWith('Version'))).toBe(false);
   });
 });
