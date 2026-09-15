@@ -84,6 +84,7 @@ import {
   normalizeMediaTemplateListResponse,
   normalizeTemplateRunResponse,
 } from './media-templates';
+import type { MediaDiagnosticsReport } from './media-diagnostics';
 
 export class ApiError extends Error {
   constructor(
@@ -703,6 +704,16 @@ export function createApiClient({
         body: JSON.stringify({ ...body, installationId }),
       });
     },
+    /**
+     * A sampled media-failure report from `lib/media-diagnostics`. Sent without
+     * credentials: it carries no identity, and has to get through while the
+     * session itself may be what is failing.
+     */
+    reportMediaDiagnostics: (report: MediaDiagnosticsReport) =>
+      request<unknown>('/api/mobile/media-diagnostics', {
+        method: 'POST',
+        body: JSON.stringify(report),
+      }, { auth: false }),
     deleteAccount: (
       confirmation: 'DELETE',
       options: { appleAuthorizationCode?: string } = {},

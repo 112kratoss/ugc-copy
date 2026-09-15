@@ -269,6 +269,14 @@ const extendedOperationCases: Array<{
   { key: 'recordReferralVisit', call: (api) => api.recordReferralVisit({ code: 'CREATOR1', source: 'mobile' }) },
   { key: 'claimReferral', call: (api) => api.claimReferral({ code: 'CREATOR1' }) },
   {
+    key: 'reportMediaDiagnostics',
+    call: (api) => api.reportMediaDiagnostics({
+      sessionId: 'session-1234',
+      app: { version: '0.1.4', build: '71', update: '0558882d' },
+      events: [{ at: 1, kind: 'image', event: 'stall', surface: 'profile-grid', subject: '8a1f09c2', attempt: 0 }],
+    }),
+  },
+  {
     key: 'recordShowcaseFeedEvent',
     call: (api) => api.recordShowcaseFeedEvent({
       clientEventId: 'feed-event-1',

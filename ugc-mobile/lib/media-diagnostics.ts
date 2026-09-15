@@ -52,9 +52,108 @@ export function hashMediaSubject(value: string) {
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
+/** What reaches the backend: stalls and final failures, never routine errors or recoveries. */
+const REPORTED_EVENTS = new Set<MediaDiagnosticEvent['event']>(['stall', 'latched']);
+/** Gathers a burst of failures into one report instead of one request each. */
+export const MEDIA_DIAGNOSTICS_REPORT_DELAY_MS = 30_000;
+export const MEDIA_DIAGNOSTICS_REPORT_SPACING_MS = 5 * 60_000;
+export const MEDIA_DIAGNOSTICS_REPORTS_PER_SESSION = 3;
+export const MEDIA_DIAGNOSTICS_EVENTS_PER_REPORT = 20;
+/** The backend refuses a larger attempt count; a report carries at most this. */
+const REPORTED_ATTEMPT_CEILING = 10;
+
+export type MediaDiagnosticsReport = {
+  sessionId: string;
+  app: { version: string | null; build: string | null; update: string | null };
+  events: MediaDiagnosticEvent[];
+};
+
+type MediaDiagnosticsReporter = {
+  send: (report: MediaDiagnosticsReport) => Promise<unknown>;
+  app: () => MediaDiagnosticsReport['app'];
+};
+
+/** Each recorded event's place in the session, which outlives the ring buffer's trimming. */
+const sequenceOf = new WeakMap<MediaDiagnosticEvent, number>();
+const reporting = {
+  reporter: null as MediaDiagnosticsReporter | null,
+  timer: null as ReturnType<typeof setTimeout> | null,
+  recorded: 0,
+  /** Everything up to this sequence was sent or passed over: no event is reported twice. */
+  reportedThrough: 0,
+  sentReports: 0,
+  lastSentAt: 0,
+};
+
 export function recordMediaDiagnostic(input: Omit<MediaDiagnosticEvent, 'at'>) {
-  events.push({ ...input, subject: hashMediaSubject(input.subject), at: Date.now() });
+  const entry = { ...input, subject: hashMediaSubject(input.subject), at: Date.now() };
+  reporting.recorded += 1;
+  sequenceOf.set(entry, reporting.recorded);
+  events.push(entry);
   if (events.length > EVENT_LIMIT) events.splice(0, events.length - EVENT_LIMIT);
+  if (REPORTED_EVENTS.has(entry.event)) scheduleSampledReport();
+}
+
+/**
+ * Sends a bounded sample of this session's stalls and failures to the backend,
+ * so an incident on someone else's phone leaves a trace too. Registered once
+ * the API client exists; returns the unregister.
+ *
+ * Sampling keeps it cheap and quiet: only stalls and final failures, at most
+ * `MEDIA_DIAGNOSTICS_EVENTS_PER_REPORT` per report, reports at least
+ * `MEDIA_DIAGNOSTICS_REPORT_SPACING_MS` apart and no more than
+ * `MEDIA_DIAGNOSTICS_REPORTS_PER_SESSION`. A report that fails is dropped,
+ * never retried: diagnostics must not add load to a network that is failing.
+ */
+export function setMediaDiagnosticsReporter(reporter: MediaDiagnosticsReporter) {
+  reporting.reporter = reporter;
+  if (unreportedEvents().length) scheduleSampledReport();
+  return () => {
+    if (reporting.reporter !== reporter) return;
+    reporting.reporter = null;
+    if (reporting.timer) clearTimeout(reporting.timer);
+    reporting.timer = null;
+  };
+}
+
+function unreportedEvents() {
+  return events.filter((entry) => (
+    REPORTED_EVENTS.has(entry.event) && (sequenceOf.get(entry) ?? 0) > reporting.reportedThrough
+  ));
+}
+
+function scheduleSampledReport() {
+  if (!reporting.reporter || reporting.timer) return;
+  if (reporting.sentReports >= MEDIA_DIAGNOSTICS_REPORTS_PER_SESSION) return;
+  const spacingLeft = reporting.lastSentAt
+    ? reporting.lastSentAt + MEDIA_DIAGNOSTICS_REPORT_SPACING_MS - Date.now()
+    : 0;
+  reporting.timer = setTimeout(flushSampledReport, Math.max(MEDIA_DIAGNOSTICS_REPORT_DELAY_MS, spacingLeft));
+}
+
+function flushSampledReport() {
+  reporting.timer = null;
+  const reporter = reporting.reporter;
+  if (!reporter || reporting.sentReports >= MEDIA_DIAGNOSTICS_REPORTS_PER_SESSION) return;
+
+  const pending = unreportedEvents();
+  reporting.reportedThrough = reporting.recorded;
+  if (!pending.length) return;
+
+  reporting.sentReports += 1;
+  reporting.lastSentAt = Date.now();
+  const report: MediaDiagnosticsReport = {
+    sessionId: session.id,
+    app: reporter.app(),
+    events: pending
+      .slice(-MEDIA_DIAGNOSTICS_EVENTS_PER_REPORT)
+      .map((entry) => ({ ...entry, attempt: Math.min(entry.attempt, REPORTED_ATTEMPT_CEILING) })),
+  };
+  try {
+    void reporter.send(report).catch(() => undefined);
+  } catch {
+    // A sender that throws synchronously is dropped the same as one that rejects.
+  }
 }
 
 /**
@@ -117,4 +216,13 @@ export function formatMediaDiagnosticsReport({
 
 export function clearMediaDiagnosticsForTests() {
   events.length = 0;
+  if (reporting.timer) clearTimeout(reporting.timer);
+  Object.assign(reporting, {
+    reporter: null,
+    timer: null,
+    recorded: 0,
+    reportedThrough: 0,
+    sentReports: 0,
+    lastSentAt: 0,
+  });
 }

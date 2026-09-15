@@ -24,6 +24,8 @@ import { setSessionMergedHandler, setSessionRejectedHandler, setUpgradeRequiredH
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { notificationBadgeQueryKey } from '@/lib/notification-badge';
 import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
+import { readAppVersionParts } from '@/lib/app-version-label';
+import { setMediaDiagnosticsReporter } from '@/lib/media-diagnostics';
 import { useReducedMotion } from '@/lib/motion';
 import { navigateToNotificationDeepLink, subscribeToNotificationResponses, subscribeToNotificationsReceived } from '@/lib/notifications';
 import { OnboardingProvider, useOnboarding } from '@/lib/onboarding';
@@ -119,6 +121,7 @@ function RootLayoutNav() {
           <SessionMergedCoordinator />
           <SessionRejectedCoordinator />
           <OtaUpdateCoordinator />
+          <MediaDiagnosticsCoordinator />
           <SafeAreaProvider>
             <ThemeProvider value={navigationTheme}>
               <GestureHandlerRootView style={{ flex: 1 }}>
@@ -321,6 +324,25 @@ function OtaUpdateCoordinator() {
       visible={criticalPromptVisible}
     />
   );
+}
+
+function MediaDiagnosticsCoordinator() {
+  // Sends a sampled trace of media stalls and failures to the backend (see
+  // lib/media-diagnostics), so a blank-media incident on any phone leaves
+  // evidence behind even when nobody copies the report from Settings.
+  const { api } = useAuth();
+
+  useEffect(() => setMediaDiagnosticsReporter({
+    send: (report) => api.reportMediaDiagnostics(report),
+    app: () => {
+      const { version, build, update } = readAppVersionParts();
+      // The group's first 8 characters, as Settings shows it: enough to find the
+      // update in `eas update:list`, and within the backend's field bound.
+      return { version, build, update: update?.slice(0, 8) ?? null };
+    },
+  }), [api]);
+
+  return null;
 }
 
 function UpgradeRequiredCoordinator() {
