@@ -19,8 +19,13 @@ export function creationDraftStorageKey(scope?: string) {
  * video default (kling-3.0-video) accepts no references, then autosaved the emptied draft.
  * Resuming one of those would hide the source's references for good, so they start again
  * from the source. Unsent edits in such a session are the price of that.
+ *
+ * 3: a session saved under 2 on 2026-09-15, while that fix was being verified, had lost a
+ * reference and, with it, the @mention in the prompt. Remix drafts never expire and clear
+ * only after a successful generation, so Recreate reopened it on every tap. Sessions saved
+ * under 2 start again from the source too; 2 had been live for a few hours.
  */
-const REMIX_DRAFT_SCOPE_VERSION = 2;
+const REMIX_DRAFT_SCOPE_VERSION = 3;
 
 export function remixDraftScope(userId: string | null, source?: { generationId?: string | null; postId?: string | null }) {
   if (!source?.generationId && !source?.postId) return undefined;

@@ -98,18 +98,24 @@ describe('creation draft resume', () => {
   });
 
   // Remix restores before 2026-09-15 capped media at the placeholder video model, which
-  // accepts no references, and autosaved the emptied draft. Resuming one of those sessions
-  // would hide the source's references for good, so they must restore afresh instead.
-  it('does not resume remix sessions saved under the previous scope', async () => {
+  // accepts no references, and autosaved the emptied draft (the unversioned scope). A
+  // version 2 session saved while that fix was verified had lost a reference and its
+  // @mention. Resuming either would hide the source's references, so both restore afresh.
+  it('does not resume remix sessions saved under earlier scopes', async () => {
     const memory = new Map<string, string>();
     storage.getItem.mockImplementation(async (key: string) => memory.get(key) ?? null);
     const drafts = { image: createDefaultCreationDraft('image'), video: createDefaultCreationDraft('video'), motion: createDefaultCreationDraft('motion') };
-    const previousScope = JSON.stringify(['remix', 'reader', 'post', 'generation']);
-    memory.set(creationDraftStorageKey(previousScope), JSON.stringify({ ...drafts, remixRestored: true, updatedAt: '2026-09-14T00:00:00.000Z' }));
+    const earlierScopes = [
+      JSON.stringify(['remix', 'reader', 'post', 'generation']),
+      JSON.stringify(['remix', 2, 'reader', 'post', 'generation']),
+    ];
+    for (const earlierScope of earlierScopes) {
+      memory.set(creationDraftStorageKey(earlierScope), JSON.stringify({ ...drafts, remixRestored: true, updatedAt: '2026-09-15T02:05:00.000Z' }));
+    }
 
     const scope = remixDraftScope('reader', { generationId: 'generation', postId: 'post' });
 
-    expect(scope).not.toBe(previousScope);
+    expect(earlierScopes).not.toContain(scope);
     expect(await loadPersistedCreationDrafts(scope)).toBeNull();
   });
 });
