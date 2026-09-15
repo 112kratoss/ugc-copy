@@ -1,5 +1,6 @@
 import type { CreatorToolId, GenerationListItem, OwnerPostListItem, PostResourceKind, ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/types';
 
+import { getCreationAvailability, type CreationAvailability } from './creation-library';
 import { getGenerationKind, getGenerationLabel, getGenerationRenderableMediaKind } from './generation-media';
 import { formatCompactCount } from './home-view-model';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from './showcase-display';
@@ -99,6 +100,12 @@ export interface ImmersivePreviewItem {
   linkedPostVisibility?: string | null;
   linkedPostArchivedAt?: string | null;
   linkedPostBundle?: OwnerPostListItem['bundle'] | null;
+  /**
+   * Whether the linked post's own record was loaded, so `linkedPostBundle` is
+   * known rather than merely absent. Linked-post details are enrichment that can
+   * be missing; an action that depends on the bundle reads the post first.
+   */
+  linkedPostDetailsLoaded?: boolean;
   /** The post's own recipe, for an owned post, so lifecycle policy can see its state. */
   ownerPostBundle?: OwnerPostListItem['bundle'] | null;
   linkedPostPath?: string | null;
@@ -110,6 +117,11 @@ export interface ImmersivePreviewItem {
    * indistinguishable from an empty `mediaItems` alone.
    */
   runStatus?: string | null;
+  /**
+   * Whether a creation has a file to show and, if not, why. A card or slide with
+   * nothing to play draws this state instead of disappearing (audit C1).
+   */
+  availability?: CreationAvailability;
   visibility?: string | null;
   isManualOwnerPost?: boolean;
   availableActions: string[];
@@ -249,15 +261,19 @@ export function immersiveViewerReturnPath({
 export function profileMediaFeedHref({
   source,
   initialId,
+  scope,
 }: {
   source: PreviewViewerSource;
   initialId: string;
+  /** The Posts tab's scope the tile was tapped in, so the feed holds the same posts. */
+  scope?: 'active' | 'archived';
 }) {
   return {
     pathname: '/profile-media-feed',
     params: {
       source,
       initialId,
+      ...(scope ? { scope } : {}),
     },
   };
 }
@@ -287,6 +303,18 @@ export function getImmersiveInitialIndex(items: ImmersivePreviewItem[], initialI
   if (!initialId) return 0;
   const index = items.findIndex((item) => item.id === initialId);
   return index >= 0 ? index : 0;
+}
+
+/**
+ * Whether the item a route asked for is absent from what loaded.
+ *
+ * `getImmersiveInitialIndex` answers 0 for a missing id, which suits a list's
+ * scroll props and nothing else: a screen that let that 0 stand opened the first
+ * item in place of the one tapped (audit C1). A missing selection has to be
+ * shown as missing — deleted, archived elsewhere, or no longer the reader's.
+ */
+export function isImmersiveSelectionMissing(items: ImmersivePreviewItem[], initialId: string | null | undefined) {
+  return Boolean(initialId) && !items.some((item) => item.id === initialId);
 }
 
 export function selectActiveImmersiveVideoId(
@@ -330,6 +358,13 @@ export function hasImmersiveAudibleMedia(item: ImmersivePreviewItem | undefined)
  */
 export function getImmersiveStatusSlide(item: ImmersivePreviewItem): { title: string; body: string } {
   const label = item.badge?.toLowerCase() || 'creation';
+
+  if (item.availability === 'source-unavailable') {
+    return {
+      title: 'This file is no longer available',
+      body: `The ${label}'s only copy expired at the provider before it could be saved. The prompt is on the next page — swipe left to read it, or make it again.`,
+    };
+  }
 
   if (item.runStatus === 'failed') {
     return {
@@ -409,6 +444,10 @@ function getGenerationMediaItemsList(
     return {
       id: outputUrls?.length ? `${id}:${index}` : `${id}:output`,
       url,
+      // The display rendition travels with the descriptor it belongs to. Left on
+      // `preview` alone it never reached `getShowcaseViewerImageUrl`, which reads
+      // the item, so every creation opened its full-size original (audit C2).
+      ...(media && mediaKind === 'image' && media.displayUrl ? { displayUrl: media.displayUrl } : {}),
       preview: media,
       previewUrl: media?.previewUrl ?? legacyPreview ?? (mediaKind === 'image' ? url : null),
       previewThumbhash: media?.thumbhash,
@@ -583,10 +622,12 @@ function generationToImmersiveItem(
     linkedPostVisibility,
     linkedPostArchivedAt,
     linkedPostBundle: linkedPost?.bundle ?? null,
+    linkedPostDetailsLoaded: Boolean(linkedPost),
     linkedPostPath,
     linkedPostOwnerPath,
     archivedAt: item.archived_at ?? null,
     runStatus: item.status ?? null,
+    availability: getCreationAvailability(item),
     visibility: null,
     availableActions: getGenerationAvailableActions(item, linkedPostId, linkedPostArchivedAt),
     disabledActions: item.archived_at

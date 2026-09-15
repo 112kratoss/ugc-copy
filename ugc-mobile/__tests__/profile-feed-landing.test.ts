@@ -1,61 +1,88 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  FEED_LANDING_RETRY_DELAYS_MS,
-  MAX_FEED_LANDING_ATTEMPTS,
-  shouldReassertFeedLanding,
+  FEED_LANDING_BUDGET_MS,
+  INITIAL_FEED_LANDING,
+  reduceFeedLanding,
+  shouldScrollToFeedTarget,
+  type FeedLanding,
+  type FeedLandingEvent,
 } from '../lib/profile-feed-card-view-model';
 
-function landing(overrides: Partial<Parameters<typeof shouldReassertFeedLanding>[0]> = {}) {
-  return shouldReassertFeedLanding({
-    targetIndex: 5,
-    cardCount: 13,
-    landed: false,
-    readerTookOver: false,
-    attempts: 0,
-    ...overrides,
-  });
+function run(events: FeedLandingEvent[], from: FeedLanding = INITIAL_FEED_LANDING) {
+  return events.reduce(reduceFeedLanding, from);
 }
 
-describe('shouldReassertFeedLanding', () => {
-  it('keeps re-asserting while the target has not come into view', () => {
-    expect(landing()).toBe(true);
-    expect(landing({ attempts: MAX_FEED_LANDING_ATTEMPTS - 1 })).toBe(true);
+describe('feed landing', () => {
+  it.each([1, 6, 24, 25, 48, 49, 100])('seeks card %i and lands once it is on screen', (index) => {
+    const seeking = run([{ type: 'target', index, now: 0 }]);
+    expect(seeking).toEqual({ phase: 'seeking', targetIndex: index, startedAt: 0 });
+    expect(shouldScrollToFeedTarget(seeking, 200)).toBe(true);
+
+    const landed = reduceFeedLanding(seeking, { type: 'viewable', targetVisible: true });
+    expect(landed.phase).toBe('landed');
+    expect(shouldScrollToFeedTarget(landed, 200)).toBe(false);
   });
 
-  it('stops once the target is on screen', () => {
-    expect(landing({ landed: true })).toBe(false);
+  it('waits for slow data instead of spending its budget before the card exists', () => {
+    // Two seconds of nothing, then the target arrives: the budget starts then.
+    const waiting = run([{ type: 'tick', now: 1000 }, { type: 'tick', now: 2000 }]);
+    expect(waiting.phase).toBe('waiting');
+
+    const seeking = run([{ type: 'target', index: 24, now: 2000 }, { type: 'tick', now: 4000 }], waiting);
+    expect(seeking.phase).toBe('seeking');
   });
 
-  it('stops as soon as the reader scrolls, so the list is never yanked back', () => {
-    expect(landing({ readerTookOver: true })).toBe(false);
+  it('lands again when the list reorders before the reader has moved', () => {
+    const landed = run([
+      { type: 'target', index: 6, now: 0 },
+      { type: 'viewable', targetVisible: true },
+    ]);
+
+    // A refresh inserted two creations above the card being looked at.
+    const relanding = reduceFeedLanding(landed, { type: 'target', index: 8, now: 500 });
+    expect(relanding).toEqual({ phase: 'seeking', targetIndex: 8, startedAt: 500 });
+    expect(reduceFeedLanding(relanding, { type: 'target', index: 8, now: 600 })).toBe(relanding);
   });
 
-  it('gives up rather than retrying forever when the card never becomes viewable', () => {
-    expect(landing({ attempts: MAX_FEED_LANDING_ATTEMPTS })).toBe(false);
+  it('lets the reader\'s own scroll win for the rest of the visit', () => {
+    const released = run([
+      { type: 'target', index: 6, now: 0 },
+      { type: 'reader-scrolled' },
+      { type: 'target', index: 9, now: 100 },
+      { type: 'retry', now: 200 },
+    ]);
+
+    expect(released.phase).toBe('released');
+    expect(shouldScrollToFeedTarget(released, 200)).toBe(false);
   });
 
-  it('does not scroll for the first card, which needs no landing', () => {
-    expect(landing({ targetIndex: 0 })).toBe(false);
+  it('says it failed when the budget runs out, and can be asked again', () => {
+    const failed = run([
+      { type: 'target', index: 49, now: 0 },
+      { type: 'tick', now: FEED_LANDING_BUDGET_MS - 1 },
+      { type: 'tick', now: FEED_LANDING_BUDGET_MS },
+    ]);
+    expect(failed.phase).toBe('failed');
+
+    const retried = reduceFeedLanding(failed, { type: 'retry', now: 9000 });
+    expect(retried).toEqual({ phase: 'seeking', targetIndex: 49, startedAt: 9000 });
   });
 
-  /**
-   * The regression this whole path exists for: FlashList clamps an out-of-range
-   * scroll to the end of the list, so asking for an index the list does not have
-   * lands the reader on the oldest card instead of the one they tapped.
-   */
-  it('refuses an index the list cannot contain instead of clamping to the end', () => {
-    expect(landing({ targetIndex: 13, cardCount: 13 })).toBe(false);
-    expect(landing({ targetIndex: 99, cardCount: 13 })).toBe(false);
-    expect(landing({ targetIndex: 5, cardCount: 0 })).toBe(false);
+  it('goes back to waiting when the card leaves the list, and never falls back to the first card', () => {
+    const gone = run([
+      { type: 'target', index: 6, now: 0 },
+      { type: 'target', index: -1, now: 100 },
+    ]);
+
+    expect(gone).toEqual(INITIAL_FEED_LANDING);
+    expect(shouldScrollToFeedTarget(gone, 200)).toBe(false);
   });
 
-  it('allows one attempt per scheduled delay plus the immediate one', () => {
-    expect(MAX_FEED_LANDING_ATTEMPTS).toBe(FEED_LANDING_RETRY_DELAYS_MS.length + 1);
-  });
-
-  it('schedules retries in increasing order so later cards get later chances', () => {
-    const sorted = [...FEED_LANDING_RETRY_DELAYS_MS].sort((a, b) => a - b);
-    expect(FEED_LANDING_RETRY_DELAYS_MS).toEqual(sorted);
+  it('never scrolls to an index the list does not contain, or for the first card', () => {
+    const seeking: FeedLanding = { phase: 'seeking', targetIndex: 13, startedAt: 0 };
+    // FlashList clamps an out-of-range index to the end of the list.
+    expect(shouldScrollToFeedTarget(seeking, 13)).toBe(false);
+    expect(shouldScrollToFeedTarget({ ...seeking, targetIndex: 0 }, 13)).toBe(false);
   });
 });

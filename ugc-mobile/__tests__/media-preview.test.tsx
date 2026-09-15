@@ -8,6 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 const imageState = vi.hoisted(() => ({ prefetch: vi.fn(async () => true) }));
+const appState = vi.hoisted(() => ({
+  currentState: 'active' as string,
+  listeners: [] as Array<(state: string) => void>,
+}));
 
 // This suite exercises image caching/retry; native video recovery has its own suite.
 vi.mock('@/components/recoverable-video-preview', () => ({
@@ -19,6 +23,19 @@ vi.mock('@/lib/use-media-source', () => ({
 }));
 
 vi.mock('react-native', () => ({
+  AppState: {
+    get currentState() {
+      return appState.currentState;
+    },
+    addEventListener: (_type: string, listener: (state: string) => void) => {
+      appState.listeners.push(listener);
+      return {
+        remove: () => {
+          appState.listeners = appState.listeners.filter((entry) => entry !== listener);
+        },
+      };
+    },
+  },
   Pressable: ({ children, ...props }: MockProps) => React.createElement('pressable', props, children),
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
@@ -45,6 +62,8 @@ vi.mock('lucide-react-native', () => ({
 }));
 
 import { StableMediaImage } from '../components/media-preview';
+import { clearMediaDiagnosticsForTests, readMediaDiagnostics } from '../lib/media-diagnostics';
+import { MEDIA_DISPLAY_DEADLINE_MS, MEDIA_RECOVERY_WAIT_MS, mediaRecoveryBudget } from '../lib/media-recovery';
 
 // Fires onError and advances timers until the failure latches, so these tests
 // hold for the never-retry placeholder policy and any bounded auto-retry
@@ -220,5 +239,148 @@ describe('StableMediaImage', () => {
       .findAllByType('image')
       .filter((node) => node.props.placeholder?.thumbhash === 'thumbhash-base64' && !node.props.source);
     expect(placeholderImages).toHaveLength(1);
+  });
+});
+
+describe('StableMediaImage display watchdog', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    clearMediaDiagnosticsForTests();
+    appState.currentState = 'active';
+    appState.listeners = [];
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const eventsOf = (event: string) => readMediaDiagnostics().events.filter((entry) => entry.event === event);
+  const advance = (ms: number) => renderer.act(() => {
+    vi.advanceTimersByTime(ms);
+  });
+  const setAppState = (state: string) => {
+    appState.currentState = state;
+    renderer.act(() => {
+      appState.listeners.forEach((listener) => listener(state));
+    });
+  };
+
+  it('reloads an image that neither displays nor fails, then hands it to the reader to retry', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<StableMediaImage url="https://cdn/stuck.webp" cacheKey="stuck" watchdog />);
+    });
+
+    // Two bounded reloads, one per deadline...
+    advance(MEDIA_DISPLAY_DEADLINE_MS);
+    advance(MEDIA_DISPLAY_DEADLINE_MS);
+    expect(eventsOf('stall')).toHaveLength(2);
+    expect(eventsOf('retry')).toHaveLength(2);
+    expect(tree.root.findAllByType('image')).toHaveLength(1);
+
+    // ...then the reader gets a retry control instead of an endless placeholder.
+    advance(MEDIA_DISPLAY_DEADLINE_MS);
+    expect(eventsOf('latched')).toHaveLength(1);
+    expect(JSON.stringify(tree.toJSON())).toContain('Taking too long to load');
+
+    renderer.act(() => tree.root.findByType('pressable' as never).props.onPress());
+    expect(tree.root.findByType('image').props.source).toEqual({ uri: 'https://cdn/stuck.webp', cacheKey: 'stuck' });
+
+    renderer.act(() => tree.unmount());
+    expect(mediaRecoveryBudget.activeCount()).toBe(0);
+  });
+
+  it('stands down once the image displays', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<StableMediaImage url="https://cdn/shown.webp" cacheKey="shown" watchdog />);
+    });
+
+    renderer.act(() => tree.root.findByType('image').props.onDisplay());
+    advance(MEDIA_DISPLAY_DEADLINE_MS * 3);
+
+    expect(eventsOf('stall')).toHaveLength(0);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('counts foreground time only', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<StableMediaImage url="https://cdn/slow.webp" cacheKey="slow" watchdog />);
+    });
+
+    advance(10_000);
+    setAppState('background');
+    advance(60_000);
+    expect(eventsOf('stall')).toHaveLength(0);
+
+    setAppState('active');
+    advance(MEDIA_DISPLAY_DEADLINE_MS - 1);
+    expect(eventsOf('stall')).toHaveLength(0);
+    advance(1);
+    expect(eventsOf('stall')).toHaveLength(1);
+
+    renderer.act(() => tree.unmount());
+  });
+
+  it('never times an image whose caller did not ask, such as a page the system may detach', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<StableMediaImage url="https://cdn/offscreen.webp" cacheKey="offscreen" />);
+    });
+
+    advance(MEDIA_DISPLAY_DEADLINE_MS * 4);
+
+    expect(readMediaDiagnostics().events).toHaveLength(0);
+    expect(tree.root.findAllByType('image')).toHaveLength(1);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('reloads only two stalled images at a time', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(
+        <>
+          <StableMediaImage url="https://cdn/a.webp" cacheKey="a" watchdog />
+          <StableMediaImage url="https://cdn/b.webp" cacheKey="b" watchdog />
+          <StableMediaImage url="https://cdn/c.webp" cacheKey="c" watchdog />
+        </>
+      );
+    });
+
+    advance(MEDIA_DISPLAY_DEADLINE_MS);
+    expect(eventsOf('stall')).toHaveLength(3);
+    expect(eventsOf('retry')).toHaveLength(2);
+
+    // One recovered image frees its slot for the one that was waiting.
+    const [first] = tree.root.findAllByType('image');
+    renderer.act(() => first.props.onDisplay());
+    advance(MEDIA_RECOVERY_WAIT_MS);
+    expect(eventsOf('retry')).toHaveLength(3);
+
+    renderer.act(() => tree.unmount());
+    expect(mediaRecoveryBudget.activeCount()).toBe(0);
+  });
+
+  it('records what stalled without its address or token', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(
+        <StableMediaImage
+          url="https://storage.example/object/sign/generated_images/owner-1/private.webp?token=secret-token"
+          cacheKey="owner-1/private.webp"
+          watchdog
+          diagnosticsSurface="profile-grid"
+        />
+      );
+    });
+
+    advance(MEDIA_DISPLAY_DEADLINE_MS);
+
+    expect(eventsOf('stall')[0]).toMatchObject({ kind: 'image', surface: 'profile-grid', attempt: 0, stage: 'no-response' });
+    const serialized = JSON.stringify(readMediaDiagnostics());
+    expect(serialized).not.toContain('secret-token');
+    expect(serialized).not.toContain('owner-1');
+    renderer.act(() => tree.unmount());
   });
 });

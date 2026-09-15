@@ -5,6 +5,13 @@ import { Linking, Pressable, View } from 'react-native';
 import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
 import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
 import { formatAppVersionLabel, readAppVersionParts } from '@/lib/app-version-label';
+import { copyToClipboard } from '@/lib/copy-to-clipboard';
+import { showMessageDialog } from '@/lib/dialog';
+import {
+  formatMediaDiagnosticsReport,
+  readMediaDiagnostics,
+  summarizeMediaDiagnostics,
+} from '@/lib/media-diagnostics';
 import { formatCreditAmount } from '@/lib/pricing';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
@@ -106,12 +113,37 @@ export default function SettingsScreen() {
       )}
 
       {versionLabel ? (
-        <AppText variant="caption" color="muted" style={{ textAlign: 'center' }}>
-          {versionLabel}
-        </AppText>
+        // Long-press copies this session's media diagnostics: the report to send
+        // when images stop loading, taken before the app is restarted.
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={versionLabel}
+          accessibilityHint="Long-press to copy media diagnostics."
+          onLongPress={() => void copyMediaDiagnostics(versionLabel)}
+          style={{ minHeight: 44, justifyContent: 'center' }}
+        >
+          <AppText variant="caption" color="muted" style={{ textAlign: 'center' }}>
+            {versionLabel}
+          </AppText>
+        </Pressable>
       ) : null}
     </Screen>
   );
+}
+
+async function copyMediaDiagnostics(versionLabel: string) {
+  const diagnostics = readMediaDiagnostics();
+  await copyToClipboard(
+    formatMediaDiagnosticsReport({ versionLabel, diagnostics, now: Date.now() }),
+    'Media diagnostics copied'
+  );
+  const summary = summarizeMediaDiagnostics(diagnostics.events);
+  showMessageDialog({
+    title: 'Media diagnostics copied',
+    message: summary.total
+      ? `${summary.total} media events this session: ${summary.stalls} stalled, ${summary.failures} failed, ${summary.recoveries} recovered.`
+      : 'No media problems recorded this session.',
+  });
 }
 
 function GroupLabel({ children }: { children: string }) {

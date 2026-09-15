@@ -15,6 +15,7 @@ const videoState = vi.hoisted(() => ({
     showNowPlayingNotification: true,
     staysActiveInBackground: true,
     bufferOptions: undefined as { preferredForwardBufferDuration?: number } | undefined,
+    status: undefined as string | undefined,
   },
   createVideoPlayer: vi.fn(),
 }));
@@ -36,6 +37,10 @@ vi.mock('expo-video', () => ({
 const imageState = vi.hoisted(() => ({ mounts: 0 }));
 const authRevision = vi.hoisted(() => ({ current: '' }));
 const focusState = vi.hoisted(() => ({ focused: true }));
+const appState = vi.hoisted(() => ({
+  currentState: 'active' as string,
+  listeners: [] as Array<(state: string) => void>,
+}));
 vi.mock('@react-navigation/native', () => ({ useIsFocused: () => focusState.focused }));
 
 vi.mock('@/components/recoverable-video-preview', () => ({
@@ -67,9 +72,25 @@ vi.mock('expo-linear-gradient', () => ({
 vi.mock('lucide-react-native', () => ({
   ImageOff: (props: Record<string, unknown>) => React.createElement('image-off', props),
   Play: (props: Record<string, unknown>) => React.createElement('play-icon', props),
+  RotateCcw: (props: Record<string, unknown>) => React.createElement('rotate-icon', props),
 }));
 
 vi.mock('react-native', () => ({
+  AppState: {
+    get currentState() {
+      return appState.currentState;
+    },
+    addEventListener: (_type: string, listener: (state: string) => void) => {
+      appState.listeners.push(listener);
+      return {
+        remove: () => {
+          appState.listeners = appState.listeners.filter((entry) => entry !== listener);
+        },
+      };
+    },
+  },
+  Pressable: ({ children, ...props }: Record<string, unknown> & { children?: React.ReactNode }) =>
+    React.createElement('pressable', props, children),
   ActivityIndicator: (props: Record<string, unknown>) => React.createElement('activity-indicator', props),
   Text: ({ children, ...props }: Record<string, unknown> & { children?: React.ReactNode }) => React.createElement('text', props, children),
   View: ({ children, ...props }: Record<string, unknown> & { children?: React.ReactNode }) =>
@@ -77,6 +98,7 @@ vi.mock('react-native', () => ({
 }));
 
 import { FeedVideoPreview } from '../components/feed-video-preview';
+import { MEDIA_DISPLAY_DEADLINE_MS } from '../lib/media-recovery';
 
 describe('FeedVideoPreview', () => {
   beforeEach(() => {
@@ -93,8 +115,24 @@ describe('FeedVideoPreview', () => {
     videoState.player.showNowPlayingNotification = true;
     videoState.player.staysActiveInBackground = true;
     videoState.player.bufferOptions = undefined;
+    videoState.player.status = undefined;
     imageState.mounts = 0;
+    appState.currentState = 'active';
+    appState.listeners = [];
   });
+
+  function findRetry(tree: renderer.ReactTestRenderer) {
+    return tree.root.findAll((node) => (
+      String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Video couldn’t load. Retry'
+    ));
+  }
+
+  function setAppState(state: string) {
+    appState.currentState = state;
+    renderer.act(() => {
+      appState.listeners.forEach((listener) => listener(state));
+    });
+  }
 
   const posterProps = {
     url: 'https://cdn.example.com/video.mp4',
@@ -378,5 +416,86 @@ describe('FeedVideoPreview', () => {
     expect(posterOpacity(tree!)).toBe(1);
     // The spinner is for "still loading", not "failed" — an error must not spin.
     expect(tree!.root.findAll((node) => String(node.type) === 'activity-indicator')).toHaveLength(0);
+  });
+
+  it('catches a failure reported before the tile subscribed, and retries only its own player', () => {
+    videoState.player.status = 'error';
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active />);
+    });
+
+    // The failed attempt is released; the poster stays with a way to try again.
+    expect(tree.root.findAll((node) => String(node.type) === 'video-view')).toHaveLength(0);
+    expect(tree.root.findAll((node) => String(node.type) === 'activity-indicator')).toHaveLength(0);
+    expect(findRetry(tree)).toHaveLength(1);
+
+    videoState.player.status = 'idle';
+    renderer.act(() => findRetry(tree)[0].props.onPress());
+
+    expect(videoState.createVideoPlayer).toHaveBeenCalledTimes(2);
+    expect(tree.root.findAll((node) => String(node.type) === 'video-view')).toHaveLength(1);
+    expect(findRetry(tree)).toHaveLength(0);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('stops waiting for a first frame at the deadline and releases the player', () => {
+    vi.useFakeTimers();
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active />);
+    });
+    expect(tree.root.findAll((node) => String(node.type) === 'video-view')).toHaveLength(1);
+
+    renderer.act(() => {
+      vi.advanceTimersByTime(MEDIA_DISPLAY_DEADLINE_MS);
+    });
+
+    expect(tree.root.findAll((node) => String(node.type) === 'video-view')).toHaveLength(0);
+    expect(posterOpacity(tree)).toBe(1);
+    expect(findRetry(tree)).toHaveLength(1);
+    renderer.act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(videoState.player.release).toHaveBeenCalledTimes(1);
+
+    renderer.act(() => findRetry(tree)[0].props.onPress());
+    expect(videoState.createVideoPlayer).toHaveBeenCalledTimes(2);
+    renderer.act(() => tree.unmount());
+    vi.useRealTimers();
+  });
+
+  it('does not count time in the background against the first frame', () => {
+    vi.useFakeTimers();
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active />);
+    });
+
+    setAppState('background');
+    renderer.act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(findRetry(tree)).toHaveLength(0);
+
+    setAppState('active');
+    renderer.act(() => {
+      vi.advanceTimersByTime(MEDIA_DISPLAY_DEADLINE_MS);
+    });
+    expect(findRetry(tree)).toHaveLength(1);
+
+    renderer.act(() => tree.unmount());
+    vi.useRealTimers();
+  });
+
+  it('offers no retry on a tile that is not playing', () => {
+    videoState.player.status = 'error';
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active={false} />);
+    });
+
+    expect(findRetry(tree)).toHaveLength(0);
+    renderer.act(() => tree.unmount());
   });
 });

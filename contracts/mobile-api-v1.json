@@ -126,6 +126,7 @@
               "id": "media-1",
               "kind": "image",
               "url": "https://cdn.example.test/generation-1.png",
+              "displayUrl": "https://cdn.example.test/generation-1-display.webp",
               "previewUrl": "https://cdn.example.test/generation-1-preview.png",
               "thumbhash": null,
               "cacheKey": "media:generation-1",

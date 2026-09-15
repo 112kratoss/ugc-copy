@@ -49,6 +49,10 @@ vi.mock('react-native', () => ({
     get: () => null,
     getEnforcing: () => null,
   },
+  AppState: {
+    currentState: 'active',
+    addEventListener: () => ({ remove: () => undefined }),
+  },
   Platform: {
     OS: 'ios',
     select: (obj: Record<string, unknown>) => obj.ios || obj.default,
@@ -843,16 +847,21 @@ describe('ProfileDashboard media tiles routing', () => {
     expect(queryState.refetchSavedMedia).not.toHaveBeenCalled();
   });
 
-  it('refreshes only the visible stale Profile media tab', () => {
+  it('refreshes only the first page of the visible stale Profile media tab', async () => {
     queryState.savedMediaIsStale = true;
+    queryState.setQueryData.mockClear();
+    authState.api.getSavedMedia.mockImplementation(async () => ({ items: [], pageInfo: { hasMore: false } }));
 
-    renderer.act(() => {
+    await renderer.act(async () => {
       renderer.create(<ProfileDashboard initialTab="Saved" />);
     });
 
+    // One page merged into the loaded library, never a refetch of every page.
     expect(queryState.refetchGenerations).not.toHaveBeenCalled();
     expect(queryState.refetchOwnerPosts).not.toHaveBeenCalled();
-    expect(queryState.refetchSavedMedia).toHaveBeenCalledOnce();
+    expect(queryState.refetchSavedMedia).not.toHaveBeenCalled();
+    expect(queryState.setQueryData.mock.calls.map(([key]) => key)).toEqual([['profile-saved-media', 'user-123']]);
+    authState.api.getSavedMedia.mockReset();
   });
 
   it('defers inactive Profile datasets until the visible dataset settles', () => {

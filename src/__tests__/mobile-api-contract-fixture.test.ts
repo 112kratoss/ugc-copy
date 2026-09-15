@@ -126,6 +126,13 @@ describe('shared mobile API v1 contract fixture', () => {
       .toMatchObject({ width: 720, height: 405 });
   });
 
+  it('documents the display rendition the owner library attaches to an image descriptor', () => {
+    // Mobile opens `displayUrl || url`. With the field absent from the shared
+    // fixture, a mobile adapter that dropped it passed every contract test.
+    expect(mobileApiContract.endpoints.listGenerations.response.generations[0].media)
+      .toMatchObject({ kind: 'image', displayUrl: expect.stringMatching(/^https:\/\//) });
+  });
+
   it('keeps response fixtures inside the exhaustive mobile operation registry', () => {
     const registeredPaths = new Set([
       ...Object.values(mobileApiOperationsV1.operations).map((operation) => operation.path),

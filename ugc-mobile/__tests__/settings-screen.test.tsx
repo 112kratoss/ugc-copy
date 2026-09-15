@@ -73,6 +73,12 @@ vi.mock('@/lib/app-version-label', () => ({
   readAppVersionParts: () => ({ version: null, build: null, update: null }),
 }));
 
+const copyToClipboard = vi.hoisted(() => vi.fn(async (_text: string, _announcement?: string) => undefined));
+const showMessageDialog = vi.hoisted(() => vi.fn());
+
+vi.mock('@/lib/copy-to-clipboard', () => ({ copyToClipboard }));
+vi.mock('@/lib/dialog', () => ({ showMessageDialog }));
+
 import SettingsScreen from '../app/settings';
 
 function renderScreen() {
@@ -137,6 +143,25 @@ describe('settings screen (HIG S16)', () => {
     const help = rowByTitle(tree, 'Help & support');
     renderer.act(() => { (help.props.onPress as () => void)(); });
     expect(routerPush).toHaveBeenCalledWith('/help');
+  });
+
+  it('copies media diagnostics, named by the running version, from a long-press on the version line', async () => {
+    copyToClipboard.mockClear();
+    showMessageDialog.mockClear();
+    const tree = renderScreen();
+    const version = rows(tree).find((node) => node.props.accessibilityLabel === VERSION_LABEL);
+    expect(version?.props.accessibilityHint).toBe('Long-press to copy media diagnostics.');
+
+    await renderer.act(async () => {
+      (version!.props.onLongPress as () => void)();
+      for (let tick = 0; tick < 3; tick += 1) await Promise.resolve();
+    });
+
+    expect(copyToClipboard).toHaveBeenCalledWith(expect.stringContaining(VERSION_LABEL), 'Media diagnostics copied');
+    expect(showMessageDialog).toHaveBeenCalledWith({
+      title: 'Media diagnostics copied',
+      message: 'No media problems recorded this session.',
+    });
   });
 
   it('paints only the destructive row title in the danger color', () => {

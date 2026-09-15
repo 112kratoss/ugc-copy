@@ -201,6 +201,8 @@ const PUBLIC_ROUTES = [
   '/api/marketplace/resources',
   '/api/marketplace/resources/[resourceId]',
   '/api/security/csp-report',
+  // Sampled media-failure reports: no identity is read or recorded.
+  '/api/mobile/media-diagnostics',
 ] as const;
 
 /** Cron, webhooks, ops and the admin console: no end-user identity involved. */
