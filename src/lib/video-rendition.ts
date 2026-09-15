@@ -208,6 +208,45 @@ export async function probeVideoFile(inputPath: string, signal?: AbortSignal): P
   }
 }
 
+export const MEDIA_DURATION_PROBE_TIMEOUT_MS = 20_000;
+
+/**
+ * A remote reference's length, read from its container header: nothing is
+ * decoded or written. The whole stderr is kept, because a phone clip's metadata
+ * can push the Duration line past the tail runFfmpeg reports on failure.
+ *
+ * Only HTTPS is readable. The input is a URL the server resolved, but ffmpeg
+ * speaks many protocols, and none of the others should ever be reachable from
+ * a generation request.
+ */
+export async function probeMediaDurationSeconds(input: string, signal?: AbortSignal): Promise<number | null> {
+  signal?.throwIfAborted();
+  const output = await new Promise<string>((resolve, reject) => {
+    const child = spawn(getFfmpegPath(), [
+      '-hide_banner',
+      '-nostdin',
+      '-protocol_whitelist',
+      'https,tls,tcp',
+      '-i',
+      input,
+    ], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      timeout: MEDIA_DURATION_PROBE_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
+      ...(signal ? { signal } : {}),
+    });
+    const stderr: Buffer[] = [];
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr.push(chunk);
+    });
+    child.on('error', reject);
+    // With no output named, ffmpeg always exits non-zero once the header is printed.
+    child.on('close', () => resolve(Buffer.concat(stderr).toString('utf8')));
+  });
+  const { durationSeconds } = parseVideoProbeOutput(output);
+  return durationSeconds !== null && durationSeconds > 0 ? durationSeconds : null;
+}
+
 export async function createVideoRenditionFromFile(
   inputPath: string,
   sourceBytes: number,

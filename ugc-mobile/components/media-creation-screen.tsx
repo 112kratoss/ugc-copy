@@ -42,6 +42,7 @@ import { trackOnboardingEvent } from '@/lib/onboarding';
 import { getGenerationOutput, pollGenerationStatus } from '@/lib/generation';
 import {
   applyCatalogModelDefaults,
+  applyVerifiedInputDurations,
   buildCatalogGenerationPayload,
   buildCatalogQuoteRequest,
   buildUnifiedCatalogGenerationRequest,
@@ -49,6 +50,8 @@ import {
   hasCreatorEditedPromptDuringRemix,
   hydrateCatalogCreationDraftFromRemixSource,
   normalizeCreationDraftForCatalog,
+  readVerifiedInputDurations,
+  REFERENCE_DURATION_CHANGED_CODE,
   validateCatalogCreationDraft,
 } from '@/lib/generation-model-draft';
 import {
@@ -57,6 +60,7 @@ import {
   getCatalogModels,
   catalogConditionsMatch,
   type CatalogControl,
+  type CatalogGenerationRequest,
   type CatalogInputSlot,
   type CatalogPrimitive,
   type GenerationModelCatalog,
@@ -1302,18 +1306,18 @@ export function MediaCreationScreen({
     setIsGenerating(true);
     if (guided) void trackOnboardingEvent(api, 'first_generation_started', { goal: currentDraft.tool, step: 'creator' });
     let startedPredictionId: string | null = null;
+    // Kept so a refusal that measured the references can be matched back to the draft's media.
+    let unifiedRequest: CatalogGenerationRequest | null = null;
     try {
       let started: GenerationStartResponse;
       if (api.startGeneration) {
-        started = await api.startGeneration(
-          buildUnifiedCatalogGenerationRequest(
-            currentDraft,
-            currentCatalogModel,
-            catalog?.revision ?? '',
-            activeQuote.normalizedSettings ?? undefined,
-          ),
-          idempotencyKey,
+        unifiedRequest = buildUnifiedCatalogGenerationRequest(
+          currentDraft,
+          currentCatalogModel,
+          catalog?.revision ?? '',
+          activeQuote.normalizedSettings ?? undefined,
         );
+        started = await api.startGeneration(unifiedRequest, idempotencyKey);
       } else if (currentDraft.tool === 'image') {
         started = await api.startImageGeneration(
           buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? '', activeQuote.normalizedSettings ?? undefined),
@@ -1351,6 +1355,13 @@ export function MediaCreationScreen({
       } else if (details?.code === 'CATALOG_CHANGED' || details?.code === 'MODEL_UNAVAILABLE') {
         void refetchCatalog();
         setMessage('The model catalog changed before generation started. Review the refreshed options and generate again.');
+      } else if (details?.code === REFERENCE_DURATION_CHANGED_CODE) {
+        // Nothing was charged. Taking the measured lengths refreshes the quote to
+        // the price the server will charge, and the viewer confirms it.
+        if (unifiedRequest) {
+          replaceDraft(applyVerifiedInputDurations(currentDraft, unifiedRequest, readVerifiedInputDurations(details)));
+        }
+        setMessage('We measured your reference media, and it changes the cost. Check the new price, then generate again.');
       } else {
         setMessage(error instanceof Error ? error.message : 'Generation failed.');
       }

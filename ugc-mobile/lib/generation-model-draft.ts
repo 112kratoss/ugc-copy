@@ -652,6 +652,87 @@ export function buildUnifiedCatalogGenerationRequest(
   };
 }
 
+export const REFERENCE_DURATION_CHANGED_CODE = 'REFERENCE_DURATION_CHANGED';
+
+export type VerifiedInputDuration = {
+  index: number;
+  slot: string;
+  durationSeconds: number;
+};
+
+/** The measured lengths a REFERENCE_DURATION_CHANGED refusal carries; malformed entries are dropped. */
+export function readVerifiedInputDurations(details: unknown): VerifiedInputDuration[] {
+  if (!details || typeof details !== 'object') return [];
+  const inputs = (details as { inputs?: unknown }).inputs;
+  if (!Array.isArray(inputs)) return [];
+  return inputs.flatMap((entry): VerifiedInputDuration[] => {
+    if (!entry || typeof entry !== 'object') return [];
+    const { index, slot, durationSeconds } = entry as Record<string, unknown>;
+    return typeof index === 'number' && Number.isInteger(index) && index >= 0
+      && typeof slot === 'string'
+      && typeof durationSeconds === 'number' && Number.isFinite(durationSeconds) && durationSeconds > 0
+      ? [{ index, slot, durationSeconds }]
+      : [];
+  });
+}
+
+/**
+ * Takes the server's measured reference lengths into the draft, so the next
+ * quote is built from them and the viewer confirms the price the server will
+ * actually charge. Each measured input is matched back to its media by the
+ * storage path, or else the URL, that the request sent for it. A motion run's
+ * duration follows its reference performance, as it does on the server.
+ */
+export function applyVerifiedInputDurations<T extends CreationDraft>(
+  draft: T,
+  request: Pick<CatalogGenerationRequest, 'inputs'>,
+  verified: VerifiedInputDuration[],
+): T {
+  const byPath = new Map<string, number>();
+  const byUrl = new Map<string, number>();
+  for (const { index, durationSeconds } of verified) {
+    const input = request.inputs[index];
+    if (!input) continue;
+    if (input.storagePath) byPath.set(input.storagePath, durationSeconds);
+    if (input.url) byUrl.set(input.url, durationSeconds);
+  }
+  if (byPath.size === 0 && byUrl.size === 0) return draft;
+
+  const measuredFor = (media: { storagePath?: string | null; url?: string | null }) => (
+    (media.storagePath ? byPath.get(media.storagePath) : undefined)
+    ?? (media.url ? byUrl.get(media.url) : undefined)
+  );
+  const withMeasured = <M extends MediaDraft | CatalogDraftInputAsset>(media: M): M => {
+    const measured = measuredFor(media);
+    return measured === undefined ? media : { ...media, durationSeconds: measured };
+  };
+  const catalogInputSlots = draft.catalogInputSlots
+    ? Object.fromEntries(
+      Object.entries(draft.catalogInputSlots).map(([slot, assets]) => [slot, assets.map(withMeasured)]),
+    )
+    : draft.catalogInputSlots;
+
+  if (draft.tool === 'video') {
+    return {
+      ...draft,
+      catalogInputSlots,
+      referenceVideos: draft.referenceVideos.map(withMeasured),
+      referenceAudios: draft.referenceAudios.map(withMeasured),
+    } as T;
+  }
+  if (draft.tool === 'motion') {
+    const referenceVideo = draft.referenceVideo ? withMeasured(draft.referenceVideo) : null;
+    const measured = referenceVideo !== draft.referenceVideo ? referenceVideo?.durationSeconds : undefined;
+    return {
+      ...draft,
+      catalogInputSlots,
+      referenceVideo,
+      ...(typeof measured === 'number' ? { duration: Math.max(1, Math.ceil(measured)) } : {}),
+    } as T;
+  }
+  return { ...draft, catalogInputSlots } as T;
+}
+
 export interface CatalogDraftReconciliation {
   draft: CreationDraft;
   model: GenerationModelDescriptor | null;

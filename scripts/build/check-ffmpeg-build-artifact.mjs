@@ -45,6 +45,7 @@ export const FFMPEG_REQUIRED_ROUTE_MANIFESTS = [
   'app/api/cron/media-preview-repair/route.js.nft.json',
   'app/api/generate/route.js.nft.json',
   'app/api/generate-video/route.js.nft.json',
+  'app/api/generations/route.js.nft.json',
   'app/api/posts/route.js.nft.json',
   'app/api/posts/[postId]/route.js.nft.json',
   'app/api/showcase/publish/route.js.nft.json',

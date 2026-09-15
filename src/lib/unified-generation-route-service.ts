@@ -13,6 +13,7 @@ import {
 import { GenerationStartIdempotencyError } from '@/lib/generation-start-idempotency';
 import { SourceGenerationValidationError } from '@/lib/source-generation';
 import {
+  ReferenceDurationChangedError,
   UnifiedGenerationRequestError,
   startUnifiedGenerationForRoute,
 } from '@/lib/unified-generation-start-service';
@@ -59,6 +60,21 @@ function mapUnifiedGenerationError(error: unknown): UnifiedGenerationRouteResult
         code: error.code,
         error: error.message,
         fieldErrors: error.fieldErrors,
+      },
+      status: error.status,
+    };
+  }
+  if (error instanceof ReferenceDurationChangedError) {
+    // The measured lengths travel back so a client can re-quote with them
+    // instead of repeating the length it measured itself.
+    return {
+      ok: false,
+      body: {
+        code: error.code,
+        error: error.message,
+        costCredits: error.costCredits,
+        quotedCostCredits: error.quotedCostCredits,
+        inputs: error.inputs,
       },
       status: error.status,
     };

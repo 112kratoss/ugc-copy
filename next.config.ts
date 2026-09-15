@@ -228,6 +228,8 @@ const nextConfig: NextConfig = {
     "/api/cron/media-preview-repair": [...FFMPEG_TRACE, ...SHARP_TRACE],
     "/api/generate": [...FFMPEG_TRACE, ...SHARP_TRACE],
     "/api/generate-video": [...FFMPEG_TRACE, ...SHARP_TRACE],
+    // The unified start measures reference media lengths with ffmpeg.
+    "/api/generations": [...FFMPEG_TRACE, ...SHARP_TRACE],
     "/api/posts": [...FFMPEG_TRACE, ...SHARP_TRACE],
     "/api/posts/*": [...FFMPEG_TRACE, ...SHARP_TRACE],
     "/api/showcase/publish": [...FFMPEG_TRACE, ...SHARP_TRACE],

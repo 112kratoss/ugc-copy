@@ -984,7 +984,7 @@ function assertAllowedGenerationMediaSource(value: string): string {
   return value;
 }
 
-async function resolveGenerationMediaSource(
+export async function resolveGenerationMediaSource(
   supabase: SupabaseClient,
   url: string,
   userId: string,

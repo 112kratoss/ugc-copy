@@ -9,6 +9,7 @@ import {
   quoteGenerationModel,
   type CatalogPlatform,
   type CatalogPrimitive,
+  type GenerationModelDescriptor,
   type GenerationModelKind,
   type GenerationModelQuoteInput,
 } from '@/lib/generation-model-catalog';
@@ -25,7 +26,9 @@ import type {
 import {
   GenerationProviderAdapterError,
 } from '@/lib/generation-model-adapters';
+import type { GenerationModelOperationalConfig } from '@/lib/generation-model-runtime';
 import {
+  resolveGenerationMediaSource,
   startCatalogGeneration,
   startImageGeneration,
   startMotionGeneration,
@@ -47,6 +50,7 @@ import type {
   VideoModelId,
 } from '@/lib/models';
 import { resolveSourceGenerationId } from '@/lib/source-generation';
+import { probeMediaDurationSeconds } from '@/lib/video-rendition';
 
 const INPUT_KINDS = new Set<CatalogGenerationInputKind>([
   'image',
@@ -72,6 +76,43 @@ export class UnifiedGenerationRequestError extends Error {
     this.name = 'UnifiedGenerationRequestError';
     this.status = status;
     this.fieldErrors = fieldErrors;
+  }
+}
+
+export const REFERENCE_DURATION_CHANGED_CODE = 'REFERENCE_DURATION_CHANGED';
+
+/**
+ * Players and ffmpeg read the same container a few hundredths of a second
+ * apart, and a phone's picker rounds. A reported length this close to the
+ * measured one is kept, so an honest client is never bounced over rounding;
+ * anything further off is replaced by the measurement.
+ */
+export const REPORTED_INPUT_DURATION_TOLERANCE_SECONDS = 0.5;
+
+export type VerifiedInputDuration = {
+  index: number;
+  slot: string;
+  durationSeconds: number;
+};
+
+/**
+ * The measured length of a reference raised the price above the quote the
+ * caller accepted. Nothing was charged: the caller should take the measured
+ * lengths, quote again, and let the viewer confirm the new cost.
+ */
+export class ReferenceDurationChangedError extends Error {
+  readonly status = 409;
+  readonly code = REFERENCE_DURATION_CHANGED_CODE;
+  readonly inputs: VerifiedInputDuration[];
+  readonly quotedCostCredits: number;
+  readonly costCredits: number;
+
+  constructor(inputs: VerifiedInputDuration[], quotedCostCredits: number, costCredits: number) {
+    super('Your reference media runs longer than the length this price was based on. Check the updated cost, then generate again.');
+    this.name = 'ReferenceDurationChangedError';
+    this.inputs = inputs;
+    this.quotedCostCredits = quotedCostCredits;
+    this.costCredits = costCredits;
   }
 }
 
@@ -117,6 +158,9 @@ type UnifiedGenerationDependencies = {
   startMotion?: typeof startMotionGeneration;
   resolveSource?: typeof resolveSourceGenerationId;
   enforceRateLimit?: typeof enforceBackendRateLimit;
+  /** Turns an input URL into the source the provider will fetch, as the adapters do. */
+  resolveInputSource?: (supabase: SupabaseClient, url: string, userId: string) => Promise<string>;
+  probeInputDuration?: (url: string) => Promise<number | null>;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -323,6 +367,127 @@ export function buildUnifiedGenerationQuoteInput(
     },
     catalogRevision: request.catalogRevision,
   };
+}
+
+function collectDurationSlotKeys(value: unknown, keys: Set<string>): void {
+  if (Array.isArray(value)) {
+    for (const item of value) collectDurationSlotKeys(item, keys);
+    return;
+  }
+  if (!isRecord(value)) return;
+  if (Array.isArray(value.referenceDurationSlots)) {
+    for (const slot of value.referenceDurationSlots) {
+      if (typeof slot === 'string') keys.add(slot);
+    }
+  }
+  if (value.type === 'combined-duration' && Array.isArray(value.slotKeys)) {
+    for (const slot of value.slotKeys) {
+      if (typeof slot === 'string') keys.add(slot);
+    }
+  }
+  for (const nested of Object.values(value)) collectDurationSlotKeys(nested, keys);
+}
+
+/**
+ * Slot keys whose asset durations the quote reads, to price a run or to hold
+ * it to a limit: descriptor slots that declare duration metadata or a cap,
+ * combined-duration constraints and rules, and reference-adjustment pricing at
+ * any depth of a conditional expression.
+ */
+export function durationBoundInputSlots(
+  descriptor: Pick<GenerationModelDescriptor, 'inputModes' | 'inputConstraints'> | null | undefined,
+  operation: Pick<GenerationModelOperationalConfig, 'pricingConfig' | 'validationConfig'>,
+): Set<string> {
+  const keys = new Set<string>();
+  for (const mode of descriptor?.inputModes ?? []) {
+    for (const slot of mode.slots) {
+      if (slot.durationMetadata !== undefined || slot.maxDurationSeconds !== undefined) {
+        keys.add(slot.key);
+      }
+    }
+  }
+  collectDurationSlotKeys(descriptor?.inputConstraints ?? [], keys);
+  collectDurationSlotKeys(operation.pricingConfig, keys);
+  collectDurationSlotKeys(operation.validationConfig, keys);
+  return keys;
+}
+
+/**
+ * Replaces caller-reported reference lengths with measured ones before a run is
+ * priced. A caller reporting zero seconds, or nothing, used to shrink the charge
+ * for models the provider bills by input seconds and slip past their
+ * combined-duration caps (model/post/remix audit, finding A2).
+ *
+ * Only inputs whose length is read are measured: a slot the price or a limit
+ * depends on, every video when a model prices `videoReferences` (how the runtime
+ * falls back), and a motion run's reference performance, whose length is the
+ * output's length whatever `duration` the request names. The source is resolved
+ * the way the adapters resolve it, so the file measured is the file the provider
+ * fetches, and only an HTTPS object is ever read.
+ */
+export async function resolveBillableInputDurations({
+  request,
+  descriptor,
+  operation,
+  resolveInputSource,
+  probeInputDuration,
+}: {
+  request: UnifiedGenerationRequest;
+  descriptor: Pick<GenerationModelDescriptor, 'inputModes' | 'inputConstraints'> | null | undefined;
+  operation: Pick<GenerationModelOperationalConfig, 'pricingConfig' | 'validationConfig'>;
+  resolveInputSource: (url: string) => Promise<string>;
+  probeInputDuration: (url: string) => Promise<number | null>;
+}): Promise<{ request: UnifiedGenerationRequest; verified: VerifiedInputDuration[] }> {
+  const boundSlots = durationBoundInputSlots(descriptor, operation);
+  const isBound = (asset: CatalogGenerationInputAsset) => (
+    (asset.kind === 'video' || asset.kind === 'audio')
+    && (
+      boundSlots.has(asset.slot)
+      || (asset.kind === 'video' && (boundSlots.has('videoReferences') || request.kind === 'motion'))
+    )
+  );
+  if (!request.inputs.some(isBound)) {
+    return { request, verified: [] };
+  }
+
+  const unverifiable = (index: number) => new UnifiedGenerationRequestError(
+    'The length of a reference file could not be verified. Upload it again, then retry.',
+    422,
+    { [`inputs.${index}`]: 'This file’s length could not be verified.' },
+  );
+  const verified: VerifiedInputDuration[] = [];
+  const inputs = await Promise.all(request.inputs.map(async (asset, index) => {
+    if (!isBound(asset)) return asset;
+    if (!asset.url) throw unverifiable(index);
+    const source = await resolveInputSource(asset.url);
+    if (!/^https:\/\//i.test(source)) throw unverifiable(index);
+    const measured = await probeInputDuration(source);
+    if (measured === null || !Number.isFinite(measured) || measured <= 0) throw unverifiable(index);
+
+    verified.push({ index, slot: asset.slot, durationSeconds: measured });
+    const reported = typeof asset.durationSeconds === 'number' && asset.durationSeconds > 0
+      ? asset.durationSeconds
+      : null;
+    const billable = reported !== null
+      && Math.abs(measured - reported) <= REPORTED_INPUT_DURATION_TOLERANCE_SECONDS
+      ? reported
+      : measured;
+    return { ...asset, durationSeconds: billable };
+  }));
+  verified.sort((first, second) => first.index - second.index);
+
+  let settings = request.settings;
+  if (request.kind === 'motion') {
+    const performance = inputs.find((asset) => asset.kind === 'video' && typeof asset.durationSeconds === 'number');
+    if (performance && typeof performance.durationSeconds === 'number') {
+      settings = {
+        ...settings,
+        duration: Math.max(1, Math.ceil(performance.durationSeconds - REPORTED_INPUT_DURATION_TOLERANCE_SECONDS)),
+      };
+    }
+  }
+
+  return { request: { ...request, inputs, settings }, verified };
 }
 
 function platformForRequest(request: Request): CatalogPlatform {
@@ -634,28 +799,61 @@ export async function startUnifiedGenerationForRoute(
     key: userId,
   });
 
+  const resolveInputSource = dependencies.resolveInputSource ?? resolveGenerationMediaSource;
+  const probeInputDuration = dependencies.probeInputDuration
+    ?? ((url: string) => probeMediaDurationSeconds(url));
+
   const result = await withGenerationStartIdempotency({
     client: adminSupabase,
     userId,
     idempotencyKey: getGenerationStartIdempotencyKey(request, body),
     requestHash: hashGenerationStartRequest(body),
     owner: getGenerationStartLockOwner(request),
-    start: (clientRequestKeyHash) => dispatchCatalogGenerationAdapter({
-      request: parsed,
-      quote,
-      operation,
-      supabase,
-      adminSupabase,
-      userId,
-      clientRequestKeyHash,
-      sourceGenerationId,
-      dependencies: {
-        startCatalog: dependencies.startCatalog ?? startCatalogGeneration,
-        startImage: dependencies.startImage ?? startImageGeneration,
-        startVideo: dependencies.startVideo ?? startVideoGeneration,
-        startMotion: dependencies.startMotion ?? startMotionGeneration,
-      },
-    }),
+    // Measured here, inside the start, so an idempotent replay returns the
+    // original run without touching a single reference file.
+    start: async (clientRequestKeyHash) => {
+      const billable = await resolveBillableInputDurations({
+        request: parsed,
+        descriptor: snapshot.catalog.models.find((model) => (
+          model.id === parsed.modelId && model.kind === parsed.kind
+        )),
+        operation,
+        resolveInputSource: (url) => resolveInputSource(supabase, url, userId),
+        probeInputDuration,
+      });
+      const billableQuote = billable.verified.length > 0
+        ? quoteModel(buildUnifiedGenerationQuoteInputForCatalog(billable.request, snapshot), {
+          catalog: snapshot.catalog,
+          operations: snapshot.operations,
+        })
+        : quote;
+      // Never charge more than the price the caller saw. A lower price after
+      // measuring (an overstated length) is charged as measured.
+      if (billableQuote.costCredits > quote.costCredits) {
+        throw new ReferenceDurationChangedError(
+          billable.verified,
+          quote.costCredits,
+          billableQuote.costCredits,
+        );
+      }
+
+      return dispatchCatalogGenerationAdapter({
+        request: billable.request,
+        quote: billableQuote,
+        operation,
+        supabase,
+        adminSupabase,
+        userId,
+        clientRequestKeyHash,
+        sourceGenerationId,
+        dependencies: {
+          startCatalog: dependencies.startCatalog ?? startCatalogGeneration,
+          startImage: dependencies.startImage ?? startImageGeneration,
+          startVideo: dependencies.startVideo ?? startVideoGeneration,
+          startMotion: dependencies.startMotion ?? startMotionGeneration,
+        },
+      });
+    },
   });
 
   return {

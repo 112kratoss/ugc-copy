@@ -2129,6 +2129,47 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(authState.api.getVideoGeneration).toHaveBeenCalledWith('unified-video-prediction');
   });
 
+  it('asks the viewer to confirm a new price when the server measures a longer reference', async () => {
+    vi.useFakeTimers();
+    catalogState.catalog = catalogV2();
+    const startGeneration = vi.fn().mockRejectedValue(Object.assign(
+      new Error('Your reference media runs longer than the length this price was based on.'),
+      { details: { code: 'REFERENCE_DURATION_CHANGED', costCredits: 60, quotedCostCredits: 29, inputs: [] } },
+    ));
+    authState.api.startGeneration = startGeneration;
+    authState.api.quoteGenerationModel.mockResolvedValue({
+      modelId: 'fallback-video-v2',
+      catalogRevision: 'catalog-v2-revision',
+      normalizedSettings: {
+        referenceMode: 'elements',
+        resolution: '720p',
+        duration: 7,
+      },
+      costCredits: 29,
+    });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="video" />);
+    });
+    renderer.act(() => {
+      tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('Create a remote cinematic reveal.');
+    });
+    await renderer.act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Generate · 29 credits').props.onPress();
+    });
+
+    expect(startGeneration).toHaveBeenCalledTimes(1);
+    expect(collectText(tree!.root)).toContain(
+      'We measured your reference media, and it changes the cost. Check the new price, then generate again.',
+    );
+    expect(authState.api.getVideoGeneration).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
   it('opens the shared video result workspace and posts with the generation id', async () => {
     vi.useFakeTimers();
     authState.api.startVideoGeneration.mockResolvedValue({
