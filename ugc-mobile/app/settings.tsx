@@ -4,6 +4,7 @@ import { Linking, Pressable, View } from 'react-native';
 
 import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
 import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
+import { formatAppVersionLabel, readAppVersionParts } from '@/lib/app-version-label';
 import { formatCreditAmount } from '@/lib/pricing';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
@@ -11,6 +12,7 @@ import { appTheme } from '@/lib/theme';
 
 export default function SettingsScreen() {
   const { user, credits } = useAuth();
+  const versionLabel = formatAppVersionLabel(readAppVersionParts());
 
   return (
     <Screen>
@@ -102,6 +104,12 @@ export default function SettingsScreen() {
           onPress={() => void Linking.openURL(`${env.siteUrl}/delete-account`)}
         />
       )}
+
+      {versionLabel ? (
+        <AppText variant="caption" color="muted" style={{ textAlign: 'center' }}>
+          {versionLabel}
+        </AppText>
+      ) : null}
     </Screen>
   );
 }
