@@ -49,7 +49,11 @@ export async function getRemixSourceRouteResponse({
     }
 
     if (error instanceof RemixSourceError) {
-      return remixSourceJsonResponse(request, { error: error.message }, error.status);
+      return remixSourceJsonResponse(
+        request,
+        error.code ? { error: error.message, code: error.code } : { error: error.message },
+        error.status,
+      );
     }
 
     logBackendError('failed_to_load_remix_source_bundle', { error: error });

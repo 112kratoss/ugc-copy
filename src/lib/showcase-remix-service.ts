@@ -5,6 +5,11 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { sanitizeWorkflowSettingsForRemix } from '@/lib/generation-input-media';
 import { isAudioModel } from '@/lib/models';
+import {
+  REMIX_UNLOCK_REQUIRED_CODE,
+  REMIX_UNLOCK_REQUIRED_MESSAGE,
+  resolveRemixAccess,
+} from '@/lib/remix-access';
 import { remixCreatePathForCategory } from '@/lib/remix-tools';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { findPublicPostReferenceByIdOrGenerationId } from '@/lib/posts-server';
@@ -48,9 +53,10 @@ export type ShowcaseRemixServiceResult =
     }
   | {
       ok: false;
-      status: 400 | 404;
+      status: 400 | 403 | 404;
       body: {
         error: string;
+        code?: string;
       };
     };
 
@@ -61,6 +67,14 @@ function resolveDependencies(
     findPublicPostReferenceByIdOrGenerationId:
       dependencies?.findPublicPostReferenceByIdOrGenerationId ?? findPublicPostReferenceByIdOrGenerationId,
     isUserRelationshipBlocked: dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked,
+  };
+}
+
+function linkedGenerationNotFound(): ShowcaseRemixServiceResult {
+  return {
+    ok: false,
+    status: 404,
+    body: { error: 'Linked generation not found' },
   };
 }
 
@@ -135,9 +149,10 @@ export async function remixShowcasePostForRoute({
   }
 
   // Authenticated clients hold no read grant on prompt/workflow_settings, so
-  // this read must be service-role. The access decision therefore lives in the
-  // explicit gate below, not in RLS: the actor must own the generation, or the
-  // generation must still be public and belong to the post's creator.
+  // this read must be service-role. The access decision therefore lives in
+  // resolveRemixAccess, not in RLS, and it is the same gate /api/remix-source
+  // applies: the owner, or anyone else while the post is exposed and any
+  // remix-enabled recipe on it is unlocked.
   const { data: generation, error: generationError } = await serviceClient
     .from('generations')
     .select('id, user_id, is_public, share_input_media_for_remix, category, model, prompt, workflow_settings')
@@ -145,21 +160,33 @@ export async function remixShowcasePostForRoute({
     .maybeSingle();
 
   const generationRow = generation as GenerationRow | null;
-  const isOwner = Boolean(generationRow?.user_id && generationRow.user_id === actorUserId);
-  const isPubliclyRemixable = Boolean(
-    generationRow?.is_public === true
-    && generationRow.user_id
-    && generationRow.user_id === post.user_id,
-  );
-  if (generationError || !generationRow?.id || !(isOwner || isPubliclyRemixable)) {
+  if (generationError || !generationRow?.id) {
     if (generationError) {
       logBackendError('failed_to_load_linked_generation_for_remix', { error: generationError });
     }
-    return {
-      ok: false,
-      status: 404,
-      body: { error: 'Linked generation not found' },
-    };
+    return linkedGenerationNotFound();
+  }
+
+  const access = await resolveRemixAccess({
+    adminSupabase: serviceClient,
+    viewerUserId: actorUserId,
+    generation: {
+      id: generationRow.id,
+      user_id: generationRow.user_id ?? null,
+      is_public: generationRow.is_public ?? null,
+      share_input_media_for_remix: generationRow.share_input_media_for_remix ?? null,
+    },
+    requestedPostId: post.id,
+    dependencies: { isUserRelationshipBlocked: resolvedDependencies.isUserRelationshipBlocked },
+  });
+  if (!access.allowed) {
+    return access.reason === 'unlock_required'
+      ? {
+          ok: false,
+          status: 403,
+          body: { error: REMIX_UNLOCK_REQUIRED_MESSAGE, code: REMIX_UNLOCK_REQUIRED_CODE },
+        }
+      : linkedGenerationNotFound();
   }
 
   // No create tool takes audio, and the prefill endpoint answers 400 for an
@@ -183,8 +210,7 @@ export async function remixShowcasePostForRoute({
     generationRow.workflow_settings && typeof generationRow.workflow_settings === 'object'
       ? generationRow.workflow_settings as Record<string, unknown>
       : {};
-  const includeInputMedia = isOwner
-    || (isPubliclyRemixable && generationRow.share_input_media_for_remix === true);
+  const includeInputMedia = access.basis === 'owner' || access.includeSharedInputMedia;
 
   return {
     ok: true,

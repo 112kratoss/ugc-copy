@@ -1,5 +1,4 @@
 import 'server-only';
-import { isOwnOrLinkedAccountId } from '@/lib/account-identity';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -16,7 +15,11 @@ import {
 } from '@/lib/generation-input-media';
 import { REMIX_SOURCE_RATE_LIMIT, enforceBackendRateLimit } from '@/lib/backend-rate-limit';
 import { isAudioModel, isImageModel, isMotionModel } from '@/lib/models';
-import { isUserRelationshipBlocked } from '@/lib/moderation-service';
+import {
+  REMIX_UNLOCK_REQUIRED_CODE,
+  REMIX_UNLOCK_REQUIRED_MESSAGE,
+  resolveRemixAccess,
+} from '@/lib/remix-access';
 import {
   type RemixMediaAssetDescriptor,
   normalizeRemixMediaAssetDescriptor,
@@ -57,38 +60,13 @@ const GENERATION_SELECT =
 
 export class RemixSourceError extends Error {
   status: number;
+  code?: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = 'RemixSourceError';
     this.status = status;
-  }
-}
-
-/**
- * Mirrors the block gate on POST /api/showcase/remix. Failure is treated as
- * blocked, because a moderation check that errors open is not a gate.
- */
-async function isRemixSourceBlockedForViewer({
-  adminSupabase,
-  ownerUserId,
-  viewerUserId,
-}: {
-  adminSupabase: ReturnType<typeof createServiceClient>;
-  ownerUserId: string | null;
-  viewerUserId: string;
-}): Promise<boolean> {
-  if (!ownerUserId || ownerUserId === viewerUserId) return false;
-
-  try {
-    return await isUserRelationshipBlocked({
-      adminSupabase,
-      firstUserId: viewerUserId,
-      secondUserId: ownerUserId,
-    });
-  } catch (error) {
-    logBackendError('failed_to_verify_block_state_before_loading_remix_source', { error: error });
-    return true;
+    if (code) this.code = code;
   }
 }
 
@@ -261,27 +239,31 @@ export async function loadRemixSourceBundle(
   }
 
   const typedGeneration = generation as RemixSourceGenerationRow;
-  // Owned means the caller's id or a guest identity since linked to it: work
-  // made before registering keeps its guest UUID, and the owner library lists
-  // it through the same linked-account set that Recreate starts from.
-  const isOwner = await isOwnOrLinkedAccountId(adminSupabase, user.id, typedGeneration.user_id);
-  if (!isOwner && !typedGeneration.is_public) {
-    throw new RemixSourceError('Remix source not found', 404);
-  }
-
-  // A create page reaches this loader straight from its own URL, so without
-  // the same block gate the remix endpoint enforces, a block is one hop from
-  // being bypassed: prompt, settings and shared media come back regardless.
-  // 404 rather than 403, matching the line above — the gate should not
-  // confirm that the source exists. Owners never reach the lookup.
-  const blocked = !isOwner && await isRemixSourceBlockedForViewer({
+  // A create page reaches this loader straight from its own URL, so it must
+  // apply exactly the gate POST /api/showcase/remix applies, or that gate is
+  // one hop from being bypassed. Owned means the caller's id or a guest
+  // identity since linked to it. Anyone else needs the generation's post to be
+  // exposed right now, no block between them, and any remix-enabled recipe on
+  // the post unlocked. Every refusal but the unlock answers 404, so the gate
+  // never confirms that a private source exists.
+  const access = await resolveRemixAccess({
     adminSupabase,
-    ownerUserId: typedGeneration.user_id,
     viewerUserId: user.id,
+    generation: {
+      id: typedGeneration.id,
+      user_id: typedGeneration.user_id,
+      is_public: typedGeneration.is_public,
+      share_input_media_for_remix: typedGeneration.share_input_media_for_remix ?? null,
+    },
+    requestedPostId: options?.postId ?? null,
   });
-  if (blocked) {
+  if (!access.allowed) {
+    if (access.reason === 'unlock_required') {
+      throw new RemixSourceError(REMIX_UNLOCK_REQUIRED_MESSAGE, 403, REMIX_UNLOCK_REQUIRED_CODE);
+    }
     throw new RemixSourceError('Remix source not found', 404);
   }
+  const isOwner = access.basis === 'owner';
 
   const category = normalizeCategory(typedGeneration.category, typedGeneration.model);
   if (!category) {
@@ -293,7 +275,7 @@ export async function loadRemixSourceBundle(
       ? typedGeneration.workflow_settings
       : {};
   const isMotionWorkflow = typedGeneration.category === 'motion' || workflowSettings.creationMode === 'motion';
-  const includeInputMedia = isOwner || (typedGeneration.is_public === true && typedGeneration.share_input_media_for_remix === true);
+  const includeInputMedia = isOwner || access.includeSharedInputMedia;
   const effectiveWorkflowSettings = sanitizeWorkflowSettingsForRemix(workflowSettings, includeInputMedia);
   const durableInputMediaMap = includeInputMedia
     ? await loadGenerationInputMediaMap({
@@ -315,9 +297,11 @@ export async function loadRemixSourceBundle(
     });
   }
 
-  const recipeInputMedia = !includeInputMedia && options?.postId
+  // Bought recipe media is restored from the post the gate verified, never
+  // from the id the caller put in the URL.
+  const recipeInputMedia = !includeInputMedia && access.recipeEntitled && access.post
     ? await loadGenerationRecipeRemixInputMediaByPostId({
-      postId: options.postId,
+      postId: access.post.id,
       generationId: typedGeneration.id,
       viewerUserId: user.id,
       adminSupabase,

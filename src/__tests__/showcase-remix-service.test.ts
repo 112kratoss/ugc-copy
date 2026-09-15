@@ -9,15 +9,23 @@ vi.mock('@/lib/mobile-notifications', async (importOriginal) => ({
 
 beforeEach(() => { vi.mocked(notifyPostSocialActivity).mockClear(); });
 
+import { resolvePostRemixCapability } from '@/lib/post-resource-bundles';
 import {
   remixShowcasePostForRoute,
   type ShowcaseRemixServiceDependencies,
 } from '@/lib/showcase-remix-service';
 
+type Row = Record<string, unknown>;
+
 type GenerationQueryOptions = {
-  generation?: Record<string, unknown> | null;
+  generation?: Row | null;
   generationError?: unknown;
   rpcError?: unknown;
+  post?: Row | null;
+  bundle?: Row | null;
+  bundleError?: unknown;
+  purchases?: Row[];
+  profiles?: Row[];
 };
 
 const PUBLIC_CREATOR_GENERATION = {
@@ -30,30 +38,90 @@ const PUBLIC_CREATOR_GENERATION = {
   workflow_settings: { model: 'nano-banana-2' },
 };
 
+/** The generation's post as the remix gate re-reads it. */
+const EXPOSED_POST_ROW = {
+  id: 'post-1',
+  user_id: 'creator-1',
+  generation_id: 'gen-1',
+  category: 'image',
+  post_format: 'media',
+  source_kind: 'magicbooklet',
+  visibility: 'public',
+  archived_at: null,
+  review_status: 'visible',
+};
+
+const REMIX_RECIPE_BUNDLE = {
+  id: 'bundle-1',
+  post_id: 'post-1',
+  status: 'published',
+  allow_remix: true,
+};
+
 /**
  * The generations read runs through the SERVICE client on purpose:
  * authenticated clients hold no read grant on prompt/workflow_settings since
  * the 2026-07-26 hardening migration, which is exactly the drift that broke
- * remix in production. This mock models rpc + the generations read on one
- * client so the tests fail if the read ever moves back to a user client.
+ * remix in production. This mock models rpc + every read the remix gate makes
+ * on one client — the generation, its post, the post's recipe, purchases and
+ * linked profiles — applying each `eq` filter, so the tests run the real access
+ * decision and fail if a read ever moves back to a user client.
  */
 function createServiceClientMock({
   generation = PUBLIC_CREATOR_GENERATION,
   generationError = null,
   rpcError = null,
+  post = EXPOSED_POST_ROW,
+  bundle = null,
+  bundleError = null,
+  purchases = [],
+  profiles = [],
 }: GenerationQueryOptions = {}) {
-  const maybeSingleMock = vi.fn(async () => ({
-    data: generation,
-    error: generationError,
-  }));
-  const eqMock = vi.fn(() => ({ maybeSingle: maybeSingleMock }));
-  const selectMock = vi.fn(() => ({ eq: eqMock }));
+  const tables: Record<string, Row[]> = {
+    generations: generation ? [generation] : [],
+    posts: post ? [post] : [],
+    post_resource_bundles: bundle ? [bundle] : [],
+    post_resource_bundle_purchases: purchases,
+    profiles,
+  };
+  const errors: Record<string, unknown> = {
+    generations: generationError,
+    post_resource_bundles: bundleError,
+  };
+  const selectMock = vi.fn();
+  const eqMock = vi.fn();
+  const maybeSingleMock = vi.fn();
   const fromMock = vi.fn((table: string) => {
-    if (table !== 'generations') {
+    if (!(table in tables)) {
       throw new Error(`Unexpected table: ${table}`);
     }
 
-    return { select: selectMock };
+    const filters: Array<[string, unknown]> = [];
+    const outcome = (single: boolean) => {
+      if (errors[table]) return { data: null, error: errors[table] };
+      const matches = tables[table].filter((row) => filters.every(([column, value]) => row[column] === value));
+      return { data: single ? matches[0] ?? null : matches, error: null };
+    };
+    const builder = {
+      select: (columns: string) => {
+        selectMock(columns);
+        return builder;
+      },
+      eq: (column: string, value: unknown) => {
+        eqMock(column, value);
+        filters.push([column, value]);
+        return builder;
+      },
+      maybeSingle: async () => {
+        maybeSingleMock(table);
+        return outcome(true);
+      },
+      then: (
+        resolve: (value: ReturnType<typeof outcome>) => unknown,
+        reject?: (reason: unknown) => unknown,
+      ) => Promise.resolve(outcome(false)).then(resolve, reject),
+    };
+    return builder;
   });
   const rpcMock = vi.fn(async () => ({
     data: true,
@@ -462,6 +530,127 @@ describe('remixShowcasePostForRoute', () => {
       referenceId: 'post-1',
       serviceClient: serviceClient.client,
       dependencies,
+    });
+
+    expect(result.ok ? result.body.prefill.settings : null).toEqual(settings);
+  });
+});
+
+describe('remixShowcasePostForRoute access gate', () => {
+  // Audit A1, counterexample 1: the post surface reported `unlock_required`
+  // while this endpoint still returned the original prompt.
+  it('refuses the original recipe while the post says remixing needs an unlock', async () => {
+    const serviceClient = createServiceClientMock({ bundle: REMIX_RECIPE_BUNDLE });
+    expect(resolvePostRemixCapability({
+      generationId: 'gen-1',
+      postFormat: 'media',
+      category: 'image',
+      sourceKind: 'magicbooklet',
+      resourceBundle: { viewerCanAccess: false, allowRemix: true, items: [] },
+    }).capability).toBe('unlock_required');
+
+    const result = await remixShowcasePostForRoute({
+      actorUserId: 'someone-else',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      dependencies: createDependencies(),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 403,
+      body: { error: 'Unlock this post to remix it.', code: 'REMIX_UNLOCK_REQUIRED' },
+    });
+    expect(JSON.stringify(result)).not.toContain(PUBLIC_CREATOR_GENERATION.prompt);
+  });
+
+  it('opens a remix-enabled recipe for the viewer who bought it', async () => {
+    const serviceClient = createServiceClientMock({
+      bundle: REMIX_RECIPE_BUNDLE,
+      purchases: [{ id: 'purchase-1', bundle_id: 'bundle-1', buyer_user_id: 'someone-else' }],
+    });
+
+    const result = await remixShowcasePostForRoute({
+      actorUserId: 'someone-else',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      dependencies: createDependencies(),
+    });
+
+    expect(result.ok ? result.body.prefill.prompt : null).toBe(PUBLIC_CREATOR_GENERATION.prompt);
+  });
+
+  it('lets the creator remix their own remix-enabled recipe without buying it', async () => {
+    const serviceClient = createServiceClientMock({ bundle: REMIX_RECIPE_BUNDLE });
+
+    const result = await remixShowcasePostForRoute({
+      actorUserId: 'creator-1',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      dependencies: createDependencies(),
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  // Audit A4: the generation's own public flag is a copy of the post's state,
+  // so a generation still marked public must not outlive its post's exposure.
+  it.each([
+    ['made private', { visibility: 'private' }],
+    ['archived', { archived_at: '2026-09-15T10:00:00.000Z' }],
+    ['hidden by moderation', { review_status: 'hidden' }],
+  ])('refuses a still-public generation once its post is %s', async (_label, postOverrides) => {
+    const serviceClient = createServiceClientMock({
+      post: { ...EXPOSED_POST_ROW, ...postOverrides },
+    });
+
+    const result = await remixShowcasePostForRoute({
+      actorUserId: 'someone-else',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      dependencies: createDependencies(),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 404,
+      body: { error: 'Linked generation not found' },
+    });
+  });
+
+  it('fails closed when the recipe unlock cannot be read', async () => {
+    const failure = { code: '57014', message: 'canceling statement due to statement timeout' };
+    const serviceClient = createServiceClientMock({ bundleError: failure });
+
+    await expect(remixShowcasePostForRoute({
+      actorUserId: 'someone-else',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      dependencies: createDependencies(),
+    })).rejects.toBe(failure);
+  });
+
+  it('treats a private guest creation linked to the viewer as the viewer’s own', async () => {
+    const settings = {
+      model: 'nano-banana-2',
+      referenceImageUrls: ['https://cdn.example/guest-face.png'],
+    };
+    const serviceClient = createServiceClientMock({
+      generation: {
+        ...PUBLIC_CREATOR_GENERATION,
+        user_id: 'guest-1',
+        is_public: false,
+        share_input_media_for_remix: false,
+        workflow_settings: settings,
+      },
+      profiles: [{ id: 'guest-1', merged_into_user_id: 'user-1' }],
+    });
+
+    const result = await remixShowcasePostForRoute({
+      actorUserId: 'user-1',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      dependencies: createDependencies(),
     });
 
     expect(result.ok ? result.body.prefill.settings : null).toEqual(settings);
