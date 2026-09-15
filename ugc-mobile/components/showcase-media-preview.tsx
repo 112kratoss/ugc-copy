@@ -45,7 +45,12 @@ type ShowcaseMediaPreviewProps = {
   width: number;
 };
 
-type VideoActivation = 'never' | 'visible' | 'when-poster-missing';
+/**
+ * `visible` plays; `prepared` holds a paused, loaded player for a video the
+ * reader is about to reach (see FeedVideoPreview); `when-poster-missing` plays
+ * only to draw a frame where no poster exists.
+ */
+type VideoActivation = 'never' | 'prepared' | 'visible' | 'when-poster-missing';
 
 export function ShowcaseMediaPreview({
   accent,
@@ -291,6 +296,7 @@ function ShowcaseMediaSlide({
           previewThumbhash={previewThumbhash}
           onPosterLoad={onLoad}
           active={videoActivation === 'visible' || (videoActivation === 'when-poster-missing' && !usablePreviewUrl)}
+          prepared={videoActivation === 'prepared'}
           height={height}
           radius={radius}
           accent={accent}

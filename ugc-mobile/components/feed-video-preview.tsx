@@ -10,7 +10,11 @@ import { FeedMediaPlate } from '@/components/feed-media-plate';
 import { StableMediaImage } from '@/components/media-preview';
 import { useAppForeground } from '@/lib/app-foreground';
 import { recordMediaDiagnostic } from '@/lib/media-diagnostics';
-import { FEED_PREVIEW_FORWARD_BUFFER_SECONDS } from '@/lib/media-performance';
+import {
+  FEED_PREPARED_FORWARD_BUFFER_SECONDS,
+  FEED_PREVIEW_BUFFERING_INDICATOR_DELAY_MS,
+  FEED_PREVIEW_FORWARD_BUFFER_SECONDS,
+} from '@/lib/media-performance';
 import { MEDIA_DISPLAY_DEADLINE_MS } from '@/lib/media-recovery';
 import { useMediaSource } from '@/lib/use-media-source';
 import { appTheme } from '@/lib/theme';
@@ -26,6 +30,10 @@ const absoluteFill = {
 // the native view transaction to detach before releasing it.
 const PLAYER_RELEASE_GRACE_MS = 100;
 
+function forwardBufferSeconds(playing: boolean) {
+  return playing ? FEED_PREVIEW_FORWARD_BUFFER_SECONDS : FEED_PREPARED_FORWARD_BUFFER_SECONDS;
+}
+
 /**
  * A feed video tile: poster while idle, muted looping preview while active.
  *
@@ -36,6 +44,13 @@ const PLAYER_RELEASE_GRACE_MS = 100;
  * remounted the poster (replaying its 120ms transition) and tore down the
  * ExoPlayer plus its hardware decoder — the flicker seen while scrolling the
  * showcase, where the single autoplay slot changes hands as the feed moves.
+ *
+ * A `prepared` tile goes one step further, the way TikTok and Instagram keep
+ * the next posts loaded: its player is created paused and draws its first frame
+ * before the reader arrives, and a tile that stops playing keeps its player and
+ * its frame for as long as it stays prepared. Activation is then a resume of a
+ * picture already on screen rather than a load, and scrolling back continues
+ * the clip instead of starting it again from the poster.
  *
  * A playback attempt that fails — an error, including one reported before this
  * tile subscribed, or no first frame within the deadline — releases its player
@@ -52,6 +67,7 @@ export function FeedVideoPreview({
   previewThumbhash,
   onPosterLoad,
   active,
+  prepared = false,
   height,
   radius,
   accent,
@@ -75,6 +91,12 @@ export function FeedVideoPreview({
   previewThumbhash?: string | null;
   onPosterLoad?: ImageProps['onLoad'];
   active: boolean;
+  /**
+   * Hold a paused player with its first frame drawn while not active. The feed
+   * sets it for the videos around the playing one (see
+   * selectPreparedShowcaseVideoIds); it changes nothing while `active`.
+   */
+  prepared?: boolean;
   height: number;
   radius: number;
   accent: string;
@@ -90,51 +112,70 @@ export function FeedVideoPreview({
   // Keep navigation focus at the player boundary. Making it list extraData
   // rerendered every mounted feed card on each tab switch just to pause one video.
   const isFocused = useIsFocused();
-  const canPlay = active && isFocused && Boolean(streamUrl);
+  const canStream = isFocused && Boolean(streamUrl);
+  const canPlay = active && canStream;
+  const wantsPlayer = (active || prepared) && canStream;
   const foreground = useAppForeground(canPlay);
 
-  const [failedPosterUrl, setFailedPosterUrl] = useState<string | null>(null);
-  // Every latch is keyed to one playback attempt — the stream, its credentials
-  // and the retry count — rather than being a boolean, so a recycled instance or
-  // a retry never inherits the previous attempt's first frame, error or stall.
+  // Every latch is keyed to one player rather than being a boolean. The key
+  // carries the stream and its credentials, the generation — each player the
+  // tile mounts is a new one, so neither a recycled instance nor a player
+  // created after an earlier one was released inherits a frame it has not
+  // drawn, which would lift the poster off a bare surface — and the retry
+  // count, so a retry never inherits the failed attempt's error or stall.
   const [attempt, setAttempt] = useState(0);
-  const attemptIdentity = `${streamUrl}|${requestKey}#${attempt}`;
-  const [firstFrameIdentity, setFirstFrameIdentity] = useState<string | null>(null);
-  const [errorIdentity, setErrorIdentity] = useState<string | null>(null);
-  const [stalledIdentity, setStalledIdentity] = useState<string | null>(null);
-  const hasFirstFrame = Boolean(streamUrl) && firstFrameIdentity === attemptIdentity;
-  const hasPlaybackError = Boolean(streamUrl) && errorIdentity === attemptIdentity;
-  const stalled = Boolean(streamUrl) && stalledIdentity === attemptIdentity;
+  const [playerSlot, setPlayerSlot] = useState({ mounted: false, generation: 0 });
+  const playerKey = `${streamUrl}|${requestKey}|${playerSlot.generation}#${attempt}`;
+
+  const [failedPosterUrl, setFailedPosterUrl] = useState<string | null>(null);
+  const [firstFrameKey, setFirstFrameKey] = useState<string | null>(null);
+  const [playbackErrorKey, setPlaybackErrorKey] = useState<string | null>(null);
+  const [stalledKey, setStalledKey] = useState<string | null>(null);
+  const [slowStartKey, setSlowStartKey] = useState<string | null>(null);
+
+  const hasPlaybackError = Boolean(streamUrl) && playbackErrorKey === playerKey;
+  const stalled = Boolean(streamUrl) && stalledKey === playerKey;
   const playbackFailed = hasPlaybackError || stalled;
-  const shouldMountPlayer = canPlay && !playbackFailed;
-  const [playerMounted, setPlayerMounted] = useState(shouldMountPlayer);
+  // A failed attempt releases its player; the poster and Retry take its place.
+  const playerMounted = wantsPlayer && !playbackFailed;
+  if (playerSlot.mounted !== playerMounted) {
+    setPlayerSlot({
+      mounted: playerMounted,
+      generation: playerMounted ? playerSlot.generation + 1 : playerSlot.generation,
+    });
+  }
 
   const usablePreviewUrl = previewUrl && previewUrl !== failedPosterUrl ? previewUrl : null;
-  const posterVisible = !canPlay || !hasFirstFrame || playbackFailed;
+  const hasFirstFrame = playerMounted && firstFrameKey === playerKey;
+  // The poster covers the tile until the tile's own player has drawn, and comes
+  // back on a failure or once the player is gone. Posters are the clip's first
+  // frame, so handing over to a player's first frame changes nothing visible.
+  const posterVisible = !hasFirstFrame || playbackFailed;
   // Nothing to show but the play badge: keep the borderless dark tile this
   // state has always rendered rather than framing an empty box.
-  const posterless = !usablePreviewUrl && !canPlay;
+  const posterless = !usablePreviewUrl && !canPlay && !hasFirstFrame;
+  const loading = canPlay && !hasFirstFrame && !playbackFailed;
+  const slowStart = loading && slowStartKey === playerKey;
 
   useEffect(() => {
     setFailedPosterUrl(null);
   }, [previewUrl, url, posterRequestKey]);
 
+  // A tile that has left the playing and prepared windows has released its
+  // player, and a failure it recorded belongs to that player: the next time it
+  // is wanted it tries afresh, rather than showing Retry for a player long gone.
   useEffect(() => {
-    // The player layer owns pause/release ordering. Dropping it here works for
-    // viewability handoffs, whole-screen navigation and a failed attempt alike.
-    setPlayerMounted(shouldMountPlayer);
-    if (!canPlay) {
-      setFirstFrameIdentity(null);
-      setErrorIdentity(null);
-      setStalledIdentity(null);
-    }
-  }, [canPlay, shouldMountPlayer]);
+    if (wantsPlayer) return;
+    setPlaybackErrorKey(null);
+    setStalledKey(null);
+  }, [wantsPlayer]);
 
   // Foreground time only: a tile left behind the app switcher is not stalled.
+  // Nor is a prepared tile waiting its turn: only a playing tile has a deadline.
   useEffect(() => {
     if (!playerMounted || !canPlay || hasFirstFrame || playbackFailed || !foreground) return;
     const timer = setTimeout(() => {
-      setStalledIdentity(attemptIdentity);
+      setStalledKey(playerKey);
       recordMediaDiagnostic({
         kind: 'video',
         event: 'stall',
@@ -145,22 +186,32 @@ export function FeedVideoPreview({
       });
     }, MEDIA_DISPLAY_DEADLINE_MS);
     return () => clearTimeout(timer);
-  }, [attempt, attemptIdentity, canPlay, diagnosticsSurface, foreground, hasFirstFrame, playbackFailed, playerMounted, url]);
+  }, [attempt, canPlay, diagnosticsSurface, foreground, hasFirstFrame, playbackFailed, playerKey, playerMounted, url]);
+
+  // Dimming the tile under a spinner on every activation was the blink the feed
+  // showed while scrolling: each handoff flashed dark for as long as a new
+  // player took to draw. The poster already shows what is coming, so the
+  // spinner waits for a start that is genuinely slow.
+  useEffect(() => {
+    if (!loading) return undefined;
+    const timer = setTimeout(() => setSlowStartKey(playerKey), FEED_PREVIEW_BUFFERING_INDICATOR_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [loading, playerKey]);
 
   const handleFirstFrame = useCallback(() => {
-    setFirstFrameIdentity(attemptIdentity);
-    setErrorIdentity(null);
+    setFirstFrameKey(playerKey);
+    setPlaybackErrorKey(null);
     if (attempt > 0) {
       recordMediaDiagnostic({ kind: 'video', event: 'recovered', surface: diagnosticsSurface, subject: url, attempt });
     }
-  }, [attempt, attemptIdentity, diagnosticsSurface, url]);
+  }, [attempt, diagnosticsSurface, playerKey, url]);
 
   const handlePlaybackError = useCallback((errored: boolean) => {
-    setErrorIdentity(errored ? attemptIdentity : null);
+    setPlaybackErrorKey(errored ? playerKey : null);
     if (errored) {
       recordMediaDiagnostic({ kind: 'video', event: 'error', surface: diagnosticsSurface, subject: url, attempt, stage: 'player' });
     }
-  }, [attempt, attemptIdentity, diagnosticsSurface, url]);
+  }, [attempt, diagnosticsSurface, playerKey, url]);
 
   const retryPlayback = () => {
     recordMediaDiagnostic({
@@ -207,9 +258,10 @@ export function FeedVideoPreview({
 
       {playerMounted && streamUrl ? (
         <FeedVideoPlayerLayer
-          key={attemptIdentity}
+          key={playerKey}
           source={streamSource}
           contentFit={videoContentFit}
+          playing={canPlay}
           onFirstFrame={handleFirstFrame}
           onPlaybackError={handlePlaybackError}
         />
@@ -224,7 +276,7 @@ export function FeedVideoPreview({
           cacheKey={previewCacheKey ?? `${url}:poster`}
           thumbhash={previewThumbhash}
           onLoad={onPosterLoad}
-          contentFit={canPlay ? videoContentFit : 'cover'}
+          contentFit={playerMounted ? videoContentFit : 'cover'}
           onError={() => setFailedPosterUrl(usablePreviewUrl)}
           watchdog={watchdog && posterVisible}
           diagnosticsSurface={diagnosticsSurface}
@@ -238,16 +290,20 @@ export function FeedVideoPreview({
         </View>
       ) : null}
 
-      {canPlay && !hasFirstFrame && !playbackFailed ? (
-        <View
-          pointerEvents="none"
-          style={[absoluteFill, {
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: `${appTheme.colors.background}66`,
-          }]}
-        >
-          <ActivityIndicator color={accent} />
+      {slowStart ? (
+        <View pointerEvents="none" style={[absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
+          <View
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 18,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: 'rgba(3,3,6,0.55)',
+            }}
+          >
+            <ActivityIndicator color={appTheme.colors.text} />
+          </View>
         </View>
       ) : null}
 
@@ -282,11 +338,13 @@ export function FeedVideoPreview({
 function FeedVideoPlayerLayer({
   source,
   contentFit,
+  playing,
   onFirstFrame,
   onPlaybackError,
 }: {
   source: { uri: string; headers?: Record<string, string> };
   contentFit: 'cover' | 'contain';
+  playing: boolean;
   onFirstFrame: () => void;
   onPlaybackError: (errored: boolean) => void;
 }) {
@@ -303,9 +361,7 @@ function FeedVideoPlayerLayer({
     // (`doNotMix`) would seize it anyway, while its Android default is `auto`.
     instance.audioMixingMode = 'auto';
     // Assigned as a whole object: the individual fields are readonly.
-    instance.bufferOptions = {
-      preferredForwardBufferDuration: FEED_PREVIEW_FORWARD_BUFFER_SECONDS,
-    };
+    instance.bufferOptions = { preferredForwardBufferDuration: forwardBufferSeconds(playing) };
     return instance;
   });
   const releaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -315,7 +371,6 @@ function FeedVideoPlayerLayer({
       clearTimeout(releaseTimerRef.current);
       releaseTimerRef.current = null;
     }
-    player.play();
     return () => {
       try {
         player.pause();
@@ -332,6 +387,15 @@ function FeedVideoPlayerLayer({
       }, PLAYER_RELEASE_GRACE_MS);
     };
   }, [player]);
+
+  // One player serves both states. Paused, it holds only the head of the clip —
+  // enough to have drawn its first frame and to start without a stall — and
+  // playing widens to the preview window.
+  useEffect(() => {
+    player.bufferOptions = { preferredForwardBufferDuration: forwardBufferSeconds(playing) };
+    if (playing) player.play();
+    else player.pause();
+  }, [player, playing]);
 
   useEffect(() => {
     // A source that failed before this effect subscribed never sends a

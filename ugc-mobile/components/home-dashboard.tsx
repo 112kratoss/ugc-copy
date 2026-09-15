@@ -55,12 +55,16 @@ import {
 } from '@/lib/home-feed-view-model';
 import { getOwnerPostSalesSummary } from '@/lib/home-view-model';
 import { immersiveViewerHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
-import { SHOWCASE_DRAW_DISTANCE, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS } from '@/lib/media-performance';
+import {
+  SHOWCASE_DRAW_DISTANCE,
+  SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS,
+  SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS,
+} from '@/lib/media-performance';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
 import { MotionView, usePressMotion, useReducedMotion } from '@/lib/motion';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
-import { selectActiveShowcaseVideoIds } from '@/lib/showcase-display';
+import { selectActiveShowcaseVideoIds, selectPreparedShowcaseVideoIds } from '@/lib/showcase-display';
 import {
   SHOWCASE_PLAYBACK_VIEWABILITY,
   SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY,
@@ -165,6 +169,14 @@ export function HomeDashboard() {
   const [menuVisible, setMenuVisible] = useState(false);
   const [activeChipId, setActiveChipId] = useState<HomeFeedChipId>('for-you');
   const [activeVideoIds, setActiveVideoIds] = useState<string[]>([]);
+  // The cards, of any kind, that last met the playback threshold. A moment with
+  // none (mid-fling, the header in view) keeps the last set, so the players
+  // prepared around it are not released and rebuilt on the way past.
+  const [playbackViewableIds, setPlaybackViewableIds] = useState<string[]>([]);
+  // The videos that same report chose to play. Prepared players are anchored
+  // here rather than to `activeVideoIds`, which empties the moment a scroll
+  // leaves no card qualified; see selectPreparedShowcaseVideoIds.
+  const [preparedAnchorIds, setPreparedAnchorIds] = useState<string[]>([]);
   const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
   const [commentsItem, setCommentsItem] = useState<ShowcaseFeedItem | null>(null);
   const [commentsReplyToId, setCommentsReplyToId] = useState<string | null>(null);
@@ -271,6 +283,18 @@ export function HomeDashboard() {
         ? current
         : nextVideoIds
     ));
+    if (!visibleItems.length) return;
+    const nextViewableIds = visibleItems.map((item) => item.id);
+    setPlaybackViewableIds((current) => (
+      current.length === nextViewableIds.length && current.every((id, index) => id === nextViewableIds[index])
+        ? current
+        : nextViewableIds
+    ));
+    setPreparedAnchorIds((current) => (
+      current.length === nextVideoIds.length && current.every((id, index) => id === nextVideoIds[index])
+        ? current
+        : nextVideoIds
+    ));
   }, [reportAmbientMedia]);
 
   const onQualifiedViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<HomeFeedCard>> }) => {
@@ -370,6 +394,21 @@ export function HomeDashboard() {
   }, [api, feedItems, requestedCommentsPostId, requestedReplyToId]);
 
   const cards = useMemo(() => buildHomeFeedCards(feedItems), [feedItems]);
+  // The videos around the playing one keep a paused player with its first
+  // frame drawn, so the next autoplay handoff is a resume rather than a load.
+  const preparedVideoIds = useMemo(
+    () => selectPreparedShowcaseVideoIds(
+      cards.map((card) => card.item),
+      { viewableIds: playbackViewableIds, anchorIds: preparedAnchorIds, activeIds: visibleActiveVideoIds },
+      SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS,
+    ),
+    [cards, playbackViewableIds, preparedAnchorIds, visibleActiveVideoIds],
+  );
+  // FlashList rerenders visible cells only when extraData changes identity.
+  const feedExtraData = useMemo(
+    () => ({ activeVideoIds: visibleActiveVideoIds, preparedVideoIds }),
+    [preparedVideoIds, visibleActiveVideoIds],
+  );
   const slidePreviews = useMemo(() => pickHomeSlidePreviews(cards), [cards]);
   const hasItems = cards.length > 0;
   const isFirstLoad = feedQuery.isLoading && !hasItems;
@@ -724,6 +763,7 @@ export function HomeDashboard() {
         card={card}
         contentWidth={contentWidth}
         showActiveVideo={visibleActiveVideoIds.includes(card.id)}
+        showPreparedVideo={preparedVideoIds.includes(card.id)}
         bodyExpanded={expandedBodyIds.includes(card.id)}
         onOpen={() => openCard(card)}
         onToggleBody={() => toggleBodyExpanded(card.id)}
@@ -757,7 +797,7 @@ export function HomeDashboard() {
         keyExtractor={(card) => card.id}
         renderItem={renderCard}
         getItemType={(card) => card.previewKind}
-        extraData={visibleActiveVideoIds}
+        extraData={feedExtraData}
         drawDistance={SHOWCASE_DRAW_DISTANCE}
         maintainVisibleContentPosition={{ disabled: true }}
         onEndReached={requestNextPage}

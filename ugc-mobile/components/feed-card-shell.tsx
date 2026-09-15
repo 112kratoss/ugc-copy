@@ -9,6 +9,16 @@ import { appTheme } from '@/lib/theme';
 
 /** The creator byline reads as a single line of text; its reach is widened rather than its height. */
 const CREATOR_ROW_HEIGHT = 32;
+
+/**
+ * How long a finger must rest on the card before it presses down. A feed is
+ * mostly scrolled, and a swipe that starts on the media would otherwise spring
+ * the whole card down and back at the start of every scroll. Native lists wait
+ * the same way: Android holds the pressed state inside a scrolling container for
+ * its 100ms tap timeout, and UIScrollView delays content touches until it can
+ * tell a scroll from a tap. A quicker tap still presses and opens.
+ */
+const CARD_PRESS_DELAY_MS = 100;
 import { verticalHitSlop } from '@/lib/hit-target';
 
 /**
@@ -168,6 +178,7 @@ export function FeedCardShell({
         onPress={open}
         onPressIn={openMotion.onPressIn}
         onPressOut={openMotion.onPressOut}
+        unstable_pressDelay={CARD_PRESS_DELAY_MS}
         style={{ paddingTop: media ? appTheme.spacing.gap : 0 }}
       >
         {media ? media : caption}

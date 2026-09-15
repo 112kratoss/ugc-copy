@@ -19,6 +19,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   card,
   contentWidth,
   showActiveVideo,
+  showPreparedVideo,
   bodyExpanded,
   onOpen,
   onToggleBody,
@@ -33,6 +34,8 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   card: HomeFeedCard;
   contentWidth: number;
   showActiveVideo: boolean;
+  /** Keep this card's video loaded and paused, ready to play; see FeedVideoPreview. */
+  showPreparedVideo: boolean;
   bodyExpanded: boolean;
   onOpen: () => void;
   onToggleBody: () => void;
@@ -48,6 +51,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   const hasMedia = card.previewKind !== 'text' && Boolean(card.mediaUrl);
   const mediaHeight = hasMedia ? getHomeFeedMediaHeight(card, contentWidth) : 0;
   const bodyWidth = contentWidth - appTheme.spacing.card * 2;
+  const videoActivation = showActiveVideo ? 'visible' : showPreparedVideo ? 'prepared' : 'never';
 
   return (
     <FeedCardShell
@@ -80,7 +84,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
           height={mediaHeight}
           radius={0}
           recyclingKey={`home-feed:${card.id}`}
-          videoActivation={showActiveVideo ? 'visible' : 'never'}
+          videoActivation={videoActivation}
           videoBackdrop="none"
           videoContentFit="cover"
         />

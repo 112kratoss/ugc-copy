@@ -243,6 +243,30 @@ describe('ShowcaseMediaPreview', () => {
     expect(video.props.active).toBe(true);
   });
 
+  it('hands a prepared video a paused player without playing it', () => {
+    const tree = renderPreview(
+      <ShowcaseMediaPreview
+        accent="#fb7185"
+        height={180}
+        mediaItems={[media({
+          id: 'video-next',
+          url: 'https://cdn.example.com/original.mp4',
+          previewUrl: 'https://cdn.example.com/poster.webp',
+          mediaKind: 'video',
+          contentType: 'video/mp4',
+        })]}
+        radius={12}
+        recyclingKey="home-feed:video-next"
+        videoActivation="prepared"
+        width={160}
+      />
+    );
+
+    const [video] = findAllByNodeType(tree, 'feed-video-preview');
+    expect(video.props.active).toBe(false);
+    expect(video.props.prepared).toBe(true);
+  });
+
   it('keeps every media item available in a swipeable preview', () => {
     const tree = renderPreview(
       <ShowcaseMediaPreview
