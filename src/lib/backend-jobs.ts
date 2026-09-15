@@ -9,6 +9,7 @@ export type BackendJobName =
   | 'mobile-push-receipts'
   | 'operational-data-retention'
   | 'referral-reward-reconciliation'
+  | 'showcase-media-revocations'
   | 'workflow-run-steps';
 
 export type BackendJobSchedulerDefinition = {
@@ -304,6 +305,19 @@ export const BACKEND_JOB_REGISTRY = [
     lockTtlSeconds: 14 * 60,
     noWorkSkipReason: 'no_unsettled_referral_rewards',
     maxMissedRunsBeforeDegraded: 2,
+  }),
+  defineBackendJob({
+    // Hourly is enough: the post update and publish routes delete a public
+    // derivative inline the moment its post stops needing it, and this only
+    // retries what they miss. The posts trigger queues every such object in
+    // the post write's own transaction, so none can be missed silently.
+    name: 'showcase-media-revocations',
+    route: '/api/cron/showcase-media-revocations',
+    schedule: '30 * * * *',
+    maxDurationSeconds: 300,
+    lockTtlSeconds: 14 * 60,
+    noWorkSkipReason: 'no_pending_showcase_media_revocations',
+    maxMissedRunsBeforeDegraded: 3,
   }),
   defineBackendJob({
     // F12: before this entry the registry had no workflow job at all, so a

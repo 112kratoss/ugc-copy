@@ -112,7 +112,7 @@ describe('archiveOwnerPostForRoute', () => {
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 
-  it('archives owned active posts and synchronizes bundles and linked generations', async () => {
+  it('archives owned active posts and demotes the recipe, leaving generation exposure to the posts trigger', async () => {
     const client = createClient();
 
     const result = await archiveOwnerPostForRoute({
@@ -148,12 +148,6 @@ describe('archiveOwnerPostForRoute', () => {
           ['eq', 'owner_user_id', 'user-1'],
           ['eq', 'status', 'published'],
         ],
-        selectColumns: null,
-      },
-      {
-        table: 'generations',
-        values: { is_public: false, showcase_asset_path: null },
-        filters: [['eq', 'id', 'generation-1']],
         selectColumns: null,
       },
     ]);
@@ -225,62 +219,34 @@ describe('restoreOwnerPostForRoute', () => {
     expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
   });
 
-  // Archive flips the linked generation's exposure off and forgets its
-  // showcase path; restore used to clear archived_at and nothing else, so the
-  // Creations card kept saying "not public" for a post that was live.
-  it('puts a public post\'s linked generation back on show when restoring', async () => {
-    const client = createClient({
-      postResult: {
-        data: {
-          id: 'post-1',
-          generation_id: 'generation-1',
-          visibility: 'public',
-          showcase_asset_path: 'showcase/generation-1/example.jpg',
+  // The generation's exposure used to be written here after the restore had
+  // committed, and a failure was never even checked. The posts trigger now
+  // recomputes it inside the restore's own statement (pgTAP:
+  // generation_exposure_follows_post.test.sql), so nothing is written here.
+  it.each(['public', 'private'] as const)(
+    'leaves a restored %s post\'s linked generation to the posts trigger',
+    async (visibility) => {
+      const client = createClient({
+        postResult: {
+          data: {
+            id: 'post-1',
+            generation_id: 'generation-1',
+            visibility,
+            showcase_asset_path: 'showcase/generation-1/example.jpg',
+          },
+          error: null,
         },
-        error: null,
-      },
-    });
+      });
 
-    await restoreOwnerPostForRoute({
-      adminSupabase: client.client,
-      ownerUserId: 'user-1',
-      postId: 'post-1',
-    });
+      await expect(restoreOwnerPostForRoute({
+        adminSupabase: client.client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+      })).resolves.toEqual({ ok: true, body: { success: true, restored: true } });
 
-    expect(client.updateCalls).toContainEqual({
-      table: 'generations',
-      values: { is_public: true, showcase_asset_path: 'showcase/generation-1/example.jpg' },
-      filters: [['eq', 'id', 'generation-1']],
-      selectColumns: null,
-    });
-  });
-
-  it('keeps a private post\'s linked generation private when restoring', async () => {
-    const client = createClient({
-      postResult: {
-        data: {
-          id: 'post-1',
-          generation_id: 'generation-1',
-          visibility: 'private',
-          showcase_asset_path: 'showcase/generation-1/example.jpg',
-        },
-        error: null,
-      },
-    });
-
-    await restoreOwnerPostForRoute({
-      adminSupabase: client.client,
-      ownerUserId: 'user-1',
-      postId: 'post-1',
-    });
-
-    expect(client.updateCalls).toContainEqual({
-      table: 'generations',
-      values: { is_public: false, showcase_asset_path: null },
-      filters: [['eq', 'id', 'generation-1']],
-      selectColumns: null,
-    });
-  });
+      expect(client.updateCalls.map((call) => call.table)).toEqual(['posts']);
+    },
+  );
 
   it('returns not found when no archived owned post matches', async () => {
     const client = createClient({ postResult: { data: null, error: null } });

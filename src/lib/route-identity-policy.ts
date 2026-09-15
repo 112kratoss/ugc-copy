@@ -225,6 +225,7 @@ const SERVICE_ROUTES = [
   '/api/cron/mobile-push-receipts',
   '/api/cron/operational-data-retention',
   '/api/cron/referral-rewards',
+  '/api/cron/showcase-media-revocations',
   '/api/cron/workflow-run-steps',
   '/api/ops/backend-alerts',
   '/api/ops/backend-costs',

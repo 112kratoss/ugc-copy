@@ -95,6 +95,7 @@ describe('backend job registry', () => {
       'mobile-push-receipts',
       'operational-data-retention',
       'referral-reward-reconciliation',
+      'showcase-media-revocations',
       'workflow-run-steps',
     ]);
   });
@@ -124,7 +125,9 @@ describe('backend job registry', () => {
     expect(getCronScheduleDailyInvocations('0 * * * *')).toBe(24);
     // Media repair now runs every ten minutes rather than hourly (+120/day) so
     // its leased queue cannot sit for an hour after publish stopped doing work.
-    expect(logicalDailyRuns).toBe(915);
+    // Showcase media revocations retry hourly (+24/day) inside the shared
+    // scheduler invocation, so they add no Vercel cron invocation of their own.
+    expect(logicalDailyRuns).toBe(939);
     expect(BACKEND_JOB_SCHEDULER.dailyInvocations).toBe(144);
     // The budget bounds real Vercel cron invocations, not logical job runs, so
     // it has to be measured across every entry now that F14 added two. Checking

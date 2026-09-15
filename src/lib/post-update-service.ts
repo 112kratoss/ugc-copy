@@ -1431,7 +1431,9 @@ export async function updateOwnerPostForRoute({
     // Moving between them used to be the publish route's job alone, which is
     // why a visibility change from a client that used this route left a
     // private post's media served from the public bucket. The linked
-    // generation is kept in step afterwards, its title and caption included.
+    // generation's exposure (is_public and its public derivative) follows the
+    // post inside the update RPC's transaction, through the posts trigger;
+    // only its title, caption and durable media location are copied here.
     const generationUpdate: Record<string, unknown> = {};
     let removableDerivativePath: string | null = null;
     // The derivative this route creates needs the same `post_media` cover row
@@ -1473,7 +1475,6 @@ export async function updateOwnerPostForRoute({
               category: showcaseCategory,
             });
             updatePayload.showcase_asset_path = showcaseAssetPath;
-            generationUpdate.showcase_asset_path = showcaseAssetPath;
             coverMediaToRecord = { showcaseAssetPath, category: showcaseCategory };
           } catch (error) {
             logBackendError('failed_to_create_showcase_derivative_for_post_update', { error });
@@ -1514,13 +1515,9 @@ export async function updateOwnerPostForRoute({
             };
           }
           updatePayload.showcase_asset_path = null;
-          generationUpdate.showcase_asset_path = null;
           removableDerivativePath = generation.showcase_asset_path ?? post.showcase_asset_path ?? null;
         }
 
-        if (exposureChanged) {
-          generationUpdate.is_public = nextVisibility === 'public';
-        }
         // The creation card shows the generation's own title and caption, so
         // they follow the post's whenever the post is edited — private too,
         // or a post retitled while private would show its old name in
@@ -1632,6 +1629,8 @@ export async function updateOwnerPostForRoute({
       }
     }
 
+    // Presentation and the durable media location only. Nothing written here
+    // can expose the generation, so a failure is cosmetic, not a leak.
     if (post.generation_id && Object.keys(generationUpdate).length > 0) {
       const { error: generationError } = await adminSupabase
         .from('generations')
@@ -1643,6 +1642,9 @@ export async function updateOwnerPostForRoute({
       }
     }
 
+    // The fast path. The posts trigger queued this derivative when the post
+    // dropped it, so a delete that fails here is retried by the
+    // showcase-media-revocations job instead of leaving the copy public.
     if (post.generation_id && removableDerivativePath) {
       const removal = await resolvedDependencies.removeGenerationShowcaseDerivative({
         adminSupabase,
