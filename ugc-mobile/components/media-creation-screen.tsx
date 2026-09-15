@@ -32,6 +32,7 @@ import {
 import { acquireActivityLock } from '@/lib/app-activity';
 import { showConfirmDialog } from '@/lib/dialog';
 import { useAuth } from '@/lib/auth';
+import { needsRemixReferenceRecovery, recoverRemixReferences } from '@/lib/remix-draft-recovery';
 import { clearPersistedCreationDrafts, loadPersistedCreationDrafts, persistCreationDrafts, remixDraftScope } from '@/lib/creation-draft-resume';
 import { createDraftSaveQueue } from '@/lib/draft-save-queue';
 import { SheetBackdrop, SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
@@ -496,6 +497,7 @@ export function MediaCreationScreen({
   const closingRef = useRef(false);
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resumedRemixRef = useRef(false);
+  const recoveringRemixReferences = useRef(false);
   const remixResolvedRef = useRef(false);
   const [remixRetry, setRemixRetry] = useState(0);
   const [remixRestoreFailed, setRemixRestoreFailed] = useState(false);
@@ -557,6 +559,7 @@ export function MediaCreationScreen({
     setDraftsHydrated(false);
     setDraftLoadError(false);
     resumedRemixRef.current = false;
+    recoveringRemixReferences.current = false;
     remixResolvedRef.current = false;
     // A prompt-only entry has its own seed; a remix can resume its own session.
     const load = initialPrompt && !draftScope ? Promise.resolve(null) : loadPersistedCreationDrafts(draftScope);
@@ -566,7 +569,10 @@ export function MediaCreationScreen({
         setImageDraft(persisted.image);
         setVideoDraft(persisted.video);
         setMotionDraft(persisted.motion);
-        resumedRemixRef.current = Boolean(draftScope && persisted.remixRestored);
+        // A previous failed restore may have been saved as complete. Re-read its
+        // source without resetting the creator's other saved fields.
+        recoveringRemixReferences.current = Boolean(draftScope && persisted.remixRestored && needsRemixReferenceRecovery(persisted[initialTool]));
+        resumedRemixRef.current = Boolean(draftScope && persisted.remixRestored && !recoveringRemixReferences.current);
         remixResolvedRef.current = resumedRemixRef.current;
         savedRemixEdits.current = persisted.remixEditedKeys ?? {};
       }
@@ -911,7 +917,9 @@ export function MediaCreationScreen({
         )));
         const restoredPrompt = savedRemixEdits.current[targetTool]?.includes('prompt') ? current.prompt : prompt;
         // A model chosen while loading keeps its compatible settings as a unit.
-        const merged = 'model' in edits
+        const merged = recoveringRemixReferences.current
+          ? recoverRemixReferences(current, restored.draft)
+          : 'model' in edits
           ? { ...current, sourceGenerationId: restored.draft.sourceGenerationId }
           : { ...restored.draft, ...edits, prompt: restoredPrompt };
         remixBaseline.current = { ...remixBaseline.current, [targetTool]: restored.draft };

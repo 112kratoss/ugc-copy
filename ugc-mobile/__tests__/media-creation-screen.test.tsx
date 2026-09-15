@@ -2372,4 +2372,18 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value)
       .toBe('creator lifts the serum');
   });
+
+  it('repairs a completed saved remix with a missing named source reference without resetting edits', async () => {
+    catalogState.catalog = createRemixRestoreCatalog();
+    const video = {...createDefaultCreationDraft('video'), model:'seedance-2', prompt:'My edited scene: @girl is crying', aspectRatio:'9:16', resolution:'480p', duration:4, references:[]};
+    draftStorage.getItem.mockResolvedValue(JSON.stringify({image:createDefaultCreationDraft('image'),video,motion:createDefaultCreationDraft('motion'),updatedAt:new Date().toISOString(),remixRestored:true,remixEditedKeys:{video:['prompt','references']}}));
+    authState.api.getRemixSourceBundle.mockResolvedValue({generation:{id:'gen-girl',title:'Original',prompt:'The girl from @girl is crying',category:'video',model:'seedance-2'},result:null,inputs:{video:{referenceMode:'elements',startFrame:null,endFrame:null,elements:[{id:'girl',displayName:'Girl',handle:'@girl',url:'https://cdn.example.com/girl.png',storagePath:'generation_inputs/owner/girl.png',sourceGenerationId:null}],referenceVideos:[],referenceAudios:[]}},workflowSettings:{model:'seedance-2',referenceMode:'elements',duration:4,aspectRatio:'16:9',resolution:'480p'},restoreIssues:[]});
+    let tree!: renderer.ReactTestRenderer;
+    await renderer.act(async()=>{tree=renderer.create(<MediaCreationScreen initialTool="video" remixSource={{generationId:'gen-girl',postId:'post-girl'}}/>);});
+    expect(tree.root.findByProps({accessibilityLabel:'Open details for Girl'})).toBeTruthy();
+    expect(tree.root.findByProps({accessibilityLabel:'Generation prompt'}).props.value).toBe(video.prompt);
+    expect(collectText(tree.root)).not.toContain('Unknown element mention');
+    await renderer.act(async()=>{tree.unmount();});
+  });
+
 });
