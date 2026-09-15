@@ -14,6 +14,7 @@ import {
   deletePost,
   describePostLifecycleError,
   pickPostVisibility,
+  resolveLinkedLifecyclePost,
   restorePost,
   toPostLifecyclePost,
   type PostLifecyclePost,
@@ -25,6 +26,49 @@ const publicWithListedRecipe: PostLifecyclePost = {
   archivedAt: null,
   bundle: { accessMode: 'free', status: 'published', salesCount: 2 },
 };
+
+describe('resolveLinkedLifecyclePost', () => {
+  const linked = { linkedPostId: 'post-1', linkedPostVisibility: 'public', linkedPostArchivedAt: null };
+
+  beforeEach(() => {
+    alertState.alert.mockReset();
+  });
+
+  it('uses linked-post details that already loaded, without another request', async () => {
+    const api = { getOwnerPost: vi.fn() };
+
+    await expect(resolveLinkedLifecyclePost({
+      api: api as never,
+      item: { ...linked, linkedPostBundle: null, linkedPostDetailsLoaded: true },
+    })).resolves.toEqual({ id: 'post-1', visibility: 'public', archivedAt: null, bundle: null });
+    expect(api.getOwnerPost).not.toHaveBeenCalled();
+  });
+
+  it('reads a post whose details never loaded, so a selling recipe is not taken for a plain post', async () => {
+    const api = {
+      getOwnerPost: vi.fn(async () => ({
+        success: true,
+        post: {
+          id: 'post-1',
+          visibility: 'public',
+          archivedAt: null,
+          bundle: { accessMode: 'paid', status: 'published', salesCount: 3 },
+        },
+      })),
+    };
+
+    await expect(resolveLinkedLifecyclePost({ api: api as never, item: { ...linked, linkedPostDetailsLoaded: false } }))
+      .resolves.toMatchObject({ bundle: { accessMode: 'paid', status: 'published', salesCount: 3 } });
+    expect(api.getOwnerPost).toHaveBeenCalledWith('post-1');
+  });
+
+  it('reports a failed read and hands back nothing to act on', async () => {
+    const api = { getOwnerPost: vi.fn(async () => { throw new Error('Network request failed.'); }) };
+
+    await expect(resolveLinkedLifecyclePost({ api: api as never, item: linked })).resolves.toBeNull();
+    expect(alertState.alert.mock.calls[0]?.[0]).toBe('Could not load the post');
+  });
+});
 
 function getAlertAction(label: string, callIndex = 0) {
   const actions = alertState.alert.mock.calls[callIndex]?.[2] as Array<{ text: string; style?: string; onPress?: () => void }> | undefined;

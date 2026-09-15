@@ -14,42 +14,78 @@ const TEXT_BODY_LINES = 6;
 const BODY_FONT_SIZE = 14;
 
 /**
- * Landing the feed on the tapped card is a retry, not a single shot.
- * `initialScrollIndex` is only honoured at mount, and the two queries behind the
- * list (source data and profile) settle independently, so the list the first
- * scroll addresses is not always the list that ends up rendered. Re-asserting
- * until the card is actually on screen makes the landing independent of which
- * order those resolve in — the timing difference that made a tap open the wrong
- * creation on iOS while Android happened to land correctly.
+ * How long the feed keeps trying to bring the tapped card on screen once the
+ * card is in the list.
  *
- * Delays rather than a single frame because a card's height is only final once
- * its body text has wrapped; the last attempt is late enough to outlast that.
+ * Landing is a retry, not a single shot: `initialScrollIndex` is only honoured at
+ * mount, card heights settle as bodies wrap, and the queries behind the list
+ * resolve independently. The old scheme spent five attempts on a fixed schedule
+ * ending at 640ms, whether or not anything had rendered, then marked the card
+ * landed the first time it was glimpsed — so a slow load used the attempts up
+ * and a later reorder left the reader on the wrong card (audit C8). Now the list
+ * drives the attempts (the target arriving, the list reporting load or a content
+ * size, the card turning viewable), a reorder before the reader moves lands
+ * again, and this budget only bounds how long that may take before the feed
+ * says it could not get there.
  */
-export const FEED_LANDING_RETRY_DELAYS_MS = [64, 160, 320, 640];
-export const MAX_FEED_LANDING_ATTEMPTS = FEED_LANDING_RETRY_DELAYS_MS.length + 1;
+export const FEED_LANDING_BUDGET_MS = 3000;
+
+export type FeedLanding = {
+  /**
+   * `waiting` for the target to appear in the list; `seeking` it; `landed` on it;
+   * `released` for good once the reader scrolled; `failed` when the budget ran out.
+   */
+  phase: 'waiting' | 'seeking' | 'landed' | 'released' | 'failed';
+  /** The index the target held when the landing last saw it; -1 while absent. */
+  targetIndex: number;
+  /** When the current attempt began, which starts its budget. */
+  startedAt: number | null;
+};
+
+export type FeedLandingEvent =
+  | { type: 'target'; index: number; now: number }
+  | { type: 'viewable'; targetVisible: boolean }
+  | { type: 'reader-scrolled' }
+  | { type: 'tick'; now: number }
+  | { type: 'retry'; now: number };
+
+export const INITIAL_FEED_LANDING: FeedLanding = { phase: 'waiting', targetIndex: -1, startedAt: null };
+
+export function reduceFeedLanding(state: FeedLanding, event: FeedLandingEvent): FeedLanding {
+  // The reader's own scroll outranks the landing for the rest of the visit.
+  if (state.phase === 'released') return state;
+
+  switch (event.type) {
+    case 'reader-scrolled':
+      return { ...state, phase: 'released' };
+    case 'target':
+      if (event.index < 0) {
+        // Gone from the list. The screen shows that as a missing selection; if it
+        // comes back, landing starts over.
+        return state.phase === 'waiting' ? state : { phase: 'waiting', targetIndex: -1, startedAt: null };
+      }
+      if (state.phase !== 'waiting' && event.index === state.targetIndex) return state;
+      return { phase: 'seeking', targetIndex: event.index, startedAt: event.now };
+    case 'viewable':
+      return state.phase === 'seeking' && event.targetVisible ? { ...state, phase: 'landed' } : state;
+    case 'tick':
+      return state.phase === 'seeking'
+        && state.startedAt !== null
+        && event.now - state.startedAt >= FEED_LANDING_BUDGET_MS
+        ? { ...state, phase: 'failed' }
+        : state;
+    case 'retry':
+      return state.phase === 'failed' ? { ...state, phase: 'seeking', startedAt: event.now } : state;
+  }
+}
 
 /**
- * `targetIndex >= cardCount` is rejected rather than clamped: FlashList clamps an
- * out-of-range scroll to the end of the list, which silently lands the reader on
- * the oldest card instead of admitting it could not find the one they asked for.
+ * Whether the list should be scrolled to the target now. The first card needs
+ * no scroll. An index the list cannot contain is never passed on: FlashList
+ * clamps it to the end, which would land the reader on the oldest card instead.
  */
-export function shouldReassertFeedLanding({
-  targetIndex,
-  cardCount,
-  landed,
-  readerTookOver,
-  attempts,
-}: {
-  targetIndex: number;
-  cardCount: number;
-  landed: boolean;
-  readerTookOver: boolean;
-  attempts: number;
-}) {
-  if (landed || readerTookOver) return false;
-  if (targetIndex <= 0 || targetIndex >= cardCount) return false;
-
-  return attempts < MAX_FEED_LANDING_ATTEMPTS;
+export function shouldScrollToFeedTarget(state: FeedLanding, cardCount: number) {
+  return state.phase === 'seeking' && state.targetIndex > 0 && state.targetIndex < cardCount;
 }
 
 export interface ProfileFeedCard {
@@ -60,6 +96,11 @@ export interface ProfileFeedCard {
   bodyLines: number;
   isTextOnly: boolean;
   hasMedia: boolean;
+  /**
+   * A creation whose only file is gone. The card draws that state where the
+   * media would be, so the card the reader opened is visibly the one they tapped.
+   */
+  sourceUnavailable: boolean;
   creatorLabel: string;
   creatorName: string;
   creatorAvatar: string | null;
@@ -90,6 +131,7 @@ export function toProfileFeedCard(item: ImmersivePreviewItem, now?: Date): Profi
     bodyLines: isTextOnly ? TEXT_BODY_LINES : BODY_LINES,
     isTextOnly,
     hasMedia,
+    sourceUnavailable: !isTextOnly && item.availability === 'source-unavailable',
     creatorLabel: item.creatorLabel,
     creatorName,
     creatorAvatar: item.creatorAvatar,
@@ -158,7 +200,11 @@ function profileCardUnlockSummary(item: ImmersivePreviewItem) {
   return unlock.previewText?.trim() || 'Reusable resources are attached to this post.';
 }
 
+/** Height of the plate an unavailable creation draws in place of its media. */
+const UNAVAILABLE_PLATE_HEIGHT = 200;
+
 export function getProfileFeedMediaHeight(card: ProfileFeedCard, contentWidth: number) {
+  if (card.sourceUnavailable) return UNAVAILABLE_PLATE_HEIGHT;
   if (!card.hasMedia) return 0;
   const fallback = card.item.mediaKind === 'video'
     ? FALLBACK_VIDEO_ASPECT_RATIO

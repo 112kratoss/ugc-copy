@@ -2,11 +2,12 @@ import { FlashList, type FlashListRef, type ViewToken } from '@shopify/flash-lis
 import { useIsFocused } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
+import { RefreshCw } from 'lucide-react-native';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
+  AccessibilityInfo,
   ActivityIndicator,
-  Alert,
   Pressable,
   Share,
   Text,
@@ -16,30 +17,31 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CommentsSheet } from '@/components/comments-sheet';
+import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { ProfileFeedCardView } from '@/components/profile-feed-card';
 import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
+import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import {
-  buildViewerItems,
-  loadImmersiveSourceData,
   normalizeParam,
   normalizeViewerSource,
-  readCachedImmersiveSourceData,
   readCachedProfile,
 } from '@/lib/immersive-preview-source-data';
 import {
-  getImmersiveInitialIndex,
   immersivePreviewOpenHref,
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
 import {
-  FEED_LANDING_RETRY_DELAYS_MS,
+  INITIAL_FEED_LANDING,
   buildProfileFeedCards,
-  shouldReassertFeedLanding,
+  reduceFeedLanding,
+  shouldScrollToFeedTarget,
   type ProfileFeedCard,
 } from '@/lib/profile-feed-card-view-model';
+import { refreshProfileLibraryHead } from '@/lib/profile-library-head';
+import { PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS } from '@/lib/profile-media-query';
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { BackGlyph } from '@/lib/platform-glyphs';
@@ -48,29 +50,43 @@ import { getNativeRemixCreateHref, getViewerShareIntent, getViewerShareSourceSur
 import {
   changePostVisibility,
   pickPostVisibility,
+  resolveLinkedLifecyclePost,
   toPostLifecyclePost,
   type PostLifecyclePost,
 } from '@/lib/post-lifecycle';
 import type { PostLifecycleVisibility } from '@/lib/post-lifecycle-policy';
-import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
+import { useProfileLibrarySource } from '@/lib/use-profile-library-source';
+import { useProfileMediaRevalidation } from '@/lib/use-profile-media-revalidation';
+import { applyPostVisibilityToCaches } from '@/lib/viewer-media-cache';
 
 type ProfileMediaFeedParams = {
   source?: string | string[];
   initialId?: string | string[];
+  scope?: string | string[];
 };
 
 const CARD_GAP = 12;
+/** How often a landing that is under way checks its budget. */
+const LANDING_TICK_MS = 250;
 
 /**
  * Creations and Posts open here rather than in the reel: owned media is managed,
  * not consumed, so it reads as a card feed in the same visual language as Home,
  * with the ownership controls inline. Opening a text post uses its dedicated
  * reading screen; image and video cards still open the reel.
+ *
+ * The feed reads the grid's own library — the same pages, order, freshness and
+ * membership rule — and continues past the loaded pages through the grid's
+ * cursor, so the card a tile opens is always that tile's (2026-09-16 Creations
+ * reliability audit, C1, C3, C8).
  */
 export function ProfileMediaFeedScreen() {
   const params = useLocalSearchParams<ProfileMediaFeedParams>();
   const source = normalizeViewerSource(params.source);
   const initialId = normalizeParam(params.initialId);
+  const postsScope = normalizeParam(params.scope) === 'archived' ? 'archived' : 'active';
+  const libraryName = source === 'profile-creations' ? 'Creations' : 'Posts';
+  const noun = source === 'profile-creations' ? 'creation' : 'post';
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
@@ -79,9 +95,6 @@ export function ProfileMediaFeedScreen() {
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const listRef = useRef<FlashListRef<ProfileFeedCard>>(null);
-  const landedRef = useRef(false);
-  const readerTookOverRef = useRef(false);
-  const landingAttemptsRef = useRef(0);
   const [actionsOpenItemId, setActionsOpenItemId] = useState<string | null>(null);
   const [commentsOpenItemId, setCommentsOpenItemId] = useState<string | null>(null);
   const [expandedBodyIds, setExpandedBodyIds] = useState<Record<string, boolean>>({});
@@ -100,26 +113,31 @@ export function ProfileMediaFeedScreen() {
     staleTime: 1000 * 60 * 5,
   });
 
-  const sourceQuery = useQuery({
-    queryKey: ['immersive-preview-source', source, user?.id ?? 'guest', initialId, '', ''],
-    enabled: Boolean(source),
-    initialData: () => readCachedImmersiveSourceData(queryClient, source, user?.id, initialId),
-    queryFn: () => loadImmersiveSourceData({ api, source, initialId }),
-    staleTime: 1000 * 45,
-  });
-
   const ownerInfo = useMemo(() => ({
     creatorLabel: user ? getProfileHandle(profileQuery.data, user.email) : '@creator',
     creatorAvatar: profileQuery.data?.avatarUrl ?? null,
     creatorId: user?.id ?? null,
   }), [profileQuery.data, user]);
 
-  const items = useMemo(
-    () => buildViewerItems(source, sourceQuery.data, ownerInfo),
-    [source, sourceQuery.data, ownerInfo]
-  );
+  const library = useProfileLibrarySource({
+    api,
+    userId: user?.id,
+    source,
+    initialId,
+    postsScope,
+    owner: ownerInfo,
+  });
+  const {
+    fetchNextPage,
+    hasNextPage,
+    isFetching: libraryIsFetching,
+    isFetchingNextPage,
+    isFetchNextPageError,
+    items,
+    pageCount,
+    selection,
+  } = library;
   const cards = useMemo(() => buildProfileFeedCards(items), [items]);
-  const initialIndex = useMemo(() => getImmersiveInitialIndex(items, initialId), [items, initialId]);
   const activeItem = useMemo(
     () => items.find((item) => item.id === actionsOpenItemId) ?? null,
     [items, actionsOpenItemId]
@@ -129,42 +147,92 @@ export function ProfileMediaFeedScreen() {
     [items, commentsOpenItemId]
   );
 
-  /**
-   * Land on the tapped card, re-asserting until it is actually on screen.
-   * Scrolling (rather than reordering) is what keeps the items above it reachable.
-   *
-   * The previous single deferred frame could be dropped entirely: it marked itself
-   * done synchronously but scrolled a frame later, so any change to `cards` or
-   * `initialIndex` in between — routine, since the source and profile queries settle
-   * independently — cancelled the pending frame and the re-run then saw the work as
-   * already done. Whatever position the list happened to hold became final, which is
-   * how tapping the sixth creation opened the oldest one on iOS.
-   */
-  useEffect(() => {
-    landedRef.current = false;
-    readerTookOverRef.current = false;
-    landingAttemptsRef.current = 0;
-  }, [initialId]);
+  // Coming back to the feed revalidates the library it shares with the grid.
+  const refreshLibraryHead = useCallback(
+    () => refreshProfileLibraryHead({ api, queryClient, userId: user?.id, library: libraryName }),
+    [api, libraryName, queryClient, user?.id]
+  );
+  useProfileMediaRevalidation({
+    enabled: isFocused && Boolean(user),
+    scope: libraryName,
+    hasData: library.hasData,
+    isFetching: libraryIsFetching,
+    isStale: library.isStale,
+    refresh: refreshLibraryHead,
+  });
 
-  const landOnTarget = useCallback(() => {
-    if (!shouldReassertFeedLanding({
-      targetIndex: initialIndex,
-      cardCount: cards.length,
-      landed: landedRef.current,
-      readerTookOver: readerTookOverRef.current,
-      attempts: landingAttemptsRef.current,
+  /**
+   * Bring the tapped card on screen and keep it there until the reader moves.
+   * The list's own reports drive each attempt — the card arriving, the list
+   * loading or changing size, the card turning viewable — and the reducer bounds
+   * them, saying so when it could not get there instead of leaving the reader on
+   * another card. Scrolling rather than reordering keeps the cards above it
+   * reachable.
+   */
+  const [landing, dispatchLanding] = useReducer(reduceFeedLanding, INITIAL_FEED_LANDING);
+  const [layoutRevision, setLayoutRevision] = useState(0);
+  const landingSeekingRef = useRef(false);
+  const targetIndex = initialId ? cards.findIndex((card) => card.id === initialId) : -1;
+
+  useEffect(() => {
+    landingSeekingRef.current = landing.phase === 'seeking';
+  }, [landing.phase]);
+
+  useEffect(() => {
+    if (initialId) dispatchLanding({ type: 'target', index: targetIndex, now: Date.now() });
+  }, [initialId, targetIndex]);
+
+  useEffect(() => {
+    if (!shouldScrollToFeedTarget(landing, cards.length)) return;
+    listRef.current?.scrollToIndex({ index: landing.targetIndex, animated: false });
+  }, [cards.length, landing, layoutRevision]);
+
+  useEffect(() => {
+    if (landing.phase !== 'seeking') return;
+    const timer = setInterval(() => dispatchLanding({ type: 'tick', now: Date.now() }), LANDING_TICK_MS);
+    return () => clearInterval(timer);
+  }, [landing.phase]);
+
+  useEffect(() => {
+    if (landing.phase === 'failed') {
+      AccessibilityInfo.announceForAccessibility(`Couldn't scroll to the ${noun} you opened.`);
+    }
+  }, [landing.phase, noun]);
+
+  // A load or size report is another chance to land, while a landing is under way.
+  const acknowledgeListLayout = useCallback(() => {
+    if (landingSeekingRef.current) setLayoutRevision((revision) => revision + 1);
+  }, []);
+
+  const loadingMoreRef = useRef(false);
+  const lastLoadMoreAtRef = useRef(0);
+  const lastLoadMorePageCountRef = useRef<number | null>(null);
+  const requestNextPage = useCallback(() => {
+    const now = Date.now();
+    if (!canRequestNextFeedPage({
+      cooldownMs: PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS,
+      hasNextPage,
+      isBusy: libraryIsFetching,
+      isRequestInFlight: loadingMoreRef.current,
+      lastRequestedAt: lastLoadMoreAtRef.current,
+      lastRequestedPageCount: lastLoadMorePageCountRef.current,
+      now,
+      pageCount,
     })) return;
 
-    landingAttemptsRef.current += 1;
-    listRef.current?.scrollToIndex({ index: initialIndex, animated: false });
-  }, [cards.length, initialIndex]);
+    loadingMoreRef.current = true;
+    lastLoadMoreAtRef.current = now;
+    lastLoadMorePageCountRef.current = pageCount;
+    void fetchNextPage().finally(() => {
+      loadingMoreRef.current = false;
+    });
+  }, [fetchNextPage, hasNextPage, libraryIsFetching, pageCount]);
 
-  useEffect(() => {
-    landOnTarget();
-    const timers = FEED_LANDING_RETRY_DELAYS_MS.map((delay) => setTimeout(landOnTarget, delay));
-
-    return () => timers.forEach(clearTimeout);
-  }, [landOnTarget]);
+  const retryNextPage = useCallback(() => {
+    lastLoadMorePageCountRef.current = null;
+    lastLoadMoreAtRef.current = 0;
+    requestNextPage();
+  }, [requestNextPage]);
 
   const openItem = useCallback((
     item: ImmersivePreviewItem,
@@ -217,13 +285,14 @@ export function ProfileMediaFeedScreen() {
     try {
       const outcome = await changePostVisibility({ api, post, visibility });
       if (outcome === 'done') {
-        await refreshViewerMediaCaches(queryClient, user?.id);
-        await sourceQuery.refetch();
+        // Patched into the loaded pages rather than collapsing them, so the
+        // reader stays on the card they just changed.
+        await applyPostVisibilityToCaches(queryClient, user?.id, post.id, visibility);
       }
     } finally {
       setPendingAction(null);
     }
-  }, [api, queryClient, sourceQuery, user?.id]);
+  }, [api, queryClient, user?.id]);
 
   /**
    * Card actions dispatch the same action ids the More sheet uses, so a control
@@ -279,34 +348,59 @@ export function ProfileMediaFeedScreen() {
       }
       case 'change-linked-visibility': {
         if (!item.linkedPostId) return;
-        const post = toPostLifecyclePost({
-          id: item.linkedPostId,
-          visibility: item.linkedPostVisibility,
-          archivedAt: item.linkedPostArchivedAt,
-          bundle: item.linkedPostBundle ?? null,
+        // Whether the change needs a confirmation depends on the linked post's
+        // bundle; read the post first when its details never loaded.
+        void resolveLinkedLifecyclePost({ api, item }).then((post) => {
+          if (post) pickPostVisibility(post.visibility, (next) => void applyPostVisibility(post, next, action));
         });
-        pickPostVisibility(post.visibility, (next) => void applyPostVisibility(post, next, action));
         return;
       }
       default:
         return;
     }
-  }, [applyPostVisibility, openItem, recreateItem, shareItem, user]);
+  }, [api, applyPostVisibility, openItem, recreateItem, shareItem, user]);
 
-  if (!cards.length && sourceQuery.isLoading) {
+  if (library.isLoading || selection === 'loading') {
     return (
-      <FeedShell topInset={topInset} bottomInset={bottomInset}>
+      <FeedShell title={libraryName} topInset={topInset} bottomInset={bottomInset}>
         <ActivityIndicator accessibilityLabel="Loading media" color={appTheme.colors.primary} />
       </FeedShell>
     );
   }
 
-  if (!cards.length && sourceQuery.isError) {
+  if (library.isError) {
     return (
-      <FeedShell topInset={topInset} bottomInset={bottomInset}>
+      <FeedShell title={libraryName} topInset={topInset} bottomInset={bottomInset}>
         <View style={{ width: '100%', maxWidth: 420, gap: 12 }}>
           <StatusBlock tone="danger" title="Couldn't load this media" body="Check your connection and try again." />
-          <SecondaryButton label="Try again" onPress={() => void sourceQuery.refetch()} />
+          <SecondaryButton label="Try again" onPress={() => void library.refetch()} />
+        </View>
+      </FeedShell>
+    );
+  }
+
+  if (selection === 'error') {
+    return (
+      <FeedShell title={libraryName} topInset={topInset} bottomInset={bottomInset}>
+        <View style={{ width: '100%', maxWidth: 420, gap: 12 }}>
+          <StatusBlock tone="danger" title={`Couldn't load this ${noun}`} body="Check your connection and try again." />
+          <SecondaryButton label="Try again" onPress={() => void library.retrySelection()} />
+        </View>
+      </FeedShell>
+    );
+  }
+
+  // The item the reader opened is not theirs to open any more. Say that; never
+  // show them a different card in its place.
+  if (selection === 'missing') {
+    return (
+      <FeedShell title={libraryName} topInset={topInset} bottomInset={bottomInset}>
+        <View style={{ width: '100%', maxWidth: 420, gap: 12 }}>
+          <StatusBlock
+            title={`This ${noun} isn't available`}
+            body="It may have been deleted or archived, or it's no longer on this account."
+          />
+          <SecondaryButton label="Go back" onPress={leaveFeed} />
         </View>
       </FeedShell>
     );
@@ -314,19 +408,30 @@ export function ProfileMediaFeedScreen() {
 
   if (!cards.length) {
     return (
-      <FeedShell topInset={topInset} bottomInset={bottomInset}>
+      <FeedShell title={libraryName} topInset={topInset} bottomInset={bottomInset}>
         <Text style={{ color: appTheme.colors.text, ...appTheme.type.sectionTitle, fontWeight: '800' }}>Nothing here yet</Text>
         <Text style={{ color: appTheme.colors.muted, marginTop: 8 }}>This item may have been removed.</Text>
       </FeedShell>
     );
   }
 
+  const showEnrichmentNotice = library.enrichmentFailed && items.some((item) => Boolean(item.linkedPostId));
+
   return (
     <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
-      <FeedTopBar
-        title={source === 'profile-creations' ? 'Creations' : 'Posts'}
-        topInset={topInset}
-      />
+      <FeedTopBar title={libraryName} topInset={topInset} />
+      {landing.phase === 'failed' ? (
+        <FeedNotice
+          label={`Couldn't scroll to the ${noun} you opened. Tap to try again.`}
+          onPress={() => dispatchLanding({ type: 'retry', now: Date.now() })}
+        />
+      ) : null}
+      {showEnrichmentNotice ? (
+        <FeedNotice
+          label="Couldn't load linked post details. Tap to retry."
+          onPress={() => void library.retryEnrichment()}
+        />
+      ) : null}
       {/* FlashList rather than FlatList: cards are variable height (media aspect ratio
           and body length both differ), so FlatList could not implement getItemLayout and
           could not jump to the tapped card. */}
@@ -336,23 +441,38 @@ export function ProfileMediaFeedScreen() {
         testID="profile-media-feed-list"
         data={cards}
         keyExtractor={(card) => card.id}
-        initialScrollIndex={initialIndex}
-        getItemType={(card) => card.isTextOnly ? 'text' : card.item.mediaKind ?? 'image'}
-        extraData={{ activeVideoId, expandedBodyIds, pendingAction }}
+        initialScrollIndex={Math.max(0, targetIndex)}
+        getItemType={(card) => card.isTextOnly
+          ? 'text'
+          : card.sourceUnavailable
+            ? 'unavailable'
+            : card.item.mediaKind ?? 'image'}
+        extraData={{ activeVideoId, expandedBodyIds, isFocused, pendingAction }}
+        onLoad={acknowledgeListLayout}
+        onContentSizeChange={acknowledgeListLayout}
         onScrollBeginDrag={() => {
           // The reader's own scroll outranks the landing: never yank them back.
-          readerTookOverRef.current = true;
+          dispatchLanding({ type: 'reader-scrolled' });
         }}
         onViewableItemsChanged={({ viewableItems }: { viewableItems: Array<ViewToken<ProfileFeedCard>> }) => {
           const firstVideo = viewableItems.find((token) => token.item?.item.mediaKind === 'video');
           setActiveVideoId(firstVideo?.item?.id ?? null);
 
-          if (!landedRef.current && initialId
-            && viewableItems.some((token) => token.item?.id === initialId)) {
-            landedRef.current = true;
+          if (initialId) {
+            dispatchLanding({
+              type: 'viewable',
+              targetVisible: viewableItems.some((token) => token.item?.id === initialId),
+            });
           }
         }}
         viewabilityConfig={{ itemVisiblePercentThreshold: 60 }}
+        onEndReached={requestNextPage}
+        onEndReachedThreshold={0.6}
+        ListFooterComponent={isFetchingNextPage
+          ? <FeedFooterLoader />
+          : isFetchNextPageError
+            ? <FeedLoadMoreErrorFooter onRetry={retryNextPage} />
+            : null}
         ItemSeparatorComponent={() => <View style={{ height: CARD_GAP }} />}
         contentContainerStyle={{
           paddingHorizontal: horizontalPadding,
@@ -366,6 +486,7 @@ export function ProfileMediaFeedScreen() {
             card={card}
             contentWidth={cardWidth}
             showActiveVideo={isFocused && activeVideoId === card.id}
+            mediaWatchdog={isFocused}
             bodyExpanded={Boolean(expandedBodyIds[card.id])}
             pendingAction={pendingAction}
             onOpen={() => openItem(card.item)}
@@ -398,7 +519,7 @@ export function ProfileMediaFeedScreen() {
           onRecreate={() => recreateItem(activeItem)}
           onShare={() => void shareItem(activeItem)}
           onDeleted={() => setActionsOpenItemId(null)}
-          onSourceRefresh={() => void sourceQuery.refetch()}
+          onSourceRefresh={() => void library.refetch()}
           visible={actionsOpenItemId === activeItem.id}
         />
       ) : null}
@@ -414,6 +535,14 @@ export function ProfileMediaFeedScreen() {
       ) : null}
     </View>
   );
+}
+
+function leaveFeed() {
+  if (router.canGoBack()) {
+    router.back();
+    return;
+  }
+  router.replace('/(tabs)/profile' as never);
 }
 
 function FeedTopBar({ title, topInset }: { title: string; topInset: number }) {
@@ -434,7 +563,7 @@ function FeedTopBar({ title, topInset }: { title: string; topInset: number }) {
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Go back"
-        onPress={() => router.back()}
+        onPress={leaveFeed}
         style={({ pressed }) => ({
           width: 44,
           height: 44,
@@ -453,18 +582,59 @@ function FeedTopBar({ title, topInset }: { title: string; topInset: number }) {
   );
 }
 
+/** A non-blocking problem the reader can act on, above the cards it concerns. */
+function FeedNotice({ label, onPress }: { label: string; onPress: () => void }) {
+  const tone = appTheme.semantic.warning;
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        minHeight: 44,
+        marginHorizontal: 14,
+        marginTop: 10,
+        paddingHorizontal: 14,
+        paddingVertical: 10,
+        borderRadius: appTheme.radii.sm,
+        borderWidth: 1,
+        borderColor: tone.border,
+        backgroundColor: tone.background,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
+      })}
+    >
+      <RefreshCw size={appTheme.icon.sm} color={tone.foreground} />
+      <Text style={{ flex: 1, color: tone.foreground, ...appTheme.type.label }}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function FeedFooterLoader() {
+  return (
+    <View style={{ minHeight: 64, alignItems: 'center', justifyContent: 'center' }}>
+      <ActivityIndicator accessibilityLabel="Loading more" color={appTheme.colors.primary} />
+    </View>
+  );
+}
+
 function FeedShell({
+  title,
   topInset,
   bottomInset,
   children,
 }: {
+  title: string;
   topInset: number;
   bottomInset: number;
   children: React.ReactNode;
 }) {
   return (
     <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
-      <FeedTopBar title="Media" topInset={topInset} />
+      <FeedTopBar title={title} topInset={topInset} />
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: bottomInset, paddingHorizontal: 24 }}>
         {children}
       </View>

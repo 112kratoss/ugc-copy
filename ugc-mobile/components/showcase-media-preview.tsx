@@ -35,6 +35,13 @@ type ShowcaseMediaPreviewProps = {
   videoActivation?: VideoActivation;
   videoBackdrop?: 'blurred' | 'none';
   videoContentFit?: 'cover' | 'contain';
+  /**
+   * Arms display deadlines for the media on screen. A carousel passes it only to
+   * its current page: Android detaches clipped pages, which never start loading.
+   */
+  watchdog?: boolean;
+  /** Where the media is drawn, for the media diagnostics log. */
+  diagnosticsSurface?: string;
   width: number;
 };
 
@@ -52,6 +59,8 @@ export function ShowcaseMediaPreview({
   videoActivation = 'never',
   videoBackdrop = 'blurred',
   videoContentFit = 'contain',
+  watchdog = false,
+  diagnosticsSurface,
   width,
 }: ShowcaseMediaPreviewProps) {
   const reduceMotionEnabled = useReducedMotion();
@@ -71,6 +80,8 @@ export function ShowcaseMediaPreview({
         videoActivation={resolvedVideoActivation}
         videoBackdrop={videoBackdrop}
         videoContentFit={videoContentFit}
+        watchdog={watchdog}
+        diagnosticsSurface={diagnosticsSurface}
         width={width}
       />
     );
@@ -89,6 +100,8 @@ export function ShowcaseMediaPreview({
       videoActivation={resolvedVideoActivation}
       videoBackdrop={videoBackdrop}
       videoContentFit={videoContentFit}
+      watchdog={watchdog}
+      diagnosticsSurface={diagnosticsSurface}
       width={width}
     />
   );
@@ -106,6 +119,8 @@ function ShowcaseMediaCarousel({
   videoActivation = 'never',
   videoBackdrop = 'blurred',
   videoContentFit = 'contain',
+  watchdog = false,
+  diagnosticsSurface,
   width,
 }: ShowcaseMediaPreviewProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -135,6 +150,8 @@ function ShowcaseMediaCarousel({
               videoActivation={currentIndex === index ? videoActivation : 'never'}
               videoBackdrop={videoBackdrop}
               videoContentFit={videoContentFit}
+              watchdog={watchdog && currentIndex === index}
+              diagnosticsSurface={diagnosticsSurface}
               width={width}
             />
           );
@@ -222,6 +239,8 @@ function ShowcaseMediaSlide({
   videoActivation,
   videoBackdrop,
   videoContentFit,
+  watchdog,
+  diagnosticsSurface,
   width,
 }: {
   accent: string;
@@ -233,6 +252,8 @@ function ShowcaseMediaSlide({
   videoActivation: VideoActivation;
   videoBackdrop: 'blurred' | 'none';
   videoContentFit: 'cover' | 'contain';
+  watchdog: boolean;
+  diagnosticsSurface?: string;
   width: number;
 }) {
   const previewUrl = getShowcaseMediaPreviewUrl(item);
@@ -275,6 +296,8 @@ function ShowcaseMediaSlide({
           accent={accent}
           videoBackdrop={videoBackdrop}
           videoContentFit={videoContentFit}
+          watchdog={watchdog}
+          diagnosticsSurface={diagnosticsSurface}
         />
       </View>
     );
@@ -340,6 +363,8 @@ function ShowcaseMediaSlide({
       transition={120}
       recyclingKey={recyclingKey}
       radius={radius}
+      watchdog={watchdog}
+      diagnosticsSurface={diagnosticsSurface}
       style={{ width, height }}
     />
   );

@@ -54,17 +54,18 @@ import {
   type ProfileMediaTab,
   type ProfilePostsScope,
 } from '@/lib/profile-view-model';
+import { refreshProfileLibraryHead } from '@/lib/profile-library-head';
 import {
   PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS,
   PROFILE_MEDIA_MIN_FILL_COUNT,
-  PROFILE_MEDIA_PAGE_SIZE,
   flattenProfileGenerationPages,
   flattenProfileOwnerPostPages,
-  getNextProfileGenerationsCursor,
-  getNextProfileOwnerPostsOffset,
-  getNextProfileSavedMediaOffset,
+  profileGenerationsQueryOptions,
+  profileOwnerPostsQueryOptions,
+  profileSavedMediaQueryOptions,
   truncateInfiniteDataToFirstPage,
 } from '@/lib/profile-media-query';
+import { useProfileMediaRevalidation } from '@/lib/use-profile-media-revalidation';
 import { flattenShowcaseFeedPages } from '@/lib/showcase-feed-query';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
@@ -136,44 +137,21 @@ export function ProfileDashboard({
     staleTime: 1000 * 60 * 5,
   });
 
+  // The card feed and the reel read these same queries, so a tile can only ever
+  // open onto the pages, order and freshness the grid is showing.
   const generationsQuery = useInfiniteQuery({
-    queryKey: ['profile-generations', user?.id],
+    ...profileGenerationsQueryOptions(api, user?.id),
     enabled: Boolean(user && (activeTab === 'Creations' || backgroundMediaReady)),
-    initialPageParam: null as string | null,
-    queryFn: ({ pageParam }) => api.listGenerations(false, {
-      cursor: pageParam ?? undefined,
-      limit: PROFILE_MEDIA_PAGE_SIZE,
-    }),
-    getNextPageParam: getNextProfileGenerationsCursor,
-    staleTime: 1000 * 60,
   });
 
   const postsQuery = useInfiniteQuery({
-    queryKey: ['profile-owner-posts', user?.id],
+    ...profileOwnerPostsQueryOptions(api, user?.id),
     enabled: Boolean(user && (activeTab === 'Posts' || backgroundMediaReady)),
-    initialPageParam: 0,
-    // Only the first page pays for the sales-summary aggregate.
-    queryFn: ({ pageParam }) => api.listOwnerPosts({
-      includeArchived: true,
-      includeSummary: pageParam === 0,
-      limit: PROFILE_MEDIA_PAGE_SIZE,
-      offset: pageParam,
-      visibility: 'all',
-    }),
-    getNextPageParam: getNextProfileOwnerPostsOffset,
-    staleTime: 1000 * 60,
   });
 
   const savedQuery = useInfiniteQuery({
-    queryKey: ['profile-saved-media', user?.id],
+    ...profileSavedMediaQueryOptions(api, user?.id),
     enabled: Boolean(user && (activeTab === 'Saved' || backgroundMediaReady)),
-    initialPageParam: 0,
-    queryFn: ({ pageParam }) => api.getSavedMedia({
-      limit: PROFILE_MEDIA_PAGE_SIZE,
-      offset: pageParam,
-    }),
-    getNextPageParam: getNextProfileSavedMediaOffset,
-    staleTime: 1000 * 60,
   });
 
   const activeMediaQuery = activeTab === 'Saved'
@@ -182,10 +160,10 @@ export function ProfileDashboard({
       ? generationsQuery
       : postsQuery;
   const {
+    data: activeMediaData,
     isFetched: activeMediaIsFetched,
     isFetching: activeMediaIsFetching,
     isStale: activeMediaIsStale,
-    refetch: refetchActiveMedia,
   } = activeMediaQuery;
 
   useEffect(() => {
@@ -204,15 +182,27 @@ export function ProfileDashboard({
     }
   }, [activeMediaIsFetched, user?.id]);
 
-  useEffect(() => {
-    if (
-      !isFocused
-      || !user
-      || activeMediaIsFetching
-      || !activeMediaIsStale
-    ) return;
-    void refetchActiveMedia();
-  }, [activeMediaIsFetching, activeMediaIsStale, isFocused, refetchActiveMedia, user?.id]);
+  // Freshness from events — focus, a tab change, the app returning — refreshing
+  // only the first page. The effect this replaces re-fired whenever a fetch
+  // settled, so a failing refresh looped, and each refetch re-requested every
+  // page the reader had loaded (audit C7).
+  const refreshMediaHead = useCallback(
+    (library: string) => refreshProfileLibraryHead({
+      api,
+      queryClient,
+      userId: user?.id,
+      library: library as ProfileMediaTab,
+    }),
+    [api, queryClient, user?.id]
+  );
+  useProfileMediaRevalidation({
+    enabled: isFocused && Boolean(user),
+    scope: activeTab,
+    hasData: Boolean(activeMediaData),
+    isFetching: activeMediaIsFetching,
+    isStale: activeMediaIsStale,
+    refresh: refreshMediaHead,
+  });
 
   const savedCards = useMemo(
     () => savedShowcaseToProfileMediaCards(flattenShowcaseFeedPages(savedQuery.data?.pages)),
@@ -529,7 +519,8 @@ function ProfileMediaList({
   // Focus is read here rather than threaded down from ProfileDashboard: the
   // grid is the thing that knows which tiles are on screen, so the reset and the
   // reporting stay in one component.
-  const reportAmbientMedia = useTabBarAmbientFeed(useIsFocused());
+  const isFocused = useIsFocused();
+  const reportAmbientMedia = useTabBarAmbientFeed(isFocused);
   const viewabilityConfigCallbackPairs = useRef([
     {
       viewabilityConfig: SHOWCASE_PLAYBACK_VIEWABILITY,
@@ -544,7 +535,7 @@ function ProfileMediaList({
         data={isLoading ? [] : cards}
         viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
         drawDistance={400}
-        extraData={activeTab}
+        extraData={`${activeTab}:${isFocused}`}
         getItemType={(item) => item.mediaKind ?? item.previewKind}
         keyExtractor={(item) => `${item.label}-${item.id}`}
         ListHeaderComponent={(
@@ -603,6 +594,9 @@ function ProfileMediaList({
               item={item}
               width={cardWidth}
               height={cardHeight}
+              // A background tab's views are detached and never start loading,
+              // so tiles only count down to a stall while Profile is on screen.
+              mediaWatchdog={isFocused}
               fallbackAvatarUrl={fallbackAvatarUrl}
               fallbackAvatarInitials={fallbackAvatarInitials}
               highlighted={activeTab === 'Posts' && highlightedPostId === item.sourceId}
@@ -1088,6 +1082,7 @@ function ProfileMediaTile({
   fallbackAvatarUrl,
   fallbackAvatarInitials,
   highlighted,
+  mediaWatchdog = false,
 }: {
   item: ProfileMediaCard;
   width: number;
@@ -1095,6 +1090,7 @@ function ProfileMediaTile({
   fallbackAvatarUrl?: string | null;
   fallbackAvatarInitials: string;
   highlighted?: boolean;
+  mediaWatchdog?: boolean;
 }) {
   const avatarUrl = item.avatarUrl ?? fallbackAvatarUrl ?? null;
   const avatarInitials = item.avatarUrl
@@ -1140,10 +1136,14 @@ function ProfileMediaTile({
         }
         // Saved media is for looking at, so it opens the reel. Creations and Posts
         // are for managing, so they open the card feed with their controls inline.
-        const href = (isSavedTile ? immersiveViewerHref : profileMediaFeedHref)({
-          source: item.viewerSource,
-          initialId: item.sourceId,
-        });
+        const href = isSavedTile
+          ? immersiveViewerHref({ source: item.viewerSource, initialId: item.sourceId })
+          : profileMediaFeedHref({
+            source: item.viewerSource,
+            initialId: item.sourceId,
+            // The feed holds the scope the tile was drawn in; active is its default.
+            scope: item.label === 'Post' && item.isArchived ? 'archived' : undefined,
+          });
         router.push(href as never);
       }}
       style={{ flex: 1 }}
@@ -1160,7 +1160,7 @@ function ProfileMediaTile({
           backgroundColor: PROFILE_COLORS.surface,
         }}
       >
-        <ProfileGalleryPreview item={item} height={height} />
+        <ProfileGalleryPreview item={item} height={height} watchdog={mediaWatchdog} />
         <LinearGradient
           colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.16)', 'rgba(0,0,0,0.70)']}
           locations={[0, 0.48, 1]}
@@ -1350,7 +1350,15 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
   );
 }
 
-function ProfileGalleryPreview({ item, height }: { item: ProfileMediaCard; height: number }) {
+function ProfileGalleryPreview({
+  item,
+  height,
+  watchdog = false,
+}: {
+  item: ProfileMediaCard;
+  height: number;
+  watchdog?: boolean;
+}) {
   // `previewState` is the whole answer to what a tile draws, so the tile does
   // not second-guess it. It used to fall through to "any image card can paint
   // its own media", which reached past a state that had already decided
@@ -1371,6 +1379,8 @@ function ProfileGalleryPreview({ item, height }: { item: ProfileMediaCard; heigh
           thumbhash={item.previewThumbhash}
           contentFit="cover"
           transition={120}
+          watchdog={watchdog}
+          diagnosticsSurface="profile-grid"
           style={{ position: 'absolute', inset: 0 }}
         />
       </View>

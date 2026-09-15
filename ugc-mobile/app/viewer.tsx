@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import * as Clipboard from 'expo-clipboard';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -32,6 +32,7 @@ import {
   hasImmersiveAudibleMedia,
   hasImmersiveDetailsPage,
   immersiveViewerReturnPath,
+  isImmersiveSelectionMissing,
   selectActiveImmersiveVideoId,
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
@@ -53,10 +54,11 @@ import { useHardwareBack } from '@/lib/use-hardware-back';
 import {
   buildViewerItems,
   type ImmersiveSourceData,
+  isGenerationSource,
   loadImmersiveSourceData,
   normalizeParam,
   normalizeViewerSource,
-  readCachedImmersiveSourceData,
+  readCachedImmersiveSourceSnapshot,
   readCachedProfile,
 } from '@/lib/immersive-preview-source-data';
 import { getProfileHandle } from '@/lib/profile-view-model';
@@ -92,8 +94,7 @@ import {
 } from '@/lib/feed-event-queue';
 import {
   getShowcasePlaybackUrl,
-  getShowcaseViewerImageCacheKey,
-  getShowcaseViewerImageUrl,
+  resolveShowcaseViewerImageSource,
 } from '@/lib/showcase-media';
 import {
   createShowcaseMediaProgressTracker,
@@ -106,11 +107,14 @@ import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE, canSaveViewerItemOnDoubleT
 import {
   changePostVisibility,
   pickPostVisibility,
+  resolveLinkedLifecyclePost,
   toPostLifecyclePost,
   type PostLifecyclePost,
 } from '@/lib/post-lifecycle';
 import type { PostLifecycleVisibility } from '@/lib/post-lifecycle-policy';
-import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
+import { flattenProfileOwnerPostPages, profileOwnerPostsQueryOptions } from '@/lib/profile-media-query';
+import { isProfileLibrarySource, useProfileLibrarySource } from '@/lib/use-profile-library-source';
+import { applyPostVisibilityToCaches } from '@/lib/viewer-media-cache';
 import { useViewerPlaybackGate } from '@/lib/use-viewer-playback-gate';
 import { useStableSignedUrl } from '@/lib/use-stable-signed-url';
 import { verticalHitSlop } from '@/lib/hit-target';
@@ -217,41 +221,98 @@ export default function ImmersivePreviewViewerScreen() {
     [user?.id]
   );
 
-  const sourceQuery = useQuery({
-    queryKey: sourceQueryKey,
-    enabled: Boolean(source),
-    initialData: () => readCachedImmersiveSourceData(queryClient, source, user?.id, initialId, routeFeedSessionId),
-    queryFn: () => loadImmersiveSourceData({ api, source, initialId, creatorUsername }),
-    staleTime: 1000 * 45,
-  });
-
-  useEffect(() => {
-    if (!isFocused) return;
-    if (source === 'showcase-feed' && skipInitialRankedFeedRefreshRef.current) {
-      skipInitialRankedFeedRefreshRef.current = false;
-      return;
-    }
-    void sourceQuery.refetch?.();
-  }, [isFocused, source, sourceQuery.refetch]);
-
   const ownerInfo = useMemo(() => ({
     creatorLabel: user ? getProfileHandle(profileQuery.data, user.email) : '@creator',
     creatorAvatar: profileQuery.data?.avatarUrl ?? null,
     creatorId: user?.id ?? null,
   }), [profileQuery.data, user]);
 
+  // Owned libraries read the Profile grid's own pages, so a reel opened from a
+  // card holds the grid's items in the grid's order and pages on through its
+  // cursor (audit C3, C8). Every other source loads its own window below.
+  const libraryBacked = isProfileLibrarySource(source);
+  const library = useProfileLibrarySource({
+    api,
+    userId: user?.id,
+    source,
+    initialId,
+    owner: ownerInfo,
+    enabled: libraryBacked,
+  });
+
+  const loaderQuery = useQuery({
+    queryKey: sourceQueryKey,
+    enabled: Boolean(source) && !libraryBacked,
+    // Cached data opens the viewer at once and keeps the age of the caches it
+    // came from, so an hour-old snapshot refetches straight away instead of
+    // passing for fresh (audit C4).
+    initialData: () => (libraryBacked
+      ? undefined
+      : readCachedImmersiveSourceSnapshot(queryClient, source, user?.id, initialId, routeFeedSessionId)?.data),
+    initialDataUpdatedAt: () => (libraryBacked
+      ? undefined
+      : readCachedImmersiveSourceSnapshot(queryClient, source, user?.id, initialId, routeFeedSessionId)?.updatedAt),
+    queryFn: () => loadImmersiveSourceData({ api, source, initialId, creatorUsername }),
+    staleTime: 1000 * 45,
+  });
+
+  // Linked-post details for the creations a loader window holds. Enrichment
+  // only: when it fails the creations still show (audit C5).
+  const postEnrichmentQuery = useInfiniteQuery({
+    ...profileOwnerPostsQueryOptions(api, user?.id),
+    enabled: Boolean(user) && !libraryBacked && isGenerationSource(source),
+  });
+  const enrichmentPosts = useMemo(
+    () => flattenProfileOwnerPostPages(postEnrichmentQuery.data?.pages),
+    [postEnrichmentQuery.data]
+  );
+
+  const sourceQuery = libraryBacked
+    ? {
+      data: undefined as ImmersiveSourceData | undefined,
+      isLoading: library.isLoading || library.selection === 'loading',
+      isError: library.isError || library.selection === 'error',
+      isFetching: library.isFetching,
+      refetch: library.selection === 'error' ? library.retrySelection : library.refetch,
+    }
+    : loaderQuery;
+
+  const refetchLoader = loaderQuery.refetch;
+  useEffect(() => {
+    if (!isFocused || libraryBacked) return;
+    if (source === 'showcase-feed' && skipInitialRankedFeedRefreshRef.current) {
+      skipInitialRankedFeedRefreshRef.current = false;
+      return;
+    }
+    // Only data that has gone stale: a viewer returned to with fresh data does
+    // not ask again, and a first load already under way is not restarted (C4).
+    const state = queryClient.getQueryState(sourceQueryKey);
+    if (!state || state.status === 'pending' || state.fetchStatus === 'fetching') return;
+    if (!state.isInvalidated && Date.now() - state.dataUpdatedAt < 1000 * 45) return;
+    void refetchLoader?.();
+  }, [isFocused, libraryBacked, queryClient, refetchLoader, source, sourceQueryKey]);
+
   const items = useMemo(() => {
-    const builtItems = buildViewerItems(source, sourceQuery.data, ownerInfo, initialId);
+    if (libraryBacked) return library.items;
+    const data = isGenerationSource(source) && loaderQuery.data
+      ? { ...loaderQuery.data, ownerPosts: enrichmentPosts }
+      : loaderQuery.data;
+    const builtItems = buildViewerItems(source, data, ownerInfo, initialId);
     if (user || source !== 'showcase-feed') return builtItems;
 
     const visiblePostIds = new Set(
-      filterAnonymousSessionShowcaseFeedItems(sourceQuery.data?.showcaseItems ?? [])
+      filterAnonymousSessionShowcaseFeedItems(loaderQuery.data?.showcaseItems ?? [])
         .map((item) => item.id)
     );
     return builtItems.filter((item) => (
       !item.showcasePostId || visiblePostIds.has(item.showcasePostId)
     ));
-  }, [source, sourceQuery.data, ownerInfo, initialId, user]);
+  }, [enrichmentPosts, initialId, library.items, libraryBacked, loaderQuery.data, ownerInfo, source, user]);
+  // The item the route named did not load: deleted, archived elsewhere, or no
+  // longer the reader's. Shown as that, never replaced by the first item (C1).
+  const selectionMissing = libraryBacked
+    ? library.selection === 'missing'
+    : loaderQuery.data !== undefined && isImmersiveSelectionMissing(items, initialId);
   const openCreatorProfile = useCallback((item: ImmersivePreviewItem) => {
     if (!item.creatorUsername) return;
     router.push(`/creators/${encodeURIComponent(item.creatorUsername)}` as never);
@@ -379,14 +440,16 @@ export default function ImmersivePreviewViewerScreen() {
     : null;
 
   useEffect(() => {
-    if (!items.length || initialPositionReady) return;
+    // A missing selection has no position to settle on; settling on item 0
+    // would put the reader on an item they never opened.
+    if (!items.length || initialPositionReady || selectionMissing) return;
     const frame = requestAnimationFrame(() => {
       setActiveIndex(initialIndex);
       listRef.current?.scrollToIndex({ index: initialIndex, animated: false });
       setInitialPositionReady(true);
     });
     return () => cancelAnimationFrame(frame);
-  }, [initialIndex, initialPositionReady, items.length]);
+  }, [initialIndex, initialPositionReady, items.length, selectionMissing]);
 
   useEffect(() => {
     if (!requestedCommentsPostId || !items.length) return;
@@ -687,8 +750,9 @@ export default function ImmersivePreviewViewerScreen() {
     const apply = async () => {
       const outcome = await changePostVisibility({ api, post, visibility });
       if (outcome !== 'done') return;
-      await refreshViewerMediaCaches(queryClient, user?.id);
-      await sourceQuery.refetch();
+      // Patched into the loaded pages without collapsing them; the invalidation
+      // inside refreshes a loader window that is showing.
+      await applyPostVisibilityToCaches(queryClient, user?.id, post.id, visibility);
       void AccessibilityInfo.announceForAccessibility(`This post is now ${visibility}.`);
     };
     setOwnerActionPending(action);
@@ -730,13 +794,11 @@ export default function ImmersivePreviewViewerScreen() {
     }
 
     if (action === 'change-linked-visibility' && item.linkedPostId) {
-      const post = toPostLifecyclePost({
-        id: item.linkedPostId,
-        visibility: item.linkedPostVisibility,
-        archivedAt: item.linkedPostArchivedAt,
-        bundle: item.linkedPostBundle ?? null,
+      // Whether the change needs a confirmation depends on the linked post's
+      // bundle; read the post first when its details never loaded (C5).
+      void resolveLinkedLifecyclePost({ api, item }).then((post) => {
+        if (post) pickPostVisibility(post.visibility, (next) => void applyPostVisibility(post, next, action));
       });
-      pickPostVisibility(post.visibility, (next) => void applyPostVisibility(post, next, action));
     }
   };
 
@@ -799,6 +861,20 @@ export default function ImmersivePreviewViewerScreen() {
         );
       });
   };
+
+  if (selectionMissing && !savedPosition) {
+    return (
+      <ViewerShell topInset={topInset} bottomInset={bottomInset}>
+        <View style={{ width: '100%', maxWidth: 420, gap: 12 }}>
+          <StatusBlock
+            title="This isn’t available anymore"
+            body="It may have been deleted or archived, or it’s no longer shared with you."
+          />
+          <SecondaryButton label="Go back" onPress={leaveViewer} />
+        </View>
+      </ViewerShell>
+    );
+  }
 
   if (!items.length && sourceQuery.isLoading) {
     return (
@@ -876,6 +952,12 @@ export default function ImmersivePreviewViewerScreen() {
             listRef.current?.scrollToOffset({ offset: height * index, animated: false });
           });
         }}
+        // An owned library continues through the grid's cursor instead of
+        // stopping at whatever was loaded when the reel opened.
+        onEndReached={libraryBacked && library.hasNextPage ? () => {
+          if (!library.isFetchingNextPage) void library.fetchNextPage();
+        } : undefined}
+        onEndReachedThreshold={2}
         // Hand playback over as soon as the landing page owns most of the
         // screen, the moment Instagram and TikTok switch, rather than at
         // momentum end. On Android that event trails the visible stop by
@@ -1967,6 +2049,10 @@ function ImmersiveMedia({
       y: event.nativeEvent.locationY,
     });
   }, [onDoubleTapSave]);
+  // A display rendition that will not load falls back to the original rather
+  // than leaving the slide on a retry tile (audit C2).
+  const [failedDisplayUrl, setFailedDisplayUrl] = useState<string | null>(null);
+  const isFocused = useIsFocused();
 
   if (mediaItem.mediaKind === 'video') {
     return (
@@ -2011,6 +2097,7 @@ function ImmersiveMedia({
   }
 
   if (mediaItem.url) {
+    const image = resolveShowcaseViewerImageSource(mediaItem, failedDisplayUrl);
     return (
       <DoubleTapPressable
         accessible={false}
@@ -2019,11 +2106,16 @@ function ImmersiveMedia({
       >
         <FeedMediaFrame
           kind="image"
-          url={getShowcaseViewerImageUrl(mediaItem)}
+          url={image.url}
           backdropUrl={mediaItem.previewUrl}
           backdropCacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
-          cacheKey={getShowcaseViewerImageCacheKey(mediaItem)}
+          cacheKey={image.cacheKey}
           thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
+          onImageError={image.rendition === 'display' ? () => setFailedDisplayUrl(image.url) : undefined}
+          // The page on screen, on a focused reel: a covered screen's views are
+          // detached and cannot start loading, so they are not timed.
+          watchdog={active && isFocused}
+          diagnosticsSurface="viewer"
           transition={120}
           recyclingKey={`viewer:${mediaItem.id}`}
           style={{ width, height }}

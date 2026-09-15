@@ -154,4 +154,16 @@ describe('profile feed card view model', () => {
     const cards = buildProfileFeedCards([item(), item({ id: 'gen-2' })], NOW);
     expect(cards.map((card) => card.id)).toEqual(['gen-1', 'gen-2']);
   });
+
+  it('draws a creation whose file is gone as a plate where the media would be', () => {
+    const card = toProfileFeedCard(item({
+      mediaUrl: null,
+      mediaItems: [],
+      availability: 'source-unavailable',
+    }), NOW);
+
+    expect(card.hasMedia).toBe(false);
+    expect(card.sourceUnavailable).toBe(true);
+    expect(getProfileFeedMediaHeight(card, 360)).toBeGreaterThan(0);
+  });
 });

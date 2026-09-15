@@ -5,6 +5,7 @@ import {
   buildViewerItems,
   loadImmersiveSourceData,
   readCachedImmersiveSourceData,
+  readCachedImmersiveSourceSnapshot,
 } from '../lib/immersive-preview-source-data';
 import type { CreatorProfileResponse, GenerationListItem, ShowcaseFeedItem } from '../lib/types';
 
@@ -112,7 +113,7 @@ describe('immersive preview source data', () => {
     expect(items[1].runStatus).toBe('failed');
   });
 
-  it('bounds generation viewer hydration to the visible preview window', async () => {
+  it('loads the unarchived library window and leaves owner posts to enrichment', async () => {
     const api = {
       getCreatorProfile: vi.fn(),
       getSavedMedia: vi.fn(),
@@ -129,12 +130,29 @@ describe('immersive preview source data', () => {
       initialId: '',
     });
 
-    expect(api.listGenerations).toHaveBeenCalledWith(true, { limit: 48 });
-    expect(api.listOwnerPosts).toHaveBeenCalledWith({
-      includeArchived: true,
-      limit: 48,
-      visibility: 'all',
-    });
+    expect(api.listGenerations).toHaveBeenCalledWith(false, { limit: 48 });
+    // Linked-post details load beside the creations, never in front of them.
+    expect(api.listOwnerPosts).not.toHaveBeenCalled();
+  });
+
+  it('shares one library read between viewers that open at the same time', async () => {
+    let finish: (value: { generations: GenerationListItem[] }) => void = () => undefined;
+    const api = {
+      getCreatorProfile: vi.fn(), getSavedMedia: vi.fn(), getShowcaseFeed: vi.fn(),
+      getShowcasePost: vi.fn(), getOwnerPost: vi.fn(), listOwnerPosts: vi.fn(),
+      listGenerations: vi.fn(() => new Promise<{ generations: GenerationListItem[] }>((resolve) => { finish = resolve; })),
+    };
+
+    const first = loadImmersiveSourceData({ api, source: 'profile-creations', initialId: 'gen-1' });
+    const second = loadImmersiveSourceData({ api, source: 'studio-creations', initialId: 'gen-1' });
+    finish({ generations: [generation('gen-1')] });
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+    expect(api.listGenerations).toHaveBeenCalledTimes(1);
+
+    // A settled read is not cached: the next open asks again.
+    api.listGenerations.mockImplementationOnce(async () => ({ generations: [generation('gen-1')] }));
+    await loadImmersiveSourceData({ api, source: 'profile-creations', initialId: 'gen-1' });
+    expect(api.listGenerations).toHaveBeenCalledTimes(2);
   });
 
   it.each(['profile-creations', 'studio-creations', 'home-creations'] as const)(
@@ -346,5 +364,34 @@ describe('immersive preview source data', () => {
       showcaseItems: [{ title: 'Signed-in ranking' }],
       feedSessionId: 'user-session',
     });
+  });
+
+  it('keeps the newest copy of a creation found in two caches, and the older cache\'s age', () => {
+    const queryClient = new QueryClient();
+    const now = Date.now();
+    queryClient.setQueryData(['profile-generations', 'user-1'], {
+      pages: [{ generations: [generation('gen-1', { title: 'Old title' }), generation('gen-2')] }],
+      pageParams: [null],
+    }, { updatedAt: now - 60 * 60 * 1000 });
+    queryClient.setQueryData(['home-generations', 'user-1'], {
+      generations: [generation('gen-1', { title: 'Renamed a minute ago' })],
+    }, { updatedAt: now - 60 * 1000 });
+
+    const snapshot = readCachedImmersiveSourceSnapshot(queryClient, 'home-creations', 'user-1', 'gen-1');
+
+    // Order still follows the caches' precedence; the version follows freshness.
+    expect(snapshot?.data.generations?.map((item) => [item.id, item.title])).toEqual([
+      ['gen-1', 'Renamed a minute ago'],
+      ['gen-2', 'gen-2'],
+    ]);
+    // A snapshot is only as fresh as its stalest part.
+    expect(snapshot?.updatedAt).toBe(now - 60 * 60 * 1000);
+  });
+
+  it('does not hand a viewer a snapshot that lacks the item it opened', () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(['home-generations', 'user-1'], { generations: [generation('gen-1')] });
+
+    expect(readCachedImmersiveSourceSnapshot(queryClient, 'home-creations', 'user-1', 'elsewhere')).toBeUndefined();
   });
 });

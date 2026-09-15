@@ -20,6 +20,10 @@ type FeedMediaFrameBaseProps = {
   cacheKey?: string;
   thumbhash?: string | null;
   style?: StyleProp<ViewStyle>;
+  /** Arms the image's display deadline; see `StableMediaImage`. Only for media on screen. */
+  watchdog?: boolean;
+  /** Where the frame is drawn, for the media diagnostics log. */
+  diagnosticsSurface?: string;
 };
 
 type FeedImageFrameProps = FeedMediaFrameBaseProps & {
@@ -125,6 +129,8 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
             onError={props.onImageError}
             onLoad={props.onImageLoad}
             transition={props.transition}
+            watchdog={props.watchdog}
+            diagnosticsSurface={props.diagnosticsSurface}
             style={[absoluteFill, { backgroundColor: 'transparent' }]}
           />
         </>
@@ -159,6 +165,8 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
               cacheKey={foregroundCacheKey ?? props.posterUrl}
               thumbhash={props.thumbhash}
               contentFit={props.videoContentFit ?? 'contain'}
+              watchdog={props.watchdog}
+              diagnosticsSurface={props.diagnosticsSurface}
               style={[absoluteFill, { backgroundColor: 'transparent' }]}
             />
           ) : null}

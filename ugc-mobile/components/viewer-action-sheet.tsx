@@ -12,8 +12,10 @@ import {
   changePostVisibility,
   deletePost as runDeletePost,
   pickPostVisibility,
+  resolveLinkedLifecyclePost,
   restorePost as runRestorePost,
   toPostLifecyclePost,
+  type PostLifecyclePost,
 } from '@/lib/post-lifecycle';
 import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
 import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
@@ -106,15 +108,6 @@ export function ViewerActionSheet({
     archivedAt: item.archivedAt,
     bundle: item.ownerPostBundle ?? null,
   });
-  const linkedLifecyclePost = item.linkedPostId
-    ? toPostLifecyclePost({
-        id: item.linkedPostId,
-        visibility: item.linkedPostVisibility,
-        archivedAt: item.linkedPostArchivedAt,
-        bundle: item.linkedPostBundle ?? null,
-      })
-    : null;
-
   const deletePost = async () => {
     const outcome = await runDeletePost({ api, post: lifecyclePost });
     if (outcome !== 'done') return;
@@ -142,7 +135,7 @@ export function ViewerActionSheet({
     });
   };
 
-  const updateVisibility = async (post: NonNullable<typeof linkedLifecyclePost>, visibility: 'public' | 'unlisted' | 'private') => {
+  const updateVisibility = async (post: PostLifecyclePost, visibility: 'public' | 'unlisted' | 'private') => {
     const outcome = await changePostVisibility({ api, post, visibility });
     if (outcome === 'done') {
       await refreshMedia();
@@ -232,8 +225,12 @@ export function ViewerActionSheet({
       router.push({ pathname: '/post/new', params: { postId: item.linkedPostId, focus: 'resources' } } as never);
       return;
     }
-    if (action === 'change-linked-visibility' && linkedLifecyclePost) {
-      pickPostVisibility(linkedLifecyclePost.visibility, (next) => void updateVisibility(linkedLifecyclePost, next));
+    if (action === 'change-linked-visibility' && item.linkedPostId) {
+      // Read the linked post first when its details never loaded: whether the
+      // change needs a confirmation depends on its bundle.
+      void resolveLinkedLifecyclePost({ api, item }).then((post) => {
+        if (post) pickPostVisibility(post.visibility, (next) => void updateVisibility(post, next));
+      });
       return;
     }
     if (action === 'change-visibility') {

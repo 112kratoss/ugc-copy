@@ -369,6 +369,10 @@ function normalizeGenerationMediaUrls(root: string, item: GenerationListItem): G
       ...item.media,
       url: absolutizeMediaUrl(root, item.media.url) ?? item.media.url,
       previewUrl: absolutizeMediaUrl(root, item.media.previewUrl),
+      // Absent and null both mean "open the original"; only a present address moves.
+      ...(item.media.displayUrl !== undefined ? {
+        displayUrl: absolutizeMediaUrl(root, item.media.displayUrl),
+      } : {}),
       ...(item.media.renditionUrl !== undefined ? {
         renditionUrl: absolutizeMediaUrl(root, item.media.renditionUrl),
       } : {}),

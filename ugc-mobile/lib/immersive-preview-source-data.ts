@@ -1,5 +1,7 @@
-import type { InfiniteData, QueryClient } from '@tanstack/react-query';
+import type { InfiniteData, QueryClient, QueryKey } from '@tanstack/react-query';
 
+import { selectCreationLibraryItems } from '@/lib/creation-library';
+import { dedupeInFlight } from '@/lib/in-flight';
 import {
   buildImmersiveGenerationItems,
   buildImmersiveOwnerPostItems,
@@ -37,6 +39,9 @@ export const VIEWER_SOURCES: PreviewViewerSource[] = [
   'home-creations',
 ];
 
+/** How many recent creations a generation-sourced viewer loads around the one it opens. */
+export const IMMERSIVE_GENERATION_WINDOW = 48;
+
 export type ImmersiveSourceData = {
   showcaseItems?: ShowcaseFeedItem[];
   generations?: GenerationListItem[];
@@ -53,8 +58,9 @@ export interface ImmersivePreviewApi {
   getCreatorProfile: (username: string, params?: Record<string, QueryValue>) => Promise<CreatorProfileResponse>;
   getSavedMedia: (params?: Record<string, QueryValue>) => Promise<ShowcaseFeedResponse>;
   getShowcasePost: (postId: string) => Promise<ShowcasePostResponse>;
+  /** The first argument is `includeArchived`, as in the API client itself. */
   listGenerations: (
-    includeCompleted?: boolean,
+    includeArchived?: boolean,
     options?: { limit?: number; id?: string }
   ) => Promise<GenerationListResponse>;
   listOwnerPosts: (params?: Record<string, QueryValue>) => Promise<OwnerPostsResponse>;
@@ -70,6 +76,17 @@ export function normalizeParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] ?? '' : value ?? '';
 }
 
+/**
+ * The items a viewer shows for its source.
+ *
+ * Generation sources hold the creations the grid does — the shared library rule
+ * in `creation-library`, not "has media". Keeping only items with media dropped
+ * the grid's own "File no longer available" tile, so tapping it opened the first
+ * creation instead; and archived runs the grid never showed came in with the
+ * viewer's wider request (audit C1, C3). The item a route named on purpose stays
+ * whatever its state: a "your video failed" notification lands on that run and
+ * explains itself.
+ */
 export function buildViewerItems(
   source: PreviewViewerSource,
   data: ImmersiveSourceData | undefined,
@@ -77,39 +94,17 @@ export function buildViewerItems(
   initialId?: string | null
 ): ImmersivePreviewItem[] {
   if (isGenerationSource(source)) {
-    return filterViewerGenerationItems(
-      buildImmersiveGenerationItems(source, data?.generations ?? [], owner, data?.ownerPosts ?? []),
-      initialId
+    return buildImmersiveGenerationItems(
+      source,
+      selectCreationLibraryItems(data?.generations ?? [], initialId),
+      owner,
+      data?.ownerPosts ?? []
     );
   }
   if (source === 'profile-posts') {
     return buildImmersiveOwnerPostItems(source, data?.ownerPosts ?? [], owner);
   }
   return buildImmersiveShowcaseItems(source, data?.showcaseItems ?? []);
-}
-
-/**
- * The reel holds the same creations the grid it was opened from does.
- *
- * `listGenerations` answers with every run, finished or not, while the profile
- * grid shows only the ones with something to draw. Scrolling the reel could
- * therefore arrive at a failed run that was never on screen in the grid -- the
- * reported symptom, and a dead end before the status page existed.
- *
- * The one exception is the creation the reader deliberately opened. A "your
- * video failed" notification deep-links straight to its own run, and it should
- * land on the run it names and explain itself, not silently open some
- * unrelated creation because the named one was filtered away.
- */
-export function filterViewerGenerationItems(
-  items: ImmersivePreviewItem[],
-  initialId?: string | null
-): ImmersivePreviewItem[] {
-  return items.filter((item) => (
-    item.id === initialId
-    || item.previewKind === 'text'
-    || (item.mediaItems?.length ?? 0) > 0
-  ));
 }
 
 export function isGenerationSource(source: PreviewViewerSource) {
@@ -128,22 +123,26 @@ export async function loadImmersiveSourceData({
   creatorUsername?: string | null;
 }): Promise<ImmersiveSourceData> {
   if (isGenerationSource(source)) {
-    const [generationResponse, ownerPostResponse] = await Promise.all([
-      api.listGenerations(true, { limit: 48 }),
-      api.listOwnerPosts({ includeArchived: true, limit: 48, visibility: 'all' }),
-    ]);
-    let generations = generationResponse.generations;
+    // The library window is unarchived, as the grid's is. Owner posts are not
+    // part of this read: linked-post details are enrichment loaded beside it, so
+    // a failing or slow post list can no longer discard or hold back creations
+    // that loaded (audit C5). Concurrent opens share the one request.
+    const response = await dedupeInFlight(
+      api,
+      `generations:library:${IMMERSIVE_GENERATION_WINDOW}`,
+      () => api.listGenerations(false, { limit: IMMERSIVE_GENERATION_WINDOW })
+    );
+    let generations = response.generations;
     if (initialId && !generations.some((item) => item.id === initialId)) {
-      // A paginated grid can open an older item. Refresh its signed media URLs
-      // with one owner-scoped lookup instead of replacing it with the first page.
+      // A deliberate route can name a creation outside the window: an older
+      // tile, an archived creation, a notification for an unfinished run. One
+      // owner-scoped lookup refreshes its signed media without loading the
+      // whole library.
       const detail = await api.listGenerations(true, { id: initialId, limit: 1 });
       const selected = detail.generations.find((item) => item.id === initialId);
       if (selected) generations = [selected, ...generations];
     }
-    return {
-      generations,
-      ownerPosts: ownerPostResponse.posts,
-    };
+    return { generations };
   }
 
   if (source === 'profile-posts') {
@@ -206,6 +205,38 @@ export async function loadImmersiveSourceData({
   };
 }
 
+/**
+ * Cached data a viewer can open on before its own request returns, with the age
+ * of the caches it came from.
+ *
+ * The age matters as much as the data. Handed over as bare `initialData`, an
+ * hour-old grid page became "fresh" for another 45 seconds in the viewer, so
+ * nothing refetched it (audit C4). `updatedAt` is the oldest contributing
+ * cache's: a snapshot is only as fresh as its stalest part. Pass it as the
+ * query's `initialDataUpdatedAt`.
+ */
+export type ImmersiveSourceSnapshot = {
+  data: ImmersiveSourceData;
+  updatedAt: number;
+};
+
+export function readCachedImmersiveSourceSnapshot(
+  queryClient: QueryClient,
+  source: PreviewViewerSource,
+  userId: string | undefined,
+  initialId: string,
+  feedSessionId?: string | null
+): ImmersiveSourceSnapshot | undefined {
+  const snapshot = isGenerationSource(source)
+    ? cachedGenerations(queryClient, userId)
+    : source === 'profile-posts'
+      ? cachedOwnerPosts(queryClient, userId)
+      : source === 'creator-profile'
+        ? cachedCreatorProfileItems(queryClient)
+        : cachedShowcaseItems(queryClient, source, userId, initialId, feedSessionId);
+  return snapshot && sourceDataContains(snapshot.data, initialId) ? snapshot : undefined;
+}
+
 export function readCachedImmersiveSourceData(
   queryClient: QueryClient,
   source: PreviewViewerSource,
@@ -213,26 +244,7 @@ export function readCachedImmersiveSourceData(
   initialId: string,
   feedSessionId?: string | null
 ): ImmersiveSourceData | undefined {
-  if (isGenerationSource(source)) {
-    const data = {
-      ...(cachedGenerations(queryClient, userId) ?? {}),
-      ...(cachedOwnerPosts(queryClient, userId) ?? {}),
-    };
-    return sourceDataContains(data, initialId) ? data : undefined;
-  }
-
-  if (source === 'profile-posts') {
-    const data = cachedOwnerPosts(queryClient, userId);
-    return sourceDataContains(data, initialId) ? data : undefined;
-  }
-
-  if (source === 'creator-profile') {
-    const data = cachedCreatorProfileItems(queryClient);
-    return sourceDataContains(data, initialId) ? data : undefined;
-  }
-
-  const data = cachedShowcaseItems(queryClient, source, userId, initialId, feedSessionId);
-  return sourceDataContains(data, initialId) ? data : undefined;
+  return readCachedImmersiveSourceSnapshot(queryClient, source, userId, initialId, feedSessionId)?.data;
 }
 
 export function readCachedProfile(queryClient: QueryClient, userId: string | undefined): ProfileResponse | undefined {
@@ -245,76 +257,140 @@ function cachedShowcaseItems(
   userId: string | undefined,
   initialId: string,
   feedSessionId?: string | null
-): ImmersiveSourceData | undefined {
+): ImmersiveSourceSnapshot | undefined {
+  const savedKey: QueryKey = ['profile-saved-media', userId];
+
   if (source === 'profile-saved') {
-    const saved = queryClient.getQueryData<CachedPages<ShowcaseFeedResponse>>(['profile-saved-media', userId]);
+    const saved = queryClient.getQueryData<CachedPages<ShowcaseFeedResponse>>(savedKey);
     const showcaseItems = readCachedPages(saved)
       .flatMap((page) => page.items)
       .filter((item) => item.isSaved);
-    return showcaseItems.length ? { showcaseItems } : undefined;
+    return showcaseItems.length
+      ? { data: { showcaseItems }, updatedAt: oldestUpdatedAt(queryClient, [savedKey]) }
+      : undefined;
   }
 
   const feedQueries = queryClient.getQueriesData<InfiniteData<ShowcaseFeedResponse>>({
     queryKey: createShowcaseFeedViewerQueryKey(userId),
   });
   const rankedSources = feedQueries
-    .map(([, data]) => data)
-    .filter((data): data is InfiniteData<ShowcaseFeedResponse> => Boolean(data?.pages.length));
-  const selected = rankedSources.find((data) => Boolean(
+    .filter((entry): entry is [QueryKey, InfiniteData<ShowcaseFeedResponse>] => Boolean(entry[1]?.pages.length));
+  const selected = rankedSources.find(([, data]) => Boolean(
     feedSessionId && data.pages.some((page) => page.feedSessionId === feedSessionId)
-  )) ?? rankedSources.find((data) => flattenShowcaseFeedPages(data.pages).some((item) => item.id === initialId));
+  )) ?? rankedSources.find(([, data]) => flattenShowcaseFeedPages(data.pages).some((item) => item.id === initialId));
 
   if (selected) {
-    const showcaseItems = flattenShowcaseFeedPages(selected.pages);
-    const context = getShowcaseFeedSessionContext(selected.pages);
+    const [selectedKey, data] = selected;
+    const showcaseItems = flattenShowcaseFeedPages(data.pages);
+    const context = getShowcaseFeedSessionContext(data.pages);
     return showcaseItems.length ? {
-      showcaseItems,
-      feedSessionId: context.feedSessionId,
-      algorithmVersion: context.algorithmVersion,
+      data: {
+        showcaseItems,
+        feedSessionId: context.feedSessionId,
+        algorithmVersion: context.algorithmVersion,
+      },
+      updatedAt: oldestUpdatedAt(queryClient, [selectedKey]),
     } : undefined;
   }
 
-  const saved = queryClient.getQueryData<CachedPages<ShowcaseFeedResponse>>(['profile-saved-media', userId]);
+  const saved = queryClient.getQueryData<CachedPages<ShowcaseFeedResponse>>(savedKey);
   const showcaseItems = dedupeById(readCachedPages(saved).flatMap((page) => page.items));
-  return showcaseItems.length ? { showcaseItems } : undefined;
+  return showcaseItems.length
+    ? { data: { showcaseItems }, updatedAt: oldestUpdatedAt(queryClient, [savedKey]) }
+    : undefined;
 }
 
-function cachedCreatorProfileItems(queryClient: QueryClient): ImmersiveSourceData | undefined {
+function cachedCreatorProfileItems(queryClient: QueryClient): ImmersiveSourceSnapshot | undefined {
   const items: ShowcaseFeedItem[] = [];
+  const contributing: QueryKey[] = [];
   const creatorQueries = queryClient.getQueriesData<CreatorProfileResponse | InfiniteData<CreatorProfileResponse>>({ queryKey: ['creator-profile'] });
 
-  for (const [, data] of creatorQueries) {
+  for (const [key, data] of creatorQueries) {
+    const before = items.length;
     if (data && 'pages' in data) {
       items.push(...flattenCreatorProfilePages(data.pages));
     } else if (data?.items.length) {
       items.push(...data.items);
     }
+    if (items.length > before) contributing.push(key);
   }
 
   const showcaseItems = dedupeById(items);
-  return showcaseItems.length ? { showcaseItems } : undefined;
+  return showcaseItems.length
+    ? { data: { showcaseItems }, updatedAt: oldestUpdatedAt(queryClient, contributing) }
+    : undefined;
 }
 
-function cachedGenerations(queryClient: QueryClient, userId: string | undefined): ImmersiveSourceData | undefined {
-  const all: GenerationListItem[] = [];
-  // `profile-generations` is paginated; `home-generations` and `generations` stay single-page.
-  for (const key of [['profile-generations', userId], ['home-generations', userId], ['generations', userId]] as const) {
-    const data = queryClient.getQueryData<CachedPages<GenerationListResponse>>(key);
-    all.push(...readCachedPages(data).flatMap((page) => page.generations ?? []));
-  }
-  const generations = dedupeById(all);
-  return generations.length ? { generations } : undefined;
+/**
+ * `profile-generations` is paginated; `home-generations` and `generations` stay
+ * single-page. Owner posts are not merged in: generation viewers load linked-post
+ * details as separate enrichment.
+ */
+function cachedGenerations(queryClient: QueryClient, userId: string | undefined): ImmersiveSourceSnapshot | undefined {
+  return mergeCachedEntities(
+    queryClient,
+    [['profile-generations', userId], ['home-generations', userId], ['generations', userId]],
+    (data) => readCachedPages(data as CachedPages<GenerationListResponse> | undefined)
+      .flatMap((page) => page.generations ?? []),
+    (generations) => ({ generations })
+  );
 }
 
-function cachedOwnerPosts(queryClient: QueryClient, userId: string | undefined): ImmersiveSourceData | undefined {
-  const all: OwnerPostsResponse['posts'] = [];
-  // `profile-owner-posts` is paginated; `owner-posts-sales-summary` stays single-page.
-  for (const key of [['profile-owner-posts', userId], ['owner-posts-sales-summary', userId]] as const) {
-    const data = queryClient.getQueryData<CachedPages<OwnerPostsResponse>>(key);
-    all.push(...readCachedPages(data).flatMap((page) => page.posts ?? []));
+/** `profile-owner-posts` is paginated; `owner-posts-sales-summary` stays single-page. */
+function cachedOwnerPosts(queryClient: QueryClient, userId: string | undefined): ImmersiveSourceSnapshot | undefined {
+  return mergeCachedEntities(
+    queryClient,
+    [['profile-owner-posts', userId], ['owner-posts-sales-summary', userId]],
+    (data) => readCachedPages(data as CachedPages<OwnerPostsResponse> | undefined)
+      .flatMap((page) => page.posts ?? []),
+    (ownerPosts) => ({ ownerPosts })
+  );
+}
+
+/**
+ * Merges overlapping caches of one entity type.
+ *
+ * Order follows the precedence of `keys`, so a viewer does not reshuffle with
+ * cache ages. The *version* of an entity found in more than one cache comes from
+ * the most recently updated one: fixed precedence used to let an hour-old grid
+ * page overrule a copy another screen fetched a minute ago (audit C4).
+ */
+function mergeCachedEntities<TItem extends { id: string }>(
+  queryClient: QueryClient,
+  keys: QueryKey[],
+  readItems: (data: unknown) => TItem[],
+  toData: (items: TItem[]) => ImmersiveSourceData
+): ImmersiveSourceSnapshot | undefined {
+  const order: string[] = [];
+  const newest = new Map<string, { item: TItem; updatedAt: number }>();
+  const contributing: QueryKey[] = [];
+
+  for (const key of keys) {
+    const items = readItems(queryClient.getQueryData(key));
+    if (!items.length) continue;
+    contributing.push(key);
+    const updatedAt = queryClient.getQueryState(key)?.dataUpdatedAt ?? 0;
+    for (const item of items) {
+      const current = newest.get(item.id);
+      if (!current) order.push(item.id);
+      if (!current || updatedAt > current.updatedAt) newest.set(item.id, { item, updatedAt });
+    }
   }
-  const ownerPosts = dedupeById(all);
-  return ownerPosts.length ? { ownerPosts } : undefined;
+
+  if (!order.length) return undefined;
+  return {
+    data: toData(order.map((id) => newest.get(id)!.item)),
+    updatedAt: oldestUpdatedAt(queryClient, contributing),
+  };
+}
+
+/** The oldest `dataUpdatedAt` among the given caches; 0 for one that never loaded. */
+function oldestUpdatedAt(queryClient: QueryClient, keys: QueryKey[]) {
+  if (!keys.length) return 0;
+  return keys.reduce(
+    (oldest, key) => Math.min(oldest, queryClient.getQueryState(key)?.dataUpdatedAt ?? 0),
+    Number.POSITIVE_INFINITY
+  );
 }
 
 type CachedPages<T> = T | InfiniteData<T>;
