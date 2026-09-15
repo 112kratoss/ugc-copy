@@ -7,10 +7,18 @@ const VIEWER = 'viewer-1';
 const SOURCE_PATH = `generation_inputs/${CREATOR}/gen-9/00-reference_image.jpg`;
 const DEST_PATH = `${VIEWER}/remix-imports/gen-9/00-reference_image.jpg`;
 
+// A creation made before the viewer registered keeps its guest UUID, so
+// Recreate restores its references as signed URLs under the guest's prefix.
+const GUEST = 'guest-1';
+const GUEST_SOURCE_PATH = `generation_inputs/${GUEST}/gen-4/00-reference_image.png`;
+const GUEST_SIGNED_SOURCE = `https://project.supabase.co/storage/v1/object/sign/${GUEST_SOURCE_PATH}?token=restored`;
+const GUEST_DEST_PATH = `${VIEWER}/remix-imports/gen-4/00-reference_image.png`;
+
 type AdminStubOptions = {
   mediaRows?: Array<Record<string, unknown>>;
   generationRow?: Record<string, unknown> | null;
   postRows?: Array<Record<string, unknown>>;
+  profileRows?: Array<Record<string, unknown>>;
   copyError?: { statusCode?: string; message: string; error?: string } | null;
   signError?: { message: string } | null;
 };
@@ -20,6 +28,7 @@ function createAdminStub(options: AdminStubOptions = {}) {
     mediaRows = [{ id: 'media-1', generation_id: 'gen-9', user_id: CREATOR, storage_path: SOURCE_PATH }],
     generationRow = { id: 'gen-9', user_id: CREATOR, is_public: true, share_input_media_for_remix: true },
     postRows = [],
+    profileRows = [],
     copyError = null,
     signError = null,
   } = options;
@@ -31,17 +40,29 @@ function createAdminStub(options: AdminStubOptions = {}) {
       : { data: { signedUrl: `https://project.supabase.co/storage/v1/object/sign/generation_inputs/${path}?token=copy` }, error: null }
   ));
   const from = vi.fn((table: string) => {
-    const result = table === 'generation_input_media'
-      ? { data: mediaRows, error: null }
-      : table === 'posts'
-        ? { data: postRows, error: null }
-        : { data: generationRow, error: null };
+    const filters: Array<[string, unknown]> = [];
+    const resolveResult = () => {
+      if (table === 'generation_input_media') return { data: mediaRows, error: null };
+      if (table === 'posts') return { data: postRows, error: null };
+      // Profiles honour their filters, as the database would: the linked-account
+      // lookup must find the guests merged into the viewer, not every merged guest.
+      if (table === 'profiles') {
+        return {
+          data: profileRows.filter((row) => filters.every(([column, value]) => row[column] === value)),
+          error: null,
+        };
+      }
+      return { data: generationRow, error: null };
+    };
     const query = {
       select: () => query,
-      eq: () => query,
+      eq: (column: string, value: unknown) => {
+        filters.push([column, value]);
+        return query;
+      },
       limit: () => query,
-      maybeSingle: async () => result,
-      then: (resolve: (value: unknown) => void) => resolve(result),
+      maybeSingle: async () => resolveResult(),
+      then: (resolve: (value: unknown) => void) => resolve(resolveResult()),
     };
     return query;
   });
@@ -67,6 +88,15 @@ function createDependencies(stub: ReturnType<typeof createAdminStub>, overrides:
     }) as never,
     loadGenerationRecipeRemixInputMediaByPostId: vi.fn(async () => (overrides.recipeItems ?? []) as never),
   };
+}
+
+function createLinkedGuestStub(overrides: AdminStubOptions = {}) {
+  return createAdminStub({
+    mediaRows: [{ id: 'media-4', generation_id: 'gen-4', user_id: GUEST, storage_path: GUEST_SOURCE_PATH }],
+    generationRow: { id: 'gen-4', user_id: GUEST, is_public: false, share_input_media_for_remix: false },
+    profileRows: [{ id: GUEST, merged_into_user_id: VIEWER }],
+    ...overrides,
+  });
 }
 
 describe('importSharedGenerationInputMedia', () => {
@@ -245,5 +275,51 @@ describe('importSharedGenerationInputMedia', () => {
       viewerUserId: VIEWER,
       dependencies: createDependencies(generationMismatch),
     })).resolves.toEqual({ outcome: 'not-eligible' });
+  });
+
+  it('imports a private, unshared input made under a guest identity linked to the viewer', async () => {
+    const stub = createLinkedGuestStub();
+    const dependencies = createDependencies(stub);
+    const result = await importSharedGenerationInputMedia({
+      source: GUEST_SIGNED_SOURCE,
+      viewerUserId: VIEWER,
+      dependencies,
+    });
+
+    expect(result).toEqual({
+      outcome: 'imported',
+      storagePath: `generation_inputs/${GUEST_DEST_PATH}`,
+      signedUrl: expect.stringContaining(GUEST_DEST_PATH),
+    });
+    expect(stub.copy).toHaveBeenCalledWith(`${GUEST}/gen-4/00-reference_image.png`, GUEST_DEST_PATH);
+    // The block gate and the sharing checks exist for other people's media.
+    expect(dependencies.isUserRelationshipBlocked).not.toHaveBeenCalled();
+    expect(stub.from).not.toHaveBeenCalledWith('posts');
+  });
+
+  it('stays ineligible for a guest identity linked to a different account', async () => {
+    const stub = createLinkedGuestStub({
+      profileRows: [{ id: GUEST, merged_into_user_id: 'account-2' }],
+    });
+    const result = await importSharedGenerationInputMedia({
+      source: GUEST_SIGNED_SOURCE,
+      viewerUserId: VIEWER,
+      dependencies: createDependencies(stub),
+    });
+
+    expect(result).toEqual({ outcome: 'not-eligible' });
+    expect(stub.copy).not.toHaveBeenCalled();
+  });
+
+  it('still requires a durable input row for a linked guest', async () => {
+    const stub = createLinkedGuestStub({ mediaRows: [] });
+    const result = await importSharedGenerationInputMedia({
+      source: GUEST_SIGNED_SOURCE,
+      viewerUserId: VIEWER,
+      dependencies: createDependencies(stub),
+    });
+
+    expect(result).toEqual({ outcome: 'not-eligible' });
+    expect(stub.copy).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,4 @@
+import { isOwnOrLinkedAccountId } from '@/lib/account-identity';
 import { logBackendError } from '@/lib/backend-logger';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { loadGenerationRecipeRemixInputMediaByPostId } from '@/lib/post-resource-bundles-server';
@@ -42,6 +43,11 @@ function isAlreadyExistsStorageError(error: { statusCode?: string | number; mess
  * The deterministic destination makes retries and repeated remixes reuse one
  * copy, and the remix keeps working even if the creator later deletes the
  * original or stops sharing.
+ *
+ * Recreate on the viewer's own pre-registration work lands here too: that work
+ * keeps the guest UUID it was made under, so its references fail the prefix
+ * check. A guest identity linked to the viewer needs no sharing decision, only
+ * the same copy.
  *
  * Only durable inputs (rows in `generation_input_media`) are importable;
  * legacy pre-durable references stay rejected until the repair backfill
@@ -92,49 +98,57 @@ export async function importSharedGenerationInputMedia(params: {
     | null;
   if (!generation || generation.user_id !== ownerUserId) return { outcome: 'not-eligible' };
 
-  // Mirrors the remix-source block gate: a check that errors open is not a gate.
-  let blocked = true;
-  try {
-    blocked = await (params.dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked)({
-      adminSupabase,
-      firstUserId: params.viewerUserId,
-      secondUserId: ownerUserId,
-    });
-  } catch (error) {
-    logBackendError('failed_to_verify_block_state_before_shared_input_import', { error });
-  }
-  if (blocked) return { outcome: 'not-eligible' };
-
-  // Free sharing first (the same predicate the remix-source endpoint serves
-  // media under), then the paid recipe entitlement via a post that links this
-  // generation — that loader re-checks purchase, allowRemix, and eligibility.
-  let authorized = generation.is_public === true && generation.share_input_media_for_remix === true;
-  if (!authorized) {
-    const postsResult = await adminSupabase
-      .from('posts')
-      .select('id')
-      .eq('generation_id', generation.id)
-      .limit(MAX_POSTS_PER_GENERATION);
-    if (postsResult.error) {
-      logBackendError('failed_to_load_posts_for_shared_input_import', { error: postsResult.error });
-      return { outcome: 'failed' };
-    }
-    const loadRecipeInputMedia = params.dependencies?.loadGenerationRecipeRemixInputMediaByPostId
-      ?? loadGenerationRecipeRemixInputMediaByPostId;
-    for (const post of (postsResult.data ?? []) as Array<{ id: string }>) {
-      const items = await loadRecipeInputMedia({
-        postId: post.id,
-        generationId: generation.id,
-        viewerUserId: params.viewerUserId,
+  // Creations made before the viewer registered keep their guest UUID, so
+  // Recreate submits their references under that guest's prefix. They are
+  // still the viewer's own inputs, and the block gate and sharing checks below
+  // exist for other people's media. A failed link lookup reads as "not linked",
+  // which keeps those checks in force.
+  const ownedByViewer = await isOwnOrLinkedAccountId(adminSupabase, params.viewerUserId, ownerUserId);
+  if (!ownedByViewer) {
+    // Mirrors the remix-source block gate: a check that errors open is not a gate.
+    let blocked = true;
+    try {
+      blocked = await (params.dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked)({
         adminSupabase,
+        firstUserId: params.viewerUserId,
+        secondUserId: ownerUserId,
       });
-      if (items.some((item) => item.storagePath === storagePathKey)) {
-        authorized = true;
-        break;
+    } catch (error) {
+      logBackendError('failed_to_verify_block_state_before_shared_input_import', { error });
+    }
+    if (blocked) return { outcome: 'not-eligible' };
+
+    // Free sharing first (the same predicate the remix-source endpoint serves
+    // media under), then the paid recipe entitlement via a post that links this
+    // generation — that loader re-checks purchase, allowRemix, and eligibility.
+    let authorized = generation.is_public === true && generation.share_input_media_for_remix === true;
+    if (!authorized) {
+      const postsResult = await adminSupabase
+        .from('posts')
+        .select('id')
+        .eq('generation_id', generation.id)
+        .limit(MAX_POSTS_PER_GENERATION);
+      if (postsResult.error) {
+        logBackendError('failed_to_load_posts_for_shared_input_import', { error: postsResult.error });
+        return { outcome: 'failed' };
+      }
+      const loadRecipeInputMedia = params.dependencies?.loadGenerationRecipeRemixInputMediaByPostId
+        ?? loadGenerationRecipeRemixInputMediaByPostId;
+      for (const post of (postsResult.data ?? []) as Array<{ id: string }>) {
+        const items = await loadRecipeInputMedia({
+          postId: post.id,
+          generationId: generation.id,
+          viewerUserId: params.viewerUserId,
+          adminSupabase,
+        });
+        if (items.some((item) => item.storagePath === storagePathKey)) {
+          authorized = true;
+          break;
+        }
       }
     }
+    if (!authorized) return { outcome: 'not-eligible' };
   }
-  if (!authorized) return { outcome: 'not-eligible' };
 
   const fileName = location.filePath.split('/').pop() ?? 'input';
   const destinationFilePath = `${params.viewerUserId}/${REMIX_IMPORT_FOLDER}/${mediaRow.generation_id}/${fileName}`;
