@@ -66,7 +66,7 @@ type ProfileMediaFeedParams = {
 };
 
 const CARD_GAP = 12;
-/** How often a landing that is under way checks its budget. */
+/** How often a landing checks its budget and retries after layout has advanced. */
 const LANDING_TICK_MS = 250;
 
 /**
@@ -171,7 +171,10 @@ export function ProfileMediaFeedScreen() {
    */
   const [landing, dispatchLanding] = useReducer(reduceFeedLanding, INITIAL_FEED_LANDING);
   const [layoutRevision, setLayoutRevision] = useState(0);
+  const [listReady, setListReady] = useState(false);
   const landingSeekingRef = useRef(false);
+  const landingScrollInFlightRef = useRef(false);
+  const landingTargetVisibleRef = useRef(false);
   const targetIndex = initialId ? cards.findIndex((card) => card.id === initialId) : -1;
 
   useEffect(() => {
@@ -179,13 +182,36 @@ export function ProfileMediaFeedScreen() {
   }, [landing.phase]);
 
   useEffect(() => {
+    landingTargetVisibleRef.current = false;
     if (initialId) dispatchLanding({ type: 'target', index: targetIndex, now: Date.now() });
   }, [initialId, targetIndex]);
 
   useEffect(() => {
-    if (!shouldScrollToFeedTarget(landing, cards.length)) return;
-    listRef.current?.scrollToIndex({ index: landing.targetIndex, animated: false });
-  }, [cards.length, landing, layoutRevision]);
+    if (listReady && targetIndex === 0) {
+      dispatchLanding({ type: 'viewable', targetVisible: true });
+    }
+  }, [listReady, targetIndex]);
+
+  useEffect(() => {
+    if (!listReady || !shouldScrollToFeedTarget(landing, cards.length)) return;
+    const list = listRef.current;
+    if (!list || landingScrollInFlightRef.current) return;
+    const index = landing.targetIndex;
+    landingScrollInFlightRef.current = true;
+    void list.scrollToIndex({ index, animated: false, viewPosition: 0 })
+      .then(() => {
+        const visible = list.computeVisibleIndices();
+        dispatchLanding({
+          type: 'scroll-complete',
+          index,
+          targetVisible: landingTargetVisibleRef.current
+            || (index >= visible.startIndex && index <= visible.endIndex),
+        });
+      })
+      .finally(() => {
+        landingScrollInFlightRef.current = false;
+      });
+  }, [cards.length, landing, layoutRevision, listReady]);
 
   useEffect(() => {
     if (landing.phase !== 'seeking') return;
@@ -441,14 +467,20 @@ export function ProfileMediaFeedScreen() {
         testID="profile-media-feed-list"
         data={cards}
         keyExtractor={(card) => card.id}
-        initialScrollIndex={Math.max(0, targetIndex)}
+        accessibilityElementsHidden={landing.phase === 'seeking'}
+        importantForAccessibility={landing.phase === 'seeking' ? 'no-hide-descendants' : 'auto'}
+        pointerEvents={landing.phase === 'seeking' ? 'none' : 'auto'}
         getItemType={(card) => card.isTextOnly
           ? 'text'
           : card.sourceUnavailable
             ? 'unavailable'
             : card.item.mediaKind ?? 'image'}
         extraData={{ activeVideoId, expandedBodyIds, isFocused, pendingAction }}
-        onLoad={acknowledgeListLayout}
+        maintainVisibleContentPosition={{ disabled: true }}
+        onLoad={() => {
+          setListReady(true);
+          acknowledgeListLayout();
+        }}
         onContentSizeChange={acknowledgeListLayout}
         onScrollBeginDrag={() => {
           // The reader's own scroll outranks the landing: never yank them back.
@@ -459,9 +491,11 @@ export function ProfileMediaFeedScreen() {
           setActiveVideoId(firstVideo?.item?.id ?? null);
 
           if (initialId) {
+            const targetVisible = viewableItems.some((token) => token.item?.id === initialId);
+            landingTargetVisibleRef.current = targetVisible;
             dispatchLanding({
               type: 'viewable',
-              targetVisible: viewableItems.some((token) => token.item?.id === initialId),
+              targetVisible,
             });
           }
         }}
@@ -480,7 +514,7 @@ export function ProfileMediaFeedScreen() {
           paddingTop: 12,
         }}
         showsVerticalScrollIndicator={false}
-        style={{ flex: 1 }}
+        style={{ flex: 1, opacity: landing.phase === 'seeking' ? 0 : 1 }}
         renderItem={({ item: card }) => (
           <ProfileFeedCardView
             card={card}
@@ -499,6 +533,14 @@ export function ProfileMediaFeedScreen() {
           />
         )}
       />
+      {landing.phase === 'seeking' ? (
+        <View
+          pointerEvents="none"
+          style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}
+        >
+          <ActivityIndicator accessibilityLabel={`Opening ${noun}`} color={appTheme.colors.primary} />
+        </View>
+      ) : null}
       </View>
       {activeItem ? (
         <ViewerActionSheet
