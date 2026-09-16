@@ -47,6 +47,7 @@ export type FeedLanding = {
 export type FeedLandingEvent =
   | { type: 'target'; index: number; now: number }
   | { type: 'viewable'; targetVisible: boolean }
+  | { type: 'scroll-complete'; index: number; targetVisible: boolean }
   | { type: 'reader-scrolled' }
   | { type: 'tick'; now: number }
   | { type: 'retry'; now: number };
@@ -71,7 +72,18 @@ export function reduceFeedLanding(state: FeedLanding, event: FeedLandingEvent): 
       if (state.phase !== 'waiting' && event.index === state.targetIndex) return state;
       return { phase: 'seeking', targetIndex: event.index, startedAt: event.now, attempt: 0 };
     case 'viewable':
-      return state.phase === 'seeking' && event.targetVisible ? { ...state, phase: 'landed' } : state;
+      // Index zero needs no native jump. Other targets can become visible during
+      // FlashList's intermediate scroll steps; revealing the list then exposes
+      // the Android variable-height overlap that initial jumps can produce.
+      return state.phase === 'seeking' && state.targetIndex === 0 && event.targetVisible
+        ? { ...state, phase: 'landed' }
+        : state;
+    case 'scroll-complete':
+      return state.phase === 'seeking'
+        && state.targetIndex === event.index
+        && event.targetVisible
+        ? { ...state, phase: 'landed' }
+        : state;
     case 'tick':
       if (state.phase !== 'seeking' || state.startedAt === null) return state;
       return event.now - state.startedAt >= FEED_LANDING_BUDGET_MS

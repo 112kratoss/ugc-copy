@@ -210,7 +210,10 @@ function RootLayoutNav() {
                     zoom out of the tile was tried (2026-08-23) and read as the media
                     arriving before its controls, so it was taken out. */}
                 <Stack.Screen name="viewer" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
-                <Stack.Screen name="profile-media-feed" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
+                {/* Keep the library and its card feed opaque while navigating. A
+                    fade composites two dense media surfaces and briefly makes
+                    cards from the grid look stacked over feed cards. */}
+                <Stack.Screen name="profile-media-feed" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'simple_push' }} />
                 <Stack.Screen name="showcase" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
                 <Stack.Screen name="creators/[username]" options={{ title: 'Creator' }} />
                 <Stack.Screen name="marketplace/[assetId]" options={{ title: 'Unlock' }} />

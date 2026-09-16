@@ -14,14 +14,38 @@ function run(events: FeedLandingEvent[], from: FeedLanding = INITIAL_FEED_LANDIN
 }
 
 describe('feed landing', () => {
-  it.each([1, 6, 24, 25, 48, 49, 100])('seeks card %i and lands once it is on screen', (index) => {
+  it.each([1, 6, 24, 25, 48, 49, 100])('seeks card %i and lands after its native scroll completes', (index) => {
     const seeking = run([{ type: 'target', index, now: 0 }]);
     expect(seeking).toEqual({ phase: 'seeking', targetIndex: index, startedAt: 0, attempt: 0 });
     expect(shouldScrollToFeedTarget(seeking, 200)).toBe(true);
 
-    const landed = reduceFeedLanding(seeking, { type: 'viewable', targetVisible: true });
+    const glimpsed = reduceFeedLanding(seeking, { type: 'viewable', targetVisible: true });
+    expect(glimpsed.phase).toBe('seeking');
+
+    const landed = reduceFeedLanding(glimpsed, {
+      type: 'scroll-complete', index, targetVisible: true,
+    });
     expect(landed.phase).toBe('landed');
     expect(shouldScrollToFeedTarget(landed, 200)).toBe(false);
+  });
+
+  it('lands the first card from viewability because it needs no programmatic scroll', () => {
+    const seeking = run([{ type: 'target', index: 0, now: 0 }]);
+    const landed = reduceFeedLanding(seeking, { type: 'viewable', targetVisible: true });
+
+    expect(landed.phase).toBe('landed');
+    expect(shouldScrollToFeedTarget(landed, 18)).toBe(false);
+  });
+
+  it('ignores completion from a stale scroll after the target index changes', () => {
+    const seeking = run([
+      { type: 'target', index: 6, now: 0 },
+      { type: 'target', index: 8, now: 50 },
+    ]);
+
+    expect(reduceFeedLanding(seeking, {
+      type: 'scroll-complete', index: 6, targetVisible: true,
+    })).toBe(seeking);
   });
 
   it('waits for slow data instead of spending its budget before the card exists', () => {
@@ -36,7 +60,7 @@ describe('feed landing', () => {
   it('lands again when the list reorders before the reader has moved', () => {
     const landed = run([
       { type: 'target', index: 6, now: 0 },
-      { type: 'viewable', targetVisible: true },
+      { type: 'scroll-complete', index: 6, targetVisible: true },
     ]);
 
     // A refresh inserted two creations above the card being looked at.
