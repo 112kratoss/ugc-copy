@@ -16,7 +16,7 @@ function run(events: FeedLandingEvent[], from: FeedLanding = INITIAL_FEED_LANDIN
 describe('feed landing', () => {
   it.each([1, 6, 24, 25, 48, 49, 100])('seeks card %i and lands once it is on screen', (index) => {
     const seeking = run([{ type: 'target', index, now: 0 }]);
-    expect(seeking).toEqual({ phase: 'seeking', targetIndex: index, startedAt: 0 });
+    expect(seeking).toEqual({ phase: 'seeking', targetIndex: index, startedAt: 0, attempt: 0 });
     expect(shouldScrollToFeedTarget(seeking, 200)).toBe(true);
 
     const landed = reduceFeedLanding(seeking, { type: 'viewable', targetVisible: true });
@@ -41,7 +41,7 @@ describe('feed landing', () => {
 
     // A refresh inserted two creations above the card being looked at.
     const relanding = reduceFeedLanding(landed, { type: 'target', index: 8, now: 500 });
-    expect(relanding).toEqual({ phase: 'seeking', targetIndex: 8, startedAt: 500 });
+    expect(relanding).toEqual({ phase: 'seeking', targetIndex: 8, startedAt: 500, attempt: 0 });
     expect(reduceFeedLanding(relanding, { type: 'target', index: 8, now: 600 })).toBe(relanding);
   });
 
@@ -66,7 +66,17 @@ describe('feed landing', () => {
     expect(failed.phase).toBe('failed');
 
     const retried = reduceFeedLanding(failed, { type: 'retry', now: 9000 });
-    expect(retried).toEqual({ phase: 'seeking', targetIndex: 49, startedAt: 9000 });
+    expect(retried).toEqual({ phase: 'seeking', targetIndex: 49, startedAt: 9000, attempt: 0 });
+  });
+
+  it('requests another scroll on every tick while variable-height cards are still settling', () => {
+    const seeking = reduceFeedLanding(INITIAL_FEED_LANDING, { type: 'target', index: 9, now: 0 });
+    const secondAttempt = reduceFeedLanding(seeking, { type: 'tick', now: 250 });
+    const thirdAttempt = reduceFeedLanding(secondAttempt, { type: 'tick', now: 500 });
+
+    expect(secondAttempt).toMatchObject({ phase: 'seeking', targetIndex: 9, attempt: 1 });
+    expect(thirdAttempt).toMatchObject({ phase: 'seeking', targetIndex: 9, attempt: 2 });
+    expect(shouldScrollToFeedTarget(thirdAttempt, 24)).toBe(true);
   });
 
   it('goes back to waiting when the card leaves the list, and never falls back to the first card', () => {
@@ -80,7 +90,7 @@ describe('feed landing', () => {
   });
 
   it('never scrolls to an index the list does not contain, or for the first card', () => {
-    const seeking: FeedLanding = { phase: 'seeking', targetIndex: 13, startedAt: 0 };
+    const seeking: FeedLanding = { phase: 'seeking', targetIndex: 13, startedAt: 0, attempt: 0 };
     // FlashList clamps an out-of-range index to the end of the list.
     expect(shouldScrollToFeedTarget(seeking, 13)).toBe(false);
     expect(shouldScrollToFeedTarget({ ...seeking, targetIndex: 0 }, 13)).toBe(false);

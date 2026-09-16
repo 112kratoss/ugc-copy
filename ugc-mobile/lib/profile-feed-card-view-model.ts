@@ -40,6 +40,8 @@ export type FeedLanding = {
   targetIndex: number;
   /** When the current attempt began, which starts its budget. */
   startedAt: number | null;
+  /** Changes on each budget tick so the screen makes another bounded scroll attempt. */
+  attempt: number;
 };
 
 export type FeedLandingEvent =
@@ -49,7 +51,9 @@ export type FeedLandingEvent =
   | { type: 'tick'; now: number }
   | { type: 'retry'; now: number };
 
-export const INITIAL_FEED_LANDING: FeedLanding = { phase: 'waiting', targetIndex: -1, startedAt: null };
+export const INITIAL_FEED_LANDING: FeedLanding = {
+  phase: 'waiting', targetIndex: -1, startedAt: null, attempt: 0,
+};
 
 export function reduceFeedLanding(state: FeedLanding, event: FeedLandingEvent): FeedLanding {
   // The reader's own scroll outranks the landing for the rest of the visit.
@@ -62,20 +66,21 @@ export function reduceFeedLanding(state: FeedLanding, event: FeedLandingEvent): 
       if (event.index < 0) {
         // Gone from the list. The screen shows that as a missing selection; if it
         // comes back, landing starts over.
-        return state.phase === 'waiting' ? state : { phase: 'waiting', targetIndex: -1, startedAt: null };
+        return state.phase === 'waiting' ? state : INITIAL_FEED_LANDING;
       }
       if (state.phase !== 'waiting' && event.index === state.targetIndex) return state;
-      return { phase: 'seeking', targetIndex: event.index, startedAt: event.now };
+      return { phase: 'seeking', targetIndex: event.index, startedAt: event.now, attempt: 0 };
     case 'viewable':
       return state.phase === 'seeking' && event.targetVisible ? { ...state, phase: 'landed' } : state;
     case 'tick':
-      return state.phase === 'seeking'
-        && state.startedAt !== null
-        && event.now - state.startedAt >= FEED_LANDING_BUDGET_MS
+      if (state.phase !== 'seeking' || state.startedAt === null) return state;
+      return event.now - state.startedAt >= FEED_LANDING_BUDGET_MS
         ? { ...state, phase: 'failed' }
-        : state;
+        : { ...state, attempt: state.attempt + 1 };
     case 'retry':
-      return state.phase === 'failed' ? { ...state, phase: 'seeking', startedAt: event.now } : state;
+      return state.phase === 'failed'
+        ? { ...state, phase: 'seeking', startedAt: event.now, attempt: 0 }
+        : state;
   }
 }
 

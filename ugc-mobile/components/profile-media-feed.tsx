@@ -66,7 +66,7 @@ type ProfileMediaFeedParams = {
 };
 
 const CARD_GAP = 12;
-/** How often a landing that is under way checks its budget. */
+/** How often a landing checks its budget and retries after layout has advanced. */
 const LANDING_TICK_MS = 250;
 
 /**
@@ -172,6 +172,7 @@ export function ProfileMediaFeedScreen() {
   const [landing, dispatchLanding] = useReducer(reduceFeedLanding, INITIAL_FEED_LANDING);
   const [layoutRevision, setLayoutRevision] = useState(0);
   const landingSeekingRef = useRef(false);
+  const landingScrollInFlightRef = useRef(false);
   const targetIndex = initialId ? cards.findIndex((card) => card.id === initialId) : -1;
 
   useEffect(() => {
@@ -184,7 +185,12 @@ export function ProfileMediaFeedScreen() {
 
   useEffect(() => {
     if (!shouldScrollToFeedTarget(landing, cards.length)) return;
-    listRef.current?.scrollToIndex({ index: landing.targetIndex, animated: false });
+    const list = listRef.current;
+    if (!list || landingScrollInFlightRef.current) return;
+    landingScrollInFlightRef.current = true;
+    void list.scrollToIndex({ index: landing.targetIndex, animated: false }).finally(() => {
+      landingScrollInFlightRef.current = false;
+    });
   }, [cards.length, landing, layoutRevision]);
 
   useEffect(() => {
