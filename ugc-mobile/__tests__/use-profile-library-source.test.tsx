@@ -90,6 +90,34 @@ async function renderLibrary(props: Omit<LibraryProps, 'owner' | 'userId'>) {
 }
 
 describe('useProfileLibrarySource', () => {
+  it('reports an initial read failure and can retry the primary library', async () => {
+    const api = stubApi({ listGenerations: vi.fn()
+      .mockRejectedValueOnce(new Error('Network unavailable'))
+      .mockResolvedValue(generationPage([generation('tapped')], null)) });
+    const library = await renderLibrary({ api, source: 'profile-creations', initialId: 'tapped' });
+    const failed = await library.until((result) => result.isError);
+    expect(failed.selection).toBe('error');
+    expect(failed.isLoading).toBe(false);
+    await renderer.act(async () => { await failed.refetch(); });
+    const ready = await library.until((result) => result.selection === 'found');
+    expect(ready.items.map((item) => item.id)).toEqual(['tapped']);
+    expect(api.getOwnerPost).not.toHaveBeenCalled();
+  });
+
+  it('keeps a delayed selected lookup distinct from a failed primary read', async () => {
+    let finish!: (value: GenerationListResponse) => void;
+    const api = stubApi({ listGenerations: vi.fn(async (_archived, options) => options.id
+      ? new Promise<GenerationListResponse>((resolve) => { finish = resolve; })
+      : generationPage([generation('unrelated')], null)) });
+    const library = await renderLibrary({ api, source: 'profile-creations', initialId: 'older' });
+    const pending = await library.until((result) => result.hasData && Boolean(finish));
+    expect(pending.selection).toBe('loading');
+    expect(pending.isError).toBe(false);
+    await renderer.act(async () => { finish(generationPage([generation('older')], null)); });
+    const ready = await library.until((result) => result.selection === 'found');
+    expect(ready.items[0].id).toBe('older');
+  });
+
   it('reads the grid\'s pages in the grid\'s order and rule, and continues through its cursor', async () => {
     const firstPage = [
       generation('newest'),

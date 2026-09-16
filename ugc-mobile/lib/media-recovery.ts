@@ -11,6 +11,8 @@ export const MEDIA_DISPLAY_DEADLINE_MS = 15_000;
 
 /** How long a stalled image waits before asking again for a recovery slot. */
 export const MEDIA_RECOVERY_WAIT_MS = 1_500;
+/** Waiting for another screen's recovery must also end in an actionable state. */
+export const MEDIA_RECOVERY_MAX_WAIT_MS = 15_000;
 
 /** Stalled images reloading at once, app-wide. */
 export const MAX_CONCURRENT_MEDIA_RECOVERIES = 2;

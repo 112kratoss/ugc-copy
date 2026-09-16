@@ -147,19 +147,21 @@ export function useProfileLibrarySource({
     ? 'none'
     : selectionFound
       ? 'found'
-      : !primaryHasData || selectionQuery.fetchStatus === 'fetching' || (selectionQuery.data && !selectionPinned)
-        ? 'loading'
-        : selectionQuery.isError
-          ? 'error'
-          : selectionQuery.isSuccess
-            ? 'missing'
-            : 'loading';
+      : !primaryHasData && primaryQuery.isError && !primaryQuery.isFetching
+        ? 'error'
+        : !primaryHasData || selectionQuery.fetchStatus === 'fetching' || (selectionQuery.data && !selectionPinned)
+          ? 'loading'
+          : selectionQuery.isError
+            ? 'error'
+            : selectionQuery.isSuccess
+              ? 'missing'
+              : 'loading';
 
   return {
     items,
     selection,
     hasData: primaryHasData,
-    isLoading: !primaryHasData && primaryQuery.isLoading,
+    isLoading: !primaryHasData && (primaryQuery.isPending || primaryQuery.isFetching),
     isError: !primaryHasData && primaryQuery.isError,
     isStale: primaryQuery.isStale,
     isFetching: primaryQuery.isFetching,

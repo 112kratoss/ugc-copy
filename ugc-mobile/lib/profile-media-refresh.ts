@@ -102,6 +102,8 @@ export type ProfilePageAdapter<TPage, TItem extends { id: string }> = {
    * tell an item pushed onto page two by new work from one that was removed.
    */
   orderKey?: (item: TItem) => number;
+  /** Offset libraries must resume from the fresh boundary, not an old offset. */
+  restartContinuation?: (retainedTail: TPage, freshHead: TPage) => TPage;
 };
 
 /**
@@ -142,6 +144,20 @@ export function mergeRefreshedFirstPage<TPage, TItem extends { id: string }, TPa
     return adapter.withItems(page, index === 0 ? [...displaced, ...kept] : kept);
   });
 
+  // Offsets describe positions in the current server collection, so they stay
+  // valid only while the rows ahead of the reader's boundary do. When the fresh
+  // head no longer holds every row the cached head held, something ahead of it
+  // moved: keep the cached cards visible, but resume the next load-more from the
+  // freshly verified head boundary, which the flatteners deduplicate against
+  // what is already loaded. A head that came back unchanged — what a periodic
+  // refresh almost always finds — keeps its own continuation, because reopening
+  // it would re-read every page the reader already holds, one per end of list.
+  const headShifted = adapter.items(current.pages[0]).some((item) => !freshIds.has(item.id));
+  if (headShifted && laterPages.length && adapter.restartContinuation) {
+    const last = laterPages.length - 1;
+    laterPages[last] = adapter.restartContinuation(laterPages[last], fresh);
+  }
+
   return { pages: [fresh, ...laterPages], pageParams: [...current.pageParams] };
 }
 
@@ -162,6 +178,10 @@ export const PROFILE_OWNER_POST_PAGES: ProfilePageAdapter<OwnerPostsResponse, Ow
   withItems: (page, posts) => ({ ...page, posts }),
   hasMore: (page) => Boolean(page.pageInfo?.hasMore),
   orderKey: (item) => createdAtKey(item.createdAt),
+  restartContinuation: (tail, head) => ({
+    ...tail,
+    pageInfo: { ...tail.pageInfo!, hasMore: head.pageInfo!.hasMore, nextOffset: head.pageInfo!.nextOffset },
+  }),
 };
 
 /**
@@ -172,4 +192,8 @@ export const PROFILE_SAVED_MEDIA_PAGES: ProfilePageAdapter<ShowcaseFeedResponse,
   items: (page) => page.items ?? [],
   withItems: (page, items) => ({ ...page, items }),
   hasMore: (page) => Boolean(page.pageInfo?.hasMore),
+  restartContinuation: (tail, head) => ({
+    ...tail,
+    pageInfo: { ...tail.pageInfo!, hasMore: head.pageInfo!.hasMore, nextOffset: head.pageInfo!.nextOffset },
+  }),
 };
