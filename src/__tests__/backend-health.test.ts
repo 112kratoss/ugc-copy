@@ -168,6 +168,19 @@ function createClient(
         }
       : {}),
   };
+  // A job with nothing in the lookback window is asked once more, without the
+  // window, so a job introduced by the build under test is told apart from one
+  // that stopped running. A fixture that does not care answers "it has run
+  // before", which leaves the no-recent-run warning exactly as it was; a
+  // fixture about a newly registered job spells out its own empty answers.
+  if (tableResultsByName.backend_job_runs) {
+    const provided = tableResultsByName.backend_job_runs;
+    tableResultsByName.backend_job_runs = [
+      ...(Array.isArray(provided) ? provided : [provided]),
+      ...BACKEND_JOB_REGISTRY.map(() => ({ error: null, data: [{ id: 'ran-before' }] })),
+    ];
+  }
+
   const builders: Record<string, FakeQueryBuilder[]> = {};
   const from = vi.fn((table: string) => {
     const tableResults = Array.isArray(tableResultsByName[table])
@@ -902,6 +915,37 @@ describe('collectBackendHealth', () => {
         message: 'media-upload-reclaim has no recorded run in the last 48 hours.',
       }),
     ]));
+  });
+
+  it('waits out the first run of a job this database has never run', async () => {
+    // The release that introduces a job stages its build against the database
+    // the job has yet to run in: its cron fires only once that build is live.
+    // Reported as a missing run, it would hold the release gate, which
+    // promotes only on a strictly ok status, and nothing could ever clear it.
+    const db = createClient(
+      {
+        backend_job_runs: [
+          { error: null, data: [] },
+          ...BACKEND_JOB_REGISTRY.map(() => ({ error: null, data: [] })),
+        ],
+        generations: [
+          { error: null, data: [] },
+          { error: null, data: [] },
+          { error: null, data: [] },
+        ],
+      },
+      { withHealthyRequiredRuns: false },
+    );
+
+    const health = await collectBackendHealth(
+      db.client as never,
+      new Date('2026-06-21T10:00:00.000Z'),
+      COMPLETE_BACKEND_ENVIRONMENT,
+    );
+
+    expect(health.issues.filter((issue) => issue.code === 'JOB_NO_RECENT_RUN')).toEqual([]);
+    expect(health.status).toBe('ok');
+    expect(health.jobs.find((job) => job.name === 'media-upload-reclaim')?.awaitingFirstRun).toBe(true);
   });
 
   it('paginates registered job runs so daily successes are not crowded out', async () => {

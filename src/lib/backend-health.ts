@@ -125,6 +125,8 @@ export type BackendJobHealth = {
   maxMissedRunsBeforeDegraded: number;
   status: BackendHealthStatus;
   expectedMaxAgeMinutes: number;
+  /** Registered here but never run in this database: its first run follows this deploy. */
+  awaitingFirstRun?: true;
   latestRun: {
     status: string;
     startedAt: string;
@@ -427,6 +429,37 @@ async function loadRecentBackendJobRuns(
   }
 }
 
+/**
+ * Of the jobs with nothing in the lookback window, the ones this database has
+ * never run at all.
+ *
+ * A job's first run cannot precede the deploy that introduces it, so the
+ * release that adds one verifies a staged build against a database that cannot
+ * yet hold a run for it. Reported as a missing run, that warning holds the
+ * release gate, which requires a strictly ok status, and the job can never run
+ * to clear it (2026-09-16: showcase-media-revocations blocked its own release).
+ *
+ * Only asked about jobs already missing from the window, so an ordinary check
+ * makes no extra read at all, and a job that ran before and stopped still has
+ * rows here and keeps warning.
+ */
+async function loadJobsAwaitingFirstRun(
+  client: SupabaseClient,
+  jobNames: string[],
+): Promise<Set<string>> {
+  const awaiting = new Set<string>();
+  for (const name of jobNames) {
+    const { data, error } = await client
+      .from('backend_job_runs')
+      .select('id')
+      .eq('job_name', name)
+      .limit(1);
+    if (error) throw error;
+    if (!(data ?? []).length) awaiting.add(name);
+  }
+  return awaiting;
+}
+
 function maxStatus(statuses: BackendHealthStatus[]): BackendHealthStatus {
   if (statuses.includes('degraded')) return 'degraded';
   if (statuses.includes('warning')) return 'warning';
@@ -437,6 +470,7 @@ function buildJobHealth(
   job: BackendJobDefinition,
   rows: BackendJobRunRow[],
   now: Date,
+  awaitingFirstRun = false,
 ): { health: BackendJobHealth; issues: BackendHealthIssue[] } {
   const jobRows = rows.filter((row) => row.job_name === job.name);
   const latest = jobRows[0] ?? null;
@@ -453,12 +487,19 @@ function buildJobHealth(
 
   let status: BackendHealthStatus = 'ok';
   if (!latest) {
-    status = 'warning';
-    issues.push({
-      severity: 'warning',
-      code: 'JOB_NO_RECENT_RUN',
-      message: `${job.name} has no recorded run in the last ${JOB_LOOKBACK_HOURS} hours.`,
-    });
+    // Nothing yet, because nothing could be: this job is new here and its cron
+    // fires after the deploy that introduces it. Registration is not taken on
+    // trust — backend-job-registry.test.ts keeps every registered job wired to
+    // a real cron — and its first run puts it under every rule below, this one
+    // included, the moment it stops running again.
+    if (!awaitingFirstRun) {
+      status = 'warning';
+      issues.push({
+        severity: 'warning',
+        code: 'JOB_NO_RECENT_RUN',
+        message: `${job.name} has no recorded run in the last ${JOB_LOOKBACK_HOURS} hours.`,
+      });
+    }
   } else if (latest.status === 'failed') {
     status = 'degraded';
     issues.push({
@@ -530,6 +571,7 @@ function buildJobHealth(
       maxMissedRunsBeforeDegraded: job.maxMissedRunsBeforeDegraded,
       status,
       expectedMaxAgeMinutes: job.healthExpectedMaxAgeMinutes,
+      ...(awaitingFirstRun ? { awaitingFirstRun: true as const } : {}),
       latestRun: latest
         ? {
             status: latest.status,
@@ -1333,7 +1375,15 @@ export async function collectBackendHealth(
     return rows.slice(0, cap);
   }
 
-  const jobResults = BACKEND_JOB_REGISTRY.map((job) => buildJobHealth(job, jobRows, now));
+  const jobsWithoutRecentRuns = BACKEND_JOB_REGISTRY
+    .filter((job) => !jobRows.some((row) => row.job_name === job.name))
+    .map((job) => job.name);
+  const jobsAwaitingFirstRun = jobsWithoutRecentRuns.length
+    ? await loadJobsAwaitingFirstRun(client, jobsWithoutRecentRuns)
+    : new Set<string>();
+  const jobResults = BACKEND_JOB_REGISTRY.map((job) => (
+    buildJobHealth(job, jobRows, now, jobsAwaitingFirstRun.has(job.name))
+  ));
   const schedulerResult = buildSchedulerHealth();
   const generationResult = buildGenerationHealth(
     healthSample('generations', (recentGenerationsResult.data ?? []) as GenerationStatusRow[], HEALTH_RECENCY_SAMPLE_LIMIT),
