@@ -115,7 +115,7 @@ describe('S9 — the wait says what is happening and how long it has been', () =
     // Minimizing and returning must not restart it, so the stamp is taken in
     // generate() rather than when the modal becomes visible.
     expect(screen).toContain('setGenerationStartedAt(Date.now());');
-    expect(workspace).toContain('const waiting = visible && !succeeded && !failed && !pollingInterrupted;');
+    expect(workspace).toContain('const waiting = visible && !succeeded && !failed && !pollingInterrupted && !attemptUnconfirmed;');
     expect(workspace).toContain('useGenerationElapsedSeconds(waiting ? startedAt : null)');
     const hook = screen.slice(screen.indexOf('function useGenerationElapsedSeconds('));
     expect(hook).toContain('clearInterval(timer)');
@@ -140,7 +140,9 @@ describe('S9 — the result offers the control the chapter asks for', () => {
     // The identical action — close the workspace, keep the draft — was called
     // "Create another" on one panel and "Back to creator" on the other.
     expect(workspace).not.toContain('Create another');
-    expect((workspace.match(/label="Back to creator"/g) ?? []).length).toBe(3);
+    // Success, an interrupted status check, a start that could not be
+    // confirmed, and failure: four panels, one name.
+    expect((workspace.match(/label="Back to creator"/g) ?? []).length).toBe(4);
   });
 });
 

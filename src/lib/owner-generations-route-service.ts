@@ -584,6 +584,7 @@ export async function listOwnerGenerationsForRoute({
       ? null
       : buildGenerationPaywallPrefill({
         category: generation.category,
+        creationMode: generation.creation_mode ?? null,
         model: generation.model,
         prompt: generation.prompt,
         workflowSettings,

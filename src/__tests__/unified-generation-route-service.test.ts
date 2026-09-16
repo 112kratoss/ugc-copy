@@ -14,6 +14,7 @@ vi.mock('@/lib/unified-generation-start-service', async (importOriginal) => {
 });
 
 import { postUnifiedGenerationForRoute } from '@/lib/unified-generation-route-service';
+import { ReferenceDurationChangedError } from '@/lib/unified-generation-start-service';
 
 describe('unified generation route service', () => {
   beforeEach(() => {
@@ -123,6 +124,38 @@ describe('unified generation route service', () => {
     expect(createAdminSupabase).not.toHaveBeenCalled();
     expect(readRequestBody).not.toHaveBeenCalled();
     expect(startUnifiedGenerationForRouteMock).not.toHaveBeenCalled();
+  });
+
+  it('hands measured reference lengths back as a 409 the client can re-quote from', async () => {
+    startUnifiedGenerationForRouteMock.mockRejectedValueOnce(new ReferenceDurationChangedError(
+      [{ index: 0, slot: 'videoReferences', durationSeconds: 10 }],
+      50,
+      150,
+    ));
+
+    const result = await postUnifiedGenerationForRoute({
+      request: new Request('http://localhost/api/generations', { method: 'POST' }),
+      createUserSupabase: () => ({
+        auth: {
+          getUser: vi.fn(async () => ({ data: { user: { id: 'user-1' } }, error: null })),
+        },
+      }),
+      createAdminSupabase: () => ({ kind: 'admin' }),
+      kieApiKey: 'configured',
+      readRequestBody: async () => ({ kind: 'video', modelId: 'seedance-2' }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      body: {
+        code: 'REFERENCE_DURATION_CHANGED',
+        error: expect.stringContaining('Check the updated cost'),
+        costCredits: 150,
+        quotedCostCredits: 50,
+        inputs: [{ index: 0, slot: 'videoReferences', durationSeconds: 10 }],
+      },
+    });
   });
 
   it('fails closed when the provider configuration is unavailable', async () => {

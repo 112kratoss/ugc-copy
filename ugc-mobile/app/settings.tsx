@@ -1,11 +1,13 @@
+import { useSyncExternalStore } from 'react';
 import { router } from 'expo-router';
 import { ArrowUpRight, Bell, ChevronRight, CircleHelp, CreditCard, FileText, Gift, ShieldCheck, Trash2, UserRound } from 'lucide-react-native';
 import { Linking, Pressable, View } from 'react-native';
 
 import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
 import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
-import { formatAppVersionLabel, readAppVersionParts } from '@/lib/app-version-label';
+import { formatAppVersionLabel, readAppVersionParts, readUpdateRuntime } from '@/lib/app-version-label';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
+import { formatSupportDetails, readCreatorSession, subscribeCreatorSession } from '@/lib/creator-session-diagnostics';
 import { showMessageDialog } from '@/lib/dialog';
 import {
   formatMediaDiagnosticsReport,
@@ -20,6 +22,10 @@ import { appTheme } from '@/lib/theme';
 export default function SettingsScreen() {
   const { user, credits } = useAuth();
   const versionLabel = formatAppVersionLabel(readAppVersionParts());
+  // For support: the OTA runtime and channel, and how the last draft this launch
+  // opened came back. It sits above the version, which stays the last line.
+  const creatorSession = useSyncExternalStore(subscribeCreatorSession, readCreatorSession, readCreatorSession);
+  const supportDetails = formatSupportDetails({ ...readUpdateRuntime(), session: creatorSession });
 
   return (
     <Screen>
@@ -111,6 +117,12 @@ export default function SettingsScreen() {
           onPress={() => void Linking.openURL(`${env.siteUrl}/delete-account`)}
         />
       )}
+
+      {supportDetails ? (
+        <AppText variant="caption" color="muted" style={{ textAlign: 'center' }}>
+          {supportDetails}
+        </AppText>
+      ) : null}
 
       {versionLabel ? (
         // Long-press copies this session's media diagnostics: the report to send

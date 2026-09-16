@@ -1,13 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import { GenerationModelCatalogSchemaUnavailableError } from '@/lib/generation-model-catalog-store';
 import {
+  ReferenceDurationChangedError,
   UnifiedGenerationRequestError,
   buildUnifiedGenerationQuoteInput,
   buildUnifiedGenerationQuoteInputForCatalog,
   dispatchCatalogGenerationAdapter,
+  durationBoundInputSlots,
   loadUnifiedGenerationCatalog,
   parseUnifiedGenerationRequest,
+  resolveBillableInputDurations,
   startUnifiedGenerationForRoute,
 } from '@/lib/unified-generation-start-service';
 
@@ -259,7 +263,7 @@ describe('unified generation start service', () => {
     }));
   });
 
-  it('resolves the remix source with the service-role client', async () => {
+  it('rate limits before resolving the remix source or looking up attempts', async () => {
     // Grants on generations only allow service-role reads of is_public, so the
     // route must hand resolveSource the admin client — passing the user client
     // is the regression that broke every remix-sourced start in production.
@@ -326,9 +330,337 @@ describe('unified generation start service', () => {
       },
     )).rejects.toBe(rateLimitStop);
 
-    expect(resolveSource).toHaveBeenCalledTimes(1);
-    expect(resolveSource.mock.calls[0][0]).toBe(adminSupabase);
-    expect(resolveSource.mock.calls[0][1]).toBe('user-1');
-    expect(resolveSource.mock.calls[0][2]).toBe('3f8f0c70-9a54-4f6e-8f5a-1c2d3e4f5a6b');
+    expect(resolveSource).not.toHaveBeenCalled();
+  });
+});
+
+describe('reference lengths a caller reports', () => {
+  const REFERENCE_URL = 'https://media.example.supabase.co/storage/v1/object/sign/generation_inputs/user-1/reference.mp4?token=signed';
+  const CHARACTER_URL = 'https://media.example.supabase.co/storage/v1/object/sign/generation_inputs/user-1/character.png?token=signed';
+
+  const SEEDANCE_OPERATION = {
+    modelId: 'seedance-2',
+    kind: 'video' as const,
+    adapterKey: 'video-v1' as const,
+    providerModelMap: {},
+    adapterConfig: {},
+    pricingStrategy: 'reference-adjustment' as const,
+    pricingConfig: {
+      unit: 'second',
+      settingKey: 'resolution',
+      durationSettingKey: 'duration',
+      referenceDurationSlots: ['videoReferences'],
+      rounding: 'ceil',
+      rates: { noReference: { '720p': 8 }, withReference: { '720p': 10 } },
+    },
+    validationStrategy: 'descriptor-rules-v1' as const,
+    validationConfig: {},
+    verificationConfig: {},
+  };
+
+  const MOTION_OPERATION = {
+    ...SEEDANCE_OPERATION,
+    modelId: 'kling-2.6',
+    kind: 'motion' as const,
+    adapterKey: 'motion-v1' as const,
+    pricingStrategy: 'per-second' as const,
+    pricingConfig: { durationSettingKey: 'duration', rate: 10 },
+  };
+
+  function seedanceBody(durationSeconds: number | null) {
+    return {
+      kind: 'video',
+      modelId: 'seedance-2',
+      catalogRevision: 'catalog-v2',
+      prompt: 'Follow the reference motion.',
+      settings: { duration: 5, resolution: '720p' },
+      inputs: [{ slot: 'videoReferences', kind: 'video', url: REFERENCE_URL, durationSeconds }],
+    };
+  }
+
+  function motionBody(duration: number, durationSeconds: number) {
+    return {
+      kind: 'motion',
+      modelId: 'kling-2.6',
+      catalogRevision: 'catalog-v2',
+      prompt: '',
+      settings: { duration, resolution: '720p', characterOrientation: 'video' },
+      inputs: [
+        { slot: 'characterImage', kind: 'image', url: CHARACTER_URL },
+        { slot: 'referenceVideo', kind: 'video', url: REFERENCE_URL, durationSeconds },
+      ],
+    };
+  }
+
+  /** Prices the way reference-adjustment does: (output + reference seconds) x rate. */
+  function referencePricedQuote(input: GenerationModelQuoteInput) {
+    const referenceSeconds = (input.inputMetadata?.referenceVideoDurationsSeconds ?? [])
+      .reduce((total, seconds) => total + seconds, 0);
+    return {
+      modelId: input.modelId,
+      catalogRevision: 'catalog-v2',
+      normalizedSettings: input.settings ?? {},
+      costCredits: Math.ceil((Number(input.settings?.duration ?? 0) + referenceSeconds) * 10),
+    };
+  }
+
+  /** Prices the way a per-second motion model does: its duration setting x rate. */
+  function durationPricedQuote(input: GenerationModelQuoteInput) {
+    return {
+      modelId: input.modelId,
+      catalogRevision: 'catalog-v2',
+      normalizedSettings: input.settings ?? {},
+      costCredits: Number(input.settings?.duration ?? 0) * 10,
+    };
+  }
+
+  /** Just enough of the service client for the idempotent start: a claim, a lock, and the replay lookup. */
+  function createAdminClient(existingGeneration: Record<string, unknown> | null) {
+    return {
+      rpc: vi.fn(async (fn: string) => (
+        fn === 'claim_generation_start_request'
+          ? { data: 'claimed', error: null }
+          : { data: true, error: null }
+      )),
+      from: vi.fn((table: string) => {
+        const builder = {
+          select: () => builder,
+          eq: () => builder,
+          maybeSingle: async () => ({
+            data: table === 'generations' ? existingGeneration : { credits: 90 },
+            error: null,
+          }),
+        };
+        return builder;
+      }),
+    };
+  }
+
+  function start({
+    body,
+    measuredSeconds,
+    operation = SEEDANCE_OPERATION,
+    quote = referencePricedQuote,
+    existingGeneration = null,
+  }: {
+    body: Record<string, unknown>;
+    measuredSeconds: number;
+    operation?: typeof SEEDANCE_OPERATION | typeof MOTION_OPERATION;
+    quote?: (input: GenerationModelQuoteInput) => ReturnType<typeof referencePricedQuote>;
+    existingGeneration?: Record<string, unknown> | null;
+  }) {
+    const started = { predictionId: 'provider-task', generationId: 'generation-1', remainingCredits: 50, cost: 0 };
+    const startVideo = vi.fn(async () => started);
+    const startMotion = vi.fn(async () => started);
+    const probeInputDuration = vi.fn(async () => measuredSeconds);
+    const outcome = startUnifiedGenerationForRoute(
+      {
+        request: new Request('http://localhost/api/generations', {
+          method: 'POST',
+          headers: { 'Idempotency-Key': 'reference-length-key' },
+        }),
+        body,
+        userId: 'user-1',
+        supabase: { label: 'user-client' } as never,
+        adminSupabase: createAdminClient(existingGeneration) as never,
+      },
+      {
+        loadCatalog: vi.fn(async () => ({
+          catalog: {
+            schemaVersion: 2,
+            revision: 'catalog-v2',
+            defaults: { image: null, video: 'seedance-2', motion: 'kling-2.6' },
+            models: [],
+          },
+          operations: new Map([[operation.modelId, operation]]),
+          source: 'database' as const,
+          releaseId: 'release-v2',
+          releaseSchemaVersion: 2,
+        })) as never,
+        quoteModel: vi.fn(quote) as never,
+        resolveSource: vi.fn(async () => null) as never,
+        enforceRateLimit: vi.fn(async () => undefined) as never,
+        startVideo: startVideo as never,
+        startMotion: startMotion as never,
+        resolveInputSource: vi.fn(async (_client: unknown, url: string) => url),
+        probeInputDuration,
+      },
+    );
+    return { outcome, startVideo, startMotion, probeInputDuration };
+  }
+
+  // Audit A2, counterexample 2: the same reference file cost less when its
+  // length was reported as zero seconds instead of ten.
+  it('charges what a reference really runs, whatever length the caller reports', async () => {
+    const honest = start({ body: seedanceBody(10), measuredSeconds: 10 });
+    await expect(honest.outcome).resolves.toMatchObject({ success: true, predictionId: 'provider-task' });
+    expect(honest.startVideo).toHaveBeenCalledWith(expect.objectContaining({
+      quotedCostCredits: 150,
+      referenceVideoUrls: [REFERENCE_URL],
+    }));
+
+    const understated = start({ body: seedanceBody(0), measuredSeconds: 10 });
+    const refusal = await understated.outcome.then(() => null, (error: unknown) => error);
+    expect(refusal).toBeInstanceOf(ReferenceDurationChangedError);
+    expect(refusal).toMatchObject({
+      status: 409,
+      code: 'REFERENCE_DURATION_CHANGED',
+      quotedCostCredits: 50,
+      costCredits: 150,
+      inputs: [{ index: 0, slot: 'videoReferences', durationSeconds: 10 }],
+    });
+    expect(understated.startVideo).not.toHaveBeenCalled();
+  });
+
+  it('uses measured duration even when the reported length is within half a second', async () => {
+    const run = start({ body: seedanceBody(9.5), measuredSeconds: 10 });
+    await expect(run.outcome).rejects.toMatchObject({
+      code: 'REFERENCE_DURATION_CHANGED', quotedCostCredits: 145, costCredits: 150,
+    });
+    expect(run.startVideo).not.toHaveBeenCalled();
+  });
+
+  it('replays an accepted attempt before a changed catalog can reject its old revision', async () => {
+    const run = start({
+      body: seedanceBody(10), measuredSeconds: 10,
+      existingGeneration: { id: 'generation-1', prediction_id: 'original-task', status: 'processing', cost: 150 },
+      quote: () => { throw new Error('CATALOG_CHANGED'); },
+    });
+    await expect(run.outcome).resolves.toMatchObject({ predictionId: 'original-task', idempotentReplay: true, catalogRevision: 'catalog-v2' });
+    expect(run.startVideo).not.toHaveBeenCalled();
+    expect(run.probeInputDuration).not.toHaveBeenCalled();
+  });
+
+  it('requires reconfirmation when fractional measured seconds raise the cost', async () => {
+    const { outcome, startVideo } = start({ body: seedanceBody(9.75), measuredSeconds: 10.25 });
+
+    await expect(outcome).rejects.toMatchObject({
+      code: 'REFERENCE_DURATION_CHANGED', quotedCostCredits: 148, costCredits: 153,
+    });
+    expect(startVideo).not.toHaveBeenCalled();
+  });
+
+  it('charges the measured length when the caller overstated it', async () => {
+    const { outcome, startVideo } = start({ body: seedanceBody(14), measuredSeconds: 10 });
+
+    await expect(outcome).resolves.toMatchObject({ success: true });
+    expect(startVideo).toHaveBeenCalledWith(expect.objectContaining({ quotedCostCredits: 150 }));
+  });
+
+  it('refuses a combined length over the model cap once it is measured', async () => {
+    const cappedQuote = (input: GenerationModelQuoteInput) => {
+      const total = (input.inputMetadata?.referenceVideoDurationsSeconds ?? []).reduce((sum, seconds) => sum + seconds, 0);
+      if (total > 15) throw new UnifiedGenerationRequestError('Reference videos may be at most 15 seconds in total.');
+      return referencePricedQuote(input);
+    };
+    const { outcome, startVideo } = start({ body: seedanceBody(2), measuredSeconds: 40, quote: cappedQuote });
+
+    await expect(outcome).rejects.toThrow('Reference videos may be at most 15 seconds in total.');
+    expect(startVideo).not.toHaveBeenCalled();
+  });
+
+  it('measures nothing on an idempotent replay', async () => {
+    const { outcome, probeInputDuration, startVideo } = start({
+      body: seedanceBody(0),
+      measuredSeconds: 10,
+      existingGeneration: { id: 'generation-1', prediction_id: 'provider-task-original', status: 'processing', cost: 150 },
+    });
+
+    await expect(outcome).resolves.toMatchObject({ predictionId: 'provider-task-original', idempotentReplay: true });
+    expect(probeInputDuration).not.toHaveBeenCalled();
+    expect(startVideo).not.toHaveBeenCalled();
+  });
+
+  it('prices a motion run by its reference performance, not the duration it names', async () => {
+    const understated = start({
+      body: motionBody(1, 1),
+      measuredSeconds: 30,
+      operation: MOTION_OPERATION,
+      quote: durationPricedQuote,
+    });
+    const refusal = await understated.outcome.then(() => null, (error: unknown) => error);
+    expect(refusal).toMatchObject({
+      code: 'REFERENCE_DURATION_CHANGED',
+      quotedCostCredits: 10,
+      costCredits: 300,
+      inputs: [{ index: 1, slot: 'referenceVideo', durationSeconds: 30 }],
+    });
+    expect(understated.startMotion).not.toHaveBeenCalled();
+
+    const honest = start({
+      body: motionBody(30, 30),
+      measuredSeconds: 29.9,
+      operation: MOTION_OPERATION,
+      quote: durationPricedQuote,
+    });
+    await expect(honest.outcome).resolves.toMatchObject({ success: true });
+    expect(honest.startMotion).toHaveBeenCalledWith(expect.objectContaining({ duration: 30, quotedCostCredits: 300 }));
+  });
+
+  it('refuses a reference whose length cannot be read, or that is not an HTTPS object', async () => {
+    await expect(resolveBillableInputDurations({
+      request: parseUnifiedGenerationRequest(seedanceBody(10)),
+      descriptor: null,
+      operation: SEEDANCE_OPERATION,
+      resolveInputSource: async (url) => url,
+      probeInputDuration: async () => null,
+    })).rejects.toMatchObject({ status: 422, fieldErrors: { 'inputs.0': expect.any(String) } });
+
+    const probe = vi.fn(async () => 10);
+    await expect(resolveBillableInputDurations({
+      request: parseUnifiedGenerationRequest(seedanceBody(10)),
+      descriptor: null,
+      operation: SEEDANCE_OPERATION,
+      resolveInputSource: async () => 'provider-asset-handle-1',
+      probeInputDuration: probe,
+    })).rejects.toBeInstanceOf(UnifiedGenerationRequestError);
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('measures nothing when neither the price nor a limit reads a length', async () => {
+    const probe = vi.fn(async () => 10);
+    const request = parseUnifiedGenerationRequest({
+      kind: 'video',
+      modelId: 'kling-3.0-video',
+      catalogRevision: 'catalog-v2',
+      settings: { duration: 5 },
+      inputs: [{ slot: 'videoElements', kind: 'video', url: REFERENCE_URL, handle: '@move' }],
+    });
+
+    const result = await resolveBillableInputDurations({
+      request,
+      descriptor: null,
+      operation: { pricingConfig: { durationSettingKey: 'duration', rate: 20 }, validationConfig: {} },
+      resolveInputSource: async (url) => url,
+      probeInputDuration: probe,
+    });
+
+    expect(result).toEqual({ request, verified: [] });
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('finds every slot whose length is read, at any depth', () => {
+    const slots = durationBoundInputSlots(
+      {
+        inputModes: [{
+          key: 'references',
+          label: 'References',
+          default: true,
+          slots: [
+            { key: 'audioReferences', kind: 'audio', role: 'reference', label: 'Audio', min: 0, max: 3, durationMetadata: 'optional', maxDurationSeconds: 15 },
+            { key: 'imageReferences', kind: 'image', role: 'reference', label: 'Images', min: 0, max: 3 },
+          ],
+        }],
+        inputConstraints: [{ type: 'combined-duration', slotKeys: ['clipReferences'], max: 15, message: 'Too long.' }],
+      },
+      {
+        pricingConfig: {
+          branches: [{ pricing: { strategy: 'reference-adjustment', config: { referenceDurationSlots: ['videoReferences'] } } }],
+        },
+        validationConfig: { rules: [{ type: 'combined-duration', slotKeys: ['motionReferences'], max: 30 }] },
+      },
+    );
+
+    expect([...slots].sort()).toEqual(['audioReferences', 'clipReferences', 'motionReferences', 'videoReferences']);
   });
 });

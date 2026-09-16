@@ -28,6 +28,9 @@ const authState = vi.hoisted(() => ({
   // Generating keys off the backend identity, not registration, so guests can
   // spend the credits they bought. For a registered user the two are the same.
   identityUserId: 'user-123' as string | null,
+  // A draft from a build that kept one for the whole phone is resumed only for
+  // the session that saved it, judged by when that session signed in.
+  session: null as { user: { id: string; last_sign_in_at?: string | null } } | null,
   isGuest: false,
   credits: 999,
   updateCredits: vi.fn(),
@@ -42,6 +45,7 @@ const authState = vi.hoisted(() => ({
     getMotionGeneration: vi.fn(),
     quoteGenerationModel: vi.fn(),
     getRemixSourceBundle: vi.fn(),
+    createMediaReadUrl: vi.fn(),
   },
 }));
 
@@ -156,6 +160,12 @@ vi.mock('@/lib/auth', () => ({
   useAuth: () => authState,
 }));
 
+// Reference links are dated against the storage origin, so the suite fixes one.
+vi.mock('@/lib/env', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/env')>();
+  return { ...actual, env: { ...actual.env, supabaseUrl: 'https://project.supabase.co' } };
+});
+
 const loadCatalogDetails = async () => catalogState.catalog;
 
 vi.mock('@/lib/use-generation-model-catalog', () => ({
@@ -165,6 +175,7 @@ vi.mock('@/lib/use-generation-model-catalog', () => ({
 import { AppState } from 'react-native';
 import { createDefaultCreationDraft } from '../lib/media-creation-view-model';
 import { MediaCreationScreen } from '../components/media-creation-screen';
+import { readCreatorSession, resetCreatorSessionForTests } from '../lib/creator-session-diagnostics';
 import { pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia } from '../lib/media';
 import { createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel } from './fixtures/generation-model-catalog';
 import { catalogV2 } from './generation-model-catalog-v2-fixtures';
@@ -253,10 +264,12 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     draftStorage.setItem.mockReset().mockResolvedValue(undefined);
     draftStorage.removeItem.mockReset().mockResolvedValue(undefined);
     routerState.push.mockClear();
+    resetCreatorSessionForTests();
     authState.updateCredits.mockClear();
     authState.credits = 999;
     authState.user = { id: 'user-123', email: 'creator@example.com' };
     authState.identityUserId = 'user-123';
+    authState.session = null;
     authState.isGuest = false;
     authState.api.startGeneration = undefined;
     authState.api.startImageGeneration.mockReset();
@@ -267,6 +280,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     authState.api.getMotionGeneration.mockReset();
     authState.api.quoteGenerationModel.mockReset();
     authState.api.getRemixSourceBundle.mockReset();
+    authState.api.createMediaReadUrl.mockReset();
     authState.api.quoteGenerationModel.mockResolvedValue({
       modelId: 'nano-banana-2',
       catalogRevision: 'test-catalog-rev',
@@ -725,6 +739,111 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     await renderer.act(async () => { tree.root.findByProps({ accessibilityLabel: 'Close creator' }).props.onPress(); });
     expect(onClose).not.toHaveBeenCalled();
     expect(collectText(tree.root)).toContain('Draft not saved');
+  });
+
+  // Audit A5. The ordinary Create draft was one key for the whole phone, so
+  // whoever signed in next opened the last person's prompt and references.
+  // Remix sessions were already kept per account.
+  describe('a phone shared by more than one identity', () => {
+    const PHONE_WIDE_DRAFT_KEY = 'magicbooklet.creation.drafts.v1';
+    const memory = new Map<string, string>();
+    const signInAs = (id: string, signedInAt = '2026-09-16T09:00:00.000Z') => {
+      authState.user = { id, email: `${id}@example.com` };
+      authState.identityUserId = id;
+      authState.session = { user: { id, last_sign_in_at: signedInAt } };
+    };
+    const promptOf = (tree: renderer.ReactTestRenderer) => tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value;
+    const type = (tree: renderer.ReactTestRenderer, text: string) => renderer.act(() => {
+      tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText(text);
+    });
+    // Past the autosave delay, and past every storage read a load makes.
+    const settle = () => renderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
+    const keysHolding = (text: string) => [...memory.entries()].filter(([, value]) => value.includes(text)).map(([key]) => key);
+    const phoneWideDraft = (prompt: string, updatedAt: string) => JSON.stringify({
+      image: { ...createDefaultCreationDraft('image'), prompt },
+      video: createDefaultCreationDraft('video'),
+      motion: createDefaultCreationDraft('motion'),
+      updatedAt,
+    });
+
+    beforeEach(() => {
+      memory.clear();
+      draftStorage.getItem.mockImplementation(async (key: string) => memory.get(key) ?? null);
+      draftStorage.setItem.mockImplementation(async (key: string, value: string) => { memory.set(key, value); });
+      draftStorage.removeItem.mockImplementation(async (key: string) => { memory.delete(key); });
+    });
+
+    it("never opens one account's draft for the next account", async () => {
+      signInAs('account-a');
+      let tab!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tab = renderer.create(<MediaCreationScreen initialTool="image" insideTab />); });
+      await settle();
+      type(tab, 'account A private prompt');
+      await settle();
+      expect(keysHolding('account A private prompt')).toHaveLength(1);
+
+      // The Create tab stays mounted through a sign-out and the next sign-in.
+      signInAs('account-b');
+      await renderer.act(async () => { tab.update(<MediaCreationScreen initialTool="image" insideTab />); });
+      await settle();
+      expect(promptOf(tab)).toBe('');
+
+      let opened!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { opened = renderer.create(<MediaCreationScreen initialTool="image" />); });
+      await settle();
+      expect(promptOf(opened)).toBe('');
+      type(opened, 'account B prompt');
+      await settle();
+      expect(keysHolding('account B prompt')).toHaveLength(1);
+      expect(keysHolding('account A private prompt')).toHaveLength(1);
+      expect(keysHolding('account B prompt')[0]).not.toBe(keysHolding('account A private prompt')[0]);
+
+      // Account A's draft is still there, for account A.
+      signInAs('account-a');
+      let back!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { back = renderer.create(<MediaCreationScreen initialTool="image" />); });
+      await settle();
+      expect(promptOf(back)).toBe('account A private prompt');
+    });
+
+    it('keeps what was typed with no identity for the person who then gets one', async () => {
+      authState.user = null;
+      authState.identityUserId = null;
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(<MediaCreationScreen initialTool="image" insideTab />); });
+      await settle();
+      type(tree, 'typed while signed out');
+      await settle();
+      // There is no one to keep it for yet, so it is written nowhere.
+      expect(keysHolding('typed while signed out')).toEqual([]);
+
+      // Signing in from Generate, or the guest session arriving once the phone is online.
+      signInAs('account-a');
+      await renderer.act(async () => { tree.update(<MediaCreationScreen initialTool="image" insideTab />); });
+      await settle();
+      expect(promptOf(tree)).toBe('typed while signed out');
+      expect(keysHolding('typed while signed out')).toEqual([expect.stringContaining('account-a')]);
+    });
+
+    it('resumes a phone-wide draft from an older build only for the session that saved it', async () => {
+      // Saved at 08:00, and account B signed in at 09:00: someone else wrote it.
+      memory.set(PHONE_WIDE_DRAFT_KEY, phoneWideDraft('the last person’s prompt', '2026-09-16T08:00:00.000Z'));
+      signInAs('account-b', '2026-09-16T09:00:00.000Z');
+      let next!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { next = renderer.create(<MediaCreationScreen initialTool="image" />); });
+      await settle();
+      expect(promptOf(next)).toBe('');
+      expect(keysHolding('the last person’s prompt')).toEqual([]);
+
+      // Saved at 09:30, inside a session that signed in at 09:00: it is theirs, and moves under their key.
+      memory.set(PHONE_WIDE_DRAFT_KEY, phoneWideDraft('my own unfinished prompt', '2026-09-16T09:30:00.000Z'));
+      signInAs('account-c', '2026-09-16T09:00:00.000Z');
+      let own!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { own = renderer.create(<MediaCreationScreen initialTool="image" />); });
+      await settle();
+      expect(promptOf(own)).toBe('my own unfinished prompt');
+      expect(keysHolding('my own unfinished prompt')).toEqual([expect.stringContaining('account-c')]);
+    });
   });
 
   it('hydrates remix prompt and references from the remix-source bundle', async () => {
@@ -2129,6 +2248,228 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(authState.api.getVideoGeneration).toHaveBeenCalledWith('unified-video-prediction');
   });
 
+  it('asks the viewer to confirm a new price when the server measures a longer reference', async () => {
+    vi.useFakeTimers();
+    catalogState.catalog = catalogV2();
+    const startGeneration = vi.fn().mockRejectedValue(Object.assign(
+      new Error('Your reference media runs longer than the length this price was based on.'),
+      { details: { code: 'REFERENCE_DURATION_CHANGED', costCredits: 60, quotedCostCredits: 29, inputs: [] } },
+    ));
+    authState.api.startGeneration = startGeneration;
+    authState.api.quoteGenerationModel.mockResolvedValue({
+      modelId: 'fallback-video-v2',
+      catalogRevision: 'catalog-v2-revision',
+      normalizedSettings: {
+        referenceMode: 'elements',
+        resolution: '720p',
+        duration: 7,
+      },
+      costCredits: 29,
+    });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="video" />);
+    });
+    renderer.act(() => {
+      tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('Create a remote cinematic reveal.');
+    });
+    await renderer.act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Generate · 29 credits').props.onPress();
+    });
+
+    expect(startGeneration).toHaveBeenCalledTimes(1);
+    expect(collectText(tree!.root)).toContain(
+      'We measured your reference media, and it changes the cost. Check the new price, then generate again.',
+    );
+    expect(authState.api.getVideoGeneration).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  // Audit A3, counterexample 3: a retry after a lost start response sent the
+  // same request under a new idempotency key, so the server could start and
+  // charge a second run.
+  it('checks a start whose response was lost under the same key, saved before it was sent', async () => {
+    vi.useFakeTimers();
+    catalogState.catalog = catalogV2();
+    const attemptKey = 'magicbooklet.generation.pendingAttempt.v1:user-123';
+    const startGeneration = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('Could not reach Magicbooklet.'), {
+        status: 0,
+        details: { cause: 'Network request failed' },
+      }))
+      .mockResolvedValueOnce({
+        success: true,
+        predictionId: 'unified-video-prediction',
+        generationId: 'unified-video-generation',
+        status: 'processing',
+        remainingCredits: 970,
+        idempotentReplay: true,
+      });
+    authState.api.startGeneration = startGeneration;
+    authState.api.getVideoGeneration.mockResolvedValue({
+      status: 'succeeded',
+      output: 'https://cdn.example.com/unified-output.mp4',
+    });
+    authState.api.quoteGenerationModel.mockResolvedValue({
+      modelId: 'fallback-video-v2',
+      catalogRevision: 'catalog-v2-revision',
+      normalizedSettings: { referenceMode: 'elements', resolution: '720p', duration: 7 },
+      costCredits: 29,
+    });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="video" />);
+    });
+    renderer.act(() => {
+      tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('Create a remote cinematic reveal.');
+    });
+    await renderer.act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Generate · 29 credits').props.onPress();
+    });
+
+    const firstKey = startGeneration.mock.calls[0]?.[1];
+    const savedAt = draftStorage.setItem.mock.calls.findIndex(([key]) => key === attemptKey);
+    expect(savedAt).toBeGreaterThanOrEqual(0);
+    expect(draftStorage.setItem.mock.invocationCallOrder[savedAt])
+      .toBeLessThan(startGeneration.mock.invocationCallOrder[0]);
+    expect(collectText(tree!.root)).toContain('Generation not confirmed');
+
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Check again').props.onPress();
+    });
+
+    expect(startGeneration).toHaveBeenCalledTimes(2);
+    expect(startGeneration.mock.calls[1]?.[1]).toBe(firstKey);
+    expect(startGeneration.mock.calls[1]?.[0]).toEqual(startGeneration.mock.calls[0]?.[0]);
+    expect(authState.api.getVideoGeneration).toHaveBeenCalledWith('unified-video-prediction');
+    expect(draftStorage.removeItem).toHaveBeenCalledWith(attemptKey);
+    vi.useRealTimers();
+  });
+
+  it('does not send a generation until its attempt can be saved', async () => {
+    vi.useFakeTimers();
+    const start = vi.fn().mockRejectedValue(Object.assign(new Error('Lost response'), { status: 0 }));
+    authState.api.startGeneration = start;
+    draftStorage.setItem.mockImplementation(async (key: string) => {
+      if (key.startsWith('magicbooklet.generation.pendingAttempt')) throw new Error('Storage unavailable');
+    });
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => { tree = renderer.create(<MediaCreationScreen initialTool="image" />); });
+    renderer.act(() => { tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('A product photograph'); });
+    await renderer.act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    await renderer.act(async () => { await findPressableByText(tree!.root, 'Generate · 8 credits').props.onPress(); });
+    expect(start).not.toHaveBeenCalled();
+    expect(collectText(tree!.root).join(' ')).toContain('Could not save your generation attempt');
+    draftStorage.setItem.mockResolvedValue(undefined);
+    await renderer.act(async () => { await findPressableByText(tree!.root, 'Check again').props.onPress(); });
+    expect(start).toHaveBeenCalledTimes(1);
+    renderer.act(() => tree!.unmount());
+    vi.useRealTimers();
+  });
+
+  it('offers to check a start a restart left unconfirmed, replaying the saved request and key', async () => {
+    vi.useFakeTimers();
+    catalogState.catalog = catalogV2();
+    const attemptKey = 'magicbooklet.generation.pendingAttempt.v1:user-123';
+    const savedRequest = {
+      kind: 'video',
+      modelId: 'fallback-video-v2',
+      catalogRevision: 'catalog-v2-revision',
+      settings: { duration: 7 },
+      prompt: 'The run from before the restart.',
+      inputs: [],
+    };
+    draftStorage.getItem.mockImplementation(async (key: string) => (key === attemptKey
+      ? JSON.stringify({
+        version: 1,
+        identityUserId: 'user-123',
+        tool: 'video',
+        route: 'unified',
+        idempotencyKey: 'video:before-restart',
+        requestJson: JSON.stringify(savedRequest),
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+      })
+      : null));
+    const startGeneration = vi.fn().mockResolvedValue({
+      success: true,
+      predictionId: 'restored-prediction',
+      generationId: 'restored-generation',
+      status: 'processing',
+      remainingCredits: 970,
+      idempotentReplay: true,
+    });
+    authState.api.startGeneration = startGeneration;
+    authState.api.getVideoGeneration.mockResolvedValue({
+      status: 'succeeded',
+      output: 'https://cdn.example.com/restored-output.mp4',
+    });
+    authState.api.quoteGenerationModel.mockResolvedValue({
+      modelId: 'fallback-video-v2',
+      catalogRevision: 'catalog-v2-revision',
+      normalizedSettings: { referenceMode: 'elements', resolution: '720p', duration: 7 },
+      costCredits: 29,
+    });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="video" />);
+    });
+    await renderer.act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(collectText(tree!.root)).toContain('Generation not confirmed');
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Check again').props.onPress();
+    });
+
+    expect(startGeneration).toHaveBeenCalledWith(savedRequest, 'video:before-restart');
+    expect(authState.api.getVideoGeneration).toHaveBeenCalledWith('restored-prediction');
+    vi.useRealTimers();
+  });
+
+  it('forgets an attempt the server refused outright', async () => {
+    vi.useFakeTimers();
+    catalogState.catalog = catalogV2();
+    const attemptKey = 'magicbooklet.generation.pendingAttempt.v1:user-123';
+    authState.api.startGeneration = vi.fn().mockRejectedValue(Object.assign(new Error('This model needs a shorter prompt.'), {
+      status: 422,
+      details: { code: 'INVALID_GENERATION_REQUEST' },
+    }));
+    authState.api.quoteGenerationModel.mockResolvedValue({
+      modelId: 'fallback-video-v2',
+      catalogRevision: 'catalog-v2-revision',
+      normalizedSettings: { referenceMode: 'elements', resolution: '720p', duration: 7 },
+      costCredits: 29,
+    });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="video" />);
+    });
+    renderer.act(() => {
+      tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('Create a remote cinematic reveal.');
+    });
+    await renderer.act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Generate · 29 credits').props.onPress();
+    });
+
+    expect(draftStorage.removeItem).toHaveBeenCalledWith(attemptKey);
+    expect(collectText(tree!.root)).not.toContain('Generation not confirmed');
+    vi.useRealTimers();
+  });
+
   it('opens the shared video result workspace and posts with the generation id', async () => {
     vi.useFakeTimers();
     authState.api.startVideoGeneration.mockResolvedValue({
@@ -2182,8 +2523,11 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       await vi.advanceTimersByTimeAsync(200);
     });
 
-    renderer.act(() => {
+    // The start never settles here, so the press is not awaited; flushing lets
+    // the attempt save that precedes every start land first.
+    await renderer.act(async () => {
       void findPressableByText(tree!.root, 'Generate · 8 credits').props.onPress();
+      await vi.advanceTimersByTimeAsync(0);
     });
     expect(collectText(tree!.root)).toContain('Creating image');
     expect(collectText(tree!.root)).toContain('Minimize');
@@ -2283,8 +2627,9 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(collectText(tree!.root)).toContain('Back to creator');
 
     authState.api.startImageGeneration.mockReturnValueOnce(new Promise(() => undefined));
-    renderer.act(() => {
+    await renderer.act(async () => {
       void findPressableByText(tree!.root, 'Try again · 8 credits').props.onPress();
+      await vi.advanceTimersByTimeAsync(0);
     });
     expect(authState.api.startImageGeneration).toHaveBeenCalledTimes(2);
     expect(promptInput.props.value).toBe('Create a dramatic studio portrait.');
@@ -2384,6 +2729,143 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(tree.root.findByProps({accessibilityLabel:'Generation prompt'}).props.value).toBe(video.prompt);
     expect(collectText(tree.root)).not.toContain('Unknown element mention');
     await renderer.act(async()=>{tree.unmount();});
+  });
+
+  // Audit A6. Source media are restored behind signed links that last an hour,
+  // and a saved draft keeps them. Diagnostic counterexample 6: a saved remix
+  // whose rail still held its references was never read again, so links that
+  // had run out stayed dead, and the thumbnail's retry asked for the same link.
+  describe('reference links that have run out', () => {
+    const STORAGE = 'https://project.supabase.co';
+    const signed = (path: string, expiresAtMs: number) => (
+      `${STORAGE}/storage/v1/object/sign/${path}?token=head.${Buffer.from(JSON.stringify({ exp: Math.floor(expiresAtMs / 1000) })).toString('base64url')}.signature`
+    );
+    const girlPath = 'uploads/owner/girl.png';
+    const otherPath = 'uploads/owner/other.png';
+    const settle = () => renderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
+    const thumbnail = (tree: renderer.ReactTestRenderer, name: string) => tree.root
+      .findByProps({ accessibilityLabel: `Open details for ${name}` })
+      .find((node) => String(node.type) === 'stable-media-image');
+    const sourceBundle = (girlUrl: string) => ({
+      generation: { id: 'gen-girl', title: 'Original', prompt: 'The girl from @girl is crying', category: 'video', model: 'seedance-2' },
+      result: null,
+      inputs: {
+        video: {
+          referenceMode: 'elements',
+          startFrame: null,
+          endFrame: null,
+          elements: [
+            { id: 'girl', displayName: 'Girl', handle: '@girl', url: girlUrl, storagePath: girlPath, sourceGenerationId: null },
+            { id: 'other', displayName: 'Other', handle: '@other', url: signed(otherPath, Date.now() + 3_600_000), storagePath: otherPath, sourceGenerationId: null },
+          ],
+          referenceVideos: [],
+          referenceAudios: [],
+        },
+      },
+      workflowSettings: { model: 'seedance-2', referenceMode: 'elements', duration: 4, aspectRatio: '16:9', resolution: '480p' },
+      restoreIssues: [],
+    });
+    /** A completed remix, then edited: the girl renamed, @other removed, the frame made vertical. */
+    const savedRemix = (girlUrl: string) => JSON.stringify({
+      image: createDefaultCreationDraft('image'),
+      video: {
+        ...createDefaultCreationDraft('video'),
+        model: 'seedance-2',
+        prompt: 'My edited scene: @girl is crying',
+        aspectRatio: '9:16',
+        resolution: '480p',
+        duration: 4,
+        references: [{ id: 'girl', kind: 'image', url: girlUrl, storagePath: girlPath, fileName: 'girl.png', displayName: 'My girl', handle: '@girl', sourceGenerationId: null }],
+      },
+      motion: createDefaultCreationDraft('motion'),
+      updatedAt: new Date().toISOString(),
+      remixRestored: true,
+      remixEditedKeys: { video: ['prompt', 'references', 'aspectRatio'] },
+    });
+    const openRemix = async () => {
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(<MediaCreationScreen initialTool="video" remixSource={{ generationId: 'gen-girl', postId: 'post-girl' }} />); });
+      await settle();
+      return tree;
+    };
+
+    beforeEach(() => {
+      catalogState.catalog = createRemixRestoreCatalog();
+    });
+
+    it('reads the source again for a saved remix whose links have expired, and keeps every edit', async () => {
+      const fresh = signed(girlPath, Date.now() + 3_600_000);
+      draftStorage.getItem.mockResolvedValue(savedRemix(signed(girlPath, Date.now() - 60_000)));
+      authState.api.getRemixSourceBundle.mockResolvedValue(sourceBundle(fresh));
+
+      const tree = await openRemix();
+      await settle();
+
+      expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
+      // What Settings' support line will say about this draft.
+      expect(readCreatorSession()).toMatchObject({ tool: 'video', outcome: 'recovered', referenceCount: 1 });
+      expect(thumbnail(tree, 'My girl').props.url).toBe(fresh);
+      expect(tree.root.findAllByProps({ accessibilityLabel: 'Open details for Other' })).toHaveLength(0);
+      expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('My edited scene: @girl is crying');
+      expect(JSON.parse(draftStorage.setItem.mock.lastCall![1]).video).toMatchObject({
+        aspectRatio: '9:16',
+        references: [expect.objectContaining({ id: 'girl', displayName: 'My girl', url: fresh })],
+      });
+    });
+
+    it('resumes a saved remix whose links are still good without reading the source', async () => {
+      const good = signed(girlPath, Date.now() + 3_600_000);
+      draftStorage.getItem.mockResolvedValue(savedRemix(good));
+
+      const tree = await openRemix();
+
+      expect(authState.api.getRemixSourceBundle).not.toHaveBeenCalled();
+      expect(readCreatorSession()).toMatchObject({ tool: 'video', outcome: 'resumed', referenceCount: 1 });
+      expect(thumbnail(tree, 'My girl').props.url).toBe(good);
+    });
+
+    it('renews a remix thumbnail from its source when it is retried', async () => {
+      draftStorage.getItem.mockResolvedValue(savedRemix(signed(girlPath, Date.now() + 3_600_000)));
+      const renewedLink = `${STORAGE}/storage/v1/object/sign/${girlPath}?token=renewed`;
+      authState.api.getRemixSourceBundle.mockResolvedValue(sourceBundle(renewedLink));
+      const tree = await openRemix();
+
+      let renewed: string | undefined;
+      await renderer.act(async () => { renewed = await thumbnail(tree, 'My girl').props.resolveRetryUrl(); });
+
+      expect(renewed).toBe(renewedLink);
+      expect(authState.api.getRemixSourceBundle).toHaveBeenCalledWith('gen-girl', { postId: 'post-girl' });
+      expect(authState.api.createMediaReadUrl).not.toHaveBeenCalled();
+      expect(thumbnail(tree, 'My girl').props.url).toBe(renewedLink);
+    });
+
+    it("renews the creator's own upload by signing it again when it is retried", async () => {
+      catalogState.catalog = createTestGenerationModelCatalog();
+      const ownPath = 'uploads/user-123/product.png';
+      draftStorage.getItem.mockResolvedValue(JSON.stringify({
+        image: {
+          ...createDefaultCreationDraft('image'),
+          prompt: 'A product shot with @product',
+          references: [{ id: 'product', kind: 'image', url: signed(ownPath, Date.now() - 60_000), storagePath: ownPath, fileName: 'product.png', displayName: 'Product', handle: '@product', sourceGenerationId: null }],
+        },
+        video: createDefaultCreationDraft('video'),
+        motion: createDefaultCreationDraft('motion'),
+        updatedAt: new Date().toISOString(),
+      }));
+      const renewedLink = `${STORAGE}/storage/v1/object/sign/${ownPath}?token=renewed`;
+      authState.api.createMediaReadUrl.mockResolvedValue({ success: true, signedUrl: renewedLink, expiresInSeconds: 3600 });
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(<MediaCreationScreen initialTool="image" />); });
+      await settle();
+
+      let renewed: string | undefined;
+      await renderer.act(async () => { renewed = await thumbnail(tree, 'Product').props.resolveRetryUrl(); });
+
+      expect(renewed).toBe(renewedLink);
+      expect(authState.api.createMediaReadUrl).toHaveBeenCalledWith({ storagePath: ownPath });
+      expect(authState.api.getRemixSourceBundle).not.toHaveBeenCalled();
+      expect(thumbnail(tree, 'Product').props.url).toBe(renewedLink);
+    });
   });
 
 });

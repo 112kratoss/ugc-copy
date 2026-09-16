@@ -269,6 +269,15 @@ describe('collectBackendHealth', () => {
             error_message: null,
           },
           {
+            job_name: 'showcase-media-revocations',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:30:00.000Z',
+            finished_at: '2026-06-21T09:30:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
             job_name: 'mobile-push-receipts',
             status: 'succeeded',
             started_at: '2026-06-21T09:50:00.000Z',
@@ -336,8 +345,8 @@ describe('collectBackendHealth', () => {
       cadenceMinutes: 10,
       dailyInvocations: 144,
       dailyInvocationBudget: 456,
-      logicalDailyInvocations: 915,
-      coveredJobCount: 11,
+      logicalDailyInvocations: 939,
+      coveredJobCount: 12,
       coveredJobs: expect.arrayContaining([
         expect.objectContaining({
           name: 'account-deletion-resweeps',
@@ -365,6 +374,11 @@ describe('collectBackendHealth', () => {
           dailyInvocations: 144,
         }),
         expect.objectContaining({
+          name: 'showcase-media-revocations',
+          cadenceMinutes: 60,
+          dailyInvocations: 24,
+        }),
+        expect.objectContaining({
           name: 'mobile-push-receipts',
           cadenceMinutes: 10,
           dailyInvocations: 144,
@@ -376,7 +390,7 @@ describe('collectBackendHealth', () => {
         }),
       ]),
     });
-    expect(health.jobs).toHaveLength(11);
+    expect(health.jobs).toHaveLength(12);
     expect(health.jobs.find((job) => job.name === 'media-upload-reclaim')).toMatchObject({
       status: 'ok',
       dailyInvocations: 1,
@@ -1034,6 +1048,15 @@ describe('collectBackendHealth', () => {
             finished_at: '2026-06-21T09:56:01.000Z',
             duration_ms: 1000,
             skip_reason: 'no_reclaimable_media_uploads',
+            error_message: null,
+          },
+          {
+            job_name: 'showcase-media-revocations',
+            status: 'skipped',
+            started_at: '2026-06-21T09:30:00.000Z',
+            finished_at: '2026-06-21T09:30:01.000Z',
+            duration_ms: 1000,
+            skip_reason: 'no_pending_showcase_media_revocations',
             error_message: null,
           },
           {

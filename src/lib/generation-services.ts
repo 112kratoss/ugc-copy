@@ -53,6 +53,7 @@ import {
   type PersistGenerationInputCandidate,
 } from '@/lib/generation-input-media';
 import { importSharedGenerationInputMedia } from '@/lib/generation-input-media-import';
+import { buildCatalogInputMediaCandidates } from '@/lib/catalog-input-media-candidates';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
 import { buildKieWebhookCallbackUrl } from '@/lib/kie-webhook';
@@ -984,7 +985,7 @@ function assertAllowedGenerationMediaSource(value: string): string {
   return value;
 }
 
-async function resolveGenerationMediaSource(
+export async function resolveGenerationMediaSource(
   supabase: SupabaseClient,
   url: string,
   userId: string,
@@ -3314,6 +3315,9 @@ export async function startCatalogGeneration(params: {
       workflow_settings: privateRecipe ? {} : {
         ...settings,
         model: operation.modelId,
+        // How the legacy motion start marks motion, and the key the paywall and
+        // remix readers of workflow_settings recognize it by.
+        ...(operation.kind === 'motion' ? { creationMode: 'motion' } : {}),
         catalogRevision,
         compiledPrompt: typeof prompt === 'string' ? prompt.trim() : '',
         settings,
@@ -3390,52 +3394,7 @@ export async function startCatalogGeneration(params: {
     await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
     if (persistInputMedia) {
-      // Reference images are numbered per media type so their labels read the same as
-      // the legacy path's ("Reference image 1"), which downstream remix and creation
-      // views display verbatim.
-      let referenceImageOrdinal = 0;
-      const candidates: PersistGenerationInputCandidate[] = resolvedInputs.flatMap((asset, index) => {
-        if (!asset.url) return [];
-        const mediaType = asset.kind === 'video'
-          ? 'video'
-          : asset.kind === 'audio'
-            ? 'audio'
-            : 'image';
-        const role = mediaType === 'video'
-          ? 'reference_video'
-          : mediaType === 'audio'
-            ? 'reference_audio'
-            : asset.slot === 'startFrame'
-              ? 'start_frame'
-              : asset.slot === 'endFrame'
-                ? 'end_frame'
-                : asset.kind === 'character'
-                  ? 'character_image'
-                  : 'reference_image';
-        if (role === 'reference_image') referenceImageOrdinal += 1;
-        return [{
-          mediaType,
-          role,
-          label: asset.label
-            ?? (role === 'reference_image' ? `Reference image ${referenceImageOrdinal}` : asset.slot),
-          sourceUrl: asset.url,
-          sourceStoragePath: asset.storagePath ?? null,
-          sourceGenerationId: asset.sourceGenerationId ?? null,
-          sortOrder: index,
-          // Element identity must survive: toRemixImageElement reads id/displayName/handle
-          // back out of this metadata, and without them remix falls back to the row id
-          // and loses the name the user gave the reference.
-          metadata: {
-            slot: asset.slot,
-            ...(asset.elementId ? { id: asset.elementId } : {}),
-            ...(asset.label ? { displayName: asset.label } : {}),
-            ...(asset.handle ? { handle: asset.handle } : {}),
-            ...(typeof asset.durationSeconds === 'number'
-              ? { durationSeconds: asset.durationSeconds }
-              : {}),
-          },
-        } satisfies PersistGenerationInputCandidate];
-      });
+      const candidates = buildCatalogInputMediaCandidates(operation.kind, resolvedInputs);
       if (candidates.length > 0) {
         await persistGenerationInputMedia({
           supabase: creditSupabase,

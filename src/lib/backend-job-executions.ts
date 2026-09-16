@@ -57,6 +57,10 @@ import {
   reapStalledGenerations,
 } from '@/lib/stalled-generation-reaper';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import {
+  hasPendingShowcaseMediaRevocations,
+  processShowcaseMediaRevocations,
+} from '@/lib/showcase-media-revocations';
 import { hasDueTemplateRunJobs, pruneTemplateRunJobs } from '@/lib/template-run-jobs';
 import {
   TEMPLATE_RUN_JOB_BATCH_LIMIT,
@@ -580,6 +584,30 @@ export function runMediaUploadReclaimBackendJob(options: {
       });
       return { repair, ...reclaim };
     },
+  });
+}
+
+export function runShowcaseMediaRevocationsBackendJob(options: {
+  requestId?: string;
+  startedAtMs?: number;
+  serviceClient?: SupabaseClient;
+  triggerRoute?: string;
+} = {}) {
+  const job = BACKEND_JOBS_BY_NAME['showcase-media-revocations'];
+  return runManagedBackendJob({
+    ...options,
+    job,
+    messages: {
+      started: 'showcase_media_revocations_started',
+      skippedNoWork: 'showcase_media_revocations_skipped_no_pending_revocations',
+      skippedLocked: 'showcase_media_revocations_skipped',
+      completed: 'showcase_media_revocations_completed',
+      failed: 'showcase_media_revocations_failed',
+    },
+    hasWork: (client) => hasPendingShowcaseMediaRevocations(client),
+    run: (client, context) => processShowcaseMediaRevocations(client, {
+      now: new Date(context.startedAtMs),
+    }),
   });
 }
 

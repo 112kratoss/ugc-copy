@@ -8,7 +8,14 @@ const native = vi.hoisted(() => ({
   application: null as { nativeApplicationVersion?: string | null; nativeBuildVersion?: string | null } | null,
   expoConfigVersion: null as string | null,
   iosBuildNumber: null as string | null,
-  updates: { isEnabled: true, isEmbeddedLaunch: false, updateId: null as string | null, manifest: {} as unknown },
+  updates: {
+    isEnabled: true,
+    isEmbeddedLaunch: false,
+    updateId: null as string | null,
+    manifest: {} as unknown,
+    runtimeVersion: null as string | null,
+    channel: null as string | null,
+  },
 }));
 
 vi.mock('expo', () => ({
@@ -39,9 +46,15 @@ vi.mock('expo-updates', () => ({
   get manifest() {
     return native.updates.manifest;
   },
+  get runtimeVersion() {
+    return native.updates.runtimeVersion;
+  },
+  get channel() {
+    return native.updates.channel;
+  },
 }));
 
-import { formatAppVersionLabel, readAppVersionParts } from '../lib/app-version-label';
+import { formatAppVersionLabel, readAppVersionParts, readUpdateRuntime } from '../lib/app-version-label';
 
 beforeEach(() => {
   native.application = { nativeApplicationVersion: '0.1.4', nativeBuildVersion: '52' };
@@ -52,6 +65,8 @@ beforeEach(() => {
     isEmbeddedLaunch: false,
     updateId: UPDATE_ID,
     manifest: { id: UPDATE_ID, metadata: { updateGroup: UPDATE_GROUP, branchName: 'production' } },
+    runtimeVersion: '0.1.4',
+    channel: 'production',
   };
 });
 
@@ -86,5 +101,12 @@ describe('settings version label', () => {
 
   it('shows no line without a version', () => {
     expect(formatAppVersionLabel({ version: null, build: '52', update: UPDATE_GROUP })).toBeNull();
+  });
+
+  // Support diagnostics: which runtime and channel this binary takes updates on.
+  it('names the OTA runtime and channel, and neither where updates are off', () => {
+    expect(readUpdateRuntime()).toEqual({ runtimeVersion: '0.1.4', channel: 'production' });
+    native.updates.isEnabled = false;
+    expect(readUpdateRuntime()).toEqual({ runtimeVersion: null, channel: null });
   });
 });

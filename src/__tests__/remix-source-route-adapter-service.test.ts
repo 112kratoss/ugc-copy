@@ -70,4 +70,21 @@ describe('remix source route adapter service', () => {
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     await expect(response.json()).resolves.toEqual({ error: 'Remix source not found' });
   });
+
+  it('passes the unlock code through so clients can offer the unlock instead of an error', async () => {
+    const response = await getRemixSourceRouteResponse({
+      request: createRequest('http://localhost/api/remix-source?id=locked-1&postId=post-1'),
+      dependencies: {
+        loadRemixSourceBundle: vi.fn(async () => {
+          throw new RemixSourceError('Unlock this post to remix it.', 403, 'REMIX_UNLOCK_REQUIRED');
+        }),
+      },
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Unlock this post to remix it.',
+      code: 'REMIX_UNLOCK_REQUIRED',
+    });
+  });
 });

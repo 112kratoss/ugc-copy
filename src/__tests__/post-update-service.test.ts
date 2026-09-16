@@ -880,7 +880,7 @@ describe('updateOwnerPostForRoute', () => {
     // pointing at its public copy and the copy must go; this route used to
     // change the visibility column alone, which is how a post made private
     // from the phone stayed fetchable at its old URL.
-    it('secures the private copy, drops the public derivative, and takes the generation off show when going private', async () => {
+    it('secures the private copy and drops the public derivative when going private, leaving exposure to the posts trigger', async () => {
       const { client, generationUpdates } = createSupabaseMock({
         post: generatedPost,
         bundle: null,
@@ -907,9 +907,10 @@ describe('updateOwnerPostForRoute', () => {
           output_url: 'generated_images/user-1/durable/example.jpg',
         }),
       }));
+      // is_public and showcase_asset_path follow the post inside the RPC's own
+      // transaction (posts_sync_generation_exposure). Writing them here, after
+      // the commit, is what used to let a private post keep a public generation.
       expect(generationUpdates).toEqual([{
-        is_public: false,
-        showcase_asset_path: null,
         output_url: 'generated_images/user-1/durable/example.jpg',
       }]);
       // Removed only after the post row no longer points at it, together with
@@ -952,7 +953,7 @@ describe('updateOwnerPostForRoute', () => {
       expect(generationUpdates).toEqual([]);
     });
 
-    it('creates the public copy and puts the generation on show when going public', async () => {
+    it('creates the public copy when going public, leaving the generation\'s exposure to the posts trigger', async () => {
       const { client, generationUpdates } = createSupabaseMock({
         post: { ...generatedPost, visibility: 'private', showcase_asset_path: null },
         bundle: null,
@@ -988,10 +989,7 @@ describe('updateOwnerPostForRoute', () => {
           showcase_asset_path: 'showcase/generation-1/example.abc123.jpg',
         }),
       }));
-      expect(generationUpdates).toEqual([{
-        showcase_asset_path: 'showcase/generation-1/example.abc123.jpg',
-        is_public: true,
-      }]);
+      expect(generationUpdates).toEqual([]);
       expect(dependencies.ensureDurableGenerationMedia).not.toHaveBeenCalled();
       expect(dependencies.removeGenerationShowcaseDerivative).not.toHaveBeenCalled();
     });

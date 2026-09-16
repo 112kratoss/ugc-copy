@@ -14,6 +14,7 @@ import {
   runMobilePushReceiptsBackendJob,
   runOperationalDataRetentionBackendJob,
   runReferralRewardReconciliationBackendJob,
+  runShowcaseMediaRevocationsBackendJob,
   runWorkflowRunStepsBackendJob,
   type BackendJobExecutionResult,
 } from '@/lib/backend-job-executions';
@@ -39,6 +40,7 @@ type BackendJobsRouteDependencies = {
   runMobilePushReceiptsBackendJob?: typeof runMobilePushReceiptsBackendJob;
   runOperationalDataRetentionBackendJob?: typeof runOperationalDataRetentionBackendJob;
   runReferralRewardReconciliationBackendJob?: typeof runReferralRewardReconciliationBackendJob;
+  runShowcaseMediaRevocationsBackendJob?: typeof runShowcaseMediaRevocationsBackendJob;
   runWorkflowRunStepsBackendJob?: typeof runWorkflowRunStepsBackendJob;
 };
 
@@ -90,6 +92,8 @@ function resolveDependencies(dependencies: BackendJobsRouteDependencies | undefi
     runReferralRewardReconciliationBackendJob:
       dependencies?.runReferralRewardReconciliationBackendJob
       ?? runReferralRewardReconciliationBackendJob,
+    runShowcaseMediaRevocationsBackendJob: dependencies?.runShowcaseMediaRevocationsBackendJob
+      ?? runShowcaseMediaRevocationsBackendJob,
     runWorkflowRunStepsBackendJob: dependencies?.runWorkflowRunStepsBackendJob
       ?? runWorkflowRunStepsBackendJob,
   };
@@ -132,6 +136,8 @@ async function runDueBackendJob(
       return options.dependencies.runOperationalDataRetentionBackendJob(runOptions);
     case 'referral-reward-reconciliation':
       return options.dependencies.runReferralRewardReconciliationBackendJob(runOptions);
+    case 'showcase-media-revocations':
+      return options.dependencies.runShowcaseMediaRevocationsBackendJob(runOptions);
     case 'workflow-run-steps':
       return options.dependencies.runWorkflowRunStepsBackendJob(runOptions);
     default: {

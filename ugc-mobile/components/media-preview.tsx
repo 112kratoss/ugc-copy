@@ -23,12 +23,15 @@ export function MediaPreview({
   height,
   radius = appTheme.radii.lg,
   nativeControls = true,
+  resolveRetryUrl,
 }: {
   url: string | null | undefined;
   kind?: 'image' | 'video' | null;
   height?: number;
   radius?: number;
   nativeControls?: boolean;
+  /** A fresh link for a video whose own has stopped working. */
+  resolveRetryUrl?: () => Promise<string>;
 }) {
   const { requestKey } = useMediaSource(url || '');
   const sourceKey = `${url}|${requestKey}`;
@@ -41,7 +44,7 @@ export function MediaPreview({
   }
 
   if (kind === 'video') {
-    return <VideoPreview url={url} height={height} radius={radius} nativeControls={nativeControls} />;
+    return <VideoPreview url={url} height={height} radius={radius} nativeControls={nativeControls} resolveRetryUrl={resolveRetryUrl} />;
   }
 
   if (imageFailed) {
@@ -394,16 +397,19 @@ function VideoPreview({
   height,
   radius,
   nativeControls,
+  resolveRetryUrl,
 }: {
   url: string;
   height?: number;
   radius: number;
   nativeControls: boolean;
+  resolveRetryUrl?: () => Promise<string>;
 }) {
   return (
     <RecoverableVideoPreview
       url={url}
       nativeControls={nativeControls}
+      resolveRetryUrl={resolveRetryUrl}
       style={{
         width: '100%',
         aspectRatio: 4 / 5,

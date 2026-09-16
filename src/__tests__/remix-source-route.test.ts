@@ -50,9 +50,19 @@ type PostRow = {
   created_at: string;
 };
 
+type BundleRow = {
+  id: string;
+  post_id: string;
+  status: 'draft' | 'published';
+  allow_remix: boolean;
+};
+
 let currentUserId: string | null = 'user-1';
 let generationRows = new Map<string, GenerationRow>();
 let postRows = new Map<string, PostRow>();
+// Keyed by post id, the column the remix gate reads a recipe by.
+let bundleRows = new Map<string, BundleRow>();
+let purchaseRows: Array<{ id: string; bundle_id: string; buyer_user_id: string }> = [];
 let signedUploads = new Map<string, string | null>();
 // Guest profiles linked into a registered account (profiles.merged_into_user_id).
 let linkedProfileRows: Array<{ id: string; merged_into_user_id: string }> = [];
@@ -104,6 +114,55 @@ function createGuestMadeGeneration(overrides: Partial<GenerationRow> = {}): Gene
   };
 }
 
+/** A public creation by creator-1 that other viewers may remix while its post is exposed. */
+function createPublicSource(overrides: Partial<GenerationRow> = {}): GenerationRow {
+  return {
+    id: 'source-1',
+    user_id: 'creator-1',
+    is_public: true,
+    share_input_media_for_remix: true,
+    output_url: 'generated_images/creator-1/source-1.png',
+    showcase_asset_path: null,
+    category: 'image',
+    model: 'nano-banana-2',
+    prompt: 'A bright creator product shot.',
+    title: 'Hero frame',
+    workflow_settings: {},
+    ...overrides,
+  };
+}
+
+/**
+ * The generation's own post on the public surface: public, not archived and
+ * visible to moderation, which the remix gate requires before anyone but the
+ * owner may restore the generation.
+ */
+function createExposedPost(generationId: string, overrides: Partial<PostRow> = {}): PostRow {
+  return {
+    id: `post-${generationId}`,
+    user_id: 'creator-1',
+    generation_id: generationId,
+    title: 'Public post',
+    body: '',
+    prompt: null,
+    category: 'image',
+    post_format: 'media',
+    visibility: 'public',
+    archived_at: null,
+    review_status: 'visible',
+    showcase_asset_path: null,
+    output_url: null,
+    source_kind: 'magicbooklet',
+    source_tool: null,
+    source_tool_slug: 'magicbooklet',
+    save_count: 0,
+    remix_count: 0,
+    share_visit_count: 0,
+    created_at: '2026-06-04T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
 function createRouteRequest(url: string) {
   return {
     nextUrl: new URL(url),
@@ -130,15 +189,40 @@ function createAdminClientMock() {
     }),
     from: vi.fn((table: string) => {
       if (table === 'post_resource_bundles') {
+        const filters = new Map<string, unknown>();
         const query = {
           select() {
             return query;
           },
-          eq() {
+          eq(column: string, value: unknown) {
+            filters.set(column, value);
             return query;
           },
           async maybeSingle() {
-            return { data: null, error: null };
+            return { data: bundleRows.get(String(filters.get('post_id'))) ?? null, error: null };
+          },
+        };
+        return query;
+      }
+
+      if (table === 'post_resource_bundle_purchases') {
+        const filters = new Map<string, unknown>();
+        const query = {
+          select() {
+            return query;
+          },
+          eq(column: string, value: unknown) {
+            filters.set(column, value);
+            return query;
+          },
+          async maybeSingle() {
+            return {
+              data: purchaseRows.find((row) => (
+                row.bundle_id === filters.get('bundle_id')
+                && row.buyer_user_id === filters.get('buyer_user_id')
+              )) ?? null,
+              error: null,
+            };
           },
         };
         return query;
@@ -200,14 +284,17 @@ function createAdminClientMock() {
           select() {
             return {
               eq(column: string, value: unknown) {
-                if (column !== 'id') {
+                if (column !== 'id' && column !== 'generation_id') {
                   throw new Error(`Unexpected filter column: ${column}`);
                 }
 
                 return {
                   async maybeSingle() {
+                    const post = column === 'id'
+                      ? postRows.get(String(value))
+                      : [...postRows.values()].find((row) => row.generation_id === value);
                     return {
-                      data: postRows.get(String(value)) ?? null,
+                      data: post ?? null,
                       error: null,
                     };
                   },
@@ -334,6 +421,8 @@ describe('/api/remix-source route', () => {
     currentUserId = 'user-1';
     generationRows = new Map();
     postRows = new Map();
+    bundleRows = new Map();
+    purchaseRows = [];
     signedUploads = new Map();
     linkedProfileRows = [];
     inputMediaRows = [];
@@ -392,6 +481,7 @@ describe('/api/remix-source route', () => {
       },
     });
     signedUploads.set('creator-1/bottle.png', 'https://signed.example.com/uploads/creator-1/bottle.png');
+    postRows.set('post-source-1', createExposedPost('source-1'));
 
     const { GET } = await import('@/app/api/remix-source/route');
     const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=source-1'));
@@ -530,6 +620,7 @@ describe('/api/remix-source route', () => {
         metadata: null,
       },
     ];
+    postRows.set('post-video-shared-1', createExposedPost('video-shared-1', { category: 'video' }));
 
     const { GET } = await import('@/app/api/remix-source/route');
     const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=video-shared-1'));
@@ -748,6 +839,8 @@ describe('/api/remix-source route', () => {
       title: 'Public source',
       workflow_settings: {},
     });
+    // Exposed, so the block is what refuses and not a missing post.
+    postRows.set('post-public-1', createExposedPost('public-1', { user_id: 'creator-9' }));
 
     const { GET } = await import('@/app/api/remix-source/route');
     const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=public-1'));
@@ -772,6 +865,7 @@ describe('/api/remix-source route', () => {
       title: 'Public source',
       workflow_settings: {},
     });
+    postRows.set('post-public-1', createExposedPost('public-1', { user_id: 'creator-9' }));
 
     const { GET } = await import('@/app/api/remix-source/route');
     const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=public-1'));
@@ -886,5 +980,47 @@ describe('/api/remix-source route', () => {
     expect(response.status).toBe(429);
     expect(response.headers.get('Retry-After')).toBe('42');
     expect((await response.json()).code).toBe('RATE_LIMITED');
+  });
+
+  // Audit A4, read side: a generation's public flag is a copy of its post's
+  // state, so another viewer's restore follows the post itself.
+  it.each([
+    ['has no post', null],
+    ['was made private', { visibility: 'private' }],
+    ['was archived', { archived_at: '2026-09-15T10:00:00.000Z' }],
+    ['was hidden by moderation', { review_status: 'hidden' }],
+  ] as Array<[string, Partial<PostRow> | null]>)(
+    'hides a still-public generation from other viewers once its post %s',
+    async (_label, postOverrides) => {
+      currentUserId = 'user-2';
+      generationRows.set('source-1', createPublicSource());
+      if (postOverrides) {
+        postRows.set('post-source-1', createExposedPost('source-1', postOverrides));
+      }
+
+      const { GET } = await import('@/app/api/remix-source/route');
+      const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=source-1'));
+
+      expect(response.status).toBe(404);
+      expect((await response.json()).error).toBe('Remix source not found');
+    },
+  );
+
+  // Audit A1: the post tells this viewer "unlock to remix", so the source the
+  // create page restores from must not answer with the recipe either.
+  it('answers 403 with the unlock code for a remix-enabled recipe the viewer has not bought', async () => {
+    currentUserId = 'user-2';
+    generationRows.set('source-1', createPublicSource({ prompt: 'A prompt only buyers restore.' }));
+    postRows.set('post-1', createExposedPost('source-1', { id: 'post-1' }));
+    bundleRows.set('post-1', { id: 'bundle-1', post_id: 'post-1', status: 'published', allow_remix: true });
+    purchaseRows = [{ id: 'purchase-9', bundle_id: 'bundle-1', buyer_user_id: 'someone-else' }];
+
+    const { GET } = await import('@/app/api/remix-source/route');
+    const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=source-1&postId=post-1'));
+
+    expect(response.status).toBe(403);
+    const body = await response.json();
+    expect(body).toEqual({ error: 'Unlock this post to remix it.', code: 'REMIX_UNLOCK_REQUIRED' });
+    expect(JSON.stringify(body)).not.toContain('A prompt only buyers restore.');
   });
 });

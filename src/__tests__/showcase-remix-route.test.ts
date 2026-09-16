@@ -17,6 +17,7 @@ vi.mock('@supabase/supabase-js', () => ({
 vi.mock('@/lib/posts-server', () => ({
   findPublicPostReferenceByIdOrGenerationId: (id: string) =>
     findPublicPostReferenceByIdOrGenerationIdMock(id),
+  isMissingPostResourceBundlesSchemaError: () => false,
 }));
 
 vi.mock('@/lib/mobile-notifications', () => ({
@@ -97,6 +98,71 @@ describe('/api/showcase/remix route', () => {
     createServiceClientMock.mockReturnValue({
       rpc: serviceRpcMock,
       from: (table: string) => {
+        // The remix gate re-reads the generation's post for its exposure...
+        if (table === 'posts') {
+          return {
+            select() {
+              return {
+                eq(column: string, value: unknown) {
+                  if (column !== 'generation_id') {
+                    throw new Error(`Unexpected posts filter: ${column}`);
+                  }
+
+                  return {
+                    async maybeSingle() {
+                      return {
+                        data: value === 'gen-1'
+                          ? {
+                              id: 'post-1',
+                              user_id: 'creator-1',
+                              generation_id: 'gen-1',
+                              category: 'image',
+                              post_format: 'media',
+                              source_kind: 'magicbooklet',
+                              visibility: 'public',
+                              archived_at: null,
+                              review_status: 'visible',
+                            }
+                          : null,
+                        error: null,
+                      };
+                    },
+                  };
+                },
+              };
+            },
+          };
+        }
+
+        // ...its recipe, which this post does not have...
+        if (table === 'post_resource_bundles') {
+          const query = {
+            select() {
+              return query;
+            },
+            eq() {
+              return query;
+            },
+            async maybeSingle() {
+              return { data: null, error: null };
+            },
+          };
+          return query;
+        }
+
+        // ...and the guest identities linked to the viewer, of which there are none.
+        if (table === 'profiles') {
+          return {
+            select() {
+              return {
+                async eq() {
+                  return { data: [], error: null };
+                },
+              };
+            },
+          };
+        }
+
         if (table !== 'generations') {
           throw new Error(`Unexpected table: ${table}`);
         }

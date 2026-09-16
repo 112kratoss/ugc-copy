@@ -442,9 +442,15 @@ redeployment with `expected_abandoned_reclaim_effective=false`; the consumed hal
 and the repair keep running. Removing the variable without redeploying does not
 disable it in the already-built deployment.
 
+## Showcase Media Revocations
+
+A generation-backed post's public derivative lives in the public `showcase_media` bucket, which serves whatever is in it. The posts trigger `posts_sync_generation_exposure` keeps `generations.is_public` and `generations.showcase_asset_path` in step with the post inside the post write's own transaction, for every writer (update, publish, archive, restore, moderation, tombstone, delete). The same trigger queues a derivative in `showcase_media_revocations` whenever an unexposed post drops it or a post is deleted directly. The post update and publish routes still delete the copy inline; the hourly `showcase-media-revocations` job retries whatever they miss, backing off from ten minutes to a day. A copy the post serves again is left alone, and only objects under `showcase/<generation_id>/` are ever removed. Archived and tombstoned posts are deliberately not queued: restore, and buyers, still need their copy. Account-erasure cascades are left to the deletion sweep.
+
+A queued copy still present a day after it was queued fails the job's run, which surfaces as `JOB_LATEST_RUN_FAILED` for `showcase-media-revocations`. Read the row's `last_error` with the service role before intervening; setting `next_attempt_at` to now makes the next hourly run pick the row up again.
+
 ## Durable Queue Graduation Decision
 
-Current decision: keep the Vercel cron orchestrator for `account-deletion-resweeps`, `backend-alert-delivery`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `media-preview-repair`, `media-upload-reclaim`, `mobile-push-receipts`, `operational-data-retention`, `referral-reward-reconciliation`, and `workflow-run-steps`.
+Current decision: keep the Vercel cron orchestrator for `account-deletion-resweeps`, `backend-alert-delivery`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `media-preview-repair`, `media-upload-reclaim`, `mobile-push-receipts`, `operational-data-retention`, `referral-reward-reconciliation`, `showcase-media-revocations`, and `workflow-run-steps`.
 
 This is the cost-efficient production baseline for the current workload because the jobs are idempotent, lock-protected in Supabase, bounded by 300-second function limits, and tolerant of the current ten-minute or hourly cadence. The single `/api/cron/backend-jobs` scheduler keeps Vercel cron invocations at 144 per day while logical jobs can still run at their own cadence.
 

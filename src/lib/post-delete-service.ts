@@ -334,15 +334,10 @@ export async function deleteOwnerPostForRoute({
     if (generationError) {
       logBackendError('failed_to_load_linked_generation_before_post_delete', { error: generationError });
     } else if (generation) {
+      // Tombstoning or deleting the post below takes this generation off show
+      // in that same statement, through the posts trigger, and a deleted post's
+      // public copy is queued for revocation there too.
       verifiedLinkedGenerationId = post.generation_id;
-      await adminSupabase
-        .from('generations')
-        .update({
-          is_public: false,
-          showcase_asset_path: null,
-        })
-        .eq('id', post.generation_id)
-        .eq('user_id', ownerUserId);
     }
   }
 

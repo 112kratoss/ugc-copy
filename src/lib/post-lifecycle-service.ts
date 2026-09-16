@@ -119,15 +119,9 @@ export async function archiveOwnerPostForRoute({
     .eq('owner_user_id', ownerUserId)
     .eq('status', 'published');
 
-  if (post.generation_id) {
-    await adminSupabase
-      .from('generations')
-      .update({
-        is_public: false,
-        showcase_asset_path: null,
-      })
-      .eq('id', post.generation_id);
-  }
+  // Setting archived_at took the linked generation off show in that same
+  // statement: the posts trigger owns the generation's exposure. The post keeps
+  // its showcase path, which is what restore puts back.
 
   return {
     ok: true,
@@ -188,20 +182,9 @@ export async function restoreOwnerPostForRoute({
 
   invalidateShowcaseFeedCache();
 
-  // Archive cleared the linked generation's exposure flags; put back whatever
-  // the post's own visibility says. The post row kept the showcase path, so
-  // nothing has to be re-derived. The recipe itself is re-promoted by the
-  // posts trigger when archived_at clears.
-  if (post.generation_id) {
-    const isExposed = post.visibility !== 'private';
-    await adminSupabase
-      .from('generations')
-      .update({
-        is_public: post.visibility === 'public',
-        showcase_asset_path: isExposed ? post.showcase_asset_path ?? null : null,
-      })
-      .eq('id', post.generation_id);
-  }
+  // Clearing archived_at put the linked generation back on show in that same
+  // statement, from the post's own visibility and the showcase path the post
+  // kept, and re-promoted the recipe: the posts triggers own both.
 
   return {
     ok: true,

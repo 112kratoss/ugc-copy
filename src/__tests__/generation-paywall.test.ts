@@ -157,6 +157,30 @@ describe('generation paywall helpers', () => {
     ).toBe(true);
   });
 
+  // A motion model onboarded through the catalog is stored as a 'video'
+  // generation marked by creation_mode, with its inputs kept as slots. Read only
+  // by the legacy keys, it never had remix access switched on or its inputs noted.
+  it('recognizes a catalog motion generation by its creation mode and input slots', () => {
+    const source = {
+      category: 'video',
+      creationMode: 'motion',
+      model: 'kling-2.6',
+      prompt: 'Match the performer energy.',
+      workflowSettings: {
+        model: 'kling-2.6',
+        duration: 8,
+        inputs: [
+          { slot: 'characterImage', kind: 'image', label: 'Character image', storagePath: 'uploads/user-1/character.png' },
+          { slot: 'referenceVideo', kind: 'video', label: 'Reference video', storagePath: 'uploads/user-1/reference.mp4' },
+        ],
+      },
+    };
+
+    expect(hasRecoverableGenerationRemixInputs(source)).toBe(true);
+    expect(buildGenerationPaywallPrefill(source)?.notesMarkdown).toContain('Inputs: character image + reference video');
+    expect(hasRecoverableGenerationRemixInputs({ ...source, creationMode: null })).toBe(false);
+  });
+
   it('returns null when a generation has no usable prompt, notes, or remix inputs', () => {
     expect(
       buildGenerationPaywallPrefill({
