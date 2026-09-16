@@ -383,4 +383,50 @@ describe('StableMediaImage display watchdog', () => {
     expect(serialized).not.toContain('owner-1');
     renderer.act(() => tree.unmount());
   });
+
+  it('releases slots when covered so a visible image can recover', () => {
+    let tree!: renderer.ReactTestRenderer;
+    const content = (covered: boolean) => <>
+      <StableMediaImage url="https://cdn/a.webp" cacheKey="a" watchdog={!covered} />
+      <StableMediaImage url="https://cdn/b.webp" cacheKey="b" watchdog={!covered} />
+      {covered ? <StableMediaImage url="https://cdn/c.webp" cacheKey="c" watchdog /> : null}
+    </>;
+    renderer.act(() => { tree = renderer.create(content(false)); });
+    advance(MEDIA_DISPLAY_DEADLINE_MS);
+    expect(mediaRecoveryBudget.activeCount()).toBe(2);
+    renderer.act(() => { tree.update(content(true)); });
+    const heldWhenCovered = mediaRecoveryBudget.activeCount();
+    advance(MEDIA_DISPLAY_DEADLINE_MS);
+    const retries = eventsOf('retry').length;
+    renderer.act(() => tree.unmount());
+    expect(heldWhenCovered).toBe(0);
+    expect(retries).toBe(3);
+  });
+
+  it('bounds waiting for a recovery slot and allows a manual retry', () => {
+    const slots = [mediaRecoveryBudget.tryAcquire()!, mediaRecoveryBudget.tryAcquire()!];
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(<StableMediaImage url="https://cdn/queued.webp" cacheKey="queued" watchdog />); });
+    for (let count = 0; count < 50; count += 1) advance(MEDIA_RECOVERY_WAIT_MS);
+    const timedOut = JSON.stringify(tree.toJSON()).includes('Taking too long to load');
+    slots.forEach((slot) => slot.release());
+    if (timedOut) {
+      renderer.act(() => tree.root.findByType('pressable' as never).props.onPress());
+      renderer.act(() => tree.root.findByType('image').props.onDisplay());
+      advance(MEDIA_DISPLAY_DEADLINE_MS * 2);
+      expect(tree.root.findAllByType('pressable' as never)).toHaveLength(0);
+    }
+    renderer.act(() => tree.unmount());
+    expect(timedOut).toBe(true);
+  });
+
+  it('remembers an image displayed while covered when its watchdog resumes', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(<StableMediaImage url="https://cdn/shown.webp" cacheKey="shown" />); });
+    renderer.act(() => tree.root.findByType('image').props.onDisplay?.());
+    renderer.act(() => tree.update(<StableMediaImage url="https://cdn/shown.webp" cacheKey="shown" watchdog />));
+    advance(MEDIA_DISPLAY_DEADLINE_MS);
+    renderer.act(() => tree.unmount());
+    expect(eventsOf('stall')).toHaveLength(0);
+  });
 });

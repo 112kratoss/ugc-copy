@@ -10,6 +10,7 @@ import { imageRetryDelayMs } from '@/lib/media-performance';
 import {
   MEDIA_DISPLAY_DEADLINE_MS,
   MEDIA_RECOVERY_WAIT_MS,
+  MEDIA_RECOVERY_MAX_WAIT_MS,
   classifyImageStall,
   mediaRecoveryBudget,
   type MediaRecoverySlot,
@@ -169,6 +170,13 @@ function StableMediaImageSession({
     latestOnError.current = onError;
   });
 
+  // Navigation keeps covered images mounted, and detached native views may
+  // never send another callback. Their recovery ownership must end on suspend.
+  useEffect(() => () => {
+    recoverySlot.current?.release();
+    recoverySlot.current = null;
+  }, [watchdog, foreground, sourceId]);
+
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -197,7 +205,8 @@ function StableMediaImageSession({
           stage: classifyImageStall(reached),
         });
       }
-      if (imageRetryDelayMs(attempt) === null) {
+      if (imageRetryDelayMs(attempt) === null
+        || (waitingForRecovery && recoveryWait.count * MEDIA_RECOVERY_WAIT_MS >= MEDIA_RECOVERY_MAX_WAIT_MS)) {
         releaseSlot();
         setStalledSourceId(sourceId);
         setFailedSourceId(sourceId);
@@ -222,6 +231,8 @@ function StableMediaImageSession({
   const retryImage = async () => {
     if (pending.current) return;
     progress.current = NO_PROGRESS;
+    setRecoveryWait({ attemptKey: '', count: 0 });
+    setDisplayedAttemptKey(null);
     if (!resolveRetryUrl) {
       setFailedSourceId(null);
       setStalledSourceId(null);
@@ -288,7 +299,7 @@ function StableMediaImageSession({
         progress.current = { ...progressFor(attemptKey), loaded: true };
         onLoad?.(event);
       } : onLoad}
-      onDisplay={watchdog ? () => {
+      onDisplay={() => {
         if (displayedAttemptKey !== attemptKey) setDisplayedAttemptKey(attemptKey);
         if (attempt > 0) {
           recordMediaDiagnostic({ kind: 'image', event: 'recovered', surface: diagnosticsSurface, subject: cacheKey, attempt });
@@ -296,7 +307,7 @@ function StableMediaImageSession({
         recoverySlot.current?.release();
         recoverySlot.current = null;
         onDisplay?.();
-      } : onDisplay}
+      }}
       onError={(event) => {
         const failure = describeImageError(event);
         const delayMs = imageRetryDelayMs(attempt);

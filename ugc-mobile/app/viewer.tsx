@@ -273,7 +273,7 @@ export default function ImmersivePreviewViewerScreen() {
       isLoading: library.isLoading || library.selection === 'loading',
       isError: library.isError || library.selection === 'error',
       isFetching: library.isFetching,
-      refetch: library.selection === 'error' ? library.retrySelection : library.refetch,
+      refetch: library.selection === 'error' && !library.isError ? library.retrySelection : library.refetch,
     }
     : loaderQuery;
 
@@ -292,8 +292,13 @@ export default function ImmersivePreviewViewerScreen() {
     void refetchLoader?.();
   }, [isFocused, libraryBacked, queryClient, refetchLoader, source, sourceQueryKey]);
 
+  // A warm library is not proof that the requested item exists. Keep unrelated
+  // pages out of the renderer and position/playback effects until selection
+  // resolves. After landing, the reader's own position continues to own the reel.
+  const awaitingLibrarySelection = libraryBacked && !initialPositionReady
+    && library.selection !== 'none' && library.selection !== 'found';
   const items = useMemo(() => {
-    if (libraryBacked) return library.items;
+    if (libraryBacked) return awaitingLibrarySelection ? [] : library.items;
     const data = isGenerationSource(source) && loaderQuery.data
       ? { ...loaderQuery.data, ownerPosts: enrichmentPosts }
       : loaderQuery.data;
@@ -307,7 +312,7 @@ export default function ImmersivePreviewViewerScreen() {
     return builtItems.filter((item) => (
       !item.showcasePostId || visiblePostIds.has(item.showcasePostId)
     ));
-  }, [enrichmentPosts, initialId, library.items, libraryBacked, loaderQuery.data, ownerInfo, source, user]);
+  }, [awaitingLibrarySelection, enrichmentPosts, initialId, library.items, libraryBacked, loaderQuery.data, ownerInfo, source, user]);
   // The item the route named did not load: deleted, archived elsewhere, or no
   // longer the reader's. Shown as that, never replaced by the first item (C1).
   const selectionMissing = libraryBacked
