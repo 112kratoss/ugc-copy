@@ -60,6 +60,55 @@ export function toPostLifecyclePost(input: {
   };
 }
 
+/**
+ * The linked post a creation's controls act on, with its unlock bundle.
+ *
+ * The bundle decides whether a visibility change needs confirmation — a selling
+ * recipe must not leave public without a word — and linked-post details load as
+ * enrichment beside the creations, which can be missing or have failed. Rather
+ * than guess that a post it has not seen has no bundle, this reads the post
+ * first (2026-09-16 Creations reliability audit, C5). A failed read reports
+ * itself and returns null, so the caller does nothing.
+ */
+export async function resolveLinkedLifecyclePost({
+  api,
+  item,
+}: {
+  api: Pick<MagicbookletApiClient, 'getOwnerPost'>;
+  item: {
+    linkedPostId?: string | null;
+    linkedPostVisibility?: string | null;
+    linkedPostArchivedAt?: string | null;
+    linkedPostBundle?: Pick<OwnerPostBundleSummary, 'accessMode' | 'status' | 'salesCount'> | null;
+    linkedPostDetailsLoaded?: boolean;
+  };
+}): Promise<PostLifecyclePost | null> {
+  if (!item.linkedPostId) return null;
+  if (item.linkedPostDetailsLoaded) {
+    return toPostLifecyclePost({
+      id: item.linkedPostId,
+      visibility: item.linkedPostVisibility,
+      archivedAt: item.linkedPostArchivedAt,
+      bundle: item.linkedPostBundle ?? null,
+    });
+  }
+  try {
+    const response = await api.getOwnerPost(item.linkedPostId);
+    if (!response.success || response.post.id !== item.linkedPostId) {
+      throw new Error('That post could not be found.');
+    }
+    return toPostLifecyclePost({
+      id: response.post.id,
+      visibility: response.post.visibility,
+      archivedAt: response.post.archivedAt,
+      bundle: response.post.bundle ?? null,
+    });
+  } catch (error) {
+    reportFailure('Could not load the post', error, 'Check your connection and try again.');
+    return null;
+  }
+}
+
 /** The app's confirmation, for a policy decision. */
 export function confirmPostLifecycleAction(confirmation: PostLifecycleConfirmation): Promise<boolean> {
   return showConfirmDialog({

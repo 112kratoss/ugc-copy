@@ -1,4 +1,4 @@
-import { FileText, Globe, LockKeyhole, MessageCircle, Repeat2, Wand2 } from 'lucide-react-native';
+import { FileText, Globe, ImageOff, LockKeyhole, MessageCircle, Repeat2, Wand2 } from 'lucide-react-native';
 import { memo } from 'react';
 import { Text, View } from 'react-native';
 
@@ -17,6 +17,7 @@ import { getViewerActionSlots, type ViewerStateTone } from '@/lib/viewer-actions
 export const ProfileFeedCardView = memo(function ProfileFeedCardView({
   card,
   contentWidth,
+  mediaWatchdog = false,
   showActiveVideo,
   bodyExpanded,
   pendingAction,
@@ -27,6 +28,8 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
 }: {
   card: ProfileFeedCard;
   contentWidth: number;
+  /** Arms display deadlines for the card's media; only while the feed is focused. */
+  mediaWatchdog?: boolean;
   showActiveVideo: boolean;
   bodyExpanded: boolean;
   pendingAction: string | null;
@@ -74,9 +77,13 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
           radius={0}
           recyclingKey={`profile-feed:${card.id}`}
           videoActivation={showActiveVideo ? 'visible' : 'never'}
+          watchdog={mediaWatchdog}
+          diagnosticsSurface="profile-feed"
           videoBackdrop="none"
           videoContentFit="cover"
         />
+      ) : card.sourceUnavailable ? (
+        <UnavailableMediaPlate height={mediaHeight} />
       ) : null}
       banner={card.unlockLabel ? (
         <View
@@ -139,6 +146,37 @@ function profileActionIcon(
   if (id === 'share') return <ShareGlyph size={18} color={muted} />;
   if (id === 'details') return <FileText size={18} color={muted} />;
   return <Repeat2 size={appTheme.icon.default} color={appTheme.colors.primary} />;
+}
+
+/**
+ * Where a creation whose only file is gone would draw its media. The card is the
+ * one the reader tapped, so it shows that creation's own state — the same words
+ * as its grid tile — rather than no media at all, and never asks for the file.
+ */
+function UnavailableMediaPlate({ height }: { height: number }) {
+  return (
+    <View
+      testID="profile-feed-media-unavailable"
+      accessible
+      accessibilityLabel="This file is no longer available. Its only copy expired at the provider before it could be saved."
+      style={{
+        height,
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        paddingHorizontal: appTheme.spacing.card,
+        backgroundColor: appTheme.colors.surfaceInset,
+      }}
+    >
+      <ImageOff size={appTheme.icon.feature} color={appTheme.colors.faint} />
+      <Text style={{ color: appTheme.colors.text, ...appTheme.type.label, textAlign: 'center' }}>
+        This file is no longer available
+      </Text>
+      <Text style={{ color: appTheme.colors.muted, ...appTheme.type.caption, textAlign: 'center' }}>
+        Its only copy expired at the provider before it could be saved.
+      </Text>
+    </View>
+  );
 }
 
 function ProfileStateChip({ label, tone }: { label: string; tone: ViewerStateTone }) {

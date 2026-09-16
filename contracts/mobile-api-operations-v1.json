@@ -492,6 +492,11 @@
       "path": "/api/mobile/notifications/preferences",
       "auth": "required"
     },
+    "reportMediaDiagnostics": {
+      "method": "POST",
+      "path": "/api/mobile/media-diagnostics",
+      "auth": "none"
+    },
     "fetchModelCatalogCurrent": {
       "method": "GET",
       "path": "/api/model-catalog/v1/current",

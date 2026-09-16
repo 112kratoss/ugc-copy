@@ -38,6 +38,12 @@ export interface VisualMediaDescriptor {
    * the client falls back to teaser then rendition — never to `url`.
    */
   feedStreamUrl?: string | null;
+  /**
+   * The ~1440px display rendition of this output, which the owner library and
+   * published post media attach beside the shared descriptor. Absent from older
+   * servers and null when none was stored; the viewer then opens `url`.
+   */
+  displayUrl?: string | null;
   previewUrl: string | null;
   thumbhash: string | null;
   cacheKey: string;

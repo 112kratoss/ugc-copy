@@ -59,6 +59,32 @@ export function getShowcaseViewerImageCacheKey(item: ShowcaseMediaItem): string 
   return previewUrl && previewUrl !== item.url ? `${key}:source` : key;
 }
 
+export type ShowcaseViewerImageSource = {
+  url: string;
+  cacheKey: string | undefined;
+  rendition: 'display' | 'source';
+};
+
+/**
+ * What the viewer loads for an image, including when its display rendition
+ * fails: a display object that will not load falls back to the original instead
+ * of latching the slide on a retry tile (audit C2). The two keep separate cache
+ * entries, so the original's bytes never land under the display's key.
+ */
+export function resolveShowcaseViewerImageSource(
+  item: ShowcaseMediaItem,
+  failedDisplayUrl: string | null = null,
+): ShowcaseViewerImageSource {
+  if (item.displayUrl && item.displayUrl !== failedDisplayUrl) {
+    return { url: item.displayUrl, cacheKey: getShowcaseViewerImageCacheKey(item), rendition: 'display' };
+  }
+  return {
+    url: item.url,
+    cacheKey: getShowcaseViewerImageCacheKey({ ...item, displayUrl: null }),
+    rendition: 'source',
+  };
+}
+
 export type ShowcaseImageTileSource = 'preview' | 'source-fallback' | 'pending';
 
 /**

@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import mobileApiOperationsV1 from '../../contracts/mobile-api-operations-v1.json';
 import { ApiError, createApiClient, type MagicbookletApiClient } from '../lib/api-client';
+import { buildImmersiveGenerationItems } from '../lib/immersive-preview-view-model';
+import { getShowcaseViewerImageUrl } from '../lib/showcase-media';
 
 type ContractEndpointKey = keyof typeof mobileApiContract.endpoints;
 type ContractEndpoint = {
@@ -68,6 +70,16 @@ it('preserves private generation playback without replacing the original downloa
   expect(video?.media?.renditionUrl).toBe('https://magicbooklet.test/api/media?bucket=generated_videos&path=owner-1%2Fplayback%2Fprivate-video-1%2Fabc123.mp4');
   expect(video?.media?.url).toBe(video?.output_url);
   expect(video?.output_url).toBe('https://storage.example.test/private-video-original.mp4');
+});
+
+it('opens an owner image on its display rendition and keeps the original for downloads', async () => {
+  // The whole path, contract payload to viewer source: the adapter that dropped
+  // `displayUrl` passed while the helper was only ever handed a hand-built item.
+  const payload = await clientForEndpoint('listGenerations').listGenerations(false);
+  const image = payload.generations.find(generation => generation.id === 'generation-1');
+  const [item] = buildImmersiveGenerationItems('profile-creations', image ? [image] : [], { creatorLabel: '@owner' });
+  expect(getShowcaseViewerImageUrl(item.mediaItems[0])).toBe('https://cdn.example.test/generation-1-display.webp');
+  expect(item.mediaItems[0].url).toBe('https://cdn.example.test/generation-1.png');
 });
 
 const successCases: Array<{
@@ -256,6 +268,14 @@ const extendedOperationCases: Array<{
   { key: 'createReferralLink', call: (api) => api.createReferralLink() },
   { key: 'recordReferralVisit', call: (api) => api.recordReferralVisit({ code: 'CREATOR1', source: 'mobile' }) },
   { key: 'claimReferral', call: (api) => api.claimReferral({ code: 'CREATOR1' }) },
+  {
+    key: 'reportMediaDiagnostics',
+    call: (api) => api.reportMediaDiagnostics({
+      sessionId: 'session-1234',
+      app: { version: '0.1.4', build: '71', update: '0558882d' },
+      events: [{ at: 1, kind: 'image', event: 'stall', surface: 'profile-grid', subject: '8a1f09c2', attempt: 0 }],
+    }),
+  },
   {
     key: 'recordShowcaseFeedEvent',
     call: (api) => api.recordShowcaseFeedEvent({

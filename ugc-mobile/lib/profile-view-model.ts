@@ -1,6 +1,7 @@
 import type { GenerationListItem, OwnerPostListItem, ProfileResponse, ShowcaseFeedItem } from '@/lib/types';
 import type { PreviewViewerSource } from './immersive-preview-view-model';
 
+import { isCreationLibraryMember } from './creation-library';
 import { getGenerationKind, getGenerationLabel, getGenerationRenderableMediaKind } from './generation-media';
 import { formatCompactCount, formatRelativeTime, formatUsdCents } from './home-view-model';
 
@@ -219,8 +220,9 @@ export function generationToProfileMediaCard(item: GenerationListItem): ProfileM
   // "no longer available" plate is the honest state, and hiding it would read
   // as deletion.
   const sourceUnavailable = Boolean(item.source_unavailable_at);
-  const hasRenderableContent = kind === 'text' ? Boolean(previewText?.trim()) : Boolean(mediaUrl) || sourceUnavailable;
-  const isGridReady = !isArchived && item.status === 'succeeded' && hasRenderableContent;
+  // The library rule the card feed and the reel apply as well, so a tile can
+  // only ever open onto a list that contains it.
+  const isGridReady = isCreationLibraryMember(item);
   const label = getGenerationLabel(kind);
 
   return {
@@ -335,6 +337,16 @@ export function ownerPostToProfileMediaCard(item: OwnerPostListItem): ProfileMed
     artVariant: item.bundle ? 'portal' : item.mediaKind === 'video' ? 'city' : isTextPost ? 'tree' : 'kingdom',
     href: `/showcase/${item.id}`,
   };
+}
+
+/**
+ * Whether an owned post belongs to one scope of the Posts library: the rule the
+ * grid draws its tiles with, and the card feed a tile opens filters by, so the
+ * feed holds exactly the posts the grid around the tapped tile showed.
+ */
+export function isOwnerPostLibraryMember(item: OwnerPostListItem, scope: ProfilePostsScope) {
+  const card = ownerPostToProfileMediaCard(item);
+  return Boolean(card.isGridReady) && (scope === 'archived' ? Boolean(card.isArchived) : !card.isArchived);
 }
 
 export function showcaseToSavedProfileMediaCard(item: ShowcaseFeedItem): ProfileMediaCard {

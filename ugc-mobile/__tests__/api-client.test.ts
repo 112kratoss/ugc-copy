@@ -716,6 +716,25 @@ describe('mobile api client caching', () => {
     });
   });
 
+  it('resolves an owner display rendition and keeps an explicit or absent one as it came', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ generations: [
+      { id: 'image-1', output_url: '/api/media?path=original.png',
+        media: { url: '/api/media?path=original.png', previewUrl: null, displayUrl: '/api/media?path=display.webp' } },
+      { id: 'image-2', output_url: 'https://cdn.example.com/small.png',
+        media: { url: 'https://cdn.example.com/small.png', previewUrl: null, displayUrl: null } },
+      { id: 'image-3', output_url: 'https://cdn.example.com/older-server.png',
+        media: { url: 'https://cdn.example.com/older-server.png', previewUrl: null } },
+    ] }));
+    const api = createApiClient({ baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1', fetcher: fetcher as unknown as typeof fetch });
+
+    const { generations: [display, explicitNull, absent] } = await api.listGenerations(false);
+
+    expect(display.media?.displayUrl).toBe('https://magicbooklet.test/api/media?path=display.webp');
+    expect(explicitNull.media?.displayUrl).toBeNull();
+    expect(absent.media).not.toHaveProperty('displayUrl');
+  });
+
   it('preserves template attribution while masking private recipe metadata', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       generations: [{

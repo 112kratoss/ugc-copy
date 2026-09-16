@@ -238,6 +238,17 @@ export const ONBOARDING_EVENT_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+/**
+ * Sampled media-failure reports from the mobile app. A client sends at most a
+ * few per session, so this only has to stop a broken or hostile sender, not
+ * shape normal traffic.
+ */
+export const MOBILE_MEDIA_DIAGNOSTICS_RATE_LIMIT = {
+  scope: 'mobile:media-diagnostics',
+  limit: 30,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const WELCOME_CREDIT_CLAIM_RATE_LIMIT = {
   scope: 'credits:welcome-claim',
   limit: 20,
