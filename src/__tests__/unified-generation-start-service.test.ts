@@ -263,7 +263,7 @@ describe('unified generation start service', () => {
     }));
   });
 
-  it('resolves the remix source with the service-role client', async () => {
+  it('rate limits before resolving the remix source or looking up attempts', async () => {
     // Grants on generations only allow service-role reads of is_public, so the
     // route must hand resolveSource the admin client — passing the user client
     // is the regression that broke every remix-sourced start in production.
@@ -330,10 +330,7 @@ describe('unified generation start service', () => {
       },
     )).rejects.toBe(rateLimitStop);
 
-    expect(resolveSource).toHaveBeenCalledTimes(1);
-    expect(resolveSource.mock.calls[0][0]).toBe(adminSupabase);
-    expect(resolveSource.mock.calls[0][1]).toBe('user-1');
-    expect(resolveSource.mock.calls[0][2]).toBe('3f8f0c70-9a54-4f6e-8f5a-1c2d3e4f5a6b');
+    expect(resolveSource).not.toHaveBeenCalled();
   });
 });
 
@@ -515,11 +512,32 @@ describe('reference lengths a caller reports', () => {
     expect(understated.startVideo).not.toHaveBeenCalled();
   });
 
-  it('keeps a reported length within half a second of the measurement, so the accepted quote stands', async () => {
+  it('uses measured duration even when the reported length is within half a second', async () => {
+    const run = start({ body: seedanceBody(9.5), measuredSeconds: 10 });
+    await expect(run.outcome).rejects.toMatchObject({
+      code: 'REFERENCE_DURATION_CHANGED', quotedCostCredits: 145, costCredits: 150,
+    });
+    expect(run.startVideo).not.toHaveBeenCalled();
+  });
+
+  it('replays an accepted attempt before a changed catalog can reject its old revision', async () => {
+    const run = start({
+      body: seedanceBody(10), measuredSeconds: 10,
+      existingGeneration: { id: 'generation-1', prediction_id: 'original-task', status: 'processing', cost: 150 },
+      quote: () => { throw new Error('CATALOG_CHANGED'); },
+    });
+    await expect(run.outcome).resolves.toMatchObject({ predictionId: 'original-task', idempotentReplay: true, catalogRevision: 'catalog-v2' });
+    expect(run.startVideo).not.toHaveBeenCalled();
+    expect(run.probeInputDuration).not.toHaveBeenCalled();
+  });
+
+  it('requires reconfirmation when fractional measured seconds raise the cost', async () => {
     const { outcome, startVideo } = start({ body: seedanceBody(9.75), measuredSeconds: 10.25 });
 
-    await expect(outcome).resolves.toMatchObject({ success: true });
-    expect(startVideo).toHaveBeenCalledWith(expect.objectContaining({ quotedCostCredits: 148 }));
+    await expect(outcome).rejects.toMatchObject({
+      code: 'REFERENCE_DURATION_CHANGED', quotedCostCredits: 148, costCredits: 153,
+    });
+    expect(startVideo).not.toHaveBeenCalled();
   });
 
   it('charges the measured length when the caller overstated it', async () => {
@@ -571,7 +589,7 @@ describe('reference lengths a caller reports', () => {
 
     const honest = start({
       body: motionBody(30, 30),
-      measuredSeconds: 30.2,
+      measuredSeconds: 29.9,
       operation: MOTION_OPERATION,
       quote: durationPricedQuote,
     });

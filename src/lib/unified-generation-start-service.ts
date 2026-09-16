@@ -81,14 +81,6 @@ export class UnifiedGenerationRequestError extends Error {
 
 export const REFERENCE_DURATION_CHANGED_CODE = 'REFERENCE_DURATION_CHANGED';
 
-/**
- * Players and ffmpeg read the same container a few hundredths of a second
- * apart, and a phone's picker rounds. A reported length this close to the
- * measured one is kept, so an honest client is never bounced over rounding;
- * anything further off is replaced by the measurement.
- */
-export const REPORTED_INPUT_DURATION_TOLERANCE_SECONDS = 0.5;
-
 export type VerifiedInputDuration = {
   index: number;
   slot: string;
@@ -465,14 +457,7 @@ export async function resolveBillableInputDurations({
     if (measured === null || !Number.isFinite(measured) || measured <= 0) throw unverifiable(index);
 
     verified.push({ index, slot: asset.slot, durationSeconds: measured });
-    const reported = typeof asset.durationSeconds === 'number' && asset.durationSeconds > 0
-      ? asset.durationSeconds
-      : null;
-    const billable = reported !== null
-      && Math.abs(measured - reported) <= REPORTED_INPUT_DURATION_TOLERANCE_SECONDS
-      ? reported
-      : measured;
-    return { ...asset, durationSeconds: billable };
+    return { ...asset, durationSeconds: measured };
   }));
   verified.sort((first, second) => first.index - second.index);
 
@@ -482,7 +467,7 @@ export async function resolveBillableInputDurations({
     if (performance && typeof performance.durationSeconds === 'number') {
       settings = {
         ...settings,
-        duration: Math.max(1, Math.ceil(performance.durationSeconds - REPORTED_INPUT_DURATION_TOLERANCE_SECONDS)),
+        duration: Math.max(1, Math.ceil(performance.durationSeconds)),
       };
     }
   }
@@ -777,22 +762,7 @@ export async function startUnifiedGenerationForRoute(
   const parsed = parseUnifiedGenerationRequest(body);
   const loadCatalog = dependencies.loadCatalog ?? loadPublishedGenerationModelCatalog;
   const quoteModel = dependencies.quoteModel ?? quoteGenerationModel;
-  const snapshot = await loadUnifiedGenerationCatalog(
-    loadCatalog,
-    platformForRequest(request),
-  );
-  const quote = quoteModel(buildUnifiedGenerationQuoteInputForCatalog(parsed, snapshot), {
-    catalog: snapshot.catalog,
-    operations: snapshot.operations,
-  });
-  const operation = requireOperation(snapshot, parsed.modelId);
-
   const resolveSource = dependencies.resolveSource ?? resolveSourceGenerationId;
-  const sourceGenerationId = await resolveSource(
-    adminSupabase,
-    userId,
-    parsed.sourceGenerationId,
-  );
   const applyRateLimit = dependencies.enforceRateLimit ?? enforceBackendRateLimit;
   await applyRateLimit(adminSupabase, {
     ...MEDIA_GENERATION_RATE_LIMIT,
@@ -809,9 +779,16 @@ export async function startUnifiedGenerationForRoute(
     idempotencyKey: getGenerationStartIdempotencyKey(request, body),
     requestHash: hashGenerationStartRequest(body),
     owner: getGenerationStartLockOwner(request),
-    // Measured here, inside the start, so an idempotent replay returns the
-    // original run without touching a single reference file.
+    // Accepted attempts replay before mutable catalog/source validation. A
+    // later model release or privacy change cannot hide an already-started run.
     start: async (clientRequestKeyHash) => {
+      const snapshot = await loadUnifiedGenerationCatalog(loadCatalog, platformForRequest(request));
+      const quote = quoteModel(buildUnifiedGenerationQuoteInputForCatalog(parsed, snapshot), {
+        catalog: snapshot.catalog,
+        operations: snapshot.operations,
+      });
+      const operation = requireOperation(snapshot, parsed.modelId);
+      const sourceGenerationId = await resolveSource(adminSupabase, userId, parsed.sourceGenerationId);
       const billable = await resolveBillableInputDurations({
         request: parsed,
         descriptor: snapshot.catalog.models.find((model) => (
@@ -863,7 +840,8 @@ export async function startUnifiedGenerationForRoute(
     status: 'processing',
     remainingCredits: result.remainingCredits,
     cost: result.cost,
-    catalogRevision: quote.catalogRevision,
+    // The request hash binds a replay to this original revision.
+    catalogRevision: parsed.catalogRevision,
     modelId: parsed.modelId,
     ...(result.idempotentReplay ? { idempotentReplay: true } : {}),
   };

@@ -2354,6 +2354,27 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     vi.useRealTimers();
   });
 
+  it('does not send a generation until its attempt can be saved', async () => {
+    vi.useFakeTimers();
+    const start = vi.fn().mockRejectedValue(Object.assign(new Error('Lost response'), { status: 0 }));
+    authState.api.startGeneration = start;
+    draftStorage.setItem.mockImplementation(async (key: string) => {
+      if (key.startsWith('magicbooklet.generation.pendingAttempt')) throw new Error('Storage unavailable');
+    });
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => { tree = renderer.create(<MediaCreationScreen initialTool="image" />); });
+    renderer.act(() => { tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('A product photograph'); });
+    await renderer.act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    await renderer.act(async () => { await findPressableByText(tree!.root, 'Generate · 8 credits').props.onPress(); });
+    expect(start).not.toHaveBeenCalled();
+    expect(collectText(tree!.root).join(' ')).toContain('Could not save your generation attempt');
+    draftStorage.setItem.mockResolvedValue(undefined);
+    await renderer.act(async () => { await findPressableByText(tree!.root, 'Check again').props.onPress(); });
+    expect(start).toHaveBeenCalledTimes(1);
+    renderer.act(() => tree!.unmount());
+    vi.useRealTimers();
+  });
+
   it('offers to check a start a restart left unconfirmed, replaying the saved request and key', async () => {
     vi.useFakeTimers();
     catalogState.catalog = catalogV2();

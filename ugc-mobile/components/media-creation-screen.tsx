@@ -1394,11 +1394,13 @@ function IdentityCreationScreen({
     generationPollControllerRef.current = pollController;
     setIsGenerating(true);
     let startedPredictionId: string | null = null;
+    let attemptSaved = false;
     try {
       // Saved before the request leaves the phone, so a response lost to a
       // dropped connection or a restart can still be checked under this key.
       setPendingAttempt(attempt);
-      await savePendingGenerationAttempt(attempt).catch(() => undefined);
+      await savePendingGenerationAttempt(attempt);
+      attemptSaved = true;
       const started = await sendGenerationAttempt(attempt);
       startedPredictionId = started.predictionId;
       void forgetPendingAttempt(attempt.identityUserId);
@@ -1416,7 +1418,11 @@ function IdentityCreationScreen({
       const details = error && typeof error === 'object' && 'details' in error
         ? (error as { details?: { code?: string } }).details
         : null;
-      if (startedPredictionId) {
+      if (!attemptSaved) {
+        // Keep the same attempt available for retry, but never send without
+        // a durable key that survives a lost response and an app restart.
+        setMessage('Could not save your generation attempt. Free up device storage if needed, then check again. No request was sent.');
+      } else if (startedPredictionId) {
         setPollingInterrupted(true);
         setMessage(error instanceof Error ? error.message : 'Could not refresh generation progress.');
       } else if (isAmbiguousGenerationStartFailure(error)) {
