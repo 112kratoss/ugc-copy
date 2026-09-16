@@ -12,6 +12,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
 import { DoubleTapPressable } from '@/components/double-tap-pressable';
+import { MediaZoomChrome, MediaZoomStage, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage } from '@/components/media-zoom';
+import { mediaItemAspectRatio, showcaseViewerMediaPicture } from '@/lib/media-zoom-transition';
 import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
 import { restoreVideoPlayback } from '@/lib/video-playback-continuity';
@@ -383,6 +385,26 @@ export default function ImmersivePreviewViewerScreen() {
   }, [handoffAutoplayAllowed, playbackHandoff]);
   const activeItem = items[activeIndex];
   const detailsOpenForActive = Boolean(activeItem) && detailsPageOpenItemId === activeItem.id;
+  // The shape of the picture on screen, so a reel growing out of a tile — or
+  // shrinking back into one — lines up with the media rather than beside it;
+  // and the picture itself, for a close that has to shrink a copy of it.
+  const activeMedia = useMemo(() => {
+    if (!activeItem) return { aspectRatio: null, picture: null };
+    const pages = buildImmersiveSlidePages(activeItem);
+    const page = pages.find((candidate) => slidePageKey(candidate) === position?.mediaPageKey) ?? pages[0];
+    if (page?.type !== 'media') return { aspectRatio: null, picture: null };
+    return { aspectRatio: mediaItemAspectRatio(page.mediaItem), picture: showcaseViewerMediaPicture(page.mediaItem) };
+  }, [activeItem, position?.mediaPageKey]);
+  const zoom = useMediaZoomStage({
+    screen: { width, height },
+    initialItemId: initialId,
+    activeItemId: activeItem?.id ?? null,
+    aspectRatio: activeMedia.aspectRatio,
+    activePicture: activeMedia.picture,
+    reducedMotion,
+    ready: items.length > 0 && initialPositionReady,
+    onExit: leaveViewer,
+  });
   const showMediaForActive = useCallback(() => {
     activeSlideRef.current?.showMedia();
   }, []);
@@ -390,6 +412,13 @@ export default function ImmersivePreviewViewerScreen() {
   // Gated on focus: the listener would otherwise outlive a push to a creator
   // profile or the sign-in screen and swallow their back key.
   useHardwareBack(isFocused && detailsOpenForActive, showMediaForActive);
+  // Android's back key leaves the reel the way its own Back control does, so
+  // the post shrinks into the tile it came from instead of being cut away. A
+  // sheet or the details page answers the key first and keeps this switched off.
+  useHardwareBack(
+    isFocused && !detailsOpenForActive && !overlayOpenItemId,
+    zoom.dismiss
+  );
   const feedSessionId = sourceQuery.data?.feedSessionId ?? routeFeedSessionId ?? null;
   const algorithmVersion = sourceQuery.data?.algorithmVersion ?? routeAlgorithmVersion ?? null;
   const submitViewerFeedEvent = useCallback((
@@ -918,6 +947,10 @@ export default function ImmersivePreviewViewerScreen() {
 
   return (
     <ViewerPlaybackContext.Provider value={playbackHandoff}>
+    {/* The reel is drawn inside a window that grows out of the tapped tile and
+        shrinks back into it, so opening a post reads as that post getting
+        bigger rather than as another screen arriving. */}
+    <MediaZoomStage stage={zoom} screen={{ width, height }}>
     <View style={{ flex: 1, backgroundColor: '#000' }}>
       <Stack.Screen options={{ gestureEnabled: !detailsOpenForActive, fullScreenGestureEnabled: false }} />
       <FlatList
@@ -993,7 +1026,10 @@ export default function ImmersivePreviewViewerScreen() {
         renderItem={({ item, index }) => (
           <ImmersiveSlide
             active={index === activeIndex}
-            prepareVideo={Math.abs(index - activeIndex) <= 1 && (index === activeIndex || Math.abs(index - preparedVideoIndex) <= 1)}
+            /* Creating a player is the most expensive thing the reel mounts, and
+               a reel that is still growing out of a tile is showing a poster
+               anyway — so the players wait until it has landed. */
+            prepareVideo={zoom.opened && Math.abs(index - activeIndex) <= 1 && (index === activeIndex || Math.abs(index - preparedVideoIndex) <= 1)}
             activeSlideRef={activeSlideRef}
             activeVideoId={activeVideoId}
             authReturnTo={immersiveViewerReturnPath({
@@ -1031,7 +1067,10 @@ export default function ImmersivePreviewViewerScreen() {
         scrollEnabled={!overlayOpenItemId && !isHorizontalScrolling}
         showsVerticalScrollIndicator={false}
         style={{ flex: 1, backgroundColor: '#000' }}
-        windowSize={IMMERSIVE_VERTICAL_LIST_TUNING.windowSize}
+        // Neighbouring slides mount on the UI thread, and a reel that is still
+        // growing out of a tile cannot afford that thread: they wait for it to
+        // land, by which time the reader has seen one page and no more.
+        windowSize={zoom.opened ? IMMERSIVE_VERTICAL_LIST_TUNING.windowSize : 1}
       />
       {/* Status bars: "Obscure content under the status bar ... Be sure to keep
           the status bar readable." The reel is the app's one full-bleed screen,
@@ -1039,6 +1078,7 @@ export default function ImmersivePreviewViewerScreen() {
           so on bright media it is white on white. Same scrim the four scrolling
           screens draw, in the same place in the tree: after the scroller, before
           any sheet. */}
+      <MediaZoomChrome>
       <TopScrim topInset={topInset} over="media" />
       {/* The details page draws its own header with its own way back; the
           reel's arrow would be a second back button that leaves the reel. */}
@@ -1046,7 +1086,7 @@ export default function ImmersivePreviewViewerScreen() {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Go back"
-          onPress={leaveViewer}
+          onPress={zoom.dismiss}
           style={({ pressed }) => ({
             position: 'absolute',
             left: 16,
@@ -1096,6 +1136,7 @@ export default function ImmersivePreviewViewerScreen() {
           </IconShadow>
         </Pressable>
       )}
+      </MediaZoomChrome>
       {activeItem ? (
         <ViewerActionSheet
           item={activeItem}
@@ -1131,7 +1172,7 @@ export default function ImmersivePreviewViewerScreen() {
               params: { tab: 'posts' },
             } as never);
           }}
-          onBlocked={() => leaveViewer()}
+          onBlocked={() => zoom.dismiss()}
           onSourceRefresh={() => void sourceQuery.refetch()}
           visible={actionsOpenItemId === activeItem.id}
         />
@@ -1184,11 +1225,14 @@ export default function ImmersivePreviewViewerScreen() {
           the slide's media counter, and the two used to be drawn on top of each
           other — the spinner from `topInset + 24`, the counter from a flat 68. */}
       {sourceQuery.isFetching && activeItem ? (
-        <View style={{ position: 'absolute', top: viewerTopBadgeTop(topInset), left: 30 }}>
-          <ActivityIndicator color="rgba(255,255,255,0.72)" />
-        </View>
+        <MediaZoomChrome pointerEvents="none">
+          <View style={{ position: 'absolute', top: viewerTopBadgeTop(topInset), left: 30 }}>
+            <ActivityIndicator color="rgba(255,255,255,0.72)" />
+          </View>
+        </MediaZoomChrome>
       ) : null}
     </View>
+    </MediaZoomStage>
     </ViewerPlaybackContext.Provider>
   );
 }
@@ -1385,14 +1429,10 @@ function ImmersiveSlide({
     const scrimHeight = Math.max(220, captionBlockHeight + bottomInset + 120);
     const showFollowPill = Boolean(followTarget) && (!user || !follow.loading);
 
+    // Rail, caption and scrims ride inside the zoom window with the media, so
+    // they are revealed as it opens instead of arriving after it.
     return (
-      <View
-        pointerEvents="box-none"
-        style={{
-          position: 'absolute',
-          inset: 0,
-        }}
-      >
+      <MediaZoomChrome>
         <LinearGradient
           pointerEvents="none"
           colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.42)', 'rgba(0,0,0,0.84)']}
@@ -1644,7 +1684,7 @@ function ImmersiveSlide({
           </>
           )}
         </View>
-      </View>
+      </MediaZoomChrome>
     );
   };
 
@@ -2058,6 +2098,13 @@ function ImmersiveMedia({
   // than leaving the slide on a retry tile (audit C2).
   const [failedDisplayUrl, setFailedDisplayUrl] = useState<string | null>(null);
   const isFocused = useIsFocused();
+  // While the reel is growing out of a tile it carries that tile's picture;
+  // this is the slide saying it has drawn its own, so the copy can go.
+  const reportPainted = useMediaZoomPaintReport();
+  const zoomOpened = useMediaZoomOpened();
+  const reportSlidePainted = useCallback(() => {
+    if (slideActive) reportPainted();
+  }, [reportPainted, slideActive]);
 
   if (mediaItem.mediaKind === 'video') {
     return (
@@ -2068,6 +2115,7 @@ function ImmersiveMedia({
         {mediaItem.previewUrl ? (
           <FeedMediaFrame
             kind="image"
+            onImageDisplay={reportSlidePainted}
             url={mediaItem.previewUrl}
             backdropUrl={mediaItem.previewUrl}
             cacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
@@ -2094,7 +2142,9 @@ function ImmersiveMedia({
             onDoublePress={handleDoublePress}
             style={{ width, height }}
           >
-            <ViewerPlayBadge />
+            {/* No badge over a reel that is still growing: its player is on the
+                way, and a paused mark there reads as a stalled video. */}
+            {zoomOpened ? <ViewerPlayBadge /> : null}
           </DoubleTapPressable>
         )}
       </View>
@@ -2111,6 +2161,7 @@ function ImmersiveMedia({
       >
         <FeedMediaFrame
           kind="image"
+          onImageDisplay={reportSlidePainted}
           url={image.url}
           backdropUrl={mediaItem.previewUrl}
           backdropCacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}

@@ -21,6 +21,7 @@ import { CommentsSheet } from '@/components/comments-sheet';
 import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
 import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { HomeFeedCardView } from '@/components/home-feed-card';
+import { MediaZoomSurface } from '@/components/media-zoom';
 import { HomeSideMenu } from '@/components/home-side-menu';
 import { WorkspaceSideMenuGlyph, WORKSPACE_SIDE_MENU_LABEL } from '@/components/workspace-side-menu-gesture-layer';
 import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
@@ -786,6 +787,8 @@ export function HomeDashboard() {
   );
 
   return (
+    // Tiles on this screen are what the reel grows out of and returns to.
+    <MediaZoomSurface>
     <View style={{ flex: 1, backgroundColor: DASHBOARD_COLORS.background }}>
       <FlashList
         // A lane is a new feed, not a mutation of the visible one. Remounting
@@ -929,6 +932,7 @@ export function HomeDashboard() {
         onSignOut={signOut}
       />
     </View>
+    </MediaZoomSurface>
   );
 }
 

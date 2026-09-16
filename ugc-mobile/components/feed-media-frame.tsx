@@ -30,6 +30,8 @@ type FeedImageFrameProps = FeedMediaFrameBaseProps & {
   kind: 'image';
   imageBackdrop?: 'blurred' | 'none';
   imageContentFit?: 'cover' | 'contain';
+  /** Fires when this picture is actually on screen, not merely decoded. */
+  onImageDisplay?: ImageProps['onDisplay'];
   onImageError?: () => void;
   onImageLoad?: ImageProps['onLoad'];
   transition?: number;
@@ -126,6 +128,7 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
             cacheKey={foregroundCacheKey ?? props.url}
             thumbhash={props.thumbhash}
             contentFit={props.imageContentFit ?? 'contain'}
+            onDisplay={props.onImageDisplay}
             onError={props.onImageError}
             onLoad={props.onImageLoad}
             transition={props.transition}

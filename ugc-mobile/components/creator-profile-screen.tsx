@@ -28,6 +28,8 @@ import {
 } from '@/lib/creator-profile-view-model';
 import { env } from '@/lib/env';
 import { formatCompactCount } from '@/lib/home-view-model';
+import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '@/components/media-zoom';
+import { showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
 import { showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
 import { ShareGlyph } from '@/lib/platform-glyphs';
 import { resolvedBottomInset } from '@/lib/safe-area';
@@ -408,6 +410,8 @@ export function CreatorProfileScreen({
   };
 
   return (
+    // Tiles on this profile are what the reel grows out of and returns to.
+    <MediaZoomSurface>
     <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
       {/* The bar says what the view is, not who it contains: a username has no
           length bound, the profile header already prints the display name, and a
@@ -449,6 +453,7 @@ export function CreatorProfileScreen({
         }
       />
     </View>
+    </MediaZoomSurface>
   );
 }
 
@@ -587,10 +592,21 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
   const height = Math.round(width * 1.25);
   const accent = accentColor(item.category === 'video' ? 'video' : item.category === 'text' ? 'motion' : 'image');
   const hasVideo = item.mediaKind === 'video' || item.category === 'video' || item.mediaItems?.some((mediaItem) => mediaItem.mediaKind === 'video');
+  const tileMediaItems = getShowcasePreviewMediaItems(item);
+  // The picture is what opens: the reel grows out of this rectangle.
+  const zoomSource = useMediaZoomSource({
+    itemId: item.id,
+    // The card clips its own top corners; the window matches them on the way out.
+    radius: 20,
+    preview: showcaseMediaZoomPreview(tileMediaItems[0]),
+    enabled: !isTextPost && hasShowcasePreviewMedia(item),
+  });
+  const open = () => zoomSource.capture(onPress);
 
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.title || 'creator post'}`} onPress={onPress} style={({ pressed }) => ({ width, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.title || 'creator post'}`} onPress={open} onPressIn={zoomSource.prepare} style={({ pressed }) => ({ width, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
       <View style={{ minHeight: height + 92, overflow: 'hidden', borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.borderSubtle, backgroundColor: appTheme.colors.panel }}>
+        <MediaZoomSourceView source={zoomSource} style={{ width, height }}>
         <View style={{ height, backgroundColor: appTheme.colors.surfaceInset }}>
           {isTextPost ? (
             <View style={{ flex: 1, padding: 13, justifyContent: 'space-between', backgroundColor: appTheme.colors.panelSoft }}>
@@ -598,7 +614,7 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
               <Text numberOfLines={7} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>{displayText}</Text>
             </View>
           ) : hasShowcasePreviewMedia(item) ? (
-            <ShowcaseMediaPreview accent={accent} height={height} mediaItems={getShowcasePreviewMediaItems(item)} onPress={onPress} radius={0} recyclingKey={`creator-profile:${item.id}`} videoActivation={activeVideoPreview ? 'when-poster-missing' : 'never'} width={width} />
+            <ShowcaseMediaPreview accent={accent} height={height} mediaItems={tileMediaItems} onPress={open} radius={0} recyclingKey={`creator-profile:${item.id}`} videoActivation={activeVideoPreview ? 'when-poster-missing' : 'never'} width={width} />
           ) : (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><ImageIcon size={appTheme.icon.hero} color={appTheme.colors.faint} /></View>
           )}
@@ -616,6 +632,7 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
             </View>
           ) : null}
         </View>
+        </MediaZoomSourceView>
 
         <View style={{ minHeight: 92, padding: 10, gap: 6 }}>
           <Text numberOfLines={2} style={{ minHeight: 38, color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>{item.title || displayText}</Text>

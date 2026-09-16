@@ -3,6 +3,7 @@ import { memo } from 'react';
 import { Text, View } from 'react-native';
 
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
+import { MediaZoomSourceView, useMediaZoomSource } from '@/components/media-zoom';
 import { PostTextBlock } from '@/components/post-text-block';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import {
@@ -10,6 +11,7 @@ import {
   getProfileFeedMediaHeight,
   type ProfileFeedCard,
 } from '@/lib/profile-feed-card-view-model';
+import { showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
 import { ShareGlyph } from '@/lib/platform-glyphs';
 import { accentColor, appTheme } from '@/lib/theme';
 import { getViewerActionSlots, type ViewerStateTone } from '@/lib/viewer-actions';
@@ -41,6 +43,13 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
   const accent = accentColor(card.accent);
   const mediaHeight = getProfileFeedMediaHeight(card, contentWidth);
   const item = card.item;
+  // The media is what opens: the reel grows out of this rectangle and shrinks
+  // back into it.
+  const zoomSource = useMediaZoomSource({
+    itemId: item.id,
+    preview: showcaseMediaZoomPreview(item.mediaItems?.[0]),
+    enabled: card.hasMedia,
+  });
   // The card drops the Details slot: tapping the card already opens its canonical
   // viewer, and five labelled actions wrap onto a second row.
   const slots = getViewerActionSlots(item).filter((slot) => slot.id !== 'details');
@@ -54,7 +63,8 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
       creatorName={card.creatorName}
       onMorePress={onActionsOpen}
       moreAccessibilityLabel={`More options for ${card.title}`}
-      onOpen={onOpen}
+      onOpen={() => zoomSource.capture(onOpen)}
+      onOpenTouchStart={zoomSource.prepare}
       openAccessibilityLabel={`Open ${card.title}`}
       statusChip={card.state ? <ProfileStateChip label={card.state.label} tone={card.state.tone} /> : null}
       timeLabel={card.timeLabel}
@@ -69,19 +79,21 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
         />
       ) : null}
       media={card.hasMedia ? (
-        <ShowcaseMediaPreview
-          accent={accent}
-          mediaItems={item.mediaItems}
-          width={contentWidth}
-          height={mediaHeight}
-          radius={0}
-          recyclingKey={`profile-feed:${card.id}`}
-          videoActivation={showActiveVideo ? 'visible' : 'never'}
-          watchdog={mediaWatchdog}
-          diagnosticsSurface="profile-feed"
-          videoBackdrop="none"
-          videoContentFit="cover"
-        />
+        <MediaZoomSourceView source={zoomSource}>
+          <ShowcaseMediaPreview
+            accent={accent}
+            mediaItems={item.mediaItems}
+            width={contentWidth}
+            height={mediaHeight}
+            radius={0}
+            recyclingKey={`profile-feed:${card.id}`}
+            videoActivation={showActiveVideo ? 'visible' : 'never'}
+            watchdog={mediaWatchdog}
+            diagnosticsSurface="profile-feed"
+            videoBackdrop="none"
+            videoContentFit="cover"
+          />
+        </MediaZoomSourceView>
       ) : card.sourceUnavailable ? (
         <UnavailableMediaPlate height={mediaHeight} />
       ) : null}

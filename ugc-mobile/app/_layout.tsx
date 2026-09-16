@@ -9,13 +9,14 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
 import 'react-native-reanimated';
-import { AppState, View } from 'react-native';
+import { AppState, Platform, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { ActionSheetHost } from '@/components/action-sheet';
 import { DialogHost } from '@/components/dialog';
 import { OnboardingServerSync } from '@/components/onboarding-server-sync';
+import { MediaZoomFlightLayer } from '@/components/media-zoom';
 import { OverlayHost } from '@/components/overlay-host';
 import { SignOutOverlay } from '@/components/sign-out-overlay';
 import { CriticalUpdateSheet } from '@/components/critical-update-sheet';
@@ -48,6 +49,10 @@ export const unstable_settings = {
 // FONT_SPLASH_FALLBACK_MS guarantees the splash can never hang on it.
 const FONT_SPLASH_FALLBACK_MS = 1200;
 void SplashScreen.preventAutoHideAsync().catch(() => undefined);
+
+// The reel's zoom is its whole transition on Android (see the viewer screen
+// below); on iOS the navigator's short fade is what it arrives under.
+const VIEWER_ANIMATION = Platform.OS === 'android' ? 'none' : 'fade';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -205,11 +210,30 @@ function RootLayoutNav() {
                     contentStyle: { backgroundColor: appTheme.colors.app },
                   }}
                 />
-                {/* A plain native fade: the reel, its rail and its caption arrive in
-                    the same frame, the way a tapped reel opens elsewhere. A hero
-                    zoom out of the tile was tried (2026-08-23) and read as the media
-                    arriving before its controls, so it was taken out. */}
-                <Stack.Screen name="viewer" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
+                {/* The reel opens by growing out of the tapped tile, rail and caption
+                    inside that window, and shrinks back into it
+                    (`components/media-zoom.tsx`); the navigator contributes as
+                    little as each platform lets it. Android: a transparent modal
+                    keeps the screen beneath attached and drawn, so the reel grows
+                    over it and shrinks back over it live, and the navigator runs no
+                    animation of its own. iOS: a push (a modal here would make every
+                    screen pushed after it a modal too — RNSScreenStack splits the
+                    stack at the first one), transparent so the screen beneath shows
+                    through the reel's own ground during the short fade in, and so
+                    the snapshot a pop leaves behind hides nothing while the layer
+                    above the navigator shrinks the reel's picture over it. An
+                    earlier attempt (2026-08-23) mounted the media first and brought
+                    the controls in afterwards, which is what it was cut for. */}
+                <Stack.Screen
+                  name="viewer"
+                  options={{
+                    headerShown: false,
+                    presentation: Platform.OS === 'android' ? 'transparentModal' : 'card',
+                    contentStyle: { backgroundColor: 'transparent' },
+                    animation: reducedMotion ? 'none' : VIEWER_ANIMATION,
+                    animationDuration: 250,
+                  }}
+                />
                 {/* Keep the library and its card feed opaque while navigating. A
                     fade composites two dense media surfaces and briefly makes
                     cards from the grid look stacked over feed cards. */}
@@ -228,6 +252,11 @@ function RootLayoutNav() {
                 <Stack.Screen name="help" options={{ title: 'Help & Support' }} />
                 </Stack>
                 </OverlayHost>
+                {/* Above every screen: the flight a tapped tile's picture makes
+                    to the full screen and back, which no screen change can
+                    interrupt. Nothing is rendered unless a post is opening or
+                    closing. */}
+                <MediaZoomFlightLayer />
               </View>
               </GestureHandlerRootView>
             </ThemeProvider>

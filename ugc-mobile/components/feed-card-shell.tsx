@@ -46,6 +46,7 @@ export function FeedCardShell({
   moreAccessibilityLabel,
   media,
   onOpen,
+  onOpenTouchStart,
   openAccessibilityLabel,
   statusChip,
   timeLabel,
@@ -64,6 +65,12 @@ export function FeedCardShell({
   moreAccessibilityLabel: string;
   media?: ReactNode;
   onOpen?: () => void;
+  /**
+   * The finger has gone down on the media: a chance to get its opening ready.
+   * Raw touch start, not press-in — the press delay below holds press-in back
+   * until most taps have already been released.
+   */
+  onOpenTouchStart?: () => void;
   openAccessibilityLabel: string;
   /** Publish/visibility state for owned media. Home passes nothing. */
   statusChip?: ReactNode;
@@ -178,6 +185,7 @@ export function FeedCardShell({
         onPress={open}
         onPressIn={openMotion.onPressIn}
         onPressOut={openMotion.onPressOut}
+        onTouchStart={onOpenTouchStart}
         unstable_pressDelay={CARD_PRESS_DELAY_MS}
         style={{ paddingTop: media ? appTheme.spacing.gap : 0 }}
       >
