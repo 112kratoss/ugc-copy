@@ -66,6 +66,7 @@ import {
 } from '@/lib/media-zoom-video-offer';
 import { adoptVideoPlayer, lendVideoPlayer, releaseAdoptedVideoPlayer, returnVideoPlayer } from '@/lib/video-player-loans';
 import { FEED_VIDEO_VIEW_PROPS } from '@/lib/feed-video-view-props';
+import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { LetterboxBands } from '@/components/letterbox-bands';
 import { TopScrim } from '@/components/top-scrim';
 import { resolvedTopInset } from '@/lib/safe-area';
@@ -140,13 +141,19 @@ const VIDEO_ATTACH_SETTLE_MS = 90;
  * Instagram.
  */
 const GROUND_RAMP_FROM = 0.8;
-/**
- * The rail and caption are there only while the window is the whole screen:
- * they cut away on the first frame of a collapse rather than fading, as
- * Instagram's do. A fade would cost a frame of offscreen compositing for every
- * gradient in them, and nobody is looking at a caption that is shrinking.
- */
+/** The rail and caption belong to a window that is the whole screen. */
 const CHROME_FROM = 0.995;
+/**
+ * A closing post carries its rail and caption down into the tile, fading, the
+ * way Instagram's does — rather than cutting them away on the collapse's first
+ * frame, which read as the post being replaced by its picture.
+ *
+ * Read on the close's own clock (1 at the reel, 0 at the tile) and not on the
+ * window, which is front-loaded: a fade tied to the window would be over within
+ * two frames, while the picture still filled most of the screen.
+ */
+const CLOSE_CHROME_HOLD = 0.95;
+const CLOSE_CHROME_GONE = 0.3;
 /**
  * How far the picture has grown before the reel is pushed: all the way. Mounting
  * the reel is the heaviest thing the app does, and the UI thread is held for a
@@ -230,6 +237,13 @@ const CLOSE_CREEPS_UNTIL_POPPED = Platform.OS === 'ios';
 const CLOSE_CREEP_RATE = 0.25;
 /** A pop that never reports back releases the creep after this anyway. */
 const CLOSE_CREEP_DEADLINE_MS = 300;
+/**
+ * How long the screen keeps showing the frame it last drew after the pop has
+ * committed, while the screen underneath is drawn again: 67–100 ms on an iPhone
+ * 16e, measured on film. The close creeps through it rather than racing it; see
+ * the reel's unmount.
+ */
+const CLOSE_REATTACH_MS = 90;
 /** The black ground's fade once the screen the close returns to is back. */
 const CLOSE_GROUND_FADE_MS = 90;
 /**
@@ -311,6 +325,7 @@ function samePicture(a: ZoomPreview | null | undefined, b: ZoomPreview | null | 
 function drawsSameStill(a: ZoomStill, b: ZoomStill) {
   return samePicture(a.preview, b.preview)
     && !a.video && !b.video
+    && (a.post?.id ?? null) === (b.post?.id ?? null)
     && a.geometry.screen.width === b.geometry.screen.width
     && a.geometry.screen.height === b.geometry.screen.height
     && (a.geometry.aspectRatio ?? null) === (b.geometry.aspectRatio ?? null);
@@ -347,17 +362,32 @@ function holdStill(still: ZoomStill | null) {
  *
  * `standing` holds it for an open reel's close rather than for a finger (see
  * `ZoomStill.standing`).
+ *
+ * The post's rail and caption are laid out here too, for the same reason as the
+ * picture: under the finger they cost nothing, and a flight that has to create
+ * them after the tap leaves without them (`ZoomStill.post`).
  */
-function prepareZoomPicture(preview: ZoomPreview, aspectRatio: number | null, standing = false) {
+function prepareZoomPicture(
+  preview: ZoomPreview,
+  aspectRatio: number | null,
+  standing = false,
+  post: ImmersivePreviewItem | null = null
+) {
   if (!tickerControl || getZoomFlight()) return;
   if (layerScreen.width <= 0) measureLayerNow?.();
   if (layerScreen.width <= 0) return;
   const held = getHeldZoomPicture();
-  if (samePicture(held?.preview, preview) && Boolean(held?.standing) === standing) return;
+  // By identity, not by id: a post whose counts or saved state have moved on is
+  // a different drawing, and this copy is what a close puts on screen.
+  if (
+    samePicture(held?.preview, preview)
+    && Boolean(held?.standing) === standing
+    && (held?.post ?? null) === (post ?? null)
+  ) return;
   stillOpacity.set(0);
   closeGroundOpacity.set(0);
   stillCarriesVideo.set(false);
-  holdStill({ preview, geometry: { screen: layerScreen, tile: null, tileRadius: 0, aspectRatio }, standing });
+  holdStill({ preview, geometry: { screen: layerScreen, tile: null, tileRadius: 0, aspectRatio }, standing, post });
 }
 
 /**
@@ -390,7 +420,12 @@ function startZoomFlight(
   }
   flightClosing.set(spec.direction === 'close');
   const still: ZoomStill | null = spec.still && spec.preview
-    ? { preview: spec.preview, geometry: spec.geometry, video: spec.video ?? null }
+    ? {
+      preview: spec.preview,
+      geometry: spec.geometry,
+      video: spec.video ?? null,
+      post: spec.post ?? null,
+    }
     : null;
   const carriesVideo = Boolean(still?.video);
   // A picture the layer has already drawn — prepared under the finger, or
@@ -603,6 +638,7 @@ export function useMediaZoomSource({
   radius = 0,
   aspectRatio,
   preview = null,
+  post = null,
   enabled = true,
 }: {
   itemId: string;
@@ -618,6 +654,12 @@ export function useMediaZoomSource({
   aspectRatio: number | null;
   /** What this tile is showing, so the reel can carry it while it builds. */
   preview?: ZoomPreview | null;
+  /**
+   * The post as the reel will list it (`buildImmersiveShowcaseItems` with the
+   * source the tile opens), so the flight can draw its rail and caption from
+   * the first frame; see `ZoomStill.post`. Null flies the picture alone.
+   */
+  post?: ImmersivePreviewItem | null;
   enabled?: boolean;
 }): MediaZoomSource {
   const surfaceId = useContext(MediaZoomSurfaceContext);
@@ -662,8 +704,8 @@ export function useMediaZoomSource({
   }, [active, aspectRatio, hidden, itemId, measure, previewCacheKey, previewThumbhash, previewUrl, radius, surfaceId]);
 
   const prepare = useCallback(() => {
-    if (active && preview) prepareZoomPicture(preview, aspectRatio);
-  }, [active, aspectRatio, preview]);
+    if (active && preview) prepareZoomPicture(preview, aspectRatio, false, post);
+  }, [active, aspectRatio, post, preview]);
 
   // A ref, not state: the offer changes as players come and go while the feed
   // scrolls, and nothing renders from it — only a tap reads it.
@@ -718,6 +760,7 @@ export function useMediaZoomSource({
         },
         preview,
         video,
+        post,
         still: true,
       }, { whenProgressed: open });
       setPendingZoomOrigin({
@@ -736,7 +779,7 @@ export function useMediaZoomSource({
     // Fabric answers `measureInWindow` before it returns. A host that does not
     // must never swallow the tap, so the plain open runs instead.
     start(null);
-  }, [active, aspectRatio, itemId, measure, preview, radius, surfaceId]);
+  }, [active, aspectRatio, itemId, measure, post, preview, radius, surfaceId]);
 
   return { ref, hiddenStyle, prepare, capture, offerVideo };
 }
@@ -843,6 +886,7 @@ export function useMediaZoomStage({
   activeItemId,
   aspectRatio,
   activePicture = null,
+  activePost = null,
   reducedMotion,
   ready,
   expectsNeighbours,
@@ -857,6 +901,11 @@ export function useMediaZoomStage({
   aspectRatio: number | null;
   /** The picture the reel is drawing now, for a close that has to leave the reel behind. */
   activePicture?: ZoomPreview | null;
+  /**
+   * The post the reel is on, so a close carries its rail and caption down into
+   * the tile instead of shrinking a bare picture (`ZoomStill.post`).
+   */
+  activePost?: ImmersivePreviewItem | null;
   reducedMotion: boolean;
   /** The reel has its first slide in place. */
   ready: boolean;
@@ -919,6 +968,8 @@ export function useMediaZoomStage({
   aspectRef.current = aspectRatio;
   const pictureRef = useRef(activePicture);
   pictureRef.current = activePicture;
+  const postRef = useRef(activePost);
+  postRef.current = activePost;
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
 
@@ -1130,15 +1181,18 @@ export function useMediaZoomStage({
     if (openedRef.current && !dismissingRef.current) holdTile(activeItemId);
   }, [activeItemId, holdTile]);
 
-  // The picture a close would shrink, drawn into the layer ahead of time and
-  // out of sight, so the close finds it on screen and moves on the next frame.
-  // Redrawn for each post the reader moves to, and on coming back from a screen
+  // The post a close would shrink — its picture and its chrome — drawn into the
+  // layer ahead of time and out of sight, so the close finds it on screen and
+  // moves on the next frame. Redrawn for each post the reader moves to, for a
+  // post whose own counts have moved on, and on coming back from a screen
   // pushed over the reel, which may have held a picture of its own.
   const prepareClosePicture = useCallback(() => {
     if (!openedRef.current || dismissingRef.current || leftRef.current) return;
     const handle = getZoomSource(origin?.surfaceId, activeItemRef.current);
     const picture = pictureRef.current ?? handle?.preview ?? null;
-    if (picture) prepareZoomPicture(picture, aspectRef.current ?? handle?.aspectRatio ?? null, true);
+    if (picture) {
+      prepareZoomPicture(picture, aspectRef.current ?? handle?.aspectRatio ?? null, true, postRef.current);
+    }
   }, [origin]);
   const activePictureUrl = activePicture?.url ?? null;
   const activePictureCacheKey = activePicture?.cacheKey ?? null;
@@ -1146,7 +1200,7 @@ export function useMediaZoomStage({
     if (!CLOSE_CREEPS_UNTIL_POPPED || !zooming || !opened) return;
     const timer = setTimeout(prepareClosePicture, CLOSE_PICTURE_PREPARE_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [activeItemId, activePictureCacheKey, activePictureUrl, opened, prepareClosePicture, zooming]);
+  }, [activeItemId, activePicture, activePictureCacheKey, activePictureUrl, activePost, opened, prepareClosePicture, zooming]);
   useEffect(() => {
     if (!CLOSE_CREEPS_UNTIL_POPPED || !zooming) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -1168,9 +1222,17 @@ export function useMediaZoomStage({
     clearHiddenZoomSources();
     const close = closeRef.current;
     const stillClosing = Boolean(close) && !close!.live;
-    // This unmount is the pop committing: the screen the close returns to is
-    // back, so a picture creeping until then shrinks over it now.
-    if (stillClosing) releaseZoomFlightCreep(close!.id);
+    // This unmount is the pop committing. The screen the close returns to is
+    // back in the tree, but not yet on the display: drawing it again costs
+    // 67–100 ms during which nothing reaches the screen at all, filmed on an
+    // iPhone 16e. A picture released to full speed here spends that stretch
+    // shrinking unseen and is all but landed when the display catches up — five
+    // closes out of five jumped. It keeps creeping through it instead, so the
+    // screen wakes on a picture around half way down with its own landing in
+    // the tile still to come.
+    if (stillClosing) {
+      setTimeout(() => releaseZoomFlightCreep(close!.id), CLOSE_REATTACH_MS);
+    }
     // Taken along: a picture not yet handed over, or one drawn for a close that never came.
     if (!stillClosing && (!openedRef.current || getHeldZoomPicture()?.standing)) holdStill(null);
     // The reel owns a video it adopted, for as long as the reel is up.
@@ -1241,7 +1303,11 @@ export function useMediaZoomStage({
       // Closed before the hand-off, a lent video is still the layer's to draw,
       // so it turns round with the flight rather than giving way to a poster.
       const video = beforeHandoff ? lentVideo : null;
-      const flight = startZoomFlight({ direction: 'close', geometry, preview, video, still: !live }, live ? {} : {
+      // The post shrinks whole: the layer draws its rail and caption over the
+      // picture and fades them out as the window comes down. A live close has
+      // the reel's own chrome to fade instead (`chromeStyle`).
+      const post = live ? null : postRef.current;
+      const flight = startZoomFlight({ direction: 'close', geometry, preview, video, post, still: !live }, live ? {} : {
         whenDisplayed: () => {
           stageOpacity.set(0);
           if (CLOSE_CREEPS_UNTIL_POPPED) {
@@ -1306,10 +1372,17 @@ export function useMediaZoomStage({
   }));
 
   // The chrome belongs to a reel that is the whole screen: it is uncovered with
-  // the reel once the flight has landed, and cuts away on a collapse's first frame.
-  const chromeStyle = useAnimatedStyle(() => ({
-    opacity: following.value && flightProgress.value < CHROME_FROM ? 0 : 1,
-  }));
+  // the reel once the flight has landed, and on a collapse the reel shrinks with
+  // it — fading, not cut away (`CLOSE_CHROME_HOLD`).
+  const chromeStyle = useAnimatedStyle(() => {
+    if (!following.value) return { opacity: 1 };
+    if (flightClosing.value) {
+      return {
+        opacity: interpolate(flightTime.value, [CLOSE_CHROME_GONE, CLOSE_CHROME_HOLD], [0, 1], Extrapolation.CLAMP),
+      };
+    }
+    return { opacity: flightProgress.value < CHROME_FROM ? 0 : 1 };
+  });
 
   const carriedStyle = useAnimatedStyle(() => ({ opacity: carriedOpacity.value }));
 
@@ -1420,7 +1493,17 @@ export function MediaZoomStage({
  * navigator, so no screen change can take it away mid-movement; it draws
  * nothing at all unless a post is opening or closing.
  */
-export function MediaZoomFlightLayer() {
+export function MediaZoomFlightLayer({
+  renderPost,
+}: {
+  /**
+   * Draws a post's rail, caption and controls, laid out on the whole screen as
+   * the reel lays them out (`ZoomStill.post`). The app shell supplies it, as it
+   * owns what that chrome reads — the signed-in reader, whom they follow — and
+   * the flight stays a picture in a window.
+   */
+  renderPost?: (post: ImmersivePreviewItem) => ReactNode;
+} = {}) {
   const still = useSyncExternalStore(subscribeToHeldZoomPicture, getHeldZoomPicture, getHeldZoomPicture);
   const layerRef = useRef<View | null>(null);
 
@@ -1533,6 +1616,18 @@ export function MediaZoomFlightLayer() {
   }));
 
   const frame = useDerivedValue(() => computeZoomFrame(flightGeometry.value, flightProgress.value));
+  const postChrome = still?.post && renderPost ? renderPost(still.post) : null;
+  const carriesPost = postChrome !== null;
+
+  // The post's own chrome: kept off a video's tile until the layer's view of it
+  // has drawn, as the bands are, and faded out as a close comes down.
+  const postChromeStyle = useAnimatedStyle(() => {
+    if (stillCarriesVideo.value && flightProgress.value <= 0) return { opacity: 0 };
+    if (!flightClosing.value) return { opacity: 1 };
+    return {
+      opacity: interpolate(flightTime.value, [CLOSE_CHROME_GONE, CLOSE_CHROME_HOLD], [0, 1], Extrapolation.CLAMP),
+    };
+  });
 
   const clipStyle = useAnimatedStyle(() => ({
     left: frame.value.clip.x,
@@ -1630,14 +1725,35 @@ export function MediaZoomFlightLayer() {
                 />
               </Animated.View>
             )}
+            {carriesPost ? (
+              // The post itself — its rail, caption, top shade and controls, on
+              // the page the picture is on and scaled with it — so the window
+              // opens on the whole post rather than on a picture the reel
+              // dresses once it lands — and the one a close carries back down
+              // into the tile, fading (`postChromeStyle`).
+              //
+              // A drawing, not the post: the reel underneath owns every control
+              // here, so a screen reader must find them there and never twice.
+              <Animated.View
+                pointerEvents="none"
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+                style={[StyleSheet.absoluteFill, postChromeStyle]}
+              >
+                {postChrome}
+              </Animated.View>
+            ) : null}
           </Animated.View>
           {/* The reel's top shade, arriving with the window: measured without
               it, the top of the screen darkened by some 77 levels as the reel
               took over, because the shade is the reel's and only appeared as
-              this picture let go. Screen-fixed, so outside the page's transform. */}
-          <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, scrimStyle]}>
-            <TopScrim topInset={topInset} over="media" />
-          </Animated.View>
+              this picture let go. Screen-fixed, so outside the page's transform.
+              A flight carrying the post draws the shade with it instead. */}
+          {carriesPost ? null : (
+            <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, scrimStyle]}>
+              <TopScrim topInset={topInset} over="media" />
+            </Animated.View>
+          )}
         </Animated.View>
       ) : null}
     </View>

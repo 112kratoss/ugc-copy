@@ -51,6 +51,9 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
     // media at 4:5 and crops the rest.
     aspectRatio: mediaItemAspectRatio(item.mediaItems?.[0]),
     preview: showcaseMediaZoomPreview(item.mediaItems?.[0]),
+    // The card already holds the post as the reel lists it, so the window it
+    // grows in carries the rail and caption with it.
+    post: item,
     enabled: card.hasMedia,
   });
   // The card drops the Details slot: tapping the card already opens its canonical

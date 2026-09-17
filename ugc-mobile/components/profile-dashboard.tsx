@@ -1122,6 +1122,8 @@ function ProfileMediaTile({
     // The media's own shape: the cell crops every post to the same one.
     aspectRatio: item.aspectRatio ?? null,
     preview: previewUrl ? { url: previewUrl, cacheKey: item.previewCacheKey ?? item.id, thumbhash: item.previewThumbhash } : null,
+    // The post as the reel lists it, so the window carries its rail and caption.
+    post: item.post ?? null,
     enabled: isSavedTile && !isFallbackPreview && item.previewKind !== 'text',
   });
 

@@ -24,7 +24,7 @@ import {
 } from '@/components/workspace-side-menu-gesture-layer';
 import { useAuth } from '@/lib/auth';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
-import { showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
+import { buildImmersiveShowcaseItems, showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
 import { isShowcaseCoverVideoStreaming, isShowcaseVideoPreviewCandidate } from '@/lib/showcase-display';
@@ -1029,6 +1029,9 @@ const MasonryPin = memo(function MasonryPin({
     radius: layout.mediaRadius,
     aspectRatio: resolvedAspectRatio ?? card.aspectRatio ?? null,
     preview: showcaseMediaZoomPreview(pinMediaItems[0]),
+    // The post as the reel lists it, so the window it grows in carries its rail
+    // and caption from the first frame.
+    post: buildImmersiveShowcaseItems('showcase-feed', [card.item])[0] ?? null,
   });
   const openPin = () => zoomSource.capture(() => onOpenPost(card.item));
 

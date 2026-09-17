@@ -46,6 +46,8 @@ const mobileRoot = path.resolve(__dirname, '..');
 const read = (name: string) => readFileSync(path.join(mobileRoot, name), 'utf8');
 
 const viewer = read('app/viewer.tsx');
+/** A slide's rail, caption and counter, which the reel and the zoom into it both draw. */
+const chrome = read('components/reel-chrome.tsx');
 
 describe('S6 — the status bar over full-bleed media', () => {
   // Status bars: "Obscure content under the status bar ... Be sure to keep the
@@ -113,17 +115,21 @@ describe('S6 — the viewer top strip is laid out from the safe area', () => {
   });
 
   it('places every top-strip element through the shared geometry', () => {
-    expect(viewer).not.toContain('top: 68');
-    expect(viewer).not.toContain('top: topInset + 24');
-    expect(viewer).not.toContain('top: topInset + 10');
+    for (const source of [viewer, chrome]) {
+      expect(source).not.toContain('top: 68');
+      expect(source).not.toContain('top: topInset + 24');
+      expect(source).not.toContain('top: topInset + 10');
+    }
     expect(viewer.match(/viewerTopControlTop\(topInset\)/g)?.length).toBe(3);
-    expect(viewer.match(/viewerTopBadgeTop\(topInset\)/g)?.length).toBe(2);
+    // The spinner, in the reel; the counter, in the slide chrome.
+    expect(viewer.match(/viewerTopBadgeTop\(topInset\)/g)?.length).toBe(1);
+    expect(chrome.match(/viewerTopBadgeTop\(topInset\)/g)?.length).toBe(1);
   });
 
   it('puts the spinner and the counter on opposite edges of the badge row', () => {
     const spinner = viewer.slice(viewer.indexOf('sourceQuery.isFetching && activeItem'));
     expect(spinner).toContain('left: 30');
-    const counter = viewer.slice(viewer.indexOf('Media count indicator'), viewer.indexOf('Right rail'));
+    const counter = chrome.slice(chrome.indexOf('Media count indicator'), chrome.indexOf('Right rail'));
     expect(counter).toContain('right: 18');
   });
 });
@@ -247,9 +253,11 @@ describe('S6 — the counter answers the finger', () => {
   // that helps them predict its results." The settled index may only move once
   // a page lands, because it also gates video and hardware back.
   it('reads the dragged page, not the settled one', () => {
-    const counter = viewer.slice(viewer.indexOf('Media count indicator'), viewer.indexOf('Right rail'));
-    expect(counter).toContain('Math.min(draggedPageIndex + 1, mediaCount)');
-    expect(counter).not.toContain('currentHorizontalIndex');
+    const counter = chrome.slice(chrome.indexOf('Media count indicator'), chrome.indexOf('Right rail'));
+    expect(counter).toContain('Math.min(pageIndex + 1, mediaCount)');
+    // The reel hands the chrome the page under the finger.
+    expect(viewer).toContain('pageIndex={draggedPageIndex}');
+    expect(viewer).not.toContain('pageIndex={currentHorizontalIndex}');
   });
 
   it('tracks the drag without moving what the reel believes', () => {

@@ -14,6 +14,7 @@ import {
 } from '@/lib/home-feed-view-model';
 import { ShareGlyph } from '@/lib/platform-glyphs';
 import { showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
+import { buildImmersiveShowcaseItems } from '@/lib/immersive-preview-view-model';
 import { getShowcasePreviewMediaItems } from '@/lib/showcase-media';
 import { accentColor, appTheme } from '@/lib/theme';
 
@@ -61,6 +62,9 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
     itemId: card.item.id,
     aspectRatio: card.aspectRatio ?? null,
     preview: showcaseMediaZoomPreview(mediaItems[0]),
+    // The post as the reel lists it, so the window it grows in carries its rail
+    // and caption from the first frame.
+    post: buildImmersiveShowcaseItems('showcase-feed', [card.item])[0] ?? null,
     enabled: hasMedia,
   });
 

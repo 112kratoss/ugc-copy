@@ -30,7 +30,7 @@ import { env } from '@/lib/env';
 import { formatCompactCount } from '@/lib/home-view-model';
 import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '@/components/media-zoom';
 import { mediaItemAspectRatio, showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
-import { showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
+import { buildImmersiveShowcaseItems, showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
 import { ShareGlyph } from '@/lib/platform-glyphs';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { getShowcasePreviewMediaItems, hasShowcasePreviewMedia, hasShowcaseVideoWithoutPreview } from '@/lib/showcase-media';
@@ -601,6 +601,9 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
     // The media's own shape, not the tile's 4:5 crop of it.
     aspectRatio: mediaItemAspectRatio(tileMediaItems[0]),
     preview: showcaseMediaZoomPreview(tileMediaItems[0]),
+    // The post as the reel lists it, so the window it grows in carries its rail
+    // and caption from the first frame.
+    post: buildImmersiveShowcaseItems('creator-profile', [item])[0] ?? null,
     enabled: !isTextPost && hasShowcasePreviewMedia(item),
   });
   const open = () => zoomSource.capture(onPress);
