@@ -11,7 +11,7 @@ import {
   getProfileFeedMediaHeight,
   type ProfileFeedCard,
 } from '@/lib/profile-feed-card-view-model';
-import { showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
+import { mediaItemAspectRatio, showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
 import { ShareGlyph } from '@/lib/platform-glyphs';
 import { accentColor, appTheme } from '@/lib/theme';
 import { getViewerActionSlots, type ViewerStateTone } from '@/lib/viewer-actions';
@@ -47,6 +47,9 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
   // back into it.
   const zoomSource = useMediaZoomSource({
     itemId: item.id,
+    // The media's shape as the reel reads it — not the card's, which caps tall
+    // media at 4:5 and crops the rest.
+    aspectRatio: mediaItemAspectRatio(item.mediaItems?.[0]),
     preview: showcaseMediaZoomPreview(item.mediaItems?.[0]),
     enabled: card.hasMedia,
   });

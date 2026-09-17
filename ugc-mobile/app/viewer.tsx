@@ -12,13 +12,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
 import { DoubleTapPressable } from '@/components/double-tap-pressable';
-import { MediaZoomChrome, MediaZoomStage, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage } from '@/components/media-zoom';
+import { MediaZoomChrome, MediaZoomStage, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage } from '@/components/media-zoom';
 import { mediaItemAspectRatio, showcaseViewerMediaPicture } from '@/lib/media-zoom-transition';
 import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
 import { restoreVideoPlayback } from '@/lib/video-playback-continuity';
 import { createViewerPlaybackHandoff } from '@/lib/viewer-playback-handoff';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
+import { LetterboxBands } from '@/components/letterbox-bands';
 import { PostDetailsPage } from '@/components/post-details-page';
 import { Pill, SecondaryButton, StatusBlock } from '@/components/ui';
 import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
@@ -158,6 +159,8 @@ type DoubleTapSavePosition = {
 
 const DOUBLE_TAP_SAVE_HEART_SIZE = 90;
 const VIEWER_PLAY_BADGE_SIZE = 72;
+/** How long after a zoom has uncovered the reel its neighbours' players are made. */
+const NEIGHBOUR_PLAYERS_DELAY_MS = 400;
 
 const ViewerPlaybackContext = createContext<ReturnType<typeof createViewerPlaybackHandoff> | null>(null);
 
@@ -403,8 +406,23 @@ export default function ImmersivePreviewViewerScreen() {
     activePicture: activeMedia.picture,
     reducedMotion,
     ready: items.length > 0 && initialPositionReady,
+    expectsNeighbours: items.length > 1,
     onExit: leaveViewer,
   });
+  // A zoom into the reel lands in steps, each a frame or two of the UI thread
+  // rather than one long hold — traced on an S24, doing it all at once held one
+  // 59 ms frame, two frames of a video still playing in the landed picture: the
+  // slide's own rail and caption as it lands (`useMediaZoomLanded`), the
+  // neighbouring slides once those are drawn, and the neighbours' players a
+  // moment after the reel is uncovered. By then its own video is playing, and a
+  // player's view created during playback costs a display frame, not a video one.
+  const neighbourSlidesAllowed = zoom.landed && zoom.chromeDrawn;
+  const [neighbourPlayersAllowed, setNeighbourPlayersAllowed] = useState(zoom.opened);
+  useEffect(() => {
+    if (neighbourPlayersAllowed || !zoom.opened) return undefined;
+    const timer = setTimeout(() => setNeighbourPlayersAllowed(true), NEIGHBOUR_PLAYERS_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [neighbourPlayersAllowed, zoom.opened]);
   const showMediaForActive = useCallback(() => {
     activeSlideRef.current?.showMedia();
   }, []);
@@ -952,7 +970,18 @@ export default function ImmersivePreviewViewerScreen() {
         bigger rather than as another screen arriving. */}
     <MediaZoomStage stage={zoom} screen={{ width, height }}>
     <View style={{ flex: 1, backgroundColor: '#000' }}>
-      <Stack.Screen options={{ gestureEnabled: !detailsOpenForActive, fullScreenGestureEnabled: false }} />
+      {/* Pushed under a zoom that had already filled the screen, the reel came in
+          with no animation (`viewerAnimation`, app/_layout.tsx); it still leaves
+          under the fade — a plain pop, the back swipe. Put back once the reel is
+          uncovered, well after the push: set as the push commits, it could be
+          folded into the same native update and fade the push after all. */}
+      <Stack.Screen
+        options={{
+          gestureEnabled: !detailsOpenForActive,
+          fullScreenGestureEnabled: false,
+          ...(Platform.OS === 'ios' && !reducedMotion && zoom.opened ? { animation: 'fade' as const } : null),
+        }}
+      />
       <FlatList
         ref={listRef}
         data={items}
@@ -1026,11 +1055,18 @@ export default function ImmersivePreviewViewerScreen() {
         renderItem={({ item, index }) => (
           <ImmersiveSlide
             active={index === activeIndex}
-            /* Creating a player is the most expensive thing the reel mounts, and
-               a reel that is still growing out of a tile is showing a poster
-               anyway — so the players wait until it has landed. */
-            prepareVideo={zoom.opened && Math.abs(index - activeIndex) <= 1 && (index === activeIndex || Math.abs(index - preparedVideoIndex) <= 1)}
+            /* Creating a player is the most expensive thing the reel mounts, so
+               while the reel is still growing out of a tile the neighbours'
+               players wait (see `neighbourPlayersAllowed`). The slide it opens on
+               cannot wait at all: a player made only once the reel had opened left
+               the landed picture standing still for as long as that player took to
+               load. It loads under the tile's picture instead, held on its first
+               frame until the reel opens (`ImmersiveMedia`) — and a slide the tile
+               lent its playing video to has nothing to create at all. */
+            prepareVideo={(index === activeIndex || neighbourPlayersAllowed) && Math.abs(index - activeIndex) <= 1 && (index === activeIndex || Math.abs(index - preparedVideoIndex) <= 1)}
             activeSlideRef={activeSlideRef}
+            onLayoutAsNeighbour={index === activeIndex ? undefined : zoom.reportNeighbourDrawn}
+            onChromeLayout={index === activeIndex ? zoom.reportChromeDrawn : undefined}
             activeVideoId={activeVideoId}
             authReturnTo={immersiveViewerReturnPath({
               source,
@@ -1069,8 +1105,9 @@ export default function ImmersivePreviewViewerScreen() {
         style={{ flex: 1, backgroundColor: '#000' }}
         // Neighbouring slides mount on the UI thread, and a reel that is still
         // growing out of a tile cannot afford that thread: they wait for it to
-        // land, by which time the reader has seen one page and no more.
-        windowSize={zoom.opened ? IMMERSIVE_VERTICAL_LIST_TUNING.windowSize : 1}
+        // land and for the slide's own rail to be drawn (`neighbourSlidesAllowed`),
+        // by which time the reader has seen one page and no more.
+        windowSize={neighbourSlidesAllowed ? IMMERSIVE_VERTICAL_LIST_TUNING.windowSize : 1}
       />
       {/* Status bars: "Obscure content under the status bar ... Be sure to keep
           the status bar readable." The reel is the app's one full-bleed screen,
@@ -1080,6 +1117,11 @@ export default function ImmersivePreviewViewerScreen() {
           any sheet. */}
       <MediaZoomChrome>
       <TopScrim topInset={topInset} over="media" />
+      {/* Both buttons, like the slides' rails, mount once a zoom into the reel
+          has landed (`useMediaZoomLanded`); the shade above is part of the
+          picture the flight shows. */}
+      {zoom.landed && zoom.drawn ? (
+      <>
       {/* The details page draws its own header with its own way back; the
           reel's arrow would be a second back button that leaves the reel. */}
       {detailsOpenForActive ? null : (
@@ -1136,6 +1178,8 @@ export default function ImmersivePreviewViewerScreen() {
           </IconShadow>
         </Pressable>
       )}
+      </>
+      ) : null}
       </MediaZoomChrome>
       {activeItem ? (
         <ViewerActionSheet
@@ -1271,6 +1315,8 @@ function ImmersiveSlide({
   active,
   prepareVideo,
   activeSlideRef,
+  onLayoutAsNeighbour,
+  onChromeLayout,
   activeVideoId,
   authReturnTo,
   bottomInset,
@@ -1297,6 +1343,16 @@ function ImmersiveSlide({
   active: boolean;
   prepareVideo: boolean;
   activeSlideRef: MutableRefObject<ImmersiveSlideHandle | null>;
+  /**
+   * For a slide beside the one on screen: laid out means mounted and drawn,
+   * which a reel growing out of a tile waits for before it is uncovered.
+   */
+  onLayoutAsNeighbour?: () => void;
+  /**
+   * For the slide on screen: its rail and caption, mounted once a zoom into the
+   * reel has landed, have been laid out — the reel fades in with them.
+   */
+  onChromeLayout?: () => void;
   activeVideoId: string | null;
   /** Where sign-in should land the viewer back: this reel, on this item. */
   authReturnTo: string;
@@ -1323,6 +1379,13 @@ function ImmersiveSlide({
 }) {
   const horizontalRef = useRef<FlatList<ImmersiveSlidePage>>(null);
   const reducedMotion = useReducedMotion();
+  // The rail, caption and double-tap heart are no part of the picture a zoom
+  // into the reel flies, yet each of their views — the rail's icons alone are a
+  // few dozen SVG views, drawn twice for their shadow — is created on the thread
+  // that moves that picture: traced on an S24, mounting them with the reel cost
+  // 15–29 ms frames in the flight's last stretch. They mount once it has landed,
+  // under the still picture, and the reel is uncovered once they are laid out.
+  const zoomLanded = useMediaZoomLanded();
 
   // The settled index drives what the *reel* believes — which page blocks video,
   // which one hardware back returns from — so it may only move once a page has
@@ -1418,6 +1481,18 @@ function ImmersiveSlide({
     })) return;
     onSave(item, 'double-tap');
   }, [doubleTapHeart, item, onSave, saveLoading]);
+
+  const renderChrome = () => (zoomLanded ? (
+    <View pointerEvents="box-none" onLayout={onChromeLayout} style={{ position: 'absolute', inset: 0 }}>
+      {renderOverlays()}
+      <DoubleTapSaveHeart
+        opacity={doubleTapHeart.opacity}
+        palette={doubleTapHeart.palette}
+        position={doubleTapHeart.position}
+        scale={doubleTapHeart.scale}
+      />
+    </View>
+  ) : null);
 
   const renderOverlays = () => {
     if (currentPageIsDetails) {
@@ -1690,7 +1765,7 @@ function ImmersiveSlide({
 
   if (pages.length <= 1) {
     return (
-      <View collapsable={false} accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'} style={{ width, height }}>
+      <View collapsable={false} onLayout={onLayoutAsNeighbour} accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'} style={{ width, height }}>
         <MediaSlidePage
           active={videoPlaybackActive}
           slideActive={active}
@@ -1708,19 +1783,13 @@ function ImmersiveSlide({
           topInset={topInset}
           width={width}
         />
-        {renderOverlays()}
-        <DoubleTapSaveHeart
-          opacity={doubleTapHeart.opacity}
-          palette={doubleTapHeart.palette}
-          position={doubleTapHeart.position}
-          scale={doubleTapHeart.scale}
-        />
+        {renderChrome()}
       </View>
     );
   }
 
   return (
-    <View collapsable={false} accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'} style={{ width, height, backgroundColor: '#000' }}>
+    <View collapsable={false} onLayout={onLayoutAsNeighbour} accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'} style={{ width, height, backgroundColor: '#000' }}>
       <FlatList
         ref={horizontalRef}
         data={pages}
@@ -1780,13 +1849,7 @@ function ImmersiveSlide({
         style={{ width, height, backgroundColor: '#000' }}
         windowSize={IMMERSIVE_HORIZONTAL_LIST_TUNING.windowSize}
       />
-      {renderOverlays()}
-      <DoubleTapSaveHeart
-        opacity={doubleTapHeart.opacity}
-        palette={doubleTapHeart.palette}
-        position={doubleTapHeart.position}
-        scale={doubleTapHeart.scale}
-      />
+      {renderChrome()}
     </View>
   );
 }
@@ -2105,6 +2168,49 @@ function ImmersiveMedia({
   const reportSlidePainted = useCallback(() => {
     if (slideActive) reportPainted();
   }, [reportPainted, slideActive]);
+  // While the reel grows out of a tile, this slide's player loads under the
+  // tile's picture and holds its first frame — the frame the poster is — so the
+  // landing uncovers the same picture, which then starts moving. Played any
+  // earlier it would be some frames on by then, and the tile's copy fading over
+  // it would show the clip twice. A player the tile lent is moving already, and
+  // carries on.
+  const playbackUrl = getShowcasePlaybackUrl(mediaItem);
+  const lentVideo = useMediaZoomLentVideo(playbackUrl);
+  // Nor does it start on the render that opens the reel: that render mounts the
+  // neighbouring slides and their players, which holds the UI thread (833 ms on
+  // the emulator), and a clip started into it stalls on its first frames. It
+  // starts two frames later, once that work has been drawn, so the wait is spent
+  // on a still picture rather than a frozen one. A slide mounted after the reel
+  // opened has nothing to wait for.
+  const [openingDrawn, setOpeningDrawn] = useState(zoomOpened);
+  const holdsItsPlayer = mediaItem.mediaKind === 'video' && lentVideo === null;
+  useEffect(() => {
+    // Only a slide holding its own player waits: rendering every slide again
+    // two frames after the reel opens would land in the very stretch it avoids.
+    if (!holdsItsPlayer || !zoomOpened || openingDrawn) return undefined;
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => setOpeningDrawn(true));
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
+  }, [holdsItsPlayer, openingDrawn, zoomOpened]);
+  const videoActive = active && (openingDrawn || lentVideo !== null);
+
+  // The bands around a picture that does not fill the slide show the picture's
+  // own edge mirrored outward and blurred, shaded darkest at the screen's edge
+  // and not at all where the picture begins, so the band meets the picture
+  // without an edge (lib/letterbox.ts). They take the frame's backdrop slot, under
+  // the picture. A picture of unknown shape keeps the plain blurred backdrop.
+  const mediaAspectRatio = mediaItemAspectRatio(mediaItem);
+  const bandSource = mediaItem.previewUrl
+    ? { uri: mediaItem.previewUrl, cacheKey: mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey }
+    : { uri: mediaItem.url, cacheKey: null };
+  const letterboxBands = mediaAspectRatio ? (
+    <LetterboxBands frame={{ width, height }} aspectRatio={mediaAspectRatio} source={bandSource} />
+  ) : null;
 
   if (mediaItem.mediaKind === 'video') {
     return (
@@ -2118,6 +2224,7 @@ function ImmersiveMedia({
             onImageDisplay={reportSlidePainted}
             url={mediaItem.previewUrl}
             backdropUrl={mediaItem.previewUrl}
+            imageBackdropContent={letterboxBands}
             cacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
             thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
             transition={0}
@@ -2129,9 +2236,9 @@ function ImmersiveMedia({
           <ActiveVideo
             key={mediaItem.id}
             postId={postId}
-            active={active}
+            active={videoActive}
             slideActive={slideActive}
-            url={getShowcasePlaybackUrl(mediaItem)}
+            url={playbackUrl}
             onDoublePress={handleDoublePress}
             width={width}
             height={height}
@@ -2165,6 +2272,7 @@ function ImmersiveMedia({
           url={image.url}
           backdropUrl={mediaItem.previewUrl}
           backdropCacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
+          imageBackdropContent={letterboxBands}
           cacheKey={image.cacheKey}
           thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
           onImageError={image.rendition === 'display' ? () => setFailedDisplayUrl(image.url) : undefined}
@@ -2172,7 +2280,10 @@ function ImmersiveMedia({
           // detached and cannot start loading, so they are not timed.
           watchdog={active && isFocused}
           diagnosticsSurface="viewer"
-          transition={120}
+          // The zoom stage owns the reveal. onDisplay fires when the native
+          // fade starts, so another fade here exposes a partly transparent
+          // image as the carried preview disappears.
+          transition={0}
           recyclingKey={`viewer:${mediaItem.id}`}
           style={{ width, height }}
         />
@@ -2213,6 +2324,7 @@ function ActiveVideo(props: ActiveVideoProps) {
       // A refreshed signature is still the same media. Keep this component's
       // previous-player ref so URL renewal preserves pause and position.
       key={attempt}
+      attempt={attempt}
       onRetry={() => setAttempt(value => value + 1)}
     />
   );
@@ -2227,8 +2339,10 @@ function ActiveVideoAttempt({
   width,
   height,
   onRetry,
-}: ActiveVideoProps & { onRetry: () => void }) {
+  attempt,
+}: ActiveVideoProps & { onRetry: () => void; attempt: number }) {
   const [hasFrame, setHasFrame] = useState(false);
+  const zoomLanded = useMediaZoomLanded();
   const [hasError, setHasError] = useState(false);
   const reducedMotion = useReducedMotion();
   const audioMuted = useViewerAudioMuted();
@@ -2258,7 +2372,16 @@ function ActiveVideoAttempt({
   const previousPlayer = useRef<VideoPlayer | null>(null);
   const playbackAllowed = useViewerPlaybackGate(previousPlayer, () => setIsPlaying(false));
   const playbackRequested = useRef(active);
-  const player = useVideoPlayer({ ...source, useCaching: true }, (instance) => {
+  // The feed tile this reel grew out of lent the player it was already playing
+  // this file on (lib/video-player-loans.ts). Using it instead of building one
+  // is what keeps the picture moving through the zoom: nothing reloads, and the
+  // clip carries on from the frame the reader was watching. Only a first
+  // attempt adopts — a retry wants a fresh player, as it always did.
+  const lentVideo = useMediaZoomLentVideo(url);
+  const lentPlayer = attempt === 0 ? lentVideo?.video.player ?? null : null;
+  const lentPlayerRef = useRef<VideoPlayer | null>(null);
+  if (lentPlayer) lentPlayerRef.current = lentPlayer;
+  const ownPlayer = useVideoPlayer(lentPlayer ? null : { ...source, useCaching: true }, (instance) => {
     instance.loop = true;
     instance.muted = !active || isViewerAudioMuted();
     instance.volume = 1.0;
@@ -2273,9 +2396,13 @@ function ActiveVideoAttempt({
     instance.audioMixingMode = 'auto';
     // A neighbour is prepared paused; only the active slide may resume, and
     // a replaced player on the active slide carries the previous decision over.
-    playbackRequested.current = restoreVideoPlayback(instance, previousPlayer.current, active && !reducedMotion,
+    // A lent player that could not be kept is not one to carry on from: by now
+    // it is back with its tile or released.
+    const previous = previousPlayer.current === lentPlayerRef.current ? null : previousPlayer.current;
+    playbackRequested.current = restoreVideoPlayback(instance, previous, active && !reducedMotion,
       active && playbackAllowed.current && !reducedMotion && (!AppState.currentState || AppState.currentState === 'active'));
   });
+  const player = lentPlayer ?? ownPlayer;
   previousPlayer.current = player;
   const [status, setStatus] = useState<VideoPlayerStatus>(player.status);
   const timedOut = useVideoLoadDeadline(player, status);
@@ -2288,7 +2415,13 @@ function ActiveVideoAttempt({
   // Lets the reel's scroll-end handler start this player before the
   // activation render reaches it (see lib/viewer-playback-handoff.ts).
   const playbackHandoff = useContext(ViewerPlaybackContext);
-  useEffect(() => playbackHandoff?.register(postId, player), [playbackHandoff, player, postId]);
+  // A lent player joins the reel's register once the reel has taken it: until
+  // then it is still the flight's picture, and the register stops every player
+  // it holds whenever autoplay is disallowed, even for a moment.
+  const awaitingLentPlayer = Boolean(lentPlayer) && !lentVideo?.attached;
+  useEffect(() => (
+    awaitingLentPlayer ? undefined : playbackHandoff?.register(postId, player)
+  ), [awaitingLentPlayer, playbackHandoff, player, postId]);
 
   // A post the reader scrolled away from starts over when they come back, as
   // it does in Instagram and TikTok. Rewind on leaving rather than on return,
@@ -2362,6 +2495,20 @@ function ActiveVideoAttempt({
   useEffect(() => {
     if (revealedPlayerRef.current !== player) surfaceOpacity.setValue(0);
   }, [player, surfaceOpacity]);
+  // A lent player drew its first frame long ago, in the tile, and reports none
+  // to a view that takes it now. The layer still covers this slide at that
+  // moment, so the surface is simply shown rather than faded in.
+  const lentAttached = Boolean(lentPlayer && lentVideo?.attached);
+  useEffect(() => {
+    if (!lentAttached || !lentPlayer) return;
+    lentPlayer.volume = 1.0;
+    lentPlayer.timeUpdateEventInterval = 0.25;
+    setHasFrame(true);
+    setHasError(false);
+    revealedPlayerRef.current = lentPlayer;
+    surfaceOpacity.setValue(1);
+  }, [lentAttached, lentPlayer, surfaceOpacity]);
+
   const revealSurface = () => {
     if (revealedPlayerRef.current === player) return;
     revealedPlayerRef.current = player;
@@ -2442,23 +2589,38 @@ function ActiveVideoAttempt({
         onSinglePress={togglePlayback}
         style={{ width, height, alignItems: 'center', justifyContent: 'center' }}
       >
-        <Animated.View style={{ width, height, opacity: surfaceOpacity }}>
-          <FeedMediaFrame
-            kind="video"
-            player={player}
-            backgroundColor="transparent"
-            videoBackdrop="none"
-            onFirstFrameRender={() => {
-              setHasFrame(true);
-              setHasError(false);
-              revealSurface();
-            }}
-            style={{ width, height }}
-          />
-        </Animated.View>
+        {/* The video's own view — the priciest view the reel creates, some
+            10 ms on an S24 — waits for a zoom into the reel to land. The player
+            is loading without it, and draws its frame into it the moment it
+            mounts, still under the landed picture. */}
+        {zoomLanded ? (
+          <Animated.View
+            // The native texture and its container must fade as one surface;
+            // applying alpha through the hierarchy darkens the poster beneath
+            // it just as playback takes over.
+            needsOffscreenAlphaCompositing
+            renderToHardwareTextureAndroid
+            style={{ width, height, opacity: surfaceOpacity }}
+          >
+            <FeedMediaFrame
+              kind="video"
+              // A lent player stays out of this view until the hand-off: taking it
+              // earlier would move its surface out from under the growing picture.
+              player={lentPlayer && !lentVideo?.attached ? null : player}
+              backgroundColor="transparent"
+              videoBackdrop="none"
+              onFirstFrameRender={() => {
+                setHasFrame(true);
+                setHasError(false);
+                revealSurface();
+              }}
+              style={{ width, height }}
+            />
+          </Animated.View>
+        ) : null}
         {active && !isPlaying && hasFrame && !playbackFailed ? <ViewerPlayBadge /> : null}
       </DoubleTapPressable>
-      {!playbackFailed && (status === 'loading' || status === 'idle') ? (
+      {zoomLanded && !playbackFailed && (status === 'loading' || status === 'idle') ? (
         <View pointerEvents="none" style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
           <ActivityIndicator accessibilityLabel="Loading video" color={appTheme.colors.primary} />
         </View>

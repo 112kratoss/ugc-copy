@@ -1119,6 +1119,8 @@ function ProfileMediaTile({
   const zoomSource = useMediaZoomSource({
     itemId: item.sourceId,
     radius: 12,
+    // The media's own shape: the cell crops every post to the same one.
+    aspectRatio: item.aspectRatio ?? null,
     preview: previewUrl ? { url: previewUrl, cacheKey: item.previewCacheKey ?? item.id, thumbhash: item.previewThumbhash } : null,
     enabled: isSavedTile && !isFallbackPreview && item.previewKind !== 'text',
   });

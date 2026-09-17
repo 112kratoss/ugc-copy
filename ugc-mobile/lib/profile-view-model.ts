@@ -4,6 +4,7 @@ import type { PreviewViewerSource } from './immersive-preview-view-model';
 import { isCreationLibraryMember } from './creation-library';
 import { getGenerationKind, getGenerationLabel, getGenerationRenderableMediaKind } from './generation-media';
 import { formatCompactCount, formatRelativeTime, formatUsdCents } from './home-view-model';
+import { mediaItemAspectRatio } from './media-zoom-transition';
 
 export type ProfilePreviewState = 'image' | 'videoPoster' | 'videoFallback' | 'text' | 'artFallback';
 
@@ -19,6 +20,12 @@ export interface ProfileMediaCard {
   previewExpiresAt?: string | null;
   previewStatus?: 'pending' | 'processing' | 'ready' | 'failed';
   mediaKind: 'image' | 'video' | null;
+  /**
+   * width / height of the media as the reel draws it, for a tile the reel grows
+   * out of; null when the media's size is unknown. The cell crops the media to
+   * its own shape, which is not this one.
+   */
+  aspectRatio?: number | null;
   previewKind?: 'text';
   previewText?: string;
   previewState?: ProfilePreviewState;
@@ -368,6 +375,9 @@ export function showcaseToSavedProfileMediaCard(item: ShowcaseFeedItem): Profile
     previewExpiresAt: descriptor?.expiresAt ?? null,
     previewStatus: descriptor?.status ?? primaryMedia?.previewStatus ?? (previewUrl ? 'ready' : 'pending'),
     mediaKind: item.mediaKind,
+    // Read exactly as the reel reads its first slide, which is this media: the
+    // zoom out of this tile lands where the reel draws it.
+    aspectRatio: mediaItemAspectRatio(primaryMedia),
     previewKind: isTextPost ? 'text' : undefined,
     previewText,
     previewState: getProfilePreviewState({

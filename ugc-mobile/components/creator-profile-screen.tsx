@@ -29,7 +29,7 @@ import {
 import { env } from '@/lib/env';
 import { formatCompactCount } from '@/lib/home-view-model';
 import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '@/components/media-zoom';
-import { showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
+import { mediaItemAspectRatio, showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
 import { showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
 import { ShareGlyph } from '@/lib/platform-glyphs';
 import { resolvedBottomInset } from '@/lib/safe-area';
@@ -598,6 +598,8 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
     itemId: item.id,
     // The card clips its own top corners; the window matches them on the way out.
     radius: 20,
+    // The media's own shape, not the tile's 4:5 crop of it.
+    aspectRatio: mediaItemAspectRatio(tileMediaItems[0]),
     preview: showcaseMediaZoomPreview(tileMediaItems[0]),
     enabled: !isTextPost && hasShowcasePreviewMedia(item),
   });

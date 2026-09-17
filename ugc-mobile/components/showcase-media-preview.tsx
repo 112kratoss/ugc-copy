@@ -12,6 +12,7 @@ import { useReducedMotion } from '@/lib/motion';
 import {
   getShowcaseFeedStreamUrl,
   getShowcaseMediaPreviewUrl,
+  getShowcasePlaybackUrl,
   getShowcasePreviewMediaItems,
   resolveShowcaseImageTileSource,
 } from '@/lib/showcase-media';
@@ -286,11 +287,16 @@ function ShowcaseMediaSlide({
   }
 
   if (item.mediaKind === 'video') {
+    const streamUrl = getShowcaseFeedStreamUrl(item);
     return (
       <View style={{ width, height }}>
         <FeedVideoPreview
           url={item.url}
-          streamUrl={getShowcaseFeedStreamUrl(item)}
+          streamUrl={streamUrl}
+          // The reel plays the full rendition. Where the feed streams that same
+          // file — anything too short to have a teaser — the tile's player can
+          // carry on into the reel; a teaser is a different file and cannot.
+          lendableStreamUrl={streamUrl && streamUrl === getShowcasePlaybackUrl(item) ? streamUrl : null}
           previewUrl={usablePreviewUrl}
           previewCacheKey={previewCacheKey}
           previewThumbhash={previewThumbhash}

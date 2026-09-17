@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   advanceZoomFlight,
+  arrivesUnderLandedZoom,
   beginZoomFlight,
   clearHiddenZoomSources,
   clearPendingZoomOrigin,
@@ -205,6 +206,54 @@ describe('the hand-off from a tapped tile', () => {
     clearPendingZoomOrigin();
 
     expect(peekPendingZoomOrigin('post-1', 1_100)).toBeNull();
+  });
+});
+
+describe('what a reel is pushed under', () => {
+  const spec = {
+    direction: 'open' as const,
+    geometry: geometry(),
+    preview: { url: 'https://example.test/preview.webp' },
+    still: true,
+  };
+
+  function handOff(flightId: number) {
+    setPendingZoomOrigin({
+      surfaceId: 'home',
+      itemId: 'post-1',
+      rect: { x: 0, y: 0, width: 10, height: 10 },
+      radius: 0,
+      aspectRatio: null,
+      preview: spec.preview,
+      flightId,
+      recordedAt: 1_000,
+    });
+  }
+
+  it('is a picture that already fills the screen once the tile’s flight has landed', () => {
+    const flight = beginZoomFlight(spec);
+    handOff(flight.id);
+    landZoomFlight(flight.id);
+
+    expect(arrivesUnderLandedZoom('post-1', 1_300)).toBe(true);
+  });
+
+  it('is not, while that flight is still growing — a push its deadline made early', () => {
+    const flight = beginZoomFlight(spec);
+    handOff(flight.id);
+
+    expect(arrivesUnderLandedZoom('post-1', 1_300)).toBe(false);
+  });
+
+  it('is nothing for a reel opened with no tile, or on another post, or long after', () => {
+    expect(arrivesUnderLandedZoom('post-1', 1_300)).toBe(false);
+
+    const flight = beginZoomFlight(spec);
+    handOff(flight.id);
+    landZoomFlight(flight.id);
+
+    expect(arrivesUnderLandedZoom('post-2', 1_300)).toBe(false);
+    expect(arrivesUnderLandedZoom('post-1', 60_000)).toBe(false);
   });
 });
 

@@ -8,6 +8,8 @@ import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { FEED_VIDEO_VIEW_PROPS } from '@/components/feed-media-frame';
 import { FeedMediaPlate } from '@/components/feed-media-plate';
 import { StableMediaImage } from '@/components/media-preview';
+import { useMediaZoomVideoOffer } from '@/lib/media-zoom-video-offer';
+import { lenderUnmounting } from '@/lib/video-player-loans';
 import { useAppForeground } from '@/lib/app-foreground';
 import { recordMediaDiagnostic } from '@/lib/media-diagnostics';
 import {
@@ -62,6 +64,7 @@ function forwardBufferSeconds(playing: boolean) {
 export function FeedVideoPreview({
   url,
   streamUrl = null,
+  lendableStreamUrl = null,
   previewUrl,
   previewCacheKey,
   previewThumbhash,
@@ -86,6 +89,12 @@ export function FeedVideoPreview({
    * renders the poster with a play glyph instead.
    */
   streamUrl?: string | null;
+  /**
+   * `streamUrl` again, when the reel plays that very file — then a tile inside a
+   * zoom source offers its playing player to the reel it opens, which carries
+   * on with it instead of starting the clip over. Null for a teaser.
+   */
+  lendableStreamUrl?: string | null;
   previewUrl?: string | null;
   previewCacheKey?: string;
   previewThumbhash?: string | null;
@@ -260,6 +269,7 @@ export function FeedVideoPreview({
         <FeedVideoPlayerLayer
           key={playerKey}
           source={streamSource}
+          lendableUrl={lendableStreamUrl}
           contentFit={videoContentFit}
           playing={canPlay}
           onFirstFrame={handleFirstFrame}
@@ -337,12 +347,15 @@ export function FeedVideoPreview({
 
 function FeedVideoPlayerLayer({
   source,
+  lendableUrl,
   contentFit,
   playing,
   onFirstFrame,
   onPlaybackError,
 }: {
   source: { uri: string; headers?: Record<string, string> };
+  /** Offered to the zoom out of this tile under this stream; null offers nothing. */
+  lendableUrl: string | null;
   contentFit: 'cover' | 'contain';
   playing: boolean;
   onFirstFrame: () => void;
@@ -366,12 +379,37 @@ function FeedVideoPlayerLayer({
   });
   const releaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Offered to the zoom out of the tile, which lends it to the flight and the
+  // reel when the tile is tapped (see lib/video-player-loans.ts).
+  const offerVideo = useMediaZoomVideoOffer();
+  const hasFrameRef = useRef(false);
+  // A new native view, for taking the player back: on Android a player draws in
+  // one view at a time, and a view it has left does not reclaim it on its own.
+  const [surfaceGeneration, setSurfaceGeneration] = useState(0);
+  useEffect(() => {
+    if (!offerVideo || !lendableUrl) return undefined;
+    return offerVideo({
+      player,
+      url: lendableUrl,
+      hasFrame: () => hasFrameRef.current,
+      reattach: () => setSurfaceGeneration((generation) => generation + 1),
+    });
+  }, [lendableUrl, offerVideo, player]);
+
+  const handleFirstFrameRender = useCallback(() => {
+    hasFrameRef.current = true;
+    onFirstFrame();
+  }, [onFirstFrame]);
+
   useEffect(() => {
     if (releaseTimerRef.current) {
       clearTimeout(releaseTimerRef.current);
       releaseTimerRef.current = null;
     }
     return () => {
+      // Out on loan, the player is the flight's or the reel's now — this tile
+      // unmounts exactly because the reel it opened took its screen's focus.
+      if (lenderUnmounting(player)) return;
       try {
         player.pause();
       } catch {
@@ -412,9 +450,10 @@ function FeedVideoPlayerLayer({
   return (
     <VideoView
       {...FEED_VIDEO_VIEW_PROPS}
+      key={surfaceGeneration}
       player={player}
       contentFit={contentFit}
-      onFirstFrameRender={onFirstFrame}
+      onFirstFrameRender={handleFirstFrameRender}
       pointerEvents="none"
       style={[absoluteFill, { backgroundColor: 'transparent' }]}
     />

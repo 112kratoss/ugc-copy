@@ -19,6 +19,23 @@ vi.mock('expo-router', () => ({
   useNavigation: () => ({ addListener: () => () => {} }),
 }));
 
+// The flight layer draws a lent video in a VideoView.
+vi.mock('expo-video', () => ({
+  VideoView: (props: MockProps) => React.createElement('video-view', props),
+}));
+
+// And shades letterbox bands and the top strip with expo-linear-gradient, which
+// vitest cannot parse.
+vi.mock('@/components/letterbox-bands', () => ({
+  LetterboxBands: (props: MockProps) => React.createElement('letterbox-bands', props),
+}));
+vi.mock('@/components/top-scrim', () => ({
+  TopScrim: (props: MockProps) => React.createElement('top-scrim', props),
+}));
+vi.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 59, bottom: 34, left: 0, right: 0 }),
+}));
+
 import { MediaZoomSourceView, type MediaZoomSource } from '../components/media-zoom';
 
 /** Stands in for whatever a tile draws; the wrappers around it are the subject. */
@@ -29,6 +46,7 @@ const source: MediaZoomSource = {
   hiddenStyle: { opacity: 1 },
   prepare: () => {},
   capture: (open) => open(),
+  offerVideo: () => () => {},
 };
 
 function flatten(style: unknown): Record<string, unknown> {

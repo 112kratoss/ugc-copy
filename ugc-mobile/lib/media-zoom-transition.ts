@@ -13,6 +13,8 @@
  * opens, and the register of tiles a closing reel can return to.
  * `components/media-zoom.tsx` animates them.
  */
+import type { VideoPlayer } from 'expo-video';
+
 import { getShowcaseMediaPreviewUrl, resolveShowcaseViewerImageSource } from './showcase-media';
 import type { ShowcaseMediaItem } from './types';
 
@@ -35,6 +37,18 @@ export interface ZoomPreview {
   thumbhash?: string | null;
 }
 
+/**
+ * A tile's playing video, lent to the flight out of it (`lib/video-player-loans.ts`).
+ * The flight draws the video the reader was watching instead of its poster, and
+ * the reel adopts the same player instead of building one — so a video post
+ * neither changes picture at take-off nor stops after landing.
+ */
+export interface ZoomVideo {
+  player: VideoPlayer;
+  /** The stream it plays. The reel adopts it only for a slide playing this same file. */
+  url: string;
+}
+
 /** What a tapped tile hands to the reel it is about to open. */
 export interface ZoomOrigin {
   /** The screen the tile lives on. A closing reel only returns to tiles on it. */
@@ -52,6 +66,8 @@ export interface ZoomOrigin {
    * the reel arrives underneath.
    */
   preview: ZoomPreview | null;
+  /** The tile's playing video, when it lent it; see `ZoomVideo`. */
+  video?: ZoomVideo | null;
   /** The flight the tap started, which the reel joins rather than starting its own. */
   flightId: number;
   recordedAt: number;
@@ -110,6 +126,8 @@ export interface ZoomFlight {
    * place for a moment after a close has landed. Null flies unseen.
    */
   preview: ZoomPreview | null;
+  /** A playing video the layer draws in place of `preview`; see `ZoomVideo`. */
+  video?: ZoomVideo | null;
   /**
    * Whether the layer draws `preview` while the flight runs. A close that
    * shrinks the live reel itself flies under nothing; the picture appears only
@@ -230,6 +248,13 @@ export function reverseZoomFlightTime(progress: number, easePower: number): numb
 export interface ZoomStill {
   preview: ZoomPreview;
   geometry: ZoomGeometry;
+  /** Drawn instead of `preview` when the tile lent its playing video. */
+  video?: ZoomVideo | null;
+  /**
+   * Held, out of sight, for as long as an open reel may close onto it — not
+   * for a finger that may never lift — so the layer never lets it go on a timer.
+   */
+  standing?: boolean;
 }
 
 let still: ZoomStill | null = null;
@@ -296,6 +321,17 @@ export function peekPendingZoomOrigin(itemId: string | null | undefined, now: nu
   if (!pendingOrigin || !itemId || pendingOrigin.itemId !== itemId) return null;
   if (now - pendingOrigin.recordedAt > ORIGIN_TTL_MS) return null;
   return pendingOrigin;
+}
+
+/**
+ * Whether the reel opening on `itemId` is pushed under a tile's picture that
+ * already fills the screen: a fresh hand-off whose flight has landed. Whatever
+ * the navigator animates then plays unseen beneath that picture, and only holds
+ * back the moment the reel can be uncovered.
+ */
+export function arrivesUnderLandedZoom(itemId: string | null | undefined, now: number): boolean {
+  const origin = peekPendingZoomOrigin(itemId, now);
+  return origin !== null && flight?.id !== origin.flightId;
 }
 
 /** Registers a mounted tile; the returned function unregisters exactly this handle. */

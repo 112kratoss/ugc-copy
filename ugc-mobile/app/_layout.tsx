@@ -27,6 +27,7 @@ import { notificationBadgeQueryKey } from '@/lib/notification-badge';
 import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
 import { readAppVersionParts } from '@/lib/app-version-label';
 import { setMediaDiagnosticsReporter } from '@/lib/media-diagnostics';
+import { arrivesUnderLandedZoom } from '@/lib/media-zoom-transition';
 import { useReducedMotion } from '@/lib/motion';
 import { navigateToNotificationDeepLink, subscribeToNotificationResponses, subscribeToNotificationsReceived } from '@/lib/notifications';
 import { OnboardingProvider, useOnboarding } from '@/lib/onboarding';
@@ -50,9 +51,21 @@ export const unstable_settings = {
 const FONT_SPLASH_FALLBACK_MS = 1200;
 void SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
-// The reel's zoom is its whole transition on Android (see the viewer screen
-// below); on iOS the navigator's short fade is what it arrives under.
-const VIEWER_ANIMATION = Platform.OS === 'android' ? 'none' : 'fade';
+/**
+ * The navigator's own animation for the reel screen. Android: none, the zoom is
+ * its whole transition (see the viewer screen below). iOS: the short fade a reel
+ * arrives and leaves under — except when it is pushed under a tile's picture
+ * that already fills the screen. A fade there plays unseen beneath the picture
+ * and only holds back the reel's reveal until it ends (the reel may not be
+ * uncovered while it is still translucent), which kept the rail and caption off
+ * an iPhone 16e's screen some 200 ms after everything was ready. Read when the
+ * reel is pushed; the viewer puts the fade back for the ways it leaves.
+ */
+function viewerAnimation(params: object | undefined): 'none' | 'fade' {
+  if (Platform.OS === 'android') return 'none';
+  const initialId = (params as { initialId?: string | string[] } | undefined)?.initialId;
+  return arrivesUnderLandedZoom(Array.isArray(initialId) ? initialId[0] : initialId, Date.now()) ? 'none' : 'fade';
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -221,18 +234,20 @@ function RootLayoutNav() {
                     stack at the first one), transparent so the screen beneath shows
                     through the reel's own ground during the short fade in, and so
                     the snapshot a pop leaves behind hides nothing while the layer
-                    above the navigator shrinks the reel's picture over it. An
+                    above the navigator shrinks the reel's picture over it; pushed
+                    under a picture that has already grown to fill the screen, it
+                    arrives with no animation at all (`viewerAnimation`). An
                     earlier attempt (2026-08-23) mounted the media first and brought
                     the controls in afterwards, which is what it was cut for. */}
                 <Stack.Screen
                   name="viewer"
-                  options={{
+                  options={({ route }) => ({
                     headerShown: false,
                     presentation: Platform.OS === 'android' ? 'transparentModal' : 'card',
                     contentStyle: { backgroundColor: 'transparent' },
-                    animation: reducedMotion ? 'none' : VIEWER_ANIMATION,
+                    animation: reducedMotion ? 'none' : viewerAnimation(route.params),
                     animationDuration: 250,
-                  }}
+                  })}
                 />
                 {/* Keep the library and its card feed opaque while navigating. A
                     fade composites two dense media surfaces and briefly makes
