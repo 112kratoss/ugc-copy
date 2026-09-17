@@ -27,9 +27,14 @@ import {
 } from '../lib/viewer-audio';
 import {
   VIEWER_TOP_CONTROL_SIZE,
+  VIEWER_TOP_SCRIM_GLYPH_BAND,
+  scrimAlphaAt,
   viewerTopBadgeTop,
   viewerTopControlTop,
+  viewerTopScrim,
 } from '../lib/viewer-chrome';
+import { contrastRatio, MIN_BODY_CONTRAST } from '../lib/color-contrast';
+import { appTheme } from '../lib/theme';
 
 /**
  * S6's rules, in the form a suite can hold. Sources: Going full screen, Playing
@@ -52,8 +57,39 @@ describe('S6 — the status bar over full-bleed media', () => {
     // clock is drawn on, which protects nothing when the content is a photo.
     expect(viewer).toContain('<TopScrim topInset={topInset} over="media" />');
     const scrim = read('components/top-scrim.tsx');
-    expect(scrim).toContain('MEDIA_SCRIM_HOLD = 0.6');
-    expect(scrim).toContain('locations={over === \'media\' ? [0, MEDIA_SCRIM_HOLD, 1] : undefined}');
+    expect(scrim).toContain('viewerTopScrim(topInset)');
+  });
+
+  // The rule the scrim exists for, rather than the shape it happens to have:
+  // over a pure-white photo, the status bar's white glyphs clear body-text
+  // contrast wherever they are drawn. Blended in 8-bit sRGB, as the renderer does.
+  const shadeOverWhite = (alpha: number) => {
+    const ground = appTheme.colors.background;
+    const channel = (offset: number) => {
+      const value = Number.parseInt(ground.slice(offset, offset + 2), 16);
+      return Math.round(alpha * value + (1 - alpha) * 255).toString(16).padStart(2, '0');
+    };
+    return `#${channel(1)}${channel(3)}${channel(5)}`;
+  };
+  const insets = [20, 24, 34, 44, 55, 59, 62, 72];
+
+  it.each(insets)('keeps the status bar readable on a white photo at inset %i', (inset) => {
+    const { stops } = viewerTopScrim(inset);
+    for (let y = 0; y <= inset * VIEWER_TOP_SCRIM_GLYPH_BAND; y += 1) {
+      expect(contrastRatio('#ffffff', shadeOverWhite(scrimAlphaAt(stops, y)))).toBeGreaterThanOrEqual(MIN_BODY_CONTRAST);
+    }
+  });
+
+  // Measured on a Pixel 9a, the old shade was a solid bar, a 54px straight
+  // ramp and a kink: its steepest step lost 0.045 of opacity a point. An eased
+  // fade that reaches past the control row stays under half of that everywhere.
+  it.each(insets)('reaches behind the control row and fades without an edge at inset %i', (inset) => {
+    const { height, stops } = viewerTopScrim(inset);
+    expect(height).toBeGreaterThanOrEqual(viewerTopControlTop(inset) + VIEWER_TOP_CONTROL_SIZE);
+    expect(scrimAlphaAt(stops, height)).toBe(0);
+    for (let y = 0; y < height; y += 1) {
+      expect(scrimAlphaAt(stops, y) - scrimAlphaAt(stops, y + 1)).toBeLessThanOrEqual(0.02);
+    }
   });
 
   it('keeps the scrim between the reel and the sheets it must not band', () => {

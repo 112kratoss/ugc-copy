@@ -38,6 +38,46 @@ export const SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS = 1;
  * the user has chosen to watch and stalling matters more than bytes.
  */
 export const FEED_PREVIEW_FORWARD_BUFFER_SECONDS = 8;
+
+/**
+ * How far ahead a prepared feed preview buffers, in seconds.
+ *
+ * A prepared tile is one the reader has not reached yet: its player waits
+ * paused beside the playing one, so arriving is a resume rather than a load
+ * (see SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS). It needs only enough to draw its
+ * first frame and start without stalling, so it holds the head of the clip —
+ * the way large feeds prefetch just the first seconds of what is likely to play
+ * next — and widens to FEED_PREVIEW_FORWARD_BUFFER_SECONDS once it plays. The
+ * bytes land in the player cache, so a prepared tile that goes on to play never
+ * fetches them twice.
+ */
+export const FEED_PREPARED_FORWARD_BUFFER_SECONDS = 3;
+
+/**
+ * How many feed videos beside the playing one keep a paused, loaded player.
+ *
+ * Creating a player on activation costs a fetch plus a decoder setup, and in a
+ * feed that reads as the tile sitting on its poster before it moves. Two cover
+ * a scroll in either direction: the nearest video below the playing one and the
+ * nearest above it. The video being scrolled away from keeps its player only
+ * while nothing else plays, so the feed holds at most three players — plus, for
+ * a moment in each handoff, the outgoing one waiting out its release grace.
+ * Hardware decoders are a hard per-device limit: the Pixel emulator refuses a
+ * fifth, which an earlier selection that briefly held five ran into.
+ */
+export const SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS = 2;
+
+/**
+ * How long an active feed video may take to draw its first frame before the
+ * tile shows a spinner, in milliseconds.
+ *
+ * A prepared video starts at once and a cold one usually draws well inside a
+ * second; a spinner that flashes up for those reads as the tile blinking. A
+ * second is where a wait stops feeling immediate, so only a genuinely slow
+ * start admits it is loading.
+ */
+export const FEED_PREVIEW_BUFFERING_INDICATOR_DELAY_MS = 1000;
+
 export const HOME_RAIL_DRAW_DISTANCE = 400;
 
 /**

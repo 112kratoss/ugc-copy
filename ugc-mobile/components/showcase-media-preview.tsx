@@ -12,6 +12,7 @@ import { useReducedMotion } from '@/lib/motion';
 import {
   getShowcaseFeedStreamUrl,
   getShowcaseMediaPreviewUrl,
+  getShowcasePlaybackUrl,
   getShowcasePreviewMediaItems,
   resolveShowcaseImageTileSource,
 } from '@/lib/showcase-media';
@@ -45,7 +46,12 @@ type ShowcaseMediaPreviewProps = {
   width: number;
 };
 
-type VideoActivation = 'never' | 'visible' | 'when-poster-missing';
+/**
+ * `visible` plays; `prepared` holds a paused, loaded player for a video the
+ * reader is about to reach (see FeedVideoPreview); `when-poster-missing` plays
+ * only to draw a frame where no poster exists.
+ */
+type VideoActivation = 'never' | 'prepared' | 'visible' | 'when-poster-missing';
 
 export function ShowcaseMediaPreview({
   accent,
@@ -281,16 +287,22 @@ function ShowcaseMediaSlide({
   }
 
   if (item.mediaKind === 'video') {
+    const streamUrl = getShowcaseFeedStreamUrl(item);
     return (
       <View style={{ width, height }}>
         <FeedVideoPreview
           url={item.url}
-          streamUrl={getShowcaseFeedStreamUrl(item)}
+          streamUrl={streamUrl}
+          // The reel plays the full rendition. Where the feed streams that same
+          // file — anything too short to have a teaser — the tile's player can
+          // carry on into the reel; a teaser is a different file and cannot.
+          lendableStreamUrl={streamUrl && streamUrl === getShowcasePlaybackUrl(item) ? streamUrl : null}
           previewUrl={usablePreviewUrl}
           previewCacheKey={previewCacheKey}
           previewThumbhash={previewThumbhash}
           onPosterLoad={onLoad}
           active={videoActivation === 'visible' || (videoActivation === 'when-poster-missing' && !usablePreviewUrl)}
+          prepared={videoActivation === 'prepared'}
           height={height}
           radius={radius}
           accent={accent}

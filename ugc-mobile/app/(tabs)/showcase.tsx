@@ -8,6 +8,8 @@ import { ActivityIndicator, AccessibilityInfo, Pressable, ScrollView, Text, useW
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
+import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '@/components/media-zoom';
+import { showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
 import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
 import { ExploreSearchOverlay } from '@/components/explore-search-overlay';
 import { FeedMediaPlate } from '@/components/feed-media-plate';
@@ -680,6 +682,8 @@ export default function ShowcaseScreen() {
   }, [gridLayout, visibleActiveVideoIds, resolvedAspectRatios, openCreator, openPost, handleMediaScrollToggle]);
 
   return (
+    // Pins on this grid are what the reel grows out of and returns to.
+    <MediaZoomSurface>
     <WorkspaceSideMenuGestureLayer bottomOffset={tabBarMetrics.contentBottomPadding} enabled={!isSwipingMedia}>
       <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
         <FlashList
@@ -834,6 +838,7 @@ export default function ShowcaseScreen() {
         />
       </View>
     </WorkspaceSideMenuGestureLayer>
+    </MediaZoomSurface>
   );
 }
 
@@ -1016,6 +1021,16 @@ const MasonryPin = memo(function MasonryPin({
   const creatorLabel = formatCreatorLabel(card.creatorLabel);
   const signal = card.unlock;
   const pressMotion = usePressMotion(false, { scale: appTheme.motion.scale.pressed });
+  // The pin is the rectangle the reel grows out of, and empties into while the
+  // reel is holding this post.
+  const pinMediaItems = getShowcasePreviewMediaItems(card.item);
+  const zoomSource = useMediaZoomSource({
+    itemId: card.item.id,
+    radius: layout.mediaRadius,
+    aspectRatio: resolvedAspectRatio ?? card.aspectRatio ?? null,
+    preview: showcaseMediaZoomPreview(pinMediaItems[0]),
+  });
+  const openPin = () => zoomSource.capture(() => onOpenPost(card.item));
 
   return (
     <View style={{ gap: 5 }}>
@@ -1024,8 +1039,11 @@ const MasonryPin = memo(function MasonryPin({
         accessibilityRole="button"
         accessibilityLabel={`${card.title}. ${card.badge}${signal ? `. ${signal.summary}` : ''}. ${creatorLabel}`}
         accessibilityHint="Opens this post in the full-screen viewer"
-        onPress={() => onOpenPost(card.item)}
-        onPressIn={pressMotion.onPressIn}
+        onPress={openPin}
+        onPressIn={() => {
+          pressMotion.onPressIn();
+          zoomSource.prepare();
+        }}
         onPressOut={pressMotion.onPressOut}
         style={{
           height: mediaHeight,
@@ -1035,9 +1053,10 @@ const MasonryPin = memo(function MasonryPin({
           backgroundColor: '#050506',
         }}
       >
+        <MediaZoomSourceView source={zoomSource} style={{ width: columnWidth, height: mediaHeight }}>
         {hasShowcasePreviewMedia(card.item) ? (
           <ShowcaseMediaPreview
-            mediaItems={getShowcasePreviewMediaItems(card.item)}
+            mediaItems={pinMediaItems}
             height={mediaHeight}
             accent={accent}
             width={columnWidth}
@@ -1046,7 +1065,7 @@ const MasonryPin = memo(function MasonryPin({
             videoActivation={showActiveVideo ? 'visible' : 'never'}
             videoBackdrop="none"
             videoContentFit="cover"
-            onPress={() => onOpenPost(card.item)}
+            onPress={openPin}
             onScrollToggle={onScrollToggle}
             onCoverLoad={card.aspectRatio || resolvedAspectRatio ? undefined : (event) => {
               const ratio = event.source.width / event.source.height;
@@ -1062,6 +1081,7 @@ const MasonryPin = memo(function MasonryPin({
         )}
         {signal ? <PinBadge label={signal.label} accent={accentColor(signal.accent)} /> : null}
         {isVideoCard && !coverVideoStreaming ? <VideoCornerPlay /> : null}
+        </MediaZoomSourceView>
       </Pressable>
       </MotionView>
 

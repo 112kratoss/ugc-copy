@@ -3,6 +3,7 @@ import { VideoView, type VideoPlayer } from 'expo-video';
 import type { ReactNode } from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
 
+import { FEED_VIDEO_VIEW_PROPS } from '@/lib/feed-video-view-props';
 import { useMediaSource } from '@/lib/use-media-source';
 import { appTheme } from '@/lib/theme';
 import { StableMediaImage } from '@/components/media-preview';
@@ -29,7 +30,17 @@ type FeedMediaFrameBaseProps = {
 type FeedImageFrameProps = FeedMediaFrameBaseProps & {
   kind: 'image';
   imageBackdrop?: 'blurred' | 'none';
+  /**
+   * Drawn beneath the picture in place of the blurred backdrop, when given. The
+   * reel's letterbox bands go here (`LetterboxBands`): the evenly dimmed backdrop
+   * leaves a hard edge where it meets the picture, and the bands reach a little
+   * way under the picture so a rounding gap along the seam cannot show — which
+   * only a picture drawn over them hides.
+   */
+  imageBackdropContent?: ReactNode;
   imageContentFit?: 'cover' | 'contain';
+  /** Fires when this picture is actually on screen, not merely decoded. */
+  onImageDisplay?: ImageProps['onDisplay'];
   onImageError?: () => void;
   onImageLoad?: ImageProps['onLoad'];
   transition?: number;
@@ -39,7 +50,8 @@ type FeedImageFrameProps = FeedMediaFrameBaseProps & {
 type FeedVideoFrameProps = FeedMediaFrameBaseProps & {
   kind: 'video';
   onFirstFrameRender?: () => void;
-  player: VideoPlayer;
+  /** Null draws no video yet — a surface that will take a player later. */
+  player: VideoPlayer | null;
   posterUrl?: string | null;
   posterVisible?: boolean;
   videoBackdrop?: 'blurred' | 'none';
@@ -53,20 +65,8 @@ const absoluteFill = {
   inset: 0,
 };
 
-/**
- * Presentation for every feed-side `VideoView`, shared with FeedVideoPreview so
- * the two cannot drift. `useExoShutter: false` means ExoPlayer draws no black
- * shutter before the first frame — the caller's poster is the only cover, so a
- * consumer that drops its poster early will show the bare surface.
- */
-export const FEED_VIDEO_VIEW_PROPS = {
-  allowsPictureInPicture: false,
-  fullscreenOptions: { enable: false },
-  nativeControls: false,
-  startsPictureInPictureAutomatically: false,
-  surfaceType: 'textureView' as const,
-  useExoShutter: false,
-};
+// Shared by every feed-side VideoView; see lib/feed-video-view-props.ts.
+export { FEED_VIDEO_VIEW_PROPS };
 
 export function FeedMediaFrame(props: FeedMediaFrameProps) {
   const foregroundUrl = props.kind === 'image' ? props.url : props.posterUrl;
@@ -106,7 +106,8 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
     >
       {props.kind === 'image' ? (
         <>
-          {(props.imageBackdrop ?? 'blurred') === 'blurred' ? (
+          {props.imageBackdropContent}
+          {!props.imageBackdropContent && (props.imageBackdrop ?? 'blurred') === 'blurred' ? (
             <>
               <Image
                 source={backdropSource}
@@ -126,6 +127,7 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
             cacheKey={foregroundCacheKey ?? props.url}
             thumbhash={props.thumbhash}
             contentFit={props.imageContentFit ?? 'contain'}
+            onDisplay={props.onImageDisplay}
             onError={props.onImageError}
             onLoad={props.onImageLoad}
             transition={props.transition}

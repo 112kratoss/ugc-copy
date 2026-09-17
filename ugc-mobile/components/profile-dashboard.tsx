@@ -34,6 +34,7 @@ import { useAuth } from '@/lib/auth';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { formatUsdCents, getOwnerPostSalesSummary } from '@/lib/home-view-model';
 import { haptic } from '@/lib/haptics';
+import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '@/components/media-zoom';
 import { immersiveViewerHref, profileMediaFeedHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
 import { MotionView, usePressMotion } from '@/lib/motion';
 import {
@@ -529,6 +530,8 @@ function ProfileMediaList({
   ]).current;
 
   return (
+    // Saved tiles here are what the reel grows out of and returns to.
+    <MediaZoomSurface>
     <View {...swipeResponder.panHandlers} style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
       <FlashList
         ref={listRef}
@@ -615,6 +618,7 @@ function ProfileMediaList({
 
       <TopScrim topInset={topInset} />
     </View>
+    </MediaZoomSurface>
   );
 }
 
@@ -1109,13 +1113,27 @@ function ProfileMediaTile({
     ? `${item.label}, ${item.title}, ${countLabel} likes`
     : `${item.label}, ${item.title}, ${getProfileTileState(item).label}`;
   const motion = usePressMotion(false, { scale: appTheme.motion.scale.pressed });
+  // Saved tiles open the reel, and the reel grows out of this tile. Creations
+  // and Posts open the card feed, which is not a zoom.
+  const previewUrl = item.previewUrl ?? item.mediaUrl;
+  const zoomSource = useMediaZoomSource({
+    itemId: item.sourceId,
+    radius: 12,
+    // The media's own shape: the cell crops every post to the same one.
+    aspectRatio: item.aspectRatio ?? null,
+    preview: previewUrl ? { url: previewUrl, cacheKey: item.previewCacheKey ?? item.id, thumbhash: item.previewThumbhash } : null,
+    enabled: isSavedTile && !isFallbackPreview && item.previewKind !== 'text',
+  });
 
   return (
     <MotionView style={[{ width, height }, motion.animatedStyle]}>
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
-      onPressIn={motion.onPressIn}
+      onPressIn={() => {
+        motion.onPressIn();
+        zoomSource.prepare();
+      }}
       onPressOut={motion.onPressOut}
       onPress={() => {
         haptic.light();
@@ -1144,10 +1162,11 @@ function ProfileMediaTile({
             // The feed holds the scope the tile was drawn in; active is its default.
             scope: item.label === 'Post' && item.isArchived ? 'archived' : undefined,
           });
-        router.push(href as never);
+        zoomSource.capture(() => router.push(href as never));
       }}
       style={{ flex: 1 }}
     >
+      <MediaZoomSourceView source={zoomSource} style={{ width, height }}>
       <View
         testID={highlighted ? 'profile-highlighted-post-tile' : undefined}
         style={{
@@ -1182,6 +1201,7 @@ function ProfileMediaTile({
           <ProfileMinimalMediaOverlay item={item} />
         )}
       </View>
+      </MediaZoomSourceView>
     </Pressable>
     </MotionView>
   );

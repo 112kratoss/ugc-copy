@@ -498,4 +498,140 @@ describe('FeedVideoPreview', () => {
     expect(findRetry(tree)).toHaveLength(0);
     renderer.act(() => tree.unmount());
   });
+
+  it('prepares a paused player that draws its first frame before activation', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active={false} prepared />);
+    });
+
+    expect(videoState.createVideoPlayer).toHaveBeenCalledTimes(1);
+    expect(videoState.player.play).not.toHaveBeenCalled();
+    // Waiting, it holds only the head of the clip.
+    expect(videoState.player.bufferOptions).toEqual({ preferredForwardBufferDuration: 3 });
+    expect(posterOpacity(tree!)).toBe(1);
+
+    renderer.act(() => {
+      tree!.root.findByType('video-view' as never).props.onFirstFrameRender();
+    });
+    // The paused first frame takes over from the poster, which is that frame.
+    expect(posterOpacity(tree!)).toBe(0);
+    expect(tree!.root.findAll((node) => String(node.type) === 'activity-indicator')).toHaveLength(0);
+  });
+
+  it('activates a prepared tile by resuming its player, and keeps it when playback moves on', () => {
+    vi.useFakeTimers();
+    let tree: renderer.ReactTestRenderer | undefined;
+
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active={false} prepared />);
+    });
+    renderer.act(() => {
+      tree!.root.findByType('video-view' as never).props.onFirstFrameRender();
+    });
+
+    renderer.act(() => {
+      tree!.update(<FeedVideoPreview {...posterProps} active />);
+    });
+    expect(videoState.createVideoPlayer).toHaveBeenCalledTimes(1);
+    expect(videoState.player.play).toHaveBeenCalledTimes(1);
+    expect(videoState.player.bufferOptions).toEqual({ preferredForwardBufferDuration: 8 });
+    expect(posterOpacity(tree!)).toBe(0);
+
+    // Playback moves to the next card; this one stays prepared, paused on its frame.
+    videoState.player.pause.mockClear();
+    renderer.act(() => {
+      tree!.update(<FeedVideoPreview {...posterProps} active={false} prepared />);
+    });
+    renderer.act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(videoState.player.pause).toHaveBeenCalledTimes(1);
+    expect(videoState.player.release).not.toHaveBeenCalled();
+    expect(posterOpacity(tree!)).toBe(0);
+
+    // Scrolling back resumes that same player instead of loading a new one.
+    renderer.act(() => {
+      tree!.update(<FeedVideoPreview {...posterProps} active />);
+    });
+    expect(videoState.createVideoPlayer).toHaveBeenCalledTimes(1);
+    expect(videoState.player.play).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it('releases a prepared player that leaves the window, and a new one redraws before the poster lifts', () => {
+    vi.useFakeTimers();
+    let tree: renderer.ReactTestRenderer | undefined;
+
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active={false} prepared />);
+    });
+    renderer.act(() => {
+      tree!.root.findByType('video-view' as never).props.onFirstFrameRender();
+    });
+    expect(posterOpacity(tree!)).toBe(0);
+
+    renderer.act(() => {
+      tree!.update(<FeedVideoPreview {...posterProps} active={false} />);
+    });
+    expect(tree!.root.findAll((node) => String(node.type) === 'video-view')).toHaveLength(0);
+    expect(posterOpacity(tree!)).toBe(1);
+    renderer.act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(videoState.player.release).toHaveBeenCalledTimes(1);
+
+    // The same stream again: the released player's frame must not lift the
+    // poster over a new player that has not drawn anything yet.
+    renderer.act(() => {
+      tree!.update(<FeedVideoPreview {...posterProps} active={false} prepared />);
+    });
+    expect(videoState.createVideoPlayer).toHaveBeenCalledTimes(2);
+    expect(posterOpacity(tree!)).toBe(1);
+    vi.useRealTimers();
+  });
+
+  it('does not dim an activating tile, and shows a spinner only for a slow start', () => {
+    vi.useFakeTimers();
+    let tree: renderer.ReactTestRenderer | undefined;
+    const spinners = () => tree!.root.findAll((node) => String(node.type) === 'activity-indicator');
+
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active />);
+    });
+    // A normal start is the poster and then motion, with nothing flashed between.
+    expect(spinners()).toHaveLength(0);
+    expect(posterOpacity(tree!)).toBe(1);
+
+    renderer.act(() => {
+      vi.advanceTimersByTime(999);
+    });
+    expect(spinners()).toHaveLength(0);
+    renderer.act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(spinners()).toHaveLength(1);
+
+    renderer.act(() => {
+      tree!.root.findByType('video-view' as never).props.onFirstFrameRender();
+    });
+    expect(spinners()).toHaveLength(0);
+    vi.useRealTimers();
+  });
+
+  it('never shows the slow-start spinner on a prepared tile that is not playing', () => {
+    vi.useFakeTimers();
+    let tree: renderer.ReactTestRenderer | undefined;
+
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active={false} prepared />);
+    });
+    renderer.act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    expect(tree!.root.findAll((node) => String(node.type) === 'activity-indicator')).toHaveLength(0);
+    vi.useRealTimers();
+  });
 });

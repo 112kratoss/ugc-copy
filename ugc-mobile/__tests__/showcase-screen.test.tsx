@@ -87,6 +87,11 @@ vi.mock('expo-image', () => ({
   ),
 }));
 
+// The zoom's flight layer can draw a video a tile lent it.
+vi.mock('expo-video', () => ({
+  VideoView: (props: MockProps) => React.createElement('video-view', props),
+}));
+
 vi.mock('lucide-react-native', () => ({
   ImageIcon: (props: MockProps) => React.createElement('image-icon', props),
   MoreVertical: (props: MockProps) => React.createElement('more-vertical-icon', props),
@@ -110,6 +115,12 @@ vi.mock('@/components/feed-feedback-sheet', () => ({
 
 vi.mock('@/components/top-scrim', () => ({
   TopScrim: (props: MockProps) => React.createElement('top-scrim', props),
+}));
+
+// Same reason as the scrim: the zoom's flight layer shades letterbox bands with
+// expo-linear-gradient, which vitest cannot parse.
+vi.mock('@/components/letterbox-bands', () => ({
+  LetterboxBands: (props: MockProps) => React.createElement('letterbox-bands', props),
 }));
 
 vi.mock('@/components/ui', () => ({

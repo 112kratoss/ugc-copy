@@ -1262,6 +1262,47 @@ describe('ProfileDashboard media tiles routing', () => {
     });
   });
 
+  it('keeps archived Posts in their scoped management feed', () => {
+    queryState.ownerPosts = [{
+      id: 'archived-post',
+      title: 'Archived post',
+      createdAt: '2026-06-10T00:00:00Z',
+      visibility: 'public',
+      mediaUrl: 'archived.png',
+      mediaKind: 'image',
+      mediaItems: [],
+      archivedAt: '2026-06-11T00:00:00Z',
+      bundle: null,
+      commentCount: 0,
+    }];
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab="Posts" />);
+    });
+
+    const archivedTab = findPressableByText(tree!.root, 'Archived (1)');
+    renderer.act(() => {
+      archivedTab.props.onPress();
+    });
+
+    const tile = tree!.root.findByProps({
+      accessibilityLabel: 'Post, Archived post, Public',
+    });
+    renderer.act(() => {
+      tile.props.onPress();
+    });
+
+    expect(routerState.push).toHaveBeenCalledWith({
+      pathname: '/profile-media-feed',
+      params: {
+        source: 'profile-posts',
+        initialId: 'archived-post',
+        scope: 'archived',
+      },
+    });
+  });
+
   it('does not show the profile error banner when cached profile data is available', () => {
     queryState.profileError = new Error('Unauthorized');
 

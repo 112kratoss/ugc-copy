@@ -22,17 +22,36 @@ function hostComponent(tag: string) {
   return Component;
 }
 
-export type SharedValue<T> = { value: T };
+export type SharedValue<T> = {
+  value: T;
+  get: () => T;
+  set: (next: T | ((value: T) => T)) => void;
+};
+
+export function makeMutable<T>(initial: T): SharedValue<T> {
+  const shared: SharedValue<T> = {
+    value: initial,
+    get: () => shared.value,
+    set: (next) => {
+      shared.value = typeof next === 'function' ? (next as (value: T) => T)(shared.value) : next;
+    },
+  };
+  return shared;
+}
 
 export function useSharedValue<T>(initial: T): SharedValue<T> {
-  return { value: initial };
+  return makeMutable(initial);
 }
 
 export function useDerivedValue<T>(factory: () => T): SharedValue<T> {
-  return { value: factory() };
+  return makeMutable(factory());
 }
 
 export function useAnimatedStyle<T>(factory: () => T): T {
+  return factory();
+}
+
+export function useAnimatedProps<T>(factory: () => T): T {
   return factory();
 }
 
@@ -66,6 +85,21 @@ export function withSpring<T>(toValue: T) {
 export function withDelay<T>(_delay: number, animation: T) {
   return animation;
 }
+
+export function cancelAnimation(_value: SharedValue<unknown>) {}
+
+/** Curves are identity here: a rendered tree only ever shows the settled value. */
+const identityEasing = (value: number) => value;
+
+export const Easing = {
+  bezier: () => identityEasing,
+  linear: identityEasing,
+  quad: identityEasing,
+  ease: identityEasing,
+  in: () => identityEasing,
+  out: () => identityEasing,
+  inOut: () => identityEasing,
+};
 
 export function runOnJS<T extends (...args: never[]) => unknown>(fn: T) {
   return fn;

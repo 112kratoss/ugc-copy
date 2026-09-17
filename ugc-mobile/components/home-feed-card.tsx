@@ -3,6 +3,7 @@ import { memo } from 'react';
 import { Text, View } from 'react-native';
 
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
+import { MediaZoomSourceView, useMediaZoomSource } from '@/components/media-zoom';
 import { PostTextBlock } from '@/components/post-text-block';
 import { SaveHeart } from '@/components/save-heart';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
@@ -12,6 +13,7 @@ import {
   type HomeFeedCard,
 } from '@/lib/home-feed-view-model';
 import { ShareGlyph } from '@/lib/platform-glyphs';
+import { showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
 import { getShowcasePreviewMediaItems } from '@/lib/showcase-media';
 import { accentColor, appTheme } from '@/lib/theme';
 
@@ -19,6 +21,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   card,
   contentWidth,
   showActiveVideo,
+  showPreparedVideo,
   bodyExpanded,
   onOpen,
   onToggleBody,
@@ -33,6 +36,8 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   card: HomeFeedCard;
   contentWidth: number;
   showActiveVideo: boolean;
+  /** Keep this card's video loaded and paused, ready to play; see FeedVideoPreview. */
+  showPreparedVideo: boolean;
   bodyExpanded: boolean;
   onOpen: () => void;
   onToggleBody: () => void;
@@ -48,6 +53,16 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   const hasMedia = card.previewKind !== 'text' && Boolean(card.mediaUrl);
   const mediaHeight = hasMedia ? getHomeFeedMediaHeight(card, contentWidth) : 0;
   const bodyWidth = contentWidth - appTheme.spacing.card * 2;
+  const videoActivation = showActiveVideo ? 'visible' : showPreparedVideo ? 'prepared' : 'never';
+  // The media is what opens: the reel grows out of this rectangle, carrying
+  // this picture, and shrinks back into it when the reader comes back.
+  const mediaItems = getShowcasePreviewMediaItems(card.item);
+  const zoomSource = useMediaZoomSource({
+    itemId: card.item.id,
+    aspectRatio: card.aspectRatio ?? null,
+    preview: showcaseMediaZoomPreview(mediaItems[0]),
+    enabled: hasMedia,
+  });
 
   return (
     <FeedCardShell
@@ -59,7 +74,8 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
       onCreatorPress={onCreatorOpen}
       onMorePress={onFeedbackOpen}
       moreAccessibilityLabel={`More options for ${card.title}`}
-      onOpen={onOpen}
+      onOpen={() => zoomSource.capture(onOpen)}
+      onOpenTouchStart={zoomSource.prepare}
       openAccessibilityLabel={`Open ${card.title}`}
       timeLabel={card.timeLabel}
       title={card.title}
@@ -73,17 +89,19 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
         />
       ) : null}
       media={hasMedia ? (
-        <ShowcaseMediaPreview
-          accent={accent}
-          mediaItems={getShowcasePreviewMediaItems(card.item)}
-          width={contentWidth}
-          height={mediaHeight}
-          radius={0}
-          recyclingKey={`home-feed:${card.id}`}
-          videoActivation={showActiveVideo ? 'visible' : 'never'}
-          videoBackdrop="none"
-          videoContentFit="cover"
-        />
+        <MediaZoomSourceView source={zoomSource}>
+          <ShowcaseMediaPreview
+            accent={accent}
+            mediaItems={mediaItems}
+            width={contentWidth}
+            height={mediaHeight}
+            radius={0}
+            recyclingKey={`home-feed:${card.id}`}
+            videoActivation={videoActivation}
+            videoBackdrop="none"
+            videoContentFit="cover"
+          />
+        </MediaZoomSourceView>
       ) : null}
       banner={card.unlock ? (
         <View

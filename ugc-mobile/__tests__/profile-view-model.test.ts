@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { generationToProfileMediaCard, getProfileStats, ownerPostToProfileMediaCard } from '../lib/profile-view-model';
-import type { GenerationListItem, OwnerPostListItem } from '../lib/types';
+import { buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
+import { mediaItemAspectRatio } from '../lib/media-zoom-transition';
+import {
+  generationToProfileMediaCard,
+  getProfileStats,
+  ownerPostToProfileMediaCard,
+  showcaseToSavedProfileMediaCard,
+} from '../lib/profile-view-model';
+import type { GenerationListItem, OwnerPostListItem, ShowcaseFeedItem, ShowcaseMediaItem } from '../lib/types';
 
 describe('profile view model media cards', () => {
   it('keeps a creation whose only source is gone on the grid with an explicit label', () => {
@@ -274,6 +281,85 @@ describe('profile view model media cards', () => {
     });
     expect(archivedCard.isGridReady).toBe(true);
     expect(archivedCard.isArchived).toBe(true);
+  });
+});
+
+describe('the shape a Saved tile hands the zoom', () => {
+  function savedVideo(media: Partial<ShowcaseMediaItem>): ShowcaseFeedItem {
+    return {
+      id: 'saved-video',
+      mediaUrl: 'https://cdn.example.com/cats.mp4',
+      mediaKind: 'video',
+      model: 'kling-3.0-video',
+      title: 'kungfu cats',
+      prompt: 'Two cats spar in a wet street',
+      body: '',
+      category: 'video',
+      postFormat: 'media',
+      saveCount: 6,
+      remixCount: 0,
+      commentCount: 0,
+      createdAt: '2026-09-01T10:00:00.000Z',
+      creator: { id: 'creator-1', username: 'fluffy', name: 'fluffy', avatar: null },
+      generationId: null,
+      asset: null,
+      canRemix: false,
+      isSaved: true,
+      mediaItems: [{
+        id: 'saved-video:0',
+        url: 'https://cdn.example.com/cats.mp4',
+        previewUrl: 'https://cdn.example.com/cats.poster.webp',
+        mediaKind: 'video',
+        contentType: 'video/mp4',
+        originalName: null,
+        width: null,
+        height: null,
+        durationSeconds: 5,
+        sortOrder: 0,
+        ...media,
+      }],
+    };
+  }
+
+  /** What the reel reports once it mounts: the shape the flight is corrected to. */
+  function reelShape(item: ShowcaseFeedItem) {
+    return mediaItemAspectRatio(buildImmersiveShowcaseItems('profile-saved', [item])[0].mediaItems[0]);
+  }
+
+  it('is the media’s own shape, not the grid cell’s crop', () => {
+    const item = savedVideo({ width: 720, height: 1280 });
+
+    expect(showcaseToSavedProfileMediaCard(item).aspectRatio).toBe(720 / 1280);
+  });
+
+  it('reads the dimensions the way the reel does, so the flight is never corrected mid-air', () => {
+    // A record and its descriptor that disagree (a rotated source): the reel
+    // reads the descriptor first, and the tile must land on that same shape.
+    const item = savedVideo({
+      width: 1920,
+      height: 1080,
+      preview: {
+        id: 'saved-video:0',
+        kind: 'video',
+        url: 'https://cdn.example.com/cats.mp4',
+        previewUrl: 'https://cdn.example.com/cats.poster.webp',
+        thumbhash: null,
+        cacheKey: 'cats.poster',
+        expiresAt: null,
+        width: 1080,
+        height: 1920,
+        durationSeconds: 5,
+        status: 'ready',
+        gridReady: true,
+      },
+    });
+
+    expect(showcaseToSavedProfileMediaCard(item).aspectRatio).toBe(reelShape(item));
+    expect(reelShape(item)).toBe(1080 / 1920);
+  });
+
+  it('admits it does not know rather than guessing, so the flight falls back to the tile', () => {
+    expect(showcaseToSavedProfileMediaCard(savedVideo({})).aspectRatio).toBeNull();
   });
 });
 
