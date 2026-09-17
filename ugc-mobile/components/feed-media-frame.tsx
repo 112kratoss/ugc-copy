@@ -1,4 +1,4 @@
-import { Image, type ImageProps } from 'expo-image';
+import type { ImageProps } from 'expo-image';
 import { VideoView, type VideoPlayer } from 'expo-video';
 import type { ReactNode } from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
@@ -6,6 +6,7 @@ import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { FEED_VIDEO_VIEW_PROPS } from '@/lib/feed-video-view-props';
 import { useMediaSource } from '@/lib/use-media-source';
 import { appTheme } from '@/lib/theme';
+import { BackdropImage } from '@/components/backdrop-image';
 import { StableMediaImage } from '@/components/media-preview';
 
 type FeedMediaFrameBaseProps = {
@@ -65,6 +66,9 @@ const absoluteFill = {
   inset: 0,
 };
 
+/** The blur a backdrop without a thumbhash is drawn with; see BackdropImage. */
+const BACKDROP_BLUR_RADIUS = 24;
+
 // Shared by every feed-side VideoView; see lib/feed-video-view-props.ts.
 export { FEED_VIDEO_VIEW_PROPS };
 
@@ -109,14 +113,11 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
           {props.imageBackdropContent}
           {!props.imageBackdropContent && (props.imageBackdrop ?? 'blurred') === 'blurred' ? (
             <>
-              <Image
+              <BackdropImage
+                thumbhash={props.thumbhash}
                 source={backdropSource}
-                contentFit="cover"
-                blurRadius={24}
-                cachePolicy="memory-disk"
-                priority="low"
+                blurRadius={BACKDROP_BLUR_RADIUS}
                 recyclingKey={props.recyclingKey ? `${props.recyclingKey}:backdrop` : undefined}
-                pointerEvents="none"
                 style={[absoluteFill, { backgroundColor }]}
               />
               <View pointerEvents="none" style={[absoluteFill, { backgroundColor: 'rgba(0,0,0,0.34)' }]} />
@@ -139,14 +140,11 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
       ) : (
         <>
           {props.backdropUrl && (props.videoBackdrop ?? 'blurred') === 'blurred' ? (
-            <Image
+            <BackdropImage
+              thumbhash={props.thumbhash}
               source={backdropSource}
-              contentFit="cover"
-              blurRadius={24}
-              cachePolicy="memory-disk"
-              priority="low"
+              blurRadius={BACKDROP_BLUR_RADIUS}
               recyclingKey={props.recyclingKey ? `${props.recyclingKey}:video-backdrop` : undefined}
-              pointerEvents="none"
               style={[absoluteFill, { backgroundColor }]}
             />
           ) : null}

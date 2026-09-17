@@ -2205,9 +2205,10 @@ function ImmersiveMedia({
   // without an edge (lib/letterbox.ts). They take the frame's backdrop slot, under
   // the picture. A picture of unknown shape keeps the plain blurred backdrop.
   const mediaAspectRatio = mediaItemAspectRatio(mediaItem);
+  const bandThumbhash = mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash ?? null;
   const bandSource = mediaItem.previewUrl
-    ? { uri: mediaItem.previewUrl, cacheKey: mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey }
-    : { uri: mediaItem.url, cacheKey: null };
+    ? { uri: mediaItem.previewUrl, cacheKey: mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey, thumbhash: bandThumbhash }
+    : { uri: mediaItem.url, cacheKey: null, thumbhash: bandThumbhash };
   const letterboxBands = mediaAspectRatio ? (
     <LetterboxBands frame={{ width, height }} aspectRatio={mediaAspectRatio} source={bandSource} />
   ) : null;

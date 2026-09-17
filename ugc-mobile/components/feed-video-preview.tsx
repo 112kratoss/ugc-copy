@@ -1,10 +1,11 @@
 import { useIsFocused } from '@react-navigation/native';
-import { Image, type ImageProps } from 'expo-image';
+import type { ImageProps } from 'expo-image';
 import { createVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
 import { Play, RotateCcw } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
+import { BackdropImage } from '@/components/backdrop-image';
 import { FEED_VIDEO_VIEW_PROPS } from '@/components/feed-media-frame';
 import { FeedMediaPlate } from '@/components/feed-media-plate';
 import { StableMediaImage } from '@/components/media-preview';
@@ -31,6 +32,9 @@ const absoluteFill = {
 // trying to attach a dead player. Keep the paused player alive long enough for
 // the native view transaction to detach before releasing it.
 const PLAYER_RELEASE_GRACE_MS = 100;
+
+/** The blur a poster wash without a thumbhash is drawn with; see BackdropImage. */
+const VIDEO_BACKDROP_BLUR_RADIUS = 24;
 
 function forwardBufferSeconds(playing: boolean) {
   return playing ? FEED_PREVIEW_FORWARD_BUFFER_SECONDS : FEED_PREPARED_FORWARD_BUFFER_SECONDS;
@@ -249,15 +253,12 @@ export function FeedVideoPreview({
     >
       {playerMounted && videoBackdrop === 'blurred' ? (
         <>
-          {usablePreviewUrl ? (
-            <Image
-              source={posterSource}
-              contentFit="cover"
-              blurRadius={24}
-              cachePolicy="memory-disk"
-              priority="low"
+          {usablePreviewUrl || previewThumbhash ? (
+            <BackdropImage
+              thumbhash={previewThumbhash}
+              source={usablePreviewUrl ? posterSource : null}
+              blurRadius={VIDEO_BACKDROP_BLUR_RADIUS}
               recyclingKey={`${url}:video-backdrop`}
-              pointerEvents="none"
               style={[absoluteFill, { backgroundColor: '#050506' }]}
             />
           ) : null}

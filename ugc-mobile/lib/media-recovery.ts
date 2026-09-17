@@ -61,3 +61,20 @@ export function classifyImageStall(progress: { progressed: boolean; loaded: bool
   if (progress.progressed) return 'downloading';
   return 'no-response';
 }
+
+/**
+ * Once the reloads above are spent, an image that stays on screen keeps trying
+ * on its own, behind the "Taking too long to load" plate, so a loader that has
+ * come back is noticed without a tap. The first wait is short enough for that;
+ * the cap keeps a screen of stuck images from asking more than every couple of
+ * minutes each; jitter keeps images latched together from reloading together;
+ * and the recovery budget still bounds how many reload at once. Only stalls
+ * retry this way: an HTTP failure names a file that is not going to appear.
+ */
+export const MEDIA_AUTO_RETRY_BASE_DELAY_MS = 20_000;
+export const MEDIA_AUTO_RETRY_MAX_DELAY_MS = 120_000;
+
+export function mediaAutoRetryDelayMs(count: number, random: () => number = Math.random): number {
+  const base = Math.min(MEDIA_AUTO_RETRY_MAX_DELAY_MS, MEDIA_AUTO_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, count));
+  return Math.round(base + random() * base * 0.25);
+}

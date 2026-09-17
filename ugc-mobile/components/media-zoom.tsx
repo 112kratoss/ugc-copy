@@ -1601,7 +1601,7 @@ export function MediaZoomFlightLayer() {
               <LetterboxBands
                 frame={still.geometry.screen}
                 aspectRatio={still.geometry.aspectRatio}
-                source={{ uri: still.preview.url, cacheKey: still.preview.cacheKey }}
+                source={{ uri: still.preview.url, cacheKey: still.preview.cacheKey, thumbhash: still.preview.thumbhash }}
               />
             </Animated.View>
             {still.video ? (

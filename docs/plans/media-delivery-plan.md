@@ -821,3 +821,50 @@ post links that generation, and returns the generation id so the worker holds
 the same ownership check the database applied. The result type changed, so
 the function is dropped and recreated with its ACL re-applied; argument types
 are unchanged, so callers and the privilege assertions are untouched.
+
+## Android previews starved by a RenderScript blur (2026-09-18)
+
+Diagnosed live on the owner's Galaxy S24 Ultra (Android 16, release build 71,
+OTA `#173`) without restarting the app. After some minutes of use every
+picture that was not already in Glide's memory cache stopped arriving:
+Creations cards sat on the 15 s watchdog's "Taking too long to load" plate,
+grid tiles on their thumbhash, while avatars (memory cache) and videos
+(ExoPlayer) kept working. A restart had always cleared it.
+
+The app's logcat (Glide logs at debug level in this build) showed the last
+disk-cache or network load at 00:19:14 and only memory-cache hits for the next
+twenty minutes. A bugreport thread dump found Glide's single disk-cache thread
+in `RenderScript.releaseAllContexts → rsContextDestroy → pthread_join`,
+waiting on a RenderScript core thread parked in `poll()` that never saw its
+exit command. Those frames are `jp.wasabeef.glide.transformations.internal.RSBlur.blur`,
+the blur expo-image 55.0.11 runs for `blurRadius` (glide-transformations 4.3.0),
+which creates and tears down a RenderScript context per picture on that one
+thread. Five blur transforms ran there at 00:19:14, when the reel opened on a
+video; the fifth teardown hung, and every later load that needed the disk-cache
+stage queued behind it. RenderScript is deprecated since API 31; upstream
+replaced this blur with a software one in expo-image 56.0.0.
+
+Two fixes, so that no build can reach this state again:
+
+1. **Over the air, both platforms.** `components/backdrop-image.tsx` draws
+   every soft backdrop — feed frames, video tile washes, the reel's letterbox
+   bands — from the picture's thumbhash, which is a blur of the picture
+   already in hand: no download, no second decode, no native transformation.
+   A picture without a thumbhash is blurred at draw time only where the loader
+   can do that safely (`lib/media-blur.ts`): always on iOS, and on Android only
+   when the ExpoImage native module advertises `softwareBlurRadius`. Build 71
+   never blurs; its frames keep their plain background under the picture.
+2. **In the next Android binary.** `patches/expo-image+55.0.11.patch` backports
+   upstream's `SoftwareBlurTransformation` (wasabeef's own FastBlur, no
+   RenderScript) and advertises it, so `blurRadius` becomes safe there. The
+   patch is a fingerprint input, so it ships with the binary that carries it,
+   recorded in `ota-targets.json` in that same commit.
+
+The watchdog also learned to heal: an image latched on "Taking too long to
+load" keeps loading again behind the plate while it stays on screen and the
+app is in the foreground (`mediaAutoRetryDelayMs`: 20 s, doubling to a 2 min
+cap, jittered, still bounded by the two-slot recovery budget), and drops the
+plate the moment the picture displays. An explicit failure never retries on
+its own. The wedge above cannot be undone from JavaScript — the retries queue
+behind the same thread — but a loader that comes back, a network that returns
+or a signature renewed through `/api/media` is now noticed without a tap.
