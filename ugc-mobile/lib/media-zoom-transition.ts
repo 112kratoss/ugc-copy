@@ -15,6 +15,7 @@
  */
 import type { VideoPlayer } from 'expo-video';
 
+import type { ImmersivePreviewItem } from './immersive-preview-view-model';
 import { getShowcaseMediaPreviewUrl, resolveShowcaseViewerImageSource } from './showcase-media';
 import type { ShowcaseMediaItem } from './types';
 
@@ -128,6 +129,8 @@ export interface ZoomFlight {
   preview: ZoomPreview | null;
   /** A playing video the layer draws in place of `preview`; see `ZoomVideo`. */
   video?: ZoomVideo | null;
+  /** The post itself, whose rail and caption an open carries; see `ZoomStill.post`. */
+  post?: ImmersivePreviewItem | null;
   /**
    * Whether the layer draws `preview` while the flight runs. A close that
    * shrinks the live reel itself flies under nothing; the picture appears only
@@ -250,6 +253,13 @@ export interface ZoomStill {
   geometry: ZoomGeometry;
   /** Drawn instead of `preview` when the tile lent its playing video. */
   video?: ZoomVideo | null;
+  /**
+   * The post as the reel lists it, when the tile knows it. The layer draws the
+   * reel's own rail, caption and controls over the picture, so the post grows
+   * out of its tile whole, from the first frame, rather than as a bare picture
+   * the reel dresses once it has landed. Instagram draws its reel that way.
+   */
+  post?: ImmersivePreviewItem | null;
   /**
    * Held, out of sight, for as long as an open reel may close onto it — not
    * for a finger that may never lift — so the layer never lets it go on a timer.

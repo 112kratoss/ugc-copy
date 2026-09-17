@@ -1,5 +1,5 @@
 import type { GenerationListItem, OwnerPostListItem, ProfileResponse, ShowcaseFeedItem } from '@/lib/types';
-import type { PreviewViewerSource } from './immersive-preview-view-model';
+import { buildImmersiveShowcaseItems, type ImmersivePreviewItem, type PreviewViewerSource } from './immersive-preview-view-model';
 
 import { isCreationLibraryMember } from './creation-library';
 import { getGenerationKind, getGenerationLabel, getGenerationRenderableMediaKind } from './generation-media';
@@ -26,6 +26,11 @@ export interface ProfileMediaCard {
    * its own shape, which is not this one.
    */
   aspectRatio?: number | null;
+  /**
+   * The post as the reel lists it, for a tile the reel grows out of: the window
+   * carries its rail and caption from the first frame (`ZoomStill.post`).
+   */
+  post?: ImmersivePreviewItem | null;
   previewKind?: 'text';
   previewText?: string;
   previewState?: ProfilePreviewState;
@@ -378,6 +383,8 @@ export function showcaseToSavedProfileMediaCard(item: ShowcaseFeedItem): Profile
     // Read exactly as the reel reads its first slide, which is this media: the
     // zoom out of this tile lands where the reel draws it.
     aspectRatio: mediaItemAspectRatio(primaryMedia),
+    // Saved tiles open the reel, which lists them as a saved post.
+    post: buildImmersiveShowcaseItems('profile-saved', [item])[0] ?? null,
     previewKind: isTextPost ? 'text' : undefined,
     previewText,
     previewState: getProfilePreviewState({

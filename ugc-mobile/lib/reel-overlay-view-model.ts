@@ -50,6 +50,30 @@ export function getReelFollowTarget(
   return { creatorId };
 }
 
+/**
+ * Whether a post drawn before its reel exists — inside the window it grows in
+ * out of its tile — may draw the Follow pill.
+ *
+ * The reel itself draws no pill until it knows whom the reader follows, and asks
+ * only once it is up. A window drawn ahead of it may therefore show the pill
+ * only for a signed-out reader, who always sees it, or when the answer is
+ * already cached: any other pill would appear in the window and then vanish as
+ * the reel took over.
+ */
+export function drawsPreparedFollowPill({
+  followTarget,
+  signedIn,
+  followKnown,
+}: {
+  followTarget: ReelFollowTarget | null;
+  signedIn: boolean;
+  /** Whether this creator's follow state is already in hand. */
+  followKnown: boolean;
+}) {
+  if (!followTarget) return false;
+  return !signedIn || followKnown;
+}
+
 /** What sits under a bare rail icon: the count when there is one, else nothing. */
 export function getRailCountLabel(count: number | null | undefined, formatCount: (value: number) => string) {
   if (!count || count <= 0) return null;

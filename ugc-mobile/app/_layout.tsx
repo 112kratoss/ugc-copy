@@ -18,6 +18,7 @@ import { ActionSheetHost } from '@/components/action-sheet';
 import { DialogHost } from '@/components/dialog';
 import { OnboardingServerSync } from '@/components/onboarding-server-sync';
 import { MediaZoomFlightLayer } from '@/components/media-zoom';
+import { ZoomPostChrome } from '@/components/zoom-post-chrome';
 import { OverlayHost } from '@/components/overlay-host';
 import { SignOutOverlay } from '@/components/sign-out-overlay';
 import { CriticalUpdateSheet } from '@/components/critical-update-sheet';
@@ -30,6 +31,7 @@ import { readAppVersionParts } from '@/lib/app-version-label';
 import { setNativeImageCapabilities, type NativeImageCapabilities } from '@/lib/media-blur';
 import { setMediaDiagnosticsReporter } from '@/lib/media-diagnostics';
 import { arrivesUnderLandedZoom } from '@/lib/media-zoom-transition';
+import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
 import { navigateToNotificationDeepLink, subscribeToNotificationResponses, subscribeToNotificationsReceived } from '@/lib/notifications';
 import { OnboardingProvider, useOnboarding } from '@/lib/onboarding';
@@ -57,6 +59,11 @@ void SplashScreen.preventAutoHideAsync().catch(() => undefined);
 // Android build whose blur still goes through RenderScript is never asked to
 // blur (lib/media-blur.ts).
 setNativeImageCapabilities(requireOptionalNativeModule<NativeImageCapabilities>('ExpoImage'));
+
+/** A post's rail, caption and controls, drawn in the window it grows in (`ZoomStill.post`). */
+function renderZoomPost(post: ImmersivePreviewItem) {
+  return <ZoomPostChrome post={post} />;
+}
 
 /**
  * The navigator's own animation for the reel screen. Android: none, the zoom is
@@ -277,8 +284,9 @@ function RootLayoutNav() {
                 {/* Above every screen: the flight a tapped tile's picture makes
                     to the full screen and back, which no screen change can
                     interrupt. Nothing is rendered unless a post is opening or
-                    closing. */}
-                <MediaZoomFlightLayer />
+                    closing. An open draws the post whole — rail, caption and
+                    controls — from its first frame. */}
+                <MediaZoomFlightLayer renderPost={renderZoomPost} />
               </View>
               </GestureHandlerRootView>
             </ThemeProvider>

@@ -64,6 +64,9 @@ const ICON_RAMP = new Set<number>([
  * resource-kind glyph to `icon.xs`). S19 took the template screens' eight —
  * poster and slot empty states to `hero`, the step glyphs to `default`, the
  * byline and footnote glyphs to `sm`/`xs`.
+ * The reel's rail left the viewer for `components/reel-chrome.tsx`, so a post
+ * growing out of its tile can draw it too: its nine 26–30pt glyphs went with it,
+ * and the viewer's own entry came down from a stale 14 to the one it still has.
  */
 const LEGACY_SIZES: Record<string, number> = {
   'app/(tabs)/showcase.tsx': 0,
@@ -77,7 +80,7 @@ const LEGACY_SIZES: Record<string, number> = {
   'app/r/[code].tsx': 5,
   'app/seller-dashboard.tsx': 0,
   'app/settings.tsx': 0,
-  'app/viewer.tsx': 14,
+  'app/viewer.tsx': 1,
   'components/creator-profile-screen.tsx': 0,
   'components/edit-profile-screen.tsx': 0,
   'components/feed-card-shell.tsx': 0,
@@ -98,6 +101,7 @@ const LEGACY_SIZES: Record<string, number> = {
   'components/post-resource-references.tsx': 0,
   'components/profile-dashboard.tsx': 0,
   'components/profile-feed-card.tsx': 0,
+  'components/reel-chrome.tsx': 9,
   'components/showcase-media-preview.tsx': 0,
   'components/unlock-remix-prompt.tsx': 0,
 };

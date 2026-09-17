@@ -425,6 +425,9 @@ describe('ProfileDashboard media tiles routing', () => {
           gridReady: true,
         }],
         title: 'Saved Title',
+        // The feed always sends both, and the reel reads them for its caption.
+        prompt: '',
+        body: '',
         creator: { name: 'Luna', username: 'luna' },
         isSaved: true,
         saveCount: 5,
@@ -498,6 +501,7 @@ describe('ProfileDashboard media tiles routing', () => {
       mediaKind: null,
       mediaItems: [],
       title: 'Saved text',
+      prompt: '',
       body: 'A saved written post.',
       category: 'text',
       postFormat: 'text',
