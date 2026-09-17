@@ -1,0 +1,125 @@
+diff --git a/node_modules/expo-image/android/src/main/java/expo/modules/image/ExpoImageModule.kt b/node_modules/expo-image/android/src/main/java/expo/modules/image/ExpoImageModule.kt
+index 2579cb3..a215fac 100644
+--- a/node_modules/expo-image/android/src/main/java/expo/modules/image/ExpoImageModule.kt
++++ b/node_modules/expo-image/android/src/main/java/expo/modules/image/ExpoImageModule.kt
+@@ -48,6 +48,10 @@ class ExpoImageModule : Module() {
+   override fun definition() = ModuleDefinition {
+     Name("ExpoImage")
+ 
++    // `blurRadius` runs SoftwareBlurTransformation here, never RenderScript;
++    // the app reads this before it asks an Android build to blur (lib/media-blur.ts).
++    Constants("softwareBlurRadius" to true)
++
+     OnCreate {
+       appContext.reactContext?.registerComponentCallbacks(ExpoImageComponentCallbacks)
+     }
+diff --git a/node_modules/expo-image/android/src/main/java/expo/modules/image/ExpoImageViewWrapper.kt b/node_modules/expo-image/android/src/main/java/expo/modules/image/ExpoImageViewWrapper.kt
+index 224404e..454ce19 100644
+--- a/node_modules/expo-image/android/src/main/java/expo/modules/image/ExpoImageViewWrapper.kt
++++ b/node_modules/expo-image/android/src/main/java/expo/modules/image/ExpoImageViewWrapper.kt
+@@ -38,7 +38,6 @@ import expo.modules.kotlin.tracing.beginAsyncTraceBlock
+ import expo.modules.kotlin.tracing.trace
+ import expo.modules.kotlin.viewevent.EventDispatcher
+ import expo.modules.kotlin.views.ExpoView
+-import jp.wasabeef.glide.transformations.BlurTransformation
+ import java.lang.ref.WeakReference
+ import kotlin.math.abs
+ import kotlin.math.min
+@@ -438,7 +437,7 @@ class ExpoImageViewWrapper(context: Context, appContext: AppContext) : ExpoView(
+         diskCacheStrategy(DiskCacheStrategy.NONE)
+       }
+       .customize(blurRadius) {
+-        transform(BlurTransformation(min(it, 25), 4))
++        transform(SoftwareBlurTransformation(min(it, 25), 4))
+       }
+   }
+ 
+diff --git a/node_modules/expo-image/android/src/main/java/expo/modules/image/SoftwareBlurTransformation.kt b/node_modules/expo-image/android/src/main/java/expo/modules/image/SoftwareBlurTransformation.kt
+new file mode 100644
+index 0000000..9686eed
+--- /dev/null
++++ b/node_modules/expo-image/android/src/main/java/expo/modules/image/SoftwareBlurTransformation.kt
+@@ -0,0 +1,65 @@
++package expo.modules.image
++
++import android.graphics.Bitmap
++import android.graphics.Canvas
++import android.graphics.Paint
++import com.bumptech.glide.load.engine.bitmap_recycle.BitmapPool
++import com.bumptech.glide.load.resource.bitmap.BitmapTransformation
++import jp.wasabeef.glide.transformations.internal.FastBlur
++import java.security.MessageDigest
++import kotlin.math.max
++
++// RenderScript-free replacement for wasabeef's BlurTransformation, used to back `blurRadius`.
++//
++// android.renderscript is deprecated (API 31) and has no HAL on newer Android releases, so its
++// ScriptIntrinsicBlur runs a CPU fallback that is not concurrency-safe: under simultaneous Glide
++// loads it underflows a RenderScript object refcount and writes through a freed slot
++// (rsAssert mUserRefCount > 0 / setVarObj invalid slot). Stock allocators swallow the corruption,
++// but GrapheneOS hardened_malloc detects the write-after-free and aborts the process.
++//
++// This reuses the same FastBlur stack-blur that wasabeef itself falls back to (same downsample +
++// radius), so the result is visually equivalent but never touches RenderScript.
++//
++// Refs: https://github.com/expo/expo/issues/24572
++//       https://github.com/wasabeef/glide-transformations/issues/196
++private const val ID = "expo.modules.image.SoftwareBlurTransformation.1"
++private val ID_BYTES = ID.toByteArray(Charsets.UTF_8)
++
++class SoftwareBlurTransformation(
++  private val radius: Int,
++  private val sampling: Int = 1
++) : BitmapTransformation() {
++
++  override fun transform(
++    pool: BitmapPool,
++    toTransform: Bitmap,
++    outWidth: Int,
++    outHeight: Int
++  ): Bitmap {
++    // FastBlur returns null for radius < 1, so skip the blur and return the source unchanged.
++    if (radius < 1) return toTransform
++
++    val downsample = max(1, sampling)
++    val scaledWidth = max(1, toTransform.width / downsample)
++    val scaledHeight = max(1, toTransform.height / downsample)
++
++    val scaled = pool.get(scaledWidth, scaledHeight, Bitmap.Config.ARGB_8888)
++    scaled.density = toTransform.density
++
++    val canvas = Canvas(scaled)
++    canvas.scale(1f / downsample, 1f / downsample)
++    canvas.drawBitmap(toTransform, 0f, 0f, Paint(Paint.FILTER_BITMAP_FLAG))
++
++    return FastBlur.blur(scaled, radius, true)
++  }
++
++  override fun updateDiskCacheKey(messageDigest: MessageDigest) {
++    messageDigest.update(ID_BYTES)
++    messageDigest.update("$radius,$sampling".toByteArray(Charsets.UTF_8))
++  }
++
++  override fun equals(other: Any?): Boolean =
++    other is SoftwareBlurTransformation && other.radius == radius && other.sampling == sampling
++
++  override fun hashCode(): Int = ID.hashCode() + radius * 1000 + sampling
++}
+diff --git a/node_modules/expo-image/expo-module.config.json b/node_modules/expo-image/expo-module.config.json
+index dd4b7f6..afe72e6 100644
+--- a/node_modules/expo-image/expo-module.config.json
++++ b/node_modules/expo-image/expo-module.config.json
+@@ -4,12 +4,6 @@
+     "modules": ["ImageModule"]
+   },
+   "android": {
+-    "modules": ["expo.modules.image.ExpoImageModule"],
+-    "publication": {
+-      "groupId": "expo.modules.image",
+-      "artifactId": "expo.modules.image",
+-      "version": "55.0.11",
+-      "repository": "local-maven-repo"
+-    }
++    "modules": ["expo.modules.image.ExpoImageModule"]
+   }
+ }

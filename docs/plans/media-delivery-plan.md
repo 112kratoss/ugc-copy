@@ -856,9 +856,19 @@ Two fixes, so that no build can reach this state again:
    never blurs; its frames keep their plain background under the picture.
 2. **In the next Android binary.** `patches/expo-image+55.0.11.patch` backports
    upstream's `SoftwareBlurTransformation` (wasabeef's own FastBlur, no
-   RenderScript) and advertises it, so `blurRadius` becomes safe there. The
-   patch is a fingerprint input, so it ships with the binary that carries it,
-   recorded in `ota-targets.json` in that same commit.
+   RenderScript) and advertises it, so `blurRadius` becomes safe there. SDK 55
+   links expo-image as a prebuilt AAR (`local-maven-repo`), which a Kotlin
+   patch never reaches: the first local build still carried the RenderScript
+   blur and no constant. The patch therefore also drops the module's
+   `publication`, so Gradle compiles the patched source (verified: the rebuilt
+   dev client reports `softwareBlurRadius: true`, draws the reel's bands
+   through the software blur, and logs no RenderScript). One side effect: a
+   source-built expo-image keeps Glide at its default ERROR log level, so the
+   per-load `Glide: Finished loading` lines the 2026-09-18 diagnosis leaned on
+   are gone unless `EXPO_ALLOW_GLIDE_LOGS=true` is set for the Gradle build.
+   The patch is a fingerprint input, so it ships with the binary that carries
+   it, recorded in `ota-targets.json` in that same commit; until then it is
+   set aside for iOS updates and blocks Android ones.
 
 The watchdog also learned to heal: an image latched on "Taking too long to
 load" keeps loading again behind the plate while it stays on screen and the
