@@ -63,7 +63,13 @@ vi.mock('lucide-react-native', () => ({
 
 import { StableMediaImage } from '../components/media-preview';
 import { clearMediaDiagnosticsForTests, readMediaDiagnostics } from '../lib/media-diagnostics';
-import { MEDIA_DISPLAY_DEADLINE_MS, MEDIA_RECOVERY_WAIT_MS, mediaRecoveryBudget } from '../lib/media-recovery';
+import {
+  MEDIA_AUTO_RETRY_BASE_DELAY_MS,
+  MEDIA_AUTO_RETRY_MAX_DELAY_MS,
+  MEDIA_DISPLAY_DEADLINE_MS,
+  MEDIA_RECOVERY_WAIT_MS,
+  mediaRecoveryBudget,
+} from '../lib/media-recovery';
 
 // Fires onError and advances timers until the failure latches, so these tests
 // hold for the never-retry placeholder policy and any bounded auto-retry
@@ -428,5 +434,159 @@ describe('StableMediaImage display watchdog', () => {
     advance(MEDIA_DISPLAY_DEADLINE_MS);
     renderer.act(() => tree.unmount());
     expect(eventsOf('stall')).toHaveLength(0);
+  });
+});
+
+describe('StableMediaImage silent retries after a stall', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    clearMediaDiagnosticsForTests();
+    appState.currentState = 'active';
+    appState.listeners = [];
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const eventsOf = (event: string) => readMediaDiagnostics().events.filter((entry) => entry.event === event);
+  const advance = (ms: number) => renderer.act(() => {
+    vi.advanceTimersByTime(ms);
+  });
+  const setAppState = (state: string) => {
+    appState.currentState = state;
+    renderer.act(() => {
+      appState.listeners.forEach((listener) => listener(state));
+    });
+  };
+  const loadingImages = (tree: renderer.ReactTestRenderer) => tree.root
+    .findAllByType('image')
+    .filter((node) => node.props.source !== undefined);
+  const latch = (tree: renderer.ReactTestRenderer) => {
+    advance(MEDIA_DISPLAY_DEADLINE_MS);
+    advance(MEDIA_DISPLAY_DEADLINE_MS);
+    advance(MEDIA_DISPLAY_DEADLINE_MS);
+    expect(JSON.stringify(tree.toJSON())).toContain('Taking too long to load');
+    expect(loadingImages(tree)).toHaveLength(0);
+  };
+  // The longest first wait, jitter included.
+  const firstWait = MEDIA_AUTO_RETRY_BASE_DELAY_MS * 1.25;
+
+  it('loads again behind the plate while it stays on screen, and drops the plate once the picture shows', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<StableMediaImage url="https://cdn/stuck.webp" cacheKey="stuck" thumbhash="thumbhash-base64" watchdog />);
+    });
+    latch(tree);
+
+    advance(firstWait);
+    // The image is loading again under the plate, which now says so.
+    const [image] = loadingImages(tree);
+    expect(image.props.source).toEqual({ uri: 'https://cdn/stuck.webp', cacheKey: 'stuck' });
+    expect(JSON.stringify(tree.toJSON())).toContain('Taking too long to load');
+    expect(JSON.stringify(tree.toJSON())).toContain('Trying again…');
+    expect(eventsOf('retry').filter((entry) => entry.stage === 'auto')).toHaveLength(1);
+
+    renderer.act(() => image.props.onDisplay());
+    expect(JSON.stringify(tree.toJSON())).not.toContain('Taking too long to load');
+    expect(tree.root.findAllByType('pressable' as never)).toHaveLength(0);
+    expect(loadingImages(tree)).toHaveLength(1);
+    expect(eventsOf('recovered')).toEqual([expect.objectContaining({ subject: expect.any(String), stage: 'auto' })]);
+
+    // Nothing more is scheduled for a picture that is on screen.
+    advance(MEDIA_AUTO_RETRY_MAX_DELAY_MS * 2);
+    expect(eventsOf('retry').filter((entry) => entry.stage === 'auto')).toHaveLength(1);
+    renderer.act(() => tree.unmount());
+    expect(mediaRecoveryBudget.activeCount()).toBe(0);
+  });
+
+  it('waits longer before each further silent retry', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<StableMediaImage url="https://cdn/stuck.webp" cacheKey="stuck" watchdog />);
+    });
+    latch(tree);
+    advance(firstWait);
+    expect(loadingImages(tree)).toHaveLength(1);
+
+    // That retry stalls too: the plate stays, the image goes, and the next wait doubles.
+    latch(tree);
+    advance(firstWait);
+    expect(loadingImages(tree)).toHaveLength(0);
+    advance(firstWait);
+    expect(loadingImages(tree)).toHaveLength(1);
+    expect(eventsOf('retry').filter((entry) => entry.stage === 'auto')).toHaveLength(2);
+    renderer.act(() => tree.unmount());
+    expect(mediaRecoveryBudget.activeCount()).toBe(0);
+  });
+
+  it('counts the wait from when the plate went up, so a screen returned to late retries at once', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<StableMediaImage url="https://cdn/stuck.webp" cacheKey="stuck" watchdog />);
+    });
+    latch(tree);
+
+    setAppState('background');
+    advance(MEDIA_AUTO_RETRY_MAX_DELAY_MS);
+    expect(loadingImages(tree)).toHaveLength(0);
+
+    setAppState('active');
+    advance(1);
+    expect(loadingImages(tree)).toHaveLength(1);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('never retries an explicit failure on its own', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<StableMediaImage url="https://cdn/gone.webp" cacheKey="gone" watchdog />);
+    });
+    exhaustImageLoad(tree);
+    expect(JSON.stringify(tree.toJSON())).toContain('Preview unavailable');
+
+    advance(MEDIA_AUTO_RETRY_MAX_DELAY_MS * 3);
+    expect(loadingImages(tree)).toHaveLength(0);
+    expect(eventsOf('retry').filter((entry) => entry.stage === 'auto')).toHaveLength(0);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('stops retrying a stall whose retry answers with a failure', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<StableMediaImage url="https://cdn/stuck-then-gone.webp" cacheKey="stuck-then-gone" watchdog />);
+    });
+    latch(tree);
+    advance(firstWait);
+    exhaustImageLoad(tree);
+    expect(JSON.stringify(tree.toJSON())).toContain('Preview unavailable');
+
+    advance(MEDIA_AUTO_RETRY_MAX_DELAY_MS * 3);
+    expect(loadingImages(tree)).toHaveLength(0);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('a tap still retries at once, without waiting for the silent retry', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<StableMediaImage url="https://cdn/stuck.webp" cacheKey="stuck" watchdog />);
+    });
+    latch(tree);
+    renderer.act(() => tree.root.findByType('pressable' as never).props.onPress());
+    expect(loadingImages(tree)).toHaveLength(1);
+    expect(JSON.stringify(tree.toJSON())).not.toContain('Taking too long to load');
+    renderer.act(() => tree.unmount());
+  });
+
+  it('does not retry a plate whose image cannot be seen', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<StableMediaImage url="https://cdn/stuck.webp" cacheKey="stuck" watchdog />);
+    });
+    latch(tree);
+    renderer.act(() => tree.update(<StableMediaImage url="https://cdn/stuck.webp" cacheKey="stuck" watchdog={false} />));
+    advance(MEDIA_AUTO_RETRY_MAX_DELAY_MS * 2);
+    expect(loadingImages(tree)).toHaveLength(0);
+    renderer.act(() => tree.unmount());
   });
 });

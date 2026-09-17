@@ -1,7 +1,7 @@
-import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { View } from 'react-native';
 
+import { BackdropImage } from '@/components/backdrop-image';
 import { easedFade, hexWithAlpha } from '@/lib/eased-fade';
 import {
   LETTERBOX_EDGE_ALPHA,
@@ -23,8 +23,8 @@ const FADE = easedFade(LETTERBOX_EDGE_ALPHA);
 const COLORS = FADE.map((stop) => hexWithAlpha('#000000', stop.alpha)) as [string, string, ...string[]];
 const LOCATIONS = FADE.map((stop) => stop.at) as [number, number, ...number[]];
 
-/** The blur the bands have always had. */
-const BAND_BLUR_RADIUS = 24;
+/** The blur the bands have always had, for a picture without a thumbhash; see BackdropImage. */
+export const BAND_BLUR_RADIUS = 24;
 
 /**
  * The bands around a `contain`-fitted picture: each shows the picture's own edge
@@ -36,7 +36,8 @@ const BAND_BLUR_RADIUS = 24;
  * so that no rounding can open a gap along the seam (`LETTERBOX_SEAM_OVERLAP`),
  * and only the picture on top hides that overlap. Nothing for a picture of
  * unknown shape, whose bands cannot be placed; only the shade when there is no
- * picture to mirror.
+ * picture to mirror. The picture's thumbhash draws the bands where it has one:
+ * it is the picture already blurred, so nothing is blurred at draw time.
  */
 export function LetterboxBands({
   frame,
@@ -45,7 +46,7 @@ export function LetterboxBands({
 }: {
   frame: ZoomSize;
   aspectRatio: number | null;
-  source: { uri: string; cacheKey?: string | null } | null;
+  source: { uri: string; cacheKey?: string | null; thumbhash?: string | null } | null;
 }) {
   if (!aspectRatio || frame.width <= 0 || frame.height <= 0) return null;
   const media = mediaRectInScreen(frame, aspectRatio);
@@ -67,12 +68,11 @@ export function LetterboxBands({
             }}
           >
             {source ? (
-              <Image
+              <BackdropImage
+                thumbhash={source.thumbhash}
                 source={{ uri: source.uri, cacheKey: source.cacheKey ?? undefined }}
-                contentFit="fill"
                 blurRadius={BAND_BLUR_RADIUS}
-                cachePolicy="memory-disk"
-                priority="low"
+                contentFit="fill"
                 transition={0}
                 style={{
                   position: 'absolute',

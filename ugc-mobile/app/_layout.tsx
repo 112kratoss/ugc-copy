@@ -1,6 +1,7 @@
 import { BricolageGrotesque_700Bold, BricolageGrotesque_800ExtraBold, useFonts } from '@expo-google-fonts/bricolage-grotesque';
 import { DarkTheme, ThemeProvider } from '@react-navigation/native';
 import { QueryClient, QueryClientProvider, focusManager, useQueryClient } from '@tanstack/react-query';
+import { requireOptionalNativeModule } from 'expo';
 import Constants from 'expo-constants';
 import { AppMetricsRoot } from 'expo-observe';
 import { Stack, router, usePathname } from 'expo-router';
@@ -26,6 +27,7 @@ import { AuthProvider, useAuth } from '@/lib/auth';
 import { notificationBadgeQueryKey } from '@/lib/notification-badge';
 import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
 import { readAppVersionParts } from '@/lib/app-version-label';
+import { setNativeImageCapabilities, type NativeImageCapabilities } from '@/lib/media-blur';
 import { setMediaDiagnosticsReporter } from '@/lib/media-diagnostics';
 import { arrivesUnderLandedZoom } from '@/lib/media-zoom-transition';
 import { useReducedMotion } from '@/lib/motion';
@@ -50,6 +52,11 @@ export const unstable_settings = {
 // FONT_SPLASH_FALLBACK_MS guarantees the splash can never hang on it.
 const FONT_SPLASH_FALLBACK_MS = 1200;
 void SplashScreen.preventAutoHideAsync().catch(() => undefined);
+
+// What this binary's expo-image can do, read before any picture is drawn: an
+// Android build whose blur still goes through RenderScript is never asked to
+// blur (lib/media-blur.ts).
+setNativeImageCapabilities(requireOptionalNativeModule<NativeImageCapabilities>('ExpoImage'));
 
 /**
  * The navigator's own animation for the reel screen. Android: none, the zoom is

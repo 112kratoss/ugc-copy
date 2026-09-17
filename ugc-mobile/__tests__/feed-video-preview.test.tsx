@@ -635,3 +635,55 @@ describe('FeedVideoPreview', () => {
     vi.useRealTimers();
   });
 });
+
+describe('FeedVideoPreview backdrop', () => {
+  it('washes the tile with the poster thumbhash rather than a blurred download', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(
+        <FeedVideoPreview
+          url="https://cdn.example.com/video.mp4"
+          streamUrl="https://cdn.example.com/video.feed.abc.mp4"
+          previewUrl="https://cdn.example.com/video-poster.jpg"
+          previewThumbhash="thumbhash-value"
+          active
+          height={260}
+          radius={8}
+          accent="#d946ef"
+        />
+      );
+    });
+
+    const images = tree!.root.findAll((node) => String(node.type) === 'image');
+    const backdrop = images.find((node) => node.props.source === undefined);
+    const poster = images.find((node) => node.props.source !== undefined);
+    expect(backdrop?.props.placeholder).toEqual({ thumbhash: 'thumbhash-value' });
+    expect(backdrop?.props.blurRadius).toBeUndefined();
+    expect(poster?.props.source).toMatchObject({ uri: 'https://cdn.example.com/video-poster.jpg' });
+    expect(images.some((node) => node.props.blurRadius !== undefined)).toBe(false);
+    renderer.act(() => tree!.unmount());
+  });
+
+  it('blurs a poster without a thumbhash where the loader can', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(
+        <FeedVideoPreview
+          url="https://cdn.example.com/video.mp4"
+          streamUrl="https://cdn.example.com/video.feed.abc.mp4"
+          previewUrl="https://cdn.example.com/video-poster.jpg"
+          active
+          height={260}
+          radius={8}
+          accent="#d946ef"
+        />
+      );
+    });
+
+    const images = tree!.root.findAll((node) => String(node.type) === 'image');
+    const backdrop = images.find((node) => node.props.blurRadius !== undefined);
+    expect(backdrop?.props.source).toMatchObject({ uri: 'https://cdn.example.com/video-poster.jpg' });
+    expect(backdrop?.props.blurRadius).toBe(24);
+    renderer.act(() => tree!.unmount());
+  });
+});

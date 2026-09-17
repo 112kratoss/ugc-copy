@@ -226,3 +226,78 @@ describe('FeedMediaFrame', () => {
     expect(posters[0].props.recyclingKey).toBe('video-clean:video-poster');
   });
 });
+
+describe('FeedMediaFrame backdrops', () => {
+  it('draws an image backdrop from the picture thumbhash and asks the loader for nothing', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(
+        <FeedMediaFrame
+          kind="image"
+          url="https://cdn.example.com/wide-image.jpg"
+          backdropUrl="https://cdn.example.com/wide-image-preview.webp"
+          thumbhash="thumbhash-value"
+          recyclingKey="media-th"
+          style={{ height: 240 }}
+        />
+      );
+    });
+
+    const images = tree!.root.findAll((node) => node.type === 'image');
+    expect(images).toHaveLength(2);
+    expect(images[0].props.placeholder).toEqual({ thumbhash: 'thumbhash-value' });
+    expect(images[0].props.source).toBeUndefined();
+    expect(images[0].props.blurRadius).toBeUndefined();
+    expect(images[0].props.recyclingKey).toBe('media-th:backdrop');
+    expect(images[1].props.source).toMatchObject({ uri: 'https://cdn.example.com/wide-image.jpg' });
+  });
+
+  it('draws a video backdrop from the poster thumbhash the same way', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(
+        <FeedMediaFrame
+          kind="video"
+          player={{ id: 'player-th' } as never}
+          backdropUrl="https://cdn.example.com/video-poster.jpg"
+          posterUrl="https://cdn.example.com/video-poster.jpg"
+          posterVisible
+          thumbhash="thumbhash-value"
+          recyclingKey="video-th"
+          style={{ height: 300 }}
+        />
+      );
+    });
+
+    const images = tree!.root.findAll((node) => node.type === 'image');
+    expect(images).toHaveLength(2);
+    expect(images[0].props.placeholder).toEqual({ thumbhash: 'thumbhash-value' });
+    expect(images[0].props.source).toBeUndefined();
+    expect(images[0].props.recyclingKey).toBe('video-th:video-backdrop');
+    expect(images[1].props.source).toMatchObject({ uri: 'https://cdn.example.com/video-poster.jpg' });
+  });
+
+  it('leaves an Android build that cannot blur safely with the frame background under the picture', () => {
+    process.env.EXPO_OS = 'android';
+    try {
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(
+          <FeedMediaFrame
+            kind="image"
+            url="https://cdn.example.com/wide-image.jpg"
+            backdropUrl="https://cdn.example.com/wide-image-preview.webp"
+            recyclingKey="media-android"
+            style={{ height: 240 }}
+          />
+        );
+      });
+      const images = tree!.root.findAll((node) => node.type === 'image');
+      expect(images).toHaveLength(1);
+      expect(images[0].props.source).toMatchObject({ uri: 'https://cdn.example.com/wide-image.jpg' });
+      expect(images[0].props.blurRadius).toBeUndefined();
+    } finally {
+      delete process.env.EXPO_OS;
+    }
+  });
+});
