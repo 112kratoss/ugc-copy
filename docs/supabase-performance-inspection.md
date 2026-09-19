@@ -26,7 +26,7 @@ locks, long-running queries, bloat, vacuum state, roles and replication slots.
 - safe `EXPLAIN` plans for rate-limit retention, upload reclaim and exact upload
   admission counters.
 
-With the repository-pinned Supabase CLI 2.75.0, `role-stats` may fail against
+With the dev-Mac Supabase CLI 2.75.0, `role-stats` may fail against
 the local Postgres 17 image when a nullable field is returned. The workflow
 preserves that CLI output and records equivalent role/connection evidence in
 `application-hot-paths.json`; this known CLI defect does not discard the rest

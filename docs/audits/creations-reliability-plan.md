@@ -1,6 +1,6 @@
 # Creations reliability audit and implementation plan
 
-Updated: 2026-09-16. Status: investigation and plan; no product fix or deployment performed.
+Updated: 2026-09-19. Status: implemented — C1–C9 shipped in #171 (`2055c5e`) and the review's R1–R4 in #173 (`35825c7`); see [creations-release-review-2026-09-16.md](creations-release-review-2026-09-16.md) and [creations-followup-fix-2026-09-16.md](creations-followup-fix-2026-09-16.md). The sections below are the 2026-09-16 audit record and plan as written.
 
 ## Decision
 

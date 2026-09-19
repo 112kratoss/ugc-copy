@@ -21,5 +21,4 @@ Live runbooks are at the root of this folder; everything dated or reference-only
 - `research/` — prompt-enhancer and model-prompting research.
 - `model-api-references/` — captured provider API references, the input to model onboarding (its README carries the capture rules).
 - `scaling-certificates/` — exact-build capacity certificates.
-- `superpowers/` — agent-written plans and specs.
 - `archive/` — dated audit journals; not current capacity claims.
