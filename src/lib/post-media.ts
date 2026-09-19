@@ -160,6 +160,15 @@ function isMissingPostMediaSourceColumnError(error: unknown): boolean {
   return (code === '42703' || code === 'PGRST204') && /source_unavailable_at/.test(message);
 }
 
+function isMissingPostMediaDisplayColumnError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const { code, message = '' } = error as SupabaseSchemaError;
+  return (code === '42703' || code === 'PGRST204') && /display_storage_path/.test(message);
+}
+
 function isMissingPostMediaTeaserColumnError(error: unknown): boolean {
   if (!error || typeof error !== 'object') {
     return false;
@@ -329,6 +338,7 @@ export async function loadPostMediaItemsMap(
   const RENDITION_COLUMNS = 'rendition_storage_path, rendition_status, rendition_attempt_count, rendition_error, rendition_generated_at, rendition_bytes';
   const TEASER_COLUMNS = 'teaser_storage_path, teaser_bytes, teaser_generated_at, teaser_error';
   const SOURCE_COLUMNS = 'source_unavailable_at';
+  const DISPLAY_COLUMNS = 'display_storage_path';
 
   const selectPostMedia = (columns: string) => supabase
     .from('post_media')
@@ -336,9 +346,15 @@ export async function loadPostMediaItemsMap(
     .in('post_id', uniquePostIds)
     .order('sort_order', { ascending: true });
 
-  const fullResult = await selectPostMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}, ${RENDITION_COLUMNS}, ${TEASER_COLUMNS}, ${SOURCE_COLUMNS}`);
+  const fullResult = await selectPostMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}, ${RENDITION_COLUMNS}, ${TEASER_COLUMNS}, ${SOURCE_COLUMNS}, ${DISPLAY_COLUMNS}`);
   let data = fullResult.data as PostMediaDbRow[] | null;
   let error = fullResult.error;
+
+  if (isMissingPostMediaDisplayColumnError(error)) {
+    const withoutDisplay = await selectPostMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}, ${RENDITION_COLUMNS}, ${TEASER_COLUMNS}, ${SOURCE_COLUMNS}`);
+    data = withoutDisplay.data as PostMediaDbRow[] | null;
+    error = withoutDisplay.error;
+  }
 
   if (isMissingPostMediaSourceColumnError(error)) {
     const withoutSource = await selectPostMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}, ${RENDITION_COLUMNS}, ${TEASER_COLUMNS}`);

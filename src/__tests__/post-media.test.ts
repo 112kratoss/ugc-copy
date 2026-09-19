@@ -136,6 +136,92 @@ describe('post media summaries', () => {
     });
   });
 
+  it('serves the display rendition an image row records', async () => {
+    let selectedColumns = '';
+    const rows = [{
+      id: 'media-1',
+      post_id: 'post-1',
+      storage_path: 'posts/post-1/original.jpg',
+      preview_storage_path: 'posts/post-1/original.preview.webp',
+      display_storage_path: 'posts/post-1/original.display.webp',
+      external_url: null,
+      media_kind: 'image',
+      content_type: 'image/jpeg',
+      original_name: 'original.jpg',
+      width: 1536,
+      height: 2752,
+      duration_seconds: null,
+      sort_order: 0,
+    }];
+    const query = {
+      select(columns: string) { selectedColumns = columns; return query; },
+      in() { return query; },
+      order() { return Promise.resolve({ data: rows, error: null }); },
+    };
+    const supabase = {
+      from: () => query,
+      storage: {
+        from: () => ({
+          getPublicUrl: (storagePath: string) => ({ data: { publicUrl: `https://cdn.example.com/${storagePath}` } }),
+        }),
+      },
+    };
+
+    const result = await loadPostMediaItemsMap(supabase as never, ['post-1']);
+
+    // Without the column in the select, every image opened in the viewer
+    // downloaded its original (up to 2.8 MB) instead of the 1440px WebP.
+    expect(selectedColumns).toContain('display_storage_path');
+    expect(result.get('post-1')?.[0]).toMatchObject({
+      url: 'https://cdn.example.com/posts/post-1/original.jpg',
+      displayUrl: 'https://cdn.example.com/posts/post-1/original.display.webp',
+    });
+  });
+
+  it('keeps serving media from a database that predates display renditions', async () => {
+    const selections: string[] = [];
+    const rows = [{
+      id: 'media-1',
+      post_id: 'post-1',
+      storage_path: 'posts/post-1/original.jpg',
+      external_url: null,
+      media_kind: 'image',
+      content_type: 'image/jpeg',
+      original_name: 'original.jpg',
+      width: null,
+      height: null,
+      duration_seconds: null,
+      sort_order: 0,
+    }];
+    const query = {
+      select(columns: string) { selections.push(columns); return query; },
+      in() { return query; },
+      order() {
+        return Promise.resolve(selections.length === 1
+          ? { data: null, error: { code: '42703', message: 'column post_media.display_storage_path does not exist' } }
+          : { data: rows, error: null });
+      },
+    };
+    const supabase = {
+      from: () => query,
+      storage: {
+        from: () => ({
+          getPublicUrl: (storagePath: string) => ({ data: { publicUrl: `https://cdn.example.com/${storagePath}` } }),
+        }),
+      },
+    };
+
+    const result = await loadPostMediaItemsMap(supabase as never, ['post-1']);
+
+    expect(selections).toHaveLength(2);
+    expect(selections[1]).not.toContain('display_storage_path');
+    expect(selections[1]).toContain('source_unavailable_at');
+    expect(result.get('post-1')?.[0]).toMatchObject({
+      url: 'https://cdn.example.com/posts/post-1/original.jpg',
+      displayUrl: null,
+    });
+  });
+
   it('supplies a deterministic key for legacy rows', async () => {
     const rows = [{
       id: 'legacy-media',
