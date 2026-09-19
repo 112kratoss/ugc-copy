@@ -1,7 +1,7 @@
 import { buildMediaSource } from '../lib/media-source';
 import React from 'react';
 import renderer from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const videoState = vi.hoisted(() => ({
   player: {
@@ -99,6 +99,18 @@ vi.mock('react-native', () => ({
 
 import { FeedVideoPreview } from '../components/feed-video-preview';
 import { MEDIA_DISPLAY_DEADLINE_MS } from '../lib/media-recovery';
+import { MediaZoomTileKeyContext } from '../lib/media-zoom-video-offer';
+import {
+  adoptVideoPlayer,
+  endVideoReturn,
+  handBackVideoPlayer,
+  isVideoReturnPending,
+  lendVideoPlayer,
+  lenderUnmounting,
+  resetVideoPlayerLoans,
+  tileAcceptsVideoReturn,
+  whenReturnedVideoDrawn,
+} from '../lib/video-player-loans';
 
 describe('FeedVideoPreview', () => {
   beforeEach(() => {
@@ -685,5 +697,160 @@ describe('FeedVideoPreview backdrop', () => {
     expect(backdrop?.props.source).toMatchObject({ uri: 'https://cdn.example.com/video-poster.jpg' });
     expect(backdrop?.props.blurRadius).toBe(24);
     renderer.act(() => tree!.unmount());
+  });
+});
+
+describe('FeedVideoPreview taking back the player of a reel closing into it', () => {
+  const TILE = 'home-surface\u0000post-1';
+  const stream = 'https://cdn.example.com/video.feed.abc.mp4';
+  const props = {
+    url: 'https://cdn.example.com/video.mp4',
+    streamUrl: stream,
+    lendableStreamUrl: stream,
+    previewUrl: 'https://cdn.example.com/video-poster.jpg',
+    height: 260,
+    radius: 8,
+    accent: '#d946ef',
+    videoBackdrop: 'none' as const,
+  };
+  type TileProps = Partial<React.ComponentProps<typeof FeedVideoPreview>>;
+
+  /** The tile's first player, lent to the reel and adopted by it: what a close hands back. */
+  function reelPlayer() {
+    const player = {
+      addListener: vi.fn(() => ({ remove: vi.fn() })),
+      play: vi.fn(),
+      pause: vi.fn(),
+      release: vi.fn(),
+      loop: false,
+      muted: false,
+      volume: 1,
+      timeUpdateEventInterval: 0.25,
+      showNowPlayingNotification: false,
+      staysActiveInBackground: false,
+      bufferOptions: undefined as { preferredForwardBufferDuration?: number } | undefined,
+      status: 'readyToPlay',
+    };
+    const asPlayer = player as unknown as Parameters<typeof lendVideoPlayer>[0];
+    lendVideoPlayer(asPlayer, vi.fn());
+    lenderUnmounting(asPlayer);
+    adoptVideoPlayer(asPlayer);
+    return { player, asPlayer };
+  }
+
+  function tile(extra: TileProps = {}) {
+    return (
+      <MediaZoomTileKeyContext.Provider value={TILE}>
+        <FeedVideoPreview {...props} active {...extra} />
+      </MediaZoomTileKeyContext.Provider>
+    );
+  }
+
+  function renderTile(extra: TileProps = {}) {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(tile(extra));
+    });
+    return tree;
+  }
+
+  function posterOpacity(tree: renderer.ReactTestRenderer) {
+    const [poster] = tree.root.findAll((node) => String(node.type) === 'image');
+    const style = [poster.props.style].flat(2) as Array<Record<string, unknown> | undefined>;
+    return style.reduce<number | undefined>(
+      (found, entry) => (entry && 'opacity' in entry ? (entry.opacity as number) : found),
+      undefined
+    );
+  }
+
+  beforeEach(() => {
+    focusState.focused = true;
+    videoState.createVideoPlayer.mockClear();
+    appState.currentState = 'active';
+    appState.listeners = [];
+  });
+
+  afterEach(() => {
+    resetVideoPlayerLoans();
+  });
+
+  it('says it would take one back while it would hold a player of that stream', () => {
+    focusState.focused = false;
+    const tree = renderTile();
+    expect(tileAcceptsVideoReturn(TILE, stream)).toBe(true);
+
+    renderer.act(() => tree.update(tile({ active: false })));
+    expect(tileAcceptsVideoReturn(TILE, stream)).toBe(false);
+    renderer.act(() => tree.update(tile({ active: false, prepared: true })));
+    expect(tileAcceptsVideoReturn(TILE, stream)).toBe(true);
+    renderer.act(() => tree.unmount());
+    expect(tileAcceptsVideoReturn(TILE, stream)).toBe(false);
+  });
+
+  it('carries on with the handed-back player under the closing reel: no new player and no poster', () => {
+    // Under the reel the tile's screen has no focus, so it holds no player.
+    focusState.focused = false;
+    const tree = renderTile();
+    expect(tree.root.findAll((node) => String(node.type) === 'video-view')).toHaveLength(0);
+
+    const { player, asPlayer } = reelPlayer();
+    const drawn = vi.fn();
+    renderer.act(() => {
+      handBackVideoPlayer(asPlayer, TILE, stream);
+      whenReturnedVideoDrawn(asPlayer, drawn);
+    });
+
+    expect(videoState.createVideoPlayer).not.toHaveBeenCalled();
+    const [video] = tree.root.findAll((node) => String(node.type) === 'video-view');
+    expect(video.props.player).toBe(player);
+    // Its clip is under way: the poster, the clip's first frame, stays down.
+    expect(posterOpacity(tree)).toBe(0);
+    // A silent, looping feed preview again, still playing.
+    expect(player).toMatchObject({ muted: true, volume: 0, loop: true, timeUpdateEventInterval: 0 });
+    expect(player.play).toHaveBeenCalled();
+    expect(player.pause).not.toHaveBeenCalled();
+
+    // The closing reel lets go once the tile's own view has drawn it.
+    expect(drawn).not.toHaveBeenCalled();
+    renderer.act(() => video.props.onFirstFrameRender());
+    expect(drawn).toHaveBeenCalledTimes(1);
+
+    // The reel pops: the screen has focus again and keeps the very same player.
+    focusState.focused = true;
+    renderer.act(() => {
+      endVideoReturn(asPlayer);
+    });
+    renderer.act(() => tree.update(tile()));
+    expect(isVideoReturnPending(TILE, stream)).toBe(false);
+    const [after] = tree.root.findAll((node) => String(node.type) === 'video-view');
+    expect(after.props.player).toBe(player);
+    expect(videoState.createVideoPlayer).not.toHaveBeenCalled();
+    expect(player.pause).not.toHaveBeenCalled();
+    expect(player.release).not.toHaveBeenCalled();
+  });
+
+  it('pauses a handed-back player in a tile that is only preparing', () => {
+    focusState.focused = false;
+    renderTile({ active: false, prepared: true });
+    const { player, asPlayer } = reelPlayer();
+    renderer.act(() => {
+      handBackVideoPlayer(asPlayer, TILE, stream);
+    });
+
+    expect(player.pause).toHaveBeenCalled();
+    expect(player.play).not.toHaveBeenCalled();
+    expect(videoState.createVideoPlayer).not.toHaveBeenCalled();
+  });
+
+  it('leaves a tile that does not lend this stream to build its own player', () => {
+    const tree = renderTile({ lendableStreamUrl: null });
+    const { asPlayer } = reelPlayer();
+    renderer.act(() => {
+      handBackVideoPlayer(asPlayer, TILE, stream);
+    });
+
+    expect(videoState.createVideoPlayer).toHaveBeenCalledTimes(1);
+    const [video] = tree.root.findAll((node) => String(node.type) === 'video-view');
+    expect(video.props.player).toBe(videoState.player);
   });
 });

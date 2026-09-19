@@ -16,6 +16,7 @@ import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
 import { restoreVideoPlayback } from '@/lib/video-playback-continuity';
 import { createViewerPlaybackHandoff } from '@/lib/viewer-playback-handoff';
+import { isVideoPlayerHandedBack } from '@/lib/video-player-loans';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { LetterboxBands } from '@/components/letterbox-bands';
 import { PostDetailsPage } from '@/components/post-details-page';
@@ -386,11 +387,15 @@ export default function ImmersivePreviewViewerScreen() {
   // shrinking back into one — lines up with the media rather than beside it;
   // and the picture itself, for a close that has to shrink a copy of it.
   const activeMedia = useMemo(() => {
-    if (!activeItem) return { aspectRatio: null, picture: null };
+    if (!activeItem) return { aspectRatio: null, picture: null, playbackUrl: null };
     const pages = buildImmersiveSlidePages(activeItem);
     const page = pages.find((candidate) => slidePageKey(candidate) === position?.mediaPageKey) ?? pages[0];
-    if (page?.type !== 'media') return { aspectRatio: null, picture: null };
-    return { aspectRatio: mediaItemAspectRatio(page.mediaItem), picture: showcaseViewerMediaPicture(page.mediaItem) };
+    if (page?.type !== 'media') return { aspectRatio: null, picture: null, playbackUrl: null };
+    return {
+      aspectRatio: mediaItemAspectRatio(page.mediaItem),
+      picture: showcaseViewerMediaPicture(page.mediaItem),
+      playbackUrl: page.mediaItem.mediaKind === 'video' ? getShowcasePlaybackUrl(page.mediaItem) : null,
+    };
   }, [activeItem, position?.mediaPageKey]);
   const zoom = useMediaZoomStage({
     screen: { width, height },
@@ -403,6 +408,9 @@ export default function ImmersivePreviewViewerScreen() {
     reducedMotion,
     ready: items.length > 0 && initialPositionReady,
     expectsNeighbours: items.length > 1,
+    // A close into the tile this video came from hands the tile its player back.
+    activeVideoUrl: activeMedia.playbackUrl,
+    playerFor: playbackHandoff.playerFor,
     onExit: leaveViewer,
   });
   // A zoom into the reel lands in steps, each a frame or two of the UI thread
@@ -2167,8 +2175,8 @@ function ActiveVideoAttempt({
   // it holds whenever autoplay is disallowed, even for a moment.
   const awaitingLentPlayer = Boolean(lentPlayer) && !lentVideo?.attached;
   useEffect(() => (
-    awaitingLentPlayer ? undefined : playbackHandoff?.register(postId, player)
-  ), [awaitingLentPlayer, playbackHandoff, player, postId]);
+    awaitingLentPlayer ? undefined : playbackHandoff?.register(postId, player, url)
+  ), [awaitingLentPlayer, playbackHandoff, player, postId, url]);
 
   // A post the reader scrolled away from starts over when they come back, as
   // it does in Instagram and TikTok. Rewind on leaving rather than on return,
@@ -2211,7 +2219,8 @@ function ActiveVideoAttempt({
     wasActiveRef.current = active;
     if (!active) {
       setIsPlaying(false);
-      player.pause();
+      // Handed back to the tile a close landed in, it plays on there.
+      if (!isVideoPlayerHandedBack(player)) player.pause();
       return;
     }
     if (!becameActive) {
@@ -2273,6 +2282,8 @@ function ActiveVideoAttempt({
 
   useEffect(() => {
     const subscription = player.addListener('playingChange', (event) => {
+      // Handed back to a feed tile, it plays or pauses as that tile says.
+      if (isVideoPlayerHandedBack(player)) return;
       // The gate polices the active slide only: the reel's scroll handoff
       // starts a neighbour before its active prop flips, and activation
       // re-arms a gate that neighbour may still hold from a background trip.

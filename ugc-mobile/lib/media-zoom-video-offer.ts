@@ -33,3 +33,14 @@ export const MediaZoomVideoOfferContext = createContext<OfferMediaZoomVideo | nu
 export function useMediaZoomVideoOffer() {
   return useContext(MediaZoomVideoOfferContext);
 }
+
+/** The zoom tile a video is drawn in (`zoomTileKey`), for a reel handing its player back. */
+export const MediaZoomTileKeyContext = createContext<string | null>(null);
+
+/**
+ * The tile a video layer belongs to, so it can take back the player a reel
+ * closing into it returns (`handBackVideoPlayer`). Null outside a zoom tile.
+ */
+export function useMediaZoomTileKey() {
+  return useContext(MediaZoomTileKeyContext);
+}
