@@ -2,7 +2,8 @@
 
 **Reviewed:** 15 September 2026  
 **Source snapshot:** `5233d61fdd6f3a3402041053334a6efd125739ba`  
-**Scope:** model catalog, quoting, generation start and callbacks, input media, posts, resource bundles, remix access, mobile drafts, and OTA behavior.
+**Scope:** model catalog, quoting, generation start and callbacks, input media, posts, resource bundles, remix access, mobile drafts, and OTA behavior.  
+**Status (2026-09-19):** findings A1–A6 fixed in #172 (`421760f`) and published OTA from `3971552`; this document is the audit record.
 
 ## Executive summary
 

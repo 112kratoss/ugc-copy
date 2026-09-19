@@ -17,9 +17,8 @@ Live runbooks are at the root of this folder; everything dated or reference-only
 
 - `design/` — the design-system index and the web and mobile guides, the June 2026 UI-consistency research, and the mobile design-QA log.
 - `audits/` — dated audit reports and findings: Kie model scans, media delivery, performance, scaling findings, production audits.
-- `plans/` — plans and scoping records, current and historical.
-- `research/` — prompt-enhancer and model-prompting research.
+- `plans/` — open plans and scoping records only. When a plan's work ships, move it to `archive/` with a dated status line at the top, or delete it if the code, `AGENTS.md`, or an audit already holds the reasoning.
+- `research/` — prompt-enhancer, model-prompting, and media-architecture research.
 - `model-api-references/` — captured provider API references, the input to model onboarding (its README carries the capture rules).
 - `scaling-certificates/` — exact-build capacity certificates.
-- `superpowers/` — agent-written plans and specs.
-- `archive/` — dated audit journals; not current capacity claims.
+- `archive/` — shipped plans and dated audit journals; not current capacity claims.

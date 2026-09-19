@@ -1,5 +1,7 @@
 # Shared model catalog implementation — 2026-09-14
 
+> Archived 2026-09-19. Shipped to production on 2026-09-14 (`ebef768`) and OTA'd on 2026-09-15; kept as the implementation record.
+
 The transport separates discovery from configuration: clients load a small current
 revision, progressively page summaries, and load descriptors for selected or restored
 models. Supabase publication remains the availability and pricing authority. Existing
