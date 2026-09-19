@@ -22,7 +22,9 @@ const projectRoot = join(__dirname, '..');
  * are here to fail loudly rather than let the egress quietly return.
  */
 describe('expo-video iOS cache patch', () => {
-  const patch = readFileSync(join(projectRoot, 'patches/expo-video+55.0.21.patch'), 'utf8');
+  // The first of expo-video's sequenced patch-package files; the second
+  // (+002+android-light-player-view) touches only Android and the JS wrapper.
+  const patch = readFileSync(join(projectRoot, 'patches/expo-video+55.0.21+001+ios-range-cache.patch'), 'utf8');
   const added = patch
     .split('\n')
     .filter((line) => line.startsWith('+') && !line.startsWith('+++'))

@@ -26,10 +26,7 @@
         "alpha",
         "production"
       ],
-      "setAside": [
-        "patches/expo-video+55.0.21.patch"
-      ],
-      "$setAsideNote": "#129 added this iOS-only patch (it edits node_modules/expo-video/ios/Cache/*.swift) after 71 was built from 62e9f57, and @expo/fingerprint hashes patches/ for every platform. Removing just this file makes main fingerprint db146ca3 again (verified 2026-09-10 and 2026-09-12).",
+      "$setAsideNote": "Dropped 2026-09-19 with #181. The iOS-only patch it named is now patches/expo-video+55.0.21+001+ios-range-cache.patch, and #181 also adds the Android light-host patch (+002), expo.autolinking.buildFromSource and expo-network, so no file can be set aside to make main fingerprint db146ca3 again: JS-only updates from main no longer reach build 71. That ends when the 0.1.5 binary replaces it here.",
       "$note": "Built from main 62e9f57 (EAS build 21641ad1, workflow run 33969667328) and submitted to the Play closed alpha 2026-09-05 14:07 UTC; a production release 0.1.4 (71) was created from the library the same day and sent for review as a full rollout (which restarted the alpha review). First binary with the full R8 pipeline (#112): optimize base, full mode, optimized resource shrinking, narrowed keeps, React Native core Image retired. Play bundle explorer: App optimization High (70 was Medium), obfuscation 80%, R8 checklist green on Full Mode, Resource Shrinking and Resource Shrinking Optimized (Repackage Classes and AGP 9 outstanding), install size 20.4 MB, -3.27 MB vs 70. Play review landed the same day: 71 has been live on production since 2026-09-05 20:14 IST (full rollout, 177 countries) and is the only Active bundle, so Android users run 71 at this fingerprint."
     },
     "ios": {
