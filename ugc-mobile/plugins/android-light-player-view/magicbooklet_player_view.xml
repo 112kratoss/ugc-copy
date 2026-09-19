@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Media3's exo_player_view without what the app never shows: no buffering
+     spinner, artwork, error text, ad or overlay frames, and no full control bar.
+     A PlayerControlView must still exist because expo-video calls the
+     controller's setters at construction; it gets a near-empty layout. -->
+<merge xmlns:android="http://schemas.android.com/apk/res/android"
+  xmlns:app="http://schemas.android.com/apk/res-auto">
+
+  <androidx.media3.ui.AspectRatioFrameLayout
+    android:id="@id/exo_content_frame"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:layout_gravity="center">
+
+    <!-- The video surface is inserted as the first child of the content frame. -->
+
+    <View
+      android:id="@id/exo_shutter"
+      android:layout_width="match_parent"
+      android:layout_height="match_parent"
+      android:background="@android:color/black" />
+
+  </androidx.media3.ui.AspectRatioFrameLayout>
+
+  <androidx.media3.ui.PlayerControlView
+    android:id="@id/exo_controller"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:visibility="gone"
+    app:controller_layout_id="@layout/magicbooklet_player_controls" />
+
+</merge>

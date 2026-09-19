@@ -28,6 +28,15 @@ import {
 import { MEDIA_DISPLAY_DEADLINE_MS } from '@/lib/media-recovery';
 import { useMediaSource } from '@/lib/use-media-source';
 import { appTheme } from '@/lib/theme';
+import {
+  beginPlaybackStall,
+  beginPlaybackStart,
+  cancelPlaybackStart,
+  completePlaybackStart,
+  endPlaybackStall,
+  forgetPlayback,
+} from '@/lib/playback-metrics';
+import { MEDIA_PLAYER_OPTIONS } from '@/lib/video-player-options';
 
 const absoluteFill = {
   position: 'absolute' as const,
@@ -369,6 +378,8 @@ export function FeedVideoPreview({
   );
 }
 
+let feedPlaybackSequence = 0;
+
 function FeedVideoPlayerLayer({
   source,
   lendableUrl,
@@ -394,7 +405,7 @@ function FeedVideoPlayerLayer({
   // frame zero and a jump, on every return from a playing video.
   const [{ player, returned }] = useState<{ player: VideoPlayer; returned: boolean }>(() => {
     const taken = returnKey && lendableUrl ? claimReturnedVideoPlayer(returnKey, lendableUrl) : null;
-    const instance = taken ?? createVideoPlayer({ ...source, useCaching: true });
+    const instance = taken ?? createVideoPlayer({ ...source, useCaching: true }, MEDIA_PLAYER_OPTIONS);
     // The reel listened to its progress; a tile does not.
     if (taken) instance.timeUpdateEventInterval = 0;
     instance.loop = true;
@@ -412,6 +423,10 @@ function FeedVideoPlayerLayer({
     return { player: instance, returned: taken !== null };
   });
   const releaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Fleet metrics (lib/playback-metrics): one key per player this layer holds.
+  const [metricsKey] = useState(() => `feed:${(feedPlaybackSequence += 1)}`);
+  const playingRef = useRef(playing);
+  useEffect(() => () => forgetPlayback(metricsKey), [metricsKey]);
 
   // Offered to the zoom out of the tile, which lends it to the flight and the
   // reel when the tile is tapped (see lib/video-player-loans.ts).
@@ -433,10 +448,11 @@ function FeedVideoPlayerLayer({
 
   const handleFirstFrameRender = useCallback(() => {
     hasFrameRef.current = true;
+    completePlaybackStart(metricsKey);
     onFirstFrame();
     // What the closing reel waits on before it lets the tile be seen.
     if (returned) reportReturnedVideoDrawn(player);
-  }, [onFirstFrame, player, returned]);
+  }, [metricsKey, onFirstFrame, player, returned]);
 
   // The clip a player handed back is showing is already under way: its poster,
   // the first frame, must not come back over it while this view takes it on.
@@ -476,9 +492,26 @@ function FeedVideoPlayerLayer({
   // playing widens to the preview window.
   useEffect(() => {
     player.bufferOptions = { preferredForwardBufferDuration: forwardBufferSeconds(playing) };
-    if (playing) player.play();
-    else player.pause();
-  }, [player, playing]);
+    playingRef.current = playing;
+    if (playing) {
+      // Asked to move: a player that has drawn is a warm start, one that has not is cold.
+      beginPlaybackStart(metricsKey, { surface: 'feed', kind: hasFrameRef.current ? 'warm' : 'cold' });
+      player.play();
+    } else {
+      cancelPlaybackStart(metricsKey);
+      endPlaybackStall(metricsKey);
+      player.pause();
+    }
+  }, [metricsKey, player, playing]);
+
+  useEffect(() => {
+    const subscription = player.addListener('playingChange', (event) => {
+      if (event.isPlaying) completePlaybackStart(metricsKey);
+    });
+    return () => {
+      subscription.remove();
+    };
+  }, [metricsKey, player]);
 
   useEffect(() => {
     // A source that failed before this effect subscribed never sends a
@@ -486,11 +519,14 @@ function FeedVideoPlayerLayer({
     onPlaybackError(player.status === 'error');
     const subscription = player.addListener('statusChange', (event) => {
       onPlaybackError(event.status === 'error');
+      // Loading again after motion, while asked to play, is a stall.
+      if (event.status === 'loading' && playingRef.current && hasFrameRef.current) beginPlaybackStall(metricsKey);
+      else if (event.status !== 'loading') endPlaybackStall(metricsKey);
     });
     return () => {
       subscription.remove();
     };
-  }, [player, onPlaybackError]);
+  }, [metricsKey, player, onPlaybackError]);
 
   return (
     <VideoView

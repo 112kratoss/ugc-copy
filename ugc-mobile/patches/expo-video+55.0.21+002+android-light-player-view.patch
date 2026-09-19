@@ -1,0 +1,280 @@
+diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt
+index 336b4aa..0987c7c 100644
+--- a/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt
++++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt
+@@ -38,6 +38,7 @@ import kotlin.time.Duration
+ class VideoModule : Module() {
+   override fun definition() = ModuleDefinition {
+     Name("ExpoVideo")
++    Constant("supportsLightweightViews") { true }
+ 
+     OnCreate {
+       VideoManager.onModuleCreated(appContext)
+@@ -70,6 +71,13 @@ class VideoModule : Module() {
+       VideoViewComponent<TextureVideoView>()
+     }
+ 
++    View(LightSurfaceVideoView::class) {
++      VideoViewComponent<LightSurfaceVideoView>()
++    }
++    View(LightTextureVideoView::class) {
++      VideoViewComponent<LightTextureVideoView>()
++    }
++
+     Class(VideoPlayer::class) {
+       Constructor { source: VideoSource?, /* useSynchronousReplace - iOS-only */ _: Boolean?, playerBuilderOptions: PlayerBuilderOptions? ->
+         val player = VideoPlayer(appContext.throwingActivity.applicationContext, appContext, source, playerBuilderOptions)
+diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoView.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoView.kt
+index bdf4c8d..043ce01 100644
+--- a/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoView.kt
++++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoView.kt
+@@ -44,9 +44,13 @@ class SurfaceVideoView(context: Context, appContext: AppContext) : VideoView(con
+ class TextureVideoView(context: Context, appContext: AppContext) : VideoView(context, appContext, true)
+ 
+ @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+-open class VideoView(context: Context, appContext: AppContext, useTextureView: Boolean = false) : ExpoView(context, appContext), VideoPlayerListener {
++class LightSurfaceVideoView(context: Context, appContext: AppContext) : VideoView(context, appContext, false, true)
++class LightTextureVideoView(context: Context, appContext: AppContext) : VideoView(context, appContext, true, true)
++
++@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
++open class VideoView(context: Context, appContext: AppContext, useTextureView: Boolean = false, lightweight: Boolean = false) : ExpoView(context, appContext), VideoPlayerListener {
+   val videoViewId: String = UUID.randomUUID().toString()
+-  val playerView: PlayerView = LayoutInflater.from(context.applicationContext).inflate(getPlayerViewLayoutId(useTextureView), null) as PlayerView
++  val playerView: PlayerView = LayoutInflater.from(context.applicationContext).inflate(getPlayerViewLayoutId(useTextureView, lightweight), null) as PlayerView
+   val onPictureInPictureStart by EventDispatcher<Unit>()
+   val onPictureInPictureStop by EventDispatcher<Unit>()
+   val onFullscreenEnter by EventDispatcher<Unit>()
+@@ -405,7 +409,8 @@ open class VideoView(context: Context, appContext: AppContext, useTextureView: B
+     return false
+   }
+ 
+-  private fun getPlayerViewLayoutId(useTextureView: Boolean): Int {
++  private fun getPlayerViewLayoutId(useTextureView: Boolean, lightweight: Boolean): Int {
++    if (lightweight) return if (useTextureView) R.layout.magicbooklet_texture_player_view else R.layout.magicbooklet_surface_player_view
+     return if (useTextureView) {
+       R.layout.texture_player_view
+     } else {
+diff --git a/node_modules/expo-video/android/src/main/res/layout/magicbooklet_player_controls.xml b/node_modules/expo-video/android/src/main/res/layout/magicbooklet_player_controls.xml
+new file mode 100644
+index 0000000..c35633c
+--- /dev/null
++++ b/node_modules/expo-video/android/src/main/res/layout/magicbooklet_player_controls.xml
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- The controller's layout: nothing to draw. The fullscreen button stays, hidden,
++     because expo-video looks it up without a null check when leaving fullscreen. -->
++<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
++  android:layout_width="match_parent"
++  android:layout_height="match_parent">
++
++  <ImageButton
++    android:id="@id/exo_fullscreen"
++    android:layout_width="1dp"
++    android:layout_height="1dp"
++    android:visibility="gone"
++    android:contentDescription="@null" />
++
++</FrameLayout>
+diff --git a/node_modules/expo-video/android/src/main/res/layout/magicbooklet_player_view.xml b/node_modules/expo-video/android/src/main/res/layout/magicbooklet_player_view.xml
+new file mode 100644
+index 0000000..74f9dcc
+--- /dev/null
++++ b/node_modules/expo-video/android/src/main/res/layout/magicbooklet_player_view.xml
+@@ -0,0 +1,32 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Media3's exo_player_view without what the app never shows: no buffering
++     spinner, artwork, error text, ad or overlay frames, and no full control bar.
++     A PlayerControlView must still exist because expo-video calls the
++     controller's setters at construction; it gets a near-empty layout. -->
++<merge xmlns:android="http://schemas.android.com/apk/res/android"
++  xmlns:app="http://schemas.android.com/apk/res-auto">
++
++  <androidx.media3.ui.AspectRatioFrameLayout
++    android:id="@id/exo_content_frame"
++    android:layout_width="match_parent"
++    android:layout_height="match_parent"
++    android:layout_gravity="center">
++
++    <!-- The video surface is inserted as the first child of the content frame. -->
++
++    <View
++      android:id="@id/exo_shutter"
++      android:layout_width="match_parent"
++      android:layout_height="match_parent"
++      android:background="@android:color/black" />
++
++  </androidx.media3.ui.AspectRatioFrameLayout>
++
++  <androidx.media3.ui.PlayerControlView
++    android:id="@id/exo_controller"
++    android:layout_width="match_parent"
++    android:layout_height="match_parent"
++    android:visibility="gone"
++    app:controller_layout_id="@layout/magicbooklet_player_controls" />
++
++</merge>
+diff --git a/node_modules/expo-video/android/src/main/res/layout/magicbooklet_surface_player_view.xml b/node_modules/expo-video/android/src/main/res/layout/magicbooklet_surface_player_view.xml
+new file mode 100644
+index 0000000..8587930
+--- /dev/null
++++ b/node_modules/expo-video/android/src/main/res/layout/magicbooklet_surface_player_view.xml
+@@ -0,0 +1,11 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Overrides expo-video's layout of the same name (app resources win the merge).
++     Same root id and surface type; only the PlayerView's inner layout changes. -->
++<androidx.media3.ui.PlayerView xmlns:android="http://schemas.android.com/apk/res/android"
++  xmlns:app="http://schemas.android.com/apk/res-auto"
++  android:id="@+id/surface_player_view"
++  android:layout_width="match_parent"
++  android:layout_height="match_parent"
++  app:surface_type="surface_view"
++  app:use_controller="false"
++  app:player_layout_id="@layout/magicbooklet_player_view" />
+diff --git a/node_modules/expo-video/android/src/main/res/layout/magicbooklet_texture_player_view.xml b/node_modules/expo-video/android/src/main/res/layout/magicbooklet_texture_player_view.xml
+new file mode 100644
+index 0000000..04aede5
+--- /dev/null
++++ b/node_modules/expo-video/android/src/main/res/layout/magicbooklet_texture_player_view.xml
+@@ -0,0 +1,11 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Overrides expo-video's layout of the same name (app resources win the merge).
++     Same root id and surface type; only the PlayerView's inner layout changes. -->
++<androidx.media3.ui.PlayerView xmlns:android="http://schemas.android.com/apk/res/android"
++  xmlns:app="http://schemas.android.com/apk/res-auto"
++  android:id="@+id/texture_player_view"
++  android:layout_width="match_parent"
++  android:layout_height="match_parent"
++  app:surface_type="texture_view"
++  app:use_controller="false"
++  app:player_layout_id="@layout/magicbooklet_player_view" />
+diff --git a/node_modules/expo-video/build/NativeVideoView.js b/node_modules/expo-video/build/NativeVideoView.js
+index 15ec740..a2b65fb 100644
+--- a/node_modules/expo-video/build/NativeVideoView.js
++++ b/node_modules/expo-video/build/NativeVideoView.js
+@@ -1,6 +1,12 @@
++import NativeVideoModule from './NativeVideoModule';
+ import { requireNativeViewManager } from 'expo-modules-core';
+ import { Platform } from 'react-native';
+ const defaultViewName = Platform.OS === 'android' ? 'SurfaceVideoView' : 'VideoView';
+ export default requireNativeViewManager('ExpoVideo', defaultViewName);
+ export const NativeTextureVideoView = Platform.OS === 'android' ? requireNativeViewManager('ExpoVideo', 'TextureVideoView') : null;
+ //# sourceMappingURL=NativeVideoView.js.map
++// Older binaries keep their registered stock views.
++export const NativeLightTextureVideoView = Platform.OS === "android" && NativeVideoModule.supportsLightweightViews
++  ? requireNativeViewManager("ExpoVideo", "LightTextureVideoView") : null;
++export const NativeLightSurfaceVideoView = Platform.OS === "android" && NativeVideoModule.supportsLightweightViews
++  ? requireNativeViewManager("ExpoVideo", "LightSurfaceVideoView") : null;
+diff --git a/node_modules/expo-video/build/VideoView.js b/node_modules/expo-video/build/VideoView.js
+index 63d9a1d..90566f8 100644
+--- a/node_modules/expo-video/build/VideoView.js
++++ b/node_modules/expo-video/build/VideoView.js
+@@ -1,6 +1,6 @@
+ import { PureComponent, createRef } from 'react';
+ import NativeVideoModule from './NativeVideoModule';
+-import NativeVideoView, { NativeTextureVideoView } from './NativeVideoView';
++import NativeVideoView, { NativeTextureVideoView, NativeLightTextureVideoView, NativeLightSurfaceVideoView } from './NativeVideoView';
+ /**
+  * Returns whether the current device supports Picture in Picture (PiP) mode.
+  *
+@@ -56,7 +56,13 @@ export class VideoView extends PureComponent {
+     render() {
+         const { player, ...props } = this.props;
+         const playerId = player ? getPlayerId(player) : null;
+-        if (NativeTextureVideoView && this.props.surfaceType === 'textureView') {
++        // Native controls can change at runtime. Switching host type remounts the
++    // presentation view while preserving the VideoPlayer and playback position.
++    const LightView = this.props.surfaceType === 'textureView' ? NativeLightTextureVideoView : NativeLightSurfaceVideoView;
++    if (LightView && this.props.nativeControls === false) {
++      return <LightView {...props} player={playerId} ref={this.nativeRef} />;
++    }
++    if (NativeTextureVideoView && this.props.surfaceType === 'textureView') {
+             return <NativeTextureVideoView {...props} player={playerId} ref={this.nativeRef}/>;
+         }
+         return <NativeVideoView {...props} player={playerId} ref={this.nativeRef}/>;
+diff --git a/node_modules/expo-video/expo-module.config.json b/node_modules/expo-video/expo-module.config.json
+index 43e3078..c653f18 100644
+--- a/node_modules/expo-video/expo-module.config.json
++++ b/node_modules/expo-video/expo-module.config.json
+@@ -1,15 +1,16 @@
+ {
+-  "platforms": ["apple", "android"],
++  "platforms": [
++    "apple",
++    "android"
++  ],
+   "apple": {
+-    "modules": ["VideoModule"]
++    "modules": [
++      "VideoModule"
++    ]
+   },
+   "android": {
+-    "modules": ["expo.modules.video.VideoModule"],
+-    "publication": {
+-      "groupId": "host.exp.exponent",
+-      "artifactId": "expo.modules.video",
+-      "version": "55.0.21",
+-      "repository": "local-maven-repo"
+-    }
++    "modules": [
++      "expo.modules.video.VideoModule"
++    ]
+   }
+ }
+diff --git a/node_modules/expo-video/src/NativeVideoModule.ts b/node_modules/expo-video/src/NativeVideoModule.ts
+index 2561030..df07aa5 100644
+--- a/node_modules/expo-video/src/NativeVideoModule.ts
++++ b/node_modules/expo-video/src/NativeVideoModule.ts
+@@ -4,6 +4,7 @@ import type { VideoPlayer } from './VideoPlayer.types';
+ import type { VideoThumbnail } from './VideoThumbnail';
+ 
+ type ExpoVideoModule = {
++  supportsLightweightViews?: boolean;
+   VideoPlayer: typeof VideoPlayer;
+   VideoThumbnail: typeof VideoThumbnail;
+ 
+diff --git a/node_modules/expo-video/src/NativeVideoView.ts b/node_modules/expo-video/src/NativeVideoView.ts
+index d7911be..a398bde 100644
+--- a/node_modules/expo-video/src/NativeVideoView.ts
++++ b/node_modules/expo-video/src/NativeVideoView.ts
+@@ -1,3 +1,4 @@
++import NativeVideoModule from './NativeVideoModule';
+ import { requireNativeViewManager } from 'expo-modules-core';
+ import { Platform } from 'react-native';
+ 
+@@ -6,3 +7,9 @@ const defaultViewName = Platform.OS === 'android' ? 'SurfaceVideoView' : 'VideoV
+ export default requireNativeViewManager('ExpoVideo', defaultViewName);
+ export const NativeTextureVideoView =
+   Platform.OS === 'android' ? requireNativeViewManager('ExpoVideo', 'TextureVideoView') : null;
++
++// Older binaries keep their registered stock views.
++export const NativeLightTextureVideoView = Platform.OS === "android" && NativeVideoModule.supportsLightweightViews
++  ? requireNativeViewManager("ExpoVideo", "LightTextureVideoView") : null;
++export const NativeLightSurfaceVideoView = Platform.OS === "android" && NativeVideoModule.supportsLightweightViews
++  ? requireNativeViewManager("ExpoVideo", "LightSurfaceVideoView") : null;
+diff --git a/node_modules/expo-video/src/VideoView.tsx b/node_modules/expo-video/src/VideoView.tsx
+index d227dfa..ab4205c 100644
+--- a/node_modules/expo-video/src/VideoView.tsx
++++ b/node_modules/expo-video/src/VideoView.tsx
+@@ -1,7 +1,7 @@
+ import { ReactNode, PureComponent, createRef } from 'react';
+ 
+ import NativeVideoModule from './NativeVideoModule';
+-import NativeVideoView, { NativeTextureVideoView } from './NativeVideoView';
++import NativeVideoView, { NativeTextureVideoView, NativeLightTextureVideoView, NativeLightSurfaceVideoView } from './NativeVideoView';
+ import type { VideoPlayer } from './VideoPlayer.types';
+ import type { VideoViewProps } from './VideoView.types';
+ 
+@@ -67,6 +67,12 @@ export class VideoView extends PureComponent<VideoViewProps> {
+     const { player, ...props } = this.props;
+     const playerId = player ? getPlayerId(player) : null;
+ 
++    // Native controls can change at runtime. Switching host type remounts the
++    // presentation view while preserving the VideoPlayer and playback position.
++    const LightView = this.props.surfaceType === 'textureView' ? NativeLightTextureVideoView : NativeLightSurfaceVideoView;
++    if (LightView && this.props.nativeControls === false) {
++      return <LightView {...props} player={playerId} ref={this.nativeRef} />;
++    }
+     if (NativeTextureVideoView && this.props.surfaceType === 'textureView') {
+       return <NativeTextureVideoView {...props} player={playerId} ref={this.nativeRef} />;
+     }

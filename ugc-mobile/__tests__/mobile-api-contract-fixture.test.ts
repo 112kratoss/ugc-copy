@@ -277,6 +277,16 @@ const extendedOperationCases: Array<{
     }),
   },
   {
+    key: 'reportPlaybackMetrics',
+    call: (api) => api.reportPlaybackMetrics({
+      sessionId: 'session-1234',
+      app: { version: '0.1.4', build: '72', update: '0558882d' },
+      device: { platform: 'android', os: '15', model: 'samsung SM-S928B', network: 'wifi' },
+      spanMs: 65000,
+      buckets: [{ surface: 'viewer', kind: 'warm', starts: 1, startTotalMs: 40, startMaxMs: 40, samples: [40], stalls: 0, stallTotalMs: 0, stallMaxMs: 0 }],
+    }),
+  },
+  {
     key: 'recordShowcaseFeedEvent',
     call: (api) => api.recordShowcaseFeedEvent({
       clientEventId: 'feed-event-1',
