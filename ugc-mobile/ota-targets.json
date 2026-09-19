@@ -18,27 +18,24 @@
   ],
   "targets": {
     "android": {
-      "fingerprint": "db146ca386f52f78a12416a2077621628eb04300",
-      "appVersion": "0.1.4",
-      "buildNumber": 71,
-      "shipped": "2026-09-05",
+      "fingerprint": "7a2df8d1315311cc2c1918693250a2e751da7695",
+      "appVersion": "0.1.5",
+      "buildNumber": 72,
+      "shipped": "2026-09-19",
       "tracks": [
-        "alpha",
-        "production"
+        "alpha"
       ],
-      "$setAsideNote": "Dropped 2026-09-19 with #181. The iOS-only patch it named is now patches/expo-video+55.0.21+001+ios-range-cache.patch, and #181 also adds the Android light-host patch (+002), expo.autolinking.buildFromSource and expo-network, so no file can be set aside to make main fingerprint db146ca3 again: JS-only updates from main no longer reach build 71. That ends when the 0.1.5 binary replaces it here.",
-      "$note": "Built from main 62e9f57 (EAS build 21641ad1, workflow run 33969667328) and submitted to the Play closed alpha 2026-09-05 14:07 UTC; a production release 0.1.4 (71) was created from the library the same day and sent for review as a full rollout (which restarted the alpha review). First binary with the full R8 pipeline (#112): optimize base, full mode, optimized resource shrinking, narrowed keeps, React Native core Image retired. Play bundle explorer: App optimization High (70 was Medium), obfuscation 80%, R8 checklist green on Full Mode, Resource Shrinking and Resource Shrinking Optimized (Repackage Classes and AGP 9 outstanding), install size 20.4 MB, -3.27 MB vs 70. Play review landed the same day: 71 has been live on production since 2026-09-05 20:14 IST (full rollout, 177 countries) and is the only Active bundle, so Android users run 71 at this fingerprint."
+      "$note": "Built from main 74f4bba (#181; EAS build 50ea8bad, workflow run 35436568550) and submitted to the Play closed alpha 2026-09-19 10:31 UTC, release status completed. First binary with the scoped light video hosts (patches/expo-video+55.0.21+002+android-light-player-view.patch), expo-video built from source, and expo-network. Testers only for now: Play production still serves 0.1.4 (71) at db146ca386f52f78a12416a2077621628eb04300, which no update from main can reach, so an update published against this fingerprint reaches the closed alpha until 72 is promoted to production."
     },
     "ios": {
-      "fingerprint": "c2e22bfa7e480143c37e68b757aa9a91d3bd0c95",
-      "appVersion": "0.1.4",
-      "buildNumber": 52,
-      "shipped": "2026-09-09",
+      "fingerprint": "a75a17fb257cf1c69eedf2ea87b564b5009e3360",
+      "appVersion": "0.1.5",
+      "buildNumber": 53,
+      "shipped": "2026-09-19",
       "tracks": [
-        "testflight",
-        "appstore"
+        "testflight"
       ],
-      "$note": "Built from main 2bf292b (EAS build e20859dc) and submitted to TestFlight 2026-09-09, then installed and exercised on a physical iPhone. First iOS binary carrying patches/expo-video+55.0.21.patch, which bounds expo-video's content-information request to `Range: bytes=0-1` (F1 in the media delivery audit): measured 2.87x -> 1.88x bytes-per-open on a 466 KB clip, 1.96x on a 1.48 MB clip. Replaces build 51, which was pulled from App Store review to make room and is now in nobody's hands - this file recorded 51 until 2026-09-09, so any iOS update published in between targeted a fingerprint no device carried. App Store 0.1.4 (52) was rejected 2026-09-09 under guidelines 5.2.1 and 2.3.10 (demo-account content and non-iOS screenshots - version metadata, not the binary) and resubmitted the same day; until that is approved App Store users still run 0.1.2 (47), so an update published against this fingerprint reaches TestFlight only. This fingerprint equals main at 2bf292b, so JS-only updates from main can reach build 52 - the block that stood while 51 was current is lifted. Update 2026-09-10: App Store 0.1.4 (52) was approved and is live (itunes lookup reports 0.1.4, released 2026-09-10T09:09Z), so this fingerprint now covers App Store users as they update; the 0.1.2 (47) population on 27175069… drains as they do."
+      "$note": "Built from main 74f4bba (#181; EAS build 4f957233, workflow run 35436568550) and uploaded to TestFlight for the internal group Team (Expo) 2026-09-19 10:17 UTC. Carries the iOS range-cache patch (now patches/expo-video+55.0.21+001+ios-range-cache.patch), expo-video marked buildFromSource ahead of SDK 56's precompiled modules, and expo-network. Testers only for now: the App Store still serves 0.1.4 (52) at c2e22bfa7e480143c37e68b757aa9a91d3bd0c95, which no update from main can reach, so an update published against this fingerprint reaches TestFlight until 0.1.5 is approved and released."
     }
   }
 }

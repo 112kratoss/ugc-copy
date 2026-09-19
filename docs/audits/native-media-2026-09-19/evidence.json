@@ -81,10 +81,6 @@
       ],
       "expo-network": "~55.0.18"
     },
-    "fingerprints": {
-      "android": "4c38d18e4ab3ce0fc617fcded1cdb184052ad64a",
-      "ios": "e29650df797607a9362bc745e0b7b068b513468e"
-    },
     "shippedTargets": {
       "android": "db146ca386f52f78a12416a2077621628eb04300",
       "ios": "c2e22bfa7e480143c37e68b757aa9a91d3bd0c95"
@@ -143,6 +139,30 @@
         ]
       },
       "verdict": "no gain; looper stays disabled and outside patches/"
+    },
+    "fingerprintsBeforeVersionBump": {
+      "android": "4c38d18e4ab3ce0fc617fcded1cdb184052ad64a",
+      "ios": "e29650df797607a9362bc745e0b7b068b513468e"
+    },
+    "release": {
+      "mergedAs": "#181 74f4bba96168459813094173debd676b097244da",
+      "storeRun": 35436568550,
+      "ios": {
+        "version": "0.1.5",
+        "build": 53,
+        "easBuild": "4f957233-fb2b-48b0-9842-a7936f0aa16f",
+        "fingerprint": "a75a17fb257cf1c69eedf2ea87b564b5009e3360",
+        "submission": "115c5f9d-698b-435d-bc04-4bcb705c6764",
+        "track": "TestFlight internal group Team (Expo)"
+      },
+      "android": {
+        "version": "0.1.5",
+        "build": 72,
+        "easBuild": "50ea8bad-59e4-41be-b9a2-d930058ffa0b",
+        "fingerprint": "7a2df8d1315311cc2c1918693250a2e751da7695",
+        "submission": "2484af0c-039d-480b-9f60-e9fb7dfd0044",
+        "track": "Play closed alpha (completed)"
+      }
     }
   }
 }
