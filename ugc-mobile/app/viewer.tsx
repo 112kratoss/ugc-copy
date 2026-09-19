@@ -2436,8 +2436,11 @@ function ActiveVideoAttempt({
           <ActivityIndicator accessibilityLabel="Loading video" color={appTheme.colors.primary} />
         </View>
       ) : null}
+      {/* Centred on the screen like the loading spinner and the paused badge.
+          The trailing inset keeps the card clear of the rail, and the leading
+          inset must match it or the card sits off-centre. */}
       {playbackFailed ? (
-        <View style={{ position: 'absolute', left: 32, right: 80, alignItems: 'center' }}>
+        <View style={{ position: 'absolute', left: 80, right: 80, alignItems: 'center' }}>
           <View style={{ backgroundColor: appTheme.colors.panel, padding: 20, borderRadius: 20, gap: 12 }}>
             <Text accessibilityRole="alert" style={{ color: appTheme.colors.text, fontSize: 16, textAlign: 'center' }}>
               Video couldn’t load
