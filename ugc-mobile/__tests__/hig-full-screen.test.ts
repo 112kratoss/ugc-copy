@@ -134,6 +134,19 @@ describe('S6 — the viewer top strip is laid out from the safe area', () => {
   });
 });
 
+describe('S6 — the failed-video card sits on the centre line', () => {
+  // Layout: "Align elements to make them easier to scan." The loading spinner
+  // and the paused badge are centred on the screen, and the card that replaces
+  // them when a video cannot load belongs on the same line. With insets of 32
+  // and 80 it sat 24pt to the left of it.
+  it('insets the card equally from both edges', () => {
+    const card = viewer.slice(viewer.indexOf('{playbackFailed ? ('), viewer.indexOf('Video couldn’t load'));
+    const inset = (side: 'left' | 'right') => card.match(new RegExp(`\\b${side}: (\\d+)`))?.[1];
+    expect(inset('right')).toBeDefined();
+    expect(inset('left')).toBe(inset('right'));
+  });
+});
+
 describe('S6 — the reel can be silenced without leaving it', () => {
   beforeEach(() => {
     storage.clear();
