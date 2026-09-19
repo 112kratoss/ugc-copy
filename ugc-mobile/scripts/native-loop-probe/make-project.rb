@@ -8,7 +8,7 @@ target.resources_build_phase.add_file_reference(project.main_group.new_reference
 target.build_configurations.each do |config|
   config.build_settings.merge!({
     'PRODUCT_BUNDLE_IDENTIFIER' => 'com.athuls.magicbooklet.loopprobe',
-    'PRODUCT_NAME' => 'LoopProbe', 'DEVELOPMENT_TEAM' => 'HNA8393NT4',
+    'PRODUCT_NAME' => 'LoopProbe', 'DEVELOPMENT_TEAM' => ENV.fetch('LOOP_PROBE_TEAM_ID'),
     'CODE_SIGN_STYLE' => 'Automatic', 'GENERATE_INFOPLIST_FILE' => 'YES',
     'SWIFT_VERSION' => '5.0', 'IPHONEOS_DEPLOYMENT_TARGET' => '18.0',
     'TARGETED_DEVICE_FAMILY' => '1', 'CURRENT_PROJECT_VERSION' => '1',
