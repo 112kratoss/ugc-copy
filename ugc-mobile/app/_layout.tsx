@@ -29,7 +29,10 @@ import { notificationBadgeQueryKey } from '@/lib/notification-badge';
 import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
 import { readAppVersionParts } from '@/lib/app-version-label';
 import { setNativeImageCapabilities, type NativeImageCapabilities } from '@/lib/media-blur';
+import { subscribeToAppForeground } from '@/lib/app-foreground';
 import { setMediaDiagnosticsReporter } from '@/lib/media-diagnostics';
+import { readPlaybackDevice, readPlaybackNetwork } from '@/lib/playback-device';
+import { setPlaybackMetricsReporter } from '@/lib/playback-metrics';
 import { arrivesUnderLandedZoom } from '@/lib/media-zoom-transition';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
@@ -402,6 +405,22 @@ function MediaDiagnosticsCoordinator() {
       // update in `eas update:list`, and within the backend's field bound.
       return { version, build, update: update?.slice(0, 8) ?? null };
     },
+  }), [api]);
+
+  // Sends each session's aggregated video start-up and stall numbers (see
+  // lib/playback-metrics): the fleet-wide reading the delivery plan's
+  // remaining decisions are gated on.
+  useEffect(() => setPlaybackMetricsReporter({
+    send: (report) => api.reportPlaybackMetrics(report),
+    app: () => {
+      const { version, build, update } = readAppVersionParts();
+      return { version, build, update: update?.slice(0, 8) ?? null };
+    },
+    device: readPlaybackDevice,
+    network: readPlaybackNetwork,
+    subscribeToBackground: (onBackground) => subscribeToAppForeground((foreground) => {
+      if (!foreground) onBackground();
+    }),
   }), [api]);
 
   return null;

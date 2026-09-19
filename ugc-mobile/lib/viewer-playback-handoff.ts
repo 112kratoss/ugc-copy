@@ -1,6 +1,7 @@
 import type { VideoPlayer } from 'expo-video';
 
 import { isVideoPlayerHandedBack } from './video-player-loans';
+import { beginPlaybackStart } from '@/lib/playback-metrics';
 import { isViewerAudioMuted } from './viewer-audio';
 
 function stopPlayer(player: VideoPlayer) {
@@ -61,6 +62,9 @@ export function createViewerPlaybackHandoff() {
         return;
       }
       if (incoming === outgoing) return;
+      // Fleet metrics: a prepared neighbour's start runs from this ask to its
+      // first sign of motion (lib/playback-metrics).
+      beginPlaybackStart(`viewer:${to}`, { surface: 'viewer', kind: 'warm' });
       try {
         incoming.muted = isViewerAudioMuted();
         incoming.play();

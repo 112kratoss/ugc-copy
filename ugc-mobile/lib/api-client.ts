@@ -85,6 +85,7 @@ import {
   normalizeTemplateRunResponse,
 } from './media-templates';
 import type { MediaDiagnosticsReport } from './media-diagnostics';
+import type { PlaybackMetricsReport } from './playback-metrics';
 
 export class ApiError extends Error {
   constructor(
@@ -711,6 +712,15 @@ export function createApiClient({
      */
     reportMediaDiagnostics: (report: MediaDiagnosticsReport) =>
       request<unknown>('/api/mobile/media-diagnostics', {
+        method: 'POST',
+        body: JSON.stringify(report),
+      }, { auth: false }),
+    /**
+     * A session's aggregated video start-up and stall numbers from
+     * `lib/playback-metrics`. Anonymous, like the diagnostics above.
+     */
+    reportPlaybackMetrics: (report: PlaybackMetricsReport) =>
+      request<unknown>('/api/mobile/playback-metrics', {
         method: 'POST',
         body: JSON.stringify(report),
       }, { auth: false }),

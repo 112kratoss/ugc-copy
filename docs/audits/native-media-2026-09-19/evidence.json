@@ -27,7 +27,14 @@
     "cycles": 30,
     "viewerOpenAssertionsPassed": 30,
     "viewerCloseAssertionsPassed": 30,
-    "holdSeconds": [0.25, 0.4, 0.55, 0.7, 0.85, 0.35],
+    "holdSeconds": [
+      0.25,
+      0.4,
+      0.55,
+      0.7,
+      0.85,
+      0.35
+    ],
     "queueFlagOn": {
       "result": "XCUITest passed in 140.981 seconds",
       "resultBundle": "/tmp/magicbooklet-loop-probe/device-recovery-30.xcresult"
@@ -58,5 +65,84 @@
       "withExperimentOutsidePatchesDir": "c2e22bfa7e480143c37e68b757aa9a91d3bd0c95"
     },
     "evidenceArchivedTo": "archive/ugc-app-audits/native-media-2026-09-19/ (workspace root; app builds, DerivedData, Metro caches and build logs left in /tmp)"
+  },
+  "storeBuildTree_2026_09_19": {
+    "commitBase": "2699cd32",
+    "patches": [
+      "expo-video+55.0.21+001+ios-range-cache.patch (107 lines, shipped content)",
+      "expo-video+55.0.21+002+android-light-player-view.patch (280 lines, patch-package --append)"
+    ],
+    "packageJson": {
+      "expo.autolinking.android.buildFromSource": [
+        "expo-video"
+      ],
+      "expo.autolinking.ios.buildFromSource": [
+        "expo-video"
+      ],
+      "expo-network": "~55.0.18"
+    },
+    "fingerprints": {
+      "android": "4c38d18e4ab3ce0fc617fcded1cdb184052ad64a",
+      "ios": "e29650df797607a9362bc745e0b7b068b513468e"
+    },
+    "shippedTargets": {
+      "android": "db146ca386f52f78a12416a2077621628eb04300",
+      "ios": "c2e22bfa7e480143c37e68b757aa9a91d3bd0c95"
+    },
+    "iosLoopAB": {
+      "device": "iPhone 16e",
+      "clip": "kungfu cats, 3.06 s",
+      "window": "2 s after open tap to 0.5 s before back tap",
+      "a_seekLoop": {
+        "swaps": 458,
+        "seconds": 11.2,
+        "histogramVsyncs": {
+          "1": 251,
+          "2": 202,
+          "3": 2,
+          "4": 2
+        },
+        "gapsMs": [
+          50.0,
+          66.6,
+          50.0,
+          66.6
+        ],
+        "gapAtTraceS": [
+          31.727,
+          34.793,
+          37.842,
+          40.908
+        ]
+      },
+      "b_looper": {
+        "swaps": 570,
+        "seconds": 11.1,
+        "histogramVsyncs": {
+          "1": 476,
+          "2": 89,
+          "3": 4
+        },
+        "gapsMs": [
+          50.0,
+          50.0,
+          50.0,
+          50.0
+        ],
+        "gapAtTraceS": [
+          30.535,
+          32.318,
+          33.585,
+          39.7
+        ],
+        "expectedBoundariesS": [
+          30.3,
+          33.4,
+          36.4,
+          39.5
+        ]
+      },
+      "verdict": "no gain; looper stays disabled and outside patches/"
+    }
   }
 }

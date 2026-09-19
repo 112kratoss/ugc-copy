@@ -203,6 +203,8 @@ const PUBLIC_ROUTES = [
   '/api/security/csp-report',
   // Sampled media-failure reports: no identity is read or recorded.
   '/api/mobile/media-diagnostics',
+  // Per-session playback start-up and stall aggregates: no identity is read or recorded.
+  '/api/mobile/playback-metrics',
 ] as const;
 
 /** Cron, webhooks, ops and the admin console: no end-user identity involved. */

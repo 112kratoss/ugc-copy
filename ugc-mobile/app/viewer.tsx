@@ -7,6 +7,7 @@ import { Copy, ImageOff, Lock, Play, Volume2, VolumeX } from 'lucide-react-nativ
 import { useIsFocused } from '@react-navigation/native';
 import { createContext, useContext, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
+import Reanimated, { useAnimatedStyle } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
@@ -16,6 +17,15 @@ import { mediaItemAspectRatio, showcaseViewerMediaPicture } from '@/lib/media-zo
 import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
 import { restoreVideoPlayback } from '@/lib/video-playback-continuity';
+import {
+  beginPlaybackStall,
+  beginPlaybackStart,
+  cancelPlaybackStart,
+  completePlaybackStart,
+  endPlaybackStall,
+  forgetPlayback,
+} from '@/lib/playback-metrics';
+import { reelNeighbourChromeRevealed, setReelNeighbourChromeRevealed } from '@/lib/reel-neighbour-chrome';
 import { createViewerPlaybackHandoff } from '@/lib/viewer-playback-handoff';
 import { isVideoPlayerHandedBack } from '@/lib/video-player-loans';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
@@ -330,6 +340,13 @@ export default function ImmersivePreviewViewerScreen() {
     [items, savedPosition, initialId]
   );
   const activeIndex = Math.max(0, items.findIndex((item) => item.id === position?.itemId));
+  // Neighbour slides keep their rail and caption mounted but out of the draw
+  // walk until a drag begins (lib/reel-neighbour-chrome). The landed slide is
+  // always shown by `active`; the previous one hides again once the index has
+  // moved on, or when a drag settles back where it started.
+  useEffect(() => {
+    setReelNeighbourChromeRevealed(false);
+  }, [activeIndex]);
   // ExoPlayer creation can block Android's handoff commit for hundreds of ms.
   // First activate the already-prepared player; refresh the neighbouring player
   // range in a lower-priority render. iOS keeps its existing preparation timing.
@@ -1001,6 +1018,9 @@ export default function ImmersivePreviewViewerScreen() {
         initialScrollIndex={initialIndex}
         keyExtractor={(item) => `${item.source}-${item.id}`}
         maxToRenderPerBatch={IMMERSIVE_VERTICAL_LIST_TUNING.maxToRenderPerBatch}
+        onScrollBeginDrag={() => {
+          setReelNeighbourChromeRevealed(true);
+        }}
         onMomentumScrollEnd={(event) => {
           const nextIndex = Math.round(event.nativeEvent.contentOffset.y / height);
           const clampedIndex = Math.max(0, Math.min(items.length - 1, nextIndex));
@@ -1011,7 +1031,10 @@ export default function ImmersivePreviewViewerScreen() {
           // The reader put the list here, so the alignment effect has nothing
           // to correct.
           nativeRowRef.current = { index: clampedIndex, height };
-          if (clampedIndex === activeIndex) return;
+          if (clampedIndex === activeIndex) {
+            setReelNeighbourChromeRevealed(false);
+            return;
+          }
           // Swap playback now, on the scroll-end event, rather than after the
           // reel re-renders: on Android that render is a few hundred ms during
           // which the landed video would otherwise sit frozen on its first frame.
@@ -1487,8 +1510,12 @@ function ImmersiveSlide({
     onSave(item, 'double-tap');
   }, [doubleTapHeart, item, onSave, saveLoading]);
 
+  // A neighbour's chrome is drawn only while a drag is under way (lib/reel-neighbour-chrome).
+  const chromeVisibility = useAnimatedStyle(() => ({
+    display: active || reelNeighbourChromeRevealed.get() ? ('flex' as const) : ('none' as const),
+  }), [active]);
   const renderChrome = () => (zoomLanded ? (
-    <View pointerEvents="box-none" onLayout={onChromeLayout} style={{ position: 'absolute', inset: 0 }}>
+    <Reanimated.View pointerEvents="box-none" onLayout={onChromeLayout} style={[{ position: 'absolute', inset: 0 }, chromeVisibility]}>
       {renderOverlays()}
       <DoubleTapSaveHeart
         opacity={doubleTapHeart.opacity}
@@ -1496,7 +1523,7 @@ function ImmersiveSlide({
         position={doubleTapHeart.position}
         scale={doubleTapHeart.scale}
       />
-    </View>
+    </Reanimated.View>
   ) : null);
 
   const renderOverlays = () => {
@@ -2106,6 +2133,10 @@ function ActiveVideoAttempt({
   attempt,
 }: ActiveVideoProps & { onRetry: () => void; attempt: number }) {
   const [hasFrame, setHasFrame] = useState(false);
+  // Fleet metrics (lib/playback-metrics): keyed as the handoff keys this slide.
+  const hasFrameRef = useRef(false);
+  const metricsKey = `viewer:${postId}`;
+  useEffect(() => () => forgetPlayback(metricsKey), [metricsKey]);
   const zoomLanded = useMediaZoomLanded();
   const [hasError, setHasError] = useState(false);
   const reducedMotion = useReducedMotion();
@@ -2228,6 +2259,8 @@ function ActiveVideoAttempt({
     wasActiveRef.current = active;
     if (!active) {
       setIsPlaying(false);
+      cancelPlaybackStart(metricsKey);
+      endPlaybackStall(metricsKey);
       // Handed back to the tile a close landed in, it plays on there.
       if (!isVideoPlayerHandedBack(player)) player.pause();
       return;
@@ -2239,11 +2272,15 @@ function ActiveVideoAttempt({
     playbackAllowed.current = !AppState.currentState || AppState.currentState === 'active';
     const play = playbackAllowed.current && !reducedMotion;
     setIsPlaying(play);
+    // A cold open builds its player here; a lent or prepared one is warm. A
+    // swipe's start was already timed by the handoff, and that earlier ask stands.
+    if (play) beginPlaybackStart(metricsKey, { surface: 'viewer', kind: lentPlayerRef.current || hasFrameRef.current ? 'warm' : 'cold' });
     if (play) player.play();
-  }, [active, player]);
+  }, [active, metricsKey, player]);
 
   useEffect(() => {
     setHasFrame(false);
+    hasFrameRef.current = false;
     setHasError(false);
   }, [player, playbackUrl, requestKey]);
 
@@ -2269,6 +2306,7 @@ function ActiveVideoAttempt({
     lentPlayer.volume = 1.0;
     lentPlayer.timeUpdateEventInterval = 0.25;
     setHasFrame(true);
+    hasFrameRef.current = true;
     setHasError(false);
     revealedPlayerRef.current = lentPlayer;
     surfaceOpacity.setValue(1);
@@ -2302,11 +2340,12 @@ function ActiveVideoAttempt({
         return;
       }
       setIsPlaying(event.isPlaying);
+      if (event.isPlaying) completePlaybackStart(metricsKey);
     });
     return () => {
       subscription.remove();
     };
-  }, [active, playbackAllowed, player]);
+  }, [active, metricsKey, playbackAllowed, player]);
 
   useEffect(() => {
     // A cached/native failure can arrive before this effect subscribes.
@@ -2315,11 +2354,14 @@ function ActiveVideoAttempt({
     const subscription = player.addListener('statusChange', (event) => {
       setHasError(event.status === 'error');
       setStatus(event.status);
+      // Loading again after motion, on the active slide, is a stall.
+      if (event.status === 'loading' && wasActiveRef.current && hasFrameRef.current) beginPlaybackStall(metricsKey);
+      else if (event.status !== 'loading') endPlaybackStall(metricsKey);
     });
     return () => {
       subscription.remove();
     };
-  }, [player]);
+  }, [metricsKey, player]);
 
   useEffect(() => {
     if (!active) return;
@@ -2378,6 +2420,8 @@ function ActiveVideoAttempt({
               videoBackdrop="none"
               onFirstFrameRender={() => {
                 setHasFrame(true);
+                hasFrameRef.current = true;
+                completePlaybackStart(metricsKey);
                 setHasError(false);
                 revealSurface();
               }}

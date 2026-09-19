@@ -249,6 +249,16 @@ export const MOBILE_MEDIA_DIAGNOSTICS_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+/**
+ * Anonymous playback-metric reports: an app sends at most a dozen per session
+ * and normally one or two, so this only caps a misbehaving client.
+ */
+export const MOBILE_PLAYBACK_METRICS_RATE_LIMIT = {
+  scope: 'mobile:playback-metrics',
+  limit: 30,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const WELCOME_CREDIT_CLAIM_RATE_LIMIT = {
   scope: 'credits:welcome-claim',
   limit: 20,
