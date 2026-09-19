@@ -2,6 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createViewerPlaybackHandoff } from '@/lib/viewer-playback-handoff';
 import { resetViewerAudioMutedForTests, setViewerAudioMuted } from '@/lib/viewer-audio';
+import {
+  adoptVideoPlayer,
+  handBackVideoPlayer,
+  lendVideoPlayer,
+  lenderUnmounting,
+  resetVideoPlayerLoans,
+} from '@/lib/video-player-loans';
 
 function fakePlayer() {
   return {
@@ -29,6 +36,41 @@ function setup() {
 describe('viewer playback handoff', () => {
   beforeEach(resetViewerAudioMutedForTests);
   afterEach(resetViewerAudioMutedForTests);
+
+  it('names the player of each video in a post, for a close to hand back', () => {
+    const registry = createViewerPlaybackHandoff();
+    const first = fakePlayer();
+    const second = fakePlayer();
+    const removeFirst = registry.register('post', asPlayer(first), 'video-one');
+    registry.register('post', asPlayer(second), 'video-two');
+    expect(registry.playerFor('post', 'video-one')).toBe(first);
+    expect(registry.playerFor('post', 'video-two')).toBe(second);
+    expect(registry.playerFor('other-post', 'video-one')).toBeNull();
+    removeFirst();
+    expect(registry.playerFor('post', 'video-one')).toBeNull();
+    expect(registry.playerFor('post', 'video-two')).toBe(second);
+  });
+
+  it('leaves a player it handed back to a feed tile playing when the reel loses focus', () => {
+    const registry = createViewerPlaybackHandoff();
+    const returned = fakePlayer();
+    const other = fakePlayer();
+    registry.register('lent', asPlayer(returned), 'video-one');
+    registry.register('other', asPlayer(other));
+    returned.play();
+    other.play();
+    const player = asPlayer(returned);
+    lendVideoPlayer(player, () => {});
+    lenderUnmounting(player);
+    adoptVideoPlayer(player);
+    expect(handBackVideoPlayer(player, 'tile', 'video-one')).toBe(true);
+
+    registry.setAutoplayAllowed(false);
+
+    expect(returned.playing).toBe(true);
+    expect(other.playing).toBe(false);
+    resetVideoPlayerLoans();
+  });
 
   it('stops the outgoing player and starts the landing player with the mute preference', () => {
     const { registry, outgoing, incoming } = setup();

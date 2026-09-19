@@ -60,13 +60,26 @@ import {
   type ZoomVideo,
 } from '@/lib/media-zoom-transition';
 import {
+  MediaZoomTileKeyContext,
   MediaZoomVideoOfferContext,
   type MediaZoomVideoOffer,
   type OfferMediaZoomVideo,
 } from '@/lib/media-zoom-video-offer';
-import { adoptVideoPlayer, lendVideoPlayer, releaseAdoptedVideoPlayer, returnVideoPlayer } from '@/lib/video-player-loans';
+import {
+  adoptVideoPlayer,
+  endVideoReturn,
+  handBackVideoPlayer,
+  isVideoPlayerHandedBack,
+  lendVideoPlayer,
+  releaseAdoptedVideoPlayer,
+  returnVideoPlayer,
+  tileAcceptsVideoReturn,
+  whenReturnedVideoDrawn,
+  zoomTileKey,
+} from '@/lib/video-player-loans';
 import { FEED_VIDEO_VIEW_PROPS } from '@/lib/feed-video-view-props';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
+import { setZoomUnderlayHidden } from '@/lib/zoom-underlay';
 import { LetterboxBands } from '@/components/letterbox-bands';
 import { TopScrim } from '@/components/top-scrim';
 import { resolvedTopInset } from '@/lib/safe-area';
@@ -203,6 +216,12 @@ const HOLD_DEADLINE_MS = 2500;
 const PLAIN_FADE_MS = 150;
 /** Last resort if an animation callback never lands, so the reel cannot stick. */
 const DISMISS_SAFETY_MS = CLOSE_MS + 220;
+/**
+ * A close landing a video in the tile it came from hands that tile the player
+ * (`handBackVideoPlayer`) and lets go once the tile's own view has drawn it —
+ * a frame or two of a video. A tile that never says so is uncovered after this.
+ */
+const RETURN_DRAWN_DEADLINE_MS = 250;
 
 /**
  * Whether the reel itself can shrink over the screen it returns to.
@@ -316,6 +335,8 @@ let onFlightDisplayed: { id: number; run: () => void } | null = null;
 let onFlightProgressed: { id: number; run: () => void } | null = null;
 /** The picture the layer has actually drawn, if it is the one it is holding. */
 let displayedPreview: ZoomPreview | null = null;
+/** Likewise the video player whose picture the layer's own view has drawn. */
+let displayedVideo: VideoPlayer | null = null;
 
 function samePicture(a: ZoomPreview | null | undefined, b: ZoomPreview | null | undefined) {
   return Boolean(a && b) && a!.url === b!.url && (a!.cacheKey ?? null) === (b!.cacheKey ?? null);
@@ -324,7 +345,7 @@ function samePicture(a: ZoomPreview | null | undefined, b: ZoomPreview | null | 
 /** Whether the layer draws two holds identically: the same picture, laid out on the same screen. */
 function drawsSameStill(a: ZoomStill, b: ZoomStill) {
   return samePicture(a.preview, b.preview)
-    && !a.video && !b.video
+    && (a.video?.player ?? null) === (b.video?.player ?? null)
     && (a.post?.id ?? null) === (b.post?.id ?? null)
     && a.geometry.screen.width === b.geometry.screen.width
     && a.geometry.screen.height === b.geometry.screen.height
@@ -335,6 +356,7 @@ function drawsSameStill(a: ZoomStill, b: ZoomStill) {
 function holdStill(still: ZoomStill | null) {
   const previous = getHeldZoomPicture();
   if (!samePicture(displayedPreview, still?.preview)) displayedPreview = null;
+  if (displayedVideo !== (still?.video?.player ?? null)) displayedVideo = null;
   const token = holdZoomPicture(still);
   // A lent video the layer has stopped drawing ends its loan: back to the tile,
   // or released if the tile has gone. One the reel adopted is the reel's, and
@@ -371,7 +393,8 @@ function prepareZoomPicture(
   preview: ZoomPreview,
   aspectRatio: number | null,
   standing = false,
-  post: ImmersivePreviewItem | null = null
+  post: ImmersivePreviewItem | null = null,
+  video: ZoomVideo | null = null
 ) {
   if (!tickerControl || getZoomFlight()) return;
   if (layerScreen.width <= 0) measureLayerNow?.();
@@ -383,11 +406,12 @@ function prepareZoomPicture(
     samePicture(held?.preview, preview)
     && Boolean(held?.standing) === standing
     && (held?.post ?? null) === (post ?? null)
+    && (held?.video?.player ?? null) === (video?.player ?? null)
   ) return;
   stillOpacity.set(0);
   closeGroundOpacity.set(0);
-  stillCarriesVideo.set(false);
-  holdStill({ preview, geometry: { screen: layerScreen, tile: null, tileRadius: 0, aspectRatio }, standing, post });
+  stillCarriesVideo.set(Boolean(video));
+  holdStill({ preview, geometry: { screen: layerScreen, tile: null, tileRadius: 0, aspectRatio }, standing, post, video });
 }
 
 /**
@@ -419,6 +443,11 @@ function startZoomFlight(
     flightTime.set(reverseZoomFlightTime(flightProgress.get(), ZOOM_EASE_POWER));
   }
   flightClosing.set(spec.direction === 'close');
+  // The screen beneath comes back with the flight's own values, so it is drawn
+  // in the frame the close starts moving. (Set from `dismiss` alone, it reached
+  // the UI thread with the commit that started the close: the same frame on
+  // the S24, but only by that coincidence.)
+  if (spec.direction === 'close') setZoomUnderlayHidden(false);
   const still: ZoomStill | null = spec.still && spec.preview
     ? {
       preview: spec.preview,
@@ -440,9 +469,16 @@ function startZoomFlight(
   // thread only after React rendered them, and for the frames between the window
   // drew a picture flight's black ground over the tile — ~33 ms of black on
   // every tap on a playing video, on an S24.
-  const alreadyShowing = !carriesVideo && Boolean(still) && samePicture(displayedPreview, still?.preview);
+  //
+  // A close carrying a video goes the other way: its window starts full-screen
+  // over the reel, so it is kept out of sight until the layer's view of the
+  // video has drawn — unless that view has been drawing it all along, prepared
+  // for the close (`prepareClosePicture`), and it is on screen at once.
+  const alreadyShowing = carriesVideo
+    ? spec.direction === 'close' && displayedVideo === still?.video?.player
+    : Boolean(still) && samePicture(displayedPreview, still?.preview);
   stillCarriesVideo.set(carriesVideo);
-  stillOpacity.set(alreadyShowing || carriesVideo ? 1 : 0);
+  stillOpacity.set(alreadyShowing || (carriesVideo && spec.direction === 'open') ? 1 : 0);
   // A video the layer starts drawing now needs a frame before it can be seen;
   // one it is already drawing — a close turning an open round — does not.
   if (carriesVideo && spec.direction === 'open') videoSurfaceOpacity.set(0);
@@ -518,11 +554,31 @@ function finishZoomFlight(id: number) {
   // Superseded: the newer flight owns the ticker now.
   if (!landed) return;
   tickerControl?.(false);
+  if (landed.direction !== 'close') return;
   // Landed in the tile, which is drawn underneath by now — the screen it is
   // on has been there for the whole collapse — so the picture lets go at once.
   // Left any longer it would sit over whatever floats above the tile (the tab
   // bar a Home card scrolls under), which the reel never did.
-  if (landed.direction === 'close') holdStill(null);
+  //
+  // Except over a video the tile has just been handed back: its view took the
+  // player during the collapse and lets go once that view has drawn it — a
+  // frame or two — rather than uncover a tile still waiting for its picture.
+  const returned = getHeldZoomPicture()?.video?.player;
+  if (!returned || !isVideoPlayerHandedBack(returned)) {
+    holdStill(null);
+    return;
+  }
+  const token = getHeldZoomPictureToken();
+  let done = false;
+  let stopWaiting = () => {};
+  const letGo = () => {
+    if (done) return;
+    done = true;
+    stopWaiting();
+    if (getHeldZoomPictureToken() === token) holdStill(null);
+  };
+  stopWaiting = whenReturnedVideoDrawn(returned, letGo);
+  if (!done) setTimeout(letGo, RETURN_DRAWN_DEADLINE_MS);
 }
 
 /** The layer's picture gives way to the reel underneath it, then is let go. */
@@ -627,6 +683,11 @@ export interface MediaZoomSource {
   capture: (open: () => void) => void;
   /** Where the tile's video layer offers its player; see `lib/media-zoom-video-offer.ts`. */
   offerVideo: OfferMediaZoomVideo;
+  /**
+   * This tile's address (`zoomTileKey`), under which a reel closing into it
+   * hands back the player it carried away; null for a tile outside a surface.
+   */
+  tileKey: string | null;
 }
 
 /**
@@ -781,7 +842,9 @@ export function useMediaZoomSource({
     start(null);
   }, [active, aspectRatio, itemId, measure, post, preview, radius, surfaceId]);
 
-  return { ref, hiddenStyle, prepare, capture, offerVideo };
+  const tileKey = active && surfaceId ? zoomTileKey(surfaceId, itemId) : null;
+
+  return { ref, hiddenStyle, prepare, capture, offerVideo, tileKey };
 }
 
 /**
@@ -806,7 +869,9 @@ export function MediaZoomSourceView({
     <Animated.View collapsable={false} style={[ZOOM_SOURCE_FILL, style, source.hiddenStyle]}>
       <View ref={source.ref} collapsable={false} style={ZOOM_SOURCE_FILL}>
         <MediaZoomVideoOfferContext.Provider value={source.offerVideo}>
-          {children}
+          <MediaZoomTileKeyContext.Provider value={source.tileKey}>
+            {children}
+          </MediaZoomTileKeyContext.Provider>
         </MediaZoomVideoOfferContext.Provider>
       </View>
     </Animated.View>
@@ -890,6 +955,8 @@ export function useMediaZoomStage({
   reducedMotion,
   ready,
   expectsNeighbours,
+  activeVideoUrl = null,
+  playerFor,
   onExit,
 }: {
   screen: ZoomSize;
@@ -915,6 +982,13 @@ export function useMediaZoomStage({
    * has none to wait for.
    */
   expectsNeighbours: boolean;
+  /** The stream of the video the reel is showing now, if it is showing one. */
+  activeVideoUrl?: string | null;
+  /**
+   * The player the reel's slide for this post and stream is drawing with. A close
+   * into the tile hands it back only when it is still the one the tile lent.
+   */
+  playerFor?: (itemId: string, url: string) => VideoPlayer | null;
   onExit: () => void;
 }): MediaZoomStageValue {
   const [origin] = useState<ZoomOrigin | null>(() => (
@@ -972,6 +1046,12 @@ export function useMediaZoomStage({
   postRef.current = activePost;
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
+  const activeVideoUrlRef = useRef(activeVideoUrl);
+  activeVideoUrlRef.current = activeVideoUrl;
+  const playerForRef = useRef(playerFor);
+  playerForRef.current = playerFor;
+  /** The player this reel handed back to its tile, which it must leave alone. */
+  const handedBackRef = useRef<VideoPlayer | null>(null);
 
   const updateGeometry = useCallback((patch: Partial<ZoomGeometry>) => {
     localGeometry.set({ ...localGeometry.get(), ...patch });
@@ -1004,8 +1084,69 @@ export function useMediaZoomStage({
     if (leftRef.current) return;
     leftRef.current = true;
     clearHiddenZoomSources();
+    setZoomUnderlayHidden(false);
     onExitRef.current();
   }, []);
+
+  // A reel that goes without closing — replaced after its post is deleted, a
+  // deep link, a reset of the stack — must not leave the screen beneath it
+  // hidden: that screen is drawn again before the reel starts to come off it,
+  // and in any case once the reel has gone.
+  useEffect(() => navigation.addListener('beforeRemove', () => setZoomUnderlayHidden(false)), [navigation]);
+  useEffect(() => () => setZoomUnderlayHidden(false), []);
+
+  /**
+   * The player to hand back to the tile a close lands in: the one that tile
+   * lent, when the reel is still showing it — the same post, the same stream,
+   * not a replacement a retry built — and the tile would take it.
+   */
+  const returnableVideo = useCallback((): (ZoomVideo & { tileKey: string }) | null => {
+    const adopted = adoptedVideoRef.current;
+    if (!origin || !lentVideo || adopted !== lentVideo.player) return null;
+    if (activeItemRef.current !== origin.itemId || activeVideoUrlRef.current !== lentVideo.url) return null;
+    if (playerForRef.current?.(origin.itemId, lentVideo.url) !== adopted) return null;
+    const tileKey = zoomTileKey(origin.surfaceId, origin.itemId);
+    if (!tileAcceptsVideoReturn(tileKey, lentVideo.url)) return null;
+    return { player: adopted, url: lentVideo.url, tileKey };
+  }, [lentVideo, origin]);
+
+  /**
+   * A live close has landed: the reel's window lies exactly over its tile. Handed
+   * the player, the tile takes it over underneath — Android draws a player in
+   * one view at a time, so the reel's own view holds its last frame meanwhile —
+   * and the reel lets go once the tile's view has drawn. Popped at once instead,
+   * the reel uncovered a tile building a new player: its poster, the clip's
+   * first frame, and then the clip from an earlier moment.
+   */
+  const leaveIntoTile = useCallback(() => {
+    const video = returnableVideo();
+    if (!video || !handBackVideoPlayer(video.player, video.tileKey, video.url)) {
+      leave();
+      return;
+    }
+    handedBackRef.current = video.player;
+    let done = false;
+    let stopWaiting = () => {};
+    const letGo = (drawn: boolean) => {
+      if (done) return;
+      done = true;
+      stopWaiting();
+      if (!drawn) {
+        leave();
+        return;
+      }
+      // Gone on the next frame, over a tile showing the same video, and popped
+      // only then. Reanimated holds its own commits while React commits, so a
+      // hide set in the same breath as the pop was drawn with the pop: traced on
+      // the S24, the reel stood over the tile ~50 ms after the tile had drawn.
+      stageOpacity.set(withTiming(0, { duration: 0 }, () => {
+        'worklet';
+        runOnJS(leave)();
+      }));
+    };
+    stopWaiting = whenReturnedVideoDrawn(video.player, () => letGo(true));
+    if (!done) setTimeout(() => letGo(false), RETURN_DRAWN_DEADLINE_MS);
+  }, [leave, returnableVideo, stageOpacity]);
 
   // The reel is the thing on screen now.
   const finishOpen = useCallback(() => {
@@ -1013,8 +1154,16 @@ export function useMediaZoomStage({
     openedRef.current = true;
     setOpened(true);
     if (!dismissingRef.current) interactive.set(1);
-    holdTile(activeItemRef.current);
+    // Only a reel still on its way in stands in for its tile. This runs when the
+    // hand-off fade ends — or is cut short, or its safety timer fires — which a
+    // close begun meanwhile can outlast: hidden then, after the close had shown
+    // the tile again and the reel had gone, the tile stayed empty until some
+    // other close happened to clear it (filmed on the S24 after two quick taps).
+    if (!dismissingRef.current && !leftRef.current) holdTile(activeItemRef.current);
     if (landedRef.current) following.set(0);
+    // Nothing of the screen beneath shows any more, so it stops being drawn
+    // under every video frame until a close needs it back.
+    if (!dismissingRef.current && !leftRef.current) setZoomUnderlayHidden(true);
   }, [following, holdTile, interactive]);
 
   /**
@@ -1101,7 +1250,7 @@ export function useMediaZoomStage({
       const close = closeRef.current;
       if (close && event.flight.id === close.id) {
         // The reel itself has landed in the tile.
-        if (event.type === 'landed' && close.live) leave();
+        if (event.type === 'landed' && close.live) leaveIntoTile();
         return;
       }
       if (event.flight.id !== origin.flightId || event.type !== 'landed') return;
@@ -1110,7 +1259,7 @@ export function useMediaZoomStage({
       if (openedRef.current) following.set(0);
       else handoff();
     });
-  }, [following, handoff, leave, origin]);
+  }, [following, handoff, leaveIntoTile, origin]);
 
   // The navigator's own transition. Its length differs by platform and
   // direction; the event is the honest signal, the timer the safety net.
@@ -1191,16 +1340,25 @@ export function useMediaZoomStage({
     const handle = getZoomSource(origin?.surfaceId, activeItemRef.current);
     const picture = pictureRef.current ?? handle?.preview ?? null;
     if (picture) {
-      prepareZoomPicture(picture, aspectRef.current ?? handle?.aspectRatio ?? null, true, postRef.current);
+      // The video itself when the close will hand it back, so that the layer's
+      // view of it has drawn by then and the close moves on the next frame.
+      const video = returnableVideo();
+      prepareZoomPicture(
+        picture,
+        aspectRef.current ?? handle?.aspectRatio ?? null,
+        true,
+        postRef.current,
+        video ? { player: video.player, url: video.url } : null
+      );
     }
-  }, [origin]);
+  }, [origin, returnableVideo]);
   const activePictureUrl = activePicture?.url ?? null;
   const activePictureCacheKey = activePicture?.cacheKey ?? null;
   useEffect(() => {
     if (!CLOSE_CREEPS_UNTIL_POPPED || !zooming || !opened) return;
     const timer = setTimeout(prepareClosePicture, CLOSE_PICTURE_PREPARE_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [activeItemId, activePicture, activePictureCacheKey, activePictureUrl, activePost, opened, prepareClosePicture, zooming]);
+  }, [activeItemId, activePicture, activePictureCacheKey, activePictureUrl, activePost, activeVideoUrl, opened, prepareClosePicture, zooming]);
   useEffect(() => {
     if (!CLOSE_CREEPS_UNTIL_POPPED || !zooming) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -1235,8 +1393,10 @@ export function useMediaZoomStage({
     }
     // Taken along: a picture not yet handed over, or one drawn for a close that never came.
     if (!stillClosing && (!openedRef.current || getHeldZoomPicture()?.standing)) holdStill(null);
-    // The reel owns a video it adopted, for as long as the reel is up.
+    // The reel owns a video it adopted, for as long as the reel is up — unless it
+    // handed it back to its tile, whose it is again.
     if (adoptedVideoRef.current) releaseAdoptedVideoPlayer(adoptedVideoRef.current);
+    if (handedBackRef.current) endVideoReturn(handedBackRef.current);
   }, []);
 
   // Nothing to shrink into.
@@ -1258,6 +1418,8 @@ export function useMediaZoomStage({
     if (dismissingRef.current || leftRef.current) return;
     dismissingRef.current = true;
     interactive.set(0);
+    // The screen beneath is drawn again from the close's first frame.
+    setZoomUnderlayHidden(false);
     if (!origin || reducedMotion) {
       plainLeave();
       return;
@@ -1302,13 +1464,25 @@ export function useMediaZoomStage({
       // the picture start to shrink, over that screen.
       // Closed before the hand-off, a lent video is still the layer's to draw,
       // so it turns round with the flight rather than giving way to a poster.
-      const video = beforeHandoff ? lentVideo : null;
+      // Closing into the tile that lent it, the reel hands that tile its player
+      // back, and the layer carries the video itself down into it: the poster is
+      // the clip's first frame, which the reel was not showing, and the tile
+      // then took up the clip somewhere else again. (A live close hands it over
+      // once it has landed; see `leaveIntoTile`.)
+      const giveBack = live || beforeHandoff ? null : returnableVideo();
+      const handingBack = giveBack !== null && handBackVideoPlayer(giveBack.player, giveBack.tileKey, giveBack.url);
+      if (handingBack) handedBackRef.current = giveBack.player;
+      const video = beforeHandoff
+        ? lentVideo
+        : handingBack ? { player: giveBack.player, url: giveBack.url } : null;
       // The post shrinks whole: the layer draws its rail and caption over the
       // picture and fades them out as the window comes down. A live close has
       // the reel's own chrome to fade instead (`chromeStyle`).
       const post = live ? null : postRef.current;
       const flight = startZoomFlight({ direction: 'close', geometry, preview, video, post, still: !live }, live ? {} : {
         whenDisplayed: () => {
+          // A video's window waited out of sight for its first frame.
+          if (video) stillOpacity.set(1);
           stageOpacity.set(0);
           if (CLOSE_CREEPS_UNTIL_POPPED) {
             // Moving from the next frame. The pop goes a frame later, once the
@@ -1328,10 +1502,11 @@ export function useMediaZoomStage({
       ownFlightRef.current = flight.id;
       // With no layer to step it the flight has already landed.
       if (live && !getZoomFlight()) leave();
-      // The safety net, in case the flight never reports back.
-      setTimeout(leave, DISMISS_SAFETY_MS);
+      // The safety net, in case the flight never reports back — after the wait
+      // for a tile to take its video back, when a live close may hand it one.
+      setTimeout(leave, DISMISS_SAFETY_MS + (live ? RETURN_DRAWN_DEADLINE_MS : 0));
     });
-  }, [following, interactive, leave, lentVideo, origin, plainLeave, reducedMotion, stageOpacity]);
+  }, [following, interactive, leave, lentVideo, origin, plainLeave, reducedMotion, returnableVideo, stageOpacity]);
 
   const stageProps = useAnimatedProps(() => ({
     pointerEvents: interactive.value ? ('box-none' as const) : ('auto' as const),
@@ -1589,6 +1764,7 @@ export function MediaZoomFlightLayer({
   // The layer's view of a lent video has drawn (iOS says so; Android relies on
   // the deadline). The poster was never drawn here, so it is not recorded as shown.
   const reportVideoDisplayed = useCallback(() => {
+    displayedVideo = getHeldZoomPicture()?.video?.player ?? null;
     markZoomFlightDisplayed(flightId.get());
   }, []);
 

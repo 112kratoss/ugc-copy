@@ -1,8 +1,11 @@
 import type { VideoPlayer } from 'expo-video';
 
+import { isVideoPlayerHandedBack } from './video-player-loans';
 import { isViewerAudioMuted } from './viewer-audio';
 
 function stopPlayer(player: VideoPlayer) {
+  // A player the reel handed back to a feed tile is the tile's to play or pause.
+  if (isVideoPlayerHandedBack(player)) return;
   try {
     player.muted = true;
     player.pause();
@@ -14,13 +17,27 @@ function stopPlayer(player: VideoPlayer) {
 /** One registry per viewer route: stacked viewers may contain the same posts. */
 export function createViewerPlaybackHandoff() {
   const players = new Map<string, VideoPlayer>();
+  // By post and stream too: a post can hold several videos, and a close hands
+  // back only the player of the one on screen.
+  const sourcePlayers = new Map<string, VideoPlayer>();
   let autoplayAllowed = false;
 
+  const sourceKey = (postId: string, url: string) => `${postId}\u0000${url}`;
+
   return {
-    register(postId: string, player: VideoPlayer) {
+    /** The player the slide for this post and stream is drawing with, if any. */
+    playerFor(postId: string, url: string) {
+      return sourcePlayers.get(sourceKey(postId, url)) ?? null;
+    },
+
+    register(postId: string, player: VideoPlayer, url?: string) {
       players.set(postId, player);
+      if (url) sourcePlayers.set(sourceKey(postId, url), player);
       return () => {
         if (players.get(postId) === player) players.delete(postId);
+        if (url && sourcePlayers.get(sourceKey(postId, url)) === player) {
+          sourcePlayers.delete(sourceKey(postId, url));
+        }
       };
     },
 

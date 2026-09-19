@@ -2,15 +2,22 @@ import { useIsFocused } from '@react-navigation/native';
 import type { ImageProps } from 'expo-image';
 import { createVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
 import { Play, RotateCcw } from 'lucide-react-native';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
 import { BackdropImage } from '@/components/backdrop-image';
 import { FEED_VIDEO_VIEW_PROPS } from '@/components/feed-media-frame';
 import { FeedMediaPlate } from '@/components/feed-media-plate';
 import { StableMediaImage } from '@/components/media-preview';
-import { useMediaZoomVideoOffer } from '@/lib/media-zoom-video-offer';
-import { lenderUnmounting } from '@/lib/video-player-loans';
+import { useMediaZoomTileKey, useMediaZoomVideoOffer } from '@/lib/media-zoom-video-offer';
+import {
+  acceptVideoReturn,
+  claimReturnedVideoPlayer,
+  isVideoReturnPending,
+  lenderUnmounting,
+  reportReturnedVideoDrawn,
+  subscribeToVideoReturns,
+} from '@/lib/video-player-loans';
 import { useAppForeground } from '@/lib/app-foreground';
 import { recordMediaDiagnostic } from '@/lib/media-diagnostics';
 import {
@@ -125,7 +132,15 @@ export function FeedVideoPreview({
   // Keep navigation focus at the player boundary. Making it list extraData
   // rerendered every mounted feed card on each tab switch just to pause one video.
   const isFocused = useIsFocused();
-  const canStream = isFocused && Boolean(streamUrl);
+  // A reel closing into this tile is handing back the player it carried away
+  // (lib/video-player-loans.ts). Until that reel has gone the tile holds a player
+  // without its screen's focus, so it can take this one over from under the reel.
+  const tileKey = useMediaZoomTileKey();
+  const returning = useSyncExternalStore(
+    subscribeToVideoReturns,
+    () => Boolean(tileKey && lendableStreamUrl && isVideoReturnPending(tileKey, lendableStreamUrl)),
+  );
+  const canStream = (isFocused || returning) && Boolean(streamUrl);
   const canPlay = active && canStream;
   const wantsPlayer = (active || prepared) && canStream;
   const foreground = useAppForeground(canPlay);
@@ -151,6 +166,13 @@ export function FeedVideoPreview({
   const playbackFailed = hasPlaybackError || stalled;
   // A failed attempt releases its player; the poster and Retry take its place.
   const playerMounted = wantsPlayer && !playbackFailed;
+  // Whether this tile would take back the player of a reel closing into it: it
+  // would hold a player on this stream anyway, were its screen focused.
+  const takesReturn = Boolean(tileKey && lendableStreamUrl && streamUrl) && (active || prepared) && !playbackFailed;
+  useEffect(() => {
+    if (!takesReturn || !tileKey || !lendableStreamUrl) return undefined;
+    return acceptVideoReturn(tileKey, lendableStreamUrl);
+  }, [lendableStreamUrl, takesReturn, tileKey]);
   if (playerSlot.mounted !== playerMounted) {
     setPlayerSlot({
       mounted: playerMounted,
@@ -271,6 +293,7 @@ export function FeedVideoPreview({
           key={playerKey}
           source={streamSource}
           lendableUrl={lendableStreamUrl}
+          returnKey={tileKey}
           contentFit={videoContentFit}
           playing={canPlay}
           onFirstFrame={handleFirstFrame}
@@ -349,6 +372,7 @@ export function FeedVideoPreview({
 function FeedVideoPlayerLayer({
   source,
   lendableUrl,
+  returnKey,
   contentFit,
   playing,
   onFirstFrame,
@@ -357,13 +381,22 @@ function FeedVideoPlayerLayer({
   source: { uri: string; headers?: Record<string, string> };
   /** Offered to the zoom out of this tile under this stream; null offers nothing. */
   lendableUrl: string | null;
+  /** The zoom tile this is (`zoomTileKey`), for taking back a reel's player; null outside one. */
+  returnKey: string | null;
   contentFit: 'cover' | 'contain';
   playing: boolean;
   onFirstFrame: () => void;
   onPlaybackError: (errored: boolean) => void;
 }) {
-  const [player] = useState<VideoPlayer>(() => {
-    const instance = createVideoPlayer({ ...source, useCaching: true });
+  // The player a reel closing into this tile handed back is carried on with in
+  // place of a new one. A new one showed the poster — the clip's first frame —
+  // until it drew, then started the clip from wherever it was told: a flash of
+  // frame zero and a jump, on every return from a playing video.
+  const [{ player, returned }] = useState<{ player: VideoPlayer; returned: boolean }>(() => {
+    const taken = returnKey && lendableUrl ? claimReturnedVideoPlayer(returnKey, lendableUrl) : null;
+    const instance = taken ?? createVideoPlayer({ ...source, useCaching: true });
+    // The reel listened to its progress; a tile does not.
+    if (taken) instance.timeUpdateEventInterval = 0;
     instance.loop = true;
     instance.muted = true;
     instance.volume = 0;
@@ -376,14 +409,15 @@ function FeedVideoPlayerLayer({
     instance.audioMixingMode = 'auto';
     // Assigned as a whole object: the individual fields are readonly.
     instance.bufferOptions = { preferredForwardBufferDuration: forwardBufferSeconds(playing) };
-    return instance;
+    return { player: instance, returned: taken !== null };
   });
   const releaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Offered to the zoom out of the tile, which lends it to the flight and the
   // reel when the tile is tapped (see lib/video-player-loans.ts).
   const offerVideo = useMediaZoomVideoOffer();
-  const hasFrameRef = useRef(false);
+  // A player handed back has drawn this clip in this tile before.
+  const hasFrameRef = useRef(returned);
   // A new native view, for taking the player back: on Android a player draws in
   // one view at a time, and a view it has left does not reclaim it on its own.
   const [surfaceGeneration, setSurfaceGeneration] = useState(0);
@@ -400,7 +434,17 @@ function FeedVideoPlayerLayer({
   const handleFirstFrameRender = useCallback(() => {
     hasFrameRef.current = true;
     onFirstFrame();
-  }, [onFirstFrame]);
+    // What the closing reel waits on before it lets the tile be seen.
+    if (returned) reportReturnedVideoDrawn(player);
+  }, [onFirstFrame, player, returned]);
+
+  // The clip a player handed back is showing is already under way: its poster,
+  // the first frame, must not come back over it while this view takes it on.
+  // The closing reel covers the tile until this view has drawn.
+  useLayoutEffect(() => {
+    if (returned) onFirstFrame();
+    // Once, for the player this layer was created with: the layer is keyed to it.
+  }, [returned]);
 
   useEffect(() => {
     if (releaseTimerRef.current) {

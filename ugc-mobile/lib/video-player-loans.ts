@@ -16,6 +16,9 @@
  * outlive the tile, and exactly one party must end up pausing and releasing it:
  *
  * - lent, then adopted by the reel: the reel releases it when it is done;
+ * - lent, adopted, then handed back: a reel closing into the tile it came from
+ *   gives the player to that tile, which carries on with it instead of starting
+ *   a new player from the clip's poster (see `handBackVideoPlayer`);
  * - lent, never adopted (the reel opened on something else, the flight turned
  *   round, the push never came): it goes back to the tile if the tile is still
  *   mounted, or is released if the tile is gone.
@@ -37,8 +40,16 @@ export const VIDEO_LOAN_TIMEOUT_MS = 4000;
  */
 export const RELEASED_LOAN_GRACE_MS = 100;
 
+/**
+ * A player handed back that its tile never takes is released after this. The
+ * tile takes it within a frame or two of the hand-back; the wait only has to
+ * outlast a close that is still drawing the player on its way down.
+ */
+export const VIDEO_RETURN_TIMEOUT_MS = 2000;
+
 interface Loan {
-  stage: 'lent' | 'adopted';
+  /** `returning`: handed back to the tile, which has not taken it yet. */
+  stage: 'lent' | 'adopted' | 'returning';
   /** The tile that lent it is still mounted, and takes it back when the loan ends. */
   lenderMounted: boolean;
   /** Gives the player back to the mounted tile: re-attaches it to the tile's own view. */
@@ -47,6 +58,8 @@ interface Loan {
 }
 
 const loans = new Map<VideoPlayer, Loan>();
+/** Players a reel has handed back: it must neither pause nor release them again. */
+const handedBack = new WeakSet<VideoPlayer>();
 
 function releaseSoon(player: VideoPlayer) {
   try {
@@ -76,6 +89,8 @@ function settle(player: VideoPlayer, loan: Loan) {
  */
 export function lendVideoPlayer(player: VideoPlayer, giveBack: () => void): boolean {
   if (loans.has(player)) return false;
+  // Lent again after coming back: the new reel owns it, as the last one did.
+  handedBack.delete(player);
   const loan: Loan = { stage: 'lent', lenderMounted: true, giveBack, timeout: null };
   loan.timeout = setTimeout(() => returnVideoPlayer(player), VIDEO_LOAN_TIMEOUT_MS);
   loans.set(player, loan);
@@ -120,11 +135,181 @@ export function returnVideoPlayer(player: VideoPlayer) {
   settle(player, loan);
 }
 
-/** The reel that adopted a player is done with it. */
+/**
+ * The reel that adopted a player is done with it. One it handed back is not
+ * its to end: the tile has it, or the hand-back's own timeout releases it.
+ */
 export function releaseAdoptedVideoPlayer(player: VideoPlayer) {
   const loan = loans.get(player);
   if (!loan || loan.stage !== 'adopted') return;
   settle(player, loan);
+}
+
+// ---------------------------------------------------------------------------
+// The way back: a reel closing into the tile it grew out of
+// ---------------------------------------------------------------------------
+//
+// The tile's own player went away when the reel took its screen's focus, so a
+// tile coming back used to build a new player: its poster — the clip's first
+// frame — until that player drew, then the clip from wherever it was told to
+// start. Filmed on a playing clip that was a flash of frame zero and a jump.
+// Handing the reel's player back keeps the one picture on screen throughout.
+//
+// A tile says which streams it would take back (`acceptVideoReturn`), so the
+// reel only waits on a tile that is going to answer. The hand-back then stays
+// pending until the reel has gone, so the tile keeps its player while its screen
+// is still unfocused under the closing reel.
+
+/** A tile's address in the zoom: the screen it is on and the post it shows. */
+export function zoomTileKey(surfaceId: string, itemId: string) {
+  return `${surfaceId}\u0000${itemId}`;
+}
+
+function returnKey(tileKey: string, url: string) {
+  return `${tileKey}\u0000${url}`;
+}
+
+interface VideoReturn {
+  player: VideoPlayer;
+  key: string;
+  /** The tile has taken it. */
+  claimed: boolean;
+  /** The tile's own view has drawn it. */
+  drawn: boolean;
+  /** The reel that handed it back has gone. */
+  reelGone: boolean;
+  drawnListeners: Set<() => void>;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
+const acceptors = new Map<string, number>();
+let pendingReturn: VideoReturn | null = null;
+const returnListeners = new Set<() => void>();
+
+function notifyReturnListeners() {
+  returnListeners.forEach((listener) => listener());
+}
+
+/**
+ * A tile that would take back a player streaming `url` — it would hold one of
+ * its own if its screen had focus — registers for as long as that is true.
+ */
+export function acceptVideoReturn(tileKey: string, url: string) {
+  const key = returnKey(tileKey, url);
+  acceptors.set(key, (acceptors.get(key) ?? 0) + 1);
+  return () => {
+    const count = (acceptors.get(key) ?? 1) - 1;
+    if (count > 0) acceptors.set(key, count);
+    else acceptors.delete(key);
+  };
+}
+
+export function tileAcceptsVideoReturn(tileKey: string, url: string) {
+  return acceptors.has(returnKey(tileKey, url));
+}
+
+/** Taken, drawn, and the reel gone: nothing more happens to this hand-back. */
+function finishReturnIfSettled(pending: VideoReturn) {
+  if (pending.claimed && pending.drawn && pending.reelGone) dropReturn(pending);
+}
+
+function dropReturn(pending: VideoReturn) {
+  if (pendingReturn !== pending) return;
+  clearTimeout(pending.timeout);
+  pendingReturn = null;
+  if (!pending.claimed) {
+    loans.delete(pending.player);
+    releaseSoon(pending.player);
+  }
+  notifyReturnListeners();
+}
+
+/**
+ * The reel gives the player it adopted back to the tile it came from. False
+ * when it cannot: the player is not the reel's adopted one.
+ */
+export function handBackVideoPlayer(player: VideoPlayer, tileKey: string, url: string): boolean {
+  const loan = loans.get(player);
+  if (!loan || loan.stage !== 'adopted') return false;
+  if (pendingReturn) dropReturn(pendingReturn);
+  loan.stage = 'returning';
+  handedBack.add(player);
+  const pending: VideoReturn = {
+    player,
+    key: returnKey(tileKey, url),
+    claimed: false,
+    drawn: false,
+    reelGone: false,
+    drawnListeners: new Set(),
+    timeout: setTimeout(() => dropReturn(pending), VIDEO_RETURN_TIMEOUT_MS),
+  };
+  pendingReturn = pending;
+  notifyReturnListeners();
+  return true;
+}
+
+export function subscribeToVideoReturns(listener: () => void) {
+  returnListeners.add(listener);
+  return () => {
+    returnListeners.delete(listener);
+  };
+}
+
+/** A hand-back to this tile and stream is under way, taken up or not. */
+export function isVideoReturnPending(tileKey: string, url: string) {
+  return pendingReturn?.key === returnKey(tileKey, url);
+}
+
+/** The tile takes its player back: from here on it is the tile's, as before it was lent. */
+export function claimReturnedVideoPlayer(tileKey: string, url: string): VideoPlayer | null {
+  const pending = pendingReturn;
+  if (!pending || pending.claimed || pending.key !== returnKey(tileKey, url)) return null;
+  pending.claimed = true;
+  loans.delete(pending.player);
+  return pending.player;
+}
+
+/** The tile's own view has drawn the player it took back. */
+export function reportReturnedVideoDrawn(player: VideoPlayer) {
+  const pending = pendingReturn;
+  if (!pending || pending.player !== player || pending.drawn) return;
+  pending.drawn = true;
+  const listeners = [...pending.drawnListeners];
+  pending.drawnListeners.clear();
+  listeners.forEach((listener) => listener());
+  finishReturnIfSettled(pending);
+}
+
+/**
+ * Runs `listener` once the tile has drawn `player` — at once if it already has,
+ * or if there is no hand-back of it left to wait on.
+ */
+export function whenReturnedVideoDrawn(player: VideoPlayer, listener: () => void) {
+  const pending = pendingReturn;
+  if (!pending || pending.player !== player || pending.drawn) {
+    listener();
+    return () => {};
+  }
+  pending.drawnListeners.add(listener);
+  return () => {
+    pending.drawnListeners.delete(listener);
+  };
+}
+
+/**
+ * The reel that handed `player` back has gone. The hand-back ends once the tile
+ * has taken the player and drawn it — a close may still be waiting on that — and
+ * one never taken is left to the timeout, as a close may still be drawing it.
+ */
+export function endVideoReturn(player: VideoPlayer) {
+  const pending = pendingReturn;
+  if (!pending || pending.player !== player) return;
+  pending.reelGone = true;
+  finishReturnIfSettled(pending);
+}
+
+export function isVideoPlayerHandedBack(player: VideoPlayer) {
+  return handedBack.has(player);
 }
 
 /** Test support: forgets every loan without touching the players. */
@@ -133,4 +318,7 @@ export function resetVideoPlayerLoans() {
     if (loan.timeout) clearTimeout(loan.timeout);
   });
   loans.clear();
+  if (pendingReturn) clearTimeout(pendingReturn.timeout);
+  pendingReturn = null;
+  acceptors.clear();
 }

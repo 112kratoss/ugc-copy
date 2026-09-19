@@ -37,6 +37,7 @@ vi.mock('react-native-safe-area-context', () => ({
 }));
 
 import { MediaZoomSourceView, type MediaZoomSource } from '../components/media-zoom';
+import { useMediaZoomTileKey } from '../lib/media-zoom-video-offer';
 
 /** Stands in for whatever a tile draws; the wrappers around it are the subject. */
 const TileContent = () => React.createElement('tile-content');
@@ -47,6 +48,7 @@ const source: MediaZoomSource = {
   prepare: () => {},
   capture: (open) => open(),
   offerVideo: () => () => {},
+  tileKey: 'surface\u0000post',
 };
 
 function flatten(style: unknown): Record<string, unknown> {
@@ -101,5 +103,22 @@ describe('the view a tile hands to the reel', () => {
     expect(outer.height).toBe(240);
     // And the tile still hides while the reel stands in for it.
     expect(outer.opacity).toBe(1);
+  });
+
+  it('tells the video inside it which tile it is, so a closing reel can hand its player back', () => {
+    let seen: string | null = null;
+    const Reader = () => {
+      seen = useMediaZoomTileKey();
+      return null;
+    };
+    renderer.act(() => {
+      renderer.create(
+        <MediaZoomSourceView source={source}>
+          <Reader />
+        </MediaZoomSourceView>
+      );
+    });
+
+    expect(seen).toBe('surface\u0000post');
   });
 });
