@@ -1,6 +1,6 @@
 # Instagram + TikTok: delivery architecture and implementation plan
 
-2026-09-19. This supersedes the implementation sequence in [the Instagram research](instagram-media-architecture-research-2026-09-19.md), which retains its source inventory and earlier device audit. This is a reconstruction from published engineering work and our code/device evidence. No current TikTok binary or private server configuration was inspected.
+2026-09-19. This supersedes the implementation sequence in [the Instagram research](../research/instagram-media-architecture-research-2026-09-19.md), which retains its source inventory and earlier device audit. This is a reconstruction from published engineering work and our code/device evidence. No current TikTok binary or private server configuration was inspected.
 
 ## Decision
 

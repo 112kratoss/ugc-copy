@@ -1,5 +1,7 @@
 # Post details → Remix → return: analysis and plan
 
+> Archived 2026-09-19. Implemented on 2026-08-30 (implementation record below); kept as the decision record.
+
 Date: 2026-08-30. Branch: `codex/edits-2026-08-30`, based on `762b3a6`.
 
 Scope: native mobile viewer, Details, and the remix editor. Implementation is now complete in this worktree; see the implementation record below. Findings and source line numbers in the original analysis describe the baseline before edits.
