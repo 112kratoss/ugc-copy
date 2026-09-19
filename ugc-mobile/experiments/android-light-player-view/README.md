@@ -1,3 +1,5 @@
+> **Graduated on 2026-09-19** into `patches/expo-video+55.0.21+002+android-light-player-view.patch`, applied by `postinstall` like every shipped patch; the copy that lived here is gone. This folder keeps the design notes and the inert helper plugin. Fingerprints and the store-build checklist: plan section 5, step 6.
+
 # Scoped Android video hosts
 
 The earlier app-wide layout override removed controls from creation previews
