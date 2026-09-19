@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The controller's layout: nothing to draw. The fullscreen button stays, hidden,
+     because expo-video looks it up without a null check when leaving fullscreen. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent">
+
+  <ImageButton
+    android:id="@id/exo_fullscreen"
+    android:layout_width="1dp"
+    android:layout_height="1dp"
+    android:visibility="gone"
+    android:contentDescription="@null" />
+
+</FrameLayout>

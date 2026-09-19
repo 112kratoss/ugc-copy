@@ -6,7 +6,7 @@ import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanima
 import { MagicTabBar } from '@/components/magic-tab-bar';
 import { useReducedMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
-import { zoomUnderlayHidden } from '@/lib/zoom-underlay';
+import { zoomUnderlayDetached, zoomUnderlayHidden } from '@/lib/zoom-underlay';
 
 export default function TabLayout() {
   const reducedMotion = useReducedMotion();
@@ -24,7 +24,11 @@ export default function TabLayout() {
       offBlur();
     };
   }, [covered, navigation]);
-  const underlayStyle = useAnimatedStyle(() => ({ opacity: 1 - zoomUnderlayHidden.value * covered.value }));
+  const underlayStyle = useAnimatedStyle(() => ({
+    opacity: 1 - zoomUnderlayHidden.value * covered.value,
+    // Out of layout as well once the reel rests, so the renderer stops walking it.
+    display: zoomUnderlayDetached.value * covered.value ? ('none' as const) : ('flex' as const),
+  }));
 
   return (
     <Animated.View style={[styles.fill, underlayStyle]}>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Overrides expo-video's layout of the same name (app resources win the merge).
+     Same root id and surface type; only the PlayerView's inner layout changes. -->
+<androidx.media3.ui.PlayerView xmlns:android="http://schemas.android.com/apk/res/android"
+  xmlns:app="http://schemas.android.com/apk/res-auto"
+  android:id="@+id/surface_player_view"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent"
+  app:surface_type="surface_view"
+  app:use_controller="false"
+  app:player_layout_id="@layout/magicbooklet_player_view" />

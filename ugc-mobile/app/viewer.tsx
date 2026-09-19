@@ -41,6 +41,7 @@ import {
 } from '@/lib/immersive-preview-view-model';
 import { hydrateViewerAudioMuted, isViewerAudioMuted, toggleViewerAudioMuted, useViewerAudioMuted } from '@/lib/viewer-audio';
 import { viewerTopBadgeTop, viewerTopControlTop, VIEWER_TOP_CONTROL_SIZE } from '@/lib/viewer-chrome';
+import { useViewerRefreshSpinner } from '@/lib/viewer-refresh-indicator';
 import { BackGlyph } from '@/lib/platform-glyphs';
 import { createShowcaseFeedViewerQueryKey } from '@/lib/showcase-feed-query';
 import {
@@ -428,6 +429,10 @@ export default function ImmersivePreviewViewerScreen() {
     const timer = setTimeout(() => setNeighbourPlayersAllowed(true), NEIGHBOUR_PLAYERS_DELAY_MS);
     return () => clearTimeout(timer);
   }, [neighbourPlayersAllowed, zoom.opened]);
+  // The source's refetch spinner waits for a fetch to have lasted a while
+  // (`lib/viewer-refresh-indicator`), unless the reader asked for the refresh.
+  const [manualRefreshes, setManualRefreshes] = useState(0);
+  const refreshSpinnerDue = useViewerRefreshSpinner({ fetching: sourceQuery.isFetching, manualRefreshes });
   const showMediaForActive = useCallback(() => {
     activeSlideRef.current?.showMedia();
   }, []);
@@ -1222,7 +1227,10 @@ export default function ImmersivePreviewViewerScreen() {
             } as never);
           }}
           onBlocked={() => zoom.dismiss()}
-          onSourceRefresh={() => void sourceQuery.refetch()}
+          onSourceRefresh={() => {
+            setManualRefreshes((count) => count + 1);
+            void sourceQuery.refetch();
+          }}
           visible={actionsOpenItemId === activeItem.id}
         />
       ) : null}
@@ -1273,7 +1281,7 @@ export default function ImmersivePreviewViewerScreen() {
       {/* Leading side, under Back: the trailing side of the badge row belongs to
           the slide's media counter, and the two used to be drawn on top of each
           other — the spinner from `topInset + 24`, the counter from a flat 68. */}
-      {sourceQuery.isFetching && activeItem ? (
+      {sourceQuery.isFetching && activeItem && refreshSpinnerDue ? (
         <MediaZoomChrome pointerEvents="none">
           <View style={{ position: 'absolute', top: viewerTopBadgeTop(topInset), left: 30 }}>
             <ActivityIndicator color="rgba(255,255,255,0.72)" />

@@ -21,6 +21,7 @@ import {
   type ViewerStateTone,
 } from '@/lib/viewer-actions';
 import { viewerTopBadgeTop } from '@/lib/viewer-chrome';
+import { renderReelIcon } from '@/components/reel-icon';
 
 /**
  * A reel slide's chrome — the right rail, the creator and caption block, the
@@ -419,6 +420,8 @@ type ShadowableIconProps = { color?: string; fill?: string; strokeWidth?: number
  * both a pale sky and a black dress.
  */
 export function IconShadow({ children }: { children: ReactElement<ShadowableIconProps> }) {
+  const raster = renderReelIcon(children, true);
+  if (raster) return raster;
   const hasFill = Boolean(children.props.fill) && children.props.fill !== 'none' && children.props.fill !== 'transparent';
   const shadow = cloneElement(children, {
     color: 'rgba(0,0,0,0.55)',
@@ -639,7 +642,7 @@ function RailActionButton({
         ) : (
           <Animated.View style={{ transform: [{ scale: iconScale }] }}>
             <Animated.View style={{ transform: [{ scale: externalIconScale }] }}>
-              {bare && iconShadow ? <IconShadow>{icon}</IconShadow> : icon}
+              {bare && iconShadow ? <IconShadow>{icon}</IconShadow> : (renderReelIcon(icon, false) ?? icon)}
             </Animated.View>
           </Animated.View>
         )}

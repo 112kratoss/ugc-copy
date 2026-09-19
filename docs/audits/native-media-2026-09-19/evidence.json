@@ -37,5 +37,26 @@
       "resultBundle": "/tmp/magicbooklet-loop-probe/device-normal-30.xcresult"
     },
     "framePacingMeasured": false
+  },
+  "patchSplit": {
+    "date": "2026-09-19",
+    "why": "@expo/fingerprint hashes patches/ and the autolinked node_modules/expo-video/ios for both platforms; the combined patch moved the iOS runtime fingerprint off the shipped build 52.",
+    "combinedPatchSha256": "872190a84b99210580cc2cceec6e563a06663be26f7a07d73e8519202ffe0c2d",
+    "shippedPatch": {
+      "path": "patches/expo-video+55.0.21.patch",
+      "sha256": "d869e55f8cf05c69948311b20e4bf18906baab2d03925776f795c5c91a500044",
+      "identicalToMain": "e451b066"
+    },
+    "experimentPatch": {
+      "path": "experiments/seamless-loop/patches/expo-video+55.0.21.patch",
+      "sha256": "e362102a292603f861c9a91c5804a0a4eb42cd19675cac5befdfbe56aa0df2df",
+      "apply": "npx patch-package --patch-dir experiments/seamless-loop/patches"
+    },
+    "iosFingerprint": {
+      "shippedBuild52": "c2e22bfa7e480143c37e68b757aa9a91d3bd0c95",
+      "withCombinedPatchInPatchesDir": "59ba532f1ef970d899abb0cda2b613170e698868",
+      "withExperimentOutsidePatchesDir": "c2e22bfa7e480143c37e68b757aa9a91d3bd0c95"
+    },
+    "evidenceArchivedTo": "archive/ugc-app-audits/native-media-2026-09-19/ (workspace root; app builds, DerivedData, Metro caches and build logs left in /tmp)"
   }
 }

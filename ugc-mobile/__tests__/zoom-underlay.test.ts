@@ -41,6 +41,30 @@ describe('the screen under an open reel', () => {
     expect(underlay.zoomUnderlayHidden.get()).toBe(0);
   });
 
+  it('leaves layout a moment after hiding, and is back in it the instant it is shown', async () => {
+    vi.useFakeTimers();
+    try {
+      const underlay = await import('@/lib/zoom-underlay');
+      underlay.setZoomUnderlayHidden(true);
+      expect(underlay.zoomUnderlayDetached.get()).toBe(0);
+      vi.advanceTimersByTime(underlay.ZOOM_UNDERLAY_DETACH_DELAY_MS - 1);
+      expect(underlay.zoomUnderlayDetached.get()).toBe(0);
+      vi.advanceTimersByTime(1);
+      expect(underlay.zoomUnderlayDetached.get()).toBe(1);
+      // A close shows the screen and puts it back in layout in one call, no timer in between.
+      underlay.setZoomUnderlayHidden(false);
+      expect(underlay.zoomUnderlayHidden.get()).toBe(0);
+      expect(underlay.zoomUnderlayDetached.get()).toBe(0);
+      // A close that begins before the moment came cancels it.
+      underlay.setZoomUnderlayHidden(true);
+      underlay.setZoomUnderlayHidden(false);
+      vi.advanceTimersByTime(underlay.ZOOM_UNDERLAY_DETACH_DELAY_MS * 2);
+      expect(underlay.zoomUnderlayDetached.get()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('is left alone on iOS, where the stack has its own pop gesture', async () => {
     platform.OS = 'ios';
     const underlay = await import('@/lib/zoom-underlay');
@@ -66,9 +90,11 @@ describe('the screen under an open reel', () => {
 
   it('is the tab screens, wrapped as one animated view', () => {
     const tabs = source('app/(tabs)/_layout.tsx');
-    expect(tabs).toContain("import { zoomUnderlayHidden } from '@/lib/zoom-underlay'");
+    expect(tabs).toContain("import { zoomUnderlayDetached, zoomUnderlayHidden } from '@/lib/zoom-underlay'");
     // Only the tabs a reel covers: tabs pushed above a reel are focused and stay drawn.
     expect(tabs).toContain('opacity: 1 - zoomUnderlayHidden.value * covered.value');
+    // And out of layout once detached, so the renderer's tree walk skips it too.
+    expect(tabs).toContain("display: zoomUnderlayDetached.value * covered.value ? ('none' as const) : ('flex' as const)");
     expect(tabs).toContain('useSharedValue(navigation.isFocused() ? 0 : 1)');
     expect(tabs).toContain("navigation.addListener('focus', () => covered.set(0))");
     expect(tabs).toContain("navigation.addListener('blur', () => covered.set(1))");

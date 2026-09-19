@@ -12,6 +12,6 @@ describe('immersive viewer comment icon', () => {
     expect(commentSource).toContain('fill="transparent"');
     expect(commentSource).toContain('iconShadow={false}');
     expect(source).toContain('iconShadow = true');
-    expect(source).toContain('bare && iconShadow ? <IconShadow>{icon}</IconShadow> : icon');
+    expect(source).toContain('bare && iconShadow ? <IconShadow>{icon}</IconShadow> : (renderReelIcon(icon, false) ?? icon)');
   });
 });
