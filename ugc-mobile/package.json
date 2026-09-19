@@ -7,7 +7,8 @@
     "install": {
       "exclude": [
         "react-native",
-        "@shopify/flash-list"
+        "@shopify/flash-list",
+        "expo-updates"
       ]
     }
   },
