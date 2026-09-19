@@ -3,11 +3,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   advanceZoomFlight,
   arrivesUnderLandedZoom,
+  beginTileOpen,
   beginZoomFlight,
+  canOpenFromTile,
+  claimTileOpen,
   clearHiddenZoomSources,
   clearPendingZoomOrigin,
   computeZoomFrame,
   coverScale,
+  endTileOpen,
   getHeldZoomPicture,
   getZoomFlight,
   getZoomSource,
@@ -474,6 +478,102 @@ describe('the flight itself', () => {
     beginZoomFlight(spec);
 
     expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The reader tapping a tile again while the post they tapped is still on its
+ * way — the picture still growing, the reel still being built underneath it —
+ * used to start the whole movement over, fly the poster in place of the video
+ * the first tap had lent, and push a second reel on top of the first.
+ */
+describe('one open at a time', () => {
+  const NOW = 1_000_000;
+
+  it('is begun by a tap, and holds every other tile off until it ends', () => {
+    const open = beginTileOpen(NOW);
+
+    expect(open).not.toBeNull();
+    expect(canOpenFromTile(NOW)).toBe(false);
+    expect(beginTileOpen(NOW)).toBeNull();
+
+    endTileOpen(open);
+
+    expect(canOpenFromTile(NOW)).toBe(true);
+    expect(beginTileOpen(NOW)).not.toBeNull();
+  });
+
+  it('opens nothing while a flight is in the air, in either direction', () => {
+    const flight = beginZoomFlight({
+      direction: 'open',
+      geometry: geometry(),
+      preview: { url: 'https://example.test/preview.webp' },
+      still: true,
+    });
+
+    expect(canOpenFromTile(NOW)).toBe(false);
+    expect(beginTileOpen(NOW)).toBeNull();
+
+    // A close is the reel shrinking back into its tile: the same rule holds.
+    beginZoomFlight({ direction: 'close', geometry: geometry(), preview: null, still: false });
+    expect(beginTileOpen(NOW)).toBeNull();
+
+    landZoomFlight(flight.id + 1);
+
+    expect(canOpenFromTile(NOW)).toBe(true);
+  });
+
+  it('lets go after its hold when no reel ever takes it over', () => {
+    beginTileOpen(NOW, 600);
+
+    expect(canOpenFromTile(NOW + 599)).toBe(false);
+    expect(canOpenFromTile(NOW + 600)).toBe(true);
+    expect(beginTileOpen(NOW + 600)).not.toBeNull();
+  });
+
+  it('is held for as long as the reel that took it over needs, however slow', () => {
+    const open = beginTileOpen(NOW, 600);
+    const claimed = claimTileOpen(NOW + 100);
+
+    expect(claimed).toBe(open);
+    // Well past the hold: the reel on screen is what ends it now, not the clock.
+    expect(canOpenFromTile(NOW + 60_000)).toBe(false);
+
+    endTileOpen(claimed);
+
+    expect(canOpenFromTile(NOW + 60_000)).toBe(true);
+  });
+
+  it('cannot be taken over once its hold has run out, and is dropped instead', () => {
+    beginTileOpen(NOW, 600);
+
+    expect(claimTileOpen(NOW + 600)).toBeNull();
+    expect(canOpenFromTile(NOW + 600)).toBe(true);
+  });
+
+  it('is taken over by one reel only, and ended by that one alone', () => {
+    const open = beginTileOpen(NOW);
+
+    expect(claimTileOpen(NOW)).toBe(open);
+    expect(claimTileOpen(NOW)).toBeNull();
+
+    // A later reel ending an open of its own leaves this one alone.
+    endTileOpen(open! + 1);
+
+    expect(canOpenFromTile(NOW)).toBe(false);
+  });
+
+  it('is forgotten on reset, which never reuses a serial a settle timer still holds', () => {
+    const open = beginTileOpen(NOW);
+    resetMediaZoomTransitions();
+
+    expect(canOpenFromTile(NOW)).toBe(true);
+    const next = beginTileOpen(NOW);
+    expect(next).not.toBe(open);
+
+    // The first open's own release, arriving late, must not end this one.
+    endTileOpen(open);
+    expect(canOpenFromTile(NOW)).toBe(false);
   });
 });
 

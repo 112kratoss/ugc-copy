@@ -1139,31 +1139,29 @@ function ProfileMediaTile({
       onPressOut={motion.onPressOut}
       onPress={() => {
         haptic.light();
-        if (isFallbackPreview) {
-          router.push(item.href as never);
-          return;
-        }
-        if (item.previewKind === 'text' && item.label !== 'Creation') {
-          router.push(textPostViewerHref({
-            postId: item.sourceId,
-            source: item.viewerSource === 'profile-posts'
-              ? 'profile-posts'
-              : item.viewerSource === 'profile-saved'
-                ? 'profile-saved'
-                : undefined,
-          }) as never);
-          return;
-        }
         // Saved media is for looking at, so it opens the reel. Creations and Posts
         // are for managing, so they open the card feed with their controls inline.
-        const href = isSavedTile
-          ? immersiveViewerHref({ source: item.viewerSource, initialId: item.sourceId })
-          : profileMediaFeedHref({
-            source: item.viewerSource,
-            initialId: item.sourceId,
-            // The feed holds the scope the tile was drawn in; active is its default.
-            scope: item.label === 'Post' && item.isArchived ? 'archived' : undefined,
-          });
+        const href = isFallbackPreview
+          ? item.href
+          : item.previewKind === 'text' && item.label !== 'Creation'
+            ? textPostViewerHref({
+              postId: item.sourceId,
+              source: item.viewerSource === 'profile-posts'
+                ? 'profile-posts'
+                : item.viewerSource === 'profile-saved'
+                  ? 'profile-saved'
+                  : undefined,
+            })
+            : isSavedTile
+              ? immersiveViewerHref({ source: item.viewerSource, initialId: item.sourceId })
+              : profileMediaFeedHref({
+                source: item.viewerSource,
+                initialId: item.sourceId,
+                // The feed holds the scope the tile was drawn in; active is its default.
+                scope: item.label === 'Post' && item.isArchived ? 'archived' : undefined,
+              });
+        // Every way a tile opens goes through `capture`, zoomed or not, so a tap
+        // repeated while the first is still opening opens nothing a second time.
         zoomSource.capture(() => router.push(href as never));
       }}
       style={{ flex: 1 }}

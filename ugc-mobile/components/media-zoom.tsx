@@ -31,10 +31,14 @@ import Animated, {
 
 import {
   advanceZoomFlight,
+  beginTileOpen,
   beginZoomFlight,
+  canOpenFromTile,
+  claimTileOpen,
   clearHiddenZoomSources,
   clearPendingZoomOrigin,
   computeZoomFrame,
+  endTileOpen,
   getHeldZoomPicture,
   getHeldZoomPictureToken,
   getZoomFlight,
@@ -273,6 +277,13 @@ const CLOSE_GROUND_FADE_MS = 90;
  */
 const CLOSE_PICTURE_PREPARE_DELAY_MS = 500;
 /**
+ * A tap that opens its screen without a zoom holds the other tiles off for at
+ * least this long after the push — long enough for that screen to be on the
+ * display and taking the touches itself — and then until the JS thread is next
+ * idle (`endTileOpenWhenSettled`).
+ */
+const PLAIN_OPEN_SETTLE_MS = 300;
+/**
  * On Android the navigator runs no animation for the reel (the zoom is the
  * animation), so a reel with no tile dissolves on its own instead of cutting.
  */
@@ -338,6 +349,29 @@ let displayedPreview: ZoomPreview | null = null;
 /** Likewise the video player whose picture the layer's own view has drawn. */
 let displayedVideo: VideoPlayer | null = null;
 
+/**
+ * Ends a tile's open once the screen it pushed without a zoom has had time to
+ * cover the one beneath, and every touch that screen took before it was covered
+ * has been handled. Those touches queue behind the new screen's first render
+ * and would each open the post again; an idle callback runs only once they have
+ * all gone through, however long that render took.
+ */
+function endTileOpenWhenSettled(serial: number) {
+  setTimeout(() => {
+    const whenIdle = globalThis.requestIdleCallback;
+    if (typeof whenIdle !== 'function') {
+      endTileOpen(serial);
+      return;
+    }
+    try {
+      whenIdle(() => endTileOpen(serial));
+    } catch {
+      // The legacy runtime scheduler has no idle tasks.
+      endTileOpen(serial);
+    }
+  }, PLAIN_OPEN_SETTLE_MS);
+}
+
 function samePicture(a: ZoomPreview | null | undefined, b: ZoomPreview | null | undefined) {
   return Boolean(a && b) && a!.url === b!.url && (a!.cacheKey ?? null) === (b!.cacheKey ?? null);
 }
@@ -396,7 +430,10 @@ function prepareZoomPicture(
   post: ImmersivePreviewItem | null = null,
   video: ZoomVideo | null = null
 ) {
-  if (!tickerControl || getZoomFlight()) return;
+  // Not while a post is opening either: a finger coming down on a tile then —
+  // a repeated tap, or a second tile — would swap the picture filling the screen
+  // for one kept out of sight, with the reel not yet drawn underneath it.
+  if (!tickerControl || !canOpenFromTile(Date.now())) return;
   if (layerScreen.width <= 0) measureLayerNow?.();
   if (layerScreen.width <= 0) return;
   const held = getHeldZoomPicture();
@@ -780,10 +817,20 @@ export function useMediaZoomSource({
   }, []);
 
   const capture = useCallback((open: () => void) => {
-    // Nothing to grow: no surface, or no picture to grow with.
-    if (!active || !surfaceId || !preview) {
+    // One tap opens one post: a tap while an earlier tap's post is still
+    // opening, or while a close is still landing, opens nothing
+    // (`beginTileOpen`). A zoomed open lasts until the reel it pushes can be
+    // touched; one without a zoom until its screen has covered this one.
+    const openSerial = beginTileOpen(Date.now());
+    if (openSerial === null) return;
+    const openPlainly = () => {
       clearPendingZoomOrigin();
       open();
+      endTileOpenWhenSettled(openSerial);
+    };
+    // Nothing to grow: no surface, or no picture to grow with.
+    if (!active || !surfaceId || !preview) {
+      openPlainly();
       return;
     }
     let handled = false;
@@ -795,8 +842,7 @@ export function useMediaZoomSource({
       if (layerScreen.width <= 0) measureLayerNow?.();
       const screen = layerScreen;
       if (!rect || screen.width <= 0 || screen.height <= 0) {
-        clearPendingZoomOrigin();
-        open();
+        openPlainly();
         return;
       }
       // A video playing in the tile flies itself, not its poster: the poster is
@@ -1052,6 +1098,21 @@ export function useMediaZoomStage({
   playerForRef.current = playerFor;
   /** The player this reel handed back to its tile, which it must leave alone. */
   const handedBackRef = useRef<VideoPlayer | null>(null);
+  /**
+   * The tap's open that pushed this reel, which this reel ends: once it can be
+   * touched — straight away for a reel that did not grow out of a tile, once the
+   * hand-off is over for one that did — or once it has gone. Until then taps on
+   * the tiles it does not yet cover open nothing. Claimed before any other
+   * effect here runs, so a hand-off finished on mount still ends it.
+   */
+  const tileOpenRef = useRef<number | null>(null);
+  useEffect(() => {
+    const claimed = claimTileOpen(Date.now());
+    if (claimed === null) return;
+    tileOpenRef.current = claimed;
+    if (openedRef.current) endTileOpenWhenSettled(claimed);
+    return () => endTileOpen(claimed);
+  }, []);
 
   const updateGeometry = useCallback((patch: Partial<ZoomGeometry>) => {
     localGeometry.set({ ...localGeometry.get(), ...patch });
@@ -1154,6 +1215,8 @@ export function useMediaZoomStage({
     openedRef.current = true;
     setOpened(true);
     if (!dismissingRef.current) interactive.set(1);
+    // The reel takes the touches now; the tiles beneath can open posts again.
+    endTileOpen(tileOpenRef.current);
     // Only a reel still on its way in stands in for its tile. This runs when the
     // hand-off fade ends — or is cut short, or its safety timer fires — which a
     // close begun meanwhile can outlast: hidden then, after the close had shown
@@ -1878,10 +1941,19 @@ export function MediaZoomFlightLayer({
                 source={{ uri: still.preview.url, cacheKey: still.preview.cacheKey, thumbhash: still.preview.thumbhash }}
               />
             </Animated.View>
+            {/* Keyed apart, so a hold that turns from the poster into the video
+                — the finger's poster, then the tap's lent video — mounts a new
+                view rather than handing the poster's one another animated style.
+                React's development build diffs a re-rendered view's props to
+                three levels for its performance track; that enumerated a
+                Reanimated style handle, whose development-only
+                `_requiresAnimatedComponent` getter throws, from inside the
+                commit, and every render after it failed with "Should not already
+                be working": the app froze on whatever it last drew. */}
             {still.video ? (
               // The tile's own player, still playing: the flight is the video
               // the reader was watching, not its first frame.
-              <Animated.View collapsable={false} pointerEvents="none" style={[StyleSheet.absoluteFill, videoSurfaceStyle]}>
+              <Animated.View key="video" collapsable={false} pointerEvents="none" style={[StyleSheet.absoluteFill, videoSurfaceStyle]}>
                 <VideoView
                   {...FEED_VIDEO_VIEW_PROPS}
                   player={still.video.player}
@@ -1892,7 +1964,7 @@ export function MediaZoomFlightLayer({
                 />
               </Animated.View>
             ) : (
-              <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, stillPictureStyle]}>
+              <Animated.View key="picture" pointerEvents="none" style={[StyleSheet.absoluteFill, stillPictureStyle]}>
                 <Image
                   source={{ uri: still.preview.url, cacheKey: still.preview.cacheKey ?? undefined }}
                   contentFit="contain"
