@@ -36,7 +36,8 @@ vi.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 59, bottom: 34, left: 0, right: 0 }),
 }));
 
-import { MediaZoomSourceView, type MediaZoomSource } from '../components/media-zoom';
+import { MediaZoomSourceView, useMediaZoomStage, type MediaZoomSource } from '../components/media-zoom';
+import { registerZoomSource, setPendingZoomOrigin, clearPendingZoomOrigin } from '../lib/media-zoom-transition';
 import { useMediaZoomTileKey } from '../lib/media-zoom-video-offer';
 
 /** Stands in for whatever a tile draws; the wrappers around it are the subject. */
@@ -70,6 +71,40 @@ function wrapperStyles(element: React.ReactElement) {
 }
 
 describe('the view a tile hands to the reel', () => {
+  it('exits once when a detached source never answers measurement, and ignores its late callback', () => {
+    vi.useFakeTimers();
+    let answer: ((rect: { x: number; y: number; width: number; height: number } | null) => void) | undefined;
+    const unregister = registerZoomSource('timeout-surface', 'timeout-post', {
+      radius: 12, aspectRatio: 1, preview: null, setHidden: vi.fn(),
+      measure: (callback) => { answer = callback; },
+    });
+    setPendingZoomOrigin({ surfaceId: 'timeout-surface', itemId: 'timeout-post',
+      rect: { x: 10, y: 100, width: 100, height: 100 }, radius: 12,
+      aspectRatio: 1, preview: null, flightId: -1, recordedAt: Date.now() });
+    const exit = vi.fn();
+    let stage!: ReturnType<typeof useMediaZoomStage>;
+    function Reader() {
+      stage = useMediaZoomStage({ screen: { width: 402, height: 874 },
+        initialItemId: 'timeout-post', activeItemId: 'timeout-post', aspectRatio: 1,
+        reducedMotion: false, ready: false, expectsNeighbours: false, onExit: exit });
+      return null;
+    }
+    let tree!: renderer.ReactTestRenderer;
+    try {
+      renderer.act(() => { tree = renderer.create(<Reader />); });
+      renderer.act(() => stage.dismiss());
+      expect(answer).toBeDefined();
+      expect(exit).not.toHaveBeenCalled();
+      renderer.act(() => { vi.advanceTimersByTime(2000); });
+      expect(exit).toHaveBeenCalledTimes(1);
+      renderer.act(() => answer?.({ x: 10, y: 100, width: 100, height: 100 }));
+      renderer.act(() => { vi.advanceTimersByTime(2000); });
+      expect(exit).toHaveBeenCalledTimes(1);
+    } finally {
+      renderer.act(() => tree?.unmount());
+      unregister(); clearPendingZoomOrigin(); vi.useRealTimers();
+    }
+  });
   /**
    * Profile tiles are `flex: 1` inside a cell their parent has already sized,
    * so a wrapper that takes its size from its content collapses them to

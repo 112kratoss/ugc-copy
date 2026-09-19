@@ -1,0 +1,41 @@
+{
+  "base": "21c9aed2",
+  "inherited_release": "e451b066",
+  "flag": "EXPO_PUBLIC_SEAMLESS_VIDEO_LOOP=1",
+  "defaultEnabled": false,
+  "files": {
+    "patches/expo-video+55.0.21.patch": "872190a84b99210580cc2cceec6e563a06663be26f7a07d73e8519202ffe0c2d",
+    "lib/video-player-options.ts": "c595434999e50c886760551096f28c94790857282675763ee0479bda04d2c035",
+    "scripts/native-loop-probe/Probe.swift": "d563442875047f670b793c8e0b2dc151d83089d9be2036289e900cdb37db6a69",
+    "components/media-zoom.tsx": "796e53967c214ea9fa76c46045b73012f458e894fd9c474b3cf60e99f4273b28",
+    "__tests__/media-zoom-source-view.test.tsx": "66e2375663d21e5c616a271be6d5c37f10876ab83558b6c984a75b4b6484b291"
+  },
+  "trace": "/tmp/magicbooklet-loop-probe/integrated-loop.trace",
+  "traceStart": "2026-09-19T10:12:35.926+05:30",
+  "traceSampledQueueAdvancesSeconds": [
+    2.924848416,
+    5.960391291
+  ],
+  "traceNearbyMaxSwapGapMs": [
+    99.97,
+    99.96
+  ],
+  "integratedIphoneReturn": {
+    "device": "iPhone 16e, iOS 26.6.2",
+    "testBundle": "com.athuls.magicbooklet.zoom",
+    "source": "Explore Motion creation tile",
+    "cycles": 30,
+    "viewerOpenAssertionsPassed": 30,
+    "viewerCloseAssertionsPassed": 30,
+    "holdSeconds": [0.25, 0.4, 0.55, 0.7, 0.85, 0.35],
+    "queueFlagOn": {
+      "result": "XCUITest passed in 140.981 seconds",
+      "resultBundle": "/tmp/magicbooklet-loop-probe/device-recovery-30.xcresult"
+    },
+    "normalFlagOff": {
+      "result": "XCUITest passed in 140.937 seconds",
+      "resultBundle": "/tmp/magicbooklet-loop-probe/device-normal-30.xcresult"
+    },
+    "framePacingMeasured": false
+  }
+}

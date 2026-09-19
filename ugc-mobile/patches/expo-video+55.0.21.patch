@@ -105,3 +105,327 @@ index aec0f9f..b569d22 100644
        return
      }
  
+diff --git a/node_modules/expo-video/ios/VideoModule.swift b/node_modules/expo-video/ios/VideoModule.swift
+index e78607a..711f2d5 100644
+--- a/node_modules/expo-video/ios/VideoModule.swift
++++ b/node_modules/expo-video/ios/VideoModule.swift
+@@ -143,9 +143,10 @@ public final class VideoModule: Module {
+     }
+ 
+     Class(VideoPlayer.self) {
+-      Constructor { (source: VideoSource?, useSynchronousReplace: Bool?, /* playerBuilderOptions - Android only */ _: [String: Any?]?) -> VideoPlayer in
++      Constructor { (source: VideoSource?, useSynchronousReplace: Bool?, playerBuilderOptions: [String: Any?]?) -> VideoPlayer in
+         let useSynchronousReplace = useSynchronousReplace ?? false
+-        let player = AVPlayer()
++        let seamlessLooping = playerBuilderOptions?["useSeamlessLooping"] as? Bool ?? false
++        let player: AVPlayer = seamlessLooping ? AVQueuePlayer() : AVPlayer()
+         let videoPlayer = try VideoPlayer(player, initialSource: source, useSynchronousReplace: useSynchronousReplace)
+         player.pause()
+         return videoPlayer
+diff --git a/node_modules/expo-video/ios/VideoPlayer.swift b/node_modules/expo-video/ios/VideoPlayer.swift
+index 61bd8cc..b231098 100644
+--- a/node_modules/expo-video/ios/VideoPlayer.swift
++++ b/node_modules/expo-video/ios/VideoPlayer.swift
+@@ -13,8 +13,18 @@ internal final class VideoPlayer: SharedRef<AVPlayer>, Hashable, VideoPlayerObse
+   lazy var audioTracks: VideoPlayerAudioTracks = VideoPlayerAudioTracks(owner: self)
+   lazy var seeker: VideoPlayerSeeker = VideoPlayerSeeker(player: self)
+   private var tracksLoadingTask: Task<(), Never>?
++  private var loopController: VideoPlayerLoopController?
+ 
+-  var loop = false
++  var loop = false {
++    didSet {
++      guard oldValue != loop else { return }
++      DispatchQueue.main.async { [weak self] in
++        guard let self else { return }
++        if self.loop { self.prepareLoopIfSupported() }
++        else { self.loopController?.disable() }
++      }
++    }
++  }
+   var audioMixingMode: AudioMixingMode = .doNotMix {
+     didSet {
+       if oldValue != audioMixingMode {
+@@ -69,6 +79,10 @@ internal final class VideoPlayer: SharedRef<AVPlayer>, Hashable, VideoPlayerObse
+   var preservesPitch = true {
+     didSet {
+       ref.currentItem?.audioTimePitchAlgorithm = preservesPitch ? .spectral : .varispeed
++      DispatchQueue.main.async { [weak self] in
++        guard let self else { return }
++        self.loopController?.updateItems { $0.audioTimePitchAlgorithm = self.preservesPitch ? .spectral : .varispeed }
++      }
+     }
+   }
+ 
+@@ -138,6 +152,10 @@ internal final class VideoPlayer: SharedRef<AVPlayer>, Hashable, VideoPlayerObse
+     didSet {
+       ref.currentItem?.preferredForwardBufferDuration = bufferOptions.preferredForwardBufferDuration
+       ref.automaticallyWaitsToMinimizeStalling = bufferOptions.waitsToMinimizeStalling
++      DispatchQueue.main.async { [weak self] in
++        guard let self else { return }
++        self.loopController?.updateItems { $0.preferredForwardBufferDuration = self.bufferOptions.preferredForwardBufferDuration }
++      }
+     }
+   }
+ 
+@@ -171,6 +189,9 @@ internal final class VideoPlayer: SharedRef<AVPlayer>, Hashable, VideoPlayerObse
+ 
+   private override init(_ ref: AVPlayer) {
+     super.init(ref)
++    if let queue = ref as? AVQueuePlayer {
++      loopController = VideoPlayerLoopController(player: queue)
++    }
+     observer = VideoPlayerObserver(owner: self, videoSourceLoader: videoSourceLoader)
+     observer?.registerDelegate(delegate: self)
+     VideoManager.shared.register(videoPlayer: self)
+@@ -191,7 +212,8 @@ internal final class VideoPlayer: SharedRef<AVPlayer>, Hashable, VideoPlayerObse
+     // We have to replace from the main thread because of KVOs (see comment in VideoSourceLoader).
+     // Moreover, in this case we have to keep a strong reference to AVPlayer and remove its item
+     // If we don't do this AVPlayer doesn't get deallocated
+-    DispatchQueue.main.async { [ref] in
++    DispatchQueue.main.async { [ref, loopController] in
++      loopController?.reset()
+       ref.replaceCurrentItem(with: nil)
+     }
+   }
+@@ -227,7 +249,7 @@ internal final class VideoPlayer: SharedRef<AVPlayer>, Hashable, VideoPlayerObse
+       guard let self else {
+         return
+       }
+-      self.ref.replaceCurrentItem(with: playerItem)
++      self.installItem(playerItem)
+       self.dangerousPropertiesStore.ownerIsReplacing = false
+       self.dangerousPropertiesStore.applyProperties(to: self)
+     }
+@@ -264,7 +286,7 @@ internal final class VideoPlayer: SharedRef<AVPlayer>, Hashable, VideoPlayerObse
+       guard let self else {
+         return
+       }
+-      self.ref.replaceCurrentItem(with: playerItem)
++      self.installItem(playerItem)
+       dangerousPropertiesStore.ownerIsReplacing = false
+       dangerousPropertiesStore.applyProperties(to: self)
+     }
+@@ -273,7 +295,8 @@ internal final class VideoPlayer: SharedRef<AVPlayer>, Hashable, VideoPlayerObse
+   private func clearCurrentItem() {
+     videoSourceLoader.cancelCurrentTask()
+ 
+-    DispatchQueue.main.async { [ref, dangerousPropertiesStore] in
++    DispatchQueue.main.async { [ref, loopController, dangerousPropertiesStore] in
++      loopController?.reset()
+       ref.replaceCurrentItem(with: nil)
+       dangerousPropertiesStore.reset()
+       dangerousPropertiesStore.ownerIsReplacing = false
+@@ -297,6 +320,19 @@ internal final class VideoPlayer: SharedRef<AVPlayer>, Hashable, VideoPlayerObse
+     return 0
+   }
+ 
++  private func installItem(_ item: VideoPlayerItem) {
++    loopController?.reset()
++    ref.replaceCurrentItem(with: item)
++    prepareLoopIfSupported()
++  }
++
++  private func prepareLoopIfSupported() {
++    guard loop, let item = ref.currentItem as? VideoPlayerItem,
++      !item.isHls, item.videoSource.drm == nil,
++      item.videoSource.uri?.pathExtension.lowercased() == "mp4" else { return }
++    loopController?.prepare(item: item)
++  }
++
+   // MARK: - VideoPlayerObserverDelegate
+ 
+   func onStatusChanged(player: AVPlayer, oldStatus: PlayerStatus?, newStatus: PlayerStatus, error: Exception?) {
+@@ -336,6 +372,9 @@ internal final class VideoPlayer: SharedRef<AVPlayer>, Hashable, VideoPlayerObse
+   }
+ 
+   func onPlayedToEnd(player: AVPlayer) {
++    // Queue rotation has its own completion below; item KVO may arrive before
++    // or after the ended notification, so emitting from both duplicates it.
++    if loopController?.isLooping == true { return }
+     safeEmit(event: "playToEnd")
+     if loop {
+       seeker.seek(to: .zero)
+@@ -344,6 +383,16 @@ internal final class VideoPlayer: SharedRef<AVPlayer>, Hashable, VideoPlayerObse
+   }
+ 
+   func onItemChanged(player: AVPlayer, oldVideoPlayerItem: VideoPlayerItem?, newVideoPlayerItem: VideoPlayerItem?) {
++    // Queue rotation is not a new source. Updating replicas here also carries
++    // buffer policy changes from a prepared tile into its active viewer.
++    newVideoPlayerItem?.preferredForwardBufferDuration = bufferOptions.preferredForwardBufferDuration
++    newVideoPlayerItem?.audioTimePitchAlgorithm = preservesPitch ? .spectral : .varispeed
++    if let oldVideoPlayerItem, let newVideoPlayerItem,
++      oldVideoPlayerItem.loopSourceID == newVideoPlayerItem.loopSourceID {
++      loopController?.didAdvance()
++      safeEmit(event: "playToEnd")
++      return
++    }
+     let payload = SourceChangedEventPayload(
+       source: newVideoPlayerItem?.videoSource,
+       oldSource: oldVideoPlayerItem?.videoSource
+diff --git a/node_modules/expo-video/ios/VideoPlayerItem.swift b/node_modules/expo-video/ios/VideoPlayerItem.swift
+index c3d3394..2df07d9 100644
+--- a/node_modules/expo-video/ios/VideoPlayerItem.swift
++++ b/node_modules/expo-video/ios/VideoPlayerItem.swift
+@@ -4,6 +4,9 @@ import ExpoModulesCore
+ import AVKit
+ 
+ class VideoPlayerItem: AVPlayerItem {
++  // Replicas represent the same logical source, not a replace/sourceLoad event.
++  private(set) var loopSourceID = UUID()
++  private var ownsTracksLoadingTask = true
+   let urlAsset: VideoAsset
+   let videoSource: VideoSource
+   let isHls: Bool
+@@ -50,7 +53,27 @@ class VideoPlayerItem: AVPlayerItem {
+   }
+ 
+   deinit {
+-    tracksLoadingTask?.cancel()
++    if ownsTracksLoadingTask { tracksLoadingTask?.cancel() }
++  }
++
++  private init(replicaOf item: VideoPlayerItem) {
++    videoSource = item.videoSource
++    urlAsset = item.urlAsset
++    isHls = item.isHls
++    loopSourceID = item.loopSourceID
++    ownsTracksLoadingTask = false
++    tracksLoadingTask = item.tracksLoadingTask
++    super.init(asset: urlAsset, automaticallyLoadedAssetKeys: nil)
++    audioTimePitchAlgorithm = item.audioTimePitchAlgorithm
++    preferredForwardBufferDuration = item.preferredForwardBufferDuration
++    preferredPeakBitRate = item.preferredPeakBitRate
++    preferredMaximumResolution = item.preferredMaximumResolution
++  }
++
++  // AVPlayerItem's inherited copy invokes an initializer this subclass doesn't
++  // implement and traps. Keep Expo metadata and the SAME resource-loader asset.
++  override func copy(with zone: NSZone? = nil) -> Any {
++    VideoPlayerItem(replicaOf: self)
+   }
+ 
+   func createTracksLoadingTask() {
+diff --git a/node_modules/expo-video/ios/VideoPlayerLoopController.swift b/node_modules/expo-video/ios/VideoPlayerLoopController.swift
+new file mode 100644
+index 0000000..6baed5e
+--- /dev/null
++++ b/node_modules/expo-video/ios/VideoPlayerLoopController.swift
+@@ -0,0 +1,87 @@
++import AVFoundation
++import os
++
++/// Opt-in MP4 looping. The current item keeps playing while replicas prepare
++/// behind it, so enabling the loop never replaces the visible frame or seeks.
++/// All queue mutations run on main, like Expo's item KVO observers.
++final class VideoPlayerLoopController {
++  private let player: AVQueuePlayer
++  private var looper: AVPlayerLooper?
++  private var statusObservation: NSKeyValueObservation?
++  private var preparation: Task<Void, Never>?
++  private var generation = 0
++  private static let log = OSLog(subsystem: "com.magicbooklet.media", category: .pointsOfInterest)
++
++  var isLooping: Bool { looper?.status == .ready }
++
++  func didAdvance() {
++    os_signpost(.event, log: Self.log, name: "VideoLoopAdvance")
++  }
++
++  func updateItems(_ apply: (AVPlayerItem) -> Void) {
++    player.items().forEach(apply)
++    looper?.loopingPlayerItems.forEach(apply)
++  }
++
++  init(player: AVQueuePlayer) {
++    self.player = player
++    // Match AVPlayer for non-looping sources (retain the last frame).
++    player.actionAtItemEnd = .pause
++  }
++
++  func prepare(item: AVPlayerItem) {
++    guard #available(iOS 17.0, tvOS 17.0, *) else { return }
++    guard looper == nil, preparation == nil else { return }
++    generation += 1
++    let token = generation
++    preparation = Task { @MainActor [weak self, weak item] in
++      guard let item else { return }
++      // A zero/indefinite duration is not a valid looper template. Loading off
++      // the main thread also avoids AVPlayerLooper synchronously loading it.
++      let duration = try? await item.asset.load(.duration)
++      guard !Task.isCancelled, let self, self.generation == token else { return }
++      self.preparation = nil
++      guard self.player.currentItem === item,
++        let duration, duration.isNumeric, duration.seconds > 0 else { return }
++      let looper = AVPlayerLooper(
++        player: self.player, templateItem: item, timeRange: .invalid,
++        existingItemsOrdering: .loopingItemsFollowExistingItems
++      )
++      self.looper = looper
++      self.statusObservation = looper.observe(\.status, options: [.initial, .new]) { [weak self] looper, _ in
++        guard looper.status == .failed else { return }
++        DispatchQueue.main.async { [weak self, weak looper] in
++          guard let self, let looper, self.looper === looper else { return }
++          // Restore AVPlayer semantics so Expo's existing seek loop recovers.
++          self.disable()
++        }
++      }
++      os_signpost(.event, log: Self.log, name: "VideoLoopQueueCreated")
++    }
++  }
++
++  /// Stop before source replacement or release. Do not preserve the old queue.
++  func reset() {
++    generation += 1
++    preparation?.cancel()
++    preparation = nil
++    statusObservation?.invalidate()
++    statusObservation = nil
++    looper?.disableLooping()
++    looper = nil
++    player.removeAllItems()
++    player.actionAtItemEnd = .pause
++  }
++
++  /// A caller can turn loop off while playing. Preserve the current item/time;
++  /// remove only the future replicas after the looper relinquishes the queue.
++  func disable() {
++    let current = player.currentItem
++    let rate = player.rate
++    reset()
++    if let current {
++      player.insert(current, after: nil)
++      player.rate = rate
++    }
++  }
++}
+diff --git a/node_modules/expo-video/ios/VideoPlayerObserver.swift b/node_modules/expo-video/ios/VideoPlayerObserver.swift
+index 56daccd..755d5c3 100644
+--- a/node_modules/expo-video/ios/VideoPlayerObserver.swift
++++ b/node_modules/expo-video/ios/VideoPlayerObserver.swift
+@@ -401,17 +401,21 @@ class VideoPlayerObserver: VideoSourceLoaderListener {
+     // Unwraps Optional<Optional<AVPlayerItem>> into Optional<AVPlayerItem>
+     let newPlayerItem = change.newValue?.flatMap({ $0 })
+ 
++    let previousItem = currentItem
++    let sameSource = previousItem != nil && previousItem?.loopSourceID == (newPlayerItem as? VideoPlayerItem)?.loopSourceID
+     invalidateCurrentPlayerItemObservers()
+-    currentVideoTrack = nil
++    if !sameSource { currentVideoTrack = nil }
+ 
+     if let videoPlayerItem = newPlayerItem as? VideoPlayerItem {
+-      initializeCurrentPlayerItemObservers(player: player, playerItem: videoPlayerItem)
+       currentItem = videoPlayerItem
++      // Set before installing .initial KVO, which may immediately load a ready
++      // replica. Only an actual source replacement should reload track metadata.
++      loadedCurrentItem = sameSource && loadedCurrentItem
++      initializeCurrentPlayerItemObservers(player: player, playerItem: videoPlayerItem)
+ 
+       delegates.forEach { delegate in
+-        delegate.value?.onItemChanged(player: player, oldVideoPlayerItem: currentItem, newVideoPlayerItem: videoPlayerItem)
++        delegate.value?.onItemChanged(player: player, oldVideoPlayerItem: previousItem, newVideoPlayerItem: videoPlayerItem)
+       }
+-      loadedCurrentItem = false
+       return
+     }
+ 

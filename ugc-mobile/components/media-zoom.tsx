@@ -1418,6 +1418,10 @@ export function useMediaZoomStage({
     if (dismissingRef.current || leftRef.current) return;
     dismissingRef.current = true;
     interactive.set(0);
+    // A recycled/detached source's native measure callback may never arrive.
+    // Arm recovery before asking for geometry, otherwise dismissal disables
+    // interaction forever while its only safety timer waits inside the callback.
+    setTimeout(leave, DISMISS_SAFETY_MS + RETURN_DRAWN_DEADLINE_MS);
     // The screen beneath is drawn again from the close's first frame.
     setZoomUnderlayHidden(false);
     if (!origin || reducedMotion) {
@@ -1433,6 +1437,8 @@ export function useMediaZoomStage({
       return;
     }
     handle.measure((rect) => {
+      // Recovery may already have popped this viewer while measurement waited.
+      if (leftRef.current) return;
       if (!isReturnableRect(rect, screenRef.current)) {
         plainLeave();
         return;
@@ -1502,9 +1508,6 @@ export function useMediaZoomStage({
       ownFlightRef.current = flight.id;
       // With no layer to step it the flight has already landed.
       if (live && !getZoomFlight()) leave();
-      // The safety net, in case the flight never reports back — after the wait
-      // for a tile to take its video back, when a live close may hand it one.
-      setTimeout(leave, DISMISS_SAFETY_MS + (live ? RETURN_DRAWN_DEADLINE_MS : 0));
     });
   }, [following, interactive, leave, lentVideo, origin, plainLeave, reducedMotion, returnableVideo, stageOpacity]);
 

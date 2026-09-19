@@ -2,6 +2,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteD
 import * as Clipboard from 'expo-clipboard';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer, type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
+import { MEDIA_PLAYER_OPTIONS } from '@/lib/video-player-options';
 import { Copy, ImageOff, Lock, Play, Volume2, VolumeX } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { createContext, useContext, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
@@ -2156,7 +2157,7 @@ function ActiveVideoAttempt({
     const previous = previousPlayer.current === lentPlayerRef.current ? null : previousPlayer.current;
     playbackRequested.current = restoreVideoPlayback(instance, previous, active && !reducedMotion,
       active && playbackAllowed.current && !reducedMotion && (!AppState.currentState || AppState.currentState === 'active'));
-  });
+  }, MEDIA_PLAYER_OPTIONS);
   const player = lentPlayer ?? ownPlayer;
   previousPlayer.current = player;
   const [status, setStatus] = useState<VideoPlayerStatus>(player.status);

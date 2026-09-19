@@ -28,6 +28,7 @@ import {
 import { MEDIA_DISPLAY_DEADLINE_MS } from '@/lib/media-recovery';
 import { useMediaSource } from '@/lib/use-media-source';
 import { appTheme } from '@/lib/theme';
+import { MEDIA_PLAYER_OPTIONS } from '@/lib/video-player-options';
 
 const absoluteFill = {
   position: 'absolute' as const,
@@ -394,7 +395,7 @@ function FeedVideoPlayerLayer({
   // frame zero and a jump, on every return from a playing video.
   const [{ player, returned }] = useState<{ player: VideoPlayer; returned: boolean }>(() => {
     const taken = returnKey && lendableUrl ? claimReturnedVideoPlayer(returnKey, lendableUrl) : null;
-    const instance = taken ?? createVideoPlayer({ ...source, useCaching: true });
+    const instance = taken ?? createVideoPlayer({ ...source, useCaching: true }, MEDIA_PLAYER_OPTIONS);
     // The reel listened to its progress; a tile does not.
     if (taken) instance.timeUpdateEventInterval = 0;
     instance.loop = true;
