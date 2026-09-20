@@ -2,6 +2,7 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { postMediaReadUrl } from '@/lib/post-media-storage';
 import { logBackendError } from '@/lib/backend-logger';
 import type { PostResourceBundleResources } from '@/lib/post-resource-bundles';
 import type { ShowcaseMediaItem } from '@/lib/showcase';
@@ -88,7 +89,7 @@ export async function loadPurchasedProofMedia({
   if (rows.length === 0) return buildScopedMediaPlaceholders(resources);
 
   const publicUrl = (storagePath: string | null) => storagePath && includeStoredUrls
-    ? adminSupabase.storage.from('showcase_media').getPublicUrl(storagePath).data.publicUrl
+    ? (storagePath.startsWith('posts/') ? `/api/media?${new URLSearchParams({ bucket: 'post_media', path: storagePath })}` : postMediaReadUrl(adminSupabase, storagePath))
     : null;
 
   return rows.map((row) => {
@@ -130,6 +131,7 @@ export async function excludePurchasedProofMediaPaths(
   options: { bundleId?: string | null } = {},
 ): Promise<string[]> {
   const uniquePaths = [...new Set(candidatePaths.filter(Boolean))];
+  const lookupPaths = [...new Set(uniquePaths.flatMap((path) => path.startsWith('private-posts/') ? [path, path.slice('private-'.length)] : [path]))];
   if (uniquePaths.length === 0) return [];
 
   const columns = ['storage_path', 'preview_storage_path', 'rendition_storage_path'] as const;
@@ -138,7 +140,7 @@ export async function excludePurchasedProofMediaPaths(
       adminSupabase
         .from('post_resource_purchase_media')
         .select('storage_path, preview_storage_path, rendition_storage_path, sort_order')
-        .in(column, uniquePaths)
+        .in(column, lookupPaths)
         .order('sort_order', { ascending: true })
     )),
     ...(options.bundleId ? [
@@ -187,7 +189,7 @@ export async function excludePurchasedProofMediaPaths(
         if (!media || typeof media !== 'object') continue;
         for (const key of ['storage_path', 'preview_storage_path', 'rendition_storage_path']) {
           const path = (media as Record<string, unknown>)[key];
-          if (typeof path === 'string' && uniquePaths.includes(path)) {
+          if (typeof path === 'string' && lookupPaths.includes(path)) {
             protectedPaths.add(path);
           }
         }
@@ -195,5 +197,6 @@ export async function excludePurchasedProofMediaPaths(
     }
   }
 
-  return uniquePaths.filter((path) => !protectedPaths.has(path));
+  return uniquePaths.filter((path) => !protectedPaths.has(path)
+    && !(path.startsWith('private-posts/') && protectedPaths.has(path.slice('private-'.length))));
 }

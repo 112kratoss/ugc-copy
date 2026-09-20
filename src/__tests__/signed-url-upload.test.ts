@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { resolveSignedUploadUrl, uploadFileToSignedUrl } from '@/lib/signed-url-upload';
 import { isUploadCancelledError } from '@/lib/upload-queue';
@@ -60,6 +60,36 @@ function fakeXhrFactory(options: FakeXhrOptions = {}) {
 const file = new File(['bytes'], 'shot.png', { type: 'image/png' });
 
 describe('uploadFileToSignedUrl', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('aborts a stalled transfer instead of occupying an upload slot forever', async () => {
+    vi.useFakeTimers();
+    const xhr = fakeXhrFactory({ autoComplete: false });
+    const rejected = vi.fn();
+    const upload = uploadFileToSignedUrl(file, 'https://storage.example.test/upload', {
+      mimeType: 'image/png', createRequest: xhr.createRequest,
+    }).catch(rejected);
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(rejected).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('stalled') }));
+    expect(xhr.getInstance()?.aborted).toBe(true);
+    await upload;
+  });
+
+  it('allows a slow transfer to continue while bytes are advancing', async () => {
+    vi.useFakeTimers();
+    const xhr = fakeXhrFactory({ autoComplete: false });
+    const upload = uploadFileToSignedUrl(file, 'https://storage.example.test/upload', {
+      mimeType: 'image/png', createRequest: xhr.createRequest,
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    xhr.getInstance()?.upload.onprogress?.({ loaded: 1, total: 5, lengthComputable: true } as ProgressEvent);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(xhr.getInstance()?.aborted).toBe(false);
+    xhr.getInstance()?.onload?.();
+    await upload;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('PUTs with the same headers the mobile client sends to this endpoint', async () => {
     const xhr = fakeXhrFactory();
     await uploadFileToSignedUrl(file, 'https://storage.example.test/upload', {

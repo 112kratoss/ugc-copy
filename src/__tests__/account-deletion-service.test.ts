@@ -97,6 +97,21 @@ function storageMock(options: {
 }
 
 describe('account deletion cleanup service', () => {
+  it('sweeps private copies created after the durable legacy-path manifest', async () => {
+    const prefix = `private-posts/${GENERATION_ID}`;
+    const manifest = parseAccountDeletionStorageManifest({
+      ...storageManifest,
+      showcase_media_paths: [`posts/${GENERATION_ID}/original.mp4`],
+    })!;
+    const mock = storageMock({ listFiles: {
+      [`post_media:${prefix}`]: [{ name: 'original.mp4' }, { name: 'display.webp' }],
+    } });
+    await removeAccountStorage(mock as never, USER_ID, manifest);
+    expect(mock.removed).toContainEqual({ bucket: 'post_media', paths: [
+      `${prefix}/original.mp4`, `${prefix}/display.webp`,
+    ] });
+  });
+
   it('rejects unsafe or incomplete persisted storage manifests', () => {
     expect(parseAccountDeletionStorageManifest(storageManifest)).toMatchObject({
       userPrefixBuckets: expect.arrayContaining(['profiles', 'generated_videos']),

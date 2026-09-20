@@ -12,7 +12,9 @@
           "currentApiVersion": 1,
           "minimumApiVersion": 1,
           "minimumAppVersion": "0.0.1",
-          "supportedCatalogSchemaVersions": [1],
+          "supportedCatalogSchemaVersions": [
+            1
+          ],
           "unversionedClientsUseApiVersion": 1
         }
       }
@@ -30,7 +32,9 @@
           "currentApiVersion": 1,
           "minimumApiVersion": 1,
           "minimumAppVersion": "0.0.1",
-          "supportedCatalogSchemaVersions": [1],
+          "supportedCatalogSchemaVersions": [
+            1
+          ],
           "unversionedClientsUseApiVersion": 1
         }
       }
@@ -119,7 +123,9 @@
           {
             "id": "generation-1",
             "output_url": "https://cdn.example.test/generation-1.png",
-            "output_urls": ["https://cdn.example.test/generation-1.png"],
+            "output_urls": [
+              "https://cdn.example.test/generation-1.png"
+            ],
             "preview_url": "https://cdn.example.test/generation-1-preview.png",
             "previewUrl": "https://cdn.example.test/generation-1-preview.png",
             "media": {
@@ -163,7 +169,9 @@
           {
             "id": "private-video-1",
             "output_url": "https://storage.example.test/private-video-original.mp4",
-            "output_urls": ["https://storage.example.test/private-video-original.mp4"],
+            "output_urls": [
+              "https://storage.example.test/private-video-original.mp4"
+            ],
             "preview_url": null,
             "previewUrl": null,
             "input_media": [],
@@ -234,7 +242,9 @@
       "response": {
         "status": "succeeded",
         "output": "https://cdn.example.test/generation-1.png",
-        "outputs": ["https://cdn.example.test/generation-1.png"],
+        "outputs": [
+          "https://cdn.example.test/generation-1.png"
+        ],
         "error": null,
         "timing": {
           "completedAt": "2026-06-22T06:01:00.000Z"
@@ -263,7 +273,9 @@
       "response": {
         "status": "succeeded",
         "output": "https://cdn.example.test/generation-2.mp4",
-        "outputs": ["https://cdn.example.test/generation-2.mp4"],
+        "outputs": [
+          "https://cdn.example.test/generation-2.mp4"
+        ],
         "error": null,
         "timing": {
           "completedAt": "2026-06-22T06:03:00.000Z"
@@ -292,7 +304,9 @@
       "response": {
         "status": "succeeded",
         "output": "https://cdn.example.test/generation-3.mp4",
-        "outputs": ["https://cdn.example.test/generation-3.mp4"],
+        "outputs": [
+          "https://cdn.example.test/generation-3.mp4"
+        ],
         "error": null,
         "timing": {
           "completedAt": "2026-06-22T06:05:00.000Z"
@@ -327,6 +341,9 @@
     },
     "getShowcaseFeed": {
       "method": "GET",
+      "query": {
+        "category": "media"
+      },
       "path": "/api/showcase/feed",
       "auth": "optional",
       "cacheControl": "public, max-age=300, stale-while-revalidate=300",
@@ -400,7 +417,10 @@
               "priceUsdCents": 0,
               "previewText": "Prompt and notes for the launch frame.",
               "allowRemix": true,
-              "resourceKinds": ["prompt", "notes"],
+              "resourceKinds": [
+                "prompt",
+                "notes"
+              ],
               "priceQuote": {
                 "formatted": "Free",
                 "amountSubunits": 0,
@@ -457,7 +477,9 @@
               "priceUsdCents": 900,
               "salesCount": 12,
               "allowRemix": true,
-              "resourceKinds": ["prompt"],
+              "resourceKinds": [
+                "prompt"
+              ],
               "createdAt": "2026-08-12T00:00:00.000Z",
               "seller": {
                 "id": "creator-1",
@@ -732,19 +754,29 @@
               {
                 "slug": "nano-banana",
                 "label": "Nano Banana 2.0",
-                "capabilities": ["image"],
+                "capabilities": [
+                  "image"
+                ],
                 "status": "current",
                 "providerSlug": "magicbooklet",
                 "aliases": []
               }
             ],
-            "supportedMediaKinds": ["image", "video"],
+            "supportedMediaKinds": [
+              "image",
+              "video"
+            ],
             "toolType": "platform",
-            "capabilities": ["image", "video"],
+            "capabilities": [
+              "image",
+              "video"
+            ],
             "catalogTier": "featured",
             "status": "current",
             "providerSlug": "magicbooklet",
-            "aliases": ["Magic Booklet"]
+            "aliases": [
+              "Magic Booklet"
+            ]
           }
         ]
       }
@@ -780,8 +812,14 @@
                 "presentation": "chips",
                 "defaultValue": "1:1",
                 "options": [
-                  { "value": "1:1", "label": "1:1" },
-                  { "value": "4:5", "label": "4:5" }
+                  {
+                    "value": "1:1",
+                    "label": "1:1"
+                  },
+                  {
+                    "value": "4:5",
+                    "label": "4:5"
+                  }
                 ]
               },
               {
@@ -791,8 +829,14 @@
                 "presentation": "chips",
                 "defaultValue": "1K",
                 "options": [
-                  { "value": "1K", "label": "1K" },
-                  { "value": "2K", "label": "2K" }
+                  {
+                    "value": "1K",
+                    "label": "1K"
+                  },
+                  {
+                    "value": "2K",
+                    "label": "2K"
+                  }
                 ]
               }
             ],
@@ -871,8 +915,14 @@
                 "presentation": "chips",
                 "defaultValue": "720p",
                 "options": [
-                  { "value": "720p", "label": "720p" },
-                  { "value": "1080p", "label": "1080p" }
+                  {
+                    "value": "720p",
+                    "label": "720p"
+                  },
+                  {
+                    "value": "1080p",
+                    "label": "1080p"
+                  }
                 ]
               }
             ],
@@ -1038,7 +1088,10 @@
               "priceUsdCents": 0,
               "salesCount": 0,
               "earningsUsdCents": 0,
-              "resourceKinds": ["prompt", "notes"]
+              "resourceKinds": [
+                "prompt",
+                "notes"
+              ]
             },
             "archivedAt": null,
             "generationId": "generation-1",
@@ -1081,7 +1134,10 @@
               "priceUsdCents": 0,
               "salesCount": 0,
               "earningsUsdCents": 0,
-              "resourceKinds": ["prompt", "notes"]
+              "resourceKinds": [
+                "prompt",
+                "notes"
+              ]
             },
             "archivedAt": null,
             "generationId": "generation-1",
@@ -1123,7 +1179,10 @@
             "priceUsdCents": 0,
             "salesCount": 0,
             "earningsUsdCents": 0,
-            "resourceKinds": ["prompt", "notes"]
+            "resourceKinds": [
+              "prompt",
+              "notes"
+            ]
           },
           "archivedAt": null,
           "generationId": "generation-1",
@@ -1213,7 +1272,10 @@
               "currency": "USD",
               "note": null
             },
-            "resourceKinds": ["prompt", "notes"],
+            "resourceKinds": [
+              "prompt",
+              "notes"
+            ],
             "creator": {
               "id": "user-1",
               "username": "creator",
@@ -1254,7 +1316,10 @@
             "currency": "USD",
             "note": null
           },
-          "resourceKinds": ["prompt", "notes"],
+          "resourceKinds": [
+            "prompt",
+            "notes"
+          ],
           "creator": {
             "id": "user-1",
             "username": "creator",
@@ -1316,7 +1381,10 @@
             "currency": "USD",
             "note": null
           },
-          "resourceKinds": ["prompt", "notes"],
+          "resourceKinds": [
+            "prompt",
+            "notes"
+          ],
           "creator": {
             "id": "user-1",
             "username": "creator",
@@ -1493,6 +1561,22 @@
           "commerceEnabled": true,
           "socialEnabled": true
         }
+      }
+    },
+    "readPostMedia": {
+      "method": "GET",
+      "path": "/api/media",
+      "auth": "optional",
+      "cacheControl": "private, no-store",
+      "status": 302,
+      "request": {
+        "path": "private-posts/b9100000-0000-4000-8000-000000000001/photo.jpg",
+        "bucket": "post_media"
+      },
+      "response": null,
+      "headers": {
+        "Vary": "Authorization, Cookie",
+        "Location": "https://project.supabase.co/storage/v1/object/sign/post_media/private-posts/b9100000-0000-4000-8000-000000000001/photo.jpg?token=short-lived"
       }
     }
   }

@@ -1,0 +1,102 @@
+diff --git a/node_modules/expo-video/ios/Cache/VideoCacheManager.swift b/node_modules/expo-video/ios/Cache/VideoCacheManager.swift
+--- a/node_modules/expo-video/ios/Cache/VideoCacheManager.swift
++++ b/node_modules/expo-video/ios/Cache/VideoCacheManager.swift
+@@ -13,7 +13,10 @@
+   private let maxCacheSizeKey = "\(VideoCacheManager.expoVideoCacheScheme)/maxCacheSize"
+ 
+   // Files currently being used/modified by the player - they will be skipped when clearing the cache
+-  private var openFiles: Set<URL> = Set()
++  // AVPlayer releases assets on its own queues, independently of cacheQueue.
++  // Count owners because feed and viewer players can hold the same cache file.
++  private let openFilesLock = NSLock()
++  private var openFiles: [String: Int] = [:]
+ 
+   // All cache commands such as clean or adding new data should be run on this queue
+   let cacheQueue = DispatchQueue(label: "\(VideoCacheManager.expoVideoCacheScheme)-dispatch-queue")
+@@ -23,11 +26,21 @@
+   }
+ 
+   func registerOpenFile(at url: URL) {
+-    openFiles.insert(url)
++    openFilesLock.lock()
++    defer { openFilesLock.unlock() }
++    openFiles[url.relativePath, default: 0] += 1
+   }
+ 
+   func unregisterOpenFile(at url: URL) {
+-    openFiles.remove(url)
++    openFilesLock.lock()
++    defer { openFilesLock.unlock() }
++    let path = url.relativePath
++    guard let count = openFiles[path] else { return }
++    if count > 1 {
++      openFiles[path] = count - 1
++    } else {
++      openFiles.removeValue(forKey: path)
++    }
+   }
+ 
+   func setMaxCacheSize(newSize: Int) throws {
+@@ -126,6 +139,10 @@
+       if totalSize <= maxSize {
+         continue
+       }
++      // A player may have opened this candidate since the eviction snapshot.
++      openFilesLock.lock()
++      defer { openFilesLock.unlock() }
++      if openFiles[fileInfo.url.relativePath] != nil { continue }
+       try removeVideoAndMimeTypeFile(at: fileInfo.url)
+       totalSize -= fileInfo.size
+     }
+@@ -177,7 +194,9 @@
+   }
+ 
+   private func fileIsOpen(url: URL) -> Bool {
+-    return openFiles.contains(url) || openFiles.contains { $0.relativePath == url.relativePath }
++    openFilesLock.lock()
++    defer { openFilesLock.unlock() }
++    return openFiles[url.relativePath] != nil
+   }
+ }
+ 
+diff --git a/node_modules/expo-video/ios/VideoAsset.swift b/node_modules/expo-video/ios/VideoAsset.swift
+--- a/node_modules/expo-video/ios/VideoAsset.swift
++++ b/node_modules/expo-video/ios/VideoAsset.swift
+@@ -72,9 +72,8 @@
+     guard useCaching else {
+       return
+     }
+-    if let saveFilePath, let cachedFileUrl = URL(string: saveFilePath) {
+-      VideoCacheManager.shared.unregisterOpenFile(at: cachedFileUrl)
+-    }
++    // MediaFileHandle owns the file registration and releases it on deinit.
++    // Releasing it here too can expose another player's live file to eviction.
+     VideoCacheManager.shared.ensureCacheSize()
+   }
+ 
+diff --git a/node_modules/expo-video/ios/Cache/MediaInfo.swift b/node_modules/expo-video/ios/Cache/MediaInfo.swift
+--- a/node_modules/expo-video/ios/Cache/MediaInfo.swift
++++ b/node_modules/expo-video/ios/Cache/MediaInfo.swift
+@@ -10,6 +10,8 @@
+ 
+   // Lock to protect loadedDataRanges from concurrent access
+   private let lock = NSLock()
++  // The synthesized decoder does not run the registering initializer.
++  private var registeredOpenFile = false
+ 
+   // Tuples can't be encoded/decoded, so we workaround that with an array
+   // Ranges are stored as half-open intervals: [start, end) where end is exclusive
+@@ -40,11 +42,12 @@
+ 
+     if let url = URL(string: savePath) {
+       VideoCacheManager.shared.registerOpenFile(at: url)
++      registeredOpenFile = true
+     }
+   }
+ 
+   deinit {
+-    if let url = URL(string: savePath) {
++    if registeredOpenFile, let url = URL(string: savePath) {
+       VideoCacheManager.shared.unregisterOpenFile(at: url)
+     }
+   }

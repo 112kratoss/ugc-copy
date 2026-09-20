@@ -188,11 +188,11 @@ describe('showcase feed route adapter service', () => {
     }));
   });
 
-  it('uses viewer auth for personalized feed requests and disables shared caching', async () => {
+  it.each(['video', 'media'])('passes the %s filter with viewer auth and disables shared caching', async (category) => {
     const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
 
     const response = await getShowcaseFeedRouteResponse({
-      request: new Request('http://localhost/api/showcase/feed?category=video&sort=top-sales&unlock=paid&resource=prompt', {
+      request: new Request(`http://localhost/api/showcase/feed?category=${category}&sort=top-sales&unlock=paid&resource=prompt`, {
         headers: {
           Authorization: 'Bearer private-token',
           'x-request-id': 'feed-adapter-auth-1',
@@ -215,7 +215,7 @@ describe('showcase feed route adapter service', () => {
     expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.objectContaining({
       anonymousKeyHash: null,
       bypassCache: false,
-      category: 'video',
+      category,
       resource: 'prompt',
       sort: 'top-sales',
       unlock: 'paid',

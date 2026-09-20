@@ -145,6 +145,7 @@ type ViewerParams = {
   source?: string | string[];
   initialId?: string | string[];
   replyTo?: string | string[];
+  mediaOnly?: string | string[];
 };
 
 type SaveMutationVariables = {
@@ -178,6 +179,7 @@ const ViewerPlaybackContext = createContext<ReturnType<typeof createViewerPlayba
 export default function ImmersivePreviewViewerScreen() {
   const params = useLocalSearchParams<ViewerParams>();
   const source = normalizeViewerSource(params.source);
+  const mediaOnly = normalizeParam(params.mediaOnly) === '1';
   const initialId = normalizeParam(params.initialId);
   const [openingPreview] = useState(() => peekOpeningPreview(initialId, Date.now()));
   // iOS 18: pushed out of a tile by UIKit's zoom (lib/apple-zoom.ts), which the pop reverses.
@@ -232,8 +234,8 @@ export default function ImmersivePreviewViewerScreen() {
   });
 
   const sourceQueryKey = useMemo(
-    () => ['immersive-preview-source', source, user?.id ?? 'guest', initialId, creatorUsername ?? '', routeFeedSessionId ?? ''] as const,
-    [creatorUsername, initialId, routeFeedSessionId, source, user?.id]
+    () => ['immersive-preview-source', source, user?.id ?? 'guest', initialId, creatorUsername ?? '', routeFeedSessionId ?? '', mediaOnly] as const,
+    [creatorUsername, initialId, mediaOnly, routeFeedSessionId, source, user?.id]
   );
   const viewerFeedQueryKey = useMemo(
     () => createShowcaseFeedViewerQueryKey(user?.id),
@@ -271,7 +273,7 @@ export default function ImmersivePreviewViewerScreen() {
     initialDataUpdatedAt: () => (libraryBacked
       ? undefined
       : readCachedImmersiveSourceSnapshot(queryClient, source, user?.id, initialId, routeFeedSessionId)?.updatedAt),
-    queryFn: () => loadImmersiveSourceData({ api, source, initialId, creatorUsername }),
+    queryFn: () => loadImmersiveSourceData({ api, source, initialId, creatorUsername, mediaOnly }),
     staleTime: 1000 * 45,
   });
 
@@ -321,7 +323,8 @@ export default function ImmersivePreviewViewerScreen() {
     const data = isGenerationSource(source) && loaderQuery.data
       ? { ...loaderQuery.data, ownerPosts: enrichmentPosts }
       : loaderQuery.data;
-    const builtItems = buildViewerItems(source, data, ownerInfo, initialId);
+    const builtItems = buildViewerItems(source, data, ownerInfo, initialId)
+      .filter((item) => !mediaOnly || Boolean(item.mediaItems.length || item.mediaUrl));
     if (user || source !== 'showcase-feed') return builtItems;
 
     const visiblePostIds = new Set(
@@ -331,7 +334,7 @@ export default function ImmersivePreviewViewerScreen() {
     return builtItems.filter((item) => (
       !item.showcasePostId || visiblePostIds.has(item.showcasePostId)
     ));
-  }, [awaitingLibrarySelection, enrichmentPosts, initialId, library.items, libraryBacked, loaderQuery.data, ownerInfo, source, user]);
+  }, [awaitingLibrarySelection, enrichmentPosts, initialId, library.items, libraryBacked, loaderQuery.data, mediaOnly, ownerInfo, source, user]);
   // A stale grid snapshot can refresh as UIKit is still opening the viewer.
   // Keep its row order for this opening: moving the playing cell to the new
   // ranking briefly exposes another post at the old native scroll offset.
@@ -789,6 +792,7 @@ export default function ImmersivePreviewViewerScreen() {
         pathname: '/auth',
         params: {
           returnTo: immersiveViewerReturnPath({
+            mediaOnly,
             source,
             initialId: item.id,
             feedSessionId,
@@ -1140,6 +1144,7 @@ export default function ImmersivePreviewViewerScreen() {
             onChromeLayout={index === activeIndex ? zoom.reportChromeDrawn : undefined}
             activeVideoId={activeVideoId}
             authReturnTo={immersiveViewerReturnPath({
+              mediaOnly,
               source,
               initialId: item.id,
               feedSessionId,
@@ -1273,6 +1278,7 @@ export default function ImmersivePreviewViewerScreen() {
         <CommentsSheet
           key={activeItem.showcasePostId}
           authReturnTo={immersiveViewerReturnPath({
+            mediaOnly,
             source,
             initialId: activeItem.id,
             feedSessionId,
@@ -1301,6 +1307,7 @@ export default function ImmersivePreviewViewerScreen() {
       ) : null}
       <UnlockRemixPrompt
         authReturnTo={unlockRemixSheetItem ? immersiveViewerReturnPath({
+          mediaOnly,
           source,
           initialId: unlockRemixSheetItem.id,
           feedSessionId,

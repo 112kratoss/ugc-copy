@@ -14,6 +14,7 @@ type ContractEndpoint = {
   cacheControl: string;
   status?: number;
   request?: unknown;
+  query?: Record<string, string>;
   response: unknown;
 };
 const contract = mobileApiContract as { endpoints: Record<ContractEndpointKey, ContractEndpoint> };
@@ -41,6 +42,9 @@ function clientForEndpoint(endpointKey: ContractEndpointKey) {
     const actualMethod = (init?.method ?? 'GET').toUpperCase();
     expect(actualMethod).toBe(endpoint.method);
     expect(matchesPathTemplate(endpoint.path, url.pathname)).toBe(true);
+    for (const [key, value] of Object.entries(endpoint.query ?? {})) {
+      expect(url.searchParams.get(key)).toBe(value);
+    }
     if (endpoint.request) {
       expect(JSON.parse(String(init?.body))).toEqual(endpoint.request);
     }
@@ -114,7 +118,7 @@ const successCases: Array<{
   },
   { key: 'getMotionGeneration', call: (api) => api.getMotionGeneration('prediction-3') },
   { key: 'enhancePrompt', call: (api) => api.enhancePrompt({ medium: 'image', selectedModel: 'nano-banana', prompt: 'Make it premium.' }) },
-  { key: 'getShowcaseFeed', call: (api) => api.getShowcaseFeed({ limit: 10 }, { auth: false }) },
+  { key: 'getShowcaseFeed', call: (api) => api.getShowcaseFeed({ limit: 10, ...mobileApiContract.endpoints.getShowcaseFeed.query }, { auth: false }) },
   { key: 'getSavedMedia', call: (api) => api.getSavedMedia({ limit: 10 }) },
   { key: 'getShowcasePost', call: (api) => api.getShowcasePost('post-1') },
   { key: 'listPostComments', call: (api) => api.listPostComments('post-1', { sort: 'top', limit: 20 }) },
@@ -386,9 +390,10 @@ describe('mobile shared API v1 contract fixture', () => {
     });
     // A retired operation stays in the registry so shipped builds that still
     // call it keep getting CORS and version headers on the route's 410, but
-    // this client no longer has a method for it.
+    // this client no longer has a method for it. Media redirects are consumed
+    // by native players/images, not the JSON client.
     const liveOperations = Object.entries(mobileApiOperationsV1.operations)
-      .filter(([, operation]) => !('retired' in operation))
+      .filter(([, operation]) => !('retired' in operation) && !('transport' in operation && operation.transport === 'native-media'))
       .map(([key]) => key)
       .sort();
 
@@ -499,5 +504,11 @@ describe('mobile shared API v1 contract fixture', () => {
 
     await expect(api.shareShowcasePost('post-1', { sourceSurface: 'showcase-reel' }))
       .resolves.toEqual(contract.endpoints.shareShowcasePost.response);
+  });
+});
+
+ it('keeps uploaded-media redirects optional-auth and uncacheable', () => {
+  expect(mobileApiContract.endpoints.readPostMedia).toMatchObject({
+    path: '/api/media', auth: 'optional', status: 302, cacheControl: 'private, no-store',
   });
 });

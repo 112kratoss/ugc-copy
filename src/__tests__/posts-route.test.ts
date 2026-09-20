@@ -631,8 +631,8 @@ describe('/api/posts route', () => {
     expect(infoMock).toHaveBeenCalledWith('user-1/tmp-proof.mp4');
     expect(copyMock).toHaveBeenCalledWith(
       'user-1/tmp-proof.mp4',
-      expect.stringMatching(/^posts\/.+\/proof\.mp4$/),
-      { destinationBucket: 'showcase_media' },
+      expect.stringMatching(/^private-posts\/.+\/proof\.mp4$/),
+      { destinationBucket: 'post_media' },
     );
     expect(downloadMock).not.toHaveBeenCalled();
     expect(uploadMock).not.toHaveBeenCalled();
@@ -708,13 +708,13 @@ describe('/api/posts route', () => {
     expect(response.status).toBe(200);
     expect(copyMock).toHaveBeenCalledWith(
       'user-1/cover.png',
-      expect.stringMatching(/^posts\/.+\/cover\.png$/),
-      { destinationBucket: 'showcase_media' },
+      expect.stringMatching(/^private-posts\/.+\/cover\.png$/),
+      { destinationBucket: 'post_media' },
     );
     expect(copyMock).toHaveBeenCalledWith(
       'user-1/clip.mp4',
-      expect.stringMatching(/^posts\/.+\/clip\.mp4$/),
-      { destinationBucket: 'showcase_media' },
+      expect.stringMatching(/^private-posts\/.+\/clip\.mp4$/),
+      { destinationBucket: 'post_media' },
     );
     // Only the image is read back, for its inline thumbhash placeholder.
     expect(downloadMock).toHaveBeenCalledWith('user-1/cover.png');

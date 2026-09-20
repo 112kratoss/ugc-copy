@@ -1,3 +1,4 @@
+import { postMediaStorageBucket } from '@/lib/post-media-storage';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { getMediaContentHash } from '@/lib/media-preview-metadata';
@@ -14,7 +15,6 @@ import {
   type VideoProbeResult,
 } from '@/lib/video-rendition';
 
-const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 
 export type PostMediaRenditionStatus = 'pending' | 'processing' | 'ready' | 'failed' | 'skipped';
 
@@ -121,7 +121,7 @@ export async function createPostMediaRendition({
             getMediaContentHash(teaser.buffer),
           );
           const teaserUpload = await supabase.storage
-            .from(SHOWCASE_MEDIA_BUCKET)
+            .from(postMediaStorageBucket(storagePath))
             .upload(teaserStoragePath, toStorageUploadBody(teaser.buffer, RENDITION_CONTENT_TYPE), {
               cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
               contentType: RENDITION_CONTENT_TYPE,
@@ -148,7 +148,7 @@ export async function createPostMediaRendition({
         getMediaContentHash(rendition.buffer),
       );
       const upload = await supabase.storage
-        .from(SHOWCASE_MEDIA_BUCKET)
+        .from(postMediaStorageBucket(storagePath))
         .upload(renditionStoragePath, toStorageUploadBody(rendition.buffer, RENDITION_CONTENT_TYPE), {
           cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
           contentType: RENDITION_CONTENT_TYPE,

@@ -2,6 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { canRepairPreview, hasRepairableMediaPreviews } from '@/lib/media-preview-repair';
 
+vi.mock('node:dns/promises', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:dns/promises')>(),
+  lookup: vi.fn(async () => [{ address: '8.8.8.8', family: 4 }]),
+}));
+
 const previewMocks = vi.hoisted(() => ({
   createPostMediaPreview: vi.fn(async () => ({
     previewStoragePath: 'posts/user/source.preview.abc123.webp',
@@ -378,10 +383,9 @@ describe('media preview repair retries', () => {
     let requestInit: RequestInit | undefined;
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       requestInit = init;
-      return {
-        ok: true,
-        blob: async () => new Blob(['image'], { type: 'image/png' }),
-      } as Response;
+      return new Response(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), {
+        headers: { 'content-type': 'image/png' },
+      });
     }));
     const updates: Array<{ table: string; payload: Record<string, unknown> }> = [];
     const supabase = {
@@ -427,6 +431,35 @@ describe('media preview repair retries', () => {
     expect(invalidateFeedCache).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { name: 'unapproved host', url: 'https://unapproved.invalid/image.png', oversized: false },
+    { name: 'oversized image', url: 'https://provider.example.com/image.png', oversized: true },
+  ])('rejects an $name before decoding a repair source', async ({ url, oversized }) => {
+    const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+    const { createGenerationOutputPreview } = await import('@/lib/generation-output-preview');
+    vi.mocked(createGenerationOutputPreview).mockClear();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
+      { headers: { 'content-type': 'image/png', 'content-length': String(26 * 1024 * 1024) } },
+    )));
+    const client = {
+      from: (table: string) => ({
+        select: () => createSelectChain({
+          data: table === 'generations' ? [{ id: 'gen-1', user_id: 'user-1', output_url: url, category: 'image', preview_attempt_count: 0 }] : [],
+          error: null,
+        }),
+        update: () => ({ eq: async () => ({ error: null }) }),
+      }),
+      storage: { from: vi.fn() },
+    };
+    const summary = await repairMediaPreviews(withAdmissionFallback(client) as never, {
+      batchSize: 1, invalidateFeedCache: vi.fn(),
+    });
+    expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
+    expect(createGenerationOutputPreview).not.toHaveBeenCalled();
+    if (!oversized) expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('marks an external source gone when a second run meets a 404, and only then', async () => {
     const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 404 } as Response)));
@@ -439,7 +472,7 @@ describe('media preview repair retries', () => {
               ? [{
                   id: 'gen-gone',
                   user_id: 'user-1',
-                  output_url: 'https://tempfile.provider.example/expired.mp4',
+                  output_url: 'https://tempfile.provider.example.com/expired.mp4',
                   category: 'motion',
                   preview_attempt_count: attemptCount,
                 }]

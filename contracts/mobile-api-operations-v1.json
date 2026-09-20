@@ -521,6 +521,12 @@
       "method": "GET",
       "path": "/api/model-catalog/v1/models/:id",
       "auth": "none"
+    },
+    "readPostMedia": {
+      "method": "GET",
+      "path": "/api/media",
+      "auth": "optional",
+      "transport": "native-media"
     }
   },
   "fallbackRoutes": [

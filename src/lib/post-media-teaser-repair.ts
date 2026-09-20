@@ -1,3 +1,4 @@
+import { postMediaStorageBucket } from '@/lib/post-media-storage';
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { buildPostMediaTeaserPath } from '@/lib/post-media-rendition';
@@ -55,11 +56,11 @@ export async function repairPostMediaTeasers(supabase: SupabaseClient) {
     // Upload-published posts file media under their own id; creation-published
     // ones keep it under the linked generation's showcase prefix. The claim
     // already applied this rule; repeating it here keeps a wrong row harmless.
-    const ownedByPost = Boolean(path?.startsWith(`posts/${row.post_id}/`));
+    const ownedByPost = Boolean((path?.startsWith(`posts/${row.post_id}/`) || path?.startsWith(`private-posts/${row.post_id}/`)));
     const ownedByGeneration = Boolean(row.generation_id && path?.startsWith(`showcase/${row.generation_id}/`));
     if (!path || !(ownedByPost || ownedByGeneration)) throw new Error('Teaser source is outside the owning post.');
     if (!(row.source_bytes > 0 && row.source_bytes <= TEASER_REPAIR_MAX_BYTES)) throw new Error('Teaser source exceeds the byte budget.');
-    const storage = supabase.storage.from('showcase_media');
+    const storage = supabase.storage.from(postMediaStorageBucket(path));
     const download = await storage.download(path, {}, { signal: AbortSignal.timeout(30_000) });
     if (download.error || !download.data) throw download.error ?? new Error('Teaser source could not be read.');
     if (!download.data.size || download.data.size > TEASER_REPAIR_MAX_BYTES) throw new Error('Teaser source exceeds the byte budget.');

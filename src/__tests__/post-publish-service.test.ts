@@ -535,7 +535,7 @@ describe('publishPreparedPost', () => {
     // source may be shared by another draft/retry and remains under its
     // reservation + reclaim policy.
     expect(removedBatches).toEqual([
-      ['posts/post-1/0/oversized.png'],
+      ['private-posts/post-1/0/oversized.png'],
     ]);
     expect(clearedIntents).not.toHaveBeenCalled();
   });
@@ -585,7 +585,7 @@ describe('publishPreparedPost', () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
-  it('copies staged video into the public bucket without reading the bytes', async () => {
+  it('copies staged video into private storage without reading the bytes', async () => {
     const prepared = await prepareStagedMediaSubmission({
       fileName: 'clip.mp4',
       contentType: 'video/mp4',
@@ -642,8 +642,8 @@ describe('publishPreparedPost', () => {
     // Cross-bucket server-side move: no bytes enter the function at all.
     expect(copy).toHaveBeenCalledWith(
       'user-1/clip.mp4',
-      'posts/post-1/0/clip.mp4',
-      { destinationBucket: 'showcase_media' },
+      'private-posts/post-1/0/clip.mp4',
+      { destinationBucket: 'post_media' },
     );
     expect(download).not.toHaveBeenCalled();
     expect(createPostMediaRendition).not.toHaveBeenCalled();
@@ -654,7 +654,7 @@ describe('publishPreparedPost', () => {
     expect(mediaItems[0]).not.toHaveProperty('previewStatus');
     expect(mediaItems[0]).not.toHaveProperty('renditionStatus');
     expect(mediaItems[0]).toMatchObject({
-      storagePath: 'posts/post-1/0/clip.mp4',
+      storagePath: 'private-posts/post-1/0/clip.mp4',
       mediaKind: 'video',
       contentType: 'video/mp4',
     });
@@ -816,7 +816,7 @@ describe('publishPreparedPost', () => {
     // The destination is registered before the copy runs, so an ambiguous
     // failure still cleans up whatever may have materialized.
     expect(removedBatches).toEqual([
-      ['posts/post-1/0/shot.png'],
+      ['private-posts/post-1/0/shot.png'],
     ]);
     // The source remains available for a retry and is not falsely marked gone.
     expect(clearedIntents).not.toHaveBeenCalled();

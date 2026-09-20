@@ -14,6 +14,8 @@ import {
 } from '@/lib/generation-services';
 
 export const GENERATION_OUTPUT_IMPORT_BATCH_LIMIT = 4;
+// Admission deadline, not an interruption of an import already persisting.
+export const GENERATION_OUTPUT_IMPORT_TIME_BUDGET_MS = 60_000;
 
 type GenerationRow = SyncableGenerationRecord & { workflow_settings?: Record<string, unknown> | null };
 
@@ -70,17 +72,23 @@ export async function processGenerationOutputImportJobs(params: {
   lockedBy: string;
   limit?: number;
 }) {
-  const jobs = await claimGenerationOutputImportJobs({
-    client: params.client,
-    limit: params.limit ?? GENERATION_OUTPUT_IMPORT_BATCH_LIMIT,
-    lockedBy: params.lockedBy,
-  });
-  const summary = { claimed: jobs.length, completed: 0, retried: 0, exhausted: 0 };
+  const startedAt = Date.now();
+  const limit = Math.max(0, Math.min(params.limit ?? GENERATION_OUTPUT_IMPORT_BATCH_LIMIT, GENERATION_OUTPUT_IMPORT_BATCH_LIMIT));
+  const summary = { claimed: 0, completed: 0, retried: 0, exhausted: 0 };
 
   // Strictly sequential: one job may stage a 250 MB video and invoke ffmpeg.
   // Bounded parallelism belongs in separate image/video worker pools, not one
   // serverless process whose temporary disk is shared by every promise.
-  for (const job of jobs) {
+  while (summary.claimed < limit && Date.now() - startedAt < GENERATION_OUTPUT_IMPORT_TIME_BUDGET_MS) {
+    // Do not hold leases on jobs this invocation may never start. Their next
+    // worker can claim them immediately rather than waiting for a stale lease.
+    const [job] = await claimGenerationOutputImportJobs({
+      client: params.client,
+      limit: 1,
+      lockedBy: params.lockedBy,
+    });
+    if (!job) break;
+    summary.claimed += 1;
     try {
       await importOne(params.client, job);
       await finishGenerationOutputImportJob({

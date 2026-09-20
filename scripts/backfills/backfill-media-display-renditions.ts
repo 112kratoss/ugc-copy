@@ -36,7 +36,7 @@ import {
  * `--limit=<n>` bounds one pass so the work can be spread out.
  */
 
-const SHOWCASE_BUCKET = 'showcase_media';
+const bucketForPath = (path: string) => path.startsWith('private-posts/') ? 'post_media' : 'showcase_media';
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -87,7 +87,7 @@ async function main() {
     if (!storagePath) continue;
 
     try {
-      const download = await supabase.storage.from(SHOWCASE_BUCKET).download(storagePath);
+      const download = await supabase.storage.from(bucketForPath(storagePath)).download(storagePath);
       if (download.error || !download.data) {
         throw download.error ?? new Error('source could not be downloaded');
       }
@@ -119,7 +119,7 @@ async function main() {
       }
 
       const upload = await supabase.storage
-        .from(SHOWCASE_BUCKET)
+        .from(bucketForPath(storagePath))
         .upload(displayPath, toStorageUploadBody(display.body, 'image/webp'), {
           cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
           contentType: 'image/webp',

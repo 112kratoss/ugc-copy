@@ -7,8 +7,8 @@ test-results
 output
 docs/model-api-references
 supabase/backups
-# The mobile workspace stays out of the web upload, except the two modules the
-# web bundle and the server import from ugc-mobile/lib/model-catalog. Gitignore
+# The mobile workspace stays out of the web upload, except the platform-free
+# model catalog and resumable media transport shared with the web app. Gitignore
 # semantics cannot re-include a file whose parent directory is excluded, so the
 # contents are excluded level by level and the path down to that folder is
 # re-included. Without this the Vercel build fails with "Module not found".
@@ -16,3 +16,4 @@ ugc-mobile/*
 !ugc-mobile/lib
 ugc-mobile/lib/*
 !ugc-mobile/lib/model-catalog
+!ugc-mobile/lib/media-upload

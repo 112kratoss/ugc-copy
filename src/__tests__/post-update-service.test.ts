@@ -1210,6 +1210,7 @@ describe('updateOwnerPostForRoute', () => {
         id: 'media-a',
         media_key: 'proof-a',
         storage_path: 'posts/post-1/a.jpg',
+        display_storage_path: 'posts/post-1/a.display.webp',
         preview_storage_path: null,
         external_url: null,
         media_kind: 'image',
@@ -1303,7 +1304,7 @@ describe('updateOwnerPostForRoute', () => {
     expect(updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
       mediaItems: [
         expect.objectContaining({ mediaKey: 'proof-b', sortOrder: 0 }),
-        expect.objectContaining({ mediaKey: 'proof-a', sortOrder: 1 }),
+        expect.objectContaining({ mediaKey: 'proof-a', sortOrder: 1, displayStoragePath: 'posts/post-1/a.display.webp' }),
       ],
     }));
   });
@@ -1848,7 +1849,7 @@ describe('updateOwnerPostForRoute', () => {
     expect(copied).toEqual([]);
   });
 
-  it('copies edited video into the public bucket without reading the bytes', async () => {
+  it('copies edited video into private storage without reading the bytes', async () => {
     const { client, copied, downloads, uploaded } = createSupabaseMock({
       bundle: null,
       stagedInfo: { size: 13 * 1024 * 1024, contentType: 'video/mp4' },
@@ -1907,7 +1908,7 @@ describe('updateOwnerPostForRoute', () => {
     expect(result.ok).toBe(true);
     expect(copied).toEqual([{
       from: 'user-1/clip.mp4',
-      to: expect.stringMatching(/^posts\/post-1\/.+\/clip\.mp4$/),
+      to: expect.stringMatching(/^private-posts\/post-1\/.+\/clip\.mp4$/),
     }]);
     // No bytes enter the function, and nothing is re-uploaded.
     expect(downloads).toEqual([]);

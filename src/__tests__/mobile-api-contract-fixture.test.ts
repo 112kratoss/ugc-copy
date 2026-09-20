@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { normalizeShowcaseCategory } from '@/lib/showcase';
+
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import mobileApiOperationsV1 from '../../contracts/mobile-api-operations-v1.json';
 import type {
@@ -111,9 +113,14 @@ const expectedEndpointKeys = [
   'markAllMobileNotificationsRead',
   'getMobileNotificationPreferences',
   'updateMobileNotificationPreferences',
+  'readPostMedia',
 ] as const;
 
 describe('shared mobile API v1 contract fixture', () => {
+  it('accepts the media-only Explore category without changing the default feed', () => {
+    expect(normalizeShowcaseCategory(mobileApiContract.endpoints.getShowcaseFeed.query.category)).toBe('media');
+    expect(normalizeShowcaseCategory(undefined)).toBe('all');
+  });
   it('keeps private playback separate from the owner original', () => {
     const video = mobileApiContract.endpoints.listGenerations.response.generations[1];
     expect(video.media.url).toBe(video.output_url);
@@ -154,7 +161,7 @@ describe('shared mobile API v1 contract fixture', () => {
       endpoint.method
       && endpoint.path.startsWith('/api/')
       && endpoint.cacheControl
-      && endpoint.response
+      && (endpoint.response || endpoint.status === 302)
     ))).toBe(true);
     expect(contract.endpoints.appVersion).toMatchObject({
       method: 'GET',
@@ -228,5 +235,11 @@ describe('shared mobile API v1 contract fixture', () => {
       category: 'commerce',
       isRead: false,
     });
+  });
+});
+
+ it('keeps uploaded-media redirects optional-auth and uncacheable', () => {
+  expect(mobileApiContract.endpoints.readPostMedia).toMatchObject({
+    path: '/api/media', auth: 'optional', status: 302, cacheControl: 'private, no-store',
   });
 });

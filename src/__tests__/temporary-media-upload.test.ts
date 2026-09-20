@@ -142,6 +142,24 @@ describe('uploadMediaToTemporaryStorage', () => {
     vi.restoreAllMocks();
   });
 
+  it('does not reserve storage for a cancelled upload', async () => {
+    const { uploadMediaToTemporaryStorage } = await import('@/lib/temporary-media-upload');
+    const signal = AbortSignal.abort();
+    await expect(uploadMediaToTemporaryStorage(new File(['image'], 'image.png'), 'user-1', { signal }))
+      .rejects.toMatchObject({ name: 'UploadCancelledError' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('carries cancellation through preparation, finalization and preview signing', async () => {
+    stubXhr();
+    const { uploadMediaToTemporaryStorage } = await import('@/lib/temporary-media-upload');
+    const signal = new AbortController().signal;
+    await uploadMediaToTemporaryStorage(new File(['image'], 'image.png', { type: 'image/png' }), 'user-1', { signal });
+    for (const endpoint of ['/api/uploads/media/sign', '/api/uploads/finalize', '/api/uploads/media/read-url']) {
+      expect(fetch).toHaveBeenCalledWith(endpoint, expect.objectContaining({ signal }));
+    }
+  });
+
   it('uploads temporary media through a backend-issued signed upload intent', async () => {
     const sent = stubXhr();
     const { uploadMediaToTemporaryStorage } = await import('@/lib/temporary-media-upload');

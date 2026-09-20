@@ -161,6 +161,50 @@ describe('createMediaReadSignedUrlForRoute', () => {
     expect(clients.rpc).toHaveBeenCalledTimes(1);
   });
 
+  it('shares signing work for concurrent range requests on a cold object', async () => {
+    const clients = createClients();
+    const request = {
+      payload: { bucket: 'generated_videos' as const, filePath: 'user/clip.mp4', downloadFilename: null },
+      rateLimitClient: clients.rateLimitClient,
+      userClient: clients.userClient,
+      userId: 'user-1',
+    };
+    const results = await Promise.all(Array.from({ length: 3 }, () => createMediaReadSignedUrlForRoute(request)));
+
+    expect(results.every((result) => result.ok)).toBe(true);
+    expect(clients.rpc).toHaveBeenCalledTimes(1);
+    expect(clients.createSignedUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases failed in-flight signing so a later request can recover', async () => {
+    const clients = createClients();
+    clients.createSignedUrl.mockRejectedValueOnce(new Error('Storage unavailable'));
+    const request = {
+      payload: { bucket: 'generated_videos' as const, filePath: 'user/clip.mp4', downloadFilename: null },
+      rateLimitClient: clients.rateLimitClient,
+      userClient: clients.userClient,
+      userId: 'user-1',
+    };
+    await expect(Promise.all([
+      createMediaReadSignedUrlForRoute(request), createMediaReadSignedUrlForRoute(request),
+    ])).rejects.toThrow('Storage unavailable');
+    expect(clients.createSignedUrl).toHaveBeenCalledTimes(1);
+    await expect(createMediaReadSignedUrlForRoute(request)).resolves.toMatchObject({ ok: true });
+    expect(clients.createSignedUrl).toHaveBeenCalledTimes(2);
+  });
+
+  it('never shares in-flight signatures across owners or dispositions', async () => {
+    const clients = createClients();
+    const base = { rateLimitClient: clients.rateLimitClient, userClient: clients.userClient };
+    const payload = { bucket: 'generated_videos' as const, filePath: 'user/clip.mp4', downloadFilename: null };
+    await Promise.all([
+      createMediaReadSignedUrlForRoute({ ...base, payload, userId: 'user-1' }),
+      createMediaReadSignedUrlForRoute({ ...base, payload, userId: 'user-2' }),
+      createMediaReadSignedUrlForRoute({ ...base, payload: { ...payload, downloadFilename: 'clip.mp4' }, userId: 'user-1' }),
+    ]);
+    expect(clients.createSignedUrl).toHaveBeenCalledTimes(3);
+  });
+
   it('never hands one owner a signature minted for another', async () => {
     const clients = createClients();
     const payload = {

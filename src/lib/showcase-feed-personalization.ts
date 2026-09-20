@@ -738,7 +738,7 @@ async function loadCandidateFeatures({
   serviceClient: SupabaseClient;
   viewerUserId: string | null;
 }) {
-  const rpcCategory = category === 'all' || category === 'image' || category === 'video' || category === 'text'
+  const rpcCategory = category === 'all' || category === 'media' || category === 'image' || category === 'video' || category === 'text'
     ? null
     : category;
   const asOf = new Date().toISOString();

@@ -27,7 +27,7 @@ import {
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
 
-const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
+import { removePostMediaObjects } from '@/lib/post-media-storage';
 
 export function getCanonicalPostShowcaseAssetPath(
   storagePath: string | null | undefined,
@@ -37,7 +37,7 @@ export function getCanonicalPostShowcaseAssetPath(
   if (!storagePath) return null;
   const canonicalPath = parseCanonicalStorageObjectPath(storagePath, { minimumSegments: 3 });
   if (!canonicalPath) return null;
-  if (canonicalPath.startsWith(`posts/${postId}/`)) return canonicalPath;
+  if (canonicalPath.startsWith(`posts/${postId}/`) || canonicalPath.startsWith(`private-posts/${postId}/`)) return canonicalPath;
   return generationId && canonicalPath.startsWith(`showcase/${generationId}/`)
     ? canonicalPath
     : null;
@@ -409,7 +409,7 @@ export async function deleteOwnerPostForRoute({
   invalidateShowcaseFeedCache();
 
   if (removableShowcasePath) {
-    await adminSupabase.storage.from(SHOWCASE_MEDIA_BUCKET).remove([removableShowcasePath]);
+    await removePostMediaObjects(adminSupabase, [removableShowcasePath]);
   }
 
   return {

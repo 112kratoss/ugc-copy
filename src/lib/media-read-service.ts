@@ -77,9 +77,10 @@ type CachedSignature = { signedUrl: string; reusableUntilMs: number };
  * a different capability from a playback one.
  */
 const signatureCache = new Map<string, CachedSignature>();
+const pendingSignatures = new Map<string, Promise<MediaReadSignedUrlResult>>();
 
 function getSignatureCacheKey(userId: string, payload: MediaReadRoutePayload): string {
-  return [userId, payload.bucket, payload.filePath, payload.downloadFilename ?? ''].join('\n');
+  return JSON.stringify([userId, payload.bucket, payload.filePath, payload.downloadFilename]);
 }
 
 function readCachedSignature(key: string): string | null {
@@ -110,6 +111,7 @@ function storeSignature(key: string, signedUrl: string): void {
 /** Test seam: instances are per-process, so a test must be able to start clean. */
 export function resetMediaSignatureCacheForTests(): void {
   signatureCache.clear();
+  pendingSignatures.clear();
 }
 
 function getDownloadFilename(filePath: string, requestedFilename: string | null): string {
@@ -170,6 +172,26 @@ export async function createMediaReadSignedUrlForRoute({
     return { ok: true, signedUrl: reusable };
   }
 
+  const pending = pendingSignatures.get(cacheKey);
+  if (pending) return pending;
+
+  const signing = signMediaReadUrl({ payload, rateLimitClient, userClient, userId }, cacheKey);
+  // Bound retained work as well as completed entries. At capacity, new keys
+  // still use the normal rate-limited path without joining the in-flight map.
+  if (pendingSignatures.size < MAX_CACHED_SIGNATURES) {
+    pendingSignatures.set(cacheKey, signing);
+  }
+  try {
+    return await signing;
+  } finally {
+    if (pendingSignatures.get(cacheKey) === signing) pendingSignatures.delete(cacheKey);
+  }
+}
+
+async function signMediaReadUrl(
+  { payload, rateLimitClient, userClient, userId }: Parameters<typeof createMediaReadSignedUrlForRoute>[0],
+  cacheKey: string,
+): Promise<MediaReadSignedUrlResult> {
   try {
     await enforceBackendRateLimit(rateLimitClient, {
       ...MEDIA_READ_SIGN_RATE_LIMIT,

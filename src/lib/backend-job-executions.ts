@@ -1,3 +1,4 @@
+import { hasPendingUploadedMediaMaintenance, processUploadedMediaMaintenance } from '@/lib/uploaded-media-maintenance';
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
@@ -604,9 +605,13 @@ export function runShowcaseMediaRevocationsBackendJob(options: {
       completed: 'showcase_media_revocations_completed',
       failed: 'showcase_media_revocations_failed',
     },
-    hasWork: (client) => hasPendingShowcaseMediaRevocations(client),
-    run: (client, context) => processShowcaseMediaRevocations(client, {
-      now: new Date(context.startedAtMs),
+    hasWork: async (client) => {
+      const pending = await Promise.all([hasPendingShowcaseMediaRevocations(client), hasPendingUploadedMediaMaintenance(client)]);
+      return pending.some(Boolean);
+    },
+    run: async (client, context) => ({
+      ...await processShowcaseMediaRevocations(client, { now: new Date(context.startedAtMs) }),
+      uploadedMedia: await processUploadedMediaMaintenance(client),
     }),
   });
 }

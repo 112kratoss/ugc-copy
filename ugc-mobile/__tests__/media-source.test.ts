@@ -5,7 +5,7 @@ const base = 'https://magicbooklet.com';
 const token = 'test-session';
 
 describe('native media source authentication', () => {
-  it.each(['/api/media?bucket=generated_images&path=owner%2Fimage.webp', 'https://magicbooklet.com/api/media?path=image.webp'])('authenticates the owned proxy %s', (url) => {
+  it.each(['/api/media?bucket=post_media&path=private-posts%2Fpost%2Fimage.webp', '/api/media?bucket=generated_images&path=owner%2Fimage.webp', 'https://magicbooklet.com/api/media?path=image.webp'])('authenticates the owned proxy %s', (url) => {
     expect(buildMediaSource(url, base, token)).toEqual({
       uri: new URL(url, base).href, headers: { Authorization: 'Bearer test-session' },
     });

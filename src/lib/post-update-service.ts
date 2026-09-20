@@ -1,3 +1,4 @@
+import { postMediaStorageBucket, removePostMediaObjects } from '@/lib/post-media-storage';
 import 'server-only';
 import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 
@@ -83,7 +84,6 @@ import {
 
 const POST_RESOURCE_FILES_BUCKET = 'post_resource_files';
 
-const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 const UPLOADS_BUCKET = 'uploads';
 
 export function getCanonicalPostMediaStoragePath(
@@ -95,7 +95,7 @@ export function getCanonicalPostMediaStoragePath(
   }
 
   const canonicalPath = parseCanonicalStorageObjectPath(value, { minimumSegments: 3 });
-  return canonicalPath?.startsWith(`posts/${postId}/`) ? canonicalPath : null;
+  return (canonicalPath?.startsWith(`posts/${postId}/`) || canonicalPath?.startsWith(`private-posts/${postId}/`)) ? canonicalPath : null;
 }
 
 function canonicalizeExistingPostMediaPath(
@@ -164,6 +164,7 @@ type ExistingPostMediaRow = {
   media_key?: string | null;
   storage_path: string | null;
   preview_storage_path?: string | null;
+  display_storage_path?: string | null;
   preview_thumbhash?: string | null;
   preview_status?: 'pending' | 'processing' | 'ready' | 'failed';
   preview_attempt_count?: number;
@@ -513,7 +514,7 @@ async function loadOwnedPostMedia(
   adminSupabase: SupabaseClient,
   postId: string,
 ): Promise<ExistingPostMediaRow[]> {
-  const BASE_COLUMNS = 'id, storage_path, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order';
+  const BASE_COLUMNS = 'id, display_storage_path, storage_path, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order';
   const PREVIEW_COLUMNS = 'preview_storage_path, preview_thumbhash, preview_status, preview_attempt_count, preview_error, preview_generated_at';
   const RENDITION_COLUMNS = 'rendition_storage_path, rendition_status, rendition_attempt_count, rendition_error, rendition_generated_at, rendition_bytes';
   const TEASER_COLUMNS = 'teaser_storage_path, teaser_bytes, teaser_generated_at, teaser_error';
@@ -719,9 +720,7 @@ async function rollbackPreparedEditedPostMedia(
   }
 
   try {
-    const cleanup = await adminSupabase.storage
-      .from(SHOWCASE_MEDIA_BUCKET)
-      .remove(prepared.newStoragePaths);
+    const cleanup = await removePostMediaObjects(adminSupabase, prepared.newStoragePaths);
     if (cleanup.error) {
       logBackendWarning('failed_to_rollback_prepared_post_media', { error: cleanup.error });
     }
@@ -799,9 +798,7 @@ async function finalizePreparedEditedPostMedia(
       if (canonicalRemovableStoragePaths.length === 0) {
         return;
       }
-      const removedMediaCleanup = await adminSupabase.storage
-        .from(SHOWCASE_MEDIA_BUCKET)
-        .remove(canonicalRemovableStoragePaths);
+      const removedMediaCleanup = await removePostMediaObjects(adminSupabase, canonicalRemovableStoragePaths);
       if (removedMediaCleanup.error) {
         logBackendWarning('failed_to_remove_deleted_post_media', { error: removedMediaCleanup.error });
       }
@@ -851,6 +848,7 @@ async function prepareEditedPostMedia(params: {
           mediaKey: item.mediaKey,
           storagePath,
           previewStoragePath,
+          displayStoragePath: canonicalizeExistingPostMediaPath(item.row.display_storage_path, params.postId),
           previewThumbhash: item.row.preview_thumbhash ?? null,
           previewStatus: item.row.preview_status ?? (previewStoragePath ? 'ready' : 'pending'),
           previewAttemptCount: item.row.preview_attempt_count ?? 0,
@@ -940,7 +938,7 @@ async function prepareEditedPostMedia(params: {
       }
 
       const extension = inferExtension(item.originalName, item.contentType);
-      const storagePath = `posts/${params.postId}/${randomUUID()}/${sanitizeFileStem(item.originalName)}.${extension}`;
+      const storagePath = `private-posts/${params.postId}/${randomUUID()}/${sanitizeFileStem(item.originalName)}.${extension}`;
       // Both registered before the copy: the staged object is confirmed to
       // exist, and a copy that materializes its destination then fails to
       // answer would otherwise leak an object no cleanup knows about. Removing
@@ -952,7 +950,7 @@ async function prepareEditedPostMedia(params: {
 
       const copyResult = await params.adminSupabase.storage
         .from(UPLOADS_BUCKET)
-        .copy(canonicalSourcePath, storagePath, { destinationBucket: SHOWCASE_MEDIA_BUCKET });
+        .copy(canonicalSourcePath, storagePath, { destinationBucket: postMediaStorageBucket(storagePath) });
       if (copyResult.error) {
         throw copyResult.error;
       }
@@ -978,6 +976,7 @@ async function prepareEditedPostMedia(params: {
           });
           if (preview?.previewStoragePath) {
             newStoragePaths.push(preview.previewStoragePath);
+            if (preview.displayStoragePath) newStoragePaths.push(preview.displayStoragePath);
           }
         } catch (previewError) {
           logBackendWarning('failed_to_create_edited_post_media_preview', { error: previewError });
@@ -994,6 +993,7 @@ async function prepareEditedPostMedia(params: {
         ...(preview
           ? {
             previewStoragePath: preview.previewStoragePath,
+            displayStoragePath: preview.displayStoragePath ?? null,
             previewThumbhash: preview.previewThumbhash,
             previewStatus: preview.previewStatus,
             previewAttemptCount: 1,
@@ -1015,7 +1015,7 @@ async function prepareEditedPostMedia(params: {
 
     const retainedStoragePaths = new Set(
       persistedMediaItems
-        .flatMap((item) => [item.storagePath, item.previewStoragePath, item.renditionStoragePath, item.teaserStoragePath])
+        .flatMap((item) => [item.storagePath, item.previewStoragePath, item.displayStoragePath, item.renditionStoragePath, item.teaserStoragePath])
         .filter((storagePath): storagePath is string => Boolean(storagePath)),
     );
     // Renditions and teasers belong on both sides: a dropped video's feed
@@ -1023,7 +1023,7 @@ async function prepareEditedPostMedia(params: {
     // the feed had been serving fetchable forever -- the same gap takedown
     // revocation had.
     const removedStoragePaths = existingMediaRows
-      .flatMap((row) => [row.storage_path, row.preview_storage_path, row.rendition_storage_path, row.teaser_storage_path])
+      .flatMap((row) => [row.storage_path, row.preview_storage_path, row.display_storage_path, row.rendition_storage_path, row.teaser_storage_path])
       .flatMap((storagePath) => {
         const canonicalPath = getCanonicalPostMediaStoragePath(storagePath, params.postId);
         return canonicalPath && !retainedStoragePaths.has(canonicalPath) ? [canonicalPath] : [];
@@ -1044,7 +1044,7 @@ async function prepareEditedPostMedia(params: {
       abortNullableUploadByteConsumption(params.adminSupabase, claim)
     )));
     if (newStoragePaths.length > 0) {
-      await params.adminSupabase.storage.from(SHOWCASE_MEDIA_BUCKET).remove(newStoragePaths);
+      await removePostMediaObjects(params.adminSupabase, newStoragePaths);
     }
 
     // A rejected upload is the caller's problem to fix, not a server fault, so

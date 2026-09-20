@@ -30,11 +30,11 @@ export interface ShowcasePriorityPosterData {
     dataUrl: string;
 }
 
-export type ShowcaseCategory = 'all' | 'image' | 'video' | 'text';
+export type ShowcaseCategory = 'all' | 'media' | 'image' | 'video' | 'text';
 export type ShowcaseSort = 'for-you' | 'recent' | 'top-saves' | 'top-remixes' | 'top-sales';
 export type ShowcaseUnlockFilter = 'all' | 'with-unlock' | 'free' | 'paid';
 export type ShowcaseResourceFilter = 'all' | 'prompt' | 'workflow' | 'files' | 'notes' | 'remix';
-export type ShowcaseItemCategory = Exclude<ShowcaseCategory, 'all'>;
+export type ShowcaseItemCategory = Exclude<ShowcaseCategory, 'all' | 'media'>;
 export const MAGICBOOKLET_SOURCE_KIND = 'magicbooklet' as const;
 const LEGACY_EMPTYBOOKLET_SOURCE_KIND = 'emptybooklet' as const;
 const LEGACY_UGC_COPY_SOURCE_KIND = 'ugc_copy' as const;
@@ -272,7 +272,7 @@ export function sanitizeShowcaseFeedPage(feed: ShowcaseFeedPage): ShowcaseFeedPa
 
 export function normalizeShowcaseCategory(value: string | null | undefined): ShowcaseCategory {
     if (value === 'motion' || value === 'ugc-ad') return 'video';
-    if (value === 'image' || value === 'video' || value === 'text') {
+    if (value === 'media' || value === 'image' || value === 'video' || value === 'text') {
         return value;
     }
 

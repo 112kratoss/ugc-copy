@@ -1,3 +1,4 @@
+import { postMediaReadUrl } from '@/lib/post-media-storage';
 import 'server-only';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -268,8 +269,7 @@ function resolveShowcaseAssetUrl(
   adminSupabase: SupabaseClient,
   showcaseAssetPath: string
 ): string {
-  const { data } = adminSupabase.storage.from('showcase_media').getPublicUrl(showcaseAssetPath);
-  return data.publicUrl;
+  return postMediaReadUrl(adminSupabase, showcaseAssetPath);
 }
 
 export async function resolvePostMediaUrl(

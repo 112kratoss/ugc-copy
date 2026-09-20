@@ -188,6 +188,7 @@ export default function ShowcaseScreen() {
   const activeFilter = FEED_FILTERS.find((filter) => filter.id === activeFilterId) ?? FEED_FILTERS[0];
   const queryFilters = useMemo<ShowcaseFeedFilters>(() => ({
     ...activeFilter.params,
+    category: 'media',
     ...(activeTool ? { tool: activeTool } : {}),
   }), [activeFilter, activeTool]);
   const queryKey = useMemo(
@@ -393,8 +394,8 @@ export default function ShowcaseScreen() {
   }, [api, feedSession.algorithmVersion, feedSession.feedSessionId, isFocused]);
   const showcaseItems = useMemo(() => {
     const flattened = flattenShowcaseFeedPages(showcaseQuery.data?.pages);
-    // `buildShowcaseMasonry` drops text-only posts; this list stays unfiltered so
-    // empty-state and pagination decisions still see everything the feed ranked.
+    // The API fills pages with media posts. The masonry filter also protects
+    // clients talking to an older server during rollout.
     return user ? flattened : filterAnonymousSessionShowcaseFeedItems(flattened);
   }, [showcaseQuery.data?.pages, user]);
   const cards = useMemo(() => buildShowcaseMasonry(showcaseItems), [showcaseItems]);
@@ -495,6 +496,7 @@ export default function ShowcaseScreen() {
     router.push(showcaseFeedItemOpenHref({
       item,
       source: 'showcase-feed',
+      mediaOnly: true,
       feedSessionId: feedSession.feedSessionId,
       algorithmVersion: item.recommendation?.algorithmVersion ?? feedSession.algorithmVersion,
       zoom,

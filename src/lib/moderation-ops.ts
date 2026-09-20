@@ -1,3 +1,4 @@
+import { postMediaStorageBucket, removePostMediaObjects } from '@/lib/post-media-storage';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { runPagedQuery } from '@/lib/admin-paged-query';
@@ -172,6 +173,7 @@ type PostMediaModerationRow = {
   storage_path: string | null;
   preview_storage_path: string | null;
   rendition_storage_path: string | null;
+  display_storage_path?: string | null;
   teaser_storage_path: string | null;
   external_url: string | null;
 };
@@ -260,6 +262,7 @@ export function normalizeShowcaseMediaPath(value: string | null | undefined) {
 
 function isOwnedModerationMediaPath(path: string, postId: string, generationId: string | null) {
   return path.startsWith(`posts/${postId}/`)
+    || path.startsWith(`private-posts/${postId}/`)
     || Boolean(generationId && path.startsWith(`showcase/${generationId}/`));
 }
 
@@ -298,7 +301,7 @@ export async function revokePostPublicMedia(
       .maybeSingle(),
     supabase
       .from('post_media')
-      .select('storage_path, preview_storage_path, rendition_storage_path, teaser_storage_path, external_url')
+      .select('storage_path, preview_storage_path, rendition_storage_path, teaser_storage_path, display_storage_path, external_url')
       .eq('post_id', postId),
   ]);
 
@@ -340,6 +343,7 @@ export async function revokePostPublicMedia(
       row.preview_storage_path,
       row.rendition_storage_path,
       row.teaser_storage_path,
+      row.display_storage_path,
     ]),
   ];
   const storagePaths = new Set<string>();
@@ -366,13 +370,13 @@ export async function revokePostPublicMedia(
   const canonicalStoragePaths = [...storagePaths];
 
   if (canonicalStoragePaths.length > 0) {
-    const removal = await supabase.storage.from(SHOWCASE_MEDIA_BUCKET).remove(canonicalStoragePaths);
+    const removal = await removePostMediaObjects(supabase, canonicalStoragePaths);
     if (removal.error) {
       throw databaseError('Failed to revoke taken-down public media', removal.error);
     }
 
     const verification = await Promise.all(
-      canonicalStoragePaths.map((path) => supabase.storage.from(SHOWCASE_MEDIA_BUCKET).exists(path)),
+      canonicalStoragePaths.map((path) => supabase.storage.from(postMediaStorageBucket(path)).exists(path)),
     );
     if (verification.some((result) => result.data === true)) {
       throw new Error('Taken-down public media still exists after Storage revocation.');

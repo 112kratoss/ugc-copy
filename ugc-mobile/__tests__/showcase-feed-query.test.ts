@@ -41,6 +41,13 @@ function item(overrides: Partial<ShowcaseFeedItem>): ShowcaseFeedItem {
 }
 
 describe('showcase feed query helpers', () => {
+  it('separates Explore from Home and retains the media filter on cursor pages', () => {
+    expect(createShowcaseFeedQueryKey({ category: 'media' })).not.toEqual(createShowcaseFeedQueryKey());
+    expect(getShowcaseFeedPageParams({ category: 'media', cursor: 'next', feedSessionId: 'session' })).toMatchObject({
+      category: 'media', cursor: 'next', feedSessionId: 'session',
+    });
+    expect(getShowcaseFeedPageParams()).not.toHaveProperty('category');
+  });
   it('preserves default first-page params and a stable query key', () => {
     expect(SHOWCASE_FEED_PAGE_SIZE).toBe(12);
     expect(SHOWCASE_FEED_STALE_TIME_MS).toBe(5 * 60 * 1000);

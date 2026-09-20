@@ -61,3 +61,14 @@ describe('expo-video iOS cache patch', () => {
     expect(added).toContain('return urlResponse.statusCode == 206 ||');
   });
 });
+
+it('ships synchronized ownership and avoids double releases on native cache teardown', () => {
+  const patch = readFileSync(join(projectRoot, 'patches/expo-video+55.0.21+003+ios-cache-ownership.patch'), 'utf8');
+  const added = patch.split('\n').filter(line => line.startsWith('+')).join('\n');
+  expect(added).toContain('private let openFilesLock = NSLock()');
+  expect(added).toContain('private var openFiles: [String: Int] = [:]');
+  expect(added.match(/openFilesLock.lock\(\)/g)).toHaveLength(4);
+  expect(added.match(/defer \{ openFilesLock.unlock\(\) \}/g)).toHaveLength(4);
+  expect(added).toContain('if registeredOpenFile, let url');
+  expect(patch).toContain('-      VideoCacheManager.shared.unregisterOpenFile(at: cachedFileUrl)');
+});

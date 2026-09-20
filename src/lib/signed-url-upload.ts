@@ -1,5 +1,8 @@
+import { RESUMABLE_CHUNK_BYTES, signedResumableTarget, uploadResumable } from '../../ugc-mobile/lib/media-upload/resumable';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_TTL_SECONDS } from '@/lib/showcase-media-cache';
 import { UploadCancelledError } from '@/lib/upload-queue';
+
+const UPLOAD_STALL_TIMEOUT_MS = 90_000;
 
 /**
  * PUT a file to a Supabase signed upload URL with byte progress.
@@ -76,27 +79,53 @@ export function uploadFileToSignedUrl(
     return Promise.reject(new UploadCancelledError());
   }
 
+  const target = file.size > RESUMABLE_CHUNK_BYTES ? signedResumableTarget(signedUploadUrl) : null;
+  if (target) return uploadResumable({
+    target, size: file.size, contentType: mimeType, signal, onProgress,
+    readChunk: (start, end) => file.slice(start, end),
+  });
+
   return new Promise<void>((resolve, reject) => {
     const request = createRequest();
     const totalBytes = file.size;
     let settled = false;
+    let stallTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastBytesSent = 0;
 
     const abort = () => {
       if (settled) return;
       settled = true;
+      cleanup();
       request.abort();
       reject(new UploadCancelledError());
     };
 
     const cleanup = () => {
+      clearTimeout(stallTimer);
       signal?.removeEventListener('abort', abort);
+    };
+
+    const armStallTimeout = () => {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        request.abort();
+        reject(new Error('Upload stalled. Check your connection and try again.'));
+      }, UPLOAD_STALL_TIMEOUT_MS);
     };
 
     signal?.addEventListener('abort', abort, { once: true });
 
     request.upload.onprogress = (event) => {
+      if (settled) return;
       const total = event.lengthComputable && event.total > 0 ? event.total : totalBytes;
       const bytesSent = Math.min(total, Math.max(0, event.loaded));
+      if (bytesSent > lastBytesSent) {
+        lastBytesSent = bytesSent;
+        armStallTimeout();
+      }
       onProgress?.({
         bytesSent,
         totalBytes: total,
@@ -144,6 +173,13 @@ export function uploadFileToSignedUrl(
     request.setRequestHeader('cache-control', `max-age=${SHOWCASE_PUBLIC_MEDIA_CACHE_TTL_SECONDS}`);
     request.setRequestHeader('content-type', mimeType);
     request.setRequestHeader('x-upsert', 'false');
-    request.send(file);
+    armStallTimeout();
+    try {
+      request.send(file);
+    } catch (error) {
+      settled = true;
+      cleanup();
+      reject(error);
+    }
   });
 }

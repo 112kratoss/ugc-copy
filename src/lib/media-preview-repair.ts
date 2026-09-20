@@ -1,3 +1,4 @@
+import { postMediaStorageBucket } from '@/lib/post-media-storage';
 import { randomUUID } from 'node:crypto';
 import { hasRepairablePostMediaTeasers, repairPostMediaTeasers } from '@/lib/post-media-teaser-repair';
 import { hasPendingGenerationPlaybackRendition, repairGenerationPlaybackRendition } from '@/lib/generation-playback-rendition';
@@ -10,11 +11,7 @@ import { createVideoPosterBuffer } from '@/lib/video-poster';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
 import { createPostMediaRendition, type PostMediaTeaserOutcome } from '@/lib/post-media-rendition';
 import type { VideoProbeResult } from '@/lib/video-rendition';
-import {
-  fetchWithProviderRetry,
-  PROVIDER_MEDIA_DOWNLOAD_RETRY_POLICY,
-  PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
-} from '@/lib/provider-fetch';
+import { downloadAllowlistedRemoteMedia } from '@/lib/remote-media-security';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import {
   getCanonicalStoredMediaLocation,
@@ -30,7 +27,6 @@ const MAX_PREVIEW_ATTEMPTS = 3;
 // source. Keep this predicate aligned with claim_generation_preview_repairs.
 const GENERATION_VISUAL_REPAIR_FILTER = String.raw`category.in.(image,video),and(category.is.null,or(output_url.like.generated\_images/*,output_url.like.generated\_videos/*))`;
 export const MAX_RENDITION_ATTEMPTS = 3;
-const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 /**
  * Transcoding is far heavier than a poster frame. The repair has a dedicated
  * invocation, but renditions still take a small bite and run one at a time so
@@ -234,7 +230,7 @@ function reserveAttempt(claimed: number | null | undefined, leased: boolean) {
 function isGoneExternalSourceError(error: unknown, attemptCount: number): boolean {
   return attemptCount >= 1
     && error instanceof Error
-    && /^External media download failed \((404|410)\)\.$/.test(error.message);
+    && /^Remote media request failed with status (404|410)\.$/.test(error.message);
 }
 
 const GENERATION_MEDIA_BUCKETS = [
@@ -283,7 +279,7 @@ function getCanonicalPostMediaPath(
   if (!canonicalPath) return null;
   const [namespace, scopedId] = canonicalPath.split('/');
   // Media uploaded to a post lives under the post's own prefix.
-  if (namespace === 'posts') {
+  if (namespace === 'posts' || namespace === 'private-posts') {
     return scopedId === scope.postId ? canonicalPath : null;
   }
   // A generation-backed post serves the public copy of its creation, which the
@@ -351,6 +347,7 @@ async function downloadMedia(
   supabase: SupabaseClient,
   source: string,
   ownerUserId: string,
+  category: string | null,
 ): Promise<Blob> {
   const location = getUserOwnedStoredMediaLocation(source, ownerUserId, {
     allowedBuckets: GENERATION_MEDIA_BUCKETS,
@@ -365,16 +362,14 @@ async function downloadMedia(
     throw new Error('Stored media is outside the generation owner prefix.');
   }
 
-  const response = await fetchWithProviderRetry(
-    source,
-    {},
-    PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
-    PROVIDER_MEDIA_DOWNLOAD_RETRY_POLICY,
-    fetch,
-    'Media preview source download'
-  );
-  if (!response.ok) throw new Error(`External media download failed (${response.status}).`);
-  return response.blob();
+  // Repair must enforce the same host, redirect, MIME, signature and streamed
+  // byte limits as the initial import. A plain response.blob() bypassed all
+  // of those controls for older provider-hosted outputs.
+  const { blob } = await downloadAllowlistedRemoteMedia({
+    url: source,
+    kind: isVideoGenerationPreview(category, null) ? 'video' : 'image',
+  });
+  return blob;
 }
 
 async function repairGeneration(
@@ -393,7 +388,7 @@ async function repairGeneration(
       }).eq('id', row.id);
     }
     const source = await resolveGenerationRepairSource(supabase, row);
-    const body = await downloadMedia(supabase, source.outputUrl, source.ownerUserId);
+    const body = await downloadMedia(supabase, source.outputUrl, source.ownerUserId, row.category);
     const preview = await createGenerationOutputPreview({
       body,
       category: row.category,
@@ -457,7 +452,7 @@ async function repairPostMedia(
       }).eq('id', row.id);
     }
     const storagePath = await resolvePostMediaRepairPath(supabase, row);
-    const download = await supabase.storage.from(SHOWCASE_MEDIA_BUCKET).download(storagePath);
+    const download = await supabase.storage.from(postMediaStorageBucket(storagePath)).download(storagePath);
     if (download.error || !download.data) {
       throw download.error ?? new Error('Stored post media could not be downloaded.');
     }
@@ -538,7 +533,7 @@ async function repairPostMediaRendition(
       }).eq('id', row.id);
     }
     const storagePath = await resolvePostMediaRepairPath(supabase, row);
-    const download = await supabase.storage.from(SHOWCASE_MEDIA_BUCKET).download(storagePath);
+    const download = await supabase.storage.from(postMediaStorageBucket(storagePath)).download(storagePath);
     if (download.error || !download.data) {
       throw download.error ?? new Error('Stored post media could not be downloaded.');
     }
@@ -1099,7 +1094,7 @@ export async function regenerateVideoPosters(
     }
     try {
       const source = await resolveGenerationRepairSource(supabase, row);
-      const body = await downloadMedia(supabase, source.outputUrl, source.ownerUserId);
+      const body = await downloadMedia(supabase, source.outputUrl, source.ownerUserId, row.category);
       const preview = await createGenerationOutputPreview({
         body,
         category: row.category,
@@ -1149,7 +1144,7 @@ export async function regenerateVideoPosters(
     }
     try {
       const storagePath = await resolvePostMediaRepairPath(supabase, row);
-      const download = await supabase.storage.from(SHOWCASE_MEDIA_BUCKET).download(storagePath);
+      const download = await supabase.storage.from(postMediaStorageBucket(storagePath)).download(storagePath);
       if (download.error || !download.data) {
         throw download.error ?? new Error('Stored post media could not be downloaded.');
       }

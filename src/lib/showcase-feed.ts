@@ -156,7 +156,7 @@ async function fetchPostRows(
 
   if (category === 'text') {
     query = query.or('category.eq.text,post_format.eq.mixed');
-  } else if (category !== 'all' && category !== 'image' && category !== 'video') {
+  } else if (category !== 'all' && category !== 'media' && category !== 'image' && category !== 'video') {
     query = query.eq('category', category);
   }
 
@@ -193,7 +193,7 @@ async function fetchPostRows(
       .eq('visibility', 'public')
       .is('archived_at', null);
 
-    if (category !== 'all' && category !== 'image' && category !== 'video') {
+    if (category !== 'all' && category !== 'media' && category !== 'image' && category !== 'video') {
       legacyQuery = legacyQuery.eq('category', category);
     }
 
@@ -307,6 +307,10 @@ function itemMatchesCategory(item: ShowcaseFeedItem, category: ShowcaseCategory)
     return true;
   }
 
+  if (category === 'media') {
+    return Boolean(item.mediaItems?.length || item.mediaUrl);
+  }
+
   if (category === 'image' || category === 'video') {
     return item.mediaItems?.some((mediaItem) => mediaItem.mediaKind === category)
       || item.mediaKind === category;
@@ -383,7 +387,7 @@ async function getShowcaseTopSalesPage(params: {
   } = params;
   if (typeof (adminSupabase as unknown as { rpc?: unknown }).rpc !== 'function') return null;
 
-  if (resourceFilter === 'all') {
+  if (resourceFilter === 'all' && category !== 'media') {
     // The unlock filter rides the RPC: it is pure column predicates on the
     // bundle join the function already makes.
     const { data, error } = await adminSupabase.rpc('list_showcase_top_sales_post_ids', {
@@ -425,7 +429,7 @@ async function getShowcaseTopSalesPage(params: {
     };
   }
 
-  // Resource-kind filtering stays in JS — getPostResourceKinds is a
+  // Media-presence and resource-kind filtering stay in JS — getPostResourceKinds is a
   // multi-fallback derivation over the bundle's resource JSON, and duplicating
   // it in SQL would fork business logic. What changed is why that no longer
   // forces a catalog scan: the old path had to fetch and hydrate every public
@@ -440,7 +444,7 @@ async function getShowcaseTopSalesPage(params: {
 
   for (;;) {
     const { data, error } = await adminSupabase.rpc('list_showcase_top_sales_post_ids', {
-      p_category: category,
+      p_category: category === 'media' ? 'all' : category,
       p_tool_slug: toolSlug,
       p_offset: scanOffset,
       p_limit: TOP_SALES_FILTER_SCAN_BATCH,
@@ -465,9 +469,9 @@ async function getShowcaseTopSalesPage(params: {
     const itemById = new Map(resolvedItems.map((item) => [item.id, item]));
     for (const postId of batchIds) {
       const item = itemById.get(postId);
-      // Re-checks category and unlock too. Both are already applied in SQL, so
-      // this changes nothing for them — it keeps the one JS predicate as the
-      // single place the filter semantics live.
+      // Media presence is determined after hydration, including attachments
+      // on mixed posts. Re-check the remaining category and unlock predicates
+      // from SQL here too, using the shared feed-filter semantics.
       if (item && itemMatchesFeedFilters(item, category, unlockFilter, resourceFilter)) {
         matchedItems.push(item);
       }
@@ -820,6 +824,7 @@ async function getShowcaseFeedPageBase(
     sort === 'top-sales' ||
     unlockFilter !== 'all' ||
     resourceFilter !== 'all' ||
+    category === 'media' ||
     category === 'image' ||
     category === 'video';
 
@@ -894,7 +899,7 @@ async function fetchLegacyGenerationRows(
       .eq('is_public', true)
       .eq('status', 'succeeded');
 
-    if (category !== 'all') {
+    if (category !== 'all' && category !== 'media') {
       query = query.eq('category', category);
     }
 

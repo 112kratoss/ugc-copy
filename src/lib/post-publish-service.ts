@@ -60,7 +60,7 @@ import {
 import { parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
 import { truncateMediaToolMessage } from '@/lib/media-tool-error';
 
-const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
+const PRIVATE_POST_MEDIA_BUCKET = 'post_media';
 const UPLOADS_BUCKET = 'uploads';
 const POST_RESOURCE_FILES_BUCKET = 'post_resource_files';
 
@@ -233,7 +233,7 @@ export async function publishPreparedPost({
     if (storagePathsToCleanup.length > 0) {
       try {
         const cleanupShowcase = await adminSupabase.storage
-          .from(SHOWCASE_MEDIA_BUCKET)
+          .from(PRIVATE_POST_MEDIA_BUCKET)
           .remove(storagePathsToCleanup);
         if (cleanupShowcase.error) {
           logBackendWarning('failed_to_remove_uploaded_showcase_media_after_post_failure', { error: cleanupShowcase.error });
@@ -249,7 +249,7 @@ export async function publishPreparedPost({
   try {
     for (const [index, mediaItem] of submission.submittedMediaItems.entries()) {
       const extension = inferExtension(mediaItem.originalName, mediaItem.contentType);
-      const storagePath = `posts/${postId}/${index}/${sanitizeFileStem(mediaItem.originalName)}.${extension}`;
+      const storagePath = `private-posts/${postId}/${index}/${sanitizeFileStem(mediaItem.originalName)}.${extension}`;
       let mediaKind = getSubmittedMediaKind(mediaItem);
 
       if (mediaItem.source === 'uploaded') {
@@ -335,7 +335,7 @@ export async function publishPreparedPost({
 
         const showcaseCopy = await adminSupabase.storage
           .from(UPLOADS_BUCKET)
-          .copy(canonicalSourcePath, storagePath, { destinationBucket: SHOWCASE_MEDIA_BUCKET });
+          .copy(canonicalSourcePath, storagePath, { destinationBucket: PRIVATE_POST_MEDIA_BUCKET });
         if (showcaseCopy.error) {
           throw showcaseCopy.error;
         }
@@ -362,6 +362,7 @@ export async function publishPreparedPost({
             });
             if (preview?.previewStoragePath) {
               storagePathsToCleanup.push(preview.previewStoragePath);
+              if (preview.displayStoragePath) storagePathsToCleanup.push(preview.displayStoragePath);
             }
           } catch (previewError) {
             logBackendWarning('failed_to_create_post_media_preview', { error: previewError });
@@ -379,6 +380,7 @@ export async function publishPreparedPost({
           ...(preview
             ? {
               previewStoragePath: preview.previewStoragePath,
+              displayStoragePath: preview.displayStoragePath ?? null,
               previewThumbhash: preview.previewThumbhash,
               previewStatus: preview.previewStatus,
               previewAttemptCount: 1,
@@ -410,7 +412,7 @@ export async function publishPreparedPost({
       }
 
       const showcaseUpload = await adminSupabase.storage
-        .from(SHOWCASE_MEDIA_BUCKET)
+        .from(PRIVATE_POST_MEDIA_BUCKET)
         .upload(storagePath, mediaBody, {
           cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
           contentType: mediaBody.type || mediaItem.contentType || undefined,
@@ -432,6 +434,7 @@ export async function publishPreparedPost({
         });
         if (preview?.previewStoragePath) {
           storagePathsToCleanup.push(preview.previewStoragePath);
+          if (preview.displayStoragePath) storagePathsToCleanup.push(preview.displayStoragePath);
         }
       } catch (previewError) {
         logBackendWarning('failed_to_create_post_media_preview', { error: previewError });
@@ -475,6 +478,7 @@ export async function publishPreparedPost({
         mediaKey: mediaItem.mediaKey,
         storagePath,
         previewStoragePath: preview?.previewStoragePath ?? null,
+        displayStoragePath: preview?.displayStoragePath ?? null,
         previewThumbhash: preview?.previewThumbhash ?? null,
         previewStatus: preview?.previewStatus ?? 'failed',
         previewAttemptCount: 1,

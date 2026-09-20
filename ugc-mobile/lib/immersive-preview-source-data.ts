@@ -116,11 +116,13 @@ export async function loadImmersiveSourceData({
   source,
   initialId,
   creatorUsername,
+  mediaOnly = false,
 }: {
   api: ImmersivePreviewApi;
   source: PreviewViewerSource;
   initialId: string;
   creatorUsername?: string | null;
+  mediaOnly?: boolean;
 }): Promise<ImmersiveSourceData> {
   if (isGenerationSource(source)) {
     // The library window is unarchived, as the grid's is. Owner posts are not
@@ -188,7 +190,7 @@ export async function loadImmersiveSourceData({
     return { showcaseItems: detail?.item ? [detail.item] : [] };
   }
 
-  const response = await api.getShowcaseFeed({ limit: 48, sort: 'for-you' });
+  const response = await api.getShowcaseFeed({ limit: 48, sort: 'for-you', ...(mediaOnly ? { category: 'media' } : {}) });
   let showcaseItems = response.items;
 
   if (initialId && !showcaseItems.some((item) => item.id === initialId)) {

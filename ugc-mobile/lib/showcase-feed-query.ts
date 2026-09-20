@@ -4,7 +4,7 @@ export const SHOWCASE_FEED_PAGE_SIZE = 12;
 export const SHOWCASE_FEED_STALE_TIME_MS = 5 * 60 * 1000;
 
 export type ShowcaseFeedSort = 'for-you' | 'recent' | 'top-saves' | 'top-remixes' | 'top-sales';
-export type ShowcaseFeedCategory = 'all' | ShowcaseFeedItem['category'];
+export type ShowcaseFeedCategory = 'all' | 'media' | ShowcaseFeedItem['category'];
 export type ShowcaseFeedUnlock = 'all' | 'with-unlock' | 'free' | 'paid';
 export type ShowcaseFeedResource = 'all' | 'prompt' | 'workflow' | 'files' | 'notes' | 'remix';
 export type MobileShowcaseFeedFilterId = 'all' | 'unlocks' | 'free' | 'paid' | 'remixable';

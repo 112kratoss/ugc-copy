@@ -26,3 +26,10 @@ it('keeps the shared catalog modules in the Vercel upload', () => {
   expect(order.every((index) => index >= 0)).toBe(true);
   expect([...order].sort((a, b) => a - b)).toEqual(order);
 });
+
+it('keeps the platform-free resumable transport in web deployments', () => {
+  const lines = readFileSync('.vercelignore', 'utf8').split('\n');
+  expect(lines.indexOf('!ugc-mobile/lib/media-upload')).toBeGreaterThan(lines.indexOf('ugc-mobile/lib/*'));
+  const config = JSON.parse(readFileSync('ugc-mobile/lib/media-upload/tsconfig.json', 'utf8'));
+  expect(config.extends).toBeUndefined();
+});

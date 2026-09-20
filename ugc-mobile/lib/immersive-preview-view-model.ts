@@ -134,6 +134,7 @@ export function immersiveViewerHref({
   algorithmVersion,
   creatorUsername,
   feedSessionId,
+  mediaOnly,
   source,
   initialId,
   zoom = null,
@@ -141,6 +142,7 @@ export function immersiveViewerHref({
   algorithmVersion?: string | null;
   creatorUsername?: string | null;
   feedSessionId?: string | null;
+  mediaOnly?: boolean;
   source: PreviewViewerSource;
   initialId: string;
   /** The zoom the tapped tile hands the push on iOS 18 (lib/apple-zoom.ts). */
@@ -151,6 +153,7 @@ export function immersiveViewerHref({
     params: {
       source,
       initialId,
+      ...(mediaOnly ? { mediaOnly: '1' } : {}),
       ...(feedSessionId ? { feedSessionId } : {}),
       ...(algorithmVersion ? { algorithmVersion } : {}),
       ...(creatorUsername ? { creatorUsername } : {}),
@@ -210,6 +213,7 @@ export function showcaseFeedItemOpenHref({
   comments,
   creatorUsername,
   feedSessionId,
+  mediaOnly,
   item,
   source,
   zoom,
@@ -218,6 +222,7 @@ export function showcaseFeedItemOpenHref({
   comments?: boolean;
   creatorUsername?: string | null;
   feedSessionId?: string | null;
+  mediaOnly?: boolean;
   item: ShowcaseFeedItem;
   source: PreviewViewerSource;
   /** The zoom the tapped tile hands the push on iOS 18 (lib/apple-zoom.ts). */
@@ -233,6 +238,7 @@ export function showcaseFeedItemOpenHref({
     feedSessionId,
     source,
     initialId: item.id,
+    mediaOnly,
     zoom,
   });
 }
@@ -241,18 +247,21 @@ export function immersiveViewerReturnPath({
   algorithmVersion,
   creatorUsername,
   feedSessionId,
+  mediaOnly,
   source,
   initialId,
 }: {
   algorithmVersion?: string | null;
   creatorUsername?: string | null;
   feedSessionId?: string | null;
+  mediaOnly?: boolean;
   source: PreviewViewerSource;
   initialId: string;
 }) {
   const params = [
     ['source', source],
     ['initialId', initialId],
+    ...(mediaOnly ? [['mediaOnly', '1']] : []),
     ...(feedSessionId ? [['feedSessionId', feedSessionId]] : []),
     ...(algorithmVersion ? [['algorithmVersion', algorithmVersion]] : []),
     ...(creatorUsername ? [['creatorUsername', creatorUsername]] : []),

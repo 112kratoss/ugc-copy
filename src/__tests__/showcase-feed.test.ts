@@ -1377,6 +1377,29 @@ describe('showcase feed', () => {
     }
   });
 
+  it('fills media-only pages before paginating, retaining mixed posts', async () => {
+    const sort = 'recent';
+    postsState = [
+      ...Array.from({ length: 55 }, (_, index) => createPostRow({
+        id: `note-${index}`, created_at: '2026-03-21T10:00:00.000Z',
+        category: 'text', post_format: 'text', output_url: null,
+      })),
+      createPostRow({ id: 'mixed-video', created_at: '2026-03-20T10:00:00.000Z', category: 'video', post_format: 'mixed', output_url: 'generated_videos/user-1/example.mp4' }),
+      createPostRow({ id: 'image', created_at: '2026-03-19T10:00:00.000Z' }),
+    ];
+    generationModelsState = [];
+    resourceBundlesState = [];
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const first = await getShowcaseFeedPage({ category: 'media', sort, offset: 0, limit: 1, bypassCache: true });
+    expect(first.items.map((item) => item.id)).toEqual(['mixed-video']);
+    expect(first.pageInfo.hasMore).toBe(true);
+    const second = await getShowcaseFeedPage({ category: 'media', sort, offset: 1, limit: 1, bypassCache: true });
+    expect(second.items.map((item) => item.id)).toEqual(['image']);
+    expect(second.pageInfo.hasMore).toBe(false);
+    const unfiltered = await getShowcaseFeedPage({ category: 'all', sort: 'recent', offset: 0, limit: 1, bypassCache: true });
+    expect(unfiltered.items[0].postFormat).toBe('text');
+  });
+
   it('returns mixed posts when filtering by text', async () => {
     postsState = [
       {
@@ -1563,6 +1586,18 @@ describe('showcase feed', () => {
       },
     ];
   }
+
+  it('excludes text-only top sellers before taking a media page', async () => {
+    seedTopSalesResourceFixture();
+    postsState = postsState.map((post) => post.id === 'older-best-seller'
+      ? { ...post, category: 'text', post_format: 'text', output_url: null }
+      : post);
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({ category: 'media', sort: 'top-sales', offset: 0, limit: 2 });
+    expect(page.items).toHaveLength(2);
+    expect(page.items.every((item) => item.id.startsWith('low-sale-'))).toBe(true);
+    expect(page.pageInfo.hasMore).toBe(true);
+  });
 
   it('filters top-sales by resource kind on top of the RPC order, not via the catalog scan', async () => {
     // Resource kinds are derived in JS, so this half of the filter cannot ride

@@ -5,6 +5,7 @@ import {
   type SignedUrlUploadProgress,
 } from '@/lib/signed-url-upload';
 import { finalizeSignedUpload } from '@/lib/upload-finalize-client';
+import { UploadCancelledError } from '@/lib/upload-queue';
 
 type TemporaryMediaUploadIntent = {
   success: boolean;
@@ -44,7 +45,9 @@ export async function uploadMediaToTemporaryStorage(
   } = {},
 ): Promise<{ signedUrl: string; storagePath: string }> {
   void ownerUserId;
+  if (options.signal?.aborted) throw new UploadCancelledError();
   const { data: { session } } = await supabase.auth.getSession();
+  if (options.signal?.aborted) throw new UploadCancelledError();
   if (!session?.access_token) {
     throw new Error('Please log in to upload files.');
   }
@@ -52,6 +55,7 @@ export async function uploadMediaToTemporaryStorage(
   const mimeType = file.type || 'application/octet-stream';
   const response = await fetch('/api/uploads/media/sign', {
     method: 'POST',
+    ...(options.signal ? { signal: options.signal } : {}),
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${session.access_token}`,
@@ -103,6 +107,7 @@ export async function uploadMediaToTemporaryStorage(
 
   const readUrlResponse = await fetch('/api/uploads/media/read-url', {
     method: 'POST',
+    ...(options.signal ? { signal: options.signal } : {}),
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${session.access_token}`,

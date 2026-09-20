@@ -85,6 +85,13 @@ function creatorProfile(items: ShowcaseFeedItem[]): CreatorProfileResponse {
 }
 
 describe('immersive preview source data', () => {
+  it('retains Explore media filtering when refreshing the reel', async () => {
+    const api = { getShowcaseFeed: vi.fn(async () => ({ items: [] })) };
+    await loadImmersiveSourceData({ api: api as never, source: 'showcase-feed', initialId: '', mediaOnly: true });
+    expect(api.getShowcaseFeed).toHaveBeenLastCalledWith({ limit: 48, sort: 'for-you', category: 'media' });
+    await loadImmersiveSourceData({ api: api as never, source: 'showcase-feed', initialId: '' });
+    expect(api.getShowcaseFeed).toHaveBeenLastCalledWith({ limit: 48, sort: 'for-you' });
+  });
   const owner = { creatorLabel: '@creator', creatorAvatar: null, creatorId: 'user-1' };
 
   it('keeps the reel to the creations the grid shows', () => {

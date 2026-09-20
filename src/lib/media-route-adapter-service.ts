@@ -1,9 +1,8 @@
 import 'server-only';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
-import { createServerClient } from '@supabase/ssr';
-import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
+import { createMediaSupabaseClient } from '@/lib/media-route-shared';
 
 import { requireIdentity } from '@/lib/account-identity';
 import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
@@ -11,34 +10,7 @@ import {
   createMediaReadSignedUrlForRoute,
   parseMediaReadRoutePayload,
 } from '@/lib/media-read-service';
-import { createServiceClient, createUserClient } from '@/lib/server-helpers';
-
-async function createCookieSupabaseClient() {
-  const cookieStore = await cookies();
-
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll();
-        },
-        setAll() {
-          // Media requests are read-only; no cookie writes are needed.
-        },
-      },
-    },
-  );
-}
-
-async function createMediaSupabaseClient(request: Request) {
-  if (request.headers.get('Authorization')) {
-    return createUserClient(request);
-  }
-
-  return createCookieSupabaseClient();
-}
+import { createServiceClient } from '@/lib/server-helpers';
 
 type MediaRouteAdapterDependencies = {
   createMediaSupabaseClient?: typeof createMediaSupabaseClient;

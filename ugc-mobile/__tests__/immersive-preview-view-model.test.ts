@@ -82,6 +82,12 @@ function ownerPost(overrides: Partial<OwnerPostListItem>): OwnerPostListItem {
 }
 
 describe('immersive preview view model', () => {
+  it('carries Explore media-only scope into the reel and auth return', () => {
+    const href = showcaseFeedItemOpenHref({ item: showcaseItem({}), source: 'showcase-feed', mediaOnly: true });
+    expect(href).toMatchObject({ params: { mediaOnly: '1' } });
+    expect(immersiveViewerReturnPath({ source: 'showcase-feed', initialId: 'post-1', mediaOnly: true })).toContain('mediaOnly=1');
+    expect(immersiveViewerHref({ source: 'showcase-feed', initialId: 'post-1' })).not.toHaveProperty('params.mediaOnly');
+  });
   it('keeps the creation descriptor on its matching output for playback and poster metadata', () => {
     const original = 'https://cdn.example.com/original.mp4';
     const rendition = 'https://cdn.example.com/playback.mp4';

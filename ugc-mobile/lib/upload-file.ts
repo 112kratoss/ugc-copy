@@ -1,3 +1,4 @@
+import { RESUMABLE_CHUNK_BYTES, signedResumableTarget, uploadResumable } from './media-upload/resumable';
 interface InspectUriUploadOptions {
   mimeType?: string | null;
   sizeBytes?: number | null;
@@ -123,15 +124,37 @@ export async function uploadUriToSignedUrl(
     throw new UploadCancelledError();
   }
 
+  const target = sizeBytes > RESUMABLE_CHUNK_BYTES ? signedResumableTarget(signedUploadUrl) : null;
+  if (target) {
+    const [{ File }, { fetch: nativeFetch }] = await Promise.all([import('expo-file-system'), import('expo/fetch')]);
+    if (signal?.aborted) throw new UploadCancelledError();
+    const handle = new File(uri).open();
+    try {
+      await uploadResumable({
+        target, size: sizeBytes, contentType: mimeType, signal, onProgress,
+        fetchImpl: nativeFetch as typeof fetch,
+        readChunk: (start, end) => {
+          // File.slice() in SDK 55 reads the ENTIRE file synchronously before
+          // slicing. The native handle limits JS memory to a single 6MB chunk.
+          handle.offset = start;
+          const bytes = handle.readBytes(end - start);
+          if (bytes.byteLength !== end - start) throw new Error('Selected file changed during upload. Choose it again.');
+          return bytes;
+        },
+      });
+      return;
+    } finally { handle.close(); }
+  }
+
   const task = await createUploadTask(
     signedUploadUrl,
     uri,
     {
       headers: {
         // Matches SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL on the web side. Publish
-        // copies this object server-side into the public bucket, and a copy
+        // copies this object server-side into durable storage, and a copy
         // carries the source's cache-control with no way to override it, so
-        // whatever is set here is what public viewers eventually receive.
+        // whatever is set here is what authorized viewers eventually receive.
         //
         // One day, per the 2026-08 scaling audit's decision #5. Every public
         // showcase path is written once and never overwritten, so a long TTL
@@ -159,6 +182,12 @@ export async function uploadUriToSignedUrl(
   const cancelUpload = () => {
     void task.cancelAsync().catch(() => undefined);
   };
+  // Task creation can yield while Expo loads. AbortSignal does not replay an
+  // abort that happened before the listener was attached.
+  if (signal?.aborted) {
+    cancelUpload();
+    throw new UploadCancelledError();
+  }
   signal?.addEventListener('abort', cancelUpload, { once: true });
 
   try {

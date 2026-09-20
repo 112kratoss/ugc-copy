@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   claim: vi.fn(),
@@ -51,13 +51,42 @@ const job = {
 describe('generation output import processor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.claim.mockResolvedValue([{ ...job }]);
+    mocks.claim.mockReset().mockResolvedValue([]).mockResolvedValueOnce([{ ...job }]);
     mocks.finish.mockResolvedValue('succeeded');
     mocks.persistOne.mockResolvedValue('succeeded');
     mocks.persistList.mockResolvedValue({
       status: 'succeeded',
       outputs: [{ index: 0, storagePath: 'generated/output.png' }],
     });
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  it('leaves later jobs unclaimed after a slow import uses the sweep budget', async () => {
+    vi.useFakeTimers();
+    const jobs = Array.from({ length: 4 }, (_, index) => ({ ...job, id: `import-${index}` }));
+    mocks.claim.mockReset().mockImplementation(async ({ limit }: { limit: number }) => jobs.splice(0, limit));
+    mocks.persistOne.mockImplementation(async () => {
+      vi.setSystemTime(Date.now() + 75_000);
+      return 'succeeded';
+    });
+    const { processGenerationOutputImportJobs } = await import('@/lib/generation-output-import-jobs-processor');
+    const summary = await processGenerationOutputImportJobs({ client: clientWithGeneration() as never, lockedBy: 'worker' });
+
+    expect(summary).toEqual({ claimed: 1, completed: 1, retried: 0, exhausted: 0 });
+    expect(jobs).toHaveLength(3);
+    expect(mocks.claim).toHaveBeenCalledTimes(1);
+    expect(mocks.claim).toHaveBeenCalledWith(expect.objectContaining({ limit: 1 }));
+  });
+
+  it('drains fast imports up to the batch ceiling without preclaiming the rest', async () => {
+    const jobs = Array.from({ length: 6 }, (_, index) => ({ ...job, id: `import-${index}` }));
+    mocks.claim.mockReset().mockImplementation(async ({ limit }: { limit: number }) => jobs.splice(0, limit));
+    const { processGenerationOutputImportJobs } = await import('@/lib/generation-output-import-jobs-processor');
+    const summary = await processGenerationOutputImportJobs({ client: clientWithGeneration() as never, lockedBy: 'worker', limit: 100 });
+    expect(summary).toEqual({ claimed: 4, completed: 4, retried: 0, exhausted: 0 });
+    expect(jobs).toHaveLength(2);
+    expect(mocks.claim).toHaveBeenCalledTimes(4);
   });
 
   it('imports large media sequentially and settles the durable ticket', async () => {
@@ -101,7 +130,7 @@ describe('generation output import processor', () => {
   });
 
   it('uses the list importer for multi-output provider results', async () => {
-    mocks.claim.mockResolvedValue([{
+    mocks.claim.mockReset().mockResolvedValue([]).mockResolvedValueOnce([{
       ...job,
       output_urls: ['https://provider.invalid/a.png', 'https://provider.invalid/b.png'],
     }]);

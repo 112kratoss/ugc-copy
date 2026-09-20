@@ -1,3 +1,4 @@
+import { groupPostMediaPaths } from '@/lib/post-media-storage';
 import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -132,7 +133,7 @@ function parseCanonicalManifestShowcasePath(storagePath: string): string | null 
   const canonicalPath = parseCanonicalStorageObjectPath(storagePath, { minimumSegments: 3 });
   if (!canonicalPath) return null;
   const [scope, resourceId] = canonicalPath.split('/');
-  return (scope === 'showcase' || scope === 'posts') && UUID_PATTERN.test(resourceId ?? '')
+  return (scope === 'showcase' || scope === 'posts' || scope === 'private-posts') && UUID_PATTERN.test(resourceId ?? '')
     ? canonicalPath
     : null;
 }
@@ -261,6 +262,16 @@ async function assertStoragePathsAbsent(
   }
 }
 
+function privatePostPrefixes(manifest: AccountDeletionStorageManifest): string[] {
+  // A backfill may finish copying after the manifest snapshot. Preserve the
+  // post namespace in every sweep, including the delayed capability-expiry pass.
+  return [...new Set(manifest.showcaseMediaPaths.flatMap((path) => {
+    const canonical = parseCanonicalManifestShowcasePath(path);
+    if (!canonical || !/^(?:private-)?posts\//.test(canonical)) return [];
+    return [`private-posts/${canonical.split('/')[1]}`];
+  }))];
+}
+
 async function assertAccountStorageEmpty(
   admin: SupabaseClient,
   manifest: AccountDeletionStorageManifest,
@@ -274,7 +285,15 @@ async function assertAccountStorageEmpty(
     }
   }
 
-  await assertStoragePathsAbsent(admin, 'showcase_media', manifest.showcaseMediaPaths);
+  for (const [bucket, paths] of groupPostMediaPaths(manifest.showcaseMediaPaths)) {
+    await assertStoragePathsAbsent(admin, bucket, paths);
+  }
+
+  for (const prefix of privatePostPrefixes(manifest)) {
+    if ((await listUserFiles(admin, 'post_media', prefix, 'private-posts')).length > 0) {
+      throw new Error('Could not verify post_media account files were removed.');
+    }
+  }
 
   for (const templatePrefix of manifest.templateAssetPrefixes) {
     const remainingPaths = await listUserFiles(
@@ -339,7 +358,15 @@ export async function removeAccountStorage(
   if (canonicalShowcasePaths.some((storagePath) => !storagePath)) {
     throw new Error('Account deletion manifest contains an invalid showcase path.');
   }
-  await removePaths('showcase_media', canonicalShowcasePaths as string[]);
+  for (const [bucket, paths] of groupPostMediaPaths(canonicalShowcasePaths as string[])) {
+    await removePaths(bucket, paths);
+  }
+
+  for (const prefix of privatePostPrefixes(manifest)) {
+    bucketsScanned += 1;
+    const paths = await listUserFiles(admin, 'post_media', prefix, 'private-posts');
+    await removePaths('post_media', paths, 'private-posts');
+  }
 
   for (const templatePrefix of manifest.templateAssetPrefixes) {
     const canonicalPrefix = parseCanonicalStorageObjectPath(templatePrefix, { minimumSegments: 1 });

@@ -113,6 +113,27 @@ describe('mobile upload file helpers', () => {
     expect(cancelAsync).toHaveBeenCalledTimes(1);
   });
 
+  it('does not start a transfer cancelled while the native task is being created', async () => {
+    const controller = new AbortController();
+    const uploadAsync = vi.fn(async () => ({ status: 200 }));
+    const cancelAsync = vi.fn(async () => undefined);
+
+    const upload = uploadUriToSignedUrl('file:///clip.mp4', 'https://storage.example.com/upload', {
+      mimeType: 'video/mp4',
+      sizeBytes: 20,
+      signal: controller.signal,
+      createUploadTask: async () => {
+        await Promise.resolve();
+        controller.abort();
+        return { uploadAsync, cancelAsync };
+      },
+    });
+
+    await expect(upload).rejects.toBeInstanceOf(UploadCancelledError);
+    expect(uploadAsync).not.toHaveBeenCalled();
+    expect(cancelAsync).toHaveBeenCalledTimes(1);
+  });
+
   it('returns a safe server error for failed native uploads', async () => {
     await expect(uploadUriToSignedUrl('file:///clip.mp4', 'https://storage.example.com/upload', {
       mimeType: 'video/mp4',

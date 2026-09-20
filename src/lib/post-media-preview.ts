@@ -1,3 +1,4 @@
+import { postMediaStorageBucket } from '@/lib/post-media-storage';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import sharp from 'sharp';
 
@@ -8,7 +9,6 @@ import { getMediaContentHash, getPreviewThumbhash } from '@/lib/media-preview-me
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
 import { toStorageUploadBody } from '@/lib/storage-upload-body';
 
-const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 const PREVIEW_MAX_SIZE = 720;
 
 type PostMediaPreviewResult = {
@@ -64,7 +64,7 @@ export async function createPostMediaImagePreview({
     .toBuffer();
   const previewStoragePath = buildPostMediaPreviewPath(storagePath, getMediaContentHash(preview));
   const upload = await supabase.storage
-    .from(SHOWCASE_MEDIA_BUCKET)
+    .from(postMediaStorageBucket(storagePath))
     .upload(previewStoragePath, toStorageUploadBody(preview, 'image/webp'), {
       cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
       contentType: 'image/webp',
@@ -77,7 +77,7 @@ export async function createPostMediaImagePreview({
 
   await assertStoredPreviewIsIntact({
     supabase,
-    location: { bucket: SHOWCASE_MEDIA_BUCKET, filePath: previewStoragePath },
+    location: { bucket: postMediaStorageBucket(storagePath), filePath: previewStoragePath },
     expected: preview,
   });
 
@@ -93,7 +93,7 @@ export async function createPostMediaImagePreview({
   if (display) {
     displayStoragePath = buildDisplayRenditionPath(storagePath, display.storagePathHash);
     const displayUpload = await supabase.storage
-      .from(SHOWCASE_MEDIA_BUCKET)
+      .from(postMediaStorageBucket(storagePath))
       .upload(displayStoragePath, toStorageUploadBody(display.body, 'image/webp'), {
         cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
         contentType: 'image/webp',
@@ -104,7 +104,7 @@ export async function createPostMediaImagePreview({
     }
     await assertStoredPreviewIsIntact({
       supabase,
-      location: { bucket: SHOWCASE_MEDIA_BUCKET, filePath: displayStoragePath },
+      location: { bucket: postMediaStorageBucket(storagePath), filePath: displayStoragePath },
       expected: display.body,
     });
   }
@@ -149,7 +149,7 @@ export async function createPostMediaPreview({
   const poster = await createVideoPosterBuffer(body);
   const previewStoragePath = buildPostMediaPreviewPath(storagePath, getMediaContentHash(poster));
   const upload = await supabase.storage
-    .from(SHOWCASE_MEDIA_BUCKET)
+    .from(postMediaStorageBucket(storagePath))
     .upload(previewStoragePath, toStorageUploadBody(poster, 'image/webp'), {
       cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
       contentType: 'image/webp',
@@ -162,7 +162,7 @@ export async function createPostMediaPreview({
 
   await assertStoredPreviewIsIntact({
     supabase,
-    location: { bucket: SHOWCASE_MEDIA_BUCKET, filePath: previewStoragePath },
+    location: { bucket: postMediaStorageBucket(storagePath), filePath: previewStoragePath },
     expected: poster,
   });
 

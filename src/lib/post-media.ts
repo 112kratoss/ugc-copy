@@ -1,3 +1,4 @@
+import { postMediaReadUrl } from '@/lib/post-media-storage';
 import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -9,7 +10,6 @@ import { defaultPostMediaKey, normalizePostMediaKey } from '@/lib/post-media-key
 import { getPostMediaKind, resolvePostMediaUrl, type PostMediaRow as LegacyPostMediaRow } from '@/lib/posts-server';
 import type { ShowcaseMediaKind, ShowcasePostFormat, ShowcaseItemCategory } from '@/lib/showcase';
 
-const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 
 export const MAX_POST_MEDIA_ITEMS = 5;
 
@@ -209,8 +209,7 @@ async function resolvePostMediaDbRowUrl(
   row: PostMediaDbRow
 ): Promise<string | null> {
   if (row.storage_path) {
-    const { data } = supabase.storage.from(SHOWCASE_MEDIA_BUCKET).getPublicUrl(row.storage_path);
-    return data.publicUrl;
+    return postMediaReadUrl(supabase, row.storage_path);
   }
 
   if (!row.external_url) {
@@ -241,12 +240,12 @@ async function resolvePostMediaDbRows(
         }
 
         const previewUrl = row.preview_storage_path
-          ? supabase.storage.from(SHOWCASE_MEDIA_BUCKET).getPublicUrl(row.preview_storage_path).data.publicUrl
+          ? postMediaReadUrl(supabase, row.preview_storage_path)
           : null;
         // Null whenever no display rendition was worth storing; every reader
         // falls back to `url`, which is what it used before this existed.
         const displayUrl = row.display_storage_path
-          ? supabase.storage.from(SHOWCASE_MEDIA_BUCKET).getPublicUrl(row.display_storage_path).data.publicUrl
+          ? postMediaReadUrl(supabase, row.display_storage_path)
           : null;
         // A source known to be gone can never earn a preview: report it failed
         // so no grid waits on it, and carry the marker so clients say why.
@@ -257,14 +256,14 @@ async function resolvePostMediaDbRows(
         // Only a 'ready' row is served: a path left behind by a half-finished
         // attempt must never reach the feed.
         const renditionUrl = row.rendition_storage_path && row.rendition_status === 'ready'
-          ? supabase.storage.from(SHOWCASE_MEDIA_BUCKET).getPublicUrl(row.rendition_storage_path).data.publicUrl
+          ? postMediaReadUrl(supabase, row.rendition_storage_path)
           : null;
         const renditionStatus: PostMediaRenditionStatus = row.rendition_status
           ?? (row.media_kind === 'video' ? 'pending' : 'skipped');
         // Path presence is the teaser's ready signal: the worker records it
         // only after the content-hashed object uploaded.
         const teaserUrl = row.teaser_storage_path
-          ? supabase.storage.from(SHOWCASE_MEDIA_BUCKET).getPublicUrl(row.teaser_storage_path).data.publicUrl
+          ? postMediaReadUrl(supabase, row.teaser_storage_path)
           : null;
         const feedStreamUrl = row.media_kind === 'video'
           ? resolvePostVideoFeedStreamUrl({

@@ -64,6 +64,19 @@ function serviceClient(featurePostIds: string[]) {
 }
 
 describe('showcase feed personalization candidate filling', () => {
+  it('retrieves a broad candidate pool for media filtering instead of querying a nonexistent media category', async () => {
+    const db = serviceClient(['image', 'video']);
+    const page = await getPersonalizedShowcaseFeedPage({
+      anonymousKeyHash: null, cursor: null,
+      filters: { category: 'media', toolSlug: null, unlockFilter: 'all', resourceFilter: 'all' },
+      hydratePostIds: async (ids) => ids.map((id) => item(id)),
+      fallbackItems: async () => [],
+      limit: 12, offset: 0, serviceClient: db, viewerUserId: null,
+    });
+    expect(db.rpc).toHaveBeenCalledWith('get_ranked_feed_candidates', expect.objectContaining({ p_category: null }));
+    expect(page.items).toHaveLength(2);
+  });
+
   it('uses filtered fallback inventory when RPC candidates are removed during hydration', async () => {
     const hydratePostIds = vi.fn(async () => [] as ShowcaseFeedItem[]);
     const fallbackItems = vi.fn(async () => [item('tool-match-1'), item('tool-match-2')]);
