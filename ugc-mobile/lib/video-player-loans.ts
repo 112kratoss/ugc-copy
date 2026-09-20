@@ -61,6 +61,61 @@ const loans = new Map<VideoPlayer, Loan>();
 /** Players a reel has handed back: it must neither pause nor release them again. */
 const handedBack = new WeakSet<VideoPlayer>();
 
+/**
+ * A tile whose player iOS's own zoom is carrying up keeps drawing it until the
+ * push has landed: UIKit grows the tile's live view into the reel, and the
+ * reel's view of the same player fades in over it (lib/apple-zoom.ts). The reel
+ * ends the hold once the navigator says the push is over; one it never says
+ * ends here.
+ */
+export const VIDEO_LOAN_HOLD_TIMEOUT_MS = 1500;
+
+interface LoanHold {
+  key: string;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
+const holds = new Map<VideoPlayer, LoanHold>();
+const holdListeners = new Set<() => void>();
+
+function notifyHoldListeners() {
+  holdListeners.forEach((listener) => listener());
+}
+
+/** The tile lending `player` out of `tileKey` on `url` keeps its view of it until released. */
+export function holdVideoLoan(player: VideoPlayer, tileKey: string, url: string) {
+  releaseVideoLoanHold(player);
+  holds.set(player, {
+    key: returnKey(tileKey, url),
+    timeout: setTimeout(() => releaseVideoLoanHold(player), VIDEO_LOAN_HOLD_TIMEOUT_MS),
+  });
+  notifyHoldListeners();
+}
+
+export function releaseVideoLoanHold(player: VideoPlayer) {
+  const hold = holds.get(player);
+  if (!hold) return;
+  clearTimeout(hold.timeout);
+  holds.delete(player);
+  notifyHoldListeners();
+}
+
+/** Whether a player lent out of this tile and stream is still the tile's to draw. */
+export function isVideoLoanHeld(tileKey: string, url: string) {
+  const key = returnKey(tileKey, url);
+  for (const hold of holds.values()) {
+    if (hold.key === key) return true;
+  }
+  return false;
+}
+
+export function subscribeToVideoLoanHolds(listener: () => void) {
+  holdListeners.add(listener);
+  return () => {
+    holdListeners.delete(listener);
+  };
+}
+
 function releaseSoon(player: VideoPlayer) {
   try {
     player.pause();
@@ -78,6 +133,7 @@ function releaseSoon(player: VideoPlayer) {
 
 function settle(player: VideoPlayer, loan: Loan) {
   loans.delete(player);
+  releaseVideoLoanHold(player);
   if (loan.timeout) clearTimeout(loan.timeout);
   if (loan.lenderMounted) loan.giveBack?.();
   else releaseSoon(player);
@@ -318,6 +374,8 @@ export function resetVideoPlayerLoans() {
     if (loan.timeout) clearTimeout(loan.timeout);
   });
   loans.clear();
+  holds.forEach((hold) => clearTimeout(hold.timeout));
+  holds.clear();
   if (pendingReturn) clearTimeout(pendingReturn.timeout);
   pendingReturn = null;
   acceptors.clear();

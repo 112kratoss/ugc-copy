@@ -17,8 +17,9 @@ import { makeMutable } from 'react-native-reanimated';
  * (`zoomUnderlayDetached`, `display: 'none'`), which ends the walk; it is put
  * back the instant a close begins, in the same call that shows it again.
  *
- * iOS pushes the viewer as a card and keeps its own pop gesture, which would
- * uncover a hidden screen mid-swipe, so it is left alone there.
+ * iOS pushes the reel as a card: nothing is drawn beneath a pushed screen, and
+ * UIKit's own zoom transition (lib/apple-zoom.ts) brings the feed back for the
+ * close itself, so there is nothing to hide there.
  */
 export const zoomUnderlayHidden = makeMutable(0);
 /** 1 once the hidden screen is also out of layout; always 0 while it is shown. */

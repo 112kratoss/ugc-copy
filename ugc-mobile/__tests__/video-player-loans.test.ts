@@ -7,6 +7,8 @@ import {
   claimReturnedVideoPlayer,
   endVideoReturn,
   handBackVideoPlayer,
+  holdVideoLoan,
+  isVideoLoanHeld,
   isVideoPlayerHandedBack,
   isVideoPlayerOnLoan,
   isVideoReturnPending,
@@ -14,11 +16,14 @@ import {
   lendVideoPlayer,
   RELEASED_LOAN_GRACE_MS,
   releaseAdoptedVideoPlayer,
+  releaseVideoLoanHold,
   reportReturnedVideoDrawn,
   resetVideoPlayerLoans,
   returnVideoPlayer,
   subscribeToVideoReturns,
+  subscribeToVideoLoanHolds,
   tileAcceptsVideoReturn,
+  VIDEO_LOAN_HOLD_TIMEOUT_MS,
   VIDEO_LOAN_TIMEOUT_MS,
   VIDEO_RETURN_TIMEOUT_MS,
   whenReturnedVideoDrawn,
@@ -296,5 +301,44 @@ describe('a tile saying it would take a player back', () => {
     expect(tileAcceptsVideoReturn(TILE, STREAM)).toBe(true);
     second();
     expect(tileAcceptsVideoReturn(TILE, STREAM)).toBe(false);
+  });
+});
+
+describe('a player held on its tile while iOS\'s zoom carries it up', () => {
+  const tile = zoomTileKey('home', 'post-1');
+  const url = 'https://cdn.test/clip.mp4';
+
+  it('is the tile\'s to draw until the reel lets go, or the hold runs out', () => {
+    const player = fakePlayer();
+    const listener = vi.fn();
+    subscribeToVideoLoanHolds(listener);
+    lendVideoPlayer(player, vi.fn());
+
+    holdVideoLoan(player, tile, url);
+    expect(isVideoLoanHeld(tile, url)).toBe(true);
+    expect(isVideoLoanHeld(tile, 'https://cdn.test/other.mp4')).toBe(false);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    releaseVideoLoanHold(player);
+    expect(isVideoLoanHeld(tile, url)).toBe(false);
+    expect(listener).toHaveBeenCalledTimes(2);
+    // Releasing twice tells nobody anything.
+    releaseVideoLoanHold(player);
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    holdVideoLoan(player, tile, url);
+    vi.advanceTimersByTime(VIDEO_LOAN_HOLD_TIMEOUT_MS);
+    expect(isVideoLoanHeld(tile, url)).toBe(false);
+  });
+
+  it('ends with the loan', () => {
+    const player = fakePlayer();
+    lendVideoPlayer(player, vi.fn());
+    holdVideoLoan(player, tile, url);
+    adoptVideoPlayer(player);
+
+    releaseAdoptedVideoPlayer(player);
+
+    expect(isVideoLoanHeld(tile, url)).toBe(false);
   });
 });

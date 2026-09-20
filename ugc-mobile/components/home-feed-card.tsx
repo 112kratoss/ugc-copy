@@ -4,6 +4,7 @@ import { Text, View } from 'react-native';
 
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
 import { MediaZoomSourceView, useMediaZoomSource } from '@/components/media-zoom';
+import type { AppleZoomOpen } from '@/lib/apple-zoom';
 import { PostTextBlock } from '@/components/post-text-block';
 import { SaveHeart } from '@/components/save-heart';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
@@ -40,7 +41,8 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   /** Keep this card's video loaded and paused, ready to play; see FeedVideoPreview. */
   showPreparedVideo: boolean;
   bodyExpanded: boolean;
-  onOpen: () => void;
+  /** Opens the post, carrying the zoom the tile hands the push on iOS 18 (lib/apple-zoom.ts). */
+  onOpen: (zoom: AppleZoomOpen | null) => void;
   onToggleBody: () => void;
   onFeedbackOpen: () => void;
   onCreatorOpen: () => void;

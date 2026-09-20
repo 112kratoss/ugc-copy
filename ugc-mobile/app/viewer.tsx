@@ -1,5 +1,6 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import * as Clipboard from 'expo-clipboard';
+import { Image } from 'expo-image';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer, type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
 import { MEDIA_PLAYER_OPTIONS } from '@/lib/video-player-options';
@@ -12,8 +13,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
 import { DoubleTapPressable } from '@/components/double-tap-pressable';
-import { MediaZoomChrome, MediaZoomStage, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage } from '@/components/media-zoom';
-import { mediaItemAspectRatio, showcaseViewerMediaPicture } from '@/lib/media-zoom-transition';
+import { AppleZoomTarget, useAppleZoomRetarget, useAppleZoomSourceId } from '@/components/apple-zoom';
+import { MediaZoomChrome, MediaZoomStage, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage } from '@/components/media-zoom';
+import { mediaItemAspectRatio, mediaRectInScreen, showcaseViewerMediaPicture, type ZoomPreview } from '@/lib/media-zoom-transition';
 import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
 import { restoreVideoPlayback } from '@/lib/video-playback-continuity';
@@ -39,6 +41,7 @@ import { useAuth } from '@/lib/auth';
 import { applyCommentCountToSourceData } from '@/lib/comments-view-model';
 import { env } from '@/lib/env';
 import { TopScrim } from '@/components/top-scrim';
+import { ViewerTopControl } from '@/components/viewer-top-control';
 import { IconShadow, ReelSlideChrome } from '@/components/reel-chrome';
 import {
   getImmersiveInitialIndex,
@@ -50,7 +53,7 @@ import {
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
 import { hydrateViewerAudioMuted, isViewerAudioMuted, toggleViewerAudioMuted, useViewerAudioMuted } from '@/lib/viewer-audio';
-import { viewerTopBadgeTop, viewerTopControlTop, VIEWER_TOP_CONTROL_SIZE } from '@/lib/viewer-chrome';
+import { viewerTopBadgeTop } from '@/lib/viewer-chrome';
 import { useViewerRefreshSpinner } from '@/lib/viewer-refresh-indicator';
 import { BackGlyph } from '@/lib/platform-glyphs';
 import { createShowcaseFeedViewerQueryKey } from '@/lib/showcase-feed-query';
@@ -175,6 +178,9 @@ export default function ImmersivePreviewViewerScreen() {
   const params = useLocalSearchParams<ViewerParams>();
   const source = normalizeViewerSource(params.source);
   const initialId = normalizeParam(params.initialId);
+  const [openingPreview] = useState(() => peekOpeningPreview(initialId, Date.now()));
+  // iOS 18: pushed out of a tile by UIKit's zoom (lib/apple-zoom.ts), which the pop reverses.
+  const nativeZoomSourceId = useAppleZoomSourceId();
   const creatorUsername = normalizeParam(params.creatorUsername) || null;
   const routeFeedSessionId = normalizeParam(params.feedSessionId) || null;
   const routeAlgorithmVersion = normalizeParam(params.algorithmVersion) || null;
@@ -401,6 +407,8 @@ export default function ImmersivePreviewViewerScreen() {
     return () => playbackHandoff.setAutoplayAllowed(false);
   }, [handoffAutoplayAllowed, playbackHandoff]);
   const activeItem = items[activeIndex];
+  // The zoom's close lands in the tile of the post the reader is on, not the one they tapped.
+  useAppleZoomRetarget(activeItem?.id ?? null);
   const detailsOpenForActive = Boolean(activeItem) && detailsPageOpenItemId === activeItem.id;
   // The shape of the picture on screen, so a reel growing out of a tile — or
   // shrinking back into one — lines up with the media rather than beside it;
@@ -957,7 +965,7 @@ export default function ImmersivePreviewViewerScreen() {
 
   if (!items.length && sourceQuery.isLoading) {
     return (
-      <ViewerShell topInset={topInset} bottomInset={bottomInset}>
+      <ViewerShell topInset={topInset} bottomInset={bottomInset} preview={openingPreview}>
         <ActivityIndicator accessibilityLabel="Loading preview" color={appTheme.colors.primary} />
       </ViewerShell>
     );
@@ -997,16 +1005,16 @@ export default function ImmersivePreviewViewerScreen() {
         bigger rather than as another screen arriving. */}
     <MediaZoomStage stage={zoom} screen={{ width, height }}>
     <View style={{ flex: 1, backgroundColor: '#000' }}>
-      {/* Pushed under a zoom that had already filled the screen, the reel came in
-          with no animation (`viewerAnimation`, app/_layout.tsx); it still leaves
-          under the fade — a plain pop, the back swipe. Put back once the reel is
-          uncovered, well after the push: set as the push commits, it could be
-          folded into the same native update and fade the push after all. */}
+      {/* iOS: a reel pushed out of a tile keeps the navigator's default
+          animation, which is how react-native-screens leaves the pop to UIKit's
+          zoom back into the tile (lib/apple-zoom.ts); its dismissal gestures go
+          with `gestureEnabled`. One pushed any other way fades out as it faded
+          in — set once the reel is up, so it is not folded into the push. */}
       <Stack.Screen
         options={{
           gestureEnabled: !detailsOpenForActive,
           fullScreenGestureEnabled: false,
-          ...(Platform.OS === 'ios' && !reducedMotion && zoom.opened ? { animation: 'fade' as const } : null),
+          ...(Platform.OS === 'ios' && !nativeZoomSourceId && !reducedMotion && zoom.opened ? { animation: 'fade' as const } : null),
         }}
       />
       <FlatList
@@ -1158,58 +1166,31 @@ export default function ImmersivePreviewViewerScreen() {
       {/* The details page draws its own header with its own way back; the
           reel's arrow would be a second back button that leaves the reel. */}
       {detailsOpenForActive ? null : (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-          onPress={zoom.dismiss}
-          style={({ pressed }) => ({
-            position: 'absolute',
-            left: 16,
-            top: viewerTopControlTop(topInset),
-            width: VIEWER_TOP_CONTROL_SIZE,
-            height: VIEWER_TOP_CONTROL_SIZE,
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderRadius: VIEWER_TOP_CONTROL_SIZE / 2,
-            backgroundColor: 'rgba(0,0,0,0.3)',
-            opacity: pressed ? appTheme.opacity.pressed : 1,
-          })}
-        >
+        <ViewerTopControl label="Go back" onPress={zoom.dismiss} topInset={topInset} side="left">
           <IconShadow><BackGlyph size={appTheme.icon.feature} color="#ffffff" /></IconShadow>
-        </Pressable>
+        </ViewerTopControl>
       )}
       {/* Going full screen: "Continue to provide access to essential features and
           controls so people can complete their task without exiting full-screen
           mode." The reel is entered from a silent grid and is the only surface
           that makes a sound, so silencing it must not mean leaving it. */}
       {detailsOpenForActive || !hasImmersiveAudibleMedia(activeItem) ? null : (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={audioMuted ? 'Unmute video' : 'Mute video'}
-          accessibilityState={{ selected: audioMuted }}
+        <ViewerTopControl
+          label={audioMuted ? 'Unmute video' : 'Mute video'}
+          selected={audioMuted}
           onPress={() => {
             haptic.select();
             toggleViewerAudioMuted();
           }}
-          style={({ pressed }) => ({
-            position: 'absolute',
-            right: 16,
-            top: viewerTopControlTop(topInset),
-            width: VIEWER_TOP_CONTROL_SIZE,
-            height: VIEWER_TOP_CONTROL_SIZE,
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderRadius: VIEWER_TOP_CONTROL_SIZE / 2,
-            backgroundColor: 'rgba(0,0,0,0.3)',
-            opacity: pressed ? appTheme.opacity.pressed : 1,
-          })}
+          topInset={topInset}
+          side="right"
         >
           <IconShadow>
             {audioMuted
               ? <VolumeX size={appTheme.icon.feature} color="#ffffff" />
               : <Volume2 size={appTheme.icon.feature} color="#ffffff" />}
           </IconShadow>
-        </Pressable>
+        </ViewerTopControl>
       )}
       </>
       ) : null}
@@ -1317,17 +1298,29 @@ export default function ImmersivePreviewViewerScreen() {
   );
 }
 
-function ViewerShell({ topInset, bottomInset, children }: { topInset: number; bottomInset: number; children: React.ReactNode }) {
+/**
+ * The reel before its first post has arrived. It shows the tapped tile's own
+ * picture meanwhile, at the size the slide will draw it, so a zoom that lands
+ * before the data does lands on the picture rather than on a spinner.
+ */
+function ViewerShell({ topInset, bottomInset, preview = null, children }: { topInset: number; bottomInset: number; preview?: ZoomPreview | null; children: React.ReactNode }) {
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#000', paddingTop: topInset, paddingBottom: bottomInset, paddingHorizontal: 24 }}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Go back"
-        onPress={leaveViewer}
-        style={({ pressed }) => ({ position: 'absolute', left: 16, top: viewerTopControlTop(topInset), width: VIEWER_TOP_CONTROL_SIZE, height: VIEWER_TOP_CONTROL_SIZE, borderRadius: VIEWER_TOP_CONTROL_SIZE / 2, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.3)', opacity: pressed ? appTheme.opacity.pressed : 1 })}
-      >
+      {preview ? <Image
+        pointerEvents="none"
+        source={{ uri: preview.url, cacheKey: preview.cacheKey ?? undefined }}
+        recyclingKey={`viewer-loading:${preview.url}:${preview.cacheKey ?? ''}`}
+        placeholder={preview.thumbhash ? { thumbhash: preview.thumbhash } : undefined}
+        placeholderContentFit="contain"
+        contentFit="contain"
+        cachePolicy="memory-disk"
+        priority="high"
+        transition={0}
+        style={{ position: 'absolute', inset: 0 }}
+      /> : null}
+      <ViewerTopControl label="Go back" onPress={leaveViewer} topInset={topInset} side="left">
         <IconShadow><BackGlyph size={appTheme.icon.feature} color="#ffffff" /></IconShadow>
-      </Pressable>
+      </ViewerTopControl>
       {children}
     </View>
   );
@@ -1626,6 +1619,8 @@ function ImmersiveSlide({
           <MediaSlidePage
             active={active && currentHorizontalIndex === pageIndex && (page.type !== 'media' || videoPlaybackActive)}
             slideActive={active}
+            // The page on screen is where the zoom's close shrinks the reel out of.
+            zoomTarget={active && currentHorizontalIndex === pageIndex}
             prepareVideo={prepareVideo && preparedMediaIndex === pageIndex}
             bottomInset={bottomInset}
             height={height}
@@ -1812,6 +1807,7 @@ function DoubleTapSaveHeart({
 function MediaSlidePage({
   active,
   slideActive,
+  zoomTarget = false,
   prepareVideo,
   bottomInset,
   height,
@@ -1833,6 +1829,8 @@ function MediaSlidePage({
   active: boolean;
   /** The reader is on this slide, overlays included -- see ActiveVideo's rewind. */
   slideActive: boolean;
+  /** This page is the one on screen: it marks where the zoom's close shrinks out of (iOS 18). */
+  zoomTarget?: boolean;
   prepareVideo: boolean;
   bottomInset: number;
   height: number;
@@ -1882,6 +1880,7 @@ function MediaSlidePage({
           mediaItem={page.mediaItem}
           active={active}
           slideActive={slideActive}
+          zoomTarget={zoomTarget}
           prepareVideo={prepareVideo}
           onDoubleTapSave={onDoubleTapSave}
           width={width}
@@ -1927,6 +1926,7 @@ function ImmersiveMedia({
   mediaItem,
   active,
   slideActive,
+  zoomTarget = false,
   prepareVideo,
   onDoubleTapSave,
   width,
@@ -1936,6 +1936,8 @@ function ImmersiveMedia({
   mediaItem: ShowcaseMediaItem;
   active: boolean;
   slideActive: boolean;
+  /** This page is the one on screen: it marks where the zoom's close shrinks out of (iOS 18). */
+  zoomTarget?: boolean;
   prepareVideo: boolean;
   onDoubleTapSave: (position: DoubleTapSavePosition) => void;
   width: number;
@@ -2003,9 +2005,14 @@ function ImmersiveMedia({
     <LetterboxBands frame={{ width, height }} aspectRatio={mediaAspectRatio} source={bandSource} />
   ) : null;
 
+  // Where the media sits on the page, for UIKit's zoom to grow the tile into
+  // and shrink the reel back out of (lib/apple-zoom.ts).
+  const zoomTargetRect = zoomTarget ? <AppleZoomTarget rect={mediaRectInScreen({ width, height }, mediaAspectRatio)} /> : null;
+
   if (mediaItem.mediaKind === 'video') {
     return (
       <View style={{ width, height, backgroundColor: '#020203' }}>
+        {zoomTargetRect}
         {/* This image stays mounted while players enter and leave the prepared
             range. Even a fast swipe that outruns decoding keeps a sharp poster
             under the transparent video surface instead of flashing its backdrop. */}
@@ -2078,6 +2085,7 @@ function ImmersiveMedia({
           recyclingKey={`viewer:${mediaItem.id}`}
           style={{ width, height }}
         />
+        {zoomTargetRect}
       </DoubleTapPressable>
     );
   }

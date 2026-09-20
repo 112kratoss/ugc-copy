@@ -59,6 +59,7 @@ import type { PostLifecycleVisibility } from '@/lib/post-lifecycle-policy';
 import { useProfileLibrarySource } from '@/lib/use-profile-library-source';
 import { useProfileMediaRevalidation } from '@/lib/use-profile-media-revalidation';
 import { applyPostVisibilityToCaches } from '@/lib/viewer-media-cache';
+import type { AppleZoomOpen } from '@/lib/apple-zoom';
 
 type ProfileMediaFeedParams = {
   source?: string | string[];
@@ -263,7 +264,7 @@ export function ProfileMediaFeedScreen() {
 
   const openItem = useCallback((
     item: ImmersivePreviewItem,
-    options: { comments?: boolean } = {}
+    options: { comments?: boolean; zoom?: AppleZoomOpen | null } = {}
   ) => {
     router.push(immersivePreviewOpenHref(item, options) as never);
   }, []);
@@ -525,7 +526,7 @@ export function ProfileMediaFeedScreen() {
             mediaWatchdog={isFocused}
             bodyExpanded={Boolean(expandedBodyIds[card.id])}
             pendingAction={pendingAction}
-            onOpen={() => openItem(card.item)}
+            onOpen={(zoom) => openItem(card.item, { zoom })}
             onToggleBody={() => setExpandedBodyIds((current) => ({
               ...current,
               [card.id]: !current[card.id],

@@ -71,6 +71,7 @@ export function LetterboxBands({
               <BackdropImage
                 thumbhash={source.thumbhash}
                 source={{ uri: source.uri, cacheKey: source.cacheKey ?? undefined }}
+                recyclingKey={`letterbox:${source.uri}:${source.cacheKey ?? ''}:${band.edge}`}
                 blurRadius={BAND_BLUR_RADIUS}
                 contentFit="fill"
                 transition={0}

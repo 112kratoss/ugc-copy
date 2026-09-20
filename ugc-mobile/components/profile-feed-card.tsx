@@ -4,6 +4,7 @@ import { Text, View } from 'react-native';
 
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
 import { MediaZoomSourceView, useMediaZoomSource } from '@/components/media-zoom';
+import type { AppleZoomOpen } from '@/lib/apple-zoom';
 import { PostTextBlock } from '@/components/post-text-block';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import {
@@ -35,7 +36,8 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
   showActiveVideo: boolean;
   bodyExpanded: boolean;
   pendingAction: string | null;
-  onOpen: () => void;
+  /** Opens the post, carrying the zoom the tile hands the push on iOS 18 (lib/apple-zoom.ts). */
+  onOpen: (zoom: AppleZoomOpen | null) => void;
   onToggleBody: () => void;
   onActionsOpen: () => void;
   onAction: (action: string) => void;

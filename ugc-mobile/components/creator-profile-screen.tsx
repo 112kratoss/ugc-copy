@@ -40,6 +40,7 @@ import { CreatorProfileSkeleton } from '@/components/skeleton';
 import { accentColor, appTheme } from '@/lib/theme';
 import type { CreatorProfileResponse, ShowcaseFeedItem } from '@/lib/types';
 import { buildShareUrl } from '@/lib/viewer-actions';
+import type { AppleZoomOpen } from '@/lib/apple-zoom';
 
 const PROFILE_PAGE_SIZE = 24;
 const GRID_GAP = 10;
@@ -259,12 +260,13 @@ export function CreatorProfileScreen({
     });
   };
 
-  const openProfileItem = (item: ShowcaseFeedItem) => {
+  const openProfileItem = (item: ShowcaseFeedItem, zoom: AppleZoomOpen | null = null) => {
     queryClient.setQueryData(createShowcasePostQueryKey(item.id, user?.id), { success: true, item });
     router.push(showcaseFeedItemOpenHref({
       item,
       source: 'creator-profile',
       creatorUsername: data?.profile.username ?? username,
+      zoom,
     }) as never);
   };
 
@@ -402,7 +404,7 @@ export function CreatorProfileScreen({
         <CreatorPostTile
           activeVideoPreview={isFocused && activeVideoItemId === item.item.id}
           item={item.item}
-          onPress={() => openProfileItem(item.item)}
+          onPress={(zoom) => openProfileItem(item.item, zoom)}
           width={tileWidth}
         />
       </View>
@@ -586,7 +588,7 @@ function CreatorTabs({ activeTab, data, onChange }: { activeTab: CreatorProfileT
   );
 }
 
-function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeVideoPreview: boolean; item: ShowcaseFeedItem; onPress: () => void; width: number }) {
+function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeVideoPreview: boolean; item: ShowcaseFeedItem; onPress: (zoom: AppleZoomOpen | null) => void; width: number }) {
   const isTextPost = isTextOnlyShowcasePost(item);
   const displayText = getShowcasePostDisplayText(item);
   const height = Math.round(width * 1.25);

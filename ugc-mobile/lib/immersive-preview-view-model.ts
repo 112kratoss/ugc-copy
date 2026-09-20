@@ -1,5 +1,6 @@
 import type { CreatorToolId, GenerationListItem, OwnerPostListItem, PostResourceKind, ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/types';
 
+import { withAppleZoom, type AppleZoomOpen } from './apple-zoom';
 import { getCreationAvailability, type CreationAvailability } from './creation-library';
 import { getGenerationKind, getGenerationLabel, getGenerationRenderableMediaKind } from './generation-media';
 import { formatCompactCount } from './home-view-model';
@@ -135,14 +136,17 @@ export function immersiveViewerHref({
   feedSessionId,
   source,
   initialId,
+  zoom = null,
 }: {
   algorithmVersion?: string | null;
   creatorUsername?: string | null;
   feedSessionId?: string | null;
   source: PreviewViewerSource;
   initialId: string;
+  /** The zoom the tapped tile hands the push on iOS 18 (lib/apple-zoom.ts). */
+  zoom?: AppleZoomOpen | null;
 }) {
-  return {
+  return withAppleZoom({
     pathname: '/viewer',
     params: {
       source,
@@ -151,7 +155,7 @@ export function immersiveViewerHref({
       ...(algorithmVersion ? { algorithmVersion } : {}),
       ...(creatorUsername ? { creatorUsername } : {}),
     },
-  };
+  }, zoom);
 }
 
 export function textPostViewerHref({
@@ -177,7 +181,7 @@ export function textPostViewerHref({
 
 export function immersivePreviewOpenHref(
   item: ImmersivePreviewItem,
-  options: { comments?: boolean } = {}
+  options: { comments?: boolean; zoom?: AppleZoomOpen | null } = {}
 ) {
   if (item.previewKind === 'text' && item.sourceType !== 'generation') {
     return textPostViewerHref({
@@ -191,7 +195,7 @@ export function immersivePreviewOpenHref(
     });
   }
 
-  return immersiveViewerHref({ source: item.source, initialId: item.id });
+  return immersiveViewerHref({ source: item.source, initialId: item.id, zoom: options.zoom });
 }
 
 /**
@@ -208,6 +212,7 @@ export function showcaseFeedItemOpenHref({
   feedSessionId,
   item,
   source,
+  zoom,
 }: {
   algorithmVersion?: string | null;
   comments?: boolean;
@@ -215,6 +220,8 @@ export function showcaseFeedItemOpenHref({
   feedSessionId?: string | null;
   item: ShowcaseFeedItem;
   source: PreviewViewerSource;
+  /** The zoom the tapped tile hands the push on iOS 18 (lib/apple-zoom.ts). */
+  zoom?: AppleZoomOpen | null;
 }) {
   if (isTextOnlyShowcasePost(item)) {
     return textPostViewerHref({ comments, postId: item.id });
@@ -226,6 +233,7 @@ export function showcaseFeedItemOpenHref({
     feedSessionId,
     source,
     initialId: item.id,
+    zoom,
   });
 }
 

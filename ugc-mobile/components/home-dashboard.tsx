@@ -56,6 +56,7 @@ import {
 } from '@/lib/home-feed-view-model';
 import { getOwnerPostSalesSummary } from '@/lib/home-view-model';
 import { immersiveViewerHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
+import type { AppleZoomOpen } from '@/lib/apple-zoom';
 import {
   SHOWCASE_DRAW_DISTANCE,
   SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS,
@@ -517,7 +518,7 @@ export function HomeDashboard() {
     setActiveChipId(chipId);
   };
 
-  const openPost = (item: ShowcaseFeedItem) => {
+  const openPost = (item: ShowcaseFeedItem, zoom: AppleZoomOpen | null = null) => {
     recordFeedEvent(item, 'open');
     queryClient.setQueryData<ShowcasePostResponse>(createShowcasePostQueryKey(item.id, user?.id), {
       success: true,
@@ -528,6 +529,7 @@ export function HomeDashboard() {
       initialId: item.id,
       feedSessionId: feedSession.feedSessionId,
       algorithmVersion: item.recommendation?.algorithmVersion ?? feedSession.algorithmVersion,
+      zoom,
     }) as never);
   };
 
@@ -536,7 +538,7 @@ export function HomeDashboard() {
    * through other showcase posts — so a written post opens its own screen
    * rather than being dropped into a reel of other people's media.
    */
-  const openCard = (card: HomeFeedCard, options: { comments?: boolean } = {}) => {
+  const openCard = (card: HomeFeedCard, options: { comments?: boolean; zoom?: AppleZoomOpen | null } = {}) => {
     if (getHomeFeedCardOpenTarget(card) === 'post') {
       recordFeedEvent(card.item, 'open');
       // Seeded so the post screen paints from cache instead of refetching.
@@ -550,7 +552,7 @@ export function HomeDashboard() {
       }) as never);
       return;
     }
-    openPost(card.item);
+    openPost(card.item, options.zoom ?? null);
   };
 
   const toggleBodyExpanded = (postId: string) => {
@@ -766,7 +768,7 @@ export function HomeDashboard() {
         showActiveVideo={visibleActiveVideoIds.includes(card.id)}
         showPreparedVideo={preparedVideoIds.includes(card.id)}
         bodyExpanded={expandedBodyIds.includes(card.id)}
-        onOpen={() => openCard(card)}
+        onOpen={(zoom) => openCard(card, { zoom })}
         onToggleBody={() => toggleBodyExpanded(card.id)}
         onFeedbackOpen={() => setFeedbackItem(card.item)}
         onCreatorOpen={() => openCreator(card.item)}

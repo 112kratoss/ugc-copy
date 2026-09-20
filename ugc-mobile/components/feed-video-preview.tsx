@@ -13,9 +13,11 @@ import { useMediaZoomTileKey, useMediaZoomVideoOffer } from '@/lib/media-zoom-vi
 import {
   acceptVideoReturn,
   claimReturnedVideoPlayer,
+  isVideoLoanHeld,
   isVideoReturnPending,
   lenderUnmounting,
   reportReturnedVideoDrawn,
+  subscribeToVideoLoanHolds,
   subscribeToVideoReturns,
 } from '@/lib/video-player-loans';
 import { useAppForeground } from '@/lib/app-foreground';
@@ -149,7 +151,14 @@ export function FeedVideoPreview({
     subscribeToVideoReturns,
     () => Boolean(tileKey && lendableStreamUrl && isVideoReturnPending(tileKey, lendableStreamUrl)),
   );
-  const canStream = (isFocused || returning) && Boolean(streamUrl);
+  // And a tile whose player iOS's own zoom is carrying up keeps drawing it
+  // until the push has landed: UIKit grows this very view into the reel, and
+  // the reel's view of the same player fades in over it (lib/apple-zoom.ts).
+  const lending = useSyncExternalStore(
+    subscribeToVideoLoanHolds,
+    () => Boolean(tileKey && lendableStreamUrl && isVideoLoanHeld(tileKey, lendableStreamUrl)),
+  );
+  const canStream = (isFocused || returning || lending) && Boolean(streamUrl);
   const canPlay = active && canStream;
   const wantsPlayer = (active || prepared) && canStream;
   const foreground = useAppForeground(canPlay);

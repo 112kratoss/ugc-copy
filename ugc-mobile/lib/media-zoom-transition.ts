@@ -56,7 +56,8 @@ export interface ZoomOrigin {
   surfaceId: string;
   /** Reel item id — the href's `initialId`, so a stale hand-off is ignored. */
   itemId: string;
-  rect: ZoomRect;
+  /** Where the tile was, in the layer's coordinates; null for a native zoom, which measures nothing. */
+  rect: ZoomRect | null;
   radius: number;
   /** width / height of the media, when the tile knows it. */
   aspectRatio: number | null;
@@ -69,8 +70,13 @@ export interface ZoomOrigin {
   preview: ZoomPreview | null;
   /** The tile's playing video, when it lent it; see `ZoomVideo`. */
   video?: ZoomVideo | null;
-  /** The flight the tap started, which the reel joins rather than starting its own. */
-  flightId: number;
+  /** The flight the tap started, which the reel joins rather than starting its own; null for a native zoom. */
+  flightId: number | null;
+  /**
+   * The tile handed the reel to iOS's own zoom transition (lib/apple-zoom.ts):
+   * UIKit carries the picture up and down, and the reel takes only a lent video.
+   */
+  native?: boolean;
   recordedAt: number;
 }
 
@@ -392,17 +398,6 @@ export function peekPendingZoomOrigin(itemId: string | null | undefined, now: nu
   if (!pendingOrigin || !itemId || pendingOrigin.itemId !== itemId) return null;
   if (now - pendingOrigin.recordedAt > ORIGIN_TTL_MS) return null;
   return pendingOrigin;
-}
-
-/**
- * Whether the reel opening on `itemId` is pushed under a tile's picture that
- * already fills the screen: a fresh hand-off whose flight has landed. Whatever
- * the navigator animates then plays unseen beneath that picture, and only holds
- * back the moment the reel can be uncovered.
- */
-export function arrivesUnderLandedZoom(itemId: string | null | undefined, now: number): boolean {
-  const origin = peekPendingZoomOrigin(itemId, now);
-  return origin !== null && flight?.id !== origin.flightId;
 }
 
 /** Registers a mounted tile; the returned function unregisters exactly this handle. */

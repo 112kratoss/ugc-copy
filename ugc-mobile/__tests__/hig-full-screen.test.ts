@@ -46,6 +46,7 @@ const mobileRoot = path.resolve(__dirname, '..');
 const read = (name: string) => readFileSync(path.join(mobileRoot, name), 'utf8');
 
 const viewer = read('app/viewer.tsx');
+const topControl = read('components/viewer-top-control.tsx');
 /** A slide's rail, caption and counter, which the reel and the zoom into it both draw. */
 const chrome = read('components/reel-chrome.tsx');
 
@@ -120,7 +121,10 @@ describe('S6 — the viewer top strip is laid out from the safe area', () => {
       expect(source).not.toContain('top: topInset + 24');
       expect(source).not.toContain('top: topInset + 10');
     }
-    expect(viewer.match(/viewerTopControlTop\(topInset\)/g)?.length).toBe(3);
+    expect(viewer.match(/<ViewerTopControl\b/g)?.length).toBe(3);
+    expect(topControl).toContain('top: viewerTopControlTop(topInset)');
+    expect(topControl).toContain('width: VIEWER_TOP_CONTROL_SIZE');
+    expect(topControl).toContain('height: VIEWER_TOP_CONTROL_SIZE');
     // The spinner, in the reel; the counter, in the slide chrome.
     expect(viewer.match(/viewerTopBadgeTop\(topInset\)/g)?.length).toBe(1);
     expect(chrome.match(/viewerTopBadgeTop\(topInset\)/g)?.length).toBe(1);
@@ -156,7 +160,8 @@ describe('S6 — the reel can be silenced without leaving it', () => {
   // Going full screen: "Continue to provide access to essential features and
   // controls so people can complete their task without exiting full-screen mode."
   it('renders a labelled mute control on any slide that can make a sound', () => {
-    expect(viewer).toContain("accessibilityLabel={audioMuted ? 'Unmute video' : 'Mute video'}");
+    expect(viewer).toContain("label={audioMuted ? 'Unmute video' : 'Mute video'}");
+    expect(topControl).toContain('accessibilityLabel={label}');
     expect(viewer).toContain('hasImmersiveAudibleMedia(activeItem)');
     expect(viewer).toContain('toggleViewerAudioMuted()');
   });

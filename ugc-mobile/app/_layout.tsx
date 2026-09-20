@@ -33,7 +33,7 @@ import { subscribeToAppForeground } from '@/lib/app-foreground';
 import { setMediaDiagnosticsReporter } from '@/lib/media-diagnostics';
 import { readPlaybackDevice, readPlaybackNetwork } from '@/lib/playback-device';
 import { setPlaybackMetricsReporter } from '@/lib/playback-metrics';
-import { arrivesUnderLandedZoom } from '@/lib/media-zoom-transition';
+import { hasAppleZoomParam } from '@/lib/apple-zoom';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
 import { navigateToNotificationDeepLink, subscribeToNotificationResponses, subscribeToNotificationsReceived } from '@/lib/notifications';
@@ -78,10 +78,14 @@ function renderZoomPost(post: ImmersivePreviewItem) {
  * an iPhone 16e's screen some 200 ms after everything was ready. Read when the
  * reel is pushed; the viewer puts the fade back for the ways it leaves.
  */
-function viewerAnimation(params: object | undefined): 'none' | 'fade' {
+function viewerAnimation(params: object | undefined): 'none' | 'fade' | 'default' {
   if (Platform.OS === 'android') return 'none';
-  const initialId = (params as { initialId?: string | string[] } | undefined)?.initialId;
-  return arrivesUnderLandedZoom(Array.isArray(initialId) ? initialId[0] : initialId, Date.now()) ? 'none' : 'fade';
+  // iOS 18: a reel opened from a tile arrives by UIKit's own zoom transition
+  // (lib/apple-zoom.ts), which react-native-screens leaves to UIKit only under
+  // its default animation — any other is an animator of its own, and the pop
+  // would run it instead of the zoom back into the tile. A reel opened any
+  // other way — a deep link, a notification, a device before iOS 18 — fades.
+  return hasAppleZoomParam(params) ? 'default' : 'fade';
 }
 
 const queryClient = new QueryClient({
@@ -240,28 +244,25 @@ function RootLayoutNav() {
                     contentStyle: { backgroundColor: appTheme.colors.app },
                   }}
                 />
-                {/* The reel opens by growing out of the tapped tile, rail and caption
-                    inside that window, and shrinks back into it
-                    (`components/media-zoom.tsx`); the navigator contributes as
-                    little as each platform lets it. Android: a transparent modal
-                    keeps the screen beneath attached and drawn, so the reel grows
-                    over it and shrinks back over it live, and the navigator runs no
-                    animation of its own. iOS: a push (a modal here would make every
-                    screen pushed after it a modal too — RNSScreenStack splits the
-                    stack at the first one), transparent so the screen beneath shows
-                    through the reel's own ground during the short fade in, and so
-                    the snapshot a pop leaves behind hides nothing while the layer
-                    above the navigator shrinks the reel's picture over it; pushed
-                    under a picture that has already grown to fill the screen, it
-                    arrives with no animation at all (`viewerAnimation`). An
-                    earlier attempt (2026-08-23) mounted the media first and brought
-                    the controls in afterwards, which is what it was cut for. */}
+                {/* The reel opens by growing out of the tapped tile and shrinks back
+                    into it. Android: the layer above the navigator flies the
+                    picture (`components/media-zoom.tsx`), and the reel is a
+                    transparent modal so the screen beneath stays attached and
+                    drawn — the reel's own window shrinks back over it live, and
+                    the navigator animates nothing. iOS: a plain pushed card, and
+                    UIKit's own zoom transition does the growing and shrinking
+                    (lib/apple-zoom.ts) — interactively, with the feed drawn
+                    beneath the whole way. A card, not a modal: a modal here would
+                    turn every screen pushed after it into a sheet
+                    (native-stack's `getModalRouteKeys`) and lose the edge-swipe
+                    back. Opaque, so the zoom never shows the system background
+                    through a reel still building its first slide. */}
                 <Stack.Screen
                   name="viewer"
                   options={({ route }) => ({
                     headerShown: false,
                     presentation: Platform.OS === 'android' ? 'transparentModal' : 'card',
-                    contentStyle: { backgroundColor: 'transparent' },
+                    contentStyle: { backgroundColor: Platform.OS === 'android' ? 'transparent' : '#000' },
                     animation: reducedMotion ? 'none' : viewerAnimation(route.params),
                     animationDuration: 250,
                   })}

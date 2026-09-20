@@ -80,6 +80,7 @@ import type {
   ProfileResponse,
   ShowcaseFeedResponse,
 } from '@/lib/types';
+import type { AppleZoomOpen } from '@/lib/apple-zoom';
 
 const PROFILE_GALLERY_COLUMNS = 3;
 const PROFILE_GALLERY_GAP = 8;
@@ -1141,7 +1142,9 @@ function ProfileMediaTile({
         haptic.light();
         // Saved media is for looking at, so it opens the reel. Creations and Posts
         // are for managing, so they open the card feed with their controls inline.
-        const href = isFallbackPreview
+        // The reel's href carries the zoom the tile hands the push on iOS 18
+        // (lib/apple-zoom.ts); the card feed and the reading screen take none.
+        const hrefFor = (zoom: AppleZoomOpen | null) => (isFallbackPreview
           ? item.href
           : item.previewKind === 'text' && item.label !== 'Creation'
             ? textPostViewerHref({
@@ -1153,16 +1156,16 @@ function ProfileMediaTile({
                   : undefined,
             })
             : isSavedTile
-              ? immersiveViewerHref({ source: item.viewerSource, initialId: item.sourceId })
+              ? immersiveViewerHref({ source: item.viewerSource, initialId: item.sourceId, zoom })
               : profileMediaFeedHref({
                 source: item.viewerSource,
                 initialId: item.sourceId,
                 // The feed holds the scope the tile was drawn in; active is its default.
                 scope: item.label === 'Post' && item.isArchived ? 'archived' : undefined,
-              });
+              }));
         // Every way a tile opens goes through `capture`, zoomed or not, so a tap
         // repeated while the first is still opening opens nothing a second time.
-        zoomSource.capture(() => router.push(href as never));
+        zoomSource.capture((zoom) => router.push(hrefFor(zoom) as never));
       }}
       style={{ flex: 1 }}
     >

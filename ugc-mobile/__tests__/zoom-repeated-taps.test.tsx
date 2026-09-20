@@ -22,7 +22,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
 vi.mock('react-native', () => ({
-  Platform: { OS: 'ios' },
+  // The layer's own flight is Android's; iOS hands the open to UIKit's zoom (lib/apple-zoom.ts).
+  Platform: { OS: 'android' },
+  StatusBar: { currentHeight: 0 },
   StyleSheet: { absoluteFill: { position: 'absolute', inset: 0 } },
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
   useWindowDimensions: () => ({ width: 402, height: 874 }),
@@ -95,6 +97,7 @@ vi.mock('react-native-reanimated', async () => {
 
 import { MediaZoomFlightLayer, MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource, useMediaZoomStage } from '../components/media-zoom';
 import {
+  beginZoomFlight,
   getZoomFlight,
   holdZoomPicture,
   landZoomFlight,
@@ -121,6 +124,26 @@ afterEach(() => {
 });
 
 describe('the picture the flight carries', () => {
+  it('ignores a late display callback from the previous media', () => {
+    const next = { url: 'https://example.test/next.webp', cacheKey: 'next', thumbhash: null };
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(<MediaZoomFlightLayer />, { createNodeMock }); });
+    renderer.act(() => { holdZoomPicture({ preview: PREVIEW, geometry: GEOMETRY }); });
+    const previousDisplay = tree.root.findByType('expo-image' as never).props.onDisplay as () => void;
+
+    renderer.act(() => {
+      holdZoomPicture({ preview: next, geometry: GEOMETRY });
+      beginZoomFlight({ direction: 'open', geometry: GEOMETRY, preview: next, still: true });
+    });
+    renderer.act(previousDisplay);
+    expect(getZoomFlight()?.displayed).toBe(false);
+
+    const currentDisplay = tree.root.findByType('expo-image' as never).props.onDisplay as () => void;
+    renderer.act(currentDisplay);
+    expect(getZoomFlight()?.displayed).toBe(true);
+    renderer.act(() => tree.unmount());
+  });
+
   it('draws a poster and a video in views of their own, so neither is ever restyled into the other', () => {
     let tree!: renderer.ReactTestRenderer;
     renderer.act(() => {

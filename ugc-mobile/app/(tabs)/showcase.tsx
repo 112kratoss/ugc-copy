@@ -87,6 +87,7 @@ import { haptic } from '@/lib/haptics';
 import { MotionView, usePressMotion, useReducedMotion } from '@/lib/motion';
 import { accentColor, appTheme } from '@/lib/theme';
 import type { ShowcaseFeedEventType, ShowcaseFeedItem, ShowcaseFeedResponse, ShowcasePostResponse } from '@/lib/types';
+import type { AppleZoomOpen } from '@/lib/apple-zoom';
 
 type FeedFilterId = MobileShowcaseFeedFilterId;
 
@@ -484,7 +485,7 @@ export default function ShowcaseScreen() {
     void showcaseQuery.refetch().finally(() => setPullRefreshing(false));
   };
 
-  const openPost = useCallback((item: ShowcaseFeedItem) => {
+  const openPost = useCallback((item: ShowcaseFeedItem, zoom: AppleZoomOpen | null = null) => {
     haptic.light();
     recordFeedEvent(item, 'open');
     queryClient.setQueryData<ShowcasePostResponse>(createShowcasePostQueryKey(item.id, user?.id), {
@@ -496,6 +497,7 @@ export default function ShowcaseScreen() {
       source: 'showcase-feed',
       feedSessionId: feedSession.feedSessionId,
       algorithmVersion: item.recommendation?.algorithmVersion ?? feedSession.algorithmVersion,
+      zoom,
     }) as never);
   }, [queryClient, user?.id, recordFeedEvent, feedSession.feedSessionId, feedSession.algorithmVersion]);
 
@@ -1005,7 +1007,7 @@ const MasonryPin = memo(function MasonryPin({
   onAspectRatio: (cardId: string, ratio: number) => void;
   onFeedbackOpen: (item: ShowcaseFeedItem) => void;
   onOpenCreator: (item: ShowcaseFeedItem) => void;
-  onOpenPost: (item: ShowcaseFeedItem) => void;
+  onOpenPost: (item: ShowcaseFeedItem, zoom: AppleZoomOpen | null) => void;
   onScrollToggle?: (scrolling: boolean) => void;
 }) {
   const { width } = useWindowDimensions();
@@ -1033,7 +1035,7 @@ const MasonryPin = memo(function MasonryPin({
     // and caption from the first frame.
     post: buildImmersiveShowcaseItems('showcase-feed', [card.item])[0] ?? null,
   });
-  const openPin = () => zoomSource.capture(() => onOpenPost(card.item));
+  const openPin = () => zoomSource.capture((zoom) => onOpenPost(card.item, zoom));
 
   return (
     <View style={{ gap: 5 }}>

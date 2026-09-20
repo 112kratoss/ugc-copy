@@ -5,7 +5,9 @@ import { describe, expect, it, vi } from 'vitest';
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
 vi.mock('react-native', () => ({
-  Platform: { OS: 'ios' },
+  // The layer's own flight is Android's; iOS hands the open to UIKit's zoom (lib/apple-zoom.ts).
+  Platform: { OS: 'android' },
+  StatusBar: { currentHeight: 0 },
   StyleSheet: { absoluteFill: { position: 'absolute', inset: 0 } },
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
   useWindowDimensions: () => ({ width: 402, height: 874 }),
@@ -47,9 +49,10 @@ const source: MediaZoomSource = {
   ref: { current: null },
   hiddenStyle: { opacity: 1 },
   prepare: () => {},
-  capture: (open) => open(),
+  capture: (open) => open(null),
   offerVideo: () => () => {},
   tileKey: 'surface\u0000post',
+  appleZoomId: null,
 };
 
 function flatten(style: unknown): Record<string, unknown> {
