@@ -1,3 +1,4 @@
+import type { OwnerPostsResponse, ShowcaseFeedResponse } from '../lib/types';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -122,4 +123,12 @@ describe('profile media pagination', () => {
     const empty = { pages: [], pageParams: [] };
     expect(truncateInfiniteDataToFirstPage(empty)).toBe(empty);
   });
+});
+
+it('uses server cursor boundaries, including empty filtered pages, and stops at an explicit null', () => {
+  const owner = { success: true, posts: [], pageInfo: { hasMore: true, nextOffset: 24, offset: 0, limit: 24, nextCursor: 'owner-boundary' } } as OwnerPostsResponse;
+  const saved = { items: [], pageInfo: { hasMore: true, nextOffset: 24, offset: 0, limit: 24, nextCursor: 'save-boundary' } } as ShowcaseFeedResponse;
+  expect(getNextProfileOwnerPostsOffset(owner)).toBe('owner-boundary');
+  expect(getNextProfileSavedMediaOffset(saved)).toBe('save-boundary');
+  expect(getNextProfileOwnerPostsOffset({ ...owner, pageInfo: { ...owner.pageInfo!, nextCursor: null } })).toBeUndefined();
 });

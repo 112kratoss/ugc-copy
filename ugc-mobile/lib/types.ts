@@ -1324,6 +1324,7 @@ export interface OwnerPostsResponse {
   posts: OwnerPostListItem[];
   pageInfo?: {
     hasMore: boolean;
+    nextCursor?: string | null;
     limit: number | null;
     nextOffset: number | null;
     offset: number;

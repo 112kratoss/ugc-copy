@@ -47,19 +47,20 @@ export async function refreshProfileLibraryHead({
       includeSummary: true,
       limit: PROFILE_MEDIA_PAGE_SIZE,
       offset: 0,
+      pagination: 'cursor',
       visibility: 'all',
     });
     if (!fresh) return;
-    queryClient.setQueryData<InfiniteData<OwnerPostsResponse, number>>(
+    queryClient.setQueryData<InfiniteData<OwnerPostsResponse, number | string>>(
       ['profile-owner-posts', userId],
       (current) => mergeRefreshedFirstPage(current, fresh, 0, PROFILE_OWNER_POST_PAGES)
     );
     return;
   }
 
-  const fresh = await api.getSavedMedia({ limit: PROFILE_MEDIA_PAGE_SIZE, offset: 0 });
+  const fresh = await api.getSavedMedia({ limit: PROFILE_MEDIA_PAGE_SIZE, offset: 0, pagination: 'cursor' });
   if (!fresh) return;
-  queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse, number>>(
+  queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse, number | string>>(
     ['profile-saved-media', userId],
     (current) => mergeRefreshedFirstPage(current, fresh, 0, PROFILE_SAVED_MEDIA_PAGES)
   );

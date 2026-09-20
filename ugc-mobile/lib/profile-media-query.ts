@@ -53,13 +53,14 @@ export function profileOwnerPostsQueryOptions(
 ) {
   return {
     queryKey: ['profile-owner-posts', userId] as const,
-    initialPageParam: 0,
+    initialPageParam: 0 as number | string,
     // Only the first page pays for the sales-summary aggregate.
-    queryFn: ({ pageParam }: { pageParam: number }) => api.listOwnerPosts({
+    queryFn: ({ pageParam }: { pageParam: number | string }) => api.listOwnerPosts({
       includeArchived: true,
       includeSummary: pageParam === 0,
       limit: PROFILE_MEDIA_PAGE_SIZE,
-      offset: pageParam,
+      ...(typeof pageParam === 'string' ? { cursor: pageParam } : { offset: pageParam }),
+      ...(pageParam === 0 || typeof pageParam === 'string' ? { pagination: 'cursor' } : {}),
       visibility: 'all',
     }),
     getNextPageParam: getNextProfileOwnerPostsOffset,
@@ -73,10 +74,11 @@ export function profileSavedMediaQueryOptions(
 ) {
   return {
     queryKey: ['profile-saved-media', userId] as const,
-    initialPageParam: 0,
-    queryFn: ({ pageParam }: { pageParam: number }) => api.getSavedMedia({
+    initialPageParam: 0 as number | string,
+    queryFn: ({ pageParam }: { pageParam: number | string }) => api.getSavedMedia({
       limit: PROFILE_MEDIA_PAGE_SIZE,
-      offset: pageParam,
+      ...(typeof pageParam === 'string' ? { cursor: pageParam } : { offset: pageParam }),
+      ...(pageParam === 0 || typeof pageParam === 'string' ? { pagination: 'cursor' } : {}),
     }),
     getNextPageParam: getNextProfileSavedMediaOffset,
     ...PROFILE_LIBRARY_QUERY_BEHAVIOUR,
@@ -94,13 +96,15 @@ export function getNextProfileGenerationsCursor(lastPage: GenerationListResponse
   return lastPage.pagination.nextCursor ?? undefined;
 }
 
-export function getNextProfileOwnerPostsOffset(lastPage: OwnerPostsResponse): number | undefined {
+export function getNextProfileOwnerPostsOffset(lastPage: OwnerPostsResponse): number | string | undefined {
   if (!lastPage.pageInfo?.hasMore) return undefined;
+  if ('nextCursor' in lastPage.pageInfo) return lastPage.pageInfo.nextCursor ?? undefined;
   return typeof lastPage.pageInfo.nextOffset === 'number' ? lastPage.pageInfo.nextOffset : undefined;
 }
 
-export function getNextProfileSavedMediaOffset(lastPage: ShowcaseFeedResponse): number | undefined {
+export function getNextProfileSavedMediaOffset(lastPage: ShowcaseFeedResponse): number | string | undefined {
   if (!lastPage.pageInfo?.hasMore) return undefined;
+  if ('nextCursor' in lastPage.pageInfo) return lastPage.pageInfo.nextCursor ?? undefined;
   return typeof lastPage.pageInfo.nextOffset === 'number' ? lastPage.pageInfo.nextOffset : undefined;
 }
 

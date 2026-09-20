@@ -178,7 +178,7 @@ export const PROFILE_OWNER_POST_PAGES: ProfilePageAdapter<OwnerPostsResponse, Ow
   withItems: (page, posts) => ({ ...page, posts }),
   hasMore: (page) => Boolean(page.pageInfo?.hasMore),
   orderKey: (item) => createdAtKey(item.createdAt),
-  restartContinuation: (tail, head) => ({
+  restartContinuation: (tail, head) => tail.pageInfo && 'nextCursor' in tail.pageInfo ? tail : ({
     ...tail,
     pageInfo: { ...tail.pageInfo!, hasMore: head.pageInfo!.hasMore, nextOffset: head.pageInfo!.nextOffset },
   }),
@@ -192,7 +192,7 @@ export const PROFILE_SAVED_MEDIA_PAGES: ProfilePageAdapter<ShowcaseFeedResponse,
   items: (page) => page.items ?? [],
   withItems: (page, items) => ({ ...page, items }),
   hasMore: (page) => Boolean(page.pageInfo?.hasMore),
-  restartContinuation: (tail, head) => ({
+  restartContinuation: (tail, head) => tail.pageInfo && 'nextCursor' in tail.pageInfo ? tail : ({
     ...tail,
     pageInfo: { ...tail.pageInfo!, hasMore: head.pageInfo!.hasMore, nextOffset: head.pageInfo!.nextOffset },
   }),

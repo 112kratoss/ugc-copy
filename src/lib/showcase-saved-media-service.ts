@@ -1,3 +1,4 @@
+import { decodeMediaLibraryCursor, encodeMediaLibraryCursor, mediaLibraryBoundaryFilter } from '@/lib/media-library-cursor';
 import 'server-only';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -27,7 +28,7 @@ export type SavedMediaRouteResult =
     }
   | {
       ok: false;
-      status: 500;
+      status: 400 | 500;
       body: {
         error: string;
       };
@@ -38,16 +39,19 @@ type GetSavedMediaFeedParams = {
   limit: number;
   loadBlockedCreatorIds?: typeof defaultLoadBlockedCreatorIds;
   offset: number;
+  pagination?: string;
+  cursor?: string | null;
   resolvePostRowsToFeedItems?: typeof defaultResolvePostRowsToFeedItems;
   userId: string;
   userSupabase: SupabaseClient;
 };
 
-function emptySavedMediaPage(limit: number, offset: number): ShowcaseFeedPage {
+function emptySavedMediaPage(limit: number, offset: number, cursorMode = false): ShowcaseFeedPage {
   return {
     items: [],
     pageInfo: {
       hasMore: false,
+      ...(cursorMode ? { nextCursor: null } : {}),
       nextOffset: null,
       limit,
       offset,
@@ -60,22 +64,32 @@ export async function getSavedMediaFeedForRoute({
   limit,
   loadBlockedCreatorIds = defaultLoadBlockedCreatorIds,
   offset,
+  pagination,
+  cursor,
   resolvePostRowsToFeedItems = defaultResolvePostRowsToFeedItems,
   userId,
   userSupabase,
 }: GetSavedMediaFeedParams): Promise<SavedMediaRouteResult> {
-  const rangeEnd = offset + limit - 1;
-
+  const cursorMode = pagination === 'cursor' || cursor != null;
+  const postScope = `saved:${userId}:post`;
+  const legacyScope = `saved:${userId}:generation`;
+  const postBoundary = cursor ? decodeMediaLibraryCursor(cursor, postScope) : null;
+  const legacyBoundary = cursor ? decodeMediaLibraryCursor(cursor, legacyScope) : null;
+  if ((cursor != null && !postBoundary && !legacyBoundary) || (cursorMode && offset !== 0)) {
+    return { ok: false, status: 400, body: { error: 'Invalid media cursor.' } };
+  }
+  const rangeEnd = offset + limit - (cursorMode ? 0 : 1);
   let savedReferences: SavedMediaReference[] = [];
   let saveSource: SavedMediaReference['source'] = 'post';
-  const { data: postSaveData, error: postSaveError } = await userSupabase
-    .from('post_saves')
-    .select('post_id, created_at')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .range(offset, rangeEnd);
+  let postQuery = userSupabase.from('post_saves').select('post_id, created_at')
+    .eq('user_id', userId).order('created_at', { ascending: false });
+  if (cursorMode) postQuery = postQuery.order('post_id', { ascending: true });
+  if (postBoundary) postQuery = postQuery.lte('created_at', postBoundary.createdAt).or(mediaLibraryBoundaryFilter(postBoundary, 'post_id', true));
+  const { data: postSaveData, error: postSaveError } = legacyBoundary
+    ? { data: null, error: null }
+    : await postQuery.range(offset, rangeEnd);
 
-  if (postSaveError && !isMissingPostsSchemaError(postSaveError)) {
+  if (postSaveError && (postBoundary || !isMissingPostsSchemaError(postSaveError))) {
     logBackendError('error_fetching_post_saved_media', { error: postSaveError });
     return { ok: false, status: 500, body: { error: 'Failed to fetch saved media' } };
   }
@@ -89,15 +103,17 @@ export async function getSavedMediaFeedForRoute({
       }));
   }
 
-  if (postSaveError || savedReferences.length === 0) {
-    const { data: legacyData, error: legacyError } = await userSupabase
+  if (legacyBoundary || (!postBoundary && (postSaveError || savedReferences.length === 0))) {
+    let legacyQuery = userSupabase
       .from('showcase_saves')
       .select('generation_id, created_at')
       .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .range(offset, rangeEnd);
+      .order('created_at', { ascending: false });
+    if (cursorMode) legacyQuery = legacyQuery.order('generation_id', { ascending: true });
+    if (legacyBoundary) legacyQuery = legacyQuery.lte('created_at', legacyBoundary.createdAt).or(mediaLibraryBoundaryFilter(legacyBoundary, 'generation_id', true));
+    const { data: legacyData, error: legacyError } = await legacyQuery.range(offset, rangeEnd);
 
-    if (legacyError && postSaveError) {
+    if (legacyError && (postSaveError || legacyBoundary)) {
       logBackendError('error_fetching_legacy_showcase_saved_media', { error: legacyError });
       return { ok: false, status: 500, body: { error: 'Failed to fetch saved media' } };
     }
@@ -116,10 +132,13 @@ export async function getSavedMediaFeedForRoute({
   if (savedReferences.length === 0) {
     return {
       ok: true,
-      body: emptySavedMediaPage(limit, offset),
+      body: emptySavedMediaPage(limit, offset, cursorMode),
     };
   }
 
+  const cursorHasMore = savedReferences.length > limit;
+  if (cursorMode) savedReferences = savedReferences.slice(0, limit);
+  const lastReference = savedReferences.at(-1)!;
   const savedAtMap = new Map<string, string>();
   for (const reference of savedReferences) {
     if (!savedAtMap.has(reference.id)) {
@@ -131,12 +150,14 @@ export async function getSavedMediaFeedForRoute({
   const countTable = saveSource === 'post' ? 'post_saves' : 'showcase_saves';
   const countColumn = saveSource === 'post' ? 'post_id' : 'generation_id';
 
-  const { count: totalSaveCount, error: countError } = await userSupabase
+  const { count: totalSaveCount, error: countError } = cursorMode
+    ? { count: null, error: null }
+    : await userSupabase
     .from(countTable)
     .select(countColumn, { count: 'exact', head: true })
     .eq('user_id', userId);
 
-  let hasMore = offset + savedReferences.length < (totalSaveCount ?? 0);
+  let hasMore = cursorMode ? cursorHasMore : offset + savedReferences.length < (totalSaveCount ?? 0);
   if (countError) {
     hasMore = savedReferences.length >= limit;
   }
@@ -201,6 +222,10 @@ export async function getSavedMediaFeedForRoute({
       items: orderedItems,
       pageInfo: {
         hasMore,
+        ...(cursorMode ? { nextCursor: hasMore ? encodeMediaLibraryCursor(
+          saveSource === 'post' ? postScope : legacyScope,
+          { id: lastReference.id, createdAt: lastReference.savedAt },
+        ) : null } : {}),
         nextOffset: hasMore ? offset + limit : null,
         limit,
         offset,

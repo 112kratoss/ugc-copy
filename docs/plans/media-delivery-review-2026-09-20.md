@@ -1,7 +1,7 @@
 # Media lifecycle review — 2026-09-20
 
 Fresh review of the current implementation. Previous audits are not inputs.
-The pending Explore media-only change is retained as separate existing work.
+The Explore media-only change was retained and included in checkpoint `9405243a`.
 
 ## Work sequence
 
@@ -70,7 +70,7 @@ and AVPlayer/ExoPlayer implementations are retained.
 | Generated images/video/audio | `generation-output-import-jobs-processor`, `generation-services`, `durable-generation-media`, `staged-remote-media`, `remote-media-security` | Durable import, private owner paths, bounded remote streaming, temporary-file cleanup, durable retry tickets. Repair now applies the same remote controls. One multi-output import can still outlast an admission budget. |
 | Derivatives | `generation-media-preview`, `generation-video-preview`, `post-media-preview`, `media-display-rendition`, `post-media-rendition`, `video-rendition` | 720px WebP previews, 1440px display images when worthwhile, content-hashed keys, MP4 faststart renditions, eight-second teasers for long clips. Original retained for original-quality uses. No adaptive bitrate ladder. |
 | Profile — creations | `owner-generations-route-service`, `owned-media-url-batch`, mobile `profile-media-query`, `use-profile-library-source` | Cursor pages, owner-scoped batch signing, authenticated proxy fallback, shared grid/feed/viewer data. Mobile pages are 24 items; head revalidation avoids refetching all loaded pages. |
-| Profile — uploaded/saved | Mobile `profile-media-query`, `profile-media-refresh`, `viewer-media-cache`, `profile-media-feed` | Shared queries, identity deduplication and visibility mutation updates. Owner/saved lists still use offsets, unlike creations. New uploaded objects use authorized private delivery; existing objects need the staged backfill below. |
+| Profile — uploaded/saved | Mobile `profile-media-query`, `profile-media-refresh`, `viewer-media-cache`, `profile-media-feed` | Shared queries, identity deduplication and visibility mutation updates. Owner/saved libraries now opt into scoped cursor pagination, retaining offsets for older clients. New uploaded objects use authorized private delivery; existing objects need the staged backfill below. |
 | Home | `showcase-feed`, `showcase-feed-cache-policy`, `post-media`, mobile `showcase-media`, `feed-video-preview`, `persisted-home-feed` | Viewer-neutral versus personalized caching; derivative selection; one active and two prepared previews; eight-second active and three-second prepared buffer targets. Persisted personalized feed is cleared with the auth session. |
 | Explore | Same delivery primitives; `showcase-feed-personalization`, mobile showcase query/view model | The existing pending change requests media-only results and carries that restriction into the viewer. Server filters before final pagination/ranking output. Home retains text posts. |
 | Full-screen viewer | Mobile `viewer`, `use-media-source`, `media-source`, `media-url-expiry`, `use-stable-signed-url`, `media-preview`, `showcase-media` | Playback/display renditions preferred; original fallback only where intended; preview/display/original image cache keys separated; signed URL renewal and bounded retries. Bearer header attached only to this app's media route. Signing burst fix benefits cold private reads. Native cache concurrency/ownership is patched and tested. |
@@ -148,11 +148,10 @@ Important limits:
   isolation. The 60-second admission budget stops claiming more imports but
   does not interrupt one slow multi-output import. A new queue product or
   worker fleet is not justified without backlog/runtime measurements.
-- Adaptive HLS, keyset pagination for uploaded/saved libraries, bounded feed
-  page retention, fan-out and sharding remain conditional scaling work. They
-  are not necessary to fix the demonstrated faults and are not represented as
-  completed infrastructure. Existing short-clip delivery uses faststart MP4
-  and teasers; creations already use cursor pagination.
+- Adaptive HLS, fan-out and sharding remain conditional scaling work. Existing
+  short-clip delivery uses faststart MP4 and teasers. The follow-up below adds
+  owner/saved cursors and mobile feed-cache limits; it does not claim a bound
+  on every actively observed profile library or on native decoded media memory.
 - No worldwide capacity certificate is claimed. Before broader rollout,
   measure per-surface p50/p95 first-frame/image-ready time, rebuffering, bytes
   per feed session, upload success/retry rate, worker age, memory and CDN hit
@@ -242,3 +241,91 @@ Additional implementation references checked against current official docs:
 - [TUS offset/recovery protocol](https://tus.io/protocols/resumable-upload)
 - [Supabase private downloads](https://supabase.com/docs/guides/storage/serving/downloads)
 - [Expo SDK 55 file handles](https://docs.expo.dev/versions/v55.0.0/sdk/filesystem/)
+
+
+### Follow-up: pagination, query plans and mobile retention (21 September 2026)
+
+Checkpoint `9405243a` contains the preceding media fixes. This follow-up is local
+implementation and verification; production migrations, private-object backfill,
+web release and a matching native mobile release remain separate rollout work.
+
+**Implemented**
+
+- Owner posts: opt-in `pagination=cursor`, with a continuation scoped to the
+  authenticated owner, visibility and archive filter. Query order is
+  `(created_at DESC, id DESC)`, including schema compatibility paths. Timestamp
+  microseconds are retained. Invalid/mismatched cursors return 400 before reads.
+- Saved libraries: scope-bound post/legacy source cursors, ordered by
+  `(created_at DESC, reference_id ASC)` to reuse existing save indexes. Cursor
+  mode uses `limit + 1` instead of an exact count. The continuation comes from
+  the last consumed save row, even when visibility/moderation removes every
+  hydrated item. An exhausted post cursor cannot switch to legacy saves.
+- Mobile grid/feed/viewer share the updated profile query options. Older
+  backends still work through the offset fallback. Head refresh retains a
+  cursor tail rather than reopening already loaded pages.
+- Added only `posts_owner_created_id_idx (user_id, created_at DESC, id DESC)`.
+  The prior archive-prefixed index cannot order the combined archived/active
+  owner library. Existing save indexes already match their cursor order.
+- Recent Home feed retains 12 pages (normally 144 items), reloads earlier pages
+  when scrolling upward, and uses FlashList native anchoring. Forward request
+  gating tracks the page boundary instead of the now-constant page count; a
+  successful backward fetch releases the forward guard. Refresh starts at 0.
+  For You/Explore ranked sessions already have a server cap of 60 eligible items.
+- Inactive media query snapshots are limited to six queries and 240 item
+  references; memory warnings remove inactive snapshots. Observed queries
+  (including disabled observers) and in-flight requests retain ownership.
+  Mounted profile libraries are not trimmed, preserving grid/viewer continuity.
+
+**Evidence and limits**
+
+Read-only production `pg_stat_statements` on 20 September showed feed-session
+item writes averaging 56.88 ms across 2,448 calls and session writes averaging
+22.47 ms across 3,330 calls. A common post-media hydration read averaged 2.56 ms
+across 8,960 calls. These are cumulative statement means, not request p95 or a
+current traffic-rate measurement. They do not justify broad speculative indexes.
+
+A transaction-local 100,000-row owner-library fixture with 20% archived rows:
+existing archive-prefixed index plus OFFSET 90,000 took 16.811 ms and sorted
+100,000 rows (3,336 kB temporary disk). The proposed index plus bounded cursor
+read took 0.032 ms, returning 25 rows through an index-only scan with 26 heap
+fetches. This demonstrates the access-path improvement, not production speed.
+The timestamp upper bound is explicit so Postgres can start the index range
+before applying the timestamp/ID tie predicate.
+
+Production retention inspection found 393 feed sessions, 377 expired, but only
+four beyond the configured two-day post-expiry retention window at the sample
+instant. Expiry alone does not mean a retention fault. Existing bounded pruning,
+30-day event/fact retention and 400-day daily rollups remain in place. No new
+retention policy, table sharding, feed fan-out or separate database was introduced.
+
+Verification:
+
+- Clean local migration replay and all 69 pgTAP files / 1,275 tests passed.
+- Real local PostgREST verified timestamp ties, microseconds, deletion ahead of
+  the cursor and the saved-library ascending ID tie-breaker.
+- Full web suite: 802 files / 5,852 tests passed. Backend/mobile type checks
+  and production build/artifact verification passed; lint has zero errors and
+  two pre-existing unused-variable warnings.
+- Full mobile suite: 252 files / 2,455 tests passed. It includes a real TanStack
+  infinite-query observer exercised over 30 forward pages and a backward fetch,
+  plus inactive retention with observed feeds/viewers preserved.
+- iOS 26.4 simulator: Profile Posts/Saved loaded against the deployed offset
+  backend; saved image opened and returned to the same grid. A temporary small
+  window and local text-card fixture exercised the real Home FlashList:
+  page offsets `[2,4,6]` → `[4,6,8]` → `[2,4,6]` kept Window item 5 at the same
+  screen position. Fixture and debug controls were removed; 12-page settings
+  restored. This verifies anchoring, not first-frame latency or release FPS.
+- Android Pixel 9a (`emulator-5554`) booted and loaded the current Metro bundle. The
+  desktop automation provider cannot select its Qt window, so Android visual
+  anchor verification remains unconfirmed.
+
+Release-device/network measurements (first-frame p50/p95, rebuffering, peak and
+steady memory, bytes/session, CDN hit ratio) remain outstanding. Development
+simulator RSS is not a valid production memory budget. The active profile
+library is also not capped by this inactive-query policy. Do not represent this
+follow-up as a complete worldwide scaling certificate or as deployed code.
+
+Current official references consulted for these changes:
+[Supabase query optimization](https://supabase.com/docs/guides/database/query-optimization),
+[TanStack infinite queries](https://tanstack.com/query/latest/docs/framework/react/guides/infinite-queries),
+[FlashList usage and scroll anchoring](https://shopify.github.io/flash-list/docs/usage/).

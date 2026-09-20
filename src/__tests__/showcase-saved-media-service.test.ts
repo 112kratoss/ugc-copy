@@ -67,20 +67,16 @@ function createUserSupabaseMock(options?: {
               return Promise.resolve({ data: null, count: totalCount, error: null });
             }
 
-            return {
-              order(_column: string, _options: Record<string, unknown>) {
-                void _column;
-                void _options;
-                return {
-                  range(_from: number, _to: number) {
-                    void _from;
-                    void _to;
-                    tableReads.push(`${table}:range`);
-                    return Promise.resolve({ data: rows, error: null });
-                  },
-                };
+            const query = {
+              order() { return query; },
+              or() { return query; },
+              lte() { return query; },
+              range() {
+                tableReads.push(`${table}:range`);
+                return Promise.resolve({ data: rows, error: null });
               },
             };
+            return query;
           },
         };
       },
@@ -261,4 +257,17 @@ describe('getSavedMediaFeedForRoute', () => {
       viewerUserId: 'viewer-1',
     });
   });
+});
+
+it('cursor pages use raw save boundaries even when all media is filtered, without counting saves', async () => {
+  const rows = [1, 2, 3].map((n) => ({ post_id: `00000000-0000-0000-0000-00000000000${n}`, created_at: '2026-09-20T12:00:00.123456Z' }));
+  const mock = createUserSupabaseMock({ postSaves: rows });
+  const result = await getSavedMediaFeedForRoute({ createAdminSupabase: () => mock.adminClient, limit: 2, offset: 0, pagination: 'cursor', userId: 'u', userSupabase: mock.client, resolvePostRowsToFeedItems: vi.fn(async () => []), loadBlockedCreatorIds: vi.fn(async () => new Set<string>()) });
+  expect(result).toMatchObject({ ok: true, body: { items: [], pageInfo: { hasMore: true, nextCursor: expect.any(String) } } });
+  expect(mock.tableReads).not.toContain('post_saves:count');
+  if (!result.ok) return;
+  const empty = createUserSupabaseMock({ legacySaves: [{ generation_id: rows[0].post_id, created_at: rows[0].created_at }] });
+  const end = await getSavedMediaFeedForRoute({ createAdminSupabase: vi.fn(), limit: 2, offset: 0, cursor: result.body.pageInfo.nextCursor, userId: 'u', userSupabase: empty.client });
+  expect(end).toMatchObject({ ok: true, body: { items: [], pageInfo: { hasMore: false, nextCursor: null } } });
+  expect(empty.tableReads).toEqual(['post_saves:range']);
 });

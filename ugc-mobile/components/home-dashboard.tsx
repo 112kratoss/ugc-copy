@@ -32,6 +32,7 @@ import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE } from '@/lib/viewer-actions';
+import { FEED_WINDOW_PAGE_LIMIT, feedWindowPaginationPosition, getPreviousFeedPageParam } from '@/lib/feed-page-window';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import {
   HOME_FEED_CHIPS,
@@ -344,6 +345,9 @@ export function HomeDashboard() {
       ...pageParam,
     })),
     getNextPageParam: getNextShowcaseFeedPageParam,
+    getPreviousPageParam: getPreviousFeedPageParam,
+    // Ranked sessions are already limited to 60 items on the server.
+    maxPages: activeChip.filters.sort === 'recent' ? FEED_WINDOW_PAGE_LIMIT : 0,
     staleTime: SHOWCASE_FEED_STALE_TIME_MS,
   });
 
@@ -366,7 +370,7 @@ export function HomeDashboard() {
     const flattened = flattenShowcaseFeedPages(feedQuery.data?.pages);
     return user ? flattened : filterAnonymousSessionShowcaseFeedItems(flattened);
   }, [feedQuery.data?.pages, user]);
-  const feedPageCount = feedQuery.data?.pages.length ?? 0;
+  const feedPageCount = feedWindowPaginationPosition(feedQuery.data);
   const requestedCommentsPostId = (
     Array.isArray(requestedComments) ? requestedComments[0] : requestedComments
   )?.trim() || null;
@@ -473,7 +477,7 @@ export function HomeDashboard() {
 
   const requestNextPage = () => {
     const now = Date.now();
-    if (!canRequestNextFeedPage({
+    if (!isFocused || !canRequestNextFeedPage({
       cooldownMs: LOAD_MORE_COOLDOWN_MS,
       hasNextPage: feedQuery.hasNextPage,
       isBusy: feedQuery.isFetching,
@@ -492,6 +496,14 @@ export function HomeDashboard() {
     });
   };
 
+  const requestPreviousPage = () => {
+    if (!isFocused || !feedQuery.hasPreviousPage || feedQuery.isFetching || loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
+    void feedQuery.fetchPreviousPage().then((result) => {
+      if (!result.isFetchPreviousPageError) lastLoadMorePageCountRef.current = null;
+    }).finally(() => { loadingMoreRef.current = false; });
+  };
+
   const retryNextPage = () => {
     lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
@@ -505,7 +517,7 @@ export function HomeDashboard() {
     lastLoadMoreAtRef.current = 0;
     queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {
       if (!current?.pages.length) return current;
-      return { pages: current.pages.slice(0, 1), pageParams: current.pageParams.slice(0, 1) };
+      return { pages: current.pages.slice(0, 1), pageParams: [{ offset: 0 }] };
     });
     void feedQuery.refetch().finally(() => setPullRefreshing(false));
   };
@@ -804,7 +816,9 @@ export function HomeDashboard() {
         getItemType={(card) => card.previewKind}
         extraData={feedExtraData}
         drawDistance={SHOWCASE_DRAW_DISTANCE}
-        maintainVisibleContentPosition={{ disabled: true }}
+        maintainVisibleContentPosition={{ disabled: activeChip.filters.sort !== 'recent' }}
+        onStartReached={requestPreviousPage}
+        onStartReachedThreshold={0.25}
         onEndReached={requestNextPage}
         onEndReachedThreshold={0.32}
         refreshControl={(

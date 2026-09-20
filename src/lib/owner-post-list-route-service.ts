@@ -1,3 +1,4 @@
+import { decodeMediaLibraryCursor, encodeMediaLibraryCursor, type MediaLibraryBoundary } from '@/lib/media-library-cursor';
 import {
   getOwnerPostList,
   type OwnerPostListItem,
@@ -14,6 +15,7 @@ export type LoadOwnerPosts = (
     includeArchived: boolean;
     limit?: number;
     offset?: number;
+    after?: MediaLibraryBoundary;
     visibility: OwnerPostVisibilityFilter;
   }
 ) => Promise<OwnerPostListItem[] | unknown[]>;
@@ -26,6 +28,7 @@ export type OwnerPostListRouteResult =
       posts: Awaited<ReturnType<LoadOwnerPosts>>;
       pageInfo: {
         hasMore: boolean;
+        nextCursor?: string | null;
         limit: number;
         nextOffset: number | null;
         offset: number;
@@ -76,6 +79,13 @@ export async function listOwnerPostsForRoute({
   const includeArchived = searchParams.get('includeArchived') === 'true' || visibility === 'archived';
   const limit = Math.max(1, parseBoundedInteger(searchParams.get('limit'), 48, 100));
   const offset = parseBoundedInteger(searchParams.get('offset'), 0, 1_000_000);
+  const cursorMode = searchParams.get('pagination') === 'cursor' || searchParams.has('cursor');
+  const cursorScope = `owner:${userId}:${visibility}:${includeArchived}`;
+  const cursor = searchParams.get('cursor');
+  const after = cursor ? decodeMediaLibraryCursor(cursor, cursorScope) : undefined;
+  if ((cursor !== null && !after) || (cursorMode && offset !== 0)) {
+    return { ok: false, status: 400, error: 'Invalid media cursor.' };
+  }
   const includeSummary = searchParams.get('includeSummary') === 'true';
   const [loadedPosts, summary] = await Promise.all([
     loadOwnerPosts(userId, {
@@ -83,6 +93,7 @@ export async function listOwnerPostsForRoute({
       limit: limit + 1,
       offset,
       visibility,
+      ...(after ? { after } : {}),
     }),
     includeSummary ? loadOwnerPostSalesSummary(userId) : Promise.resolve(null),
   ]);
@@ -94,6 +105,10 @@ export async function listOwnerPostsForRoute({
     posts,
     pageInfo: {
       hasMore,
+      ...(cursorMode ? { nextCursor: hasMore ? encodeMediaLibraryCursor(cursorScope, {
+        id: (posts.at(-1) as OwnerPostListItem).id,
+        createdAt: (posts.at(-1) as OwnerPostListItem).createdAt,
+      }) : null } : {}),
       limit,
       nextOffset: hasMore ? offset + limit : null,
       offset,

@@ -1,3 +1,4 @@
+import { mediaLibraryBoundaryFilter, type MediaLibraryBoundary } from '@/lib/media-library-cursor';
 import 'server-only';
 
 import {
@@ -188,17 +189,19 @@ async function fetchOwnerPostRows(
     includeArchived: boolean;
     limit?: number;
     offset?: number;
+    after?: MediaLibraryBoundary;
     visibility: OwnerPostVisibilityFilter;
   }
 ): Promise<OwnerPostRow[]> {
-  const { includeArchived, limit, offset = 0, visibility } = options;
+  const { includeArchived, limit, offset = 0, visibility, after } = options;
   let query = adminSupabase
     .from('posts')
     .select(
       'id, user_id, generation_id, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, source_tool_slug, comment_count, created_at, updated_at'
     )
     .eq('user_id', userId)
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false });
 
   if (visibility === 'archived') {
     query = query.not('archived_at', 'is', null);
@@ -208,6 +211,7 @@ async function fetchOwnerPostRows(
     query = query.is('archived_at', null);
   }
 
+  if (after) query = query.lte('created_at', after.createdAt).or(mediaLibraryBoundaryFilter(after, 'id'));
   if (typeof limit === 'number') {
     query = query.range(offset, offset + Math.max(0, limit - 1));
   }
@@ -221,7 +225,8 @@ async function fetchOwnerPostRows(
         'id, user_id, generation_id, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, comment_count, created_at, updated_at'
       )
       .eq('user_id', userId)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false });
 
     let compatibleQuery = withoutSourceToolSlugQuery;
     if (visibility === 'archived') {
@@ -231,6 +236,7 @@ async function fetchOwnerPostRows(
     } else if (!includeArchived) {
       compatibleQuery = compatibleQuery.is('archived_at', null);
     }
+    if (after) compatibleQuery = compatibleQuery.lte('created_at', after.createdAt).or(mediaLibraryBoundaryFilter(after, 'id'));
     if (typeof limit === 'number') {
       compatibleQuery = compatibleQuery.range(offset, offset + Math.max(0, limit - 1));
     }
@@ -253,12 +259,14 @@ async function fetchOwnerPostRows(
         'id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, category, source_kind, source_tool, comment_count, created_at'
       )
       .eq('user_id', userId)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false });
 
     let compatibleLegacyQuery = legacyQuery;
     if (visibility !== 'all' && visibility !== 'archived') {
       compatibleLegacyQuery = compatibleLegacyQuery.eq('visibility', visibility);
     }
+    if (after) compatibleLegacyQuery = compatibleLegacyQuery.lte('created_at', after.createdAt).or(mediaLibraryBoundaryFilter(after, 'id'));
     if (typeof limit === 'number') {
       compatibleLegacyQuery = compatibleLegacyQuery.range(offset, offset + Math.max(0, limit - 1));
     }
@@ -543,6 +551,7 @@ export async function getOwnerPostList(
     includeArchived?: boolean;
     limit?: number;
     offset?: number;
+    after?: MediaLibraryBoundary;
     visibility?: OwnerPostVisibilityFilter;
   }
 ): Promise<OwnerPostListItem[]> {
@@ -553,6 +562,7 @@ export async function getOwnerPostList(
     includeArchived,
     limit: options?.limit,
     offset: options?.offset,
+    after: options?.after,
     visibility,
   });
   const postIds = rows.map((row) => row.id);

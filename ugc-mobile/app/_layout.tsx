@@ -38,6 +38,7 @@ import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
 import { navigateToNotificationDeepLink, subscribeToNotificationResponses, subscribeToNotificationsReceived } from '@/lib/notifications';
 import { OnboardingProvider, useOnboarding } from '@/lib/onboarding';
+import { installMediaQueryRetention, pruneInactiveMediaQueries } from '@/lib/media-query-retention';
 import { restorePersistedHomeFeed } from '@/lib/persisted-home-feed';
 import { reportStartupMilestone } from '@/lib/startup-interactive';
 import { STARTUP_VERSION_CHECK_FALLBACK_MS, type StartupVersionCheckStatus } from '@/lib/startup-readiness';
@@ -96,6 +97,9 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+installMediaQueryRetention(queryClient);
+AppState.addEventListener('memoryWarning', () => pruneInactiveMediaQueries(queryClient, true));
 
 // The For You page the last launch saved goes back into the cache while the
 // rest of the app starts, so a returning launch draws posts rather than

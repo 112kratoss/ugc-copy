@@ -545,9 +545,18 @@
         "pageInfo": {
           "hasMore": false,
           "limit": 10,
+          "offset": 0,
           "nextOffset": null,
-          "offset": 0
+          "nextCursor": null
         }
+      },
+      "pagination": {
+        "mode": "cursor-opt-in",
+        "request": {
+          "pagination": "cursor",
+          "cursor": "optional opaque continuation"
+        },
+        "legacyOffsetSupported": true
       }
     },
     "getShowcasePost": {
@@ -1145,7 +1154,22 @@
             "sourceToolSlug": "magicbooklet",
             "sourceTools": []
           }
-        ]
+        ],
+        "pageInfo": {
+          "hasMore": false,
+          "limit": 10,
+          "offset": 0,
+          "nextOffset": null,
+          "nextCursor": null
+        }
+      },
+      "pagination": {
+        "mode": "cursor-opt-in",
+        "request": {
+          "pagination": "cursor",
+          "cursor": "optional opaque continuation"
+        },
+        "legacyOffsetSupported": true
       }
     },
     "getOwnerPost": {

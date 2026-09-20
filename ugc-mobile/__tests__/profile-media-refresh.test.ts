@@ -106,7 +106,7 @@ describe('mergeRefreshedFirstPage', () => {
     // current server boundary, including rows filtered out of the response.
     expect(flattenProfileOwnerPostPages(merged.pages).some((row) => row.id === '47')).toBe(true);
     let next = getNextProfileOwnerPostsOffset(merged.pages.at(-1)!);
-    for (let guard = 0; next !== undefined && guard < 10; guard += 1) {
+    for (let guard = 0; typeof next === 'number' && guard < 10; guard += 1) {
       merged.pages.push(read(changed, next));
       next = getNextProfileOwnerPostsOffset(merged.pages.at(-1)!);
     }
@@ -217,4 +217,11 @@ describe('mergeRefreshedFirstPage', () => {
 
     expect(merged.pages.flatMap((entry) => entry.items.map((item) => item.id))).toEqual(['new', 'a', 'b', 'c']);
   });
+});
+
+it('keeps the existing cursor continuation when new posts move the head', () => {
+  const page = (id: string, cursor: string) => ({ success: true, posts: [{ id, createdAt: '2026-09-20T12:00:00Z' }], pageInfo: { hasMore: true, nextCursor: cursor, nextOffset: 24, limit: 24, offset: 0 } }) as OwnerPostsResponse;
+  const tail = page('older', 'stable-tail');
+  const merged = mergeRefreshedFirstPage({ pages: [page('head', 'old-head'), tail], pageParams: [0, 'old-head'] }, page('new', 'new-head'), 0, PROFILE_OWNER_POST_PAGES);
+  expect(merged.pages[1].pageInfo?.nextCursor).toBe('stable-tail');
 });

@@ -661,6 +661,7 @@ describe('ProfileDashboard media tiles routing', () => {
     expect(authState.api.listOwnerPosts).toHaveBeenCalledWith({
       includeArchived: true,
       includeSummary: true,
+      pagination: 'cursor',
       limit: 24,
       offset: 0,
       visibility: 'all',

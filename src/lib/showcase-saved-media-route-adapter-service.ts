@@ -40,6 +40,8 @@ function getSavedMediaQuery(request: Request) {
       MAX_SAVED_MEDIA_LIMIT,
     ),
     offset: parsePositiveInt(searchParams.get('offset'), 0),
+    ...(searchParams.has('cursor') ? { cursor: searchParams.get('cursor') } : {}),
+    ...(searchParams.has('pagination') ? { pagination: searchParams.get('pagination')! } : {}),
   };
 }
 
@@ -61,11 +63,10 @@ async function handleShowcaseSavedMediaGET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { limit, offset } = getSavedMediaQuery(request);
+    const query = getSavedMediaQuery(request);
     const result = await dependencies.getSavedMediaFeedForRoute({
       createAdminSupabase: dependencies.createServiceClient,
-      limit,
-      offset,
+      ...query,
       userId: user.id,
       userSupabase: supabase,
     });
