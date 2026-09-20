@@ -29,6 +29,7 @@ import {
 } from '@/lib/playback-metrics';
 import { reelNeighbourChromeRevealed, setReelNeighbourChromeRevealed } from '@/lib/reel-neighbour-chrome';
 import { createViewerPlaybackHandoff } from '@/lib/viewer-playback-handoff';
+import { reconcileViewerSessionItems } from '@/lib/viewer-session-items';
 import { isVideoPlayerHandedBack } from '@/lib/video-player-loans';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { LetterboxBands } from '@/components/letterbox-bands';
@@ -315,7 +316,7 @@ export default function ImmersivePreviewViewerScreen() {
   // resolves. After landing, the reader's own position continues to own the reel.
   const awaitingLibrarySelection = libraryBacked && !initialPositionReady
     && library.selection !== 'none' && library.selection !== 'found';
-  const items = useMemo(() => {
+  const sourceItems = useMemo(() => {
     if (libraryBacked) return awaitingLibrarySelection ? [] : library.items;
     const data = isGenerationSource(source) && loaderQuery.data
       ? { ...loaderQuery.data, ownerPosts: enrichmentPosts }
@@ -331,6 +332,21 @@ export default function ImmersivePreviewViewerScreen() {
       !item.showcasePostId || visiblePostIds.has(item.showcasePostId)
     ));
   }, [awaitingLibrarySelection, enrichmentPosts, initialId, library.items, libraryBacked, loaderQuery.data, ownerInfo, source, user]);
+  // A stale grid snapshot can refresh as UIKit is still opening the viewer.
+  // Keep its row order for this opening: moving the playing cell to the new
+  // ranking briefly exposes another post at the old native scroll offset.
+  // Reconcile before commit, rather than letting an effect paint stale data.
+  const [sessionItems, setSessionItems] = useState({ key: sourceQueryKey, input: sourceItems, ordered: sourceItems });
+  if (sessionItems.input !== sourceItems || sessionItems.key !== sourceQueryKey) {
+    setSessionItems({
+      key: sourceQueryKey,
+      input: sourceItems,
+      ordered: sessionItems.key === sourceQueryKey
+        ? reconcileViewerSessionItems(sessionItems.ordered, sourceItems)
+        : sourceItems,
+    });
+  }
+  const items = sessionItems.ordered;
   // The item the route named did not load: deleted, archived elsewhere, or no
   // longer the reader's. Shown as that, never replaced by the first item (C1).
   const selectionMissing = libraryBacked
