@@ -55,6 +55,11 @@ export function useAnimatedProps<T>(factory: () => T): T {
   return factory();
 }
 
+/** Frames never arrive in a rendered test tree, so a frame callback is only ever switched on and off. */
+export function useFrameCallback(_callback: (frame: { timeSincePreviousFrame: number | null }) => void, _autostart = true) {
+  return { setActive: (_active: boolean) => {}, isActive: false, callbackId: -1 };
+}
+
 /** Reactions fire on the UI thread when a shared value changes, which a rendered test tree never does. */
 export function useAnimatedReaction<T>(_prepare: () => T, _react: (value: T, previous: T | null) => void) {}
 

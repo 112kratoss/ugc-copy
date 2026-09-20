@@ -193,6 +193,67 @@ export function subscribeToZoomFlights(listener: (event: ZoomFlightEvent) => voi
   };
 }
 
+// ---------------------------------------------------------------------------
+// One open at a time
+// ---------------------------------------------------------------------------
+
+/**
+ * One tap opens one post. From the tap until the screen it opens can be
+ * touched, taps on tiles open nothing: the tapped tile is still under the
+ * growing picture, and the screen is still under a reel being built, and every
+ * repeated tap that reached one restarted the flight from the tile, flew the
+ * poster in place of the video the first tap had lent, and — once the first
+ * reel had been pushed — pushed a second reel on top of it.
+ *
+ * The open is taken over by the reel it pushes (`claimTileOpen`), which ends it
+ * once it can be touched or has gone. One no reel ever claims — a push that was
+ * refused, or one that opened some other screen — lets go after its hold.
+ */
+interface TileOpen {
+  serial: number;
+  startedAt: number;
+  holdMs: number;
+  claimed: boolean;
+}
+
+let tileOpen: TileOpen | null = null;
+let tileOpenSerial = 0;
+
+/** Whether a tap on a tile may open its post: no flight in the air, and no earlier open under way. */
+export function canOpenFromTile(now: number): boolean {
+  if (flight) return false;
+  if (!tileOpen) return true;
+  return !tileOpen.claimed && now - tileOpen.startedAt >= tileOpen.holdMs;
+}
+
+/**
+ * Starts a tap's open, returning its serial — or null when another is under
+ * way, and the tap is to be ignored. The hold defaults to the hand-off's own
+ * lifetime: a reel mounting later than that would not grow out of the tile.
+ */
+export function beginTileOpen(now: number, holdMs = ORIGIN_TTL_MS): number | null {
+  if (!canOpenFromTile(now)) return null;
+  tileOpenSerial += 1;
+  tileOpen = { serial: tileOpenSerial, startedAt: now, holdMs, claimed: false };
+  return tileOpenSerial;
+}
+
+/** A reel has mounted: it takes the open under way over, and ends it itself. */
+export function claimTileOpen(now: number): number | null {
+  if (!tileOpen || tileOpen.claimed) return null;
+  if (now - tileOpen.startedAt >= tileOpen.holdMs) {
+    tileOpen = null;
+    return null;
+  }
+  tileOpen = { ...tileOpen, claimed: true };
+  return tileOpen.serial;
+}
+
+/** The screen an open brought up can be touched, or has gone: tiles open posts again. */
+export function endTileOpen(serial: number | null) {
+  if (serial !== null && tileOpen?.serial === serial) tileOpen = null;
+}
+
 /**
  * One frame of a flight.
  *
@@ -393,6 +454,9 @@ export function resetMediaZoomTransitions() {
   flight = null;
   flightSerial = 0;
   flightListeners.clear();
+  // The serial keeps counting: a settle timer an earlier open left running must
+  // never match — and end — an open begun after the reset.
+  tileOpen = null;
   sources.clear();
   hiddenKeys.clear();
 }

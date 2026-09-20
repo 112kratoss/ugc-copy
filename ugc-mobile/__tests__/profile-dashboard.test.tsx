@@ -282,7 +282,15 @@ vi.mock('@tanstack/react-query', () => ({
 }));
 
 import { ProfileDashboard } from '../components/profile-dashboard';
+import { resetMediaZoomTransitions } from '../lib/media-zoom-transition';
 import { DEFAULT_PROFILE_MEDIA_TAB, PROFILE_MEDIA_TABS } from '../lib/profile-view-model';
+
+// A tile's open holds every other tile off until the screen it opened can be
+// touched (`beginTileOpen`), and that state is module-wide: each test starts
+// with no open under way, as the reader does after landing on the screen.
+afterEach(() => {
+  resetMediaZoomTransitions();
+});
 
 function findPressableByText(root: renderer.ReactTestInstance, text: string) {
   const textInstances = root.findAllByProps({ children: text });
