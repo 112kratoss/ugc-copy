@@ -1,8 +1,8 @@
-import { Ban, EyeOff, Flag, ShieldAlert, UserRoundX, type LucideIcon } from 'lucide-react-native';
-import { Children, Fragment } from 'react';
-import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
+import { Ban, EyeOff, Flag, ShieldAlert, UserRoundX } from 'lucide-react-native';
+import { Modal, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { SheetActionGroup, SheetActionRow } from '@/components/sheet-action-group';
 import { SheetBackdrop, SheetGrabber, SheetPanel, sheetPanelStyle, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { useReducedMotion } from '@/lib/motion';
 import { resolvedBottomInset } from '@/lib/safe-area';
@@ -71,8 +71,8 @@ export function FeedFeedbackSheet({
                 Choose how you want to manage “{postTitle}” or its creator.
               </Text>
             </View>
-            <ActionGroup>
-              <FeedbackAction
+            <SheetActionGroup>
+              <SheetActionRow
                 body={sessionOnly
                   ? 'Remove this post from your feed for this visit.'
                   : 'Remove this post and show fewer recommendations like it.'}
@@ -80,7 +80,7 @@ export function FeedFeedbackSheet({
                 label="Not interested"
                 onPress={onNotInterested}
               />
-              <FeedbackAction
+              <SheetActionRow
                 body={hideCreatorDisabled
                   ? 'You cannot hide your own creator profile.'
                   : sessionOnly
@@ -91,7 +91,7 @@ export function FeedFeedbackSheet({
                 label={`Hide ${creatorLabel}`}
                 onPress={onHideCreator}
               />
-            </ActionGroup>
+            </SheetActionGroup>
             {hasSafetyActions ? (
               <>
                 <Text
@@ -108,9 +108,9 @@ export function FeedFeedbackSheet({
                 >
                   Safety
                 </Text>
-                <ActionGroup>
+                <SheetActionGroup>
                   {onReportContent ? (
-                    <FeedbackAction
+                    <SheetActionRow
                       body="Send this post to the moderation team for review."
                       icon={Flag}
                       label="Report content"
@@ -119,7 +119,7 @@ export function FeedFeedbackSheet({
                     />
                   ) : null}
                   {onReportUser ? (
-                    <FeedbackAction
+                    <SheetActionRow
                       body={`Report ${creatorLabel} for unsafe or abusive behavior.`}
                       disabled={hideCreatorDisabled}
                       icon={ShieldAlert}
@@ -129,7 +129,7 @@ export function FeedFeedbackSheet({
                     />
                   ) : null}
                   {onBlockUser ? (
-                    <FeedbackAction
+                    <SheetActionRow
                       body={`Hide ${creatorLabel}'s content and prevent future follows between you.`}
                       disabled={hideCreatorDisabled}
                       icon={Ban}
@@ -138,116 +138,12 @@ export function FeedFeedbackSheet({
                       tone="danger"
                     />
                   ) : null}
-                </ActionGroup>
+                </SheetActionGroup>
               </>
             ) : null}
           </ScrollView>
         </SheetPanel>
       </View>
     </Modal>
-  );
-}
-
-// The icon well and the gap after it: the row dividers start where the text
-// does, the way a grouped list keeps its hairlines out of the icon column.
-const ACTION_ICON_WELL = 40;
-const ACTION_ICON_GAP = 14;
-
-/**
- * Rows in one rounded group, divided by hairlines that begin at the text.
- *
- * Grouping is what makes a list of choices read as choices rather than as
- * paragraphs: the earlier version drew each action as bare bold text over a
- * caption, which is the shape of an article, not a menu.
- */
-function ActionGroup({ children }: { children: React.ReactNode }) {
-  const rows = Children.toArray(children);
-
-  return (
-    <View
-      style={{
-        borderRadius: appTheme.radii.lg,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: appTheme.colors.borderSubtle,
-        backgroundColor: appTheme.colors.panelSoft,
-        overflow: 'hidden',
-      }}
-    >
-      {rows.map((row, index) => (
-        <Fragment key={index}>
-          {index > 0 ? (
-            <View
-              style={{
-                height: 1,
-                marginLeft: appTheme.spacing.card + ACTION_ICON_WELL + ACTION_ICON_GAP,
-                backgroundColor: appTheme.colors.border,
-              }}
-            />
-          ) : null}
-          {row}
-        </Fragment>
-      ))}
-    </View>
-  );
-}
-
-function FeedbackAction({
-  body,
-  disabled = false,
-  icon: Icon,
-  label,
-  onPress,
-  tone = 'default',
-}: {
-  body: string;
-  disabled?: boolean;
-  icon: LucideIcon;
-  label: string;
-  onPress: () => void;
-  tone?: 'default' | 'danger';
-}) {
-  const danger = tone === 'danger';
-
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityHint={body}
-      accessibilityState={{ disabled }}
-      disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        minHeight: 64,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: ACTION_ICON_GAP,
-        paddingHorizontal: appTheme.spacing.card,
-        paddingVertical: appTheme.spacing.gap,
-        backgroundColor: pressed ? appTheme.colors.surfaceStrong : 'transparent',
-        opacity: disabled ? appTheme.opacity.disabled : 1,
-      })}
-    >
-      <View
-        style={{
-          width: ACTION_ICON_WELL,
-          height: ACTION_ICON_WELL,
-          borderRadius: ACTION_ICON_WELL / 2,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: danger ? appTheme.semantic.danger.background : appTheme.colors.surfaceStrong,
-        }}
-      >
-        <Icon size={appTheme.icon.default} color={danger ? appTheme.colors.danger : appTheme.colors.textSecondary} />
-      </View>
-      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-        <Text style={{ color: danger ? appTheme.colors.danger : appTheme.colors.text, ...appTheme.type.body, fontWeight: '700' }}>
-          {label}
-        </Text>
-        <Text style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>
-          {body}
-        </Text>
-      </View>
-    </Pressable>
   );
 }

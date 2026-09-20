@@ -70,6 +70,7 @@ vi.mock('react-native', () => ({
       style: resolvePressableStyle(style),
     }, children),
   ScrollView: ({ children, ...props }: MockProps) => React.createElement('scrollview', props, children),
+  Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
 }));
 
@@ -347,6 +348,36 @@ describe('ViewerActionSheet permanent delete', () => {
 
     renderer.act(() => findPressableByAccessibilityLabel(tree!.root, 'Hide this creator').props.onPress());
     expect(onHideCreator).toHaveBeenCalledOnce();
+  });
+
+  it('renders viewer commands as the same descriptive grouped rows as feed feedback', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+
+    renderer.act(() => {
+      tree = renderer.create(
+        <ViewerActionSheet
+          item={manualOwnerPostItem({
+            sourceType: 'showcase',
+            creatorLabel: '@luna',
+            availableActions: ['save', 'comment', 'share'],
+          })}
+          onClose={vi.fn()}
+          onDetails={vi.fn()}
+          onNotInterested={vi.fn()}
+          onRecreate={vi.fn()}
+          onShare={vi.fn()}
+          onSourceRefresh={vi.fn()}
+          visible
+        />
+      );
+    });
+
+    expect(tree!.root.findByProps({ testID: 'viewer-action-group-Media actions' })).toBeTruthy();
+    expect(tree!.root.findByProps({ testID: 'viewer-action-group-Explore preferences' })).toBeTruthy();
+    expect(findPressableByAccessibilityLabel(tree!.root, 'Save').props.accessibilityHint)
+      .toBe('Keep this post in your saved collection.');
+    expect(findPressableByAccessibilityLabel(tree!.root, 'Not interested').props.accessibilityHint)
+      .toContain('show fewer recommendations');
   });
 
   it('exposes content, user, and block safety actions for another creator post', () => {

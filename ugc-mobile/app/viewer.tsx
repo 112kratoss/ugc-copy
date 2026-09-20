@@ -1117,6 +1117,7 @@ export default function ImmersivePreviewViewerScreen() {
               creatorUsername,
             })}
             bottomInset={bottomInset}
+            chromeHidden={actionsOpenItemId === item.id}
             height={height}
             item={item}
             onActionsOpen={() => setActionsOpenItemId(item.id)}
@@ -1349,6 +1350,7 @@ function ImmersiveSlide({
   activeVideoId,
   authReturnTo,
   bottomInset,
+  chromeHidden,
   height,
   item,
   onActionsOpen,
@@ -1386,6 +1388,8 @@ function ImmersiveSlide({
   /** Where sign-in should land the viewer back: this reel, on this item. */
   authReturnTo: string;
   bottomInset: number;
+  /** Native glass controls otherwise composite above a taller modal sheet. */
+  chromeHidden: boolean;
   height: number;
   item: ImmersivePreviewItem;
   onActionsOpen: () => void;
@@ -1507,7 +1511,7 @@ function ImmersiveSlide({
   const chromeVisibility = useAnimatedStyle(() => ({
     display: active || reelNeighbourChromeRevealed.get() ? ('flex' as const) : ('none' as const),
   }), [active]);
-  const renderChrome = () => (zoomLanded ? (
+  const renderChrome = () => (zoomLanded && !chromeHidden ? (
     <Reanimated.View pointerEvents="box-none" onLayout={onChromeLayout} style={[{ position: 'absolute', inset: 0 }, chromeVisibility]}>
       {renderOverlays()}
       <DoubleTapSaveHeart
