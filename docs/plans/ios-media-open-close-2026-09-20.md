@@ -1,6 +1,6 @@
 # iOS media opening, frame isolation, and dismissal
 
-Status: iOS now opens and closes the reel with UIKit's own zoom transition (iOS 18+) through Expo Router; the transparent-modal candidate below is withdrawn. Simulator-verified 2026-09-20; device timing and the acceptance gates in §6 still to run.
+Status: shipped 2026-09-20 — iOS opens and closes the reel with UIKit's own zoom transition (iOS 18+) through Expo Router; the transparent-modal candidate below is withdrawn. Merged as `a83edfa3` and published over the air at that SHA (iOS group `bcde59f4`, Android `62e7aab8`), so it reaches TestFlight 0.1.5 (53) and the Play closed alpha 0.1.5 (72); store production is still 0.1.4 and cannot receive it until 0.1.5 is promoted. Simulator-verified on iOS and smoke-checked on the Pixel_9a emulator 2026-09-20; device timing and the acceptance gates in §6 still to run.
 Date: 2026-09-20. Inspected baseline: `cb6cec15` (includes #185).
 
 ## Objective and recommendation
