@@ -14,7 +14,7 @@ import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'reac
 
 import { DoubleTapPressable } from '@/components/double-tap-pressable';
 import { AppleZoomTarget, useAppleZoomRetarget, useAppleZoomSourceId } from '@/components/apple-zoom';
-import { MediaZoomChrome, MediaZoomStage, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage } from '@/components/media-zoom';
+import { MediaZoomChrome, MediaZoomStage, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage, type MediaZoomLentVideo } from '@/components/media-zoom';
 import { mediaItemAspectRatio, mediaRectInScreen, showcaseViewerMediaPicture, type ZoomPreview } from '@/lib/media-zoom-transition';
 import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
@@ -341,6 +341,19 @@ export default function ImmersivePreviewViewerScreen() {
     router.push(`/creators/${encodeURIComponent(item.creatorUsername)}` as never);
   }, []);
   const initialIndex = useMemo(() => getImmersiveInitialIndex(items, initialId), [items, initialId]);
+  // UIKit's zoom shows the reel live from its first frame (lib/apple-zoom.ts),
+  // so the list has to start on the tapped post natively rather than jump
+  // there after mounting: VirtualizedList scrolls to `initialScrollIndex` only
+  // once the content has been laid out, and that jump read as the reel
+  // scrolling into place, with the frame before it showing whatever post sat at
+  // offset 0. A `contentOffset` is applied as the scroll view is created, and
+  // makes VirtualizedList skip its late scroll. Latched on the render the list
+  // first mounts with, so a later reorder of the feed cannot re-apply it under
+  // a reader who has moved on.
+  const [initialContentOffset, setInitialContentOffset] = useState<{ x: number; y: number } | null>(null);
+  if (initialContentOffset === null && items.length > 0) {
+    setInitialContentOffset({ x: 0, y: initialIndex * height });
+  }
   const position = useMemo(
     () => resolveViewerPosition(items, savedPosition, initialId),
     [items, savedPosition, initialId]
@@ -965,7 +978,7 @@ export default function ImmersivePreviewViewerScreen() {
 
   if (!items.length && sourceQuery.isLoading) {
     return (
-      <ViewerShell topInset={topInset} bottomInset={bottomInset} preview={openingPreview}>
+      <ViewerShell topInset={topInset} bottomInset={bottomInset} preview={openingPreview} video={zoom.lentVideo}>
         <ActivityIndicator accessibilityLabel="Loading preview" color={appTheme.colors.primary} />
       </ViewerShell>
     );
@@ -1024,6 +1037,7 @@ export default function ImmersivePreviewViewerScreen() {
         getItemLayout={(_, index) => ({ length: height, offset: height * index, index })}
         initialNumToRender={IMMERSIVE_VERTICAL_LIST_TUNING.initialNumToRender}
         initialScrollIndex={initialIndex}
+        contentOffset={initialContentOffset ?? undefined}
         keyExtractor={(item) => `${item.source}-${item.id}`}
         maxToRenderPerBatch={IMMERSIVE_VERTICAL_LIST_TUNING.maxToRenderPerBatch}
         onScrollBeginDrag={() => {
@@ -1301,10 +1315,13 @@ export default function ImmersivePreviewViewerScreen() {
 
 /**
  * The reel before its first post has arrived. It shows the tapped tile's own
- * picture meanwhile, at the size the slide will draw it, so a zoom that lands
- * before the data does lands on the picture rather than on a spinner.
+ * picture meanwhile, at the size the slide will draw it — and the tile's own
+ * playing video when the tile lent its player, drawn by a view of the same
+ * player, so a zoom that lands before the data does lands on the clip the
+ * reader was watching rather than on its poster or a spinner. The slide that
+ * mounts takes that same player over, so nothing restarts.
  */
-function ViewerShell({ topInset, bottomInset, preview = null, children }: { topInset: number; bottomInset: number; preview?: ZoomPreview | null; children: React.ReactNode }) {
+function ViewerShell({ topInset, bottomInset, preview = null, video = null, children }: { topInset: number; bottomInset: number; preview?: ZoomPreview | null; video?: MediaZoomLentVideo | null; children: React.ReactNode }) {
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#000', paddingTop: topInset, paddingBottom: bottomInset, paddingHorizontal: 24 }}>
       {preview ? <Image
@@ -1319,6 +1336,15 @@ function ViewerShell({ topInset, bottomInset, preview = null, children }: { topI
         transition={0}
         style={{ position: 'absolute', inset: 0 }}
       /> : null}
+      {video?.attached ? (
+        <FeedMediaFrame
+          kind="video"
+          player={video.video.player}
+          backgroundColor="transparent"
+          videoBackdrop="none"
+          style={{ position: 'absolute', inset: 0 }}
+        />
+      ) : null}
       <ViewerTopControl label="Go back" onPress={leaveViewer} topInset={topInset} side="left">
         <IconShadow><BackGlyph size={appTheme.icon.feature} color="#ffffff" /></IconShadow>
       </ViewerTopControl>
