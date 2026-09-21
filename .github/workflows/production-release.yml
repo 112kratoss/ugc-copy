@@ -216,6 +216,21 @@ jobs:
               throw new Error('Staged build id ' + body.buildId + ' does not match ' + process.env.RELEASE_SHA);
             }
           "
+          # Exercise a successful route request before promotion. App-version
+          # and health do not cover the feed's framework request wrapper.
+          npx --yes vercel@57.0.0 curl \
+            "/api/showcase/feed?sort=recent&limit=1" \
+            --deployment "${DEPLOYMENT_URL}" \
+            -- \
+            --fail --silent --show-error \
+            --output "${RUNNER_TEMP}/feed-smoke.json"
+          node -e "
+            const fs = require('node:fs');
+            const body = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/feed-smoke.json', 'utf8'));
+            if (!Array.isArray(body.items) || !body.pageInfo) {
+              throw new Error('Staged feed smoke returned an invalid payload');
+            }
+          "
           npx --yes vercel@57.0.0 curl \
             "/api/ops/backend-health" \
             --deployment "${DEPLOYMENT_URL}" \

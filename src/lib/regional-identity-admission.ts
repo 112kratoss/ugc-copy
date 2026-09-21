@@ -24,5 +24,13 @@ export async function withRegionalIdentityAdmission(
   const admission = await evaluateUserFacingRouteIdentity(request, dependencies);
   if (admission.rejection) return admission.rejection;
   const headers = createAdmittedIdentityHeaders(request, admission, 'route');
-  return handler(new NextRequest(request, { headers }));
+  // App Router supplies a Proxy around the native Request. Node 24's Request
+  // copy constructor reads private fields on it and throws (#state). These
+  // GET/HEAD reads have no body: rebuild from public fields instead of passing
+  // the proxied object to the native copy constructor.
+  return handler(new NextRequest(request.url, {
+    method: request.method,
+    headers,
+    signal: request.signal,
+  }));
 }
