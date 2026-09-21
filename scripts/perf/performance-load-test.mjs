@@ -142,6 +142,11 @@ export function validateBudgets(config, profile = 'edge', { includeSignedIn = fa
       assert.ok(Array.isArray(target.expectedCacheStatuses), `${target.name} expectedCacheStatuses must be an array.`);
       assert.ok(target.expectedCacheStatuses.length > 0, `${target.name} expectedCacheStatuses cannot be empty.`);
     }
+    if (target.minCacheHitRatio !== undefined) {
+      assert.ok(Number.isFinite(target.minCacheHitRatio) && target.minCacheHitRatio > 0 && target.minCacheHitRatio <= 1,
+        `${target.name} minCacheHitRatio must be greater than 0 and at most 1.`);
+      assert.equal(target.auth, undefined, `${target.name} cannot require shared caching for signed-in responses.`);
+    }
     if (profile === 'origin') {
       assert.equal(target.cacheBust, true, `${target.name} must use a unique cache key for origin measurement.`);
     }
@@ -478,8 +483,10 @@ function targetCycle(targets) {
 
 function buildWarmupPlan(targets, requestsPerTarget) {
   const plan = [];
-  for (const target of targets) {
-    for (let count = 0; count < requestsPerTarget; count += 1) {
+  // Visit every target before repeating one. The global cap otherwise starves
+  // later targets (including the authenticated feed) as the catalog grows.
+  for (let count = 0; count < requestsPerTarget; count += 1) {
+    for (const target of targets) {
       if (plan.length >= MAX_TOTAL_WARMUP_REQUESTS) return plan;
       plan.push(target);
     }
@@ -706,6 +713,7 @@ function summarizeTarget(target, samples, elapsedSeconds) {
     decodedBytes: summarizeDurations(successful.map((sample) => sample.decodedBodyBytes)),
     statusCounts,
     cacheStatusCounts,
+    cacheHitRatio: successful.length === 0 ? null : edgeServed.length / successful.length,
     contentEncodingCounts,
     cacheTiming: {
       edge: {
@@ -731,6 +739,7 @@ function summarizeTarget(target, samples, elapsedSeconds) {
       minRequests: target.minRequests,
       maxRequestsPerRun: target.maxRequestsPerRun ?? null,
       maxErrorRate: target.maxErrorRate,
+      minCacheHitRatio: target.minCacheHitRatio ?? null,
       p95EncodedBodyBytes: target.p95EncodedBodyBytes,
       p95DecodedBytes: target.p95DecodedBytes,
       p95TtfbMs: target.p95TtfbMs,
@@ -759,6 +768,13 @@ function summarizeTarget(target, samples, elapsedSeconds) {
       'CACHE_MODE',
       unexpected.length > 0,
       `${unexpected.length} successful request(s) had unexpected cache status`,
+    ]);
+  }
+  if (target.minCacheHitRatio !== undefined) {
+    checks.push([
+      'CACHE_HIT_RATIO',
+      result.cacheHitRatio === null || result.cacheHitRatio < target.minCacheHitRatio,
+      `${edgeServed.length}/${successful.length} successful requests served from edge cache; minimum ratio ${target.minCacheHitRatio}`,
     ]);
   }
   const warningCodes = target.bodyBudgetMode === 'warn' ? new Set(['P95_DECODED_BYTES', 'P95_ENCODED_BODY_BYTES']) : new Set();
@@ -935,6 +951,12 @@ async function runSelfTest(budgetsPath) {
   assert.equal(await deadlineLimiter(), true);
   assert.equal(await deadlineLimiter(Date.now() + 1), false);
   const unsafeConfig = structuredClone(config);
+  const warmupTargets = Array.from({ length: 10 }, (_, index) => ({ name: `target-${index}` }));
+  assert.deepEqual(buildWarmupPlan(warmupTargets, 2).slice(0, 10), warmupTargets,
+    'Every target, including the final authenticated target, must warm before any repeats.');
+  const invalidCacheBudget = structuredClone(config);
+  invalidCacheBudget.load.targets[0].minCacheHitRatio = 1.1;
+  assert.throws(() => validateBudgets(invalidCacheBudget, 'edge'), /minCacheHitRatio/);
   unsafeConfig.load.targets[0].path = '/\\evil.example/performance';
   assert.throws(() => validateBudgets(unsafeConfig, 'edge'), /backslashes/);
   // Drop a target's own budget as well as the default, so the check exercises
@@ -970,6 +992,20 @@ async function runSelfTest(budgetsPath) {
   assert.equal(bodyBudgetResult.decodedBytes.p95, 151);
   assert.ok(bodyBudgetResult.violations.some(({ code }) => code === 'P95_ENCODED_BODY_BYTES'));
   assert.ok(!bodyBudgetResult.violations.some(({ code }) => code === 'P95_DECODED_BYTES'));
+  const cacheSamples = ['HIT', 'STALE', 'MISS', 'MISSING'].map((cacheStatus) => ({
+    ok: true, status: 200, cacheStatus, encodedBodyBytes: 10, decodedBodyBytes: 10,
+    ttfbMs: 1, totalMs: 1, ageSeconds: null,
+  }));
+  const cacheBudget = { ...targets[0], minRequests: 1, minCacheHitRatio: 0.75 };
+  const cacheRegression = summarizeTarget(cacheBudget, cacheSamples, 1);
+  assert.equal(cacheRegression.cacheHitRatio, 0.5);
+  assert.ok(cacheRegression.violations.some(({ code }) => code === 'CACHE_HIT_RATIO'));
+  const healthyCache = summarizeTarget(cacheBudget, cacheSamples.slice(0, 2), 1);
+  assert.equal(healthyCache.cacheHitRatio, 1);
+  assert.ok(!healthyCache.violations.some(({ code }) => code === 'CACHE_HIT_RATIO'));
+  const emptyCache = summarizeTarget(cacheBudget, [], 1);
+  assert.equal(emptyCache.cacheHitRatio, null);
+  assert.ok(emptyCache.violations.some(({ code }) => code === 'CACHE_HIT_RATIO'));
   const missingAuthCoverage = buildCertificationCoverage([{ ...bodyBudgetResult, violations: [] }], {
     includeSignedIn: false,
     profile: 'edge',

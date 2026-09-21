@@ -1,5 +1,13 @@
 # Current Scaling Assessment
 
+> **21 September 2026 update:** the [latest production diagnostic](audits/production-optimization-2026-09-21.md)
+> supersedes the green regression status below. On live build `6d435fb`, all
+> nine signed-out targets and both Lighthouse jobs passed, but the authenticated
+> feed exceeded latency budgets (15 samples; P50/P95 TTFB 1,478/3,648 ms).
+> A missing feed-delivery session index has a tested migration pending release;
+> identity-check locality remains open. The August results below are historical
+> exact-build evidence, not current performance or capacity claims.
+
 Last reviewed: 2026-08-23
 Reviewed base commit: `0345d786ffb86a44c5cc997414997a073f1ace6b`
 Remediation release commit: `277482e3a528d65ddea029db52a3fb5db0a5f4ce`
