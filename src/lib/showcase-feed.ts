@@ -516,7 +516,13 @@ export async function resolvePostRowsToFeedItems(
   rows: PostRow[],
   adminSupabase: ReturnType<typeof createServiceClient>,
   hydrationCache?: ShowcaseFeedHydrationCache,
+  onPhaseTiming?: (phase: string, durationMs: number) => void,
 ): Promise<ShowcaseFeedItem[]> {
+  const timed = async <T>(phase: string, work: () => Promise<T>): Promise<T> => {
+    const startedAt = performance.now();
+    try { return await work(); }
+    finally { onPhaseTiming?.(phase, performance.now() - startedAt); }
+  };
   const visibleRows = rows.filter((row) => !row.review_status || row.review_status === 'visible');
   const pendingPostIds = new Set<string>();
   const rowsToHydrate = hydrationCache
@@ -605,14 +611,15 @@ export async function resolvePostRowsToFeedItems(
   };
 
   const postIds = rowsToHydrate.map((row) => row.id);
-  const assetHydrationPromise = getMarketplaceAssetSummaryHydration(postIds, adminSupabase);
+  const assetHydrationPromise = timed('hydrate_bundles', () =>
+    getMarketplaceAssetSummaryHydration(postIds, adminSupabase));
   const assetMapPromise = assetHydrationPromise.then(({ assetMap }) => assetMap);
   // Every read still starts together. Only the preview signing inside
   // `loadGenerationInfo` waits on the media rows, because only it needs to
   // know which covers already have a poster of their own — this function runs
   // once per batch inside the filtering scan below, so a sequential read here
   // would cost a round trip per batch.
-  const mediaItemsPromise = loadPostMediaItemsMap(adminSupabase, postIds);
+  const mediaItemsPromise = timed('hydrate_media', () => loadPostMediaItemsMap(adminSupabase, postIds));
   const [
     profilesMap,
     assetMap,
@@ -620,11 +627,11 @@ export async function resolvePostRowsToFeedItems(
     sourceToolsMap,
     generationInfoMap,
   ] = await Promise.all([
-    loadProfiles(),
+    timed('hydrate_profiles', loadProfiles),
     assetMapPromise,
     mediaItemsPromise,
-    loadSourceTools(),
-    loadGenerationInfo(mediaItemsPromise),
+    timed('hydrate_tools', loadSourceTools),
+    timed('hydrate_generations', () => loadGenerationInfo(mediaItemsPromise)),
   ]);
 
   const resolvedItems = await Promise.all(
@@ -1078,7 +1085,7 @@ async function getShowcaseForYouFeedPage(params: {
     hydratePostIds: async (postIds) => {
       const rows = await fetchPostRowsByIds(postIds, adminSupabase);
       if (rows === null) return [];
-      const items = await resolvePostRowsToFeedItems(rows, adminSupabase, hydrationCache);
+      const items = await resolvePostRowsToFeedItems(rows, adminSupabase, hydrationCache, params.onPhaseTiming);
       for (const postId of postIds) {
         if (!hydrationCache.has(postId)) hydrationCache.set(postId, null);
       }
