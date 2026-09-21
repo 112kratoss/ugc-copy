@@ -49,3 +49,29 @@ runner locations limit a before/after comparison; this is not a capacity claim.
 - [Next.js authorization guidance](https://nextjs.org/docs/app/guides/authentication#optimistic-checks-with-proxy-optional)
 - [Next.js AVIF advisory](https://github.com/advisories/GHSA-2xp9-vwfh-vxw4)
 - [sharp/libheif advisory](https://github.com/advisories/GHSA-rgj7-g3m4-5g8c)
+
+## Production incident and correction
+
+The first release (`930ebd0a`, PR #187) passed Quality and generic staged/live
+health but failed successful feed requests. Production logs showed Node 24's
+`TypeError: Cannot read private member #state from an object whose class did not
+declare it` while constructing a request from Next's proxied route request.
+The 120-second post-release run recorded 45 feed HTTP 500s among 200 requests;
+invalid-token requests returned early and did not exercise the failing copy.
+
+At approximately 07:19 UTC, Vercel Instant Rollback restored healthy deployment
+`b4c52f91` (`HUGSQkHrsgAjwkxnxcnkaDxBPFQn`). Live app-version and public feed
+were verified as that SHA and HTTP 200. This was an incident recovery action;
+the database index stayed in place. The rollback temporarily restores the old
+dependency versions too, until the corrected build is released.
+
+On Node 24.21.0, both new proxied GET/HEAD tests reproduce the exact production
+exception with the old implementation and pass with the correction.
+The correction constructs the GET/HEAD request from URL, method, sanitized
+headers and abort signal, avoiding the native Request copy constructor on the
+framework Proxy. Regression tests pass a proxied request through admission.
+The production release workflow now requires a successful JSON feed response
+from the staged build before it can promote, closing the smoke-test gap that
+allowed the first release through. The corrected build must be verified via
+that new gate and a fresh production performance run; the failed run is not
+latency evidence.

@@ -60,6 +60,20 @@ describe('production release workflow', () => {
     expect(deploy).not.toContain('--with-cache');
   });
 
+  it('requires a successful feed payload before promoting the staged build', () => {
+    const workflow = read('.github/workflows/production-release.yml');
+    const feedCheck = workflow.indexOf('/api/showcase/feed?sort=recent&limit=1');
+    const promotion = workflow.indexOf('vercel@57.0.0 promote');
+
+    expect(feedCheck).toBeGreaterThan(-1);
+    expect(promotion).toBeGreaterThan(feedCheck);
+    const gate = workflow.slice(feedCheck, promotion);
+    expect(gate).toContain('--deployment "${DEPLOYMENT_URL}"');
+    expect(gate).toContain('--fail --silent --show-error');
+    expect(gate).toContain('!Array.isArray(body.items) || !body.pageInfo');
+    expect(gate).toContain('Staged feed smoke returned an invalid payload');
+  });
+
   it('authorizes a manual configuration redeploy only for green current main', () => {
     const workflow = read('.github/workflows/production-release.yml');
 

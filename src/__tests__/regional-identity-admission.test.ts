@@ -125,4 +125,22 @@ describe('regional feed identity admission', () => {
     expect((await withRegionalIdentityAdmission(req, handler, { createUserClient })).status).toBe(200);
     expect(createUserClient).not.toHaveBeenCalled();
   });
+
+  it.each(['GET', 'HEAD'])('handles a framework-proxied %s request without copying its native internals', async (method) => {
+    const original = request(method);
+    const proxied = new Proxy(original, {
+      get(target, property) { return Reflect.get(target, property, target); },
+    });
+    const handler = vi.fn(async (admitted: NextRequest) => {
+      expect(admitted.url).toBe(original.url);
+      expect(admitted.method).toBe(method);
+      expect(admitted.headers.get('authorization')).toBe('Bearer user-token');
+      expect(admitted.headers.get(IDENTITY_ADMISSION_HEADER)).not.toBe('forged');
+      return new Response('feed');
+    });
+    expect((await withRegionalIdentityAdmission(proxied, handler, {
+      createUserClient: () => client(),
+    })).status).toBe(200);
+    expect(handler).toHaveBeenCalledOnce();
+  });
 });
