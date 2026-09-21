@@ -247,7 +247,7 @@ describe('central route identity admission', () => {
   });
 
   it('forwards trusted proxy timing, split by phase, to the authenticated production monitor', async () => {
-    const request = new NextRequest('https://magicbooklet.test/api/showcase/feed?sort=for-you', {
+    const request = new NextRequest('https://magicbooklet.test/api/generations', {
       headers: {
         Authorization: 'Bearer signed-user-token',
         'x-performance-monitor': 'load',
