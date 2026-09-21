@@ -24,7 +24,8 @@
         "weight": 2,
         "p95TtfbMs": 1000,
         "p99TtfbMs": 2000,
-        "p95DecodedBytes": 835584
+        "p95DecodedBytes": 835584,
+        "minCacheHitRatio": 0.8
       },
       {
         "name": "showcase-page",
@@ -62,7 +63,8 @@
         "p99TtfbMs": 1500,
         "p95TotalMs": 1000,
         "p99TotalMs": 1800,
-        "bodyBudgetMode": "warn"
+        "bodyBudgetMode": "warn",
+        "minCacheHitRatio": 0.8
       },
       {
         "name": "showcase-feed-api",
@@ -77,7 +79,8 @@
         "p95TtfbMs": 1200,
         "p99TtfbMs": 2500,
         "p95TotalMs": 1600,
-        "p99TotalMs": 3200
+        "p99TotalMs": 3200,
+        "minCacheHitRatio": 0.8
       },
       {
         "name": "model-catalog-current-api",
@@ -92,7 +95,8 @@
         "p95TtfbMs": 800,
         "p99TtfbMs": 1500,
         "p95TotalMs": 1000,
-        "p99TotalMs": 1800
+        "p99TotalMs": 1800,
+        "minCacheHitRatio": 0.5
       },
       {
         "name": "model-catalog-summary-api",
@@ -108,7 +112,8 @@
         "p99TtfbMs": 1500,
         "p95TotalMs": 1000,
         "p99TotalMs": 1800,
-        "catalogProbe": "models"
+        "catalogProbe": "models",
+        "minCacheHitRatio": 0.8
       },
       {
         "name": "model-catalog-detail-api",
@@ -124,7 +129,8 @@
         "p99TtfbMs": 1500,
         "p95TotalMs": 1000,
         "p99TotalMs": 1800,
-        "catalogProbe": "detail"
+        "catalogProbe": "detail",
+        "minCacheHitRatio": 0.8
       },
       {
         "name": "model-catalog-batch-api",
@@ -140,7 +146,8 @@
         "p99TtfbMs": 1500,
         "p95TotalMs": 1000,
         "p99TotalMs": 1800,
-        "catalogProbe": "details"
+        "catalogProbe": "details",
+        "minCacheHitRatio": 0.8
       }
     ],
     "signedInTargets": [
@@ -160,7 +167,11 @@
         "p95TtfbMs": 1800,
         "p99TtfbMs": 3500,
         "p95TotalMs": 2400,
-        "p99TotalMs": 4500
+        "p99TotalMs": 4500,
+        "expectedCacheStatuses": [
+          "BYPASS",
+          "MISS"
+        ]
       }
     ],
     "originTargets": [
