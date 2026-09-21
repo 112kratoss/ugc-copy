@@ -69,8 +69,11 @@ Reviewed checkout: `ee13c22f`.
    35 BYPASS; signed GETs: 37 HIT, 122 MISS, 5 BYPASS. Counts include probes,
    errors and heterogeneous assets; they are not a controlled user-session
    experiment or a billing export. Content-Length sums are not billed egress.
-   Investigate signed URL reuse and actual playback downloads while preserving
-   expiry, ownership and takedown behavior. No TTL was lengthened in this pass.
+   The code already reuses private signed URLs in a bounded, per-instance cache
+   (256 entries, 600-second URL expiry, 120-second safety margin), keyed by user,
+   object and download mode, with in-flight request deduplication. Measure reuse
+   across instances and actual playback downloads before adding another cache;
+   preserve expiry, ownership and takedown behavior. No TTL was lengthened here.
 
 ## Validation and release
 
@@ -78,6 +81,11 @@ The index is delivered through the normal migration/release workflow, not an
 out-of-band production DDL operation. Migration text and clean-schema pgTAP
 checks cover the index. Harness self-tests cover fair warmup, invalid ratio
 budgets, a cache regression, a healthy cache and an empty sample set.
+
+Both mobile and desktop Lighthouse jobs passed in the baseline workflow. The
+load-budget job failed only the authenticated feed latency budgets described
+above. PR Quality has passed clean migration replay/pgTAP, mobile checks and
+E2E smoke; web validation is still pending at the time of this record.
 
 After release: verify the index is ready/valid, repeat the same bounded SELECT
 plan and the production performance workflow. Report query-plan improvement
