@@ -104,6 +104,16 @@ Production model definitions, controls, and pricing live in Supabase, released t
 
 `src/proxy.ts` is also the bearer admission boundary for every policy-listed `/api` route (`src/lib/route-identity-policy.ts`): it verifies the JWT locally with `auth.getClaims()` (ES256 against the project's published JWKS, cached per instance; a symmetric-key project would fall back to a GoTrue call by itself) and then makes exactly one database round trip, the zero-argument `current_identity_admission()` RPC, which returns the lifecycle state, `created_at`, whether the account is banned and whether the token's session still exists. It never calls `auth.getUser()` — the GoTrue `/user` round trip was the slow, variable half of signed-in latency (~450 ms median, past 1.5 s at P95 in busy hours). Successful admission travels to the route as the 30-second HMAC assertion (`identity-admission-assertion.ts`); routes without one fall back to `server-auth-user.ts`, the single audited `auth.getUser()` boundary. Under the production monitor the proxy reports `proxy-identity`, `proxy-verify` and `proxy-lifecycle` timings that the showcase feed folds into its `Server-Timing`.
 
+For `/api/showcase/feed` GET/HEAD, the same admission evaluator now runs in
+`withRegionalIdentityAdmission` at the actual route export, in the API function's
+configured Mumbai region. The proxy strips incoming admission/timing headers
+and defers only those two methods on that exact path; other paths keep proxy
+admission. The feed handler freshly verifies claims, session, ban and lifecycle
+state before calling its adapter, then supplies a new assertion for route reuse.
+Feed performance reports `route-identity`, `route-verify`, `route-lifecycle` for
+this check. Do not add a proxy exception without wrapping and testing the real
+route export.
+
 ### Admin console (`/admin`)
 
 A browser-only operator console living in the same Next.js app under the

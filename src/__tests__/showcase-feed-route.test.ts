@@ -20,6 +20,23 @@ const getUserMock = vi.fn(async () => ({
   },
 }));
 
+// The actual route now checks fresh admission before the adapter. Keep this
+// cache/payload suite isolated from the network; rejection and assertion reuse
+// are exercised through the real exports in regional-identity-admission.test.
+vi.mock('@supabase/supabase-js', async (original) => ({
+  ...await original<typeof import('@supabase/supabase-js')>(),
+  createClient: () => ({
+    auth: { getClaims: async () => ({
+      data: { claims: { sub: '11111111-1111-4111-8111-111111111111', role: 'authenticated' } },
+      error: null,
+    }) },
+    rpc: async () => ({
+      data: { state: 'active', session_valid: true, banned: false, created_at: '2026-09-21T00:00:00Z' },
+      error: null,
+    }),
+  }),
+}));
+
 vi.mock('@/lib/showcase-feed', () => ({
   getShowcaseFeedPage: (options: unknown) => getShowcaseFeedPageMock(options),
 }));
