@@ -1,4 +1,5 @@
 import 'server-only';
+import { createShowcaseLoadTiming } from '@/lib/showcase-load-timing';
 import { logBackendError } from '@/lib/backend-logger';
 
 import { unstable_cache } from 'next/cache';
@@ -1126,17 +1127,25 @@ const getCachedIdentitylessShowcaseForYouBootstrap = unstable_cache(
     limit: number,
     unlockFilter: ShowcaseUnlockFilter,
     resourceFilter: ShowcaseResourceFilter,
-  ) => getShowcaseForYouFeedPage({
-    category,
-    offset: 0,
-    limit,
-    toolSlug: null,
-    unlockFilter,
-    resourceFilter,
-    viewerUserId: null,
-    anonymousKeyHash: null,
-    cursor: null,
-  }),
+  ) => {
+    const timing = createShowcaseLoadTiming('feed_refill');
+    try {
+      return await timing.measure('load', () => getShowcaseForYouFeedPage({
+        category,
+        offset: 0,
+        limit,
+        toolSlug: null,
+        unlockFilter,
+        resourceFilter,
+        viewerUserId: null,
+        anonymousKeyHash: null,
+        cursor: null,
+        onPhaseTiming: (phase, durationMs) => { timing.record(phase, durationMs); },
+      }));
+    } finally {
+      timing.finish();
+    }
+  },
   ['showcase-for-you-bootstrap-v2'],
   { revalidate: 60, tags: [SHOWCASE_FEED_CACHE_TAG] }
 );
