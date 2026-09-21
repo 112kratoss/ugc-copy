@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { createShowcaseLoadTiming } from '@/lib/showcase-load-timing';
 
 import ShowcaseBootstrapClient from '@/app/showcase/ShowcaseBootstrapClient';
 import { getShowcaseFeedPage } from '@/lib/showcase-feed';
@@ -113,7 +114,8 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
     );
     const initialLimit = offset === 0 ? SHOWCASE_INITIAL_PAGE_SIZE : SHOWCASE_PAGE_SIZE;
 
-    const initialFeedPromise = getShowcaseFeedPage({
+    const timing = createShowcaseLoadTiming('page_data');
+    const initialFeedPromise = timing.measure('feed', () => getShowcaseFeedPage({
         category,
         sort,
         offset,
@@ -123,16 +125,18 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
         unlock,
         resource,
         countryCode: null,
-    });
-    const sourceToolOptionsPromise = listSourceToolsCatalog();
+    }));
+    const sourceToolOptionsPromise = timing.measure('tools', () => listSourceToolsCatalog());
     const initialFeed = await initialFeedPromise;
     const priorityVideoPoster = getPriorityVideoPoster(initialFeed);
     const [sourceToolOptions, inlinePosterDataUrl] = await Promise.all([
         sourceToolOptionsPromise,
         priorityVideoPoster
-            ? getInlineShowcasePriorityPoster(priorityVideoPoster.sourceUrl)
+            ? timing.measure('poster', () => getInlineShowcasePriorityPoster(priorityVideoPoster.sourceUrl))
             : Promise.resolve(null),
     ]);
+    // Data readiness only: React rendering and stream completion follow later.
+    timing.finish();
     const initialPriorityPoster: ShowcasePriorityPosterData | null = priorityVideoPoster && inlinePosterDataUrl
         ? {
             postId: priorityVideoPoster.postId,

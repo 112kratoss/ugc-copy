@@ -40,25 +40,38 @@ function isNodeRuntime(): boolean {
 
 export async function register() {
   if (!isNodeRuntime()) return;
-  // Warns once per runtime start when production has no DSN, so "configured but
-  // reporting nothing" cannot pass unnoticed.
-  if (!assertSentryConfigured()) return;
+  const registrationStarted = performance.now();
+  try {
+    // Warns once per runtime start when production has no DSN, so "configured but
+    // reporting nothing" cannot pass unnoticed.
+    if (!assertSentryConfigured()) return;
 
-  const Sentry = await import('@sentry/nextjs');
+    const Sentry = await import('@sentry/nextjs');
 
-  Sentry.init({
-    dsn: resolveSentryDsn(),
-    environment: resolveSentryEnvironment(),
-    tracesSampleRate: SENTRY_TRACES_SAMPLE_RATE,
-    sampleRate: SENTRY_ERROR_SAMPLE_RATE,
-    // The app already has an ops surface for request logs; Sentry is here for
-    // exceptions, not as a log sink.
-    enableLogs: false,
-    // Request bodies here routinely carry prompts, media URLs and payment
-    // payloads. None of that belongs in an error tracker. The default is
-    // already false — stated so nobody flips it without deciding to.
-    sendDefaultPii: false,
-  });
+    Sentry.init({
+      dsn: resolveSentryDsn(),
+      environment: resolveSentryEnvironment(),
+      tracesSampleRate: SENTRY_TRACES_SAMPLE_RATE,
+      sampleRate: SENTRY_ERROR_SAMPLE_RATE,
+      // The app already has an ops surface for request logs; Sentry is here for
+      // exceptions, not as a log sink.
+      enableLogs: false,
+      // Request bodies here routinely carry prompts, media URLs and payment
+      // payloads. None of that belongs in an error tracker. The default is
+      // already false — stated so nobody flips it without deciding to.
+      sendDefaultPii: false,
+    });
+  } finally {
+    if (process.env.VERCEL_ENV === 'production') {
+      // This measures this hook only, not platform boot or route imports.
+      try {
+        console.log(JSON.stringify({
+          level: 'info', msg: 'server_registration_timing', ts: new Date().toISOString(),
+          elapsedMs: Math.round(performance.now() - registrationStarted),
+        }));
+      } catch { /* Diagnostics must never prevent startup. */ }
+    }
+  }
 }
 
 export async function onRequestError(

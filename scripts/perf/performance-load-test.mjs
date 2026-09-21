@@ -598,6 +598,7 @@ async function performRequest(
     url.searchParams.set('_perf', `${Date.now()}-${randomUUID()}`);
   }
   const startedAt = performance.now();
+  const startedAtIso = new Date().toISOString();
   if (target.auth === 'bearer' && !authBearerToken) {
     throw new Error(`Authenticated target ${target.name} was selected without an authentication secret.`);
   }
@@ -607,7 +608,7 @@ async function performRequest(
     const finish = (sample) => {
       if (settled) return;
       settled = true;
-      resolve(sample);
+      resolve({ ...sample, startedAt: startedAtIso });
     };
     const request = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
       method: target.method,
@@ -639,6 +640,7 @@ async function performRequest(
           const ageHeader = responseHeader(response.headers, 'age');
           const parsedAge = ageHeader === null ? null : Number(ageHeader);
           finish({
+            vercelRequestId: safeVercelRequestId(responseHeader(response.headers, 'x-vercel-id')),
             ageSeconds: parsedAge !== null && Number.isFinite(parsedAge) ? parsedAge : null,
             cacheControl: responseHeader(response.headers, 'cache-control'),
             cacheStatus: responseHeader(response.headers, 'x-vercel-cache')?.toUpperCase() ?? 'MISSING',
@@ -664,6 +666,10 @@ async function performRequest(
     request.on('error', (error) => finish(failedSample(error, startedAt)));
     request.end();
   });
+}
+
+function safeVercelRequestId(value) {
+  return typeof value === 'string' && /^[a-zA-Z0-9:_-]{1,160}$/.test(value) ? value : null;
 }
 
 function summarizeTarget(target, samples, elapsedSeconds) {
@@ -732,6 +738,15 @@ function summarizeTarget(target, samples, elapsedSeconds) {
     cacheControls: [...new Set(successful.map((sample) => sample.cacheControl).filter(Boolean))],
     matchedPaths: [...new Set(successful.map((sample) => sample.matchedPath).filter(Boolean))],
     serverTimings,
+    // Fixed-field, bounded evidence for correlating tails with provider logs.
+    slowestRequests: [...samples].sort((a, b) => b.totalMs - a.totalMs).slice(0, 5).map((sample) => ({
+      startedAt: sample.startedAt ?? null,
+      vercelRequestId: safeVercelRequestId(sample.vercelRequestId),
+      status: sample.status,
+      cacheStatus: sample.cacheStatus,
+      ttfbMs: Number(sample.ttfbMs.toFixed(1)),
+      totalMs: Number(sample.totalMs.toFixed(1)),
+    })),
     ttfbMs: summarizeDurations(successful.map((sample) => sample.ttfbMs)),
     totalMs: summarizeDurations(successful.map((sample) => sample.totalMs)),
     sampleErrors: [...new Set(failed.map((sample) => sample.error).filter(Boolean))].slice(0, 3),
@@ -996,6 +1011,17 @@ async function runSelfTest(budgetsPath) {
     ok: true, status: 200, cacheStatus, encodedBodyBytes: 10, decodedBodyBytes: 10,
     ttfbMs: 1, totalMs: 1, ageSeconds: null,
   }));
+  const outliers = summarizeTarget(targets[0], Array.from({ length: 10 }, (_, i) => ({
+    ...cacheSamples[0], totalMs: i + 1, startedAt: '2026-09-21T00:00:00.000Z',
+    vercelRequestId: i === 9 ? 'invalid?id=secret' : 'bom1::bom1::request-123',
+    authorization: 'must-not-be-retained',
+  })), 1).slowestRequests;
+  assert.equal(outliers.length, 5);
+  assert.equal(outliers[0].totalMs, 10);
+  assert.equal(outliers[0].vercelRequestId, null);
+  assert.equal(outliers[1].vercelRequestId, 'bom1::bom1::request-123');
+  assert.ok(!JSON.stringify(outliers).includes('secret'));
+  assert.ok(!JSON.stringify(outliers).includes('must-not-be-retained'));
   const cacheBudget = { ...targets[0], minRequests: 1, minCacheHitRatio: 0.75 };
   const cacheRegression = summarizeTarget(cacheBudget, cacheSamples, 1);
   assert.equal(cacheRegression.cacheHitRatio, 0.5);

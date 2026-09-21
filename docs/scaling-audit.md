@@ -1,14 +1,14 @@
 # Current Scaling Assessment
 
-> **21 September 2026 update:** the session index is deployed (bounded lookup
-> 1,509.665 → 1.585 ms), and regional admission is live on `59d6ff6b` after a
-> corrected request-wrapper release. Its bounded run had 192 reads/zero errors,
-> all public targets and both Lighthouse jobs passed, and signed-in median TTFB
-> improved to 912.4 ms. Signed-in P95 remains above budget: 1,866.6/1,800 ms
-> across 14 samples. [Regional admission evidence](audits/regional-feed-admission-2026-09-21.md)
-> and the [hydration follow-up](audits/feed-page-hydration-2026-09-21.md) describe
-> the remaining work. The August results below are historical exact-build
-> evidence, not current performance or capacity claims.
+> **21 September 2026 update:** session indexing, regional identity admission and
+> bounded feed hydration are deployed on `3273a91e`. Run 35610802650 completed
+> 207 reads without errors; signed-in feed TTFB P50/P95 was 803.9/1041.8 ms
+> (15 samples), within budget. Eight public targets and both Lighthouse jobs
+> passed. Public Showcase HTML still failed its tail-latency budgets.
+> [Showcase diagnostics](audits/showcase-latency-diagnostics-2026-09-21.md)
+> distinguishes cold execution from cache-refill delays and records the next
+> measurements. The August results below remain historical exact-build evidence,
+> not current performance or capacity claims.
 
 Last reviewed: 2026-08-23
 Reviewed base commit: `0345d786ffb86a44c5cc997414997a073f1ace6b`
