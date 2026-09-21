@@ -859,3 +859,75 @@ describe('showcase feed personalization candidate filling', () => {
     }
   });
 });
+
+
+describe('persisted feed hydration budget', () => {
+  function persistedClient(hiddenPostIds: string[] = [], deletedPostIds: string[] = []) {
+    const rows = Array.from({ length: 48 }, (_, position) => ({
+      id: position + 1, post_id: `post-${position}`, position,
+      candidate_source: 'interest', final_score: 1, score_components: {},
+    }));
+    const from = vi.fn((table: string) => {
+      let position = 0;
+      let limit = 24;
+      const query = {
+        select: vi.fn(() => query), eq: vi.fn(() => query), order: vi.fn(() => query),
+        in: vi.fn(() => query),
+        gte: vi.fn((_field: string, value: number) => { position = value; return query; }),
+        limit: vi.fn((value: number) => { limit = value; return query; }),
+        maybeSingle: vi.fn(async () => ({ data: table === 'feed_sessions' ? {
+          id: 'bounded-session', viewer_user_id: 'viewer', anonymous_key_hash: null,
+          algorithm_version_id: 'algorithm', expires_at: '2099-01-01T00:00:00Z',
+        } : {
+          id: 'algorithm', algorithm_key: 'for-you-rules', version: 1,
+          weights: {}, retrieval_config: {}, diversity_config: {},
+        }, error: null })),
+        then: (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) => {
+          const data = table === 'feed_session_items' ? rows.slice(position, position + limit)
+            : table === 'feed_user_post_feedback' ? hiddenPostIds.map(post_id => ({ post_id }))
+            : [];
+          return Promise.resolve({ data, error: null }).then(resolve, reject);
+        },
+      };
+      return query;
+    });
+    const hydratePostIds = vi.fn(async (ids: string[]) => ids
+      .filter(id => !deletedPostIds.includes(id)).map(item));
+    return { client: { from } as unknown as SupabaseClient, hydratePostIds };
+  }
+
+  it.each([1, 12, 24])('hydrates only a %i-item page plus one eligible lookahead', async (limit) => {
+    const { client, hydratePostIds } = persistedClient();
+    const onPhaseTiming = vi.fn();
+    const page = await getPersonalizedShowcaseFeedPage({
+      anonymousKeyHash: null, cursor: encodeRankedFeedCursor({ sessionId: 'bounded-session', position: 0 }),
+      fallbackItems: vi.fn(), filters: { category: 'all', toolSlug: null, unlockFilter: 'all', resourceFilter: 'all' },
+      hydratePostIds, onPhaseTiming, limit, offset: 0, serviceClient: client, viewerUserId: 'viewer',
+    });
+    expect(hydratePostIds).toHaveBeenCalledOnce();
+    expect(hydratePostIds.mock.calls[0][0]).toHaveLength(limit + 1);
+    expect(page.items.map(row => row.id)).toEqual(Array.from({ length: limit }, (_, i) => `post-${i}`));
+    expect(onPhaseTiming.mock.calls.map(([phase]) => phase)).toEqual(
+      expect.arrayContaining(['session_items', 'session_hydration', 'session_feedback']),
+    );
+    expect(page.pageInfo.hasMore).toBe(true);
+    expect(decodeRankedFeedCursor(page.pageInfo.nextCursor)?.position).toBe(limit);
+  });
+
+  it('fills through hidden and deleted posts without skipping cursor positions', async () => {
+    const hidden = Array.from({ length: 12 }, (_, i) => `post-${i}`);
+    const { client, hydratePostIds } = persistedClient(hidden, ['post-12', 'post-24']);
+    const page = await getPersonalizedShowcaseFeedPage({
+      anonymousKeyHash: null, cursor: encodeRankedFeedCursor({ sessionId: 'bounded-session', position: 0 }),
+      fallbackItems: vi.fn(), filters: { category: 'all', toolSlug: null, unlockFilter: 'all', resourceFilter: 'all' },
+      hydratePostIds, limit: 12, offset: 0, serviceClient: client, viewerUserId: 'viewer',
+    });
+    expect(page.items.map(row => row.id)).toEqual([
+      ...Array.from({ length: 11 }, (_, i) => `post-${i + 13}`), 'post-25',
+    ]);
+    expect(page.pageInfo.hasMore).toBe(true);
+    expect(decodeRankedFeedCursor(page.pageInfo.nextCursor)?.position).toBe(26);
+    const hydratedIds = hydratePostIds.mock.calls.flatMap(([ids]) => ids);
+    expect(new Set(hydratedIds).size).toBe(hydratedIds.length);
+  });
+});

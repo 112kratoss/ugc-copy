@@ -365,6 +365,7 @@ async function loadPersistedPage({
   preloadedSession = null,
   serviceClient,
   viewerUserId,
+  onPhaseTiming,
 }: {
   anonymousKeyHash: string | null;
   cursorValue: string;
@@ -374,7 +375,16 @@ async function loadPersistedPage({
   preloadedSession?: FeedSessionRow | null;
   serviceClient: SupabaseClient;
   viewerUserId: string | null;
+  onPhaseTiming?: (phase: string, durationMs: number) => void;
 }): Promise<ShowcaseFeedPage | null> {
+  const timed = async <T>(phase: string, work: () => PromiseLike<T>): Promise<T> => {
+    const startedAt = performance.now();
+    try {
+      return await work();
+    } finally {
+      onPhaseTiming?.(phase, performance.now() - startedAt);
+    }
+  };
   const cursor = decodeRankedFeedCursor(cursorValue);
   if (!cursor) return null;
 
@@ -415,6 +425,7 @@ async function loadPersistedPage({
   let nextScanPosition = cursor.position;
   let scannedRows = 0;
   let exhausted = false;
+  let hydrationHasGaps = false;
 
   while (
     eligibleRows.length < limit + 1
@@ -425,13 +436,13 @@ async function loadPersistedPage({
       scanBatchSize,
       SHOWCASE_FEED_ELIGIBLE_ITEM_LIMIT - scannedRows,
     );
-    const { data, error } = await serviceClient
+    const { data, error } = await timed('session_items', () => serviceClient
       .from('feed_session_items')
       .select('id, post_id, position, candidate_source, final_score, score_components')
       .eq('session_id', session.id)
       .gte('position', nextScanPosition)
       .order('position', { ascending: true })
-      .limit(batchLimit);
+      .limit(batchLimit));
     if (error) return null;
 
     const rows = (data ?? []) as FeedSessionItemRow[];
@@ -444,19 +455,32 @@ async function loadPersistedPage({
     nextScanPosition = rows[rows.length - 1].position + 1;
     exhausted = rows.length < batchLimit;
 
-    const hydrated = await hydratePostIds(rows.map((row) => row.post_id));
-    const feedbackFiltered = await filterActiveViewerFeedback({
-      items: hydrated,
-      serviceClient,
-      viewerUserId,
-    });
-    if (!feedbackFiltered) return null;
+    // Hydrate only enough rows to fill the page plus its lookahead. If edits,
+    // moderation or feedback remove candidates, consume the rest of this scan
+    // batch together, preserving the bounded fallback and cursor semantics.
+    let hydrationOffset = 0;
+    while (hydrationOffset < rows.length && eligibleRows.length < limit + 1) {
+      const hydrationCount = hydrationOffset === 0 && !hydrationHasGaps
+        ? limit + 1 - eligibleRows.length
+        : rows.length - hydrationOffset;
+      const hydrationRows = rows.slice(hydrationOffset, hydrationOffset + hydrationCount);
+      hydrationOffset += hydrationRows.length;
+      const hydrated = await timed('session_hydration', () =>
+        hydratePostIds(hydrationRows.map((row) => row.post_id)));
+      const feedbackFiltered = await timed('session_feedback', () => filterActiveViewerFeedback({
+        items: hydrated,
+        serviceClient,
+        viewerUserId,
+      }));
+      if (!feedbackFiltered) return null;
+      hydrationHasGaps ||= feedbackFiltered.length < hydrationRows.length;
 
-    const itemById = new Map(feedbackFiltered.map((item) => [item.id, item]));
-    for (const row of rows) {
-      const hydratedItem = itemById.get(row.post_id);
-      if (hydratedItem) eligibleRows.push({ item: hydratedItem, row });
-      if (eligibleRows.length >= limit + 1) break;
+      const itemById = new Map(feedbackFiltered.map((item) => [item.id, item]));
+      for (const row of hydrationRows) {
+        const hydratedItem = itemById.get(row.post_id);
+        if (hydratedItem) eligibleRows.push({ item: hydratedItem, row });
+        if (eligibleRows.length >= limit + 1) break;
+      }
     }
   }
 
@@ -890,6 +914,7 @@ export async function getPersonalizedShowcaseFeedPage({
   };
   if (cursor) {
     const persisted = await timed('cursor_load', () => loadPersistedPage({
+      onPhaseTiming,
       anonymousKeyHash,
       cursorValue: cursor,
       hydratePostIds,
@@ -948,6 +973,7 @@ export async function getPersonalizedShowcaseFeedPage({
     }));
     if (reusableSession) {
       const reused = await timed('session_page', () => loadPersistedPage({
+        onPhaseTiming,
         anonymousKeyHash,
         cursorValue: encodeRankedFeedCursor({ sessionId: reusableSession.id, position: 0 }),
         hydratePostIds,
