@@ -830,17 +830,15 @@ async function hydrateEligibleCandidates({
 }
 
 async function findReusableSession({
-  algorithmVersionId,
   anonymousKeyHash,
-  experimentAssignmentId,
   filters,
+  scope,
   serviceClient,
   viewerUserId,
 }: {
-  algorithmVersionId: string;
   anonymousKeyHash: string | null;
-  experimentAssignmentId: number | null;
   filters: RankedFeedFilters;
+  scope?: { algorithmVersionId: string; experimentAssignmentId: number | null };
   serviceClient: SupabaseClient;
   viewerUserId: string | null;
 }) {
@@ -849,16 +847,18 @@ async function findReusableSession({
   const now = new Date();
   let query = serviceClient
     .from('feed_sessions')
-    .select('id, viewer_user_id, anonymous_key_hash, algorithm_version_id, created_at, expires_at')
+    .select('id, viewer_user_id, anonymous_key_hash, algorithm_version_id, experiment_assignment_id, created_at, expires_at')
     .eq('surface', 'showcase')
     .eq('mode', 'for-you')
-    .eq('algorithm_version_id', algorithmVersionId)
     .contains('filters', filters)
     .gt('expires_at', now.toISOString())
     .gte('created_at', new Date(now.getTime() - FEED_SESSION_REUSE_TTL_MS).toISOString());
-  query = experimentAssignmentId === null
-    ? query.is('experiment_assignment_id', null)
-    : query.eq('experiment_assignment_id', experimentAssignmentId);
+  if (scope) {
+    query = query.eq('algorithm_version_id', scope.algorithmVersionId);
+    query = scope.experimentAssignmentId === null
+      ? query.is('experiment_assignment_id', null)
+      : query.eq('experiment_assignment_id', scope.experimentAssignmentId);
+  }
   query = viewerUserId
     ? query.eq('viewer_user_id', viewerUserId).is('anonymous_key_hash', null)
     : query.is('viewer_user_id', null).eq('anonymous_key_hash', anonymousKeyHash);
@@ -867,7 +867,7 @@ async function findReusableSession({
     .limit(1)
     .maybeSingle();
   if (error || !data?.id) return null;
-  return data as FeedSessionRow;
+  return data as FeedSessionRow & { experiment_assignment_id: number | null };
 }
 
 function mergeUniqueFeedItems(
@@ -936,16 +936,29 @@ export async function getPersonalizedShowcaseFeedPage({
     });
   }
 
+  // The latest viewer/filter-matching session can be read while the algorithm
+  // and experiment resolve. Never use it until both scope fields match below.
+  const [resolvedAlgorithm, candidateSession] = await Promise.all([
+    timed('algorithm', () => resolveAlgorithmForViewer({
+      anonymousKeyHash,
+      serviceClient,
+      viewerUserId,
+    })),
+    offset === 0
+      ? timed('session_reuse', () => findReusableSession({
+        anonymousKeyHash,
+        filters,
+        serviceClient,
+        viewerUserId,
+      }))
+      : Promise.resolve(null),
+  ]);
   const {
     algorithm,
     experimentAssignmentId,
     experimentId,
     experimentVariantId,
-  } = await timed('algorithm', () => resolveAlgorithmForViewer({
-    anonymousKeyHash,
-    serviceClient,
-    viewerUserId,
-  }));
+  } = resolvedAlgorithm;
   if (!algorithm) {
     const fallback = await fallbackItems(Math.min(
       SHOWCASE_FEED_ELIGIBLE_ITEM_LIMIT,
@@ -963,14 +976,19 @@ export async function getPersonalizedShowcaseFeedPage({
   }
 
   if (offset === 0) {
-    const reusableSession = await timed('session_reuse', () => findReusableSession({
-      algorithmVersionId: algorithm.id,
-      anonymousKeyHash,
-      experimentAssignmentId,
-      filters,
-      serviceClient,
-      viewerUserId,
-    }));
+    // A newer session may belong to another algorithm or experiment. Retain
+    // the exact scoped lookup in that case so an older valid session wins.
+    const reusableSession = candidateSession
+      && (candidateSession.algorithm_version_id !== algorithm.id
+        || candidateSession.experiment_assignment_id !== experimentAssignmentId)
+      ? await timed('session_reuse_fallback', () => findReusableSession({
+        scope: { algorithmVersionId: algorithm.id, experimentAssignmentId },
+        anonymousKeyHash,
+        filters,
+        serviceClient,
+        viewerUserId,
+      }))
+      : candidateSession;
     if (reusableSession) {
       const reused = await timed('session_page', () => loadPersistedPage({
         onPhaseTiming,
