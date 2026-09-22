@@ -1,14 +1,16 @@
 # Current Scaling Assessment
 
-> **21 September 2026 update:** session indexing, regional identity admission and
-> bounded feed hydration are deployed on `3273a91e`. Run 35610802650 completed
-> 207 reads without errors; signed-in feed TTFB P50/P95 was 803.9/1041.8 ms
-> (15 samples), within budget. Eight public targets and both Lighthouse jobs
-> passed. Public Showcase HTML still failed its tail-latency budgets.
+> **21 September 2026 update:** session indexing, regional identity admission,
+> bounded feed hydration and latency diagnostics are deployed on `6761d58a`.
+> Run 35627749144 completed 208 reads without errors; all nine public targets
+> and both Lighthouse jobs passed. Signed-in feed TTFB P50/P95 was
+> 727.9/2440.9 ms (16 samples), so the intermittent tail remains open.
+> [Session lookup overlap](audits/feed-session-overlap-2026-09-21.md) records
+> the next bounded optimization and its limited read-only production evidence.
 > [Showcase diagnostics](audits/showcase-latency-diagnostics-2026-09-21.md)
-> distinguishes cold execution from cache-refill delays and records the next
-> measurements. The August results below remain historical exact-build evidence,
-> not current performance or capacity claims.
+> records the cold-execution and cache-refill investigation. The August results
+> below remain historical exact-build evidence, not current performance or
+> capacity claims.
 
 Last reviewed: 2026-08-23
 Reviewed base commit: `0345d786ffb86a44c5cc997414997a073f1ace6b`

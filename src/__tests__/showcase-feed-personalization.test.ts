@@ -351,7 +351,14 @@ describe('showcase feed personalization candidate filling', () => {
     expect(page.pageInfo.hasMore).toBe(false);
   });
 
-  it('reuses a recent matching initial session instead of reranking or inserting another one', async () => {
+  it.each([
+    { name: 'matching scope', candidateAlgorithm: 'algorithm-7', candidateAssignment: null, reads: 1 },
+    { name: 'newer different algorithm', candidateAlgorithm: 'algorithm-old', candidateAssignment: null, reads: 2 },
+    { name: 'newer experiment assignment', candidateAlgorithm: 'algorithm-7', candidateAssignment: 44, reads: 2 },
+    { name: 'missing experiment scope', candidateAlgorithm: 'algorithm-7', candidateAssignment: undefined, reads: 2 },
+  ])('overlaps session lookup and reuses the correct session: $name', async ({
+    candidateAlgorithm, candidateAssignment, reads,
+  }) => {
     const anonymousKeyHash = 'b'.repeat(64);
     const activeAlgorithm = {
       id: 'algorithm-7',
@@ -405,19 +412,27 @@ describe('showcase feed personalization candidate filling', () => {
     let algorithmReads = 0;
     let sessionReads = 0;
     let sessionItemReads = 0;
+    let releaseAlgorithm!: () => void;
+    const algorithmReady = new Promise<void>((resolve) => { releaseAlgorithm = resolve; });
     const from = vi.fn((table: string) => {
       if (table === 'feed_algorithm_versions') {
         algorithmReads += 1;
-        return fluent({ maybeSingleData: activeAlgorithm });
+        const query = fluent({ maybeSingleData: activeAlgorithm });
+        query.maybeSingle = async () => {
+          await algorithmReady;
+          return { data: activeAlgorithm, error: null };
+        };
+        return query;
       }
       if (table === 'feed_sessions') {
         sessionReads += 1;
-        if (sessionReads === 1) return fluent({
+        if (sessionReads <= reads) return fluent({
           maybeSingleData: {
-            id: 'session-reused',
+            id: sessionReads === 1 && reads === 2 ? 'session-other-scope' : 'session-reused',
             viewer_user_id: null,
             anonymous_key_hash: anonymousKeyHash,
-            algorithm_version_id: 'algorithm-7',
+            algorithm_version_id: sessionReads === 1 ? candidateAlgorithm : 'algorithm-7',
+            experiment_assignment_id: sessionReads === 1 ? candidateAssignment : null,
             created_at: new Date().toISOString(),
             expires_at: '2099-01-01T00:00:00.000Z',
           },
@@ -447,7 +462,7 @@ describe('showcase feed personalization candidate filling', () => {
     const db = { rpc: vi.fn(), from } as unknown as SupabaseClient;
     const hydratePostIds = vi.fn(async () => [item('persisted-post')]);
 
-    const page = await getPersonalizedShowcaseFeedPage({
+    const pendingPage = getPersonalizedShowcaseFeedPage({
       anonymousKeyHash,
       cursor: null,
       fallbackItems: vi.fn(),
@@ -459,6 +474,15 @@ describe('showcase feed personalization candidate filling', () => {
       viewerUserId: null,
     });
 
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // The bounded session read must start before algorithm resolution ends.
+      expect(sessionReads).toBe(1);
+    } finally {
+      releaseAlgorithm();
+    }
+    const page = await pendingPage;
+
     expect(algorithmReads).toBe(1);
     expect(db.rpc).not.toHaveBeenCalled();
     expect(insertCalls.every((insert) => insert.mock.calls.length === 0)).toBe(true);
@@ -467,9 +491,15 @@ describe('showcase feed personalization candidate filling', () => {
       category: 'all', toolSlug: 'video-tool', unlockFilter: 'all', resourceFilter: 'all',
     }]);
     expect(selectCalls).toContain(
-      'id, viewer_user_id, anonymous_key_hash, algorithm_version_id, created_at, expires_at',
+      'id, viewer_user_id, anonymous_key_hash, algorithm_version_id, experiment_assignment_id, created_at, expires_at',
     );
-    expect(isCalls).toContainEqual(['experiment_assignment_id', null]);
+    expect(sessionReads).toBe(reads);
+    if (reads === 2) {
+      expect(eqCalls).toContainEqual(['algorithm_version_id', 'algorithm-7']);
+      expect(isCalls).toContainEqual(['experiment_assignment_id', null]);
+    }
+    expect(isCalls).toContainEqual(['viewer_user_id', null]);
+    expect(eqCalls).toContainEqual(['anonymous_key_hash', anonymousKeyHash]);
     expect(hydratePostIds).toHaveBeenCalledWith(['persisted-post']);
     expect(page.feedSessionId).toBe('session-reused');
     expect(page.algorithmVersion).toBe('for-you-rules-v7');
@@ -674,9 +704,13 @@ describe('showcase feed personalization candidate filling', () => {
       }
       if (table === 'feed_sessions') {
         sessionReads += 1;
-        return sessionReads === 1
+        return sessionReads <= 2
           ? fluent({
-            maybeSingleData: null,
+            maybeSingleData: sessionReads === 1 ? {
+              id: 'session-before-experiment',
+              algorithm_version_id: 'algorithm-v2',
+              experiment_assignment_id: null,
+            } : null,
             onEq: (field, value) => sessionEqCalls.push([field, value]),
           })
           : fluent({ singleData: { id: 'session-v2' } });
@@ -722,7 +756,9 @@ describe('showcase feed personalization candidate filling', () => {
       viewerUserId: 'viewer-1',
     });
 
+    expect(sessionEqCalls).toContainEqual(['viewer_user_id', 'viewer-1']);
     expect(sessionEqCalls).toContainEqual(['experiment_assignment_id', 44]);
+    expect(sessionEqCalls).toContainEqual(['algorithm_version_id', 'algorithm-v2']);
     expect(factInserts).toHaveLength(1);
     expect(factInserts[0]).toMatchObject({
       delivery_id: 99,
