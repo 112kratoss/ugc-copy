@@ -1,16 +1,17 @@
 # Current Scaling Assessment
 
-> **21 September 2026 update:** session indexing, regional identity admission,
-> bounded feed hydration and latency diagnostics are deployed on `6761d58a`.
-> Run 35627749144 completed 208 reads without errors; all nine public targets
-> and both Lighthouse jobs passed. Signed-in feed TTFB P50/P95 was
-> 727.9/2440.9 ms (16 samples), so the intermittent tail remains open.
-> [Session lookup overlap](audits/feed-session-overlap-2026-09-21.md) records
-> the next bounded optimization and its limited read-only production evidence.
+> **22 September 2026 update:** session indexing, regional admission, bounded
+> hydration, diagnostics and session-lookup overlap are deployed on `20ecf1d5`.
+> Run 35691078648 completed 208 reads without errors; all nine public targets
+> and both Lighthouse jobs passed. Signed-in TTFB P50/P95 was 741.0/3433.7 ms
+> (16 samples). The remaining slow path is fresh session creation; reused
+> session-page loads stayed within 136.4–227.2 ms.
+> [Atomic persistence](audits/atomic-feed-session-2026-09-22.md) records the
+> next change and its required verification. The earlier
+> [lookup overlap](audits/feed-session-overlap-2026-09-21.md) and
 > [Showcase diagnostics](audits/showcase-latency-diagnostics-2026-09-21.md)
-> records the cold-execution and cache-refill investigation. The August results
-> below remain historical exact-build evidence, not current performance or
-> capacity claims.
+> retain their measurements. August results below remain historical evidence,
+> not current performance or capacity claims.
 
 Last reviewed: 2026-08-23
 Reviewed base commit: `0345d786ffb86a44c5cc997414997a073f1ace6b`
