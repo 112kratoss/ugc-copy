@@ -574,105 +574,39 @@ async function persistRankedSession({
   if ((!viewerUserId && !anonymousKeyHash) || ranked.length === 0) return null;
 
   const now = new Date();
-
-  const { data: sessionData, error: sessionError } = await serviceClient
-    .from('feed_sessions')
-    .insert({
+  const { data, error } = await serviceClient.rpc('persist_ranked_feed_session', {
+    p_session: {
       viewer_user_id: viewerUserId,
       anonymous_key_hash: viewerUserId ? null : anonymousKeyHash,
-      surface: 'showcase',
-      mode: 'for-you',
       filters,
       algorithm_version_id: algorithmVersionId,
-      experiment_assignment_id: experimentAssignmentId,
       random_seed: Math.floor(Math.random() * 2_147_483_647),
       expires_at: new Date(now.getTime() + FEED_SESSION_EXPIRY_MS).toISOString(),
-    })
-    .select('id')
-    .single();
-  if (sessionError || !sessionData?.id) return null;
-
-  const sessionId = String(sessionData.id);
-  const servedPositions = new Set(
-    ranked.slice(offset, offset + limit).map((_, index) => offset + index),
-  );
-  const servedAt = now.toISOString();
-  const rows = ranked.map((entry, position) => ({
-    session_id: sessionId,
-    post_id: entry.item.id,
-    position,
-    candidate_source: entry.features.candidateSource,
-    final_score: entry.score,
-    score_components: scoreComponents(entry.features),
-    is_exploration: entry.features.candidateSource === 'exploration',
-    // This lets a reused first page remain entirely read-only. Continuation
-    // pages stamp their positions only when they are actually requested.
-    served_at: servedPositions.has(position) ? servedAt : null,
-  }));
-  const { data: itemData, error: itemError } = await serviceClient
-    .from('feed_session_items')
-    .insert(rows)
-    .select('id, position');
-  if (itemError) {
-    await serviceClient.from('feed_sessions').delete().eq('id', sessionId);
-    return null;
-  }
-
-  // Durable exposure facts mirror the session items but survive session
-  // pruning; outcome columns are filled by database triggers as events arrive.
-  //
-  // Only for the slice actually being returned. A ranked session holds up to 60
-  // candidates while a page serves 2-12, so writing a fact per candidate wrote
-  // roughly 5-30x more rows than anything was ever exposed to, and inflated the
-  // retention ceiling that sets the 5,000 MAU gate. A continuation page mints
-  // its own facts as it is served, in loadPersistedPage.
-  //
-  // served_at is set here rather than stamped afterwards: a fact now exists
-  // because the delivery was served, so its creation IS the serve marker.
-  const factRows = ((itemData ?? []) as Array<{ id: string | number; position: number }>)
-    .flatMap((row) => {
-      const entry = ranked[row.position];
-      if (!entry || !servedPositions.has(row.position)) return [];
-      return [{
-        delivery_id: row.id,
-        session_id: sessionId,
-        algorithm_version_id: algorithmVersionId,
-        experiment_assignment_id: experimentAssignmentId,
-        experiment_id: experimentId,
-        experiment_variant_id: experimentVariantId,
-        viewer_user_id: viewerUserId,
-        anonymous_key_hash: viewerUserId ? null : anonymousKeyHash,
-        post_id: entry.item.id,
-        creator_user_id: entry.item.creator.id || null,
-        position: row.position,
-        candidate_source: entry.features.candidateSource,
-        is_exploration: entry.features.candidateSource === 'exploration',
-        // UCB slot selection is deterministic in v2. Conditional on the
-        // ranking context, the logged policy propensity is therefore 1 or 0;
-        // a future stochastic policy must replace this with its draw
-        // probability before inverse-propensity training is enabled.
-        exploration_propensity: entry.features.candidateSource === 'exploration' ? 1 : 0,
-        final_score: entry.score,
-        score_components: scoreComponents(entry.features),
-        surface: 'showcase',
-        mode: 'for-you',
-        ranked_at: servedAt,
-        served_at: servedAt,
-      }];
-    });
-  const { error: factError } = await serviceClient
-    .from('feed_delivery_facts')
-    .insert(factRows);
-  if (factError) {
-    await serviceClient.from('feed_sessions').delete().eq('id', sessionId);
-    return null;
-  }
-
+      served_at: now.toISOString(),
+    },
+    p_items: ranked.map((entry) => ({
+      post_id: entry.item.id,
+      creator_user_id: entry.item.creator.id || null,
+      candidate_source: entry.features.candidateSource,
+      final_score: entry.score,
+      score_components: scoreComponents(entry.features),
+    })),
+    p_experiment: {
+      assignment_id: experimentAssignmentId,
+      experiment_id: experimentId,
+      variant_id: experimentVariantId,
+    },
+    p_offset: offset,
+    p_limit: limit,
+  });
+  // All three writes commit together. On error the database rolls everything
+  // back; return the existing unpersisted-page fallback without a cursor.
+  if (error || !data?.session_id || !Array.isArray(data.deliveries)) return null;
   return {
-    sessionId,
+    sessionId: String(data.session_id),
     deliveryIdsByPosition: new Map(
-      ((itemData ?? []) as Array<{ id: string | number; position: number }>)
-        .map((row) => [row.position, String(row.id)]),
+      (data.deliveries as Array<{ id: string; position: number }>)
+        .map((row) => [row.position, row.id]),
     ),
   };
 }
