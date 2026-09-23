@@ -23,7 +23,6 @@ import {
 import { useAppForeground } from '@/lib/app-foreground';
 import { recordMediaDiagnostic } from '@/lib/media-diagnostics';
 import {
-  FEED_PREPARED_FORWARD_BUFFER_SECONDS,
   FEED_PREVIEW_BUFFERING_INDICATOR_DELAY_MS,
   FEED_PREVIEW_FORWARD_BUFFER_SECONDS,
 } from '@/lib/media-performance';
@@ -53,10 +52,6 @@ const PLAYER_RELEASE_GRACE_MS = 100;
 
 /** The blur a poster wash without a thumbhash is drawn with; see BackdropImage. */
 const VIDEO_BACKDROP_BLUR_RADIUS = 24;
-
-function forwardBufferSeconds(playing: boolean) {
-  return playing ? FEED_PREVIEW_FORWARD_BUFFER_SECONDS : FEED_PREPARED_FORWARD_BUFFER_SECONDS;
-}
 
 /**
  * A feed video tile: poster while idle, muted looping preview while active.
@@ -427,8 +422,10 @@ function FeedVideoPlayerLayer({
     // `auto` keeps them out of the audio session; expo-video's iOS default
     // (`doNotMix`) would seize it anyway, while its Android default is `auto`.
     instance.audioMixingMode = 'auto';
-    // Assigned as a whole object: the individual fields are readonly.
-    instance.bufferOptions = { preferredForwardBufferDuration: forwardBufferSeconds(playing) };
+    // Assigned as a whole object: the individual fields are readonly. Once, for
+    // the player's whole life: changing it on a handoff stalls iOS scrolling
+    // (see FEED_PREVIEW_FORWARD_BUFFER_SECONDS).
+    instance.bufferOptions = { preferredForwardBufferDuration: FEED_PREVIEW_FORWARD_BUFFER_SECONDS };
     return { player: instance, returned: taken !== null };
   });
   const releaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -496,11 +493,9 @@ function FeedVideoPlayerLayer({
     };
   }, [player]);
 
-  // One player serves both states. Paused, it holds only the head of the clip —
-  // enough to have drawn its first frame and to start without a stall — and
-  // playing widens to the preview window.
+  // One player serves both states, prepared and playing, and a handoff between
+  // them only resumes or pauses it: nothing else about the player changes.
   useEffect(() => {
-    player.bufferOptions = { preferredForwardBufferDuration: forwardBufferSeconds(playing) };
     playingRef.current = playing;
     if (playing) {
       // Asked to move: a player that has drawn is a warm start, one that has not is cold.

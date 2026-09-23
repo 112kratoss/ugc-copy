@@ -36,22 +36,20 @@ export const SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS = 1;
  *
  * Feed only. The immersive viewer keeps ExoPlayer's defaults, because there
  * the user has chosen to watch and stalling matters more than bytes.
+ *
+ * Set once, when a tile's player is created, and never changed while it
+ * lives: a prepared player (SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS) buffers as
+ * far ahead as a playing one. Prepared players used to hold 3s and widen to
+ * this on playing, then narrow again on pausing. On iOS each change is a
+ * media-server request on the player's queue, and AVFoundation's main-thread
+ * notification handler can end up waiting on that same queue. So a handoff
+ * onto a video that was still loading, which is what scrolling onto a new
+ * card produces, froze scrolling for 40–80ms on the iPhone 16e, and the same
+ * handoff with the target left alone did not (alternated runs, 2026-09-23).
+ * The price is at most 5s more of a clip the reader scrolls past before it
+ * plays; most feed clips are shorter than 8s anyway.
  */
 export const FEED_PREVIEW_FORWARD_BUFFER_SECONDS = 8;
-
-/**
- * How far ahead a prepared feed preview buffers, in seconds.
- *
- * A prepared tile is one the reader has not reached yet: its player waits
- * paused beside the playing one, so arriving is a resume rather than a load
- * (see SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS). It needs only enough to draw its
- * first frame and start without stalling, so it holds the head of the clip —
- * the way large feeds prefetch just the first seconds of what is likely to play
- * next — and widens to FEED_PREVIEW_FORWARD_BUFFER_SECONDS once it plays. The
- * bytes land in the player cache, so a prepared tile that goes on to play never
- * fetches them twice.
- */
-export const FEED_PREPARED_FORWARD_BUFFER_SECONDS = 3;
 
 /**
  * How many feed videos beside the playing one keep a paused, loaded player.
