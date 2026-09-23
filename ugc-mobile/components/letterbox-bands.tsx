@@ -1,8 +1,7 @@
-import { LinearGradient } from 'expo-linear-gradient';
 import { View } from 'react-native';
 
 import { BackdropImage } from '@/components/backdrop-image';
-import { easedFade, hexWithAlpha } from '@/lib/eased-fade';
+import { easedFade, hexWithAlpha, linearGradient } from '@/lib/eased-fade';
 import {
   LETTERBOX_EDGE_ALPHA,
   letterboxBands,
@@ -11,17 +10,18 @@ import {
 } from '@/lib/letterbox';
 import { mediaRectInScreen, type ZoomSize } from '@/lib/media-zoom-transition';
 
-/** Each band's shade runs from its frame edge towards the picture. */
-const DIRECTIONS: Record<LetterboxBand['edge'], { start: { x: number; y: number }; end: { x: number; y: number } }> = {
-  top: { start: { x: 0, y: 0 }, end: { x: 0, y: 1 } },
-  bottom: { start: { x: 0, y: 1 }, end: { x: 0, y: 0 } },
-  left: { start: { x: 0, y: 0 }, end: { x: 1, y: 0 } },
-  right: { start: { x: 1, y: 0 }, end: { x: 0, y: 0 } },
-};
+const FADE = easedFade(LETTERBOX_EDGE_ALPHA).map(({ at, alpha }) => ({ at, color: hexWithAlpha('#000000', alpha) }));
 
-const FADE = easedFade(LETTERBOX_EDGE_ALPHA);
-const COLORS = FADE.map((stop) => hexWithAlpha('#000000', stop.alpha)) as [string, string, ...string[]];
-const LOCATIONS = FADE.map((stop) => stop.at) as [number, number, ...number[]];
+/**
+ * Each band's shade runs from its frame edge towards the picture. It is React
+ * Native's own gradient, as the reel's other shades are (`components/reel-chrome.tsx`).
+ */
+const SHADES: Record<LetterboxBand['edge'], string> = {
+  top: linearGradient('to bottom', FADE),
+  bottom: linearGradient('to top', FADE),
+  left: linearGradient('to right', FADE),
+  right: linearGradient('to left', FADE),
+};
 
 /** The blur the bands have always had, for a picture without a thumbhash; see BackdropImage. */
 export const BAND_BLUR_RADIUS = 24;
@@ -85,12 +85,8 @@ export function LetterboxBands({
                 }}
               />
             ) : null}
-            <LinearGradient
-              colors={COLORS}
-              locations={LOCATIONS}
-              start={DIRECTIONS[band.edge].start}
-              end={DIRECTIONS[band.edge].end}
-              style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0 }}
+            <View
+              style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, experimental_backgroundImage: SHADES[band.edge] }}
             />
           </View>
         );
