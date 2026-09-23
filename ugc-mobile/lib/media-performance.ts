@@ -36,22 +36,20 @@ export const SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS = 1;
  *
  * Feed only. The immersive viewer keeps ExoPlayer's defaults, because there
  * the user has chosen to watch and stalling matters more than bytes.
+ *
+ * Set once, when a tile's player is created, and never changed while it
+ * lives: a prepared player (SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS) buffers as
+ * far ahead as a playing one. Prepared players used to hold 3s and widen to
+ * this on playing, then narrow again on pausing. On iOS each change is a
+ * media-server request on the player's queue, and AVFoundation's main-thread
+ * notification handler can end up waiting on that same queue. So a handoff
+ * onto a video that was still loading, which is what scrolling onto a new
+ * card produces, froze scrolling for 40–80ms on the iPhone 16e, and the same
+ * handoff with the target left alone did not (alternated runs, 2026-09-23).
+ * The price is at most 5s more of a clip the reader scrolls past before it
+ * plays; most feed clips are shorter than 8s anyway.
  */
 export const FEED_PREVIEW_FORWARD_BUFFER_SECONDS = 8;
-
-/**
- * How far ahead a prepared feed preview buffers, in seconds.
- *
- * A prepared tile is one the reader has not reached yet: its player waits
- * paused beside the playing one, so arriving is a resume rather than a load
- * (see SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS). It needs only enough to draw its
- * first frame and start without stalling, so it holds the head of the clip —
- * the way large feeds prefetch just the first seconds of what is likely to play
- * next — and widens to FEED_PREVIEW_FORWARD_BUFFER_SECONDS once it plays. The
- * bytes land in the player cache, so a prepared tile that goes on to play never
- * fetches them twice.
- */
-export const FEED_PREPARED_FORWARD_BUFFER_SECONDS = 3;
 
 /**
  * How many feed videos beside the playing one keep a paused, loaded player.
@@ -66,6 +64,38 @@ export const FEED_PREPARED_FORWARD_BUFFER_SECONDS = 3;
  * fifth, which an earlier selection that briefly held five ran into.
  */
 export const SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS = 2;
+
+/**
+ * How long after a feed election its prepared window starts moving, and
+ * between the window's steps, in milliseconds.
+ *
+ * An election flips one tile to playing, which is a resume of a player already
+ * drawn. Moving the window is what mounts and unmounts native video views — an
+ * `AVPlayerViewController` on iOS, a `PlayerView` on Android — and each of
+ * those was landing in the same frame as the election, during a scroll. Two
+ * 60 Hz frames later is invisible for a player nobody has reached yet, and
+ * puts every native view change in a frame of its own.
+ */
+export const FEED_PREPARED_WINDOW_STEP_MS = 32;
+
+/**
+ * The feed's coasting speed after a release is multiplied by this every
+ * millisecond: `UIScrollView.DecelerationRate.normal`, which React Native's
+ * ScrollView keeps while `decelerationRate` is unset (Home leaves it unset).
+ * With the release velocity it says how long a fling stays fast.
+ */
+export const FEED_DECELERATION_PER_MS = 0.998;
+
+/**
+ * Coasting faster than this, in points per millisecond (about a screen height
+ * a second), the feed is passing cards rather than showing them: one crosses
+ * the screen in less time than a new player takes to load and draw. The
+ * prepared window holds until the coast slows to it (lib/home-feed-playback.ts).
+ * On the iPhone, each player created mid-fling was measured building its item
+ * on the main thread and making synchronous calls to the media server from
+ * AVPlayerItem's own notifications; both landed in late fling frames.
+ */
+export const FEED_FAST_COAST_PT_PER_MS = 1;
 
 /**
  * How long an active feed video may take to draw its first frame before the

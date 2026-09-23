@@ -1,0 +1,143 @@
+diff --git a/node_modules/expo-video/ios/VideoLoadingActor.swift b/node_modules/expo-video/ios/VideoLoadingActor.swift
+new file mode 100644
+--- /dev/null
++++ b/node_modules/expo-video/ios/VideoLoadingActor.swift
+@@ -0,0 +1,46 @@
++// Copyright 2026-present 650 Industries. All rights reserved.
++
++import Foundation
++
++/**
++ Global actor for video source and track loading.
++
++ Creating `AVURLAsset`/`AVPlayerItem` and parsing tracks costs 10-20ms+ and must never run on
++ the main thread. Plain `Task {}` doesn't guarantee that: an unstructured task inherits the
++ enclosing actor, so one created from a `@MainActor` context runs on the main thread. Similarly,
++ under `NonisolatedNonsendingByDefault` nonisolated async functions run on the caller's actor, which can also be the main one.
++ The loading pipeline should always run on this actor.
++ */
++@globalActor
++internal actor VideoLoadingActor {
++  static let shared = VideoLoadingActor()
++
++  private nonisolated let executor = DispatchQueueSerialExecutor(
++    queue: DispatchQueue(label: "expo.video.loading", qos: .userInitiated)
++  )
++
++  nonisolated var unownedExecutor: UnownedSerialExecutor {
++    executor.asUnownedSerialExecutor()
++  }
++}
++
++/**
++ Executor, which never executes on the main thread
++ */
++internal final class DispatchQueueSerialExecutor: SerialExecutor {
++  private let queue: DispatchQueue
++
++  init(queue: DispatchQueue) {
++    self.queue = queue
++  }
++
++  func enqueue(_ job: UnownedJob) {
++    queue.async {
++      job.runSynchronously(on: self.asUnownedSerialExecutor())
++    }
++  }
++
++  func asUnownedSerialExecutor() -> UnownedSerialExecutor {
++    UnownedSerialExecutor(ordinary: self)
++  }
++}
+diff --git a/node_modules/expo-video/ios/VideoPlayerItem.swift b/node_modules/expo-video/ios/VideoPlayerItem.swift
+--- a/node_modules/expo-video/ios/VideoPlayerItem.swift
++++ b/node_modules/expo-video/ios/VideoPlayerItem.swift
+@@ -28,6 +28,7 @@
+     self.createTracksLoadingTask()
+   }
+ 
++  @VideoLoadingActor
+   init?(videoSource: VideoSource, urlOverride: URL? = nil) async throws {
+     guard let url = urlOverride ?? videoSource.uri else {
+       return nil
+@@ -40,7 +41,13 @@
+     // We can ignore any exceptions thrown during the load. The asset will be assigned to the `VideoPlayer` anyways
+     // and cause it to go into .error state trigerring the `onStatusChange` event.
+     do {
+-      _ = try await asset.load(.duration, .preferredTransform, .isPlayable)
++      let (_, _, _, _, _, characteristics) = try await asset.load(
++        .duration, .preferredTransform, .isPlayable, .hasProtectedContent,
++        .tracks, .availableMediaCharacteristicsWithMediaSelectionOptions
++      )
++      for characteristic in characteristics {
++        _ = try await asset.loadMediaSelectionGroup(for: characteristic)
++      }
+     } catch {
+         // Catch block is intentionally left empty
+     }
+@@ -54,7 +61,7 @@
+   }
+ 
+   func createTracksLoadingTask() {
+-    tracksLoadingTask = Task { [weak self] in
++    tracksLoadingTask = Task { @VideoLoadingActor [weak self] in
+       guard let self, let mainUrl = videoSource.uri else {
+         return []
+       }
+@@ -77,6 +84,7 @@
+ 
+   // MARK: - HLS Helpers
+ 
++  @VideoLoadingActor
+   private func loadHlsTracks(mainUrl: URL) async -> [VideoTrack] {
+     if #available(iOS 26.0, tvOS 26, *) {
+       return await loadModernHlsTracks(mainUrl: mainUrl)
+@@ -86,6 +94,7 @@
+   }
+ 
+   @available(iOS 26.0, tvOS 26, *)
++  @VideoLoadingActor
+   private func loadModernHlsTracks(mainUrl: URL) async -> [VideoTrack] {
+     guard let variants = try? await urlAsset.load(.variants) else {
+       return []
+@@ -97,6 +106,7 @@
+     }
+   }
+ 
++  @VideoLoadingActor
+   private func loadLegacyHlsTracks() async -> [VideoTrack] {
+     do {
+       return try await self.fetchHlsVideoTracks()
+@@ -108,6 +118,7 @@
+ 
+   // AVKit API doesn't provide us with a list of available tracks for a HLS source. We can download the playlist file and parse it ourselves
+   // it's usually very small (1-2 kB), so we won't add too much overhead
++  @VideoLoadingActor
+   private func fetchHlsVideoTracks() async throws -> [VideoTrack] {
+     guard let uri = videoSource.uri else {
+       throw URLError(.badURL)
+diff --git a/node_modules/expo-video/ios/VideoSourceLoader.swift b/node_modules/expo-video/ios/VideoSourceLoader.swift
+--- a/node_modules/expo-video/ios/VideoSourceLoader.swift
++++ b/node_modules/expo-video/ios/VideoSourceLoader.swift
+@@ -61,6 +61,7 @@
+     cancelCurrentTask()
+   }
+ 
++  @VideoLoadingActor
+   private func loadImpl(videoSource: VideoSource) async throws -> LoadingResult {
+     listeners.forEach { listener in
+       listener.value?.onLoadingStarted(loader: self, videoSource: videoSource)
+diff --git a/node_modules/expo-video/ios/VideoView.swift b/node_modules/expo-video/ios/VideoView.swift
+--- a/node_modules/expo-video/ios/VideoView.swift
++++ b/node_modules/expo-video/ios/VideoView.swift
+@@ -8,7 +8,9 @@
+ 
+   weak var player: VideoPlayer? {
+     didSet {
+-      playerViewController.player = player?.ref
++      if playerViewController.player !== player?.ref {
++        playerViewController.player = player?.ref
++      }
+     }
+   }
+ 

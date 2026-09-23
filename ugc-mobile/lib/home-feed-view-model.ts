@@ -267,6 +267,30 @@ export function shouldAutoAdvanceHomeSlides({
 }
 
 /**
+ * Whether one tick of a running rotation should turn the rail. The interval
+ * keeps its rhythm; a tick is skipped while the rail has scrolled off the top
+ * of the feed, where the turn is work no one sees, and while the feed is
+ * moving, where the turn's re-render and animated scroll land in the frames of
+ * the reader's own scroll. The next tick after the rail returns turns it, with
+ * no catch-up for the ticks it missed.
+ *
+ * `railBottom` is the rail's bottom edge in the feed's content coordinates;
+ * until it is measured the rail counts as on screen, as it is at launch.
+ */
+export function shouldTurnHomeSlides({
+  railBottom,
+  feedOffset,
+  feedMoving,
+}: {
+  railBottom: number | null;
+  feedOffset: number;
+  feedMoving: boolean;
+}) {
+  if (feedMoving) return false;
+  return railBottom === null || feedOffset < railBottom;
+}
+
+/**
  * Sibling of `buildShowcaseMasonry`. Home renders every post format in one
  * column, so — unlike the grid — it keeps text posts and never drops an item
  * for a preview that has not finished baking.

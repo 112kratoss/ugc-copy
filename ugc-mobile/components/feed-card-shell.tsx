@@ -115,7 +115,12 @@ export function FeedCardShell({
           borderWidth: 1,
           borderColor: appTheme.colors.borderSubtle,
           backgroundColor: appTheme.colors.panel,
-          overflow: 'hidden',
+          // No `overflow: 'hidden'`. Every child is inset from the corners (the
+          // media sits between the header and the actions), so the clip drew
+          // nothing, but it made iOS render each visible card's rounded corners
+          // offscreen on every frame of a scroll — the "offscreen passes" the
+          // Instruments hitch reports named (docs/archive/home-scroll-hitches-2026-09-22.md).
+          // The rounded background and border need no clip.
         },
         openMotion.animatedStyle,
       ]}

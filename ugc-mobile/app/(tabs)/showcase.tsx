@@ -3,7 +3,7 @@ import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/r
 import { router, useLocalSearchParams } from 'expo-router';
 import { ImageIcon, MoreVertical, Play, RefreshCw, Search, X } from 'lucide-react-native';
 import { useIsFocused, useScrollToTop } from '@react-navigation/native';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AccessibilityInfo, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -23,6 +23,7 @@ import {
   useWorkspaceSideMenu,
 } from '@/components/workspace-side-menu-gesture-layer';
 import { useAuth } from '@/lib/auth';
+import { createFeedVideoActivationStore, FeedVideoActivationContext, useFeedVideoActivation } from '@/lib/feed-video-activation';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { buildImmersiveShowcaseItems, showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
@@ -200,10 +201,11 @@ export default function ShowcaseScreen() {
     [user?.id]
   );
   const activeToolLabel = useMemo(() => activeTool ? formatToolLabel(activeTool) : null, [activeTool]);
-  const [activeVideoIds, setActiveVideoIds] = useState<string[]>([]);
+  // Playback lives outside React state: each pin subscribes to its own id, so
+  // an election re-renders the pins it concerns rather than the whole grid.
+  // Player-level focus gating keeps tab switches out of it too.
+  const [activationStore] = useState(() => createFeedVideoActivationStore());
   const [resolvedAspectRatios, setResolvedAspectRatios] = useState<Record<string, number>>({});
-  // Player-level focus gating avoids invalidating every cell on a tab switch.
-  const visibleActiveVideoIds = activeVideoIds;
   const [isSwipingMedia, setIsSwipingMedia] = useState(false);
   const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
   const [searchVisible, setSearchVisible] = useState(false);
@@ -264,8 +266,12 @@ export default function ShowcaseScreen() {
     if (!isFocused) void flushShowcaseFeedEvents();
   }, [isFocused]);
   const dispatchActivation = useCallback((event: ShowcaseActivationEvent) => {
-    runShowcaseActivation({ activation: activationRef, settleTimer: settleTimerRef }, event, setActiveVideoIds);
-  }, []);
+    runShowcaseActivation(
+      { activation: activationRef, settleTimer: settleTimerRef },
+      event,
+      (activeIds) => activationStore.publish({ activeIds }),
+    );
+  }, [activationStore]);
 
   useEffect(() => () => {
     if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
@@ -426,7 +432,7 @@ export default function ShowcaseScreen() {
 
   useEffect(() => {
     dispatchActivation({ type: 'reset' });
-    setActiveVideoIds([]);
+    activationStore.publish({ activeIds: [] });
     setFeedbackItem(null);
     // Every carousel is about to unmount; their releases would land after the
     // new list has already opened locks of its own.
@@ -660,11 +666,12 @@ export default function ShowcaseScreen() {
   }, []);
 
   // Memoized: an inline literal here changes identity on every parent render,
-  // which makes FlashList re-render every mounted cell instead of only when
-  // activation or a resolved ratio actually changed.
+  // which makes FlashList re-render every mounted cell instead of only when a
+  // resolved ratio actually changed. Activation is not in here: pins read it
+  // from the store themselves.
   const feedExtraData = useMemo(
-    () => ({ visibleActiveVideoIds, resolvedAspectRatios }),
-    [visibleActiveVideoIds, resolvedAspectRatios]
+    () => ({ resolvedAspectRatios }),
+    [resolvedAspectRatios]
   );
 
   const renderCard: ListRenderItem<ShowcaseMasonryCard> = useCallback(({ item, target, index }) => {
@@ -673,7 +680,7 @@ export default function ShowcaseScreen() {
         <MasonryPin
           card={item}
           layout={gridLayout}
-          activeVideo={target === 'Cell' && visibleActiveVideoIds.includes(item.id)}
+          playbackEligible={target === 'Cell'}
           resolvedAspectRatio={resolvedAspectRatios[item.id]}
           onAspectRatio={queueAspectRatio}
           onOpenCreator={openCreator}
@@ -683,10 +690,11 @@ export default function ShowcaseScreen() {
         />
       </MasonryCardCell>
     );
-  }, [gridLayout, visibleActiveVideoIds, resolvedAspectRatios, openCreator, openPost, handleMediaScrollToggle]);
+  }, [gridLayout, resolvedAspectRatios, openCreator, openPost, handleMediaScrollToggle]);
 
   return (
     // Pins on this grid are what the reel grows out of and returns to.
+    <FeedVideoActivationContext.Provider value={activationStore}>
     <MediaZoomSurface>
     <WorkspaceSideMenuGestureLayer bottomOffset={tabBarMetrics.contentBottomPadding} enabled={!isSwipingMedia}>
       <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
@@ -843,6 +851,7 @@ export default function ShowcaseScreen() {
       </View>
     </WorkspaceSideMenuGestureLayer>
     </MediaZoomSurface>
+    </FeedVideoActivationContext.Provider>
   );
 }
 
@@ -994,7 +1003,7 @@ function BottomLoader() {
 const MasonryPin = memo(function MasonryPin({
   card,
   layout,
-  activeVideo,
+  playbackEligible,
   resolvedAspectRatio,
   onAspectRatio,
   onFeedbackOpen,
@@ -1004,7 +1013,8 @@ const MasonryPin = memo(function MasonryPin({
 }: {
   card: ShowcaseMasonryCard;
   layout: ShowcaseGridLayout;
-  activeVideo: boolean;
+  /** Whether this render is a real cell, the only kind that may play; see renderCard. */
+  playbackEligible: boolean;
   resolvedAspectRatio?: number;
   onAspectRatio: (cardId: string, ratio: number) => void;
   onFeedbackOpen: (item: ShowcaseFeedItem) => void;
@@ -1017,6 +1027,9 @@ const MasonryPin = memo(function MasonryPin({
   const mediaHeight = getShowcaseMediaHeight(card, columnWidth, resolvedAspectRatio);
   const accent = accentColor(card.accent);
   const isVideoCard = isShowcaseVideoPreviewCandidate(card.item);
+  const activationStore = useContext(FeedVideoActivationContext);
+  const activation = useFeedVideoActivation(activationStore, card.id);
+  const activeVideo = playbackEligible && activation === 'visible';
   const showActiveVideo = isVideoCard && activeVideo && Boolean(card.mediaUrl);
   // Reduce Motion turns every preview back into a poster without changing the
   // election, so the badge asks the same question the tile does.

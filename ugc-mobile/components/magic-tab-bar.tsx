@@ -80,6 +80,17 @@ const ADAPTIVE_SHADE: readonly [string, string] = ['rgba(255,255,255,0.05)', 'rg
 // the bar. Against a real material that ring reads as a hole punched through
 // the glass, so it borrows the same rim light the surface uses.
 const DISC_RIM = 'rgba(255,255,255,0.18)';
+// The disc's drop shadow, 0 6px 16px at 24 % black, through the layer's own
+// shadow props (React Native draws a box shadow with half its blur as the
+// radius, hence 8). On an opaque view Fabric gives these a shadow path; the
+// equivalent box shadow is a masked layer that iOS renders offscreen on every
+// frame the feed moves under the dock.
+const CREATE_DISC_SHADOW = {
+  shadowColor: '#000000',
+  shadowOffset: { width: 0, height: 6 },
+  shadowOpacity: 0.24,
+  shadowRadius: 8,
+} as const;
 // Reduce Transparency gets a genuinely opaque bar. This is the one branch that
 // should *not* thin out — those users asked for less see-through, not more.
 const SOLID_FILL = '#111215';
@@ -165,8 +176,9 @@ export function MagicTabBar({
   const runningGenerations = useTabBarGenerationCount();
   const activeRoute = state.routes[state.index]?.name;
   // Every tab, not just Home: the store is authoritative, and a surface with no
-  // media to report hands the neutral dock back when it blurs.
-  const fallbackFill = useTabBarAmbientColor();
+  // media to report hands the neutral dock back when it blurs. Read only by the
+  // adaptive surface; glass and the solid bar leave the bar unsubscribed.
+  const fallbackFill = useTabBarAmbientColor(surfaceMode === 'adaptive');
   const { isCompact, centerSize, barHeight, centerGap, tabIconSize, tabLabelSize } = metrics;
   // Any translucent surface needs the text to carry itself; only the opaque
   // bar is a known enough backdrop for muted grey.
@@ -333,7 +345,7 @@ export function MagicTabBar({
             borderColor: DISC_RIM,
             backgroundColor: pressed ? PRIMARY_STRONG : PRIMARY,
             elevation: 3,
-            boxShadow: '0 6px 16px rgba(0,0,0,0.24)',
+            ...CREATE_DISC_SHADOW,
           })}
         >
           <Plus size={isCompact ? 23 : 25} color={ON_PRIMARY} />

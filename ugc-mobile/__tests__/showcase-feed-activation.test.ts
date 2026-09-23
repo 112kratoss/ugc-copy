@@ -192,6 +192,31 @@ describe('reduceShowcaseActivation', () => {
     expect(state.activeIds).toBe(start.activeIds);
   });
 
+  it('elects a drawn card while moving when asked to, and holds the one playing', () => {
+    const ready = new Set(['b']);
+    const isReady = (candidate: ShowcaseFeedItem) => ready.has(candidate.id);
+    const moving = [sawVideos([item('a')]), { type: 'dragBegin' } as const]
+      .reduce((state, event) => reduceShowcaseActivation(state, event, 1, isReady), INITIAL_SHOWCASE_ACTIVATION_STATE);
+
+    // 'c' has no player yet: the slot stays with 'a' while it is still on screen…
+    const held = reduceShowcaseActivation(moving, sawVideos([item('c'), item('a')]), 1, isReady);
+    expect(held.activeIds).toBe(moving.activeIds);
+    // …and empties once 'a' leaves, rather than mounting 'c' mid-scroll.
+    const waiting = reduceShowcaseActivation(held, sawVideos([item('c')]), 1, isReady);
+    expect(waiting.activeIds).toEqual([]);
+    // A drawn player is a resume: 'b' starts at once.
+    const resumed = reduceShowcaseActivation(waiting, sawVideos([item('b'), item('c')]), 1, isReady);
+    expect(resumed.activeIds).toEqual(['b']);
+    // Rest elects among everyone, as before.
+    const rested = reduceShowcaseActivation(waiting, { type: 'dragEnd', velocityY: 0 }, 1, isReady);
+    expect(rested.activeIds).toEqual(['c']);
+  });
+
+  it('still buffers in motion for a feed that passes no readiness', () => {
+    const moving = run([sawVideos([item('a')]), { type: 'dragBegin' }, sawVideos([item('b')])]);
+    expect(moving.activeIds).toEqual(['a']);
+  });
+
   it('clears everything on reset', () => {
     const start = run([sawVideos([item('a')]), { type: 'dragBegin' }]);
     const state = reduceShowcaseActivation(start, { type: 'reset' }, 1);

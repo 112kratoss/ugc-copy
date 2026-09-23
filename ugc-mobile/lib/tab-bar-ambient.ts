@@ -465,10 +465,19 @@ function getNeutralSnapshot() {
   return DEFAULT_TAB_BAR_COLOR;
 }
 
-export function useTabBarAmbientColor() {
+/**
+ * `spends` is whether the surface on screen paints this colour. Only the
+ * adaptive dock does: Liquid Glass tints itself from what scrolls under it,
+ * and the Reduce Transparency bar is a fixed solid. A bar that subscribed
+ * anyway re-rendered on every card the feed brought under it — the same
+ * viewability change that elects the next video — to arrive at a value it
+ * throws away, the waste the Android gate above already removes.
+ */
+export function useTabBarAmbientColor(spends = true) {
+  const live = TINTS_THE_DOCK && spends;
   return useSyncExternalStore(
-    TINTS_THE_DOCK ? subscribe : subscribeNever,
-    TINTS_THE_DOCK ? getSnapshot : getNeutralSnapshot,
+    live ? subscribe : subscribeNever,
+    live ? getSnapshot : getNeutralSnapshot,
     getNeutralSnapshot
   );
 }

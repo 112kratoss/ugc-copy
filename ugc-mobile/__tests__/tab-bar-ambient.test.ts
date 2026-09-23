@@ -205,13 +205,13 @@ describe('adapting only where a surface spends the colour', () => {
     platform.os = 'ios';
   });
 
-  async function mountColourProbe(os: 'ios' | 'android') {
+  async function mountColourProbe(os: 'ios' | 'android', spends = true) {
     platform.os = os;
     vi.resetModules();
     const module = await import('../lib/tab-bar-ambient');
     const painted: string[] = [];
     function Probe() {
-      painted.push(module.useTabBarAmbientColor());
+      painted.push(module.useTabBarAmbientColor(spends));
       return null;
     }
 
@@ -252,6 +252,24 @@ describe('adapting only where a surface spends the colour', () => {
 
   it('leaves the Android dock neutral without re-rendering the bar', async () => {
     const { module, painted, unmount } = await mountColourProbe('android');
+    expect(painted).toEqual([DEFAULT_TAB_BAR_COLOR]);
+
+    renderer.act(() => {
+      module.setTabBarAmbientSource({ thumbhash: MEDIA.magenta });
+    });
+
+    expect(painted).toEqual([DEFAULT_TAB_BAR_COLOR]);
+    unmount();
+  });
+
+  /**
+   * Liquid Glass tints itself from its backdrop and the Reduce Transparency bar
+   * is a fixed solid, so on iOS 26 the bar reads no fill at all. Subscribed
+   * anyway, it re-rendered on each card the feed brought under the dock — the
+   * viewability change that also elects the next video.
+   */
+  it('leaves an iOS bar that paints no fill unsubscribed', async () => {
+    const { module, painted, unmount } = await mountColourProbe('ios', false);
     expect(painted).toEqual([DEFAULT_TAB_BAR_COLOR]);
 
     renderer.act(() => {

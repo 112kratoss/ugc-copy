@@ -17,6 +17,7 @@ import {
   getInitialHomeSlideIndex,
   foldHomeSlideOffset,
   shouldAutoAdvanceHomeSlides,
+  shouldTurnHomeSlides,
   showcaseToHomeFeedCard,
 } from '@/lib/home-feed-view-model';
 import { createShowcaseFeedQueryKey, getShowcaseFeedPageParams } from '@/lib/showcase-feed-query';
@@ -402,6 +403,22 @@ describe('home feed view model', () => {
       expect(shouldAutoAdvanceHomeSlides({ ...running, isInteracting: true })).toBe(false);
       expect(shouldAutoAdvanceHomeSlides({ ...running, reduceMotion: true })).toBe(false);
       expect(shouldAutoAdvanceHomeSlides({ ...running, slideCount: 1 })).toBe(false);
+    });
+
+    it('turns the rail only while it is on screen and the feed is at rest', () => {
+      // The rail's bottom edge at 420 pt into the feed's content.
+      const resting = { railBottom: 420, feedOffset: 0, feedMoving: false };
+
+      expect(shouldTurnHomeSlides(resting)).toBe(true);
+      expect(shouldTurnHomeSlides({ ...resting, feedOffset: 419 })).toBe(true);
+      // Scrolled past it: a turn would be work no one sees.
+      expect(shouldTurnHomeSlides({ ...resting, feedOffset: 420 })).toBe(false);
+      expect(shouldTurnHomeSlides({ ...resting, feedOffset: 2400 })).toBe(false);
+      // In view but under a moving feed: the turn would land in its frames.
+      expect(shouldTurnHomeSlides({ ...resting, feedMoving: true })).toBe(false);
+      // Not measured yet, as at launch: the rail is at the top, on screen.
+      expect(shouldTurnHomeSlides({ ...resting, railBottom: null, feedOffset: 2400 })).toBe(true);
+      expect(shouldTurnHomeSlides({ ...resting, railBottom: null, feedMoving: true })).toBe(false);
     });
   });
 });

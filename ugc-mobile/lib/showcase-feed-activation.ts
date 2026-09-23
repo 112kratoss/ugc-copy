@@ -75,11 +75,18 @@ export function getVisibleCardItems<Card extends { item: ShowcaseFeedItem }>(
  * playing video for as long as it stays viewable. The two rules cover different
  * halves: gating stops handoffs while the feed moves, holding stops them when
  * viewability jitters at rest or a new card appears above the one playing.
+ *
+ * A feed that keeps players prepared around the playing one can afford to hand
+ * the slot over while moving, because starting a player that has drawn is a
+ * resume rather than a mount. Such a feed passes `readyWhileMoving`: a report
+ * taken in motion then elects among the candidates it accepts, plus the ones
+ * already playing, and a winner it rejects waits for its readiness or for rest.
  */
 export function reduceShowcaseActivation(
   state: ShowcaseActivationState,
   event: ShowcaseActivationEvent,
   limit: number = SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS,
+  readyWhileMoving?: (item: ShowcaseFeedItem) => boolean,
 ): ShowcaseActivationState {
   switch (event.type) {
     case 'reset':
@@ -90,7 +97,13 @@ export function reduceShowcaseActivation(
       // An idle report is not just the initial mount: layout shifts, refetches
       // and non-animated jumps all land here, and nothing else would re-fire
       // on a resting screen. Skipping them strands a stale winner.
-      return state.scroll === 'idle' ? elect(next, limit) : next;
+      if (state.scroll === 'idle') return elect(next, limit);
+      if (!readyWhileMoving) return next;
+      return electAmong(
+        next,
+        next.candidates.filter((item) => readyWhileMoving(item) || state.activeIds.includes(item.id)),
+        limit,
+      );
     }
 
     case 'dragBegin':
@@ -127,7 +140,11 @@ export function reduceShowcaseActivation(
 }
 
 function elect(state: ShowcaseActivationState, limit: number): ShowcaseActivationState {
-  const activeIds = selectActiveShowcaseVideoIds(state.candidates, limit, state.activeIds);
+  return electAmong(state, state.candidates, limit);
+}
+
+function electAmong(state: ShowcaseActivationState, eligible: ShowcaseFeedItem[], limit: number): ShowcaseActivationState {
+  const activeIds = selectActiveShowcaseVideoIds(eligible, limit, state.activeIds);
   // Keep the previous array when the winner is unchanged, so the screen can
   // skip its setState on a pointer comparison.
   return sameStringList(activeIds, state.activeIds) ? state : { ...state, activeIds };

@@ -34,6 +34,8 @@ type ShowcaseMediaPreviewProps = {
   radius: number;
   recyclingKey: string;
   videoActivation?: VideoActivation;
+  /** Whether the video on show holds a drawn player; see FeedVideoPreview's `onReadyChange`. */
+  onVideoReadyChange?: (ready: boolean) => void;
   videoBackdrop?: 'blurred' | 'none';
   videoContentFit?: 'cover' | 'contain';
   /**
@@ -63,6 +65,7 @@ export function ShowcaseMediaPreview({
   radius,
   recyclingKey,
   videoActivation = 'never',
+  onVideoReadyChange,
   videoBackdrop = 'blurred',
   videoContentFit = 'contain',
   watchdog = false,
@@ -84,6 +87,7 @@ export function ShowcaseMediaPreview({
         radius={radius}
         recyclingKey={recyclingKey}
         videoActivation={resolvedVideoActivation}
+        onVideoReadyChange={onVideoReadyChange}
         videoBackdrop={videoBackdrop}
         videoContentFit={videoContentFit}
         watchdog={watchdog}
@@ -104,6 +108,7 @@ export function ShowcaseMediaPreview({
       radius={radius}
       recyclingKey={recyclingKey}
       videoActivation={resolvedVideoActivation}
+      onVideoReadyChange={onVideoReadyChange}
       videoBackdrop={videoBackdrop}
       videoContentFit={videoContentFit}
       watchdog={watchdog}
@@ -123,6 +128,7 @@ function ShowcaseMediaCarousel({
   radius,
   recyclingKey,
   videoActivation = 'never',
+  onVideoReadyChange,
   videoBackdrop = 'blurred',
   videoContentFit = 'contain',
   watchdog = false,
@@ -154,6 +160,7 @@ function ShowcaseMediaCarousel({
               radius={radius}
               recyclingKey={`${recyclingKey}:${mediaItem.id}`}
               videoActivation={currentIndex === index ? videoActivation : 'never'}
+              onVideoReadyChange={currentIndex === index ? onVideoReadyChange : undefined}
               videoBackdrop={videoBackdrop}
               videoContentFit={videoContentFit}
               watchdog={watchdog && currentIndex === index}
@@ -243,6 +250,7 @@ function ShowcaseMediaSlide({
   radius,
   recyclingKey,
   videoActivation,
+  onVideoReadyChange,
   videoBackdrop,
   videoContentFit,
   watchdog,
@@ -256,6 +264,7 @@ function ShowcaseMediaSlide({
   radius: number;
   recyclingKey: string;
   videoActivation: VideoActivation;
+  onVideoReadyChange?: (ready: boolean) => void;
   videoBackdrop: 'blurred' | 'none';
   videoContentFit: 'cover' | 'contain';
   watchdog: boolean;
@@ -303,6 +312,7 @@ function ShowcaseMediaSlide({
           onPosterLoad={onLoad}
           active={videoActivation === 'visible' || (videoActivation === 'when-poster-missing' && !usablePreviewUrl)}
           prepared={videoActivation === 'prepared'}
+          onReadyChange={onVideoReadyChange}
           height={height}
           radius={radius}
           accent={accent}

@@ -1,0 +1,243 @@
+diff --git a/node_modules/expo-video/build/NativeVideoView.js b/node_modules/expo-video/build/NativeVideoView.js
+index 56bd5b9..e3100d1 100644
+--- a/node_modules/expo-video/build/NativeVideoView.js
++++ b/node_modules/expo-video/build/NativeVideoView.js
+@@ -9,4 +9,6 @@ export const NativeTextureVideoView = Platform.OS === 'android' ? requireNativeV
+ export const NativeLightTextureVideoView = Platform.OS === "android" && NativeVideoModule.supportsLightweightViews
+   ? requireNativeViewManager("ExpoVideo", "LightTextureVideoView") : null;
+ export const NativeLightSurfaceVideoView = Platform.OS === "android" && NativeVideoModule.supportsLightweightViews
+-  ? requireNativeViewManager("ExpoVideo", "LightSurfaceVideoView") : null;
+\ No newline at end of file
++  ? requireNativeViewManager("ExpoVideo", "LightSurfaceVideoView") : null;
++export const NativeLightVideoViewIOS = Platform.OS === "ios" && NativeVideoModule.supportsLightweightViews
++  ? requireNativeViewManager("ExpoVideo", "LightVideoView") : null;
+\ No newline at end of file
+diff --git a/node_modules/expo-video/build/VideoView.js b/node_modules/expo-video/build/VideoView.js
+index 90566f8..3fbd7a2 100644
+--- a/node_modules/expo-video/build/VideoView.js
++++ b/node_modules/expo-video/build/VideoView.js
+@@ -1,6 +1,6 @@
+ import { PureComponent, createRef } from 'react';
+ import NativeVideoModule from './NativeVideoModule';
+-import NativeVideoView, { NativeTextureVideoView, NativeLightTextureVideoView, NativeLightSurfaceVideoView } from './NativeVideoView';
++import NativeVideoView, { NativeTextureVideoView, NativeLightTextureVideoView, NativeLightSurfaceVideoView, NativeLightVideoViewIOS } from './NativeVideoView';
+ /**
+  * Returns whether the current device supports Picture in Picture (PiP) mode.
+  *
+@@ -58,7 +58,7 @@ export class VideoView extends PureComponent {
+         const playerId = player ? getPlayerId(player) : null;
+         // Native controls can change at runtime. Switching host type remounts the
+     // presentation view while preserving the VideoPlayer and playback position.
+-    const LightView = this.props.surfaceType === 'textureView' ? NativeLightTextureVideoView : NativeLightSurfaceVideoView;
++    const LightView = NativeLightVideoViewIOS ?? (this.props.surfaceType === 'textureView' ? NativeLightTextureVideoView : NativeLightSurfaceVideoView);
+     if (LightView && this.props.nativeControls === false) {
+       return <LightView {...props} player={playerId} ref={this.nativeRef} />;
+     }
+diff --git a/node_modules/expo-video/ios/LightVideoView.swift b/node_modules/expo-video/ios/LightVideoView.swift
+new file mode 100644
+index 0000000..f6408fd
+--- /dev/null
++++ b/node_modules/expo-video/ios/LightVideoView.swift
+@@ -0,0 +1,88 @@
++// Magicbooklet patch: a feed-weight video host for iOS.
++
++import AVFoundation
++import ExpoModulesCore
++
++/**
++ A video surface without `AVPlayerViewController`, chosen by the React wrapper for
++ `nativeControls={false}` when the binary advertises `supportsLightweightViews`.
++
++ The stock `VideoView` wraps an `AVPlayerViewController` even when its controls are
++ hidden: creating one loads the controller's whole view hierarchy on the main thread,
++ every window move starts an appearance transition, every safe-area change removes
++ and re-adds its view, and paused frames are sent for Live Text analysis. A feed
++ creates and releases these views while the reader scrolls. This host is Apple's
++ documented minimum instead: a view whose backing layer is an `AVPlayerLayer`.
++ Controls, fullscreen and Picture in Picture are not available here; screens that
++ need them keep `nativeControls` on and get the stock view.
++ */
++public final class LightVideoView: ExpoView {
++  private final class PlayerLayerView: UIView {
++    override static var layerClass: AnyClass { AVPlayerLayer.self }
++
++    var playerLayer: AVPlayerLayer {
++      // swiftlint:disable:next force_cast
++      layer as! AVPlayerLayer
++    }
++  }
++
++  private let surface = PlayerLayerView()
++  private var readyForDisplayObserver: NSKeyValueObservation?
++  private var contentOffset = CGVector.zero
++
++  let onFirstFrameRender = EventDispatcher()
++
++  weak var player: VideoPlayer? {
++    didSet {
++      surface.playerLayer.player = player?.ref
++    }
++  }
++
++  var contentFit: VideoContentFit = .contain {
++    didSet {
++      surface.playerLayer.videoGravity = contentFit.toVideoGravity()
++    }
++  }
++
++  var contentPosition: CGVector = .zero {
++    didSet {
++      contentOffset = contentPosition
++      setNeedsLayout()
++    }
++  }
++
++  public required init(appContext: AppContext? = nil) {
++    super.init(appContext: appContext)
++    clipsToBounds = true
++    surface.backgroundColor = .clear
++    surface.isUserInteractionEnabled = false
++    surface.playerLayer.videoGravity = contentFit.toVideoGravity()
++    addSubview(surface)
++
++    // Same signal as the stock view's `AVPlayerViewController.isReadyForDisplay`:
++    // the first frame of the current item can be shown.
++    readyForDisplayObserver = surface.playerLayer.observe(\.isReadyForDisplay, options: [.new]) { [weak self] layer, _ in
++      guard layer.isReadyForDisplay else {
++        return
++      }
++      if Thread.isMainThread {
++        self?.onFirstFrameRender()
++      } else {
++        DispatchQueue.main.async {
++          self?.onFirstFrameRender()
++        }
++      }
++    }
++    VideoManager.shared.register(lightVideoView: self)
++  }
++
++  deinit {
++    readyForDisplayObserver?.invalidate()
++    VideoManager.shared.unregister(lightVideoView: self)
++  }
++
++  public override func layoutSubviews() {
++    super.layoutSubviews()
++    surface.frame = bounds.offsetBy(dx: contentOffset.dx, dy: contentOffset.dy)
++  }
++}
+diff --git a/node_modules/expo-video/ios/VideoManager.swift b/node_modules/expo-video/ios/VideoManager.swift
+index 0b82a77..a8472d8 100644
+--- a/node_modules/expo-video/ios/VideoManager.swift
++++ b/node_modules/expo-video/ios/VideoManager.swift
+@@ -12,6 +12,7 @@ class VideoManager {
+ 
+   private static var managerQueue = DispatchQueue(label: "com.expo.video.manager.managerQueue")
+   private var videoViews = NSHashTable<VideoView>.weakObjects()
++  private var lightVideoViews = NSHashTable<LightVideoView>.weakObjects()
+   private var videoPlayers = NSHashTable<VideoPlayer>.weakObjects()
+ 
+   var hasRegisteredPlayers: Bool {
+@@ -44,6 +45,14 @@ class VideoManager {
+     videoViews.remove(videoView)
+   }
+ 
++  func register(lightVideoView: LightVideoView) {
++    lightVideoViews.add(lightVideoView)
++  }
++
++  func unregister(lightVideoView: LightVideoView) {
++    lightVideoViews.remove(lightVideoView)
++  }
++
+   func onAppForegrounded() {}
+ 
+   func onAppBackgrounded() {
+@@ -58,6 +67,17 @@ class VideoManager {
+         player.ref.pause()
+       }
+     }
++    for lightVideoView in lightVideoViews.allObjects {
++      guard let player = lightVideoView.player else {
++        continue
++      }
++      if player.staysActiveInBackground == true {
++        player.ref.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
++      } else {
++        player.ref.audiovisualBackgroundPlaybackPolicy = .pauses
++        player.ref.pause()
++      }
++    }
+   }
+ 
+   // MARK: - Audio Session Management
+diff --git a/node_modules/expo-video/ios/VideoModule.swift b/node_modules/expo-video/ios/VideoModule.swift
+index e78607a..97cf219 100644
+--- a/node_modules/expo-video/ios/VideoModule.swift
++++ b/node_modules/expo-video/ios/VideoModule.swift
+@@ -6,6 +6,9 @@ import AVKit
+ public final class VideoModule: Module {
+   public func definition() -> ModuleDefinition {
+     Name("ExpoVideo")
++    // Magicbooklet patch: the React wrapper picks `LightVideoView` for
++    // `nativeControls={false}` only on binaries that report this.
++    Constant("supportsLightweightViews") { true }
+ 
+     Function("isPictureInPictureSupported") { () -> Bool in
+       return AVPictureInPictureController.isPictureInPictureSupported()
+@@ -123,6 +126,22 @@ public final class VideoModule: Module {
+       }
+     }
+ 
++    View(LightVideoView.self) {
++      Events("onFirstFrameRender")
++
++      Prop("player") { (view, player: VideoPlayer?) in
++        view.player = player
++      }
++
++      Prop("contentFit") { (view, contentFit: VideoContentFit?) in
++        view.contentFit = contentFit ?? .contain
++      }
++
++      Prop("contentPosition") { (view, contentPosition: CGVector?) in
++        view.contentPosition = contentPosition ?? .zero
++      }
++    }
++
+     View(VideoAirPlayButtonView.self) {
+       Events(
+         "onBeginPresentingRoutes",
+diff --git a/node_modules/expo-video/src/NativeVideoView.ts b/node_modules/expo-video/src/NativeVideoView.ts
+index a398bde..8a32d85 100644
+--- a/node_modules/expo-video/src/NativeVideoView.ts
++++ b/node_modules/expo-video/src/NativeVideoView.ts
+@@ -13,3 +13,5 @@ export const NativeLightTextureVideoView = Platform.OS === "android" && NativeVi
+   ? requireNativeViewManager("ExpoVideo", "LightTextureVideoView") : null;
+ export const NativeLightSurfaceVideoView = Platform.OS === "android" && NativeVideoModule.supportsLightweightViews
+   ? requireNativeViewManager("ExpoVideo", "LightSurfaceVideoView") : null;
++export const NativeLightVideoViewIOS = Platform.OS === "ios" && NativeVideoModule.supportsLightweightViews
++  ? requireNativeViewManager("ExpoVideo", "LightVideoView") : null;
+diff --git a/node_modules/expo-video/src/VideoView.tsx b/node_modules/expo-video/src/VideoView.tsx
+index ab4205c..1ae4975 100644
+--- a/node_modules/expo-video/src/VideoView.tsx
++++ b/node_modules/expo-video/src/VideoView.tsx
+@@ -1,7 +1,7 @@
+ import { ReactNode, PureComponent, createRef } from 'react';
+ 
+ import NativeVideoModule from './NativeVideoModule';
+-import NativeVideoView, { NativeTextureVideoView, NativeLightTextureVideoView, NativeLightSurfaceVideoView } from './NativeVideoView';
++import NativeVideoView, { NativeTextureVideoView, NativeLightTextureVideoView, NativeLightSurfaceVideoView, NativeLightVideoViewIOS } from './NativeVideoView';
+ import type { VideoPlayer } from './VideoPlayer.types';
+ import type { VideoViewProps } from './VideoView.types';
+ 
+@@ -69,7 +69,7 @@ export class VideoView extends PureComponent<VideoViewProps> {
+ 
+     // Native controls can change at runtime. Switching host type remounts the
+     // presentation view while preserving the VideoPlayer and playback position.
+-    const LightView = this.props.surfaceType === 'textureView' ? NativeLightTextureVideoView : NativeLightSurfaceVideoView;
++    const LightView = NativeLightVideoViewIOS ?? (this.props.surfaceType === 'textureView' ? NativeLightTextureVideoView : NativeLightSurfaceVideoView);
+     if (LightView && this.props.nativeControls === false) {
+       return <LightView {...props} player={playerId} ref={this.nativeRef} />;
+     }
