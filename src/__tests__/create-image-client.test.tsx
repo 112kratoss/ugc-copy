@@ -222,7 +222,8 @@ describe('CreateImageClient persisted elements', () => {
     await waitFor(() => {
       expect(screen.getAllByText('15/14')).not.toHaveLength(0);
     });
+    // An effect sets the explanation after the counter commits, so it can land a render later.
+    expect(await screen.findByText(/Your references are preserved/)).toBeInTheDocument();
     expect(setPersistedImageElementRecordsMock).not.toHaveBeenCalled();
-    expect(screen.getByText(/Your references are preserved/)).toBeInTheDocument();
   });
 });
