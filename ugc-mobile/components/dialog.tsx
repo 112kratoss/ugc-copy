@@ -10,6 +10,7 @@ import {
 } from '@/lib/dialog';
 import { MotionView, useSpringState } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 /**
  * The surface behind `showConfirmDialog` / `showMessageDialog`. Mounted once,
@@ -86,6 +87,7 @@ function DialogSurface({
   presentation: DialogPresentation;
   onAnswer: (confirmed: boolean) => void;
 }) {
+  const theme = useAppTheme();
   // Mounted at rest and released on the next commit, so the settle plays on the
   // way in. `useSpringState` lands instantly under Reduce Motion.
   const [entered, setEntered] = useState(false);
@@ -113,7 +115,7 @@ function DialogSurface({
         question answerable by a stray tap. It still blocks every touch beneath
         it, which is the half that matters.
       */}
-      <View style={{ position: 'absolute', inset: 0, backgroundColor: appTheme.colors.overlay }} />
+      <View style={{ position: 'absolute', inset: 0, backgroundColor: theme.colors.overlay }} />
       <MotionView
         accessibilityRole="alert"
         // TalkBack reads the panel the moment it appears. Not
@@ -126,8 +128,8 @@ function DialogSurface({
           borderRadius: appTheme.radii.xl,
           borderCurve: 'continuous',
           borderWidth: 1,
-          borderColor: appTheme.colors.border,
-          backgroundColor: appTheme.colors.panelSoft,
+          borderColor: theme.colors.border,
+          backgroundColor: theme.colors.panelSoft,
           paddingTop: appTheme.spacing.panel,
           paddingHorizontal: appTheme.spacing.screen,
           paddingBottom: appTheme.spacing.screen,
@@ -197,6 +199,7 @@ function DialogButton({
   destructive?: boolean;
   onPress: () => void;
 }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -211,8 +214,8 @@ function DialogButton({
         borderRadius: appTheme.radii.pill,
         borderCurve: 'continuous',
         backgroundColor: destructive
-          ? (pressed ? appTheme.semantic.danger.background : 'transparent')
-          : (pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surface),
+          ? (pressed ? theme.semantic.danger.background : 'transparent')
+          : (pressed ? theme.colors.surfaceStrong : theme.colors.surface),
       })}
     >
       <AppText variant="button" color={destructive ? 'danger' : 'text'} numberOfLines={1}>

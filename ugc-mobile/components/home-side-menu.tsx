@@ -41,13 +41,11 @@ import { CloseGlyph } from '@/lib/platform-glyphs';
 import { formatUsdCents } from '@/lib/home-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { formatCreditAmount } from '@/lib/pricing';
+import { hexWithAlpha } from '@/lib/eased-fade';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import type { ProfileResponse } from '@/lib/types';
 
-const PRIMARY = appTheme.colors.primary;
-const PRIMARY_STRONG = appTheme.colors.primaryStrong;
-const PRIMARY_PRESSED = appTheme.colors.pressed;
-const ON_PRIMARY = appTheme.colors.onPrimary;
 /** Below this the drag is still ambiguous with a tap or a vertical scroll. */
 const DRAWER_DRAG_CLAIM_DISTANCE = 8;
 // Keeps the panel's drop shadow past the screen edge while it is closed.
@@ -80,6 +78,7 @@ export function HomeSideMenu({
   totalSalesLoading,
   onSignOut,
 }: HomeSideMenuProps) {
+  const theme = useAppTheme();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const topInset = resolvedTopInset(insets.top);
@@ -194,7 +193,7 @@ export function HomeSideMenu({
   }), [dragX]);
 
   const backdropOpacity = progress
-    ? progress.interpolate({ inputRange: [0, 1], outputRange: [0, 0.64] })
+    ? progress.interpolate({ inputRange: [0, 1], outputRange: [0, 0.64 * theme.dim.scale] })
     : 0.64;
   // No opacity ramp on the panel itself. The old 0.86 -> 1 fade existed to
   // paper over a drawer that barely moved; a surface that slides in from the
@@ -230,7 +229,7 @@ export function HomeSideMenu({
           style={{
             position: 'absolute',
             inset: 0,
-            backgroundColor: '#000000',
+            backgroundColor: theme.dim.color,
             opacity: backdropOpacity,
           }}
         >
@@ -244,10 +243,10 @@ export function HomeSideMenu({
           style={{
             width: drawerWidth,
             borderRightWidth: 1,
-            borderRightColor: appTheme.colors.border,
-            backgroundColor: appTheme.colors.background,
+            borderRightColor: theme.colors.border,
+            backgroundColor: theme.colors.background,
             transform: [{ translateX: drawerTranslateX }],
-            boxShadow: '16px 0 40px rgba(0,0,0,0.34)',
+            boxShadow: theme.shadow.drawer.boxShadow,
           }}
         >
           <ScrollView
@@ -276,12 +275,12 @@ export function HomeSideMenu({
                   alignItems: 'center',
                   justifyContent: 'center',
                   borderWidth: 1,
-                  borderColor: appTheme.colors.border,
-                  backgroundColor: pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surface,
+                  borderColor: theme.colors.border,
+                  backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surface,
                   opacity: pressed ? appTheme.opacity.pressed : 1,
                 })}
               >
-                <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
+                <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
               </Pressable>
             </View>
 
@@ -294,9 +293,9 @@ export function HomeSideMenu({
                 borderRadius: 20,
                 borderCurve: 'continuous',
                 borderWidth: 1,
-                borderColor: pressed ? appTheme.colors.primaryStrong : appTheme.colors.border,
+                borderColor: pressed ? theme.colors.primaryStrong : theme.colors.border,
                 padding: 14,
-                backgroundColor: pressed ? appTheme.colors.pressed : appTheme.colors.panel,
+                backgroundColor: pressed ? theme.colors.pressed : theme.colors.panel,
                 opacity: pressed ? appTheme.opacity.pressed : 1,
               })}
             >
@@ -308,8 +307,8 @@ export function HomeSideMenu({
                     borderRadius: 27,
                     overflow: 'hidden',
                     borderWidth: 1,
-                    borderColor: appTheme.colors.primaryStrong,
-                    backgroundColor: appTheme.colors.pressed,
+                    borderColor: theme.colors.primaryStrong,
+                    backgroundColor: theme.colors.pressed,
                     alignItems: 'center',
                     justifyContent: 'center',
                   }}
@@ -317,24 +316,24 @@ export function HomeSideMenu({
                   {profile?.avatarUrl ? (
                     <Image source={{ uri: profile.avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
                   ) : (
-                    <Text style={{ color: PRIMARY, fontSize: 21, fontWeight: '800' }}>{initial}</Text>
+                    <Text style={{ color: theme.colors.primary, fontSize: 21, fontWeight: '800' }}>{initial}</Text>
                   )}
                 </View>
                 <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                    <Text numberOfLines={1} style={{ color: appTheme.colors.text, fontSize: 17, lineHeight: 22, fontWeight: '800', flexShrink: 1 }}>
+                    <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 17, lineHeight: 22, fontWeight: '800', flexShrink: 1 }}>
                       {displayName}
                     </Text>
-                    {user ? <BadgeCheck size={17} color={PRIMARY} /> : null}
+                    {user ? <BadgeCheck size={17} color={theme.colors.primary} /> : null}
                   </View>
                   <Text
                     numberOfLines={user ? 1 : 2}
-                    style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 18, fontWeight: '600' }}
+                    style={{ color: theme.colors.muted, fontSize: 13, lineHeight: 18, fontWeight: '600' }}
                   >
                     {handle}
                   </Text>
                 </View>
-                <ChevronRight size={19} color={appTheme.colors.muted} />
+                <ChevronRight size={19} color={theme.colors.muted} />
               </View>
             </Pressable>
 
@@ -347,26 +346,26 @@ export function HomeSideMenu({
                 borderRadius: 20,
                 borderCurve: 'continuous',
                 borderWidth: 1,
-                borderColor: pressed ? 'rgba(245,158,11,0.34)' : appTheme.colors.border,
+                borderColor: pressed ? hexWithAlpha(theme.colors.amber, 0.34) : theme.colors.border,
                 paddingHorizontal: 14,
                 flexDirection: 'row',
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 gap: 12,
-                backgroundColor: pressed ? 'rgba(245,158,11,0.08)' : appTheme.colors.panel,
+                backgroundColor: pressed ? hexWithAlpha(theme.colors.amber, 0.08) : theme.colors.panel,
                 opacity: pressed ? appTheme.opacity.pressed : 1,
               })}
             >
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, minWidth: 0, flex: 1 }}>
-                <View style={{ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(245,158,11,0.12)' }}>
-                  <Crown size={21} color={appTheme.colors.amber} />
+                <View style={{ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(theme.colors.amber, 0.12) }}>
+                  <Crown size={21} color={theme.colors.amber} />
                 </View>
                 <View style={{ gap: 1, minWidth: 0, flex: 1 }}>
-                  <Text style={{ color: appTheme.colors.text, fontSize: 18, lineHeight: 23, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatCreditAmount(credits)} Credits</Text>
-                  <Text style={{ color: appTheme.colors.muted, fontSize: 12, lineHeight: 16, fontWeight: '600' }}>View balance and packs</Text>
+                  <Text style={{ color: theme.colors.text, fontSize: 18, lineHeight: 23, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatCreditAmount(credits)} Credits</Text>
+                  <Text style={{ color: theme.colors.muted, fontSize: 12, lineHeight: 16, fontWeight: '600' }}>View balance and packs</Text>
                 </View>
               </View>
-              <ChevronRight size={19} color={appTheme.colors.muted} />
+              <ChevronRight size={19} color={theme.colors.muted} />
             </Pressable>
 
             <View
@@ -376,18 +375,18 @@ export function HomeSideMenu({
                 borderRadius: 20,
                 borderCurve: 'continuous',
                 borderWidth: 1,
-                borderColor: appTheme.colors.border,
+                borderColor: theme.colors.border,
                 padding: 14,
-                backgroundColor: appTheme.colors.panel,
+                backgroundColor: theme.colors.panel,
               }}
             >
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                <View style={{ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(52,211,153,0.10)' }}>
-                  <Wallet size={21} color={appTheme.colors.success} />
+                <View style={{ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(theme.colors.workflow, 0.10) }}>
+                  <Wallet size={21} color={theme.colors.success} />
                 </View>
                 <View style={{ gap: 1, minWidth: 0, flex: 1 }}>
-                  <Text style={{ color: appTheme.colors.muted, fontSize: 11, lineHeight: 15, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6 }}>Total sales</Text>
-                  <Text style={{ color: appTheme.colors.text, fontSize: 22, lineHeight: 28, fontWeight: '800', fontVariant: ['tabular-nums'] }}>
+                  <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 15, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6 }}>Total sales</Text>
+                  <Text style={{ color: theme.colors.text, fontSize: 22, lineHeight: 28, fontWeight: '800', fontVariant: ['tabular-nums'] }}>
                     {totalSalesLoading ? 'Loading…' : formatUsdCents(totalSalesUsdCents)}
                   </Text>
                 </View>
@@ -395,13 +394,13 @@ export function HomeSideMenu({
             </View>
 
             <View style={{ gap: 8 }}>
-              <MenuRow icon={<Layers3 size={21} color={appTheme.colors.text} />} label="Templates" onPress={() => navigateAndClose('/templates')} />
-              <MenuRow icon={<Gift size={21} color={appTheme.colors.commerce} />} label="Invite & Earn" onPress={() => navigateAndClose('/invite')} />
-              <MenuRow icon={<LayoutDashboard size={21} color={appTheme.colors.text} />} label="Your Sales" onPress={() => navigateAndClose('/seller-dashboard')} />
-              <MenuRow icon={<PackageOpen size={21} color={appTheme.colors.text} />} label="Your Unlocks" onPress={() => navigateAndClose('/unlocks')} />
-              <View style={{ height: 1, backgroundColor: appTheme.colors.borderSubtle, marginVertical: 4 }} />
-              <MenuRow icon={<Settings size={21} color={appTheme.colors.text} />} label="Settings" onPress={() => navigateAndClose('/settings')} />
-              <MenuRow icon={<CircleHelp size={21} color={appTheme.colors.text} />} label="Help & Support" onPress={() => navigateAndClose('/help')} />
+              <MenuRow icon={<Layers3 size={21} color={theme.colors.text} />} label="Templates" onPress={() => navigateAndClose('/templates')} />
+              <MenuRow icon={<Gift size={21} color={theme.colors.commerce} />} label="Invite & Earn" onPress={() => navigateAndClose('/invite')} />
+              <MenuRow icon={<LayoutDashboard size={21} color={theme.colors.text} />} label="Your Sales" onPress={() => navigateAndClose('/seller-dashboard')} />
+              <MenuRow icon={<PackageOpen size={21} color={theme.colors.text} />} label="Your Unlocks" onPress={() => navigateAndClose('/unlocks')} />
+              <View style={{ height: 1, backgroundColor: theme.colors.borderSubtle, marginVertical: 4 }} />
+              <MenuRow icon={<Settings size={21} color={theme.colors.text} />} label="Settings" onPress={() => navigateAndClose('/settings')} />
+              <MenuRow icon={<CircleHelp size={21} color={theme.colors.text} />} label="Help & Support" onPress={() => navigateAndClose('/help')} />
             </View>
 
             <View style={{ flex: 1, minHeight: 16 }} />
@@ -419,15 +418,15 @@ export function HomeSideMenu({
                 justifyContent: 'center',
                 gap: 10,
                 borderWidth: 1,
-                borderColor: user ? appTheme.semantic.danger.border : PRIMARY,
+                borderColor: user ? theme.semantic.danger.border : theme.colors.primaryFill,
                 backgroundColor: user
-                  ? (pressed ? appTheme.colors.surfaceStrong : appTheme.semantic.danger.background)
-                  : (pressed ? PRIMARY_STRONG : PRIMARY),
+                  ? (pressed ? theme.colors.surfaceStrong : theme.semantic.danger.background)
+                  : (pressed ? theme.colors.primaryFillPressed : theme.colors.primaryFill),
                 opacity: pressed ? appTheme.opacity.pressed : 1,
               })}
             >
-              {user ? <LogOut size={20} color={appTheme.colors.danger} /> : <LogIn size={20} color={ON_PRIMARY} />}
-              <Text style={{ color: user ? appTheme.colors.danger : ON_PRIMARY, fontSize: 15, lineHeight: 20, fontWeight: '800' }}>{user ? 'Sign out' : 'Sign in'}</Text>
+              {user ? <LogOut size={20} color={theme.colors.danger} /> : <LogIn size={20} color={theme.colors.onPrimary} />}
+              <Text style={{ color: user ? theme.colors.danger : theme.colors.onPrimary, fontSize: 15, lineHeight: 20, fontWeight: '800' }}>{user ? 'Sign out' : 'Sign in'}</Text>
             </Pressable>
           </ScrollView>
         </AnimatedView>
@@ -445,6 +444,7 @@ function MenuRow({
   label: string;
   onPress: () => void;
 }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -458,17 +458,17 @@ function MenuRow({
         alignItems: 'center',
         gap: 12,
         paddingHorizontal: 12,
-        backgroundColor: pressed ? PRIMARY_PRESSED : appTheme.colors.surface,
+        backgroundColor: pressed ? theme.colors.pressed : theme.colors.surface,
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
-      <View style={{ width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.surfaceStrong }}>
+      <View style={{ width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
         {icon}
       </View>
-      <Text numberOfLines={1} style={{ flex: 1, color: appTheme.colors.text, fontSize: 15, lineHeight: 20, fontWeight: '700' }}>
+      <Text numberOfLines={1} style={{ flex: 1, color: theme.colors.text, fontSize: 15, lineHeight: 20, fontWeight: '700' }}>
         {label}
       </Text>
-      <ChevronRight size={18} color={appTheme.colors.muted} />
+      <ChevronRight size={18} color={theme.colors.muted} />
     </Pressable>
   );
 }

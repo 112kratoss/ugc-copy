@@ -6,7 +6,7 @@ Read this before editing mobile UI. This file is the mobile source of truth for 
 
 ## Purpose
 
-Magicbooklet mobile should feel like a premium dark AI creator studio in your pocket: fast, media-led, touch-friendly, polished, and calm enough that creators can move from idea to output without fighting the interface.
+Magicbooklet mobile should feel like a premium AI creator studio in your pocket, in the phone's own light or dark appearance: fast, media-led, touch-friendly, polished, and calm enough that creators can move from idea to output without fighting the interface.
 
 The app can be visually rich, but the system underneath must be strict. Addictive and beautiful mobile apps work because they repeat familiar patterns: predictable tabs, consistent typography, obvious primary actions, clear progress, rewarding results, and low-friction recovery.
 
@@ -45,7 +45,7 @@ If a surface does not support one of these jobs, it should be simplified or move
 
 Use this tone:
 
-- Premium, dark, cinematic.
+- Premium and cinematic — obsidian on dark, warm paper on light; the reel stays dark in both.
 - Confident rather than loud.
 - Media-first rather than form-first.
 - Friendly enough for first-time creators.
@@ -63,8 +63,8 @@ Avoid:
 
 Use a layered studio model:
 
-1. Background: deep dark app canvas.
-2. Panels: slightly raised dark surfaces.
+1. Background: the app canvas — true black, or warm paper.
+2. Panels: a real step away from the canvas — lighter on dark, a tinted fill on paper.
 3. Cards: repeatable work units with media, title, metadata, action.
 4. Accents: image/video/motion/workflow/commerce colors.
 5. Primary actions: high-contrast, easy to reach, stable wording.
@@ -95,46 +95,45 @@ When touching a mobile screen, migrate the touched surface toward these shared f
 
 ## Tokens
 
-`appTheme` is the single source of truth. Expand it carefully and keep backward-compatible aliases while migrating older screens.
+`lib/theme.ts` is the single source of truth, in two layers:
+
+- **Scheme tokens** — `colors`, `semantic`, `state`, `shadow`, `dim`, `tabBar` — exist once per scheme and are read through `useAppTheme()` (`lib/theme-context.tsx`). Never read a colour from a module constant: React Compiler memoises it for the life of the process, so it would not redraw on a scheme switch. `appTheme` carries no colours at all.
+- **Static tokens** — `radii`, `spacing`, `type`, `typeScale`, `icon`, `touch`, `opacity`, `motion` — are the same in both schemes and read from `appTheme` anywhere, module scope included.
 
 ### Color
 
-Core:
+The app follows the phone's appearance, and Settings → Appearance can hold System, Light or Dark (`lib/appearance.ts`). Both palettes carry exactly the same names; `theme-palette-parity.test.ts` holds them in step and `hig-type-and-contrast.test.ts` sweeps both for 4.5:1.
 
-| Role | Value | Use |
-| --- | --- | --- |
-| `bg.app` | `#050506` | Deep app chrome, modal backdrops |
-| `bg.page` | `#09090b` | Main screen background |
-| `surface.1` | `#111215` | Default panels and cards |
-| `surface.2` | `rgba(255,255,255,0.04)` | Soft raised surface |
-| `surface.3` | `rgba(255,255,255,0.06)` | Stronger raised surface |
-| `surface.inset` | `rgba(0,0,0,0.32)` | Inputs, media insets, nested blocks |
-| `border.subtle` | `rgba(255,255,255,0.08)` | Quiet borders |
-| `border.default` | `rgba(255,255,255,0.10)` | Cards, inputs, panels |
-| `border.strong` | `rgba(255,255,255,0.18)` | Active or modal borders |
-| `text.primary` | `#fafafa` | Main text |
-| `text.secondary` | `#d4d4d8` | Secondary text |
-| `text.muted` | `#a1a1aa` | Support copy |
-| `text.faint` | `#71717a` | Metadata only |
+Core (dark · light):
 
-Accents:
+| Token | Dark | Light | Use |
+| --- | --- | --- | --- |
+| `app` | `#000000` | `#fdfbf8` | Root ground |
+| `background` / `page` | `#070708` | `#fbf8f4` | Screen background |
+| `panel` | `#151518` | `#f2ede6` | Cards and sheets |
+| `panelSoft` | `#1f1f24` | `#ece6de` | A step further from the page |
+| `surface` / `surfaceStrong` | ivory 6% / 10% | ink 4% / 7% | Soft raised fills, chips |
+| `surfaceInset` | `#0b0b0d` | `#ffffff` | Inputs, wells, segmented-control tracks |
+| `surfaceInverse` + `textInverse` | ivory + ink | ink + ivory | The inverted pill |
+| `border*` | ivory 7 / 12 / 22% | ink 7 / 12 / 22% | Hairlines |
+| `text` · `textSecondary` · `muted` · `faint` | `#fff8ed` · `#ddd6cc` · `#aaa39b` · `#8d8780` | `#1c140f` · `#3f3731` · `#5f5750` · `#675e56` | Type ramp |
+| `mediaPlaceholder` | `#050506` | `#ece6de` | The ground a picture loads onto |
+| `scrim` | black 58% | ink 32% | Behind a bottom sheet |
 
-| Role | Value | Use |
-| --- | --- | --- |
-| `accent.image` | `#38bdf8` | Image generation |
-| `accent.video` | `#fb7185` | Video generation |
-| `accent.motion` | `#a78bfa` | Motion transfer |
-| `accent.workflow` | `#34d399` | Workflow, success, publish |
-| `accent.commerce` | `#f59e0b` | Credits, unlocks, marketplace |
-| `accent.danger` | `#fb7185` | Errors and destructive actions |
+Coral: `primary` is coral as a *foreground* — text, icons, borders and thin marks (progress bars, dots, underlines) — `#ff7a59` on dark, `#a83d1c` on light. `primaryFill` is coral as a *surface* — buttons, the selected segment — bright `#ff7a59` in both schemes, always with `onPrimary` ink (`#1a0d08`, 7.4:1); `primaryFillPressed` is its pressed step. The bright coral is 2.4:1 as text on paper, which is why the two are separate.
+
+Tool accents (`image`, `video`, `motion`, `workflow`, `amber`/`commerce`) and semantic tones (`info`, `success`, `warning`, `danger`) follow the same split: pastel on dark, deep on light for text and marks. A *solid* accent fill uses `accentFill(accent)` with `onAccentFill(accent)` — the bright set, in both schemes. A wash is the scheme's accent at low alpha: `hexWithAlpha(theme.colors.image, 0.12)`.
+
+Over pictures: text, icons, scrims and chips drawn on a photo or video frame use `mediaColors` (`onMedia`, `mediaScrim`, `mediaChip`, `mediaGround`…), identical in both schemes — the picture decides what sits on it. A component drawn entirely over a picture (a grid tile's state chip, an Explore pin) takes `themes.dark` outright.
+
+Surfaces that stay dark in both schemes: the reel (`app/viewer.tsx`), the zoom flight, the media lightbox and onboarding, each wrapped in `<ThemeScope scheme="dark">` with a light-content status bar while in front. Sheets the reel opens (actions, comments, unlock) return to the app's scheme through `AppSchemeScope`.
 
 Rules:
 
-- Use semantic roles, not raw hex values, in new UI.
+- Colours come from `useAppTheme()`, `mediaColors`, or `accentFill`. A raw colour literal fails `theme-color-literals.test.ts` unless its file is listed in that test's `EXEMPT` map with the reason the colour is the point.
+- Elevation in light is fill step plus hairline, never a new shadow: a shadow on scrolled content costs iOS an offscreen pass every frame. The shadow tokens keep the same shapes in both schemes, at a third of the weight on paper.
 - Use one accent per screen section unless the screen is a launcher.
-- Keep text contrast readable on media overlays.
 - Never place muted text on low-contrast gradients.
-- Danger and video currently share rose; distinguish by context and icon.
 
 ### Typography
 

@@ -11,8 +11,10 @@ import {
 } from '@/lib/auth';
 import { showMessageDialog } from '@/lib/dialog';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 export default function DeleteAccountScreen() {
+  const theme = useAppTheme();
   const { accountReauthenticationMethods, deleteAccount, user } = useAuth();
   const [confirmation, setConfirmation] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
@@ -58,7 +60,7 @@ export default function DeleteAccountScreen() {
         body="This permanently removes your Magicbooklet account, effective immediately. This action cannot be undone."
       />
 
-      <Card style={{ borderColor: appTheme.semantic.danger.border }}>
+      <Card style={{ borderColor: theme.semantic.danger.border }}>
         <AppText variant="cardTitle" color="danger">What will be deleted</AppText>
         <View style={{ gap: appTheme.spacing.compact }}>
           <AppText variant="bodySm" color="muted">• Your profile and sign-in credentials</AppText>

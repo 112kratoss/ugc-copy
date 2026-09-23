@@ -12,7 +12,7 @@ import {
   getRecentReferralClaim,
   normalizeReferralCode,
 } from '@/lib/referral-attribution';
-import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 type InviteState =
   | { status: 'loading' }
@@ -22,6 +22,7 @@ type InviteState =
   | { status: 'error'; code: string | null; message: string; savedLocally: boolean; visitRecorded: boolean };
 
 export default function ReferralLandingScreen() {
+  const theme = useAppTheme();
   const params = useLocalSearchParams<{ code?: string | string[]; next?: string | string[] }>();
   const { api, user, isLoading: isAuthLoading } = useAuth();
   const rawCode = Array.isArray(params.code) ? params.code[0] : params.code;
@@ -101,8 +102,8 @@ export default function ReferralLandingScreen() {
 
       <Card accent="commerce" padding="lg">
         <View style={{ alignItems: 'center', gap: 12, paddingVertical: 8 }}>
-          <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: `${appTheme.colors.commerce}1f` }}>
-            <Gift size={34} color={appTheme.colors.commerce} />
+          <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.commerce}1f` }}>
+            <Gift size={34} color={theme.colors.commerce} />
           </View>
           <AppText variant="sectionTitle" style={{ textAlign: 'center' }}>5% first top-up bonus</AppText>
           <AppText variant="bodySm" color="muted" style={{ textAlign: 'center' }}>
@@ -172,19 +173,20 @@ export default function ReferralLandingScreen() {
       ) : null}
 
       <Card variant="soft">
-        <Rule icon={<Link2 size={19} color={appTheme.colors.info} />} text="The first eligible invite opened within 30 days is used." />
-        <Rule icon={<UserPlus size={19} color={appTheme.colors.primary} />} text="The bonus is available to new Magicbooklet accounts only." />
-        <Rule icon={<CheckCircle2 size={19} color={appTheme.colors.success} />} text="Rewards are issued after payment verification." />
-        <Rule icon={<ShieldCheck size={19} color={appTheme.colors.warning} />} text="Self-referrals, refunded purchases, and abuse do not qualify." />
+        <Rule icon={<Link2 size={19} color={theme.colors.info} />} text="The first eligible invite opened within 30 days is used." />
+        <Rule icon={<UserPlus size={19} color={theme.colors.primary} />} text="The bonus is available to new Magicbooklet accounts only." />
+        <Rule icon={<CheckCircle2 size={19} color={theme.colors.success} />} text="Rewards are issued after payment verification." />
+        <Rule icon={<ShieldCheck size={19} color={theme.colors.warning} />} text="Self-referrals, refunded purchases, and abuse do not qualify." />
       </Card>
     </Screen>
   );
 }
 
 function Rule({ icon, text }: { icon: React.ReactNode; text: string }) {
+  const theme = useAppTheme();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
-      <View style={{ width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.surfaceStrong }}>{icon}</View>
+      <View style={{ width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>{icon}</View>
       <AppText variant="bodySm" color="textSecondary" style={{ flex: 1, paddingTop: 6 }}>{text}</AppText>
     </View>
   );

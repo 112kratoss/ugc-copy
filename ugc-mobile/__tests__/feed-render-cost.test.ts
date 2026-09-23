@@ -32,11 +32,12 @@ describe('feed render cost on iOS', () => {
     const bar = source('components/magic-tab-bar.tsx');
     const disc = bar.slice(bar.indexOf('accessibilityLabel="Open create menu"'), bar.indexOf('<Plus size'));
     expect(disc).not.toContain('boxShadow');
-    expect(disc).toContain('...CREATE_DISC_SHADOW');
-    expect(bar).toMatch(/const CREATE_DISC_SHADOW = \{[^}]*shadowColor: '#000000'/);
+    expect(disc).toContain('...CREATE_DISC_SHADOW_SHAPE');
+    expect(disc).toContain('shadowColor: theme.tabBar.discShadowColor');
     expect(bar).toContain('shadowRadius: 8,');
-    // Fabric only computes a shadow path over an opaque background.
-    expect(disc).toMatch(/backgroundColor: pressed \? PRIMARY_STRONG : PRIMARY/);
+    // Fabric only computes a shadow path over an opaque background: the coral
+    // fill is solid in both schemes.
+    expect(disc).toMatch(/backgroundColor: pressed \? theme\.colors\.primaryFillPressed : theme\.colors\.primaryFill/);
   });
 
   it('leaves the header rail\'s gradients to the render server', () => {
@@ -45,8 +46,12 @@ describe('feed render cost on iOS', () => {
     // switch: 17–20 ms of painting. React Native's own gradient is a CAGradientLayer.
     const home = source('components/home-dashboard.tsx');
     expect(home).not.toContain("from 'expo-linear-gradient'");
-    expect(home).toContain("experimental_backgroundImage: 'linear-gradient(to bottom, rgba(0,0,0,0.04), rgba(0,0,0,0.72))'");
-    expect(home).toContain("experimental_backgroundImage: 'linear-gradient(to bottom, rgba(0,0,0,0.04), rgba(0,0,0,0.48))'");
+    // Shades over pictures, so the media ground in both schemes.
+    expect(home).toMatch(
+      /function railShade\(bottomAlpha: number\) \{\s*return linearGradient\('to bottom', \[\s*\{ color: hexWithAlpha\(mediaColors\.mediaGround, 0\.04\), at: 0 \},\s*\{ color: hexWithAlpha\(mediaColors\.mediaGround, bottomAlpha\), at: 1 \},\s*\]\);/,
+    );
+    expect(home).toContain('experimental_backgroundImage: railShade(0.72)');
+    expect(home).toContain('experimental_backgroundImage: railShade(0.48)');
     const promo = home.slice(home.indexOf("if (slide.kind === 'promo')"), home.indexOf('const Icon = slide.id'));
     expect(promo).toContain('<View style={RAIL_PROMO_SCRIM} />');
     const preview = home.slice(home.indexOf('function ToolPreview'), home.indexOf('function FeedChips'));
@@ -80,7 +85,7 @@ describe('feed render cost on iOS', () => {
 describe('work a scrolling Home feed does not pay for', () => {
   it('subscribes the dock to the sampled colour only where it paints it', () => {
     const bar = source('components/magic-tab-bar.tsx');
-    expect(bar).toContain("useTabBarAmbientColor(surfaceMode === 'adaptive')");
+    expect(bar).toContain("useTabBarAmbientColor(surfaceMode === 'adaptive', theme.scheme)");
     expect(bar).not.toContain('useTabBarAmbientColor()');
   });
 

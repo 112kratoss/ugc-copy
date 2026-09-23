@@ -4,9 +4,11 @@ import { Pressable, Text, View } from 'react-native';
 
 import { ResourceAction } from '@/components/resource-action';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 /** The preview is short; copying always uses the complete source. */
 export function ResourcePrompt({ text, onCopy }: { text: string; onCopy?: (text: string) => Promise<void> | void }) {
+  const theme = useAppTheme();
   const [expanded, setExpanded] = useState(false);
   // A different prompt starts collapsed again. Owning that here rather than
   // asking every caller for a `key` keeps a whole prompt out of the key, and
@@ -20,7 +22,7 @@ export function ResourcePrompt({ text, onCopy }: { text: string; onCopy?: (text:
   return (
     <View style={{ gap: 8 }}>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
-        {onCopy ? <ResourceAction label="Copy prompt" confirmLabel="Copied" icon={<Copy size={appTheme.icon.xs} color={appTheme.colors.success} />} onPress={() => onCopy(text)} /> : null}
+        {onCopy ? <ResourceAction label="Copy prompt" confirmLabel="Copied" icon={<Copy size={appTheme.icon.xs} color={theme.colors.success} />} onPress={() => onCopy(text)} /> : null}
         {canExpand ? (
           <Pressable
             accessibilityRole="button"
@@ -29,11 +31,11 @@ export function ResourcePrompt({ text, onCopy }: { text: string; onCopy?: (text:
             onPress={() => setExpanded((value) => !value)}
             style={({ pressed }) => ({ minHeight: 48, justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
           >
-            <Text style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>{expanded ? 'Collapse prompt' : 'Show full prompt'}</Text>
+            <Text style={{ color: theme.colors.textSecondary, ...appTheme.type.bodySm }}>{expanded ? 'Collapse prompt' : 'Show full prompt'}</Text>
           </Pressable>
         ) : null}
       </View>
-      <Text selectable numberOfLines={canExpand && !expanded ? 5 : undefined} style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>{text}</Text>
+      <Text selectable numberOfLines={canExpand && !expanded ? 5 : undefined} style={{ color: theme.colors.textSecondary, ...appTheme.type.bodySm }}>{text}</Text>
     </View>
   );
 }

@@ -10,9 +10,11 @@ import { AppText, Card, Pill, PrimaryButton, Screen, SecondaryButton, SectionTit
 import { useAuth } from '@/lib/auth';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import { formatUnlockPrice } from '@/lib/unlock-library-view-model';
 
 export default function ViewerUnlockScreen() {
+  const theme = useAppTheme();
   const { unlockId: routeUnlockId } = useLocalSearchParams<{ unlockId: string }>();
   const unlockId = Array.isArray(routeUnlockId) ? routeUnlockId[0] : routeUnlockId;
   const { api, user } = useAuth();
@@ -128,8 +130,8 @@ export default function ViewerUnlockScreen() {
                     style={({ pressed }) => ({
                       borderRadius: appTheme.radii.pill,
                       borderWidth: 1,
-                      borderColor: option.selected ? appTheme.colors.success : appTheme.colors.border,
-                      backgroundColor: option.selected ? `${appTheme.colors.success}20` : appTheme.colors.surface,
+                      borderColor: option.selected ? theme.colors.success : theme.colors.border,
+                      backgroundColor: option.selected ? `${theme.colors.success}20` : theme.colors.surface,
                       opacity: pressed ? appTheme.opacity.pressed : 1,
                       paddingHorizontal: 14,
                       paddingVertical: 9,

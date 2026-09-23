@@ -18,11 +18,10 @@ import { CREATE_MENU_ACTIONS, type CreateMenuAction, type CreateMenuActionId } f
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { useReducedMotion } from '@/lib/motion';
 import { resolvedBottomInset } from '@/lib/safe-area';
+import { hexWithAlpha } from '@/lib/eased-fade';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
-const PRIMARY = appTheme.colors.primary ?? '#FF7A59';
-const PRIMARY_STRONG = appTheme.colors.primaryStrong ?? '#FF8A6D';
-const ON_PRIMARY = appTheme.colors.onPrimary ?? '#1A0E0A';
 // Sheet motion. The panel travels its own measured height so it reads as a sheet arriving from
 // the screen edge instead of a box blinking into place, and the two directions use opposite
 // curves: entering decelerates into rest, leaving accelerates away.
@@ -56,6 +55,7 @@ export function MagicCreateMenu({
   horizontalInset?: number;
   bottomInset?: number;
 }) {
+  const theme = useAppTheme();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const safeBottom = Math.max(resolvedBottomInset(insets.bottom), bottomInset);
@@ -102,8 +102,8 @@ export function MagicCreateMenu({
   // The scrim reaches full strength by the time the panel is 60% of the way in, so the sheet
   // settles onto an already-dimmed screen rather than darkening the world as it arrives.
   const entryBackdropOpacity = progress
-    ? progress.interpolate({ inputRange: [0, 0.6, 1], outputRange: [0, 0.72, 0.72] })
-    : 0.72;
+    ? progress.interpolate({ inputRange: [0, 0.6, 1], outputRange: [0, 0.72 * theme.dim.scale, 0.72 * theme.dim.scale] })
+    : 0.72 * theme.dim.scale;
   // The scrim also thins as the sheet is dragged away, so a pull reads as the
   // world coming back rather than a panel sliding over a scrim that stays put.
   const backdropOpacity = progress && drag.backdropOpacity
@@ -142,7 +142,7 @@ export function MagicCreateMenu({
             position: 'absolute',
             inset: 0,
             opacity: backdropOpacity,
-            backgroundColor: '#000000',
+            backgroundColor: theme.dim.color,
           }}
         >
           <Pressable accessible={false} onPress={onClose} style={{ flex: 1 }} />
@@ -166,14 +166,14 @@ export function MagicCreateMenu({
             borderCurve: 'continuous',
             borderWidth: 1,
             borderBottomWidth: 0,
-            borderColor: appTheme.colors.border,
+            borderColor: theme.colors.border,
             paddingTop: 4,
             paddingHorizontal: 20,
             paddingBottom: safeBottom + 16,
-            backgroundColor: appTheme.colors.panel,
+            backgroundColor: theme.colors.panel,
             opacity: sheetOpacity,
             transform: [{ translateY: sheetTranslateY }],
-            boxShadow: '0 -16px 42px rgba(0,0,0,0.34)',
+            boxShadow: theme.shadow.sheet.boxShadow,
           }}
         >
           <SheetGrabber drag={drag} />
@@ -183,7 +183,7 @@ export function MagicCreateMenu({
               <Text
                 accessibilityRole="header"
                 accessibilityLiveRegion="polite"
-                style={{ color: appTheme.colors.text, fontSize: 22, lineHeight: 28, fontWeight: '800' }}
+                style={{ color: theme.colors.text, fontSize: 22, lineHeight: 28, fontWeight: '800' }}
               >
                 Create or publish
               </Text>
@@ -191,7 +191,7 @@ export function MagicCreateMenu({
             <CloseMenuButton onPress={onClose} />
           </View>
 
-          <Text style={{ marginTop: 4, color: appTheme.colors.muted, fontSize: 14, lineHeight: 20 }}>
+          <Text style={{ marginTop: 4, color: theme.colors.muted, fontSize: 14, lineHeight: 20 }}>
             Start with AI, or share work you already have.
           </Text>
 
@@ -212,6 +212,7 @@ export function MagicCreateMenu({
 }
 
 function CloseMenuButton({ onPress }: { onPress: () => void }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -225,20 +226,21 @@ function CloseMenuButton({ onPress }: { onPress: () => void }) {
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1,
-        borderColor: appTheme.colors.border,
-        backgroundColor: pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surface,
+        borderColor: theme.colors.border,
+        backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surface,
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
-      <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
+      <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
     </Pressable>
   );
 }
 
 function MenuActionButton({ action, width, onPress }: { action: CreateMenuAction; width: number; onPress: () => void }) {
+  const theme = useAppTheme();
   const isCreate = action.id === 'create';
   const Icon = isCreate ? Sparkles : FilePlus2;
-  const foreground = isCreate ? ON_PRIMARY : appTheme.colors.text;
+  const foreground = isCreate ? theme.colors.onPrimary : theme.colors.text;
 
   return (
     <Pressable
@@ -255,11 +257,11 @@ function MenuActionButton({ action, width, onPress }: { action: CreateMenuAction
         borderRadius: 20,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: isCreate ? PRIMARY : appTheme.colors.border,
+        borderColor: isCreate ? theme.colors.primaryFill : theme.colors.border,
         padding: 16,
         backgroundColor: isCreate
-          ? (pressed ? PRIMARY_STRONG : PRIMARY)
-          : (pressed ? appTheme.colors.surfaceStrong : appTheme.colors.panelSoft),
+          ? (pressed ? theme.colors.primaryFillPressed : theme.colors.primaryFill)
+          : (pressed ? theme.colors.surfaceStrong : theme.colors.panelSoft),
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
@@ -270,7 +272,7 @@ function MenuActionButton({ action, width, onPress }: { action: CreateMenuAction
           borderRadius: 24,
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: isCreate ? 'rgba(26,14,10,0.12)' : appTheme.colors.surfaceStrong,
+          backgroundColor: isCreate ? hexWithAlpha(theme.colors.onPrimary, 0.12) : theme.colors.surfaceStrong,
         }}
       >
         <Icon size={appTheme.icon.feature} color={foreground} />
@@ -279,7 +281,7 @@ function MenuActionButton({ action, width, onPress }: { action: CreateMenuAction
         <Text style={{ color: foreground, fontSize: 17, lineHeight: 22, fontWeight: '800' }}>
           {action.label}
         </Text>
-        <Text numberOfLines={2} style={{ color: isCreate ? 'rgba(26,14,10,0.72)' : appTheme.colors.muted, fontSize: 12, lineHeight: 17, fontWeight: '600' }}>
+        <Text numberOfLines={2} style={{ color: isCreate ? hexWithAlpha(theme.colors.onPrimary, 0.72) : theme.colors.muted, fontSize: 12, lineHeight: 17, fontWeight: '600' }}>
           {action.body}
         </Text>
       </View>

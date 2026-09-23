@@ -2,6 +2,7 @@ import { Check } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, Text } from 'react-native';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 /** How long a completed action keeps saying so before the pill reads as itself again. */
 const CONFIRM_MS = 1800;
@@ -25,6 +26,7 @@ export function ResourceAction({
   label: string;
   onPress: () => Promise<void> | void;
 }) {
+  const theme = useAppTheme();
   const [confirmed, setConfirmed] = useState(false);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -55,14 +57,14 @@ export function ResourceAction({
         gap: 6,
         borderRadius: appTheme.radii.pill,
         borderWidth: 1,
-        borderColor: showConfirmed ? appTheme.semantic.success.border : appTheme.colors.border,
-        backgroundColor: showConfirmed ? appTheme.semantic.success.background : appTheme.colors.surface,
+        borderColor: showConfirmed ? theme.semantic.success.border : theme.colors.border,
+        backgroundColor: showConfirmed ? theme.semantic.success.background : theme.colors.surface,
         opacity: pressed ? appTheme.opacity.pressed : 1,
         paddingHorizontal: 12,
       })}
     >
-      {showConfirmed ? <Check size={appTheme.icon.xs} color={appTheme.colors.success} /> : icon}
-      <Text style={{ color: appTheme.colors.text, ...appTheme.type.caption, fontWeight: '800' }}>
+      {showConfirmed ? <Check size={appTheme.icon.xs} color={theme.colors.success} /> : icon}
+      <Text style={{ color: theme.colors.text, ...appTheme.type.caption, fontWeight: '800' }}>
         {showConfirmed ? confirmLabel : label}
       </Text>
     </Pressable>

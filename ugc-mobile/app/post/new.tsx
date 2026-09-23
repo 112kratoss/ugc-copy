@@ -112,7 +112,9 @@ import {
 import { useReducedMotion } from '@/lib/motion';
 import { BackGlyph, CloseGlyph } from '@/lib/platform-glyphs';
 import { resolvedBottomInset } from '@/lib/safe-area';
-import { appTheme, type ToolAccent } from '@/lib/theme';
+import { hexWithAlpha } from '@/lib/eased-fade';
+import { accentFill, appTheme, mediaColors, onAccentFill, type ToolAccent } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import { isUploadCancelledError, runWeightedUploadQueue } from '@/lib/upload-file';
 import type { GenerationListItem, OwnerPostsResponse, PostResourceAttachment, PostResourceBundleAccessMode, PostResourceItemType, SourceToolOption } from '@/lib/types';
 import { buildShareUrl } from '@/lib/viewer-actions';
@@ -191,6 +193,7 @@ function PostComposerHeader({
   onClose: () => void;
   onBack: () => void;
 }) {
+  const theme = useAppTheme();
   const isResources = step === 'resources';
   return (
     <View
@@ -198,8 +201,8 @@ function PostComposerHeader({
         paddingTop: Math.max(8, topInset),
         paddingHorizontal: 14,
         borderBottomWidth: 1,
-        borderBottomColor: appTheme.colors.borderSubtle,
-        backgroundColor: appTheme.colors.background,
+        borderBottomColor: theme.colors.borderSubtle,
+        backgroundColor: theme.colors.background,
       }}
     >
       <View style={{ minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
@@ -219,14 +222,15 @@ function PostComposerHeader({
         {isResources ? <HeaderIconButton label="Close post composer" icon="close" onPress={onClose} /> : null}
       </View>
       <View style={{ flexDirection: 'row', gap: 6, paddingBottom: 8 }}>
-        <View style={{ flex: 1, height: 3, borderRadius: 2, backgroundColor: appTheme.colors.primary }} />
-        <View style={{ flex: 1, height: 3, borderRadius: 2, backgroundColor: isResources ? appTheme.colors.primary : appTheme.colors.border }} />
+        <View style={{ flex: 1, height: 3, borderRadius: 2, backgroundColor: theme.colors.primary }} />
+        <View style={{ flex: 1, height: 3, borderRadius: 2, backgroundColor: isResources ? theme.colors.primary : theme.colors.border }} />
       </View>
     </View>
   );
 }
 
 function HeaderIconButton({ label, icon, onPress }: { label: string; icon: 'back' | 'close'; onPress: () => void }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -239,12 +243,12 @@ function HeaderIconButton({ label, icon, onPress }: { label: string; icon: 'back
         borderRadius: 24,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: pressed ? appTheme.colors.surfaceStrong : 'transparent',
+        backgroundColor: pressed ? theme.colors.surfaceStrong : 'transparent',
       })}
     >
       {icon === 'back'
-        ? <BackGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
-        : <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />}
+        ? <BackGlyph size={appTheme.icon.feature} color={theme.colors.text} />
+        : <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />}
     </Pressable>
   );
 }
@@ -290,6 +294,7 @@ function PostDetailsPage({
   onAddMadeWith: () => void;
   onRemoveMadeWith: (id: string) => void;
 }) {
+  const theme = useAppTheme();
   const primaryAttribution = draft.madeWithRows.find((row) => row.toolLabel.trim());
   const attribution = primaryAttribution
     ? `${primaryAttribution.toolLabel}${primaryAttribution.modelLabel ? ` · ${primaryAttribution.modelLabel}` : ''}`
@@ -372,19 +377,19 @@ function PostDetailsPage({
             gap: 12,
             borderRadius: 16,
             borderWidth: 1,
-            borderColor: appTheme.colors.borderSubtle,
-            backgroundColor: pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surface,
+            borderColor: theme.colors.borderSubtle,
+            backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surface,
             paddingHorizontal: 14,
           })}
         >
-          <Sparkles size={19} color={appTheme.colors.image} />
+          <Sparkles size={19} color={theme.colors.image} />
           <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
             <AppText variant="label">Made with <AppText variant="caption" color="faint">optional</AppText></AppText>
             <AppText variant="caption" color="muted" numberOfLines={1}>{attribution}</AppText>
           </View>
           <ChevronDown
             size={18}
-            color={appTheme.colors.muted}
+            color={theme.colors.muted}
             style={{ transform: [{ rotate: isMadeWithOpen ? '180deg' : '0deg' }] }}
           />
         </Pressable>
@@ -424,6 +429,7 @@ function PostFormatSelector({
   value: Exclude<PostComposerMode, 'creation'>;
   onChange: (mode: Exclude<PostComposerMode, 'creation'>) => void;
 }) {
+  const theme = useAppTheme();
   const options: Array<{ id: Exclude<PostComposerMode, 'creation'>; label: string; body: string }> = [
     { id: 'upload', label: 'Media post', body: 'Share images or video' },
     { id: 'text', label: 'Text post', body: 'Share an idea or breakdown' },
@@ -447,8 +453,8 @@ function PostFormatSelector({
                 minHeight: 68,
                 borderRadius: 17,
                 borderWidth: 1,
-                borderColor: selected ? `${appTheme.colors.primary}aa` : appTheme.colors.borderSubtle,
-                backgroundColor: selected ? `${appTheme.colors.primary}18` : pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surface,
+                borderColor: selected ? `${theme.colors.primary}aa` : theme.colors.borderSubtle,
+                backgroundColor: selected ? `${theme.colors.primary}18` : pressed ? theme.colors.surfaceStrong : theme.colors.surface,
                 padding: 12,
                 gap: 3,
               })}
@@ -473,14 +479,15 @@ function FieldErrorText({ message }: { message?: string }) {
 }
 
 function ComposerFieldShell({ children }: { children: React.ReactNode }) {
+  const theme = useAppTheme();
   return (
     <View
       style={{
         gap: 8,
         borderRadius: 18,
         borderWidth: 1,
-        borderColor: appTheme.colors.borderSubtle,
-        backgroundColor: appTheme.colors.surface,
+        borderColor: theme.colors.borderSubtle,
+        backgroundColor: theme.colors.surface,
         padding: 14,
       }}
     >
@@ -543,6 +550,7 @@ function PostResourcesPage({
   onRemoveResource: (id: string) => void;
   onEditDetails: () => void;
 }) {
+  const theme = useAppTheme();
   const resourceActive = draft.resource.accessMode !== 'none';
   const priceTokens = getPostComposerPriceTokens(draft.resource);
   const creatorEarnings = Math.floor(priceTokens * 0.85 * 100) / 100;
@@ -631,8 +639,8 @@ function PostResourcesPage({
           justifyContent: 'center',
           borderRadius: 14,
           backgroundColor: draft.resource.accessMode === 'none'
-            ? appTheme.colors.surfaceStrong
-            : pressed ? appTheme.colors.surface : 'transparent',
+            ? theme.colors.surfaceStrong
+            : pressed ? theme.colors.surface : 'transparent',
           opacity: pressed ? appTheme.opacity.pressed : 1,
         })}
       >
@@ -685,10 +693,10 @@ function PostResourcesPage({
                   gap: 7,
                   borderRadius: 24,
                   paddingHorizontal: 14,
-                  backgroundColor: pressed ? appTheme.colors.primaryStrong : appTheme.colors.primary,
+                  backgroundColor: pressed ? theme.colors.primaryFillPressed : theme.colors.primaryFill,
                 })}
               >
-                <Plus size={17} color={appTheme.colors.onPrimary} />
+                <Plus size={17} color={theme.colors.onPrimary} />
                 <AppText variant="label" color="onPrimary">Add</AppText>
               </Pressable>
             </View>
@@ -714,14 +722,14 @@ function PostResourcesPage({
                   borderRadius: 18,
                   borderWidth: 1,
                   borderStyle: 'dashed',
-                  borderColor: pressed ? `${appTheme.colors.primary}aa` : appTheme.colors.border,
+                  borderColor: pressed ? `${theme.colors.primary}aa` : theme.colors.border,
                   alignItems: 'center',
                   justifyContent: 'center',
                   gap: 9,
-                  backgroundColor: pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surfaceInset,
+                  backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surfaceInset,
                 })}
               >
-                <Package size={27} color={appTheme.colors.muted} />
+                <Package size={27} color={theme.colors.muted} />
                 <AppText variant="label" color="muted">Add your first resource</AppText>
               </Pressable>
             )}
@@ -826,7 +834,8 @@ function ResourceAccessChoice({
   accent: 'workflow' | 'commerce';
   onPress: () => void;
 }) {
-  const color = appTheme.colors[accent];
+  const theme = useAppTheme();
+  const color = theme.colors[accent];
   return (
     <Pressable
       accessibilityRole="button"
@@ -838,8 +847,8 @@ function ResourceAccessChoice({
         justifyContent: 'space-between',
         borderRadius: 18,
         borderWidth: 1,
-        borderColor: active ? `${color}99` : appTheme.colors.border,
-        backgroundColor: active ? `${color}18` : pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surface,
+        borderColor: active ? `${color}99` : theme.colors.border,
+        backgroundColor: active ? `${color}18` : pressed ? theme.colors.surfaceStrong : theme.colors.surface,
         padding: 14,
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
@@ -866,6 +875,7 @@ function PostPublishSummary({
   validation: PostComposerValidationResult;
   onEditTitle?: () => void;
 }) {
+  const theme = useAppTheme();
   const title = draft.title.trim() || (onEditTitle ? 'Add a title' : 'Your post');
   const cover = draft.mediaItems[0]?.previewUrl
     || draft.mediaItems[0]?.uri
@@ -885,14 +895,14 @@ function PostPublishSummary({
       style={{
         borderRadius: 18,
         borderWidth: 1,
-        borderColor: ready ? appTheme.semantic.success.border : appTheme.semantic.warning.border,
-        backgroundColor: appTheme.colors.surface,
+        borderColor: ready ? theme.semantic.success.border : theme.semantic.warning.border,
+        backgroundColor: theme.colors.surface,
         padding: 14,
         gap: 12,
       }}
     >
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-        <View style={{ width: 58, height: 58, borderRadius: 15, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.surfaceStrong }}>
+        <View style={{ width: 58, height: 58, borderRadius: 15, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
           {cover && draft.mode !== 'text' ? (
             <StableMediaImage
               url={cover}
@@ -901,12 +911,12 @@ function PostPublishSummary({
               style={{ width: 58, height: 58 }}
             />
           ) : (
-            <FileText size={22} color={appTheme.colors.textSecondary} />
+            <FileText size={22} color={theme.colors.textSecondary} />
           )}
         </View>
         <View style={{ flex: 1, gap: 3 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            {ready ? <Check size={17} color={appTheme.colors.success} /> : null}
+            {ready ? <Check size={17} color={theme.colors.success} /> : null}
             <AppText variant="label">{ready ? 'Ready to publish' : 'Needs attention'}</AppText>
           </View>
           {onEditTitle ? (
@@ -930,7 +940,7 @@ function PostPublishSummary({
               >
                 {title}
               </AppText>
-              <Pencil size={16} color={appTheme.colors.textSecondary} />
+              <Pencil size={16} color={theme.colors.textSecondary} />
             </Pressable>
           ) : (
             <AppText variant="bodySm" numberOfLines={1}>{title}</AppText>
@@ -946,7 +956,7 @@ function PostPublishSummary({
       </View>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 7 }}>
         {[visibilityLabel, resourceLabel].map((label) => (
-          <View key={label} style={{ minHeight: 28, justifyContent: 'center', borderRadius: 14, backgroundColor: appTheme.colors.surfaceStrong, paddingHorizontal: 10 }}>
+          <View key={label} style={{ minHeight: 28, justifyContent: 'center', borderRadius: 14, backgroundColor: theme.colors.surfaceStrong, paddingHorizontal: 10 }}>
             <AppText variant="caption" color="textSecondary">{label}</AppText>
           </View>
         ))}
@@ -966,6 +976,7 @@ function ResourceCardRow({
   onEdit: () => void;
   onRemove: () => void;
 }) {
+  const theme = useAppTheme();
   const typeLabel = POST_COMPOSER_RESOURCE_CARD_OPTIONS.find((option) => option.id === card.type)?.label ?? 'Resource';
   const scopeLabel = card.appliesToAll || mediaItems.length <= 1
     ? 'All outputs'
@@ -987,13 +998,13 @@ function ResourceCardRow({
         gap: 12,
         borderRadius: 18,
         borderWidth: 1,
-        borderColor: isPostComposerResourceCardReady(card) ? appTheme.colors.borderSubtle : appTheme.semantic.warning.border,
-        backgroundColor: appTheme.colors.surface,
+        borderColor: isPostComposerResourceCardReady(card) ? theme.colors.borderSubtle : theme.semantic.warning.border,
+        backgroundColor: theme.colors.surface,
         padding: 12,
       }}
     >
-      <View style={{ width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.surfaceStrong }}>
-        <ResourceTypeIcon type={card.type} color={appTheme.colors.textSecondary} />
+      <View style={{ width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
+        <ResourceTypeIcon type={card.type} color={theme.colors.textSecondary} />
       </View>
       <Pressable
         accessibilityRole="button"
@@ -1012,7 +1023,7 @@ function ResourceCardRow({
         onPress={onRemove}
         style={({ pressed }) => ({ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
       >
-        <Trash2 size={18} color={appTheme.colors.danger} />
+        <Trash2 size={18} color={theme.colors.danger} />
       </Pressable>
     </View>
   );
@@ -1040,6 +1051,7 @@ function ComposerUndoBar({
   onUndo: () => void;
   onDismiss: () => void;
 }) {
+  const theme = useAppTheme();
   if (!entry) return null;
   return (
     <View
@@ -1056,8 +1068,8 @@ function ComposerUndoBar({
         borderRadius: appTheme.radii.md,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: appTheme.colors.border,
-        backgroundColor: appTheme.colors.panelSoft,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.panelSoft,
       }}
     >
       <AppText variant="label" color="text" style={{ flex: 1, minWidth: 0 }} numberOfLines={1}>
@@ -1074,7 +1086,7 @@ function ComposerUndoBar({
           alignItems: 'center',
           justifyContent: 'center',
           borderRadius: appTheme.radii.sm,
-          backgroundColor: pressed ? appTheme.colors.surfaceStrong : 'transparent',
+          backgroundColor: pressed ? theme.colors.surfaceStrong : 'transparent',
         })}
       >
         <AppText variant="button" color="primary">Undo</AppText>
@@ -1091,7 +1103,7 @@ function ComposerUndoBar({
           opacity: pressed ? appTheme.opacity.pressed : 1,
         })}
       >
-        <X size={appTheme.icon.sm} color={appTheme.colors.muted} />
+        <X size={appTheme.icon.sm} color={theme.colors.muted} />
       </Pressable>
     </View>
   );
@@ -1118,6 +1130,7 @@ function PostComposerFooter({
   onVisibility: () => void;
   onPublish: () => void;
 }) {
+  const theme = useAppTheme();
   const visibilityLabel = visibility === 'public' ? 'Public' : visibility === 'unlisted' ? 'Unlisted' : 'Private';
   const submitLabel = getPostComposerSubmitLabel({ visibility, isEditMode, isPending: loading });
   return (
@@ -1127,9 +1140,9 @@ function PostComposerFooter({
         paddingTop: 10,
         paddingBottom: bottomInset + 10,
         borderTopWidth: 1,
-        borderTopColor: appTheme.colors.borderSubtle,
-        backgroundColor: appTheme.colors.background,
-        boxShadow: '0 -12px 30px rgba(0,0,0,0.30)',
+        borderTopColor: theme.colors.borderSubtle,
+        backgroundColor: theme.colors.background,
+        boxShadow: theme.shadow.dock.boxShadow,
       }}
     >
       {step === 'details' ? (
@@ -1144,11 +1157,11 @@ function PostComposerFooter({
             justifyContent: 'center',
             gap: 8,
             borderRadius: 17,
-            backgroundColor: pressed ? appTheme.colors.primaryStrong : appTheme.colors.primary,
+            backgroundColor: pressed ? theme.colors.primaryFillPressed : theme.colors.primaryFill,
           })}
         >
           <AppText variant="button" color="onPrimary">Review & publish</AppText>
-          <ChevronRight size={19} color={appTheme.colors.onPrimary} />
+          <ChevronRight size={19} color={theme.colors.onPrimary} />
         </Pressable>
       ) : (
         <View style={{ flexDirection: 'row', gap: 10 }}>
@@ -1165,13 +1178,13 @@ function PostComposerFooter({
               gap: 7,
               borderRadius: 17,
               borderWidth: 1,
-              borderColor: appTheme.colors.border,
-              backgroundColor: pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surface,
+              borderColor: theme.colors.border,
+              backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surface,
             })}
           >
-            <Globe2 size={17} color={appTheme.colors.textSecondary} />
+            <Globe2 size={17} color={theme.colors.textSecondary} />
             <AppText variant="label">{visibilityLabel}</AppText>
-            <ChevronDown size={15} color={appTheme.colors.muted} />
+            <ChevronDown size={15} color={theme.colors.muted} />
           </Pressable>
           <Pressable
             accessibilityRole="button"
@@ -1187,11 +1200,11 @@ function PostComposerFooter({
               justifyContent: 'center',
               gap: 8,
               borderRadius: 17,
-              backgroundColor: appTheme.colors.primary,
+              backgroundColor: theme.colors.primaryFill,
               opacity: disabled || loading ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
             })}
           >
-            {loading ? <ActivityIndicator size="small" color={appTheme.colors.onPrimary} /> : null}
+            {loading ? <ActivityIndicator size="small" color={theme.colors.onPrimary} /> : null}
             <AppText variant="button" color="onPrimary">{submitLabel}</AppText>
           </Pressable>
         </View>
@@ -1213,6 +1226,7 @@ function VisibilitySheet({
   onClose: () => void;
   onChange: (value: PostComposerDraft['visibility']) => void;
 }) {
+  const theme = useAppTheme();
   const options: Array<{ id: PostComposerDraft['visibility']; label: string; body: string }> = [
     { id: 'public', label: 'Public', body: 'Visible in Explore and your profile.' },
     { id: 'unlisted', label: 'Unlisted', body: 'Only people with the link can open it.' },
@@ -1223,7 +1237,7 @@ function VisibilitySheet({
   return (
     <Modal visible={visible} transparent animationType={reducedMotion ? 'none' : 'fade'} presentationStyle="overFullScreen" onRequestClose={onClose}>
       <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-        <SheetBackdrop drag={drag} color={appTheme.colors.overlayStrong} onPress={onClose} />
+        <SheetBackdrop drag={drag} color={theme.colors.overlayStrong} onPress={onClose} />
         <SheetPanel
           {...drag.contentPanHandlers}
           accessibilityViewIsModal
@@ -1233,8 +1247,8 @@ function VisibilitySheet({
               borderTopRightRadius: 28,
               borderWidth: 1,
               borderBottomWidth: 0,
-              borderColor: appTheme.colors.border,
-              backgroundColor: appTheme.colors.panel,
+              borderColor: theme.colors.border,
+              backgroundColor: theme.colors.panel,
               paddingHorizontal: 18,
               paddingBottom: bottomInset + 18,
               gap: 12,
@@ -1260,13 +1274,13 @@ function VisibilitySheet({
                 gap: 12,
                 borderRadius: 16,
                 borderWidth: 1,
-                borderColor: value === option.id ? `${appTheme.colors.primary}99` : appTheme.colors.borderSubtle,
-                backgroundColor: value === option.id ? appTheme.colors.selected : pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surface,
+                borderColor: value === option.id ? `${theme.colors.primary}99` : theme.colors.borderSubtle,
+                backgroundColor: value === option.id ? theme.colors.selected : pressed ? theme.colors.surfaceStrong : theme.colors.surface,
                 padding: 12,
               })}
             >
-              <View style={{ width: 24, height: 24, borderRadius: 12, borderWidth: 1, borderColor: value === option.id ? appTheme.colors.primary : appTheme.colors.borderStrong, alignItems: 'center', justifyContent: 'center' }}>
-                {value === option.id ? <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: appTheme.colors.primary }} /> : null}
+              <View style={{ width: 24, height: 24, borderRadius: 12, borderWidth: 1, borderColor: value === option.id ? theme.colors.primary : theme.colors.borderStrong, alignItems: 'center', justifyContent: 'center' }}>
+                {value === option.id ? <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: theme.colors.primary }} /> : null}
               </View>
               <View style={{ flex: 1, gap: 2 }}>
                 <AppText variant="label">{option.label}</AppText>
@@ -1315,6 +1329,7 @@ function ResourceComposerSheet({
   onCancelUpload: () => void;
   onRemoveAttachment: (id: string) => void;
 }) {
+  const theme = useAppTheme();
   const { height } = useWindowDimensions();
   const visible = mode !== null;
   const option = card ? POST_COMPOSER_RESOURCE_CARD_OPTIONS.find((candidate) => candidate.id === card.type) : null;
@@ -1339,7 +1354,7 @@ function ResourceComposerSheet({
   return (
     <Modal visible={visible} transparent animationType={reducedMotion ? 'none' : 'slide'} presentationStyle="overFullScreen" onRequestClose={onRequestClose}>
       <KeyboardAvoidingArea iosScrollViewAdjustsInsets style={{ justifyContent: 'flex-end' }}>
-        <SheetBackdrop drag={drag} color={appTheme.colors.overlayStrong} onPress={onRequestClose} />
+        <SheetBackdrop drag={drag} color={theme.colors.overlayStrong} onPress={onRequestClose} />
         <SheetPanel
           {...drag.contentPanHandlers}
           accessibilityViewIsModal
@@ -1350,8 +1365,8 @@ function ResourceComposerSheet({
               borderTopRightRadius: 28,
               borderWidth: 1,
               borderBottomWidth: 0,
-              borderColor: appTheme.colors.border,
-              backgroundColor: appTheme.colors.panel,
+              borderColor: theme.colors.border,
+              backgroundColor: theme.colors.panel,
               overflow: 'hidden',
             },
             drag.dragStyle,
@@ -1392,19 +1407,19 @@ function ResourceComposerSheet({
                     gap: 12,
                     borderRadius: 17,
                     borderWidth: 1,
-                    borderColor: appTheme.colors.borderSubtle,
-                    backgroundColor: pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surface,
+                    borderColor: theme.colors.borderSubtle,
+                    backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surface,
                     padding: 12,
                   })}
                 >
-                  <View style={{ width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.surfaceStrong }}>
-                    <ResourceTypeIcon type={resourceOption.id} color={appTheme.colors.textSecondary} />
+                  <View style={{ width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
+                    <ResourceTypeIcon type={resourceOption.id} color={theme.colors.textSecondary} />
                   </View>
                   <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
                     <AppText variant="label">{resourceOption.label}</AppText>
                     <AppText variant="caption" color="muted" numberOfLines={2}>{resourceOption.body}</AppText>
                   </View>
-                  <ChevronRight size={18} color={appTheme.colors.faint} />
+                  <ChevronRight size={18} color={theme.colors.faint} />
                 </Pressable>
               ))}
             </ScrollView>
@@ -1490,11 +1505,11 @@ function ResourceComposerSheet({
                   <ComposerFieldShell>
                     <CompactFieldLabel label={card.type === 'reference_media' ? 'Reference files' : card.type === 'workflow' ? 'Workflow files' : 'Files'} optional={card.type === 'workflow' || card.type === 'other'} required={card.type === 'reference_media' || card.type === 'source_assets'} />
                     {card.attachments.map((attachment) => (
-                      <View key={attachment.id} style={{ minHeight: 50, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 14, backgroundColor: appTheme.colors.surfaceInset, paddingHorizontal: 11 }}>
-                        <FileText size={17} color={appTheme.colors.textSecondary} />
+                      <View key={attachment.id} style={{ minHeight: 50, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 14, backgroundColor: theme.colors.surfaceInset, paddingHorizontal: 11 }}>
+                        <FileText size={17} color={theme.colors.textSecondary} />
                         <AppText variant="caption" numberOfLines={1} style={{ flex: 1 }}>{attachment.label}</AppText>
                         <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${attachment.label}`} onPress={() => onRemoveAttachment(attachment.id)} style={({ pressed }) => ({ width: 44, height: 44, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-                          <X size={17} color={appTheme.colors.danger} />
+                          <X size={17} color={theme.colors.danger} />
                         </Pressable>
                       </View>
                     ))}
@@ -1511,12 +1526,12 @@ function ResourceComposerSheet({
                         borderRadius: 15,
                         borderWidth: 1,
                         borderStyle: 'dashed',
-                        borderColor: appTheme.colors.border,
-                        backgroundColor: pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surfaceInset,
+                        borderColor: theme.colors.border,
+                        backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surfaceInset,
                         opacity: isUploading ? appTheme.opacity.disabled : 1,
                       })}
                     >
-                      {isUploading ? <ActivityIndicator size="small" color={appTheme.colors.primary} /> : <Upload size={17} color={appTheme.colors.textSecondary} />}
+                      {isUploading ? <ActivityIndicator size="small" color={theme.colors.primary} /> : <Upload size={17} color={theme.colors.textSecondary} />}
                       <AppText variant="label" color="textSecondary">{isUploading ? 'Uploading' : 'Add file'}</AppText>
                     </Pressable>
                     {isUploading ? (
@@ -1542,13 +1557,13 @@ function ResourceComposerSheet({
                             <AppText variant="caption" color="danger">Cancel</AppText>
                           </Pressable>
                         </View>
-                        <View style={{ height: 5, overflow: 'hidden', borderRadius: 3, backgroundColor: appTheme.colors.borderSubtle }}>
+                        <View style={{ height: 5, overflow: 'hidden', borderRadius: 3, backgroundColor: theme.colors.borderSubtle }}>
                           <View
                             style={{
                               width: `${uploadProgress?.percent ?? 0}%`,
                               height: '100%',
                               borderRadius: 3,
-                              backgroundColor: appTheme.colors.primary,
+                              backgroundColor: theme.colors.primary,
                             }}
                           />
                         </View>
@@ -1561,7 +1576,7 @@ function ResourceComposerSheet({
                     ) : uploadError ? (
                       <View
                         accessibilityLiveRegion="polite"
-                        style={{ gap: 8, borderRadius: 14, backgroundColor: `${appTheme.colors.danger}12`, padding: 11 }}
+                        style={{ gap: 8, borderRadius: 14, backgroundColor: `${theme.colors.danger}12`, padding: 11 }}
                       >
                         <AppText variant="label" color="danger">Could not add file</AppText>
                         <AppText variant="caption" color="muted">{uploadError}</AppText>
@@ -1585,7 +1600,7 @@ function ResourceComposerSheet({
                   <ResourceScopePicker card={card} mediaItems={mediaItems} onChange={onChange} />
                 ) : null}
               </ScrollView>
-              <View style={{ paddingHorizontal: 18, paddingTop: 10, paddingBottom: bottomInset + 12, borderTopWidth: 1, borderTopColor: appTheme.colors.borderSubtle }}>
+              <View style={{ paddingHorizontal: 18, paddingTop: 10, paddingBottom: bottomInset + 12, borderTopWidth: 1, borderTopColor: theme.colors.borderSubtle }}>
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Save resource"
@@ -1600,7 +1615,7 @@ function ResourceComposerSheet({
                     alignItems: 'center',
                     justifyContent: 'center',
                     borderRadius: 17,
-                    backgroundColor: appTheme.colors.primary,
+                    backgroundColor: theme.colors.primaryFill,
                     opacity: !isReady || isUploading ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
                   })}
                 >
@@ -1624,6 +1639,7 @@ function ResourceScopePicker({
   mediaItems: PostComposerMediaItem[];
   onChange: (patch: Partial<PostComposerResourceCardDraft>) => void;
 }) {
+  const theme = useAppTheme();
   const toggleMedia = (mediaKey: string) => {
     if (card.appliesToAll) {
       onChange({ appliesToAll: false, mediaKeys: [mediaKey] });
@@ -1651,12 +1667,12 @@ function ResourceScopePicker({
           gap: 9,
           borderRadius: 14,
           borderWidth: 1,
-          borderColor: card.appliesToAll ? `${appTheme.colors.image}99` : appTheme.colors.border,
-          backgroundColor: card.appliesToAll ? `${appTheme.colors.image}16` : pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surfaceInset,
+          borderColor: card.appliesToAll ? `${theme.colors.image}99` : theme.colors.border,
+          backgroundColor: card.appliesToAll ? `${theme.colors.image}16` : pressed ? theme.colors.surfaceStrong : theme.colors.surfaceInset,
           paddingHorizontal: 12,
         })}
       >
-        <Check size={17} color={card.appliesToAll ? appTheme.colors.image : appTheme.colors.faint} />
+        <Check size={17} color={card.appliesToAll ? theme.colors.image : theme.colors.faint} />
         <AppText variant="label">All outputs</AppText>
       </Pressable>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9 }}>
@@ -1676,15 +1692,15 @@ function ResourceScopePicker({
                 opacity: pressed ? appTheme.opacity.pressed : 1,
               })}
             >
-              <View style={{ height: 82, borderRadius: 13, overflow: 'hidden', borderWidth: selected ? 2 : 1, borderColor: selected ? appTheme.colors.image : appTheme.colors.border, backgroundColor: appTheme.colors.surfaceInset }}>
+              <View style={{ height: 82, borderRadius: 13, overflow: 'hidden', borderWidth: selected ? 2 : 1, borderColor: selected ? theme.colors.image : theme.colors.border, backgroundColor: theme.colors.surfaceInset }}>
                 {item.mediaKind === 'image' ? (
                   <StableMediaImage url={item.previewUrl ?? item.uri} cacheKey={`scope:${mediaKey}`} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
                 ) : (
-                  <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Play size={24} color={appTheme.colors.textSecondary} /></View>
+                  <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Play size={24} color={theme.colors.textSecondary} /></View>
                 )}
                 {selected ? (
-                  <View style={{ position: 'absolute', top: 5, right: 5, width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.image }}>
-                    <Check size={13} color={appTheme.colors.textInverse} />
+                  <View style={{ position: 'absolute', top: 5, right: 5, width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.image }}>
+                    <Check size={13} color={theme.colors.textInverse} />
                   </View>
                 ) : null}
               </View>
@@ -1731,6 +1747,7 @@ function getResourceCardSignature(card: PostComposerResourceCardDraft) {
 
 
 export default function NewPostScreen() {
+  const theme = useAppTheme();
   const { user, isLoading: authLoading, api } = useAuth();
   const queryClient = useQueryClient();
   const navigation = useNavigation();
@@ -2252,8 +2269,8 @@ export default function NewPostScreen() {
 
   if (authLoading) {
     return (
-      <View style={{ flex: 1, backgroundColor: appTheme.colors.background, alignItems: 'center', justifyContent: 'center' }}>
-        <ActivityIndicator color={appTheme.colors.motion} />
+      <View style={{ flex: 1, backgroundColor: theme.colors.background, alignItems: 'center', justifyContent: 'center' }}>
+        <ActivityIndicator color={theme.colors.motion} />
       </View>
     );
   }
@@ -2264,8 +2281,8 @@ export default function NewPostScreen() {
 
   if (isEditMode && (postQuery.isLoading || (postQuery.isSuccess && Boolean(postQuery.data?.post) && !hasPrefilledEdit))) {
     return (
-      <View style={{ flex: 1, backgroundColor: appTheme.colors.background, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24 }}>
-        <ActivityIndicator color={appTheme.colors.primary} />
+      <View style={{ flex: 1, backgroundColor: theme.colors.background, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24 }}>
+        <ActivityIndicator color={theme.colors.primary} />
         <AppText variant="bodySm" color="muted">Loading your post</AppText>
       </View>
     );
@@ -2273,7 +2290,7 @@ export default function NewPostScreen() {
 
   if (isEditMode && (postQuery.isError || (postQuery.isSuccess && !postQuery.data?.post))) {
     return (
-      <View style={{ flex: 1, backgroundColor: appTheme.colors.background, justifyContent: 'center', gap: 12, padding: 24 }}>
+      <View style={{ flex: 1, backgroundColor: theme.colors.background, justifyContent: 'center', gap: 12, padding: 24 }}>
         <StatusBlock tone="danger" title="Could not load this post" body="Nothing has been changed. Check your connection, then try again." />
         <SecondaryButton label="Retry post" onPress={() => void postQuery.refetch()} />
         <SecondaryButton label="Back to profile" onPress={() => router.replace('/(tabs)/profile?tab=posts' as never)} />
@@ -2283,8 +2300,8 @@ export default function NewPostScreen() {
 
   if (generationId && generationsQuery.isLoading) {
     return (
-      <View style={{ flex: 1, backgroundColor: appTheme.colors.background, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24 }}>
-        <ActivityIndicator color={appTheme.colors.primary} />
+      <View style={{ flex: 1, backgroundColor: theme.colors.background, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24 }}>
+        <ActivityIndicator color={theme.colors.primary} />
         <AppText variant="bodySm" color="muted">Loading your creation</AppText>
       </View>
     );
@@ -2292,7 +2309,7 @@ export default function NewPostScreen() {
 
   if (generationId && (generationsQuery.isError || (generationsQuery.isSuccess && !explicitGeneration))) {
     return (
-      <View style={{ flex: 1, backgroundColor: appTheme.colors.background, justifyContent: 'center', gap: 12, padding: 24 }}>
+      <View style={{ flex: 1, backgroundColor: theme.colors.background, justifyContent: 'center', gap: 12, padding: 24 }}>
         <StatusBlock tone="danger" title="Could not load this creation" body="Open the creation from your library and try publishing it again." />
         <SecondaryButton label="Retry creation" onPress={() => void generationsQuery.refetch()} />
         <SecondaryButton label="Back to creations" onPress={() => router.replace('/(tabs)/profile?tab=creations' as never)} />
@@ -3150,7 +3167,7 @@ export default function NewPostScreen() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       {/* On iOS 26 the back swipe completes the pop natively before the
           usePreventRemove veto can run — the leave sheet then opens over the
           previous screen and JS/native navigation state desync (upstream:
@@ -3176,7 +3193,7 @@ export default function NewPostScreen() {
         keyboardDismissMode="on-drag"
         scrollEventThrottle={16}
         onScroll={(event) => { scrollYRef.current = event.nativeEvent.contentOffset.y; }}
-        style={{ flex: 1, backgroundColor: appTheme.colors.background }}
+        style={{ flex: 1, backgroundColor: theme.colors.background }}
         contentContainerStyle={{
           paddingHorizontal: horizontalPadding,
           paddingTop: 8,
@@ -3327,6 +3344,7 @@ function MadeWithSection({
   onAdd: () => void;
   onRemove: (id: string) => void;
 }) {
+  const theme = useAppTheme();
   const toolOptions = getMadeWithToolOptions(sourceTools);
   const [activePickerId, setActivePickerId] = useState<string | null>(null);
   const lockedRow = rows[0];
@@ -3348,8 +3366,8 @@ function MadeWithSection({
             borderRadius: 16,
             borderCurve: 'continuous',
             borderWidth: 1,
-            borderColor: 'rgba(125,211,252,0.20)',
-            backgroundColor: 'rgba(56,189,248,0.08)',
+            borderColor: hexWithAlpha(theme.colors.image, 0.20),
+            backgroundColor: hexWithAlpha(theme.colors.image, 0.08),
             paddingHorizontal: appTheme.spacing.gap,
             paddingVertical: 10,
             flexDirection: 'row',
@@ -3649,6 +3667,7 @@ function MobileCreatablePicker({
   onCreate?: (label: string) => void;
   onCustomEdit?: (label: string) => void;
 }) {
+  const theme = useAppTheme();
   const [draftQuery, setDraftQuery] = useState<string | null>(null);
   const isOpen = activePickerId === pickerId;
   const query = isOpen ? draftQuery ?? value : value;
@@ -3735,16 +3754,16 @@ function MobileCreatablePicker({
             }
           }}
           placeholder={placeholder}
-          placeholderTextColor={appTheme.colors.faint}
+          placeholderTextColor={theme.colors.faint}
           editable={!disabled}
           style={{
             minHeight: appTheme.touch.compact,
             borderRadius: 14,
             borderCurve: 'continuous',
             borderWidth: 1,
-            borderColor: isOpen ? `${appTheme.colors.image}88` : appTheme.colors.border,
-            backgroundColor: disabled ? appTheme.colors.surface : appTheme.colors.surfaceInset,
-            color: disabled ? appTheme.colors.faint : appTheme.colors.text,
+            borderColor: isOpen ? `${theme.colors.image}88` : theme.colors.border,
+            backgroundColor: disabled ? theme.colors.surface : theme.colors.surfaceInset,
+            color: disabled ? theme.colors.faint : theme.colors.text,
             ...appTheme.type.bodySm,
             fontWeight: '700',
             paddingLeft: appTheme.spacing.gap,
@@ -3775,7 +3794,7 @@ function MobileCreatablePicker({
             opacity: pressed ? appTheme.opacity.pressed : disabled ? 0.38 : 1,
           })}
         >
-          <ChevronDown size={16} color="rgba(255,255,255,0.58)" />
+          <ChevronDown size={16} color={hexWithAlpha(theme.colors.text, 0.58)} />
         </Pressable>
       </View>
 
@@ -3786,8 +3805,8 @@ function MobileCreatablePicker({
             borderRadius: 16,
             borderCurve: 'continuous',
             borderWidth: 1,
-            borderColor: appTheme.colors.border,
-            backgroundColor: '#0a0b10',
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.surfaceInset,
             overflow: 'hidden',
           }}
         >
@@ -3808,11 +3827,11 @@ function MobileCreatablePicker({
                     gap: 8,
                     paddingHorizontal: 12,
                     paddingVertical: 10,
-                    backgroundColor: selected ? 'rgba(56,189,248,0.14)' : pressed ? 'rgba(255,255,255,0.07)' : 'transparent',
+                    backgroundColor: selected ? hexWithAlpha(theme.colors.image, 0.14) : pressed ? hexWithAlpha(theme.colors.text, 0.07) : 'transparent',
                   })}
                 >
                   {entry.type === 'create' ? (
-                    <Plus size={15} color={appTheme.colors.image} />
+                    <Plus size={15} color={theme.colors.image} />
                   ) : null}
                   <AppText
                     variant="bodySm"
@@ -4025,6 +4044,7 @@ function UnlockSection({
   onUpdateSection: (id: string, patch: Partial<PostComposerDraft['resource']['sections'][number]>) => void;
   onRemoveSection: (id: string) => void;
 }) {
+  const theme = useAppTheme();
   const resourceActive = draft.resource.accessMode !== 'none';
   const unlockEnabled = resourceActive
     || draft.creationPackage.attachGenerationReferences
@@ -4083,8 +4103,8 @@ function UnlockSection({
             style={{
               borderRadius: 16,
               borderWidth: 1,
-              borderColor: 'rgba(255,255,255,0.10)',
-              backgroundColor: 'rgba(0,0,0,0.16)',
+              borderColor: hexWithAlpha(theme.colors.text, 0.10),
+              backgroundColor: hexWithAlpha(theme.dim.color, 0.16 * theme.dim.scale),
               padding: 10,
               gap: appTheme.spacing.gap,
             }}
@@ -4109,7 +4129,7 @@ function UnlockSection({
               ))}
             </SegmentedRow>
 
-            <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.08)' }} />
+            <View style={{ height: 1, backgroundColor: hexWithAlpha(theme.colors.text, 0.08) }} />
 
             <FieldBlock label="Resource types">
               <SegmentedRow wrap>
@@ -4223,6 +4243,7 @@ function PublishSection({
 }
 
 function GeneratedProofCard({ item }: { item: GenerationListItem }) {
+  const theme = useAppTheme();
   const mediaUrl = item.media?.url ?? item.output_urls?.[0] ?? item.output_url ?? null;
   const previewUrl = getGenerationPreviewImageUrl(item);
   const mediaKind = getPublishGenerationMediaKind(item);
@@ -4234,8 +4255,8 @@ function GeneratedProofCard({ item }: { item: GenerationListItem }) {
         borderRadius: 18,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.10)',
-        backgroundColor: 'rgba(255,255,255,0.025)',
+        borderColor: hexWithAlpha(theme.colors.text, 0.10),
+        backgroundColor: hexWithAlpha(theme.colors.text, 0.025),
         padding: appTheme.spacing.gap,
         gap: appTheme.spacing.gap,
       }}
@@ -4263,8 +4284,8 @@ function GeneratedProofCard({ item }: { item: GenerationListItem }) {
           borderCurve: 'continuous',
           overflow: 'hidden',
           borderWidth: 1,
-          borderColor: 'rgba(255,255,255,0.08)',
-          backgroundColor: appTheme.colors.surfaceInset,
+          borderColor: hexWithAlpha(theme.colors.text, 0.08),
+          backgroundColor: theme.colors.surfaceInset,
         }}
       >
         {visualUrl ? (
@@ -4276,14 +4297,14 @@ function GeneratedProofCard({ item }: { item: GenerationListItem }) {
             style={{ position: 'absolute', inset: 0 }}
           />
         ) : (
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: appTheme.spacing.gap, backgroundColor: appTheme.colors.panelSoft }}>
-            <Sparkles size={34} color={appTheme.colors.motion} />
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: appTheme.spacing.gap, backgroundColor: theme.colors.panelSoft }}>
+            <Sparkles size={34} color={theme.colors.motion} />
             <AppText variant="cardTitle">Creation ready</AppText>
           </View>
         )}
         {mediaKind === 'video' ? (
-          <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.16)' }}>
-            <Play size={44} color="#fff" fill="#fff" />
+          <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.16) }}>
+            <Play size={44} color={mediaColors.onMedia} fill={mediaColors.onMedia} />
           </View>
         ) : null}
       </View>
@@ -4331,19 +4352,20 @@ function MinimalComposerSection({
   action?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  const theme = useAppTheme();
   const toneColor = tone === 'workflow'
-    ? appTheme.colors.workflow
+    ? theme.colors.workflow
     : tone === 'commerce'
-      ? appTheme.colors.image
-      : appTheme.colors.borderStrong;
+      ? theme.colors.image
+      : theme.colors.borderStrong;
 
   return (
     <View
       style={{
         ...MINIMAL_COMPOSER_SECTION_STYLE,
         borderWidth: 1,
-        borderColor: tone === 'neutral' ? appTheme.colors.border : `${toneColor}3f`,
-        backgroundColor: tone === 'workflow' ? 'rgba(5, 45, 32, 0.42)' : appTheme.colors.surface,
+        borderColor: tone === 'neutral' ? theme.colors.border : `${toneColor}3f`,
+        backgroundColor: tone === 'workflow' ? hexWithAlpha(theme.colors.workflow, 0.1) : theme.colors.surface,
       }}
     >
       <View style={{ gap: 9 }}>
@@ -4376,11 +4398,12 @@ function MinimalStatusPill({
   label: string;
   tone?: 'neutral' | 'workflow' | 'commerce';
 }) {
+  const theme = useAppTheme();
   const color = tone === 'workflow'
-    ? appTheme.colors.workflow
+    ? theme.colors.workflow
     : tone === 'commerce'
-      ? appTheme.colors.image
-      : appTheme.colors.muted;
+      ? theme.colors.image
+      : theme.colors.muted;
 
   return (
     <View
@@ -4411,6 +4434,7 @@ function UnlockChecklistRow({
   label: string;
   onPress: () => void;
 }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="checkbox"
@@ -4420,8 +4444,8 @@ function UnlockChecklistRow({
         minHeight: appTheme.touch.compact,
         borderRadius: 14,
         borderWidth: 1,
-        borderColor: checked ? `${appTheme.colors.workflow}66` : 'transparent',
-        backgroundColor: checked ? 'rgba(16,185,129,0.10)' : 'transparent',
+        borderColor: checked ? `${theme.colors.workflow}66` : 'transparent',
+        backgroundColor: checked ? hexWithAlpha(theme.colors.workflow, 0.10) : 'transparent',
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10,
@@ -4435,13 +4459,13 @@ function UnlockChecklistRow({
           height: 18,
           borderRadius: 4,
           borderWidth: 1,
-          borderColor: checked ? appTheme.colors.workflow : appTheme.colors.borderStrong,
-          backgroundColor: checked ? appTheme.colors.workflow : appTheme.colors.surfaceInset,
+          borderColor: checked ? accentFill('workflow') : theme.colors.borderStrong,
+          backgroundColor: checked ? accentFill('workflow') : theme.colors.surfaceInset,
           alignItems: 'center',
           justifyContent: 'center',
         }}
       >
-        {checked ? <Check size={13} color="#04130c" /> : null}
+        {checked ? <Check size={13} color={onAccentFill('workflow')} /> : null}
       </View>
       <AppText selectable={false} variant="label" color="text">
         {label}
@@ -4465,6 +4489,7 @@ function PublishActionCard({
   disabled: boolean;
   onPress: () => void;
 }) {
+  const theme = useAppTheme();
   const isPrimary = variant === 'primary';
 
   return (
@@ -4477,8 +4502,8 @@ function PublishActionCard({
         minHeight: 58,
         borderRadius: 13,
         borderWidth: 1,
-        borderColor: isPrimary ? appTheme.colors.primaryStrong : appTheme.colors.border,
-        backgroundColor: isPrimary ? appTheme.colors.primary : appTheme.colors.surfaceStrong,
+        borderColor: isPrimary ? theme.colors.primaryStrong : theme.colors.border,
+        backgroundColor: isPrimary ? theme.colors.primaryFill : theme.colors.surfaceStrong,
         opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
         justifyContent: 'center',
         gap: 4,
@@ -4487,13 +4512,13 @@ function PublishActionCard({
       })}
     >
       {loading ? (
-        <ActivityIndicator color={isPrimary ? appTheme.colors.textInverse : appTheme.colors.text} />
+        <ActivityIndicator color={isPrimary ? theme.colors.onPrimary : theme.colors.text} />
       ) : (
         <>
-          <AppText selectable={false} variant="label" color={isPrimary ? 'textInverse' : 'text'} numberOfLines={1}>
+          <AppText selectable={false} variant="label" color={isPrimary ? 'onPrimary' : 'text'} numberOfLines={1}>
             {label}
           </AppText>
-          <AppText selectable={false} variant="caption" color={isPrimary ? 'textInverse' : 'muted'} numberOfLines={1}>
+          <AppText selectable={false} variant="caption" color={isPrimary ? 'onPrimary' : 'muted'} numberOfLines={1}>
             {body}
           </AppText>
         </>
@@ -4528,6 +4553,7 @@ function ComposerInput({
   minHeight?: number;
   editable?: boolean;
 } & Omit<TextInputProps, 'ref' | 'value' | 'onChangeText' | 'placeholder' | 'multiline' | 'editable' | 'style'>) {
+  const theme = useAppTheme();
   return (
     <TextInput
       {...inputProps}
@@ -4537,7 +4563,7 @@ function ComposerInput({
       value={value}
       onChangeText={onChangeText}
       placeholder={placeholder}
-      placeholderTextColor={appTheme.colors.faint}
+      placeholderTextColor={theme.colors.faint}
       multiline={multiline}
       textAlignVertical={multiline ? 'top' : 'center'}
       editable={editable}
@@ -4546,9 +4572,9 @@ function ComposerInput({
         borderRadius: 14,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: appTheme.colors.border,
-        backgroundColor: editable ? appTheme.colors.surfaceInset : appTheme.colors.surface,
-        color: editable ? appTheme.colors.text : appTheme.colors.faint,
+        borderColor: theme.colors.border,
+        backgroundColor: editable ? theme.colors.surfaceInset : theme.colors.surface,
+        color: editable ? theme.colors.text : theme.colors.faint,
         ...appTheme.type.bodySm,
         fontWeight: '500',
         paddingHorizontal: appTheme.spacing.gap,
@@ -4637,6 +4663,7 @@ function UploadContent({
   onReorderMedia: (id: string, targetIndex: number) => void;
   disabled?: boolean;
 }) {
+  const theme = useAppTheme();
   // The whole drag lives here rather than inside a card, because Drag and drop
   // asks the *row* to respond: the neighbours move aside to show where the card
   // will land, and the row scrolls itself when the destination is off-screen.
@@ -4819,8 +4846,8 @@ function UploadContent({
             borderRadius: 16,
             borderWidth: 1,
             borderStyle: 'dashed',
-            borderColor: pressed ? `${appTheme.colors.image}aa` : appTheme.colors.border,
-            backgroundColor: pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surfaceInset,
+            borderColor: pressed ? `${theme.colors.image}aa` : theme.colors.border,
+            backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surfaceInset,
             alignItems: 'center',
             justifyContent: 'center',
             gap: appTheme.spacing.compact,
@@ -4828,7 +4855,7 @@ function UploadContent({
             opacity: disabled || isPicking ? appTheme.opacity.disabled : 1,
           })}
         >
-          <ImageIcon size={30} color={appTheme.colors.muted} />
+          <ImageIcon size={30} color={theme.colors.muted} />
           <AppText variant="label" color="muted">{isPicking ? 'Preparing media…' : 'Add media'}</AppText>
         </Pressable>
       )}
@@ -4852,6 +4879,7 @@ function AddMediaGalleryCard({
   remainingSlots: number;
   onPress: () => void;
 }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -4863,8 +4891,8 @@ function AddMediaGalleryCard({
         borderRadius: 16,
         borderWidth: 1,
         borderStyle: 'dashed',
-        borderColor: pressed ? `${appTheme.colors.image}cc` : appTheme.colors.border,
-        backgroundColor: pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surfaceInset,
+        borderColor: pressed ? `${theme.colors.image}cc` : theme.colors.border,
+        backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surfaceInset,
         overflow: 'hidden',
         opacity: isPicking ? appTheme.opacity.disabled : 1,
       })}
@@ -4875,7 +4903,7 @@ function AddMediaGalleryCard({
           alignItems: 'center',
           justifyContent: 'center',
           gap: 10,
-          backgroundColor: '#080912',
+          backgroundColor: theme.colors.surfaceInset,
         }}
       >
         <View
@@ -4884,21 +4912,21 @@ function AddMediaGalleryCard({
             height: 42,
             borderRadius: 21,
             borderWidth: 1,
-            borderColor: `${appTheme.colors.image}88`,
-            backgroundColor: 'rgba(56,189,248,0.12)',
+            borderColor: `${theme.colors.image}88`,
+            backgroundColor: hexWithAlpha(theme.colors.image, 0.12),
             alignItems: 'center',
             justifyContent: 'center',
           }}
         >
-          <Plus size={22} color={appTheme.colors.image} />
+          <Plus size={22} color={theme.colors.image} />
         </View>
         <AppText variant="caption" color="muted">{isPicking ? 'Preparing…' : 'Add media'}</AppText>
       </View>
       <View style={{ padding: 9, gap: 7 }}>
-        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>
+        <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 12, fontWeight: '800' }}>
           Add media
         </Text>
-        <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '700' }}>
+        <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700' }}>
           {`${remainingSlots} ${remainingSlots === 1 ? 'slot' : 'slots'} left`}
         </Text>
       </View>
@@ -4931,6 +4959,7 @@ function MediaGalleryCard({
   onDragEnd: (commit: boolean) => void;
   onPreviewMedia: (index: number) => void;
 }) {
+  const theme = useAppTheme();
   const isDragArmedRef = useRef(false);
   const isResponderRef = useRef(false);
   const touchOriginRef = useRef<{ x: number; y: number } | null>(null);
@@ -5082,15 +5111,15 @@ function MediaGalleryCard({
         width: MEDIA_CARD_WIDTH,
         borderRadius: 16,
         borderWidth: 1,
-        borderColor: isDragging ? `${appTheme.colors.image}dd` : index === 0 ? `${appTheme.colors.image}aa` : appTheme.colors.border,
-        backgroundColor: isDragging ? appTheme.colors.surfaceStrong : appTheme.colors.surfaceInset,
+        borderColor: isDragging ? `${theme.colors.image}dd` : index === 0 ? `${theme.colors.image}aa` : theme.colors.border,
+        backgroundColor: isDragging ? theme.colors.surfaceStrong : theme.colors.surfaceInset,
         overflow: 'hidden',
         transform: [{ translateX }],
         zIndex: isDragging ? 10 : 0,
         opacity: isDragging ? 0.92 : 1,
       }}
     >
-      <View style={{ height: 132, backgroundColor: '#080912' }}>
+      <View style={{ height: 132, backgroundColor: theme.colors.surfaceInset }}>
         {item.mediaKind === 'image' ? (
           <StableMediaImage
             url={item.previewUrl ?? item.uri}
@@ -5099,8 +5128,8 @@ function MediaGalleryCard({
             style={{ position: 'absolute', inset: 0 }}
           />
         ) : (
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.panelSoft }}>
-            <Play size={34} color="#fff" fill="#fff" />
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panelSoft }}>
+            <Play size={34} color={theme.colors.textSecondary} fill={theme.colors.textSecondary} />
           </View>
         )}
         {!disabled ? (
@@ -5120,22 +5149,22 @@ function MediaGalleryCard({
               height: 30,
               borderRadius: 15,
               borderWidth: 1,
-              borderColor: 'rgba(255,255,255,0.2)',
-              backgroundColor: 'rgba(0,0,0,0.58)',
+              borderColor: hexWithAlpha(mediaColors.onMedia, 0.2),
+              backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.58),
               alignItems: 'center',
               justifyContent: 'center',
               opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
-            <X size={15} color="#fff" />
+            <X size={15} color={mediaColors.onMedia} />
           </Pressable>
         ) : null}
       </View>
       <View style={{ padding: 9, gap: 7 }}>
-        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>
+        <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 12, fontWeight: '800' }}>
           {isDragging ? getComposerMediaLabel(drag.to) : label}
         </Text>
-        <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '700' }}>
+        <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700' }}>
           {item.name}
         </Text>
       </View>
@@ -5154,6 +5183,7 @@ function MiniAction({
   disabled?: boolean;
   accessibilityLabel?: string;
 }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -5164,20 +5194,21 @@ function MiniAction({
         minHeight: appTheme.touch.compact,
         borderRadius: appTheme.radii.pill,
         borderWidth: 1,
-        borderColor: appTheme.colors.border,
-        backgroundColor: appTheme.colors.surfaceStrong,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surfaceStrong,
         opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
         paddingHorizontal: 12,
         alignItems: 'center',
         justifyContent: 'center',
       })}
     >
-      <Text style={{ color: appTheme.colors.text, fontSize: 12, fontWeight: '700' }}>{label}</Text>
+      <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '700' }}>{label}</Text>
     </Pressable>
   );
 }
 
 function SecondaryPickButton({ icon, label, loading, onPress }: { icon: React.ReactNode; label: string; loading: boolean; onPress: () => void }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -5188,8 +5219,8 @@ function SecondaryPickButton({ icon, label, loading, onPress }: { icon: React.Re
         minHeight: appTheme.touch.compact,
         borderRadius: 22,
         borderWidth: 1,
-        borderColor: appTheme.colors.border,
-        backgroundColor: appTheme.colors.surface,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surface,
         alignItems: 'center',
         justifyContent: 'center',
         flexDirection: 'row',
@@ -5197,8 +5228,8 @@ function SecondaryPickButton({ icon, label, loading, onPress }: { icon: React.Re
         opacity: pressed ? appTheme.opacity.pressed : loading ? 0.58 : 1,
       })}
     >
-      {loading ? <ActivityIndicator color="#fff" /> : icon}
-      <Text style={{ color: appTheme.colors.text, fontSize: 13, fontWeight: '700' }}>{label}</Text>
+      {loading ? <ActivityIndicator color={theme.colors.text} /> : icon}
+      <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '700' }}>{label}</Text>
     </Pressable>
   );
 }
@@ -5222,6 +5253,7 @@ function UnlockFields({
   onPickResourceFile: () => void;
   isPickingResourceFile: boolean;
 }) {
+  const theme = useAppTheme();
   return (
     <View style={{ gap: 10 }}>
       <ComposerInput value={resource.previewText} onChangeText={(previewText) => onChange({ previewText })} placeholder="Buyer preview: what is inside the unlock?" minHeight={64} multiline />
@@ -5275,8 +5307,8 @@ function UnlockFields({
             minHeight: appTheme.touch.compact,
             borderRadius: appTheme.radii.pill,
             borderWidth: 1,
-            borderColor: resource.allowRemix ? appTheme.colors.primary : appTheme.colors.borderSubtle,
-            backgroundColor: resource.allowRemix ? appTheme.colors.selected : appTheme.colors.surface,
+            borderColor: resource.allowRemix ? theme.colors.primary : theme.colors.borderSubtle,
+            backgroundColor: resource.allowRemix ? theme.colors.selected : theme.colors.surface,
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -5284,8 +5316,8 @@ function UnlockFields({
             opacity: pressed ? appTheme.opacity.pressed : 1,
           })}
         >
-          <Text style={{ color: resource.allowRemix ? appTheme.colors.primary : appTheme.colors.muted, fontSize: 13, fontWeight: '700' }}>Include remix access</Text>
-          <Lock size={16} color={resource.allowRemix ? appTheme.colors.primary : appTheme.colors.muted} />
+          <Text style={{ color: resource.allowRemix ? theme.colors.primary : theme.colors.muted, fontSize: 13, fontWeight: '700' }}>Include remix access</Text>
+          <Lock size={16} color={resource.allowRemix ? theme.colors.primary : theme.colors.muted} />
         </Pressable>
       ) : null}
     </View>

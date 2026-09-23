@@ -4,7 +4,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Overlay } from '@/components/overlay-host';
 import {
-  SHEET_BACKDROP_COLOR,
   SheetGrabber,
   SheetPanel,
   sheetPanelStyle,
@@ -21,6 +20,7 @@ import { haptic } from '@/lib/haptics';
 import { useReducedMotion } from '@/lib/motion';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 
 /**
@@ -71,6 +71,7 @@ function ActionSheetSurface({
   onAnswered: () => void;
   onExited: () => void;
 }) {
+  const theme = useAppTheme();
   const insets = useSafeAreaInsets();
   const reducedMotion = useReducedMotion();
   const bottomInset = resolvedBottomInset(insets.bottom);
@@ -107,7 +108,7 @@ function ActionSheetSurface({
     // second tap must not choose again.
     <View pointerEvents={visible ? 'auto' : 'none'} style={{ flex: 1, justifyContent: 'flex-end' }}>
       <Animated.View
-        style={{ position: 'absolute', inset: 0, backgroundColor: SHEET_BACKDROP_COLOR, opacity: backdropOpacity }}
+        style={{ position: 'absolute', inset: 0, backgroundColor: theme.colors.scrim, opacity: backdropOpacity }}
       >
         <Pressable
           accessibilityRole="button"
@@ -121,7 +122,7 @@ function ActionSheetSurface({
         accessibilityViewIsModal
         onLayout={presentation.onPanelLayout}
         style={[
-          sheetPanelStyle(),
+          sheetPanelStyle(theme.colors),
           {
             paddingBottom: Math.max(bottomInset, appTheme.spacing.panel),
             opacity: presentation.panelOpacity,
@@ -134,12 +135,12 @@ function ActionSheetSurface({
           <Text
             accessibilityRole="header"
             numberOfLines={1}
-            style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}
+            style={{ color: theme.colors.text, ...appTheme.type.cardTitle }}
           >
             {request.title}
           </Text>
           {request.message ? (
-            <Text numberOfLines={2} style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
+            <Text numberOfLines={2} style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
               {request.message}
             </Text>
           ) : null}
@@ -147,7 +148,7 @@ function ActionSheetSurface({
         {orderActionSheetActions(request.actions).map((action) => (
           <ActionRow key={action.label} action={action} onPress={() => choose(action)} />
         ))}
-        <View style={{ height: 1, marginTop: appTheme.spacing.compact, backgroundColor: appTheme.colors.border }} />
+        <View style={{ height: 1, marginTop: appTheme.spacing.compact, backgroundColor: theme.colors.border }} />
         <ActionRow action={{ label: cancelLabel }} muted onPress={cancel} />
       </SheetPanel>
     </View>
@@ -163,6 +164,7 @@ function ActionRow({
   muted?: boolean;
   onPress: () => void;
 }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -177,17 +179,17 @@ function ActionRow({
         gap: 3,
         paddingHorizontal: appTheme.spacing.panel,
         paddingVertical: appTheme.spacing.gap,
-        backgroundColor: pressed ? appTheme.colors.surface : 'transparent',
+        backgroundColor: pressed ? theme.colors.surface : 'transparent',
         opacity: action.disabled ? appTheme.opacity.disabled : 1,
       })}
     >
       <Text
         style={{
           color: action.destructive
-            ? appTheme.colors.danger
+            ? theme.colors.danger
             : muted
-              ? appTheme.colors.muted
-              : appTheme.colors.text,
+              ? theme.colors.muted
+              : theme.colors.text,
           ...appTheme.type.body,
           fontWeight: '800',
         }}
@@ -195,7 +197,7 @@ function ActionRow({
         {action.label}
       </Text>
       {action.detail ? (
-        <Text style={{ color: appTheme.colors.faint, ...appTheme.type.caption }}>{action.detail}</Text>
+        <Text style={{ color: theme.colors.faint, ...appTheme.type.caption }}>{action.detail}</Text>
       ) : null}
     </Pressable>
   );

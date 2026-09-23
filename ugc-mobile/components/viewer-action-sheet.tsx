@@ -49,6 +49,7 @@ import { haptic } from '@/lib/haptics';
 import { ShareGlyph } from '@/lib/platform-glyphs';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import type { OwnerPostsResponse } from '@/lib/types';
 import { getViewerActionGroupLabel, getViewerActionLabel, isDestructiveViewerAction } from '@/lib/viewer-actions';
 
@@ -81,6 +82,7 @@ export function ViewerActionSheet({
   onSourceRefresh: () => void;
   visible: boolean;
 }) {
+  const theme = useAppTheme();
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
   const reducedMotion = useReducedMotion();
@@ -415,7 +417,7 @@ export function ViewerActionSheet({
         <SheetPanel
           {...drag.contentPanHandlers}
           style={[
-            sheetPanelStyle(),
+            sheetPanelStyle(theme.colors),
             { maxHeight: '84%', paddingBottom: Math.max(bottomInset, appTheme.spacing.panel) },
             drag.dragStyle,
           ]}
@@ -427,10 +429,10 @@ export function ViewerActionSheet({
             contentContainerStyle={{ paddingHorizontal: appTheme.spacing.panel, gap: appTheme.spacing.gap }}
           >
             <View style={{ gap: 4, paddingBottom: 4 }}>
-              <Text accessibilityRole="header" numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}>
+              <Text accessibilityRole="header" numberOfLines={1} style={{ color: theme.colors.text, ...appTheme.type.cardTitle }}>
                 More options
               </Text>
-              <Text numberOfLines={2} style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
+              <Text numberOfLines={2} style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
                 {item.sourceType === 'showcase'
                   ? `Choose what you want to do with “${item.title}” or ${item.creatorLabel}.`
                   : `Choose what you want to do with “${item.title}”.`}
@@ -441,7 +443,7 @@ export function ViewerActionSheet({
                 <Text
                   accessibilityRole="header"
                   style={{
-                    color: appTheme.colors.faint,
+                    color: theme.colors.faint,
                     ...appTheme.type.caption,
                     textTransform: 'uppercase',
                     fontWeight: '800',

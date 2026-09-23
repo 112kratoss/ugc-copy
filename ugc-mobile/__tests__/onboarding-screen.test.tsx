@@ -77,6 +77,9 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@/lib/motion', () => ({ useReducedMotion: () => true }));
+// The first run is drawn dark and raises its own light status bar while it is in front.
+vi.mock('@react-navigation/native', () => ({ useIsFocused: () => true }));
+vi.mock('expo-status-bar', () => ({ StatusBar: () => null }));
 
 vi.mock('@/lib/onboarding', async () => {
   const ReactModule = await import('react');

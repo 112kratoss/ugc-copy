@@ -7,6 +7,7 @@ import { SheetBackdrop, SheetGrabber, SheetPanel, sheetPanelStyle, useSheetDismi
 import { useReducedMotion } from '@/lib/motion';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 export function FeedFeedbackSheet({
   creatorLabel,
@@ -33,6 +34,7 @@ export function FeedFeedbackSheet({
   sessionOnly?: boolean;
   visible: boolean;
 }) {
+  const theme = useAppTheme();
   const reducedMotion = useReducedMotion();
   const insets = useSafeAreaInsets();
   const bottomInset = resolvedBottomInset(insets.bottom);
@@ -52,7 +54,7 @@ export function FeedFeedbackSheet({
         <SheetPanel
           {...drag.contentPanHandlers}
           style={[
-            sheetPanelStyle(),
+            sheetPanelStyle(theme.colors),
             { maxHeight: '84%', paddingBottom: Math.max(bottomInset, appTheme.spacing.panel) },
             drag.dragStyle,
           ]}
@@ -64,10 +66,10 @@ export function FeedFeedbackSheet({
             contentContainerStyle={{ paddingHorizontal: appTheme.spacing.panel, gap: appTheme.spacing.gap }}
           >
             <View style={{ gap: 4, paddingBottom: 4 }}>
-              <Text accessibilityRole="header" numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}>
+              <Text accessibilityRole="header" numberOfLines={1} style={{ color: theme.colors.text, ...appTheme.type.cardTitle }}>
                 Shape your feed
               </Text>
-              <Text numberOfLines={2} style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
+              <Text numberOfLines={2} style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
                 Choose how you want to manage “{postTitle}” or its creator.
               </Text>
             </View>
@@ -97,7 +99,7 @@ export function FeedFeedbackSheet({
                 <Text
                   accessibilityRole="header"
                   style={{
-                    color: appTheme.colors.faint,
+                    color: theme.colors.faint,
                     ...appTheme.type.caption,
                     fontWeight: '800',
                     letterSpacing: 0.8,

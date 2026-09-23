@@ -1,4 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
+import { StatusBar } from 'expo-status-bar';
+import { useIsFocused } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, router } from 'expo-router';
 import {
@@ -22,6 +24,8 @@ import { useReducedMotion } from '@/lib/motion';
 import { trackOnboardingEvent, useOnboarding } from '@/lib/onboarding';
 import { resolveOnboardingDestination } from '@/lib/onboarding-destination';
 import { appTheme } from '@/lib/theme';
+import { useNavigationBarSurface } from '@/lib/system-bars';
+import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 import type { OnboardingGoal, ProfileResponse, WelcomeCreditResponse } from '@/lib/types';
 import { primeWelcomeCredits } from '@/lib/use-onboarding-destination';
 import { AppText, AppTextInput, Card, Kicker, PrimaryButton, SecondaryButton } from '@/components/ui';
@@ -43,7 +47,7 @@ const GOALS: BookletGoal[] = [
     id: 'image',
     label: 'Image',
     body: 'Campaign visuals and product shots',
-    color: appTheme.colors.image,
+    tone: 'image',
     image: imagePreview,
     imageLabel: 'A cinematic mountain landscape created with Magicbooklet',
     icon: ImageIcon,
@@ -52,7 +56,7 @@ const GOALS: BookletGoal[] = [
     id: 'video',
     label: 'Video',
     body: 'Ads, reels, and story-driven clips',
-    color: appTheme.colors.video,
+    tone: 'video',
     image: videoPreview,
     imageLabel: 'A cinematic creator portrait created for a video',
     icon: Clapperboard,
@@ -61,7 +65,7 @@ const GOALS: BookletGoal[] = [
     id: 'motion',
     label: 'Motion',
     body: 'Animate a character or reference video',
-    color: appTheme.colors.motion,
+    tone: 'motion',
     image: motionPreview,
     imageLabel: 'An energetic purple motion scene created with Magicbooklet',
     icon: WandSparkles,
@@ -95,7 +99,24 @@ function profileUpdatePayload(profile: ProfileResponse, username: string, displa
   };
 }
 
+/**
+ * The first run stays dark in both schemes: its art is a neon night scene made
+ * for black, and a flow that changed its look between steps would read as
+ * broken. The app takes the phone's appearance from the first screen after it.
+ */
 export default function OnboardingScreen() {
+  const isFocused = useIsFocused();
+  useNavigationBarSurface(isFocused ? 'dark' : null);
+  return (
+    <ThemeScope scheme="dark">
+      {isFocused ? <StatusBar style="light" /> : null}
+      <OnboardingFlow />
+    </ThemeScope>
+  );
+}
+
+function OnboardingFlow() {
+  const theme = useAppTheme();
   const { api, user, refreshProfile, updateCredits } = useAuth();
   const { state, update, skip, complete } = useOnboarding();
   const queryClient = useQueryClient();
@@ -421,12 +442,12 @@ export default function OnboardingScreen() {
   const showAmount = claimReady || claimed;
 
   return (
-    <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <Stack.Screen options={{ headerShown: false, gestureEnabled: false }} />
       <LinearGradient
         colors={isWelcome
           ? ['#08080b', '#0c0c0e', '#08080a']
-          : ['#151114', appTheme.colors.background, '#0c0c0e']}
+          : ['#151114', theme.colors.background, '#0c0c0e']}
         locations={[0, 0.55, 1]}
         style={{ position: 'absolute', inset: 0 }}
       />
@@ -481,10 +502,10 @@ export default function OnboardingScreen() {
 
           {stage === 'loading' ? (
             <Card style={{ marginTop: 40, alignItems: 'center', paddingVertical: 40 }}>
-              <ActivityIndicator color={appTheme.colors.primary} />
+              <ActivityIndicator color={theme.colors.primary} />
               <AppText variant="cardTitle">Preparing your creator setup</AppText>
               <AppText variant="bodySm" color="muted">Checking your profile and Creator Pack.</AppText>
-              {message ? <Text accessibilityRole="alert" accessibilityLiveRegion="assertive" style={{ color: appTheme.colors.danger, textAlign: 'center' }}>{message}</Text> : null}
+              {message ? <Text accessibilityRole="alert" accessibilityLiveRegion="assertive" style={{ color: theme.colors.danger, textAlign: 'center' }}>{message}</Text> : null}
               {message ? <SecondaryButton label="Try again" onPress={() => void loadAuthenticatedStage()} /> : null}
               {/* Onboarding must stay optional even when it breaks. Without
                   this the stage has no Skip (the header only offers one during
@@ -518,7 +539,7 @@ export default function OnboardingScreen() {
                 <View style={{ gap: 7 }}>
                   <View style={{ position: 'relative' }}>
                     <View pointerEvents="none" style={{ position: 'absolute', left: 14, top: 42, zIndex: 2 }}>
-                      <AtSign size={18} color={appTheme.colors.muted} />
+                      <AtSign size={18} color={theme.colors.muted} />
                     </View>
                     <AppTextInput
                       inputRef={handleRef}
@@ -543,7 +564,7 @@ export default function OnboardingScreen() {
                     {usernameState === 'checking' ? 'Checking availability…' : usernameMessage ?? '3–24 lowercase letters, numbers, or hyphens.'}
                   </AppText>
                 </View>
-                {message ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.danger }}>{message}</Text> : null}
+                {message ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger }}>{message}</Text> : null}
                 <PrimaryButton
                   label="Save creator name"
                   loading={busy}
@@ -567,8 +588,8 @@ export default function OnboardingScreen() {
             <View style={{ flex: 1, justifyContent: 'center', gap: 18, paddingVertical: 24 }}>
               <Animated.View style={{ transform: [{ scale: rewardScale }] }}>
                 <Card accent="primary" padding="lg" style={{ alignItems: 'center', paddingVertical: 34, gap: 16 }}>
-                  <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.selectedStrong }}>
-                    <Sparkles size={appTheme.icon.hero} color={appTheme.colors.primary} />
+                  <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.selectedStrong }}>
+                    <Sparkles size={appTheme.icon.hero} color={theme.colors.primary} />
                   </View>
                   <View style={{ alignItems: 'center', gap: 8 }}>
                     <Kicker color="primary">Creator Pack</Kicker>
@@ -590,7 +611,7 @@ export default function OnboardingScreen() {
                   <AppText variant="caption" color="faint" style={{ textAlign: 'center' }}>Creation credits cannot be used for marketplace purchases.</AppText>
                 </Card>
               </Animated.View>
-              {message ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.danger, textAlign: 'center' }}>{message}</Text> : null}
+              {message ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, textAlign: 'center' }}>{message}</Text> : null}
               {claimReady ? <PrimaryButton label={`Claim ${welcome?.amount} credits`} loading={busy} onPress={() => void claimCredits()} /> : null}
               {!claimReady || claimed ? <PrimaryButton label="Start creating" onPress={() => void startCreating()} /> : null}
               {/* An explicit way out. "Start creating" used to be the only exit

@@ -28,7 +28,9 @@ import {
 } from '@/lib/media-performance';
 import { MEDIA_DISPLAY_DEADLINE_MS } from '@/lib/media-recovery';
 import { useMediaSource } from '@/lib/use-media-source';
-import { appTheme } from '@/lib/theme';
+import { hexWithAlpha } from '@/lib/eased-fade';
+import { appTheme, mediaColors } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import {
   beginPlaybackStall,
   beginPlaybackStart,
@@ -141,6 +143,7 @@ export function FeedVideoPreview({
   /** Where the tile is drawn, for the media diagnostics log. */
   diagnosticsSurface?: string;
 }) {
+  const theme = useAppTheme();
   const { source: streamSource, requestKey } = useMediaSource(streamUrl || '');
   const { source: posterSource, requestKey: posterRequestKey } = useMediaSource(previewUrl || '');
   // Keep navigation focus at the player boundary. Making it list extraData
@@ -300,7 +303,7 @@ export function FeedVideoPreview({
         borderCurve: 'continuous',
         borderWidth: posterless ? 0 : 1,
         borderColor: `${accent}4d`,
-        backgroundColor: '#050506',
+        backgroundColor: theme.colors.mediaPlaceholder,
       }}
     >
       {playerMounted && videoBackdrop === 'blurred' ? (
@@ -311,10 +314,10 @@ export function FeedVideoPreview({
               source={usablePreviewUrl ? posterSource : null}
               blurRadius={VIDEO_BACKDROP_BLUR_RADIUS}
               recyclingKey={`${url}:video-backdrop`}
-              style={[absoluteFill, { backgroundColor: '#050506' }]}
+              style={[absoluteFill, { backgroundColor: theme.colors.mediaPlaceholder }]}
             />
           ) : null}
-          <View pointerEvents="none" style={[absoluteFill, { backgroundColor: 'rgba(0,0,0,0.44)' }]} />
+          <View pointerEvents="none" style={[absoluteFill, { backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.44) }]} />
         </>
       ) : null}
 
@@ -363,10 +366,10 @@ export function FeedVideoPreview({
               borderRadius: 18,
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: 'rgba(3,3,6,0.55)',
+              backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.55),
             }}
           >
-            <ActivityIndicator color={appTheme.colors.text} />
+            <ActivityIndicator color={theme.colors.text} />
           </View>
         </View>
       ) : null}
@@ -385,13 +388,13 @@ export function FeedVideoPreview({
               paddingHorizontal: 16,
               borderRadius: appTheme.radii.pill,
               borderWidth: 1,
-              borderColor: 'rgba(255,255,255,0.18)',
-              backgroundColor: 'rgba(3,3,6,0.72)',
+              borderColor: hexWithAlpha(mediaColors.onMedia, 0.18),
+              backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.72),
               opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
-            <RotateCcw size={appTheme.icon.sm} color="#ffffff" />
-            <Text style={{ color: '#ffffff', ...appTheme.type.label }}>Retry video</Text>
+            <RotateCcw size={appTheme.icon.sm} color={mediaColors.onMedia} />
+            <Text style={{ color: mediaColors.onMedia, ...appTheme.type.label }}>Retry video</Text>
           </Pressable>
         </View>
       ) : null}

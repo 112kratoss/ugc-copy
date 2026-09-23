@@ -2,6 +2,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteD
 import * as Clipboard from 'expo-clipboard';
 import { Image } from 'expo-image';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { useVideoPlayer, type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
 import { MEDIA_PLAYER_OPTIONS } from '@/lib/video-player-options';
 import { Copy, ImageOff, Lock, Play, Volume2, VolumeX } from 'lucide-react-native';
@@ -36,6 +37,7 @@ import { LetterboxBands } from '@/components/letterbox-bands';
 import { PostDetailsPage } from '@/components/post-details-page';
 import { Pill, SecondaryButton, StatusBlock } from '@/components/ui';
 import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
+import { AppSchemeScope } from '@/components/app-scheme-scope';
 import { CommentsSheet } from '@/components/comments-sheet';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
 import { useAuth } from '@/lib/auth';
@@ -118,7 +120,9 @@ import {
   reportShowcaseMediaProgress,
   setShowcaseMediaProgressSink,
 } from '@/lib/showcase-media-progress';
-import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
+import { appTheme } from '@/lib/theme';
+import { useNavigationBarSurface } from '@/lib/system-bars';
+import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 import type { PostResourceKind, ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
 import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE, canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getViewerShareIntent, getViewerShareSourceSurface } from '@/lib/viewer-actions';
 import {
@@ -179,7 +183,25 @@ const ViewerPlaybackContext = createContext<ReturnType<typeof createViewerPlayba
 /** The reel has started to go off screen (lib/use-screen-leaving.ts): its videos are silent from then on. */
 const ViewerLeavingContext = createContext(false);
 
+/**
+ * The reel stays dark in both schemes: it is an immersive media surface, and
+ * its chrome, scrims and icon rasters are all drawn against video. Its status
+ * bar is light only while the reel is in front — a screen pushed over it
+ * (a creator's profile) keeps the reel mounted underneath and brings its own.
+ */
 export default function ImmersivePreviewViewerScreen() {
+  const isFocused = useIsFocused();
+  useNavigationBarSurface(isFocused ? 'dark' : null);
+  return (
+    <ThemeScope scheme="dark">
+      {isFocused ? <StatusBar style="light" /> : null}
+      <ImmersivePreviewViewer />
+    </ThemeScope>
+  );
+}
+
+function ImmersivePreviewViewer() {
+  const theme = useAppTheme();
   const params = useLocalSearchParams<ViewerParams>();
   const source = normalizeViewerSource(params.source);
   const mediaOnly = normalizeParam(params.mediaOnly) === '1';
@@ -1003,7 +1025,7 @@ export default function ImmersivePreviewViewerScreen() {
   if (!items.length && sourceQuery.isLoading) {
     return (
       <ViewerShell topInset={topInset} bottomInset={bottomInset} preview={openingPreview} video={zoom.lentVideo}>
-        <ActivityIndicator accessibilityLabel="Loading preview" color={appTheme.colors.primary} />
+        <ActivityIndicator accessibilityLabel="Loading preview" color={theme.colors.primary} />
       </ViewerShell>
     );
   }
@@ -1029,8 +1051,8 @@ export default function ImmersivePreviewViewerScreen() {
   if (!items.length) {
     return (
       <ViewerShell topInset={topInset} bottomInset={bottomInset}>
-        <Text selectable style={{ color: appTheme.colors.text, fontSize: 18, fontWeight: '800' }}>Preview unavailable</Text>
-        <Text selectable style={{ color: appTheme.colors.muted, marginTop: 8 }}>This item may have been removed or is still loading.</Text>
+        <Text selectable style={{ color: theme.colors.text, fontSize: 18, fontWeight: '800' }}>Preview unavailable</Text>
+        <Text selectable style={{ color: theme.colors.muted, marginTop: 8 }}>This item may have been removed or is still loading.</Text>
       </ViewerShell>
     );
   }
@@ -1236,6 +1258,7 @@ export default function ImmersivePreviewViewerScreen() {
       </>
       ) : null}
       </MediaZoomChrome>
+      <AppSchemeScope>
       {activeItem ? (
         <ViewerActionSheet
           item={activeItem}
@@ -1325,6 +1348,7 @@ export default function ImmersivePreviewViewerScreen() {
         onUnlocked={(item) => recreateItem(item)}
         visible={Boolean(unlockRemixOpenItemId)}
       />
+      </AppSchemeScope>
       {/* Leading side, under Back: the trailing side of the badge row belongs to
           the slide's media counter, and the two used to be drawn on top of each
           other — the spinner from `topInset + 24`, the counter from a flat 68. */}
@@ -2199,6 +2223,7 @@ function ActiveVideoAttempt({
   onRetry,
   attempt,
 }: ActiveVideoProps & { onRetry: () => void; attempt: number }) {
+  const theme = useAppTheme();
   const [hasFrame, setHasFrame] = useState(false);
   // Fleet metrics (lib/playback-metrics): keyed as the handoff keys this slide.
   const hasFrameRef = useRef(false);
@@ -2506,7 +2531,7 @@ function ActiveVideoAttempt({
       </DoubleTapPressable>
       {zoomLanded && !playbackFailed && (status === 'loading' || status === 'idle') ? (
         <View pointerEvents="none" style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
-          <ActivityIndicator accessibilityLabel="Loading video" color={appTheme.colors.primary} />
+          <ActivityIndicator accessibilityLabel="Loading video" color={theme.colors.primary} />
         </View>
       ) : null}
       {/* Centred on the screen like the loading spinner and the paused badge.
@@ -2514,8 +2539,8 @@ function ActiveVideoAttempt({
           inset must match it or the card sits off-centre. */}
       {playbackFailed ? (
         <View style={{ position: 'absolute', left: 80, right: 80, alignItems: 'center' }}>
-          <View style={{ backgroundColor: appTheme.colors.panel, padding: 20, borderRadius: 20, gap: 12 }}>
-            <Text accessibilityRole="alert" style={{ color: appTheme.colors.text, fontSize: 16, textAlign: 'center' }}>
+          <View style={{ backgroundColor: theme.colors.panel, padding: 20, borderRadius: 20, gap: 12 }}>
+            <Text accessibilityRole="alert" style={{ color: theme.colors.text, fontSize: 16, textAlign: 'center' }}>
               Video couldn’t load
             </Text>
             <SecondaryButton label="Retry video" onPress={onRetry} />
@@ -2532,14 +2557,15 @@ function ActiveVideoAttempt({
  * -- tinted by whether the run failed or is simply not finished.
  */
 function StatusSlide({ item, width, height }: { item: ImmersivePreviewItem; width: number; height: number }) {
+  const theme = useAppTheme();
   const { title, body } = getImmersiveStatusSlide(item);
-  const tone = item.runStatus === 'failed' ? appTheme.semantic.danger : appTheme.semantic.info;
+  const tone = item.runStatus === 'failed' ? theme.semantic.danger : theme.semantic.info;
 
   return (
     <View
-      style={{ width, height, justifyContent: 'center', paddingLeft: 22, paddingRight: 90, paddingBottom: 120, backgroundColor: appTheme.colors.app }}
+      style={{ width, height, justifyContent: 'center', paddingLeft: 22, paddingRight: 90, paddingBottom: 120, backgroundColor: theme.colors.app }}
     >
-      <View style={{ borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.border, backgroundColor: appTheme.colors.panel, padding: 20, gap: 13, overflow: 'hidden' }}>
+      <View style={{ borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.panel, padding: 20, gap: 13, overflow: 'hidden' }}>
         <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, backgroundColor: tone.foreground }} />
         <View
           style={{
@@ -2559,7 +2585,7 @@ function StatusSlide({ item, width, height }: { item: ImmersivePreviewItem; widt
         <Text numberOfLines={3} style={{ color: '#fff', fontSize: 25, lineHeight: 31, fontWeight: '800' }}>
           {title}
         </Text>
-        <Text numberOfLines={6} style={{ color: appTheme.colors.textSecondary, fontSize: 16, lineHeight: 23 }}>
+        <Text numberOfLines={6} style={{ color: theme.colors.textSecondary, fontSize: 16, lineHeight: 23 }}>
           {body}
         </Text>
       </View>
@@ -2568,13 +2594,14 @@ function StatusSlide({ item, width, height }: { item: ImmersivePreviewItem; widt
 }
 
 function TextSlide({ item, width, height }: { item: ImmersivePreviewItem; width: number; height: number }) {
+  const theme = useAppTheme();
   return (
     <View
-      style={{ width, height, justifyContent: 'center', paddingLeft: 22, paddingRight: 90, paddingBottom: 120, backgroundColor: appTheme.colors.app }}
+      style={{ width, height, justifyContent: 'center', paddingLeft: 22, paddingRight: 90, paddingBottom: 120, backgroundColor: theme.colors.app }}
     >
-      <View style={{ borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.border, backgroundColor: appTheme.colors.panel, padding: 20, gap: 13, overflow: 'hidden' }}>
-        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, backgroundColor: appTheme.colors.primary }} />
-        <View style={{ alignSelf: 'flex-start', borderRadius: 999, backgroundColor: appTheme.colors.surfaceStrong, paddingHorizontal: 11, paddingVertical: 6 }}>
+      <View style={{ borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.panel, padding: 20, gap: 13, overflow: 'hidden' }}>
+        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, backgroundColor: theme.colors.primary }} />
+        <View style={{ alignSelf: 'flex-start', borderRadius: 999, backgroundColor: theme.colors.surfaceStrong, paddingHorizontal: 11, paddingVertical: 6 }}>
           <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
             {item.badge}
           </Text>
@@ -2582,7 +2609,7 @@ function TextSlide({ item, width, height }: { item: ImmersivePreviewItem; width:
         <Text numberOfLines={3} style={{ color: '#fff', fontSize: 25, lineHeight: 31, fontWeight: '800' }}>
           {item.title}
         </Text>
-        <Text numberOfLines={8} style={{ color: appTheme.colors.textSecondary, fontSize: 16, lineHeight: 23 }}>
+        <Text numberOfLines={8} style={{ color: theme.colors.textSecondary, fontSize: 16, lineHeight: 23 }}>
           {item.displayText}
         </Text>
         {/* The slide clamps; the post page does not. A reel encounter with a
@@ -2600,7 +2627,7 @@ function TextSlide({ item, width, height }: { item: ImmersivePreviewItem; width:
               opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
-            <Text style={{ color: appTheme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>
+            <Text style={{ color: theme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>
               Read full post
             </Text>
           </Pressable>

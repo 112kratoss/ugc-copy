@@ -10,9 +10,11 @@ vi.mock('react-native', () => ({ Platform: { OS: 'ios' } }));
 
 import { contrastRatio } from '../lib/color-contrast';
 import { MIN_HIT_TARGET_PT } from '../lib/hit-target';
-import { appTheme } from '../lib/theme';
+import { appTheme, themes, type ColorScheme } from '../lib/theme';
 import {
   ADAPTIVE_INACTIVE_COLOR,
+  ADAPTIVE_INACTIVE_LIGHT_COLOR,
+  DEFAULT_LIGHT_TAB_BAR_COLOR,
   DEFAULT_TAB_BAR_COLOR,
   getTabBarFillFromThumbhash,
 } from '../lib/tab-bar-ambient';
@@ -131,24 +133,44 @@ const MEDIA_FIXTURES = [
   '+gcCBwB4eId4h4eHdwd4d4dwi19oAAAA',
 ];
 
-describe('HIG colour contrast', () => {
-  const backgrounds = [appTheme.colors.background, appTheme.colors.panel, appTheme.colors.panelSoft];
+/**
+ * Both palettes are held to the same floor. The light one could not simply
+ * invert the dark one: the dark palette's pastels were picked to glow on black
+ * and fail on paper (coral is 2.4:1 there), so every foreground below has its
+ * own light value, and the sweep runs once per scheme so neither can drift.
+ */
+describe.each(['dark', 'light'] as ColorScheme[])('HIG colour contrast (%s)', (scheme) => {
+  const colors = themes[scheme].colors;
+  const backgrounds = [colors.background, colors.panel, colors.panelSoft, colors.surfaceInset];
   const foregrounds: Array<[string, string]> = [
-    ['text', appTheme.colors.text],
-    ['textSecondary', appTheme.colors.textSecondary],
-    ['muted', appTheme.colors.muted],
-    ['faint', appTheme.colors.faint],
-    ['primary', appTheme.colors.primary],
-    ['info', appTheme.colors.info],
-    ['danger', appTheme.colors.danger],
-    ['success', appTheme.colors.success],
-    ['warning', appTheme.colors.warning],
+    ['text', colors.text],
+    ['textSecondary', colors.textSecondary],
+    ['muted', colors.muted],
+    ['faint', colors.faint],
+    ['primary', colors.primary],
+    ['primaryStrong', colors.primaryStrong],
+    ['info', colors.info],
+    ['danger', colors.danger],
+    ['success', colors.success],
+    ['warning', colors.warning],
+    ['image', colors.image],
+    ['video', colors.video],
+    ['motion', colors.motion],
+    ['workflow', colors.workflow],
+    ['amber', colors.amber],
+    ['commerce', colors.commerce],
   ];
 
   it('keeps selected navigation labels readable throughout the capsule transition', () => {
-    for (const foreground of [appTheme.colors.primary, appTheme.colors.muted]) {
-      expect(contrastRatio(foreground, appTheme.colors.navigationSelected)).toBeGreaterThanOrEqual(4.5);
+    for (const foreground of [colors.primary, colors.muted]) {
+      expect(contrastRatio(foreground, colors.navigationSelected)).toBeGreaterThanOrEqual(4.5);
     }
+  });
+
+  it('keeps ink on a coral fill, and coral text on a selected surface, legible', () => {
+    expect(contrastRatio(colors.onPrimary, colors.primaryFill)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(colors.primary, colors.selected)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(colors.textInverse, colors.surfaceInverse)).toBeGreaterThanOrEqual(4.5);
   });
 
   it('clears 4.5:1 for body text on every panel surface', () => {
@@ -159,7 +181,9 @@ describe('HIG colour contrast', () => {
 
     expect(failures).toEqual([]);
   });
+});
 
+describe('HIG colour contrast (derived surfaces)', () => {
   /**
    * The surfaces above are static, which is the whole reason the adaptive tab
    * bar slipped past this file: its fill is computed at runtime from whatever
@@ -175,10 +199,25 @@ describe('HIG colour contrast', () => {
    */
   it('clears 4.5:1 on the tab-bar fill, which is derived rather than declared', () => {
     const tabForegrounds: Array<[string, string]> = [
-      ['active tab (primary)', appTheme.colors.primary],
+      ['active tab (primary)', themes.dark.colors.primary],
       ['inactive tab label', ADAPTIVE_INACTIVE_COLOR],
     ];
-    const fills = [DEFAULT_TAB_BAR_COLOR, ...MEDIA_FIXTURES.map(getTabBarFillFromThumbhash)];
+    const fills = [DEFAULT_TAB_BAR_COLOR, ...MEDIA_FIXTURES.map((hash) => getTabBarFillFromThumbhash(hash))];
+
+    const failures = tabForegrounds.flatMap(([name, colour]) => fills
+      .map((fill) => ({ name, fill, ratio: contrastRatio(colour, fill) }))
+      .filter(({ ratio }) => ratio < 4.5)
+      .map(({ fill, ratio }) => `${name} on ${fill}: ${ratio.toFixed(2)}:1`));
+
+    expect(failures).toEqual([]);
+  });
+
+  it('clears 4.5:1 on the light tab-bar fill, for the deep coral and the ink label', () => {
+    const tabForegrounds: Array<[string, string]> = [
+      ['active tab (light primary)', themes.light.colors.primary],
+      ['inactive tab label (light)', ADAPTIVE_INACTIVE_LIGHT_COLOR],
+    ];
+    const fills = [DEFAULT_LIGHT_TAB_BAR_COLOR, ...MEDIA_FIXTURES.map((hash) => getTabBarFillFromThumbhash(hash, 'light'))];
 
     const failures = tabForegrounds.flatMap(([name, colour]) => fills
       .map((fill) => ({ name, fill, ratio: contrastRatio(colour, fill) }))

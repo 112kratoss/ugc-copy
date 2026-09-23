@@ -1,4 +1,5 @@
 import { RecoverableVideoPreview } from '@/components/recoverable-video-preview';
+import { StatusBar } from 'expo-status-bar';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react-native';
 import { Modal, Pressable, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,6 +9,8 @@ import { AppText } from '@/components/ui';
 import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
+import { useNavigationBarSurface } from '@/lib/system-bars';
+import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 
 export interface LightboxMediaItem {
   id: string;
@@ -46,6 +49,7 @@ export function MediaLightbox({
 }) {
   const isOpen = activeIndex !== null && activeIndex >= 0 && activeIndex < items.length;
   const reducedMotion = useReducedMotion();
+  useNavigationBarSurface(isOpen ? 'dark' : null);
 
   return (
     <Modal
@@ -57,16 +61,23 @@ export function MediaLightbox({
       presentationStyle="overFullScreen"
       onRequestClose={onClose}
     >
-      {isOpen ? (
-        <MediaLightboxContent
-          items={items}
-          activeIndex={activeIndex}
-          onClose={onClose}
-          onNavigate={onNavigate}
-          statusMessage={statusMessage}
-          errorMessage={errorMessage}
-        />
-      ) : null}
+      {/* A picture on black in both schemes: the lightbox is a media surface,
+          like the reel, and its controls are drawn against the image. */}
+      <ThemeScope scheme="dark">
+        {isOpen ? (
+          <>
+            <StatusBar style="light" />
+            <MediaLightboxContent
+              items={items}
+              activeIndex={activeIndex}
+              onClose={onClose}
+              onNavigate={onNavigate}
+              statusMessage={statusMessage}
+              errorMessage={errorMessage}
+            />
+          </>
+        ) : null}
+      </ThemeScope>
     </Modal>
   );
 }
@@ -86,6 +97,7 @@ function MediaLightboxContent({
   statusMessage?: string | null;
   errorMessage?: string | null;
 }) {
+  const theme = useAppTheme();
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const item = items[activeIndex];
@@ -141,13 +153,13 @@ function MediaLightboxContent({
               height: 38,
               borderRadius: 19,
               borderWidth: 1,
-              borderColor: appTheme.colors.border,
-              backgroundColor: pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surface,
+              borderColor: theme.colors.border,
+              backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surface,
               alignItems: 'center',
               justifyContent: 'center',
             })}
           >
-            <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
+            <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
           </Pressable>
         </View>
 
@@ -156,7 +168,7 @@ function MediaLightboxContent({
             height: stageHeight,
             borderRadius: 20,
             borderWidth: 1,
-            borderColor: appTheme.colors.border,
+            borderColor: theme.colors.border,
             backgroundColor: '#050506',
             overflow: 'hidden',
             justifyContent: 'center',
@@ -217,6 +229,7 @@ function LightboxArrow({
   label: string;
   onPress: () => void;
 }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -232,8 +245,8 @@ function LightboxArrow({
         height: 44,
         borderRadius: 22,
         borderWidth: 1,
-        borderColor: appTheme.colors.border,
-        backgroundColor: pressed ? appTheme.colors.surfaceStrong : 'rgba(0,0,0,0.65)',
+        borderColor: theme.colors.border,
+        backgroundColor: pressed ? theme.colors.surfaceStrong : 'rgba(0,0,0,0.65)',
         alignItems: 'center',
         justifyContent: 'center',
       })}

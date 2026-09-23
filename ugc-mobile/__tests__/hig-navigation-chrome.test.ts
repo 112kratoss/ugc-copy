@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { formatBadgeCount, MAX_BADGE_COUNT } from '../lib/notification-badge';
-import { appTheme } from '../lib/theme';
+import { appTheme, themes } from '../lib/theme';
 
 const mobileRoot = path.resolve(__dirname, '..');
 
@@ -199,10 +199,14 @@ describe('HIG tab bars', () => {
    * or an exclamation point."
    */
   it('draws the badge in the platform red with white text', () => {
-    expect(tabBar).toContain('appTheme.colors.badge');
-    expect(tabBar).toContain('appTheme.colors.onBadge');
-    expect(appTheme.colors.badge.toLowerCase()).toBe('#ff3b30');
-    expect(appTheme.colors.onBadge.toLowerCase()).toBe('#ffffff');
+    expect(tabBar).toContain('theme.colors.badge');
+    expect(tabBar).toContain('theme.colors.onBadge');
+    // The system's red with white in both schemes: a badge only reads as a
+    // badge in the platform colour, on paper as on black.
+    for (const scheme of ['dark', 'light'] as const) {
+      expect(themes[scheme].colors.badge.toLowerCase()).toBe('#ff3b30');
+      expect(themes[scheme].colors.onBadge.toLowerCase()).toBe('#ffffff');
+    }
   });
 
   it('badges only the tab that has something to announce', () => {

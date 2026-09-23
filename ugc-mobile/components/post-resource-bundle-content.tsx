@@ -24,7 +24,9 @@ import {
   shouldShowResourceItemTitle,
   type GenerationSetup,
 } from '@/lib/post-resource-bundle-view-model';
-import { appTheme } from '@/lib/theme';
+import { hexWithAlpha } from '@/lib/eased-fade';
+import { appTheme, mediaColors } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import type {
   PostResourceAttachment,
   PostResourceBundleLockedPreview,
@@ -82,6 +84,7 @@ export function PostResourceBundleContent({
   resolveFileUrl,
   resources,
 }: PostResourceBundleContentProps) {
+  const theme = useAppTheme();
   const [selectedMediaKey, setSelectedMediaKey] = useState<string | null>(null);
   const cards = useMemo(() => buildUnlockedResourceCards(resources), [resources]);
   const cardPreviews = lockedPreview?.cardPreviews ?? [];
@@ -149,14 +152,14 @@ export function PostResourceBundleContent({
                   borderRadius: appTheme.radii.lg,
                   borderCurve: 'continuous',
                   borderWidth: 1,
-                  borderColor: appTheme.colors.borderSubtle,
-                  backgroundColor: appTheme.colors.surfaceInset,
+                  borderColor: theme.colors.borderSubtle,
+                  backgroundColor: theme.colors.surfaceInset,
                   paddingHorizontal: 12,
                   paddingVertical: 10,
                 }}
               >
-                <Lock size={14} color={appTheme.colors.muted} />
-                <Text style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>
+                <Lock size={14} color={theme.colors.muted} />
+                <Text style={{ color: theme.colors.textSecondary, ...appTheme.type.bodySm }}>
                   {attachment.label}
                 </Text>
               </View>
@@ -164,12 +167,12 @@ export function PostResourceBundleContent({
           </View>
         ) : null}
         {activeSelectedMediaKey && cardPreviews.length > 0 && visibleCardPreviews.length === 0 && redactedAttachments.length === 0 ? (
-          <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
+          <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
             No resources apply to this output.
           </Text>
         ) : null}
         {cardPreviews.length === 0 && redactedAttachments.length === 0 ? (
-          <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
+          <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
             Resource details stay private until this package is unlocked.
           </Text>
         ) : null}
@@ -201,7 +204,7 @@ export function PostResourceBundleContent({
           resolveFileUrl={resolveFileUrl}
         />
       )) : (
-        <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
+        <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
           No resources apply to this output.
         </Text>
       )}
@@ -218,9 +221,10 @@ function ResourceMediaSelector({
   onSelect: (mediaKey: string | null) => void;
   selectedMediaKey: string | null;
 }) {
+  const theme = useAppTheme();
   return (
     <View style={{ gap: 8 }}>
-      <Text style={{ color: appTheme.colors.faint, ...appTheme.type.caption, fontWeight: '800', textTransform: 'uppercase' }}>
+      <Text style={{ color: theme.colors.faint, ...appTheme.type.caption, fontWeight: '800', textTransform: 'uppercase' }}>
         Resources for
       </Text>
       <ScrollView horizontal contentContainerStyle={{ gap: 8 }} showsHorizontalScrollIndicator={false}>
@@ -234,13 +238,13 @@ function ResourceMediaSelector({
             justifyContent: 'center',
             borderRadius: appTheme.radii.pill,
             borderWidth: 1,
-            borderColor: selectedMediaKey === null ? appTheme.colors.primary : appTheme.colors.border,
-            backgroundColor: selectedMediaKey === null ? `${appTheme.colors.primary}20` : appTheme.colors.surface,
+            borderColor: selectedMediaKey === null ? theme.colors.primary : theme.colors.border,
+            backgroundColor: selectedMediaKey === null ? `${theme.colors.primary}20` : theme.colors.surface,
             opacity: pressed ? appTheme.opacity.pressed : 1,
             paddingHorizontal: 16,
           })}
         >
-          <Text style={{ color: selectedMediaKey === null ? appTheme.colors.primary : appTheme.colors.textSecondary, ...appTheme.type.caption, fontWeight: '800' }}>
+          <Text style={{ color: selectedMediaKey === null ? theme.colors.primary : theme.colors.textSecondary, ...appTheme.type.caption, fontWeight: '800' }}>
             All resources
           </Text>
         </Pressable>
@@ -261,15 +265,15 @@ function ResourceMediaSelector({
                 borderRadius: 14,
                 borderCurve: 'continuous',
                 borderWidth: 2,
-                borderColor: selected ? appTheme.colors.primary : appTheme.colors.border,
-                backgroundColor: appTheme.colors.surfaceInset,
+                borderColor: selected ? theme.colors.primary : theme.colors.border,
+                backgroundColor: theme.colors.surfaceInset,
                 opacity: pressed ? appTheme.opacity.pressed : 1,
                 overflow: 'hidden',
               })}
             >
               <MediaScopeThumbnail item={item} />
-              <View style={{ position: 'absolute', right: 3, bottom: 3, minWidth: 17, height: 17, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.72)', paddingHorizontal: 4 }}>
-                <Text style={{ color: '#fff', fontSize: 11, lineHeight: 14, fontWeight: '900' }}>{index + 1}</Text>
+              <View style={{ position: 'absolute', right: 3, bottom: 3, minWidth: 17, height: 17, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.72), paddingHorizontal: 4 }}>
+                <Text style={{ color: mediaColors.onMedia, fontSize: 11, lineHeight: 14, fontWeight: '900' }}>{index + 1}</Text>
               </View>
             </Pressable>
           );
@@ -286,21 +290,22 @@ function LockedResourceCard({
   card: PostResourceCardPreview;
   mediaItems: ShowcaseMediaItem[];
 }) {
+  const theme = useAppTheme();
   return (
-    <View style={{ borderRadius: appTheme.radii.lg, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.border, backgroundColor: appTheme.colors.surface, padding: appTheme.spacing.gap, gap: 9 }}>
+    <View style={{ borderRadius: appTheme.radii.lg, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface, padding: appTheme.spacing.gap, gap: 9 }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 11 }}>
         <ResourceTypeIcon type={card.resourceType} />
         <View style={{ flex: 1, gap: 4 }}>
-          <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
+          <Text selectable style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
             {card.publicTitle}
           </Text>
-          <Text style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>
+          <Text style={{ color: theme.colors.muted, ...appTheme.type.caption }}>
             {resourceTypeLabel(card.resourceType)} · {formatItemCount(card.itemCount)}
           </Text>
         </View>
         {card.hasRemix ? (
-          <View style={{ borderRadius: appTheme.radii.pill, backgroundColor: `${appTheme.colors.primary}18`, paddingHorizontal: 9, paddingVertical: 5 }}>
-            <Text style={{ color: appTheme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>Remix included</Text>
+          <View style={{ borderRadius: appTheme.radii.pill, backgroundColor: `${theme.colors.primary}18`, paddingHorizontal: 9, paddingVertical: 5 }}>
+            <Text style={{ color: theme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>Remix included</Text>
           </View>
         ) : null}
       </View>
@@ -328,6 +333,7 @@ function UnlockedResourceGroup({
   onOpenUrl?: (url: string) => Promise<void> | void;
   resolveFileUrl?: (storagePath: string) => Promise<string>;
 }) {
+  const theme = useAppTheme();
   const references = getReferenceResourceItems(card.items);
   const referenceIds = new Set(references.map(resourceItemKey));
   const standardItems = card.items.filter((item) => !referenceIds.has(resourceItemKey(item)));
@@ -346,20 +352,20 @@ function UnlockedResourceGroup({
   const description = creatorAuthoredDescription(card.resourceType, card.description);
 
   return (
-    <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.borderSubtle, backgroundColor: appTheme.colors.surface, padding: appTheme.spacing.card, gap: 12 }}>
+    <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.surface, padding: appTheme.spacing.card, gap: 12 }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 11 }}>
         <ResourceTypeIcon type={card.resourceType} />
         <View style={{ flex: 1, gap: 3 }}>
-          <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>
+          <Text selectable style={{ color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>
             {title}
           </Text>
           {subtitle ? (
-            <Text style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>
+            <Text style={{ color: theme.colors.muted, ...appTheme.type.caption }}>
               {subtitle}
             </Text>
           ) : null}
           {description?.trim() ? (
-            <Text selectable style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>
+            <Text selectable style={{ color: theme.colors.textSecondary, ...appTheme.type.bodySm }}>
               {description.trim()}
             </Text>
           ) : null}
@@ -414,6 +420,7 @@ function ResourceItemRow({
   onOpenFile?: (file: ResourceFileInput) => Promise<void> | void;
   onOpenUrl?: (url: string) => Promise<void> | void;
 }) {
+  const theme = useAppTheme();
   const textContent = item.textContent?.trim() ?? '';
   const externalUrl = item.externalUrl?.trim() ?? '';
   const storagePath = item.storagePath?.trim() ?? '';
@@ -430,19 +437,19 @@ function ResourceItemRow({
         gap: 9,
         paddingTop: divided ? 12 : 0,
         borderTopWidth: divided ? 1 : 0,
-        borderTopColor: appTheme.colors.borderSubtle,
+        borderTopColor: theme.colors.borderSubtle,
       }}
     >
       {hasHeading ? (
         <View style={{ gap: 3 }}>
           {showTitle ? (
-            <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>{item.title}</Text>
+            <Text selectable style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>{item.title}</Text>
           ) : null}
           {item.description ? (
-            <Text selectable style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>{item.description}</Text>
+            <Text selectable style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{item.description}</Text>
           ) : null}
           {meta ? (
-            <Text style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>{meta}</Text>
+            <Text style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{meta}</Text>
           ) : null}
         </View>
       ) : null}
@@ -451,12 +458,12 @@ function ResourceItemRow({
       ) : textContent && item.type === 'prompt' ? (
         <ResourcePrompt text={textContent} onCopy={onCopy} />
       ) : textContent ? (
-        <Text selectable style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>
+        <Text selectable style={{ color: theme.colors.textSecondary, ...appTheme.type.bodySm }}>
           {textContent}
         </Text>
       ) : null}
       {item.workflowSnapshot && !externalUrl && !storagePath ? (
-        <Text style={{ color: appTheme.colors.success, ...appTheme.type.caption, fontWeight: '700' }}>
+        <Text style={{ color: theme.colors.success, ...appTheme.type.caption, fontWeight: '700' }}>
           Workflow project included
         </Text>
       ) : null}
@@ -465,7 +472,7 @@ function ResourceItemRow({
           {textContent && onCopy && item.type !== 'prompt' ? (
             <ResourceAction
               confirmLabel="Copied"
-              icon={<Copy size={appTheme.icon.xs} color={appTheme.colors.success} />}
+              icon={<Copy size={appTheme.icon.xs} color={theme.colors.success} />}
               label="Copy"
               onPress={() => onCopy(textContent)}
             />
@@ -473,8 +480,8 @@ function ResourceItemRow({
           {externalUrl && onOpenUrl ? (
             <ResourceAction
               icon={item.type === 'remix_link'
-                ? <Repeat2 size={14} color={appTheme.colors.primary} />
-                : <ExternalLink size={14} color={appTheme.colors.primary} />}
+                ? <Repeat2 size={14} color={theme.colors.primary} />
+                : <ExternalLink size={14} color={theme.colors.primary} />}
               label={item.type === 'remix_link' ? 'Open remix' : item.type === 'workflow' ? 'Open workflow' : 'Open link'}
               onPress={() => onOpenUrl(externalUrl)}
             />
@@ -482,8 +489,8 @@ function ResourceItemRow({
           {storagePath && onOpenFile ? (
             <ResourceAction
               icon={fileLoading
-                ? <ActivityIndicator color={appTheme.colors.primary} size="small" />
-                : <Download size={14} color={appTheme.colors.primary} />}
+                ? <ActivityIndicator color={theme.colors.primary} size="small" />
+                : <Download size={14} color={theme.colors.primary} />}
               label={fileLoading ? 'Opening…' : 'Open file'}
               onPress={() => onOpenFile({ contentType: item.contentType, storagePath, title: item.title })}
             />
@@ -496,14 +503,15 @@ function ResourceItemRow({
 
 /** A saved generation setup as the settings it is, not the paragraph it was stored as. */
 function GenerationSetupList({ entries }: { entries: GenerationSetup['entries'] }) {
+  const theme = useAppTheme();
   return (
     <View style={{ gap: 6 }}>
       {entries.map((entry) => (
         <View key={entry.key} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
-          <Text style={{ flex: 1, color: appTheme.colors.muted, ...appTheme.type.caption, fontWeight: '700' }}>
+          <Text style={{ flex: 1, color: theme.colors.muted, ...appTheme.type.caption, fontWeight: '700' }}>
             {entry.key}
           </Text>
-          <Text selectable style={{ flex: 1.4, color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>
+          <Text selectable style={{ flex: 1.4, color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>
             {entry.value}
           </Text>
         </View>
@@ -514,6 +522,7 @@ function GenerationSetupList({ entries }: { entries: GenerationSetup['entries'] 
 
 
 function ScopeSummary({ mediaItems, scope }: { mediaItems: ShowcaseMediaItem[]; scope: PostResourceItemScope | undefined }) {
+  const theme = useAppTheme();
   const normalizedScope = normalizeScope(scope);
   // Everything applying to every output is the norm, so saying so on each item
   // is noise. Only a deliberate narrowing carries information. Matches web.
@@ -527,11 +536,11 @@ function ScopeSummary({ mediaItems, scope }: { mediaItems: ShowcaseMediaItem[]; 
   });
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-      <Text style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>
+      <Text style={{ color: theme.colors.muted, ...appTheme.type.caption }}>
         Applies to {normalizedScope.mediaKeys.length} {normalizedScope.mediaKeys.length === 1 ? 'output' : 'outputs'}
       </Text>
       {targets.slice(0, 4).map((item) => (
-        <View key={resourceMediaKey(item)} style={{ width: 28, height: 28, borderRadius: 9, borderCurve: 'continuous', overflow: 'hidden', backgroundColor: appTheme.colors.surfaceInset }}>
+        <View key={resourceMediaKey(item)} style={{ width: 28, height: 28, borderRadius: 9, borderCurve: 'continuous', overflow: 'hidden', backgroundColor: theme.colors.surfaceInset }}>
           <MediaScopeThumbnail item={item} />
         </View>
       ))}
@@ -540,11 +549,12 @@ function ScopeSummary({ mediaItems, scope }: { mediaItems: ShowcaseMediaItem[]; 
 }
 
 function MediaScopeThumbnail({ item }: { item: ShowcaseMediaItem }) {
+  const theme = useAppTheme();
   const url = item.mediaKind === 'image' ? item.url : item.previewUrl;
   if (!url) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-        <FileText size={14} color={appTheme.colors.faint} />
+        <FileText size={14} color={theme.colors.faint} />
       </View>
     );
   }
@@ -562,15 +572,16 @@ function MediaScopeThumbnail({ item }: { item: ShowcaseMediaItem }) {
 }
 
 function ResourceTypeIcon({ type }: { type: PostResourceItemType }) {
+  const theme = useAppTheme();
   const icon = type === 'remix_link' || type === 'remix_access'
-    ? <Repeat2 size={18} color={appTheme.colors.primary} />
+    ? <Repeat2 size={18} color={theme.colors.primary} />
     : type === 'workflow'
-      ? <Link2 size={18} color={appTheme.colors.primary} />
+      ? <Link2 size={18} color={theme.colors.primary} />
       : type === 'settings' || type === 'preset'
-        ? <Settings2 size={18} color={appTheme.colors.primary} />
-        : <FileText size={18} color={appTheme.colors.primary} />;
+        ? <Settings2 size={18} color={theme.colors.primary} />
+        : <FileText size={18} color={theme.colors.primary} />;
   return (
-    <View style={{ width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: `${appTheme.colors.primary}18` }}>
+    <View style={{ width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.primary}18` }}>
       {icon}
     </View>
   );

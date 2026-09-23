@@ -13,7 +13,8 @@ vi.mock('expo-linear-gradient', () => ({
 }));
 
 import { TopScrim } from '../components/top-scrim';
-import { appTheme } from '../lib/theme';
+import { themes } from '../lib/theme';
+import { ThemeScope } from '../lib/theme-context';
 import { viewerTopScrim } from '../lib/viewer-chrome';
 
 describe('the reel\'s top shade', () => {
@@ -21,8 +22,13 @@ describe('the reel\'s top shade', () => {
   // percent of the shade's height; viewerTopScrim places them in points.
   it.each([47, 59, 62])('draws viewerTopScrim\'s stops where it places them, at inset %i', (inset) => {
     let tree!: renderer.ReactTestRenderer;
+    // The reel draws in its dark scope whatever the phone's scheme.
     renderer.act(() => {
-      tree = renderer.create(<TopScrim topInset={inset} over="media" />);
+      tree = renderer.create(
+        <ThemeScope scheme="dark">
+          <TopScrim topInset={inset} over="media" />
+        </ThemeScope>,
+      );
     });
     const { style } = tree.root.findByType('view' as never).props;
     const { height, stops } = viewerTopScrim(inset);
@@ -35,7 +41,7 @@ describe('the reel\'s top shade', () => {
     });
     expect(drawn).toHaveLength(stops.length);
     drawn.forEach((stop, index) => {
-      expect(stop.color.slice(0, 7)).toBe(appTheme.colors.background);
+      expect(stop.color.slice(0, 7)).toBe(themes.dark.colors.background);
       expect(Number.parseInt(stop.color.slice(7), 16) / 255).toBeCloseTo(stops[index].alpha, 2);
       expect(stop.offset).toBeCloseTo(stops[index].offset, 2);
     });

@@ -5,10 +5,11 @@ import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanima
 
 import { MagicTabBar } from '@/components/magic-tab-bar';
 import { useReducedMotion } from '@/lib/motion';
-import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import { zoomUnderlayDetached, zoomUnderlayHidden } from '@/lib/zoom-underlay';
 
 export default function TabLayout() {
+  const theme = useAppTheme();
   const reducedMotion = useReducedMotion();
   const navigation = useNavigation();
   // Skipped by the renderer while a settled reel covers it (see zoom-underlay),
@@ -47,9 +48,9 @@ export default function TabLayout() {
           // transition feedback without making the page wait for a fade.
           animation: reducedMotion ? 'none' : Platform.OS === 'android' ? 'none' : 'fade',
           headerShown: false,
-          headerStyle: { backgroundColor: appTheme.colors.background },
-          headerTintColor: appTheme.colors.text,
-          sceneStyle: { backgroundColor: appTheme.colors.background },
+          headerStyle: { backgroundColor: theme.colors.background },
+          headerTintColor: theme.colors.text,
+          sceneStyle: { backgroundColor: theme.colors.background },
         }}>
         <Tabs.Screen
           name="index"

@@ -8,11 +8,16 @@ const platform = vi.hoisted(() => ({ os: 'ios' as 'ios' | 'android' }));
 vi.mock('react-native', () => ({ Platform: { get OS() { return platform.os; } } }));
 
 import { contrastRatio } from '../lib/color-contrast';
+import { themes } from '../lib/theme';
 import {
   ADAPTIVE_INACTIVE_COLOR,
+  ADAPTIVE_INACTIVE_LIGHT_COLOR,
+  DEFAULT_LIGHT_TAB_BAR_COLOR,
   DEFAULT_TAB_BAR_COLOR,
   MAX_FILL_LUMINANCE,
+  MIN_LIGHT_FILL_LUMINANCE,
   capFillLuminance,
+  floorFillLuminance,
   getTabBarFillFromSource,
   getTabBarFillFromThumbhash,
   selectBottomVisibleAmbientSource,
@@ -173,6 +178,66 @@ describe('the fill can never fail contrast', () => {
   });
 });
 
+/**
+ * The light scheme's dock runs the same guard from the other side: a pastel
+ * of the media's hue near white, held above a luminance floor so the deep
+ * coral active tab and the ink labels clear 4.5:1 whatever was uploaded.
+ */
+describe('the light dock', () => {
+  const LIGHT_FOREGROUNDS = [themes.light.colors.primary, ADAPTIVE_INACTIVE_LIGHT_COLOR];
+  const BASE64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+  function pseudoRandomThumbhash(seed: number) {
+    let state = seed * 1103515245 + 12345;
+    let hash = '';
+    for (let index = 0; index < 32; index += 1) {
+      state = (state * 1103515245 + 12345) & 0x7fffffff;
+      hash += BASE64[(state >> 16) & 63];
+    }
+    return hash;
+  }
+
+  it('clears 4.5:1 for both light tab-label colours across the input space', () => {
+    const failures: string[] = [];
+    for (let seed = 0; seed < 4000; seed += 1) {
+      const fill = getTabBarFillFromThumbhash(pseudoRandomThumbhash(seed), 'light');
+      for (const foreground of LIGHT_FOREGROUNDS) {
+        const ratio = contrastRatio(foreground, fill);
+        if (ratio < 4.5) failures.push(`seed ${seed}: ${foreground} on ${fill} is ${ratio.toFixed(2)}:1`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it('keeps the media\'s hue, as a pastel', () => {
+    expect(dominantChannel(getTabBarFillFromThumbhash(MEDIA.forestGreen, 'light'))).toBe('green');
+    expect(dominantChannel(getTabBarFillFromThumbhash(MEDIA.magenta, 'light'))).toBe('red');
+    const magenta = getTabBarFillFromThumbhash(MEDIA.magenta, 'light');
+    expect(chroma(magenta)).toBeGreaterThan(6);
+    // Light, not a slab: every channel stays near white.
+    expect(Math.min(...channels(magenta))).toBeGreaterThan(200);
+  });
+
+  it('falls back to neutral paper with no media, and leaves the dark dock alone', () => {
+    expect(getTabBarFillFromThumbhash(null, 'light')).toBe(DEFAULT_LIGHT_TAB_BAR_COLOR);
+    expect(getTabBarFillFromSource({ thumbhash: null }, 'light')).toBe(DEFAULT_LIGHT_TAB_BAR_COLOR);
+    expect(getTabBarFillFromThumbhash(MEDIA.magenta)).toBe(getTabBarFillFromThumbhash(MEDIA.magenta, 'dark'));
+    expect(getTabBarFillFromThumbhash(MEDIA.magenta, 'light')).not.toBe(getTabBarFillFromThumbhash(MEDIA.magenta, 'dark'));
+  });
+
+  it('lifts a fill that is too dark for ink instead of clipping it', () => {
+    const lifted = floorFillLuminance('#d9a0a0');
+    expect(contrastRatio(themes.light.colors.primary, lifted)).toBeGreaterThanOrEqual(4.5);
+    expect(dominantChannel(lifted)).toBe('red');
+    expect(floorFillLuminance(DEFAULT_LIGHT_TAB_BAR_COLOR)).toBe(DEFAULT_LIGHT_TAB_BAR_COLOR);
+  });
+
+  it('derives its floor from the deep coral active tint, which binds', () => {
+    expect(MIN_LIGHT_FILL_LUMINANCE).toBeGreaterThan(0.6);
+    expect(MIN_LIGHT_FILL_LUMINANCE).toBeLessThan(0.8);
+  });
+});
+
 describe('choosing which visible card to read', () => {
   it('uses the bottommost visible card near the dock', () => {
     expect(selectBottomVisibleAmbientSource([
@@ -205,13 +270,13 @@ describe('adapting only where a surface spends the colour', () => {
     platform.os = 'ios';
   });
 
-  async function mountColourProbe(os: 'ios' | 'android', spends = true) {
+  async function mountColourProbe(os: 'ios' | 'android', spends = true, scheme: 'dark' | 'light' = 'dark') {
     platform.os = os;
     vi.resetModules();
     const module = await import('../lib/tab-bar-ambient');
     const painted: string[] = [];
     function Probe() {
-      painted.push(module.useTabBarAmbientColor(spends));
+      painted.push(module.useTabBarAmbientColor(spends, scheme));
       return null;
     }
 
@@ -247,6 +312,18 @@ describe('adapting only where a surface spends the colour', () => {
 
     expect(painted).toHaveLength(2);
     expect(painted[1]).not.toBe(DEFAULT_TAB_BAR_COLOR);
+    unmount();
+  });
+
+  it('paints the light dock from the same card, already computed for the light scheme', async () => {
+    const { module, painted, unmount } = await mountColourProbe('ios', true, 'light');
+    expect(painted).toEqual([DEFAULT_LIGHT_TAB_BAR_COLOR]);
+
+    renderer.act(() => {
+      module.setTabBarAmbientSource({ thumbhash: MEDIA.magenta });
+    });
+
+    expect(painted).toEqual([DEFAULT_LIGHT_TAB_BAR_COLOR, module.getTabBarFillFromThumbhash(MEDIA.magenta, 'light')]);
     unmount();
   });
 

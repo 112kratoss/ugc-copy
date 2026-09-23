@@ -5,6 +5,7 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-nati
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { MediaLightbox, type LightboxMediaItem } from '@/components/media-lightbox';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import type { PostResourceItem } from '@/lib/types';
 
 type PostResourceReferencesProps = {
@@ -20,6 +21,7 @@ export function PostResourceReferences({
   onOpenUrl,
   resolveFileUrl,
 }: PostResourceReferencesProps) {
+  const theme = useAppTheme();
   const referenceItems = useMemo(
     () => getReferenceResourceItems(items),
     [items]
@@ -137,7 +139,7 @@ export function PostResourceReferences({
 
   return (
     <View style={{ gap: 10 }}>
-      <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
+      <Text selectable style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
         References
       </Text>
       <ScrollView
@@ -171,12 +173,12 @@ export function PostResourceReferences({
                 borderRadius: 16,
                 borderCurve: 'continuous',
                 borderWidth: 1,
-                borderColor: appTheme.colors.border,
-                backgroundColor: pressed ? appTheme.colors.surfaceStrong : appTheme.colors.panel,
+                borderColor: theme.colors.border,
+                backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.panel,
                 overflow: 'hidden',
               })}
             >
-              <View style={{ height: 166, backgroundColor: appTheme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center' }}>
+              <View style={{ height: 166, backgroundColor: theme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center' }}>
                 {isImage && signedUrl && !previewFailed ? (
                   <FeedMediaFrame
                     kind="image"
@@ -190,26 +192,26 @@ export function PostResourceReferences({
                     url={signedUrl}
                   />
                 ) : isLoading ? (
-                  <ActivityIndicator color={appTheme.colors.primary} />
+                  <ActivityIndicator color={theme.colors.primary} />
                 ) : isImage ? (
-                  <ImageIcon size={appTheme.icon.hero} color={appTheme.colors.faint} />
+                  <ImageIcon size={appTheme.icon.hero} color={theme.colors.faint} />
                 ) : (
-                  <FileText size={appTheme.icon.hero} color={appTheme.colors.faint} />
+                  <FileText size={appTheme.icon.hero} color={theme.colors.faint} />
                 )}
               </View>
               <View style={{ padding: 10, gap: 4 }}>
-                <Text selectable numberOfLines={2} style={{ color: appTheme.colors.text, ...appTheme.type.label }}>
+                <Text selectable numberOfLines={2} style={{ color: theme.colors.text, ...appTheme.type.label }}>
                   {item.title}
                 </Text>
                 {item.description ? (
-                  <Text selectable numberOfLines={2} style={{ color: appTheme.colors.muted, ...appTheme.type.caption, fontWeight: '400' }}>
+                  <Text selectable numberOfLines={2} style={{ color: theme.colors.muted, ...appTheme.type.caption, fontWeight: '400' }}>
                     {item.description}
                   </Text>
                 ) : null}
                 {!isImage && isOpenable ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                    <ExternalLink size={appTheme.icon.xs} color={appTheme.colors.primary} />
-                    <Text style={{ color: appTheme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>{mediaLabel}</Text>
+                    <ExternalLink size={appTheme.icon.xs} color={theme.colors.primary} />
+                    <Text style={{ color: theme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>{mediaLabel}</Text>
                   </View>
                 ) : null}
               </View>

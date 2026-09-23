@@ -34,7 +34,9 @@ import { uploadProfileImage } from '@/lib/media';
 import { getProfileHandle, getProfileInitials, getProfileName } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { CloseGlyph } from '@/lib/platform-glyphs';
-import { appTheme } from '@/lib/theme';
+import { hexWithAlpha } from '@/lib/eased-fade';
+import { appTheme, mediaColors } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import type { ProfileResponse } from '@/lib/types';
 import { haptic } from '@/lib/haptics';
 import { invalidateWelcomeCredits } from '@/lib/use-onboarding-destination';
@@ -59,6 +61,7 @@ const emptyForm: EditProfileForm = {
 };
 
 export function EditProfileScreen() {
+  const theme = useAppTheme();
   const { user, api, refreshProfile } = useAuth();
   const queryClient = useQueryClient();
   const navigation = useNavigation();
@@ -403,7 +406,7 @@ export function EditProfileScreen() {
     <EditProfileShell header={header} scrollBottomPadding={scrollBottomPadding} horizontalPadding={horizontalPadding}>
       {profileQuery.isLoading ? (
         <View style={{ minHeight: 360, alignItems: 'center', justifyContent: 'center' }}>
-          <ActivityIndicator color={appTheme.colors.primary} />
+          <ActivityIndicator color={theme.colors.primary} />
         </View>
       ) : profileQuery.isError || !profile ? (
         <View style={{ gap: appTheme.spacing.gap }}>
@@ -436,22 +439,22 @@ export function EditProfileScreen() {
                 borderCurve: 'continuous',
                 overflow: 'hidden',
                 borderWidth: 1,
-                borderColor: fieldErrors.coverUrl ? appTheme.colors.danger : appTheme.colors.border,
-                backgroundColor: appTheme.colors.panel,
+                borderColor: fieldErrors.coverUrl ? theme.colors.danger : theme.colors.border,
+                backgroundColor: theme.colors.panel,
                 opacity: pressed ? appTheme.opacity.pressed : 1,
               })}
             >
               {coverDraftUri || form.coverUrl ? (
                 <Image source={{ uri: coverDraftUri ?? form.coverUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
               ) : (
-                <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: appTheme.colors.panelSoft }}>
-                  <ImageIcon size={appTheme.icon.hero} color={appTheme.colors.muted} />
+                <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: theme.colors.panelSoft }}>
+                  <ImageIcon size={appTheme.icon.hero} color={theme.colors.muted} />
                   <AppText variant="label" color="muted">Add a cover image</AppText>
                 </View>
               )}
-              <LinearGradient colors={['rgba(3,4,13,0.08)', 'rgba(3,4,13,0.76)']} style={{ position: 'absolute', inset: 0 }} />
+              <LinearGradient colors={[hexWithAlpha(mediaColors.mediaGround, 0.08), hexWithAlpha(mediaColors.mediaGround, 0.76)]} style={{ position: 'absolute', inset: 0 }} />
               <View style={{ position: 'absolute', right: 14, bottom: 14 }}>
-                <ActionPill icon={<ImageIcon size={appTheme.icon.sm} color={appTheme.colors.text} />} label="Change cover" />
+                <ActionPill icon={<ImageIcon size={appTheme.icon.sm} color={theme.colors.text} />} label="Change cover" />
               </View>
             </Pressable>
 
@@ -474,20 +477,20 @@ export function EditProfileScreen() {
                   borderRadius: 42,
                   padding: 3,
                   borderWidth: 2,
-                  borderColor: appTheme.colors.primary,
-                  backgroundColor: appTheme.colors.background,
+                  borderColor: theme.colors.primary,
+                  backgroundColor: theme.colors.background,
                   opacity: pressed ? appTheme.opacity.pressed : 1,
                 })}
               >
-                  <View style={{ flex: 1, overflow: 'hidden', borderRadius: 38, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.panelSoft }}>
+                  <View style={{ flex: 1, overflow: 'hidden', borderRadius: 38, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panelSoft }}>
                     {avatarDraftUri || form.avatarUrl ? (
                       <Image source={{ uri: avatarDraftUri ?? form.avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
                     ) : (
                       <AppText variant="sectionTitle">{preview.initials}</AppText>
                     )}
                   </View>
-                <View style={{ position: 'absolute', right: -2, bottom: 0, width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.primary, borderWidth: 3, borderColor: appTheme.colors.background }}>
-                  <Camera size={appTheme.icon.sm} color={appTheme.colors.onPrimary} />
+                <View style={{ position: 'absolute', right: -2, bottom: 0, width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.primaryFill, borderWidth: 3, borderColor: theme.colors.background }}>
+                  <Camera size={appTheme.icon.sm} color={theme.colors.onPrimary} />
                 </View>
               </Pressable>
               <AppText variant="caption" color="muted" style={{ paddingBottom: 12 }}>Tap photo to replace</AppText>
@@ -575,8 +578,9 @@ function EditProfileShell({
   scrollBottomPadding: number;
   horizontalPadding: number;
 }) {
+  const theme = useAppTheme();
   return (
-    <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       {header}
       <KeyboardAvoidingArea iosScrollViewAdjustsInsets>
       <ScrollView
@@ -617,6 +621,7 @@ function EditHeader({
   onClose: () => void;
   onSave?: () => void;
 }) {
+  const theme = useAppTheme();
   const disabled = !onSave || isSaving;
 
   return (
@@ -626,8 +631,8 @@ function EditHeader({
         paddingHorizontal: 14,
         paddingBottom: 8,
         borderBottomWidth: 1,
-        borderBottomColor: appTheme.colors.borderSubtle,
-        backgroundColor: appTheme.colors.background,
+        borderBottomColor: theme.colors.borderSubtle,
+        backgroundColor: theme.colors.background,
       }}
     >
       <View style={{ minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
@@ -650,11 +655,11 @@ function EditHeader({
             borderRadius: appTheme.touch.default / 2,
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: pressed ? appTheme.colors.surfaceStrong : 'transparent',
+            backgroundColor: pressed ? theme.colors.surfaceStrong : 'transparent',
             opacity: isSaving ? appTheme.opacity.disabled : 1,
           })}
         >
-          <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
+          <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
         </Pressable>
         <AppText heading variant="cardTitle" accessibilityRole="header" numberOfLines={1} style={{ flex: 1 }}>
           Edit profile
@@ -675,8 +680,8 @@ function EditHeader({
             justifyContent: 'center',
             gap: 7,
             backgroundColor: disabled
-              ? appTheme.colors.panelSoft
-              : pressed ? appTheme.colors.primaryStrong : appTheme.colors.primary,
+              ? theme.colors.panelSoft
+              : pressed ? theme.colors.primaryStrong : theme.colors.primary,
             opacity: disabled ? appTheme.opacity.disabled : 1,
           })}
         >
@@ -686,9 +691,9 @@ function EditHeader({
             'Checking out…'". It used to spin beside a label still reading Save.
           */}
           {isSaving
-            ? <ActivityIndicator color={appTheme.colors.onPrimary} size="small" />
-            : <Check size={appTheme.icon.sm} color={disabled ? appTheme.colors.text : appTheme.colors.onPrimary} />}
-          <AppText variant="button" color={disabled ? 'text' : appTheme.colors.onPrimary}>
+            ? <ActivityIndicator color={theme.colors.onPrimary} size="small" />
+            : <Check size={appTheme.icon.sm} color={disabled ? theme.colors.text : theme.colors.onPrimary} />}
+          <AppText variant="button" color={disabled ? 'text' : theme.colors.onPrimary}>
             {isSaving ? 'Saving…' : 'Save'}
           </AppText>
         </Pressable>
@@ -698,6 +703,7 @@ function EditHeader({
 }
 
 function GlassForm({ children }: { children: React.ReactNode }) {
+  const theme = useAppTheme();
   return (
     <View
       style={{
@@ -705,8 +711,8 @@ function GlassForm({ children }: { children: React.ReactNode }) {
         borderRadius: appTheme.radii.xl,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: appTheme.colors.border,
-        backgroundColor: appTheme.colors.panel,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.panel,
         padding: 16,
       }}
     >
@@ -716,8 +722,9 @@ function GlassForm({ children }: { children: React.ReactNode }) {
 }
 
 function ActionPill({ icon, label }: { icon: React.ReactNode; label: string }) {
+  const theme = useAppTheme();
   return (
-    <View style={{ minHeight: appTheme.touch.default, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: appTheme.radii.pill, backgroundColor: appTheme.colors.overlayStrong, paddingHorizontal: 14, paddingVertical: 9 }}>
+    <View style={{ minHeight: appTheme.touch.default, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.overlayStrong, paddingHorizontal: 14, paddingVertical: 9 }}>
       {icon}
       <AppText variant="label">{label}</AppText>
     </View>

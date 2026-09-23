@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as ReactNative from 'react-native';
 
-import { appTheme } from '@/lib/theme';
+import { appTheme, type ThemeColors } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 /**
  * The one dismissal contract every bottom sheet in this app shares.
@@ -68,8 +69,6 @@ const SHEET_DRAG_CLAIM_DISTANCE = 6;
  * drag that is about to let go reads as "leaving", not "left".
  */
 export const SHEET_BACKDROP_FADE_DISTANCE = 320;
-/** The scrim most sheets draw; a sheet over darker media may pass its own. */
-export const SHEET_BACKDROP_COLOR = 'rgba(0,0,0,0.58)';
 
 // Sheet motion. The panel travels its own measured height so it reads as a
 // sheet arriving from the screen edge instead of a box blinking into place,
@@ -461,6 +460,7 @@ export function useSheetPresentation({
  * "Close model picker" next to the button that says so is noise, not access.
  */
 export function SheetGrabber({ drag }: { drag: SheetDismissDrag }) {
+  const theme = useAppTheme();
   return (
     <ReactNative.View
       {...drag.panHandlers}
@@ -474,7 +474,7 @@ export function SheetGrabber({ drag }: { drag: SheetDismissDrag }) {
           width: GRABBER_WIDTH,
           height: GRABBER_HEIGHT,
           borderRadius: GRABBER_HEIGHT / 2,
-          backgroundColor: appTheme.colors.borderStrong,
+          backgroundColor: theme.colors.borderStrong,
         }}
       />
     </ReactNative.View>
@@ -502,15 +502,15 @@ export const SheetPanel = AnimatedView;
  * theme is read when a sheet renders, not when this module loads under a test
  * that mocks the theme down to a few colours.
  */
-export function sheetPanelStyle(): ReactNative.ViewStyle {
+export function sheetPanelStyle(colors: ThemeColors): ReactNative.ViewStyle {
   return {
     borderTopLeftRadius: appTheme.radii.xl,
     borderTopRightRadius: appTheme.radii.xl,
     borderCurve: 'continuous',
     borderWidth: 1,
     borderBottomWidth: 0,
-    borderColor: appTheme.colors.borderStrong,
-    backgroundColor: appTheme.colors.panel,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.panel,
   };
 }
 
@@ -527,16 +527,18 @@ export function SheetBackdrop({
   drag,
   onPress,
   label,
-  color = SHEET_BACKDROP_COLOR,
+  color,
 }: {
   drag: SheetDismissDrag;
   onPress: () => void;
   label?: string;
+  /** Defaults to the scheme's scrim; a sheet over darker media may pass its own. */
   color?: string;
 }) {
+  const theme = useAppTheme();
   return (
     <AnimatedView
-      style={[{ position: 'absolute', inset: 0, backgroundColor: color }, drag.backdropStyle]}
+      style={[{ position: 'absolute', inset: 0, backgroundColor: color ?? theme.colors.scrim }, drag.backdropStyle]}
     >
       {NativePressable ? (
         label ? (

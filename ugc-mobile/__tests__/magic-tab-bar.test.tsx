@@ -93,18 +93,10 @@ vi.mock('@/lib/tab-bar-layout', async () =>
   vi.importActual('../lib/tab-bar-layout')
 );
 
-vi.mock('@/lib/theme', () => ({
-  appTheme: {
-    colors: {
-      muted: '#a1a1aa',
-      borderStrong: 'rgba(255,248,237,0.22)',
-      badge: '#ff3b30',
-      onBadge: '#ffffff',
-    },
-    icon: { feature: 24 },
-    radii: { pill: 999 },
-  },
-}));
+// The real theme: it is plain data with no native imports, and the bar now
+// reads its materials per scheme (`theme.tabBar`), so a hand-cut subset of the
+// palette would have to track every token the bar touches. With no provider
+// mounted, `useAppTheme()` answers with the dark theme.
 
 // The badge's own rules (red oval, white text, 99+ cap, one badged tab) are
 // swept in hig-navigation-chrome.test.ts. Here the count is just an input, so
@@ -125,6 +117,7 @@ vi.mock('@/lib/use-active-generations', () => ({
 }));
 
 import { MagicTabBar } from '../components/magic-tab-bar';
+import { themes } from '../lib/theme';
 
 const routes = [
   { key: 'home-key', name: 'index' },
@@ -426,11 +419,11 @@ describe('MagicTabBar', () => {
     const { tree } = await renderTabBarAsync();
     const home = tree.root.findByProps({ accessibilityLabel: 'Home' });
 
-    expect(home.findByType('home-icon' as never).props.color).toBe('#FF7A59');
+    expect(home.findByType('home-icon' as never).props.color).toBe(themes.dark.colors.primary);
     expect(
       home.findAll((node) => {
         const style = node.props.style as Record<string, unknown> | undefined;
-        return style?.width === 18 && style?.height === 3 && style?.backgroundColor === '#FF7A59';
+        return style?.width === 18 && style?.height === 3 && style?.backgroundColor === themes.dark.colors.primary;
       })
     ).toHaveLength(0);
   });
@@ -452,7 +445,7 @@ describe('MagicTabBar', () => {
     // Muted grey is safe against a known opaque bar. Once the surface is
     // translucent the backdrop is whatever post scrolled past, so the label has
     // to carry itself.
-    expect(solidIcon.props.color).toBe('#a1a1aa');
+    expect(solidIcon.props.color).toBe(themes.dark.colors.muted);
     expect(glassIcon.props.color).toBe('rgba(255,255,255,0.88)');
   });
 

@@ -109,7 +109,9 @@ import { formatCreditAmount } from '@/lib/pricing';
 import { withCreditCost } from '@/lib/generation-action-label';
 import { generationWaitDetail, generationWaitPhase, generationWaitTitle } from '@/lib/generation-wait';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
-import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
+import { hexWithAlpha } from '@/lib/eased-fade';
+import { accentColor, appTheme, mediaColors, type ToolAccent } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse, PromptEnhancementLevel } from '@/lib/types';
 import type { ModelCatalogSummary } from '@/lib/model-catalog/protocol';
 import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
@@ -481,6 +483,7 @@ function IdentityCreationScreen({
   registerBeforeClose,
   onDirtyChange,
 }: MediaCreationScreenProps) {
+  const theme = useAppTheme();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   // `user` still gates remix restore, which pulls another creator's source
@@ -1641,7 +1644,7 @@ function IdentityCreationScreen({
     const contentBottom = bottomInset + 108;
 
     return withReferenceLinkRenewal(
-      <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+      <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
         <KeyboardAvoidingArea iosScrollViewAdjustsInsets>
         <ScrollView
           ref={scrollRef}
@@ -1671,8 +1674,8 @@ function IdentityCreationScreen({
             <View accessibilityLabel="Remix source post" style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
               {remixSource.thumbnailUrl ? <StableMediaImage url={remixSource.thumbnailUrl} cacheKey={`remix-source:${remixSource.postId ?? remixSource.generationId}`} style={{ width: 40, height: 40, borderRadius: 10 }} /> : null}
               <View style={{ flex: 1, gap: 2 }}>
-                <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>{remixSource.title || 'Source creation'}</Text>
-                <Text numberOfLines={1} style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>{remixSource.creatorLabel ? `By ${remixSource.creatorLabel}` : 'Make your own version'}</Text>
+                <Text numberOfLines={1} style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>{remixSource.title || 'Source creation'}</Text>
+                <Text numberOfLines={1} style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{remixSource.creatorLabel ? `By ${remixSource.creatorLabel}` : 'Make your own version'}</Text>
               </View>
             </View>
           ) : null}
@@ -1910,7 +1913,7 @@ function IdentityCreationScreen({
     const imageContentBottom = bottomInset + 108;
 
     return withReferenceLinkRenewal(
-      <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+      <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
         <KeyboardAvoidingArea iosScrollViewAdjustsInsets>
         <ScrollView
           ref={scrollRef}
@@ -1940,8 +1943,8 @@ function IdentityCreationScreen({
             <View accessibilityLabel="Remix source post" style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
               {remixSource.thumbnailUrl ? <StableMediaImage url={remixSource.thumbnailUrl} cacheKey={`remix-source:${remixSource.postId ?? remixSource.generationId}`} style={{ width: 40, height: 40, borderRadius: 10 }} /> : null}
               <View style={{ flex: 1, gap: 2 }}>
-                <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>{remixSource.title || 'Source creation'}</Text>
-                <Text numberOfLines={1} style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>{remixSource.creatorLabel ? `By ${remixSource.creatorLabel}` : 'Make your own version'}</Text>
+                <Text numberOfLines={1} style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>{remixSource.title || 'Source creation'}</Text>
+                <Text numberOfLines={1} style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{remixSource.creatorLabel ? `By ${remixSource.creatorLabel}` : 'Make your own version'}</Text>
               </View>
             </View>
           ) : null}
@@ -2166,7 +2169,8 @@ function CompactCreatorHeader({
   closing?: boolean;
   remix?: boolean;
 }) {
-  const modelAccent = accentColor(TOOL_META[activeTool].accent);
+  const theme = useAppTheme();
+  const modelAccent = accentColor(TOOL_META[activeTool].accent, theme.colors);
   return (
     <View style={{ gap: 14 }}>
       <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
@@ -2183,13 +2187,13 @@ function CompactCreatorHeader({
                 width: 48,
                 height: 48,
                 borderRadius: 24,
-                backgroundColor: pressed ? appTheme.colors.pressed : appTheme.colors.surfaceStrong,
+                backgroundColor: pressed ? theme.colors.pressed : theme.colors.surfaceStrong,
                 alignItems: 'center',
                 justifyContent: 'center',
                 opacity: pressed ? appTheme.opacity.pressed : 1,
               })}
             >
-              <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.textSecondary} />
+              <CloseGlyph size={appTheme.icon.feature} color={theme.colors.textSecondary} />
             </Pressable>
           ) : null}
           <AppText variant="pageTitle">{remix ? 'Remix' : 'Create'}</AppText>
@@ -2215,7 +2219,7 @@ function CompactCreatorHeader({
             opacity: modelDisabled ? 0.5 : pressed ? appTheme.opacity.pressed : 1,
           })}
         >
-          <Text numberOfLines={1} style={{ flexShrink: 1, color: appTheme.colors.text, fontSize: 13, fontWeight: '800' }}>
+          <Text numberOfLines={1} style={{ flexShrink: 1, color: theme.colors.text, fontSize: 13, fontWeight: '800' }}>
             {modelName}
           </Text>
           <ChevronDown size={15} color={modelAccent} />
@@ -2259,6 +2263,7 @@ function GuidedPromptChips({
   prompt: string;
   onSelectPrompt: (prompt: string) => void;
 }) {
+  const theme = useAppTheme();
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 8 }}>
       {GUIDED_PROMPTS[tool].map((starter, index) => {
@@ -2275,8 +2280,8 @@ function GuidedPromptChips({
               maxWidth: 230,
               borderRadius: appTheme.radii.pill,
               borderWidth: 1,
-              borderColor: active ? 'rgba(115,191,242,0.58)' : appTheme.colors.border,
-              backgroundColor: active ? 'rgba(115,191,242,0.12)' : appTheme.colors.surfaceStrong,
+              borderColor: active ? hexWithAlpha(theme.colors.image, 0.58) : theme.colors.border,
+              backgroundColor: active ? hexWithAlpha(theme.colors.image, 0.12) : theme.colors.surfaceStrong,
               paddingHorizontal: 14,
               justifyContent: 'center',
               opacity: pressed ? appTheme.opacity.pressed : 1,
@@ -2286,7 +2291,7 @@ function GuidedPromptChips({
                 and "Premium product photo on a cl…" is an example of a third of
                 one. Generative AI asks for "diverse, predefined example inputs
                 that hint at what's possible". */}
-            <Text numberOfLines={2} style={{ color: active ? appTheme.colors.image : appTheme.colors.textSecondary, fontSize: 12, lineHeight: 16, fontWeight: '700' }}>
+            <Text numberOfLines={2} style={{ color: active ? theme.colors.image : theme.colors.textSecondary, fontSize: 12, lineHeight: 16, fontWeight: '700' }}>
               {starter}
             </Text>
           </Pressable>
@@ -2297,6 +2302,7 @@ function GuidedPromptChips({
 }
 
 function SlimCreatorBanner({ label, body, loading, onDismiss }: { label: string; body: string; loading?: boolean; onDismiss?: () => void }) {
+  const theme = useAppTheme();
   return (
     <View
       style={{
@@ -2304,8 +2310,8 @@ function SlimCreatorBanner({ label, body, loading, onDismiss }: { label: string;
         borderRadius: 18,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: 'rgba(255,122,89,0.28)',
-        backgroundColor: 'rgba(255,122,89,0.08)',
+        borderColor: hexWithAlpha(theme.colors.primary, 0.28),
+        backgroundColor: hexWithAlpha(theme.colors.primary, 0.08),
         paddingLeft: 13,
         paddingRight: 5,
         flexDirection: 'row',
@@ -2314,12 +2320,12 @@ function SlimCreatorBanner({ label, body, loading, onDismiss }: { label: string;
       }}
     >
       <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
-        <Text style={{ color: appTheme.colors.primary, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>{label}</Text>
-        <Text numberOfLines={2} style={{ color: appTheme.colors.textSecondary, fontSize: 12, lineHeight: 16 }}>{body}</Text>
+        <Text style={{ color: theme.colors.primary, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>{label}</Text>
+        <Text numberOfLines={2} style={{ color: theme.colors.textSecondary, fontSize: 12, lineHeight: 16 }}>{body}</Text>
       </View>
       {loading ? (
         <View style={{ width: 48, height: 48, alignItems: 'center', justifyContent: 'center' }}>
-          <ActivityIndicator color={appTheme.colors.primary} size="small" />
+          <ActivityIndicator color={theme.colors.primary} size="small" />
         </View>
       ) : onDismiss ? (
         <Pressable
@@ -2328,7 +2334,7 @@ function SlimCreatorBanner({ label, body, loading, onDismiss }: { label: string;
           onPress={onDismiss}
           style={({ pressed }) => ({ width: 48, height: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
-          <X size={17} color={appTheme.colors.muted} />
+          <X size={17} color={theme.colors.muted} />
         </Pressable>
       ) : null}
     </View>
@@ -2376,6 +2382,7 @@ function ImagePromptComposer({
   onBlur: () => void;
   onMentionStateChange: (active: boolean) => void;
 }) {
+  const theme = useAppTheme();
   const [referenceId, setReferenceId] = useState<string | null>(null);
   const initialSelection = { start: draft.prompt.length, end: draft.prompt.length };
   const [promptSelection, setPromptSelection] = useState<TextSelection>(initialSelection);
@@ -2465,16 +2472,16 @@ function ImagePromptComposer({
           borderRadius: 28,
           borderCurve: 'continuous',
           borderWidth: 1,
-          borderColor: 'rgba(115,191,242,0.2)',
-          backgroundColor: appTheme.colors.panel,
+          borderColor: hexWithAlpha(theme.colors.image, 0.2),
+          backgroundColor: theme.colors.panel,
           overflow: 'hidden',
         }}
       >
         <View
           testID="prompt-heading-inset"
-          style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8, backgroundColor: appTheme.colors.panel, zIndex: 1 }}
+          style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8, backgroundColor: theme.colors.panel, zIndex: 1 }}
         >
-          <Text style={{ color: appTheme.colors.image, fontSize: 11, fontWeight: '800', letterSpacing: 1, textTransform: 'uppercase' }}>Prompt</Text>
+          <Text style={{ color: theme.colors.image, fontSize: 11, fontWeight: '800', letterSpacing: 1, textTransform: 'uppercase' }}>Prompt</Text>
         </View>
         <View testID="prompt-scroll-viewport" style={{ height: 190, overflow: 'hidden' }}>
           <TextInput
@@ -2500,7 +2507,7 @@ function ImagePromptComposer({
             scrollEnabled
             textAlignVertical="top"
             placeholder="Describe the subject, setting, lighting, composition, and style…"
-            placeholderTextColor={appTheme.colors.faint}
+            placeholderTextColor={theme.colors.faint}
             onFocus={() => {
               clearPromptBlurTimer();
               setPromptFocused(true);
@@ -2517,7 +2524,7 @@ function ImagePromptComposer({
             style={{
               height: 190,
               overflow: 'hidden',
-              color: appTheme.colors.text,
+              color: theme.colors.text,
               fontSize: 14,
               lineHeight: 20,
               paddingHorizontal: 16,
@@ -2528,11 +2535,11 @@ function ImagePromptComposer({
           <View
             testID="prompt-bottom-inset"
             pointerEvents="none"
-            style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 16, backgroundColor: appTheme.colors.panel }}
+            style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 16, backgroundColor: theme.colors.panel }}
           />
         </View>
         {promptMessage ? (
-          <Text accessibilityRole="alert" selectable style={{ color: appTheme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 16, paddingBottom: 10 }}>
+          <Text accessibilityRole="alert" selectable style={{ color: theme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 16, paddingBottom: 10 }}>
             {promptMessage}
           </Text>
         ) : null}
@@ -2548,9 +2555,9 @@ function ImagePromptComposer({
         ) : null}
 
         <View testID="composer-action-grid" style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
-          <ComposerToolbarButton icon={<ImageIcon size={16} color={appTheme.colors.text} />} label="Reference" onPress={onUploadReferences} disabled={isUploading || referenceLimitReached} />
-          <ComposerToolbarButton icon={<Layers size={15} color={appTheme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
-          <ComposerToolbarButton icon={<Wand2 size={16} color={appTheme.colors.primary} />} label={isEnhancing ? 'Enhancing' : 'Enhance'} onPress={onEnhance} disabled={isEnhancing} accent />
+          <ComposerToolbarButton icon={<ImageIcon size={16} color={theme.colors.text} />} label="Reference" onPress={onUploadReferences} disabled={isUploading || referenceLimitReached} />
+          <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
+          <ComposerToolbarButton icon={<Wand2 size={16} color={theme.colors.primary} />} label={isEnhancing ? 'Enhancing' : 'Enhance'} onPress={onEnhance} disabled={isEnhancing} accent />
         </View>
 
         <EnhanceControlsRow
@@ -2567,8 +2574,8 @@ function ImagePromptComposer({
             borderRadius: 24,
             borderCurve: 'continuous',
             borderWidth: 1,
-            borderColor: 'rgba(115,191,242,0.13)',
-            backgroundColor: appTheme.colors.panel,
+            borderColor: hexWithAlpha(theme.colors.image, 0.13),
+            backgroundColor: theme.colors.panel,
             paddingTop: 14,
             paddingBottom: 14,
             overflow: 'hidden',
@@ -2576,8 +2583,8 @@ function ImagePromptComposer({
           }}
         >
           <View style={{ paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-            <Text style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '700' }}>Reference images</Text>
-            <Text style={{ color: appTheme.colors.faint, fontSize: 11, fontWeight: '700' }}>{draft.references.length} / {maxReferences}</Text>
+            <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700' }}>Reference images</Text>
+            <Text style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '700' }}>{draft.references.length} / {maxReferences}</Text>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingHorizontal: 16, paddingRight: 16 }}>
             {draft.references.map((media) => (
@@ -2603,14 +2610,14 @@ function ImagePromptComposer({
                 borderRadius: 16,
                 borderWidth: 1,
                 borderStyle: 'dashed',
-                borderColor: 'rgba(115,191,242,0.42)',
-                backgroundColor: 'rgba(115,191,242,0.08)',
+                borderColor: hexWithAlpha(theme.colors.image, 0.42),
+                backgroundColor: hexWithAlpha(theme.colors.image, 0.08),
                 alignItems: 'center',
                 justifyContent: 'center',
                 opacity: isUploading || referenceLimitReached ? 0.38 : pressed ? appTheme.opacity.pressed : 1,
               })}
             >
-              {isUploading ? <ActivityIndicator color={appTheme.colors.image} size="small" /> : <Plus size={22} color={appTheme.colors.image} />}
+              {isUploading ? <ActivityIndicator color={theme.colors.image} size="small" /> : <Plus size={22} color={theme.colors.image} />}
             </Pressable>
           </ScrollView>
         </View>
@@ -2661,6 +2668,7 @@ function CompactReferenceSlot({
   onAdd: () => void;
   onOpen: () => void;
 }) {
+  const theme = useAppTheme();
   const action = media ? onOpen : onAdd;
   const label = media ? `Open details for ${mediaAccessibleName(media)}` : `Add ${title.toLowerCase()}`;
   return (
@@ -2679,26 +2687,26 @@ function CompactReferenceSlot({
         borderCurve: 'continuous',
         borderWidth: 1,
         borderStyle: media ? 'solid' : 'dashed',
-        borderColor: media ? 'rgba(115,191,242,0.28)' : 'rgba(115,191,242,0.38)',
-        backgroundColor: media ? appTheme.colors.surfaceStrong : 'rgba(115,191,242,0.055)',
+        borderColor: media ? hexWithAlpha(theme.colors.image, 0.28) : hexWithAlpha(theme.colors.image, 0.38),
+        backgroundColor: media ? theme.colors.surfaceStrong : hexWithAlpha(theme.colors.image, 0.055),
         padding: 11,
         gap: 9,
         opacity: isUploading || disabled ? 0.45 : pressed ? appTheme.opacity.pressed : 1,
       })}
     >
       <View style={{ minHeight: required ? 29 : 16, alignItems: 'flex-start', justifyContent: 'flex-start', gap: 1 }}>
-        <Text numberOfLines={1} style={{ width: '100%', color: appTheme.colors.text, fontSize: 12, fontWeight: '800' }}>{title}</Text>
-        {required ? <Text style={{ color: appTheme.colors.primary, fontSize: 11, fontWeight: '900', textTransform: 'uppercase' }}>Required</Text> : null}
+        <Text numberOfLines={1} style={{ width: '100%', color: theme.colors.text, fontSize: 12, fontWeight: '800' }}>{title}</Text>
+        {required ? <Text style={{ color: theme.colors.primary, fontSize: 11, fontWeight: '900', textTransform: 'uppercase' }}>Required</Text> : null}
       </View>
       {media ? (
         <>
           <ReferenceMediaPreview media={media} size={78} />
-          <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '700' }}>{media.displayName}</Text>
+          <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700' }}>{media.displayName}</Text>
         </>
       ) : (
         <View style={{ flex: 1, minHeight: 82, alignItems: 'center', justifyContent: 'center', gap: 7 }}>
-          {isUploading ? <ActivityIndicator color={appTheme.colors.image} size="small" /> : <Plus size={23} color={appTheme.colors.image} />}
-          <Text numberOfLines={2} style={{ color: appTheme.colors.muted, fontSize: 11, lineHeight: 14, textAlign: 'center' }}>{helper ?? 'Tap to add media'}</Text>
+          {isUploading ? <ActivityIndicator color={theme.colors.image} size="small" /> : <Plus size={23} color={theme.colors.image} />}
+          <Text numberOfLines={2} style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 14, textAlign: 'center' }}>{helper ?? 'Tap to add media'}</Text>
         </View>
       )}
     </Pressable>
@@ -2716,6 +2724,7 @@ function CompactShotEditor({
   onFocus: () => void;
   onBlur: () => void;
 }) {
+  const theme = useAppTheme();
   const [selectedId, setSelectedId] = useState(draft.multiPrompts[0]?.id ?? '');
   const selectedShot = draft.multiPrompts.find((shot) => shot.id === selectedId) ?? draft.multiPrompts[0] ?? null;
   const totalDuration = draft.multiPrompts.reduce((total, shot) => total + Math.max(1, Math.round(shot.duration || 0)), 0);
@@ -2737,8 +2746,8 @@ function CompactShotEditor({
     <View testID="video-shot-editor" style={{ gap: 10 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
         <View style={{ gap: 2 }}>
-          <Text style={{ color: appTheme.colors.video, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Multi-shot story</Text>
-          <Text style={{ color: appTheme.colors.muted, fontSize: 11 }}>{draft.multiPrompts.length} shots · {totalDuration}s total</Text>
+          <Text style={{ color: theme.colors.video, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Multi-shot story</Text>
+          <Text style={{ color: theme.colors.muted, fontSize: 11 }}>{draft.multiPrompts.length} shots · {totalDuration}s total</Text>
         </View>
         <Pressable
           accessibilityRole="button"
@@ -2748,10 +2757,10 @@ function CompactShotEditor({
             onChange({ ...draft, multiPrompts: [...draft.multiPrompts, { id, prompt: '', duration: 5 }] });
             setSelectedId(id);
           }}
-          style={({ pressed }) => ({ minHeight: 48, borderRadius: 16, paddingHorizontal: 13, backgroundColor: pressed ? appTheme.colors.pressed : appTheme.colors.surfaceStrong, flexDirection: 'row', alignItems: 'center', gap: 6, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+          style={({ pressed }) => ({ minHeight: 48, borderRadius: 16, paddingHorizontal: 13, backgroundColor: pressed ? theme.colors.pressed : theme.colors.surfaceStrong, flexDirection: 'row', alignItems: 'center', gap: 6, opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
-          <Plus size={16} color={appTheme.colors.video} />
-          <Text style={{ color: appTheme.colors.text, fontSize: 11, fontWeight: '800' }}>Add shot</Text>
+          <Plus size={16} color={theme.colors.video} />
+          <Text style={{ color: theme.colors.text, fontSize: 11, fontWeight: '800' }}>Add shot</Text>
         </Pressable>
       </View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 8 }}>
@@ -2764,16 +2773,16 @@ function CompactShotEditor({
               accessibilityLabel={`Edit shot ${index + 1}`}
               accessibilityState={{ selected: active }}
               onPress={() => setSelectedId(shot.id)}
-              style={({ pressed }) => ({ minWidth: 76, minHeight: 48, borderRadius: 16, borderWidth: 1, borderColor: active ? 'rgba(115,191,242,0.55)' : appTheme.colors.border, backgroundColor: active ? 'rgba(115,191,242,0.12)' : appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', gap: 2, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+              style={({ pressed }) => ({ minWidth: 76, minHeight: 48, borderRadius: 16, borderWidth: 1, borderColor: active ? hexWithAlpha(theme.colors.image, 0.55) : theme.colors.border, backgroundColor: active ? hexWithAlpha(theme.colors.image, 0.12) : theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', gap: 2, opacity: pressed ? appTheme.opacity.pressed : 1 })}
             >
-              <Text style={{ color: active ? appTheme.colors.text : appTheme.colors.muted, fontSize: 11, fontWeight: '900' }}>Shot {index + 1}</Text>
-              <Text style={{ color: appTheme.colors.faint, fontSize: 11 }}>{shot.duration}s</Text>
+              <Text style={{ color: active ? theme.colors.text : theme.colors.muted, fontSize: 11, fontWeight: '900' }}>Shot {index + 1}</Text>
+              <Text style={{ color: theme.colors.faint, fontSize: 11 }}>{shot.duration}s</Text>
             </Pressable>
           );
         })}
       </ScrollView>
       {selectedShot ? (
-        <View style={{ borderRadius: 24, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(115,191,242,0.2)', backgroundColor: appTheme.colors.panel, overflow: 'hidden' }}>
+        <View style={{ borderRadius: 24, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.image, 0.2), backgroundColor: theme.colors.panel, overflow: 'hidden' }}>
           <TextInput
             testID="selected-shot-prompt"
             accessibilityLabel="Selected shot prompt"
@@ -2783,13 +2792,13 @@ function CompactShotEditor({
             scrollEnabled
             textAlignVertical="top"
             placeholder="Describe action, camera movement, and the beat for this shot…"
-            placeholderTextColor={appTheme.colors.faint}
+            placeholderTextColor={theme.colors.faint}
             onFocus={onFocus}
             onBlur={onBlur}
-            style={{ height: 154, color: appTheme.colors.text, fontSize: 14, lineHeight: 20, paddingHorizontal: 15, paddingTop: 15, paddingBottom: 22 }}
+            style={{ height: 154, color: theme.colors.text, fontSize: 14, lineHeight: 20, paddingHorizontal: 15, paddingTop: 15, paddingBottom: 22 }}
           />
           <View style={{ paddingHorizontal: 12, paddingBottom: 12, gap: 8 }}>
-            <Text style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>Shot duration</Text>
+            <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>Shot duration</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 7 }}>
               {[3, 4, 5, 6, 8, 10, 12].map((duration) => (
                 <Chip key={duration} label={`${duration}s`} active={selectedShot.duration === duration} accent="video" onPress={() => updateSelected({ duration })} />
@@ -2807,9 +2816,9 @@ function CompactShotEditor({
               onChange({ ...draft, multiPrompts: nextShots });
               setSelectedId(nextShots[Math.max(0, index - 1)]?.id ?? nextShots[0]?.id ?? '');
             }}
-            style={({ pressed }) => ({ width: 48, height: 48, position: 'absolute', right: 6, top: 6, borderRadius: 24, backgroundColor: pressed ? appTheme.colors.pressed : 'rgba(11,12,12,0.78)', alignItems: 'center', justifyContent: 'center', opacity: draft.multiPrompts.length <= 1 ? 0.35 : 1 })}
+            style={({ pressed }) => ({ width: 48, height: 48, position: 'absolute', right: 6, top: 6, borderRadius: 24, backgroundColor: pressed ? theme.colors.pressed : hexWithAlpha(theme.colors.surfaceInset, 0.78), alignItems: 'center', justifyContent: 'center', opacity: draft.multiPrompts.length <= 1 ? 0.35 : 1 })}
           >
-            <Trash2 size={17} color={appTheme.colors.muted} />
+            <Trash2 size={17} color={theme.colors.muted} />
           </Pressable>
         </View>
       ) : null}
@@ -2868,6 +2877,7 @@ function VideoCreatorComposer({
   onBlur: () => void;
   onMentionStateChange: (active: boolean) => void;
 }) {
+  const theme = useAppTheme();
   const [referenceId, setReferenceId] = useState<string | null>(null);
   const initialSelection = { start: draft.prompt.length, end: draft.prompt.length };
   const [promptSelection, setPromptSelection] = useState<TextSelection>(initialSelection);
@@ -3082,7 +3092,7 @@ function VideoCreatorComposer({
   return (
     <View testID="video-creator-composer" style={{ gap: 12 }}>
       {model?.capabilities.multiShot ? (
-        <View testID="video-shot-mode" style={{ minHeight: 48, borderRadius: 18, backgroundColor: appTheme.colors.surfaceStrong, padding: 4, flexDirection: 'row', gap: 4 }}>
+        <View testID="video-shot-mode" style={{ minHeight: 48, borderRadius: 18, backgroundColor: theme.colors.surfaceStrong, padding: 4, flexDirection: 'row', gap: 4 }}>
           {[
             { label: 'Single shot', value: false },
             { label: 'Multi-shot', value: true },
@@ -3094,9 +3104,9 @@ function VideoCreatorComposer({
               accessibilityState={{ selected: draft.isMultiShot === option.value }}
               onPress={() => onChange({ ...draft, isMultiShot: option.value, referenceMode: option.value ? 'frames' : draft.referenceMode })}
               hitSlop={verticalHitSlop(40)}
-              style={({ pressed }) => ({ flex: 1, minHeight: 40, borderRadius: 14, backgroundColor: draft.isMultiShot === option.value ? 'rgba(115,191,242,0.14)' : pressed ? appTheme.colors.pressed : 'transparent', alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+              style={({ pressed }) => ({ flex: 1, minHeight: 40, borderRadius: 14, backgroundColor: draft.isMultiShot === option.value ? hexWithAlpha(theme.colors.image, 0.14) : pressed ? theme.colors.pressed : 'transparent', alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
             >
-              <Text style={{ color: draft.isMultiShot === option.value ? appTheme.colors.text : appTheme.colors.muted, fontSize: 12, fontWeight: '800' }}>{option.label}</Text>
+              <Text style={{ color: draft.isMultiShot === option.value ? theme.colors.text : theme.colors.muted, fontSize: 12, fontWeight: '800' }}>{option.label}</Text>
             </Pressable>
           ))}
         </View>
@@ -3105,9 +3115,9 @@ function VideoCreatorComposer({
       {draft.isMultiShot ? (
         <CompactShotEditor draft={draft} onChange={onChange} onFocus={onFocus} onBlur={onBlur} />
       ) : (
-        <View style={{ borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(115,191,242,0.2)', backgroundColor: appTheme.colors.panel, overflow: 'hidden' }}>
+        <View style={{ borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.image, 0.2), backgroundColor: theme.colors.panel, overflow: 'hidden' }}>
           <View style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8 }}>
-            <Text style={{ color: appTheme.colors.video, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Prompt</Text>
+            <Text style={{ color: theme.colors.video, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Prompt</Text>
           </View>
           <TextInput
             ref={promptInputRef}
@@ -3133,7 +3143,7 @@ function VideoCreatorComposer({
             scrollEnabled
             textAlignVertical="top"
             placeholder="Describe action, camera movement, lighting, pace, and sound…"
-            placeholderTextColor={appTheme.colors.faint}
+            placeholderTextColor={theme.colors.faint}
             onFocus={() => {
               if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
               setPromptFocused(true);
@@ -3144,9 +3154,9 @@ function VideoCreatorComposer({
               if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
               blurTimerRef.current = setTimeout(() => setPromptFocused(false), 160);
             }}
-            style={{ height: 188, color: appTheme.colors.text, fontSize: 14, lineHeight: 20, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 28 }}
+            style={{ height: 188, color: theme.colors.text, fontSize: 14, lineHeight: 20, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 28 }}
           />
-          {promptMessage ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 16, paddingBottom: 11 }}>{promptMessage}</Text> : null}
+          {promptMessage ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 16, paddingBottom: 11 }}>{promptMessage}</Text> : null}
         </View>
       )}
 
@@ -3155,9 +3165,9 @@ function VideoCreatorComposer({
       ) : null}
 
       <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
-        <ComposerToolbarButton icon={<ImageIcon size={16} color={appTheme.colors.text} />} label="Reference" onPress={primaryReferenceAction} disabled={referenceActionDisabled} />
-        <ComposerToolbarButton icon={<Layers size={15} color={appTheme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
-        <ComposerToolbarButton icon={<Wand2 size={16} color={appTheme.colors.primary} />} label={isEnhancing ? 'Enhancing' : 'Enhance'} onPress={onEnhance} disabled={isEnhancing || draft.isMultiShot} accent />
+        <ComposerToolbarButton icon={<ImageIcon size={16} color={theme.colors.text} />} label="Reference" onPress={primaryReferenceAction} disabled={referenceActionDisabled} />
+        <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
+        <ComposerToolbarButton icon={<Wand2 size={16} color={theme.colors.primary} />} label={isEnhancing ? 'Enhancing' : 'Enhance'} onPress={onEnhance} disabled={isEnhancing || draft.isMultiShot} accent />
       </View>
 
         <EnhanceControlsRow
@@ -3168,11 +3178,11 @@ function VideoCreatorComposer({
           disabled={isEnhancing}
         />
 
-      <View testID="video-reference-section" style={{ borderRadius: 24, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(115,191,242,0.13)', backgroundColor: appTheme.colors.panel, padding: 14, gap: 12 }}>
+      <View testID="video-reference-section" style={{ borderRadius: 24, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.image, 0.13), backgroundColor: theme.colors.panel, padding: 14, gap: 12 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
           <View style={{ gap: 2 }}>
-            <Text style={{ color: appTheme.colors.text, fontSize: 12, fontWeight: '800' }}>{draft.isMultiShot ? 'Story inputs' : 'Visual inputs'}</Text>
-            <Text style={{ color: appTheme.colors.muted, fontSize: 11 }}>
+            <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '800' }}>{draft.isMultiShot ? 'Story inputs' : 'Visual inputs'}</Text>
+            <Text style={{ color: theme.colors.muted, fontSize: 11 }}>
               {framesAndReferencesConflict
                 ? `Clear one — this run will use ${reusableModeLabel.toLowerCase()}`
                 : framesLockedByReferences
@@ -3209,7 +3219,7 @@ function VideoCreatorComposer({
                 />
               ) : null}
             </View>
-            {frameError ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.amber, fontSize: 11, fontWeight: '700', lineHeight: 15 }}>{frameError}</Text> : null}
+            {frameError ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700', lineHeight: 15 }}>{frameError}</Text> : null}
           </View>
         ) : null}
 
@@ -3223,20 +3233,20 @@ function VideoCreatorComposer({
               {draft.references.map((media) => (
                 <Pressable key={media.id} accessibilityRole="button" accessibilityLabel={`Open details for ${mediaAccessibleName(media)}`} onPress={() => setReferenceId(media.id)} style={({ pressed }) => ({ width: 72, gap: 5, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
                   <ReferenceMediaPreview media={media} size={72} />
-                  <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '700', textAlign: 'center' }}>{media.displayName}</Text>
+                  <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700', textAlign: 'center' }}>{media.displayName}</Text>
                 </Pressable>
               ))}
               {draft.referenceVideos.map((media) => (
                 <Pressable key={media.id} accessibilityRole="button" accessibilityLabel={`Open details for ${mediaAccessibleName(media)}`} onPress={() => setReferenceId(media.id)} style={({ pressed }) => ({ width: 72, gap: 5, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
                   <ReferenceMediaPreview media={media} size={72} />
-                  <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '700', textAlign: 'center' }}>{media.displayName}</Text>
+                  <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700', textAlign: 'center' }}>{media.displayName}</Text>
                 </Pressable>
               ))}
               {draft.referenceAudios.map((media) => (
                 <View key={media.id} style={{ width: 72, gap: 4 }}>
                   <ReferenceMediaPreview media={media} size={72} />
                   <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${mediaAccessibleName(media)}`} onPress={() => onChange({ ...draft, referenceAudios: draft.referenceAudios.filter((item) => item.id !== media.id) })} style={({ pressed }) => ({ minHeight: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-                    <Text style={{ color: appTheme.colors.danger, fontSize: 11, fontWeight: '800' }}>Remove</Text>
+                    <Text style={{ color: theme.colors.danger, fontSize: 11, fontWeight: '800' }}>Remove</Text>
                   </Pressable>
                 </View>
               ))}
@@ -3259,7 +3269,7 @@ function VideoCreatorComposer({
         ) : null}
 
         {supportsFrames || supportsReusable ? null : (
-          <Text style={{ color: appTheme.colors.muted, fontSize: 11 }}>This model creates from text without reference media.</Text>
+          <Text style={{ color: theme.colors.muted, fontSize: 11 }}>This model creates from text without reference media.</Text>
         )}
       </View>
 
@@ -3288,6 +3298,7 @@ function VideoCreatorComposer({
 }
 
 function CompactRailAddButton({ label, icon = 'image', onPress, disabled }: { label: string; icon?: 'image' | 'video' | 'audio'; onPress: () => void; disabled: boolean }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -3295,10 +3306,10 @@ function CompactRailAddButton({ label, icon = 'image', onPress, disabled }: { la
       accessibilityState={{ disabled }}
       disabled={disabled}
       onPress={onPress}
-      style={({ pressed }) => ({ width: 80, minHeight: 96, borderRadius: 16, borderWidth: 1, borderStyle: 'dashed', borderColor: 'rgba(115,191,242,0.38)', backgroundColor: 'rgba(115,191,242,0.055)', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 6, opacity: disabled ? 0.38 : pressed ? appTheme.opacity.pressed : 1 })}
+      style={({ pressed }) => ({ width: 80, minHeight: 96, borderRadius: 16, borderWidth: 1, borderStyle: 'dashed', borderColor: hexWithAlpha(theme.colors.image, 0.38), backgroundColor: hexWithAlpha(theme.colors.image, 0.055), alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 6, opacity: disabled ? 0.38 : pressed ? appTheme.opacity.pressed : 1 })}
     >
-      {icon === 'video' ? <Video size={20} color={appTheme.colors.video} /> : icon === 'audio' ? <AudioLines size={20} color={appTheme.colors.motion} /> : <Plus size={21} color={appTheme.colors.image} />}
-      <Text numberOfLines={2} style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '800', lineHeight: 14, textAlign: 'center' }}>{label}</Text>
+      {icon === 'video' ? <Video size={20} color={theme.colors.video} /> : icon === 'audio' ? <AudioLines size={20} color={theme.colors.motion} /> : <Plus size={21} color={theme.colors.image} />}
+      <Text numberOfLines={2} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', lineHeight: 14, textAlign: 'center' }}>{label}</Text>
     </Pressable>
   );
 }
@@ -3340,6 +3351,7 @@ function MotionCreatorComposer({
   onFocus: () => void;
   onBlur: () => void;
 }) {
+  const theme = useAppTheme();
   const [selectedRole, setSelectedRole] = useState<'character' | 'motion' | null>(null);
   const selectedMedia = selectedRole === 'character' ? draft.characterImage : selectedRole === 'motion' ? draft.referenceVideo : null;
   const duration = draft.referenceVideo ? getMotionDuration(draft) : null;
@@ -3352,26 +3364,26 @@ function MotionCreatorComposer({
 
   return (
     <View testID="motion-creator-composer" style={{ gap: 12 }}>
-      {supportsCharacter || supportsMotion ? <View testID="motion-required-inputs" style={{ borderRadius: 26, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(240,171,252,0.18)', backgroundColor: appTheme.colors.panel, padding: 14, gap: 12 }}>
+      {supportsCharacter || supportsMotion ? <View testID="motion-required-inputs" style={{ borderRadius: 26, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.motion, 0.18), backgroundColor: theme.colors.panel, padding: 14, gap: 12 }}>
         <View style={{ gap: 3 }}>
-          <Text style={{ color: appTheme.colors.motion, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Required inputs</Text>
-          <Text style={{ color: appTheme.colors.muted, fontSize: 11, lineHeight: 15 }}>Choose the character to preserve and the movement to transfer.</Text>
+          <Text style={{ color: theme.colors.motion, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Required inputs</Text>
+          <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 15 }}>Choose the character to preserve and the movement to transfer.</Text>
         </View>
         <View style={{ flexDirection: 'row', gap: 9 }}>
           {supportsCharacter ? <CompactReferenceSlot testID="motion-character-slot" title={characterSlot?.label ?? 'Character image'} helper="Who should move?" media={draft.characterImage} required={(characterSlot?.min ?? 1) > 0} isUploading={isUploading} onAdd={onUploadCharacter} onOpen={() => setSelectedRole('character')} /> : null}
           {supportsMotion ? <CompactReferenceSlot testID="motion-video-slot" title={motionSlot?.label ?? 'Motion video'} helper="How should they move?" media={draft.referenceVideo} required={(motionSlot?.min ?? 1) > 0} isUploading={isUploading} onAdd={onUploadMotion} onOpen={() => setSelectedRole('motion')} /> : null}
         </View>
         <View style={{ gap: 4 }}>
-          {characterError ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.amber, fontSize: 11, fontWeight: '700' }}>{characterError}</Text> : null}
-          {motionError ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.amber, fontSize: 11, fontWeight: '700' }}>{motionError}</Text> : null}
-          {duration ? <Text style={{ color: appTheme.colors.textSecondary, fontSize: 11, fontWeight: '700' }}>Detected motion length · {duration}s</Text> : null}
+          {characterError ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700' }}>{characterError}</Text> : null}
+          {motionError ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700' }}>{motionError}</Text> : null}
+          {duration ? <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontWeight: '700' }}>Detected motion length · {duration}s</Text> : null}
         </View>
       </View> : null}
 
-      <View style={{ borderRadius: 26, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(240,171,252,0.16)', backgroundColor: appTheme.colors.panel, overflow: 'hidden' }}>
+      <View style={{ borderRadius: 26, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.motion, 0.16), backgroundColor: theme.colors.panel, overflow: 'hidden' }}>
         <View style={{ paddingHorizontal: 16, paddingTop: 15, paddingBottom: 7, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Text style={{ color: appTheme.colors.motion, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Optional direction</Text>
-          <Text style={{ color: appTheme.colors.faint, fontSize: 11, fontWeight: '800' }}>Optional</Text>
+          <Text style={{ color: theme.colors.motion, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Optional direction</Text>
+          <Text style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '800' }}>Optional</Text>
         </View>
         <TextInput
           testID="motion-prompt-input"
@@ -3382,18 +3394,18 @@ function MotionCreatorComposer({
           scrollEnabled
           textAlignVertical="top"
           placeholder="Add expression, timing, camera, or framing guidance…"
-          placeholderTextColor={appTheme.colors.faint}
+          placeholderTextColor={theme.colors.faint}
           onFocus={onFocus}
           onBlur={onBlur}
-          style={{ height: 128, color: appTheme.colors.text, fontSize: 14, lineHeight: 20, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 22 }}
+          style={{ height: 128, color: theme.colors.text, fontSize: 14, lineHeight: 20, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 22 }}
         />
-        {promptMessage ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 16, paddingBottom: 11 }}>{promptMessage}</Text> : null}
+        {promptMessage ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 16, paddingBottom: 11 }}>{promptMessage}</Text> : null}
       </View>
 
       <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
-        <ComposerToolbarButton icon={<Layers size={16} color={appTheme.colors.text} />} label="Inputs" onPress={!draft.characterImage ? onUploadCharacter : onUploadMotion} disabled={isUploading} />
-        <ComposerToolbarButton icon={<Layers size={15} color={appTheme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
-        <ComposerToolbarButton icon={<Wand2 size={16} color={appTheme.colors.primary} />} label={isEnhancing ? 'Enhancing' : 'Enhance'} onPress={onEnhance} disabled={isEnhancing || !draft.prompt.trim()} accent />
+        <ComposerToolbarButton icon={<Layers size={16} color={theme.colors.text} />} label="Inputs" onPress={!draft.characterImage ? onUploadCharacter : onUploadMotion} disabled={isUploading} />
+        <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
+        <ComposerToolbarButton icon={<Wand2 size={16} color={theme.colors.primary} />} label={isEnhancing ? 'Enhancing' : 'Enhance'} onPress={onEnhance} disabled={isEnhancing || !draft.prompt.trim()} accent />
       </View>
 
         <EnhanceControlsRow
@@ -3419,7 +3431,7 @@ function MotionCreatorComposer({
           setSelectedRole(null);
         }}
       />
-      {!model ? <Text style={{ color: appTheme.colors.muted, fontSize: 11 }}>Loading motion settings…</Text> : null}
+      {!model ? <Text style={{ color: theme.colors.muted, fontSize: 11 }}>Loading motion settings…</Text> : null}
     </View>
   );
 }
@@ -3435,6 +3447,7 @@ function ReferenceMentionSuggestions({
   query: string;
   onSelect: (handle: string) => void;
 }) {
+  const theme = useAppTheme();
   const matchLabel = references.length === 1 ? '1 reference' : `${references.length} references`;
   return (
     <View
@@ -3446,14 +3459,14 @@ function ReferenceMentionSuggestions({
         borderRadius: 20,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: 'rgba(115,191,242,0.26)',
-        backgroundColor: appTheme.colors.surfaceStrong,
+        borderColor: hexWithAlpha(theme.colors.image, 0.26),
+        backgroundColor: theme.colors.surfaceStrong,
         overflow: 'hidden',
       }}
     >
-      <View style={{ minHeight: 40, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, borderBottomWidth: 1, borderBottomColor: appTheme.colors.border }}>
-        <Text style={{ color: appTheme.colors.textSecondary, fontSize: 12, fontWeight: '800' }}>References</Text>
-        <Text accessibilityLiveRegion="polite" style={{ color: appTheme.colors.faint, fontSize: 11, fontWeight: '700' }}>{matchLabel}</Text>
+      <View style={{ minHeight: 40, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, borderBottomWidth: 1, borderBottomColor: theme.colors.border }}>
+        <Text style={{ color: theme.colors.textSecondary, fontSize: 12, fontWeight: '800' }}>References</Text>
+        <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '700' }}>{matchLabel}</Text>
       </View>
       {references.length > 0 ? (
         <ScrollView keyboardShouldPersistTaps="always" nestedScrollEnabled style={{ maxHeight: 168 }}>
@@ -3476,20 +3489,20 @@ function ReferenceMentionSuggestions({
                   alignItems: 'center',
                   gap: 10,
                   borderBottomWidth: 1,
-                  borderBottomColor: appTheme.colors.border,
-                  backgroundColor: pressed ? appTheme.colors.pressed : 'transparent',
+                  borderBottomColor: theme.colors.border,
+                  backgroundColor: pressed ? theme.colors.pressed : 'transparent',
                   opacity: used ? 0.58 : pressed ? appTheme.opacity.pressed : 1,
                 })}
               >
                 <ReferenceMediaPreview media={media} size={38} />
                 <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-                  <Text numberOfLines={1} style={{ color: appTheme.colors.text, fontSize: 13, fontWeight: '800' }}>{media.displayName}</Text>
-                  <Text numberOfLines={1} style={{ color: appTheme.colors.image, fontSize: 11, fontWeight: '700' }}>{handle}</Text>
+                  <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 13, fontWeight: '800' }}>{media.displayName}</Text>
+                  <Text numberOfLines={1} style={{ color: theme.colors.image, fontSize: 11, fontWeight: '700' }}>{handle}</Text>
                 </View>
                 {used ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                    <Check size={14} color={appTheme.colors.image} />
-                    <Text style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '800' }}>Added</Text>
+                    <Check size={14} color={theme.colors.image} />
+                    <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800' }}>Added</Text>
                   </View>
                 ) : null}
               </Pressable>
@@ -3497,7 +3510,7 @@ function ReferenceMentionSuggestions({
           })}
         </ScrollView>
       ) : (
-        <Text accessibilityLiveRegion="polite" style={{ color: appTheme.colors.muted, fontSize: 12, lineHeight: 17, paddingHorizontal: 14, paddingVertical: 16 }}>
+        <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.muted, fontSize: 12, lineHeight: 17, paddingHorizontal: 14, paddingVertical: 16 }}>
           {query ? `No named references match “@${query}”.` : 'Add and name a reference to mention it here.'}
         </Text>
       )}
@@ -3522,9 +3535,10 @@ function EnhanceControlsRow({
   onUndo: () => void;
   disabled?: boolean;
 }) {
+  const theme = useAppTheme();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-      <View style={{ flexDirection: 'row', borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)', padding: 2 }}>
+      <View style={{ flexDirection: 'row', borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.text, 0.12), padding: 2 }}>
         {([['cinematic', 'Full'], ['faithful', 'Light']] as const).map(([value, label]) => (
           <Pressable
             key={value}
@@ -3543,12 +3557,12 @@ function EnhanceControlsRow({
               alignItems: 'center',
               justifyContent: 'center',
               backgroundColor: level === value
-                ? 'rgba(255,122,89,0.18)'
-                : pressed ? appTheme.colors.surfaceStrong : 'transparent',
+                ? hexWithAlpha(theme.colors.primary, 0.18)
+                : pressed ? theme.colors.surfaceStrong : 'transparent',
               opacity: disabled ? 0.5 : pressed ? appTheme.opacity.pressed : 1,
             })}
           >
-            <Text style={{ color: level === value ? '#FFB09C' : '#8E918C', fontWeight: '700', fontSize: 12 }}>{label}</Text>
+            <Text style={{ color: level === value ? theme.colors.primary : theme.colors.faint, fontWeight: '700', fontSize: 12 }}>{label}</Text>
           </Pressable>
         ))}
       </View>
@@ -3563,11 +3577,11 @@ function EnhanceControlsRow({
             paddingHorizontal: 12,
             borderRadius: appTheme.radii.pill,
             borderWidth: 1,
-            borderColor: 'rgba(255,255,255,0.12)',
+            borderColor: hexWithAlpha(theme.colors.text, 0.12),
             alignItems: 'center',
             justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
-          <Text style={{ color: '#B9BDB7', fontWeight: '700', fontSize: 12 }}>Undo</Text>
+          <Text style={{ color: theme.colors.muted, fontWeight: '700', fontSize: 12 }}>Undo</Text>
         </Pressable>
       ) : null}
     </View>
@@ -3575,6 +3589,7 @@ function EnhanceControlsRow({
 }
 
 function ComposerToolbarButton({ icon, label, onPress, disabled, accent, quiet }: { icon: React.ReactNode; label: string; onPress: () => void; disabled?: boolean; accent?: boolean; quiet?: boolean }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -3588,8 +3603,8 @@ function ComposerToolbarButton({ icon, label, onPress, disabled, accent, quiet }
         borderRadius: 18,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: accent ? 'rgba(255,122,89,0.3)' : quiet ? 'rgba(255,255,255,0.055)' : appTheme.colors.border,
-        backgroundColor: accent ? 'rgba(255,122,89,0.11)' : pressed ? appTheme.colors.pressed : quiet ? 'rgba(255,255,255,0.025)' : appTheme.colors.surfaceStrong,
+        borderColor: accent ? hexWithAlpha(theme.colors.primary, 0.3) : quiet ? hexWithAlpha(theme.colors.text, 0.055) : theme.colors.border,
+        backgroundColor: accent ? hexWithAlpha(theme.colors.primary, 0.11) : pressed ? theme.colors.pressed : quiet ? hexWithAlpha(theme.colors.text, 0.025) : theme.colors.surfaceStrong,
         alignItems: 'center',
         justifyContent: 'center',
         flexDirection: 'column',
@@ -3598,7 +3613,7 @@ function ComposerToolbarButton({ icon, label, onPress, disabled, accent, quiet }
       })}
     >
       {icon}
-      <Text style={{ color: accent ? appTheme.colors.primary : quiet ? appTheme.colors.muted : appTheme.colors.textSecondary, fontSize: quiet ? 10 : 11, fontWeight: '800' }}>{label}</Text>
+      <Text style={{ color: accent ? theme.colors.primary : quiet ? theme.colors.muted : theme.colors.textSecondary, fontSize: quiet ? 10 : 11, fontWeight: '800' }}>{label}</Text>
     </Pressable>
   );
 }
@@ -3623,6 +3638,7 @@ function ReferenceDetailsOverlay({
   isReplacing?: boolean;
   onRemove: () => void;
 }) {
+  const theme = useAppTheme();
   const reducedMotion = useReducedMotion();
   const drag = useSheetDismissDrag({ onDismiss: onClose, visible: media !== null });
   const [renameStatus, setRenameStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
@@ -3667,29 +3683,29 @@ function ReferenceDetailsOverlay({
   return (
     <Modal visible transparent statusBarTranslucent animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose}>
       <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-        <SheetBackdrop drag={drag} color="rgba(0,0,0,0.68)" onPress={onClose} />
-        <SheetPanel {...drag.contentPanHandlers} accessibilityViewIsModal style={[{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: appTheme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 30, gap: 14 }, drag.dragStyle]}>
+        <SheetBackdrop drag={drag} color={hexWithAlpha(theme.dim.color, 0.68 * theme.dim.scale)} onPress={onClose} />
+        <SheetPanel {...drag.contentPanHandlers} accessibilityViewIsModal style={[{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: theme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 30, gap: 14 }, drag.dragStyle]}>
           <SheetGrabber drag={drag} />
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Text style={{ color: appTheme.colors.text, fontSize: 20, fontWeight: '800' }}>Reference details</Text>
-            <Pressable accessibilityRole="button" accessibilityLabel="Close reference details" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-              <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
+            <Text style={{ color: theme.colors.text, fontSize: 20, fontWeight: '800' }}>Reference details</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="Close reference details" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+              <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
             </Pressable>
           </View>
           <MediaPreview url={media.url} kind={media.kind === 'video' ? 'video' : 'image'} height={300} radius={22} />
           <View style={{ gap: 7 }}>
-            <Text style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>Reference name</Text>
+            <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>Reference name</Text>
             <TextInput
               accessibilityLabel={`Reference name for ${accessibleName}`}
               value={media.displayName}
               onChangeText={handleRename}
               onBlur={renameStatus === 'saving' ? markRenameSaved : undefined}
               placeholder="Reference name"
-              placeholderTextColor={appTheme.colors.faint}
-              style={{ minHeight: 52, borderRadius: 16, borderWidth: 1, borderColor: appTheme.colors.borderStrong, backgroundColor: appTheme.colors.surfaceInset, color: appTheme.colors.text, paddingHorizontal: 14, fontSize: 14, fontWeight: '700' }}
+              placeholderTextColor={theme.colors.faint}
+              style={{ minHeight: 52, borderRadius: 16, borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.surfaceInset, color: theme.colors.text, paddingHorizontal: 14, fontSize: 14, fontWeight: '700' }}
             />
             {renameStatus !== 'idle' ? (
-              <Text accessibilityLiveRegion="polite" style={{ color: renameStatus === 'saved' ? appTheme.colors.image : appTheme.colors.muted, fontSize: 11, fontWeight: '700' }}>
+              <Text accessibilityLiveRegion="polite" style={{ color: renameStatus === 'saved' ? theme.colors.image : theme.colors.muted, fontSize: 11, fontWeight: '700' }}>
                 {renameStatus === 'saved' ? 'Saved to draft' : 'Saving…'}
               </Text>
             ) : null}
@@ -3702,17 +3718,17 @@ function ReferenceDetailsOverlay({
               accessibilityState={{ disabled: Boolean(isReplacing) }}
               disabled={isReplacing}
               onPress={onReplace}
-              style={({ pressed }) => ({ minHeight: 52, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: appTheme.colors.borderStrong, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, opacity: isReplacing ? 0.55 : pressed ? appTheme.opacity.pressed : 1 })}
+              style={({ pressed }) => ({ minHeight: 52, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: theme.colors.borderStrong, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, opacity: isReplacing ? 0.55 : pressed ? appTheme.opacity.pressed : 1 })}
             >
-              {isReplacing ? <ActivityIndicator size="small" color={appTheme.colors.text} /> : <RefreshCw size={16} color={appTheme.colors.text} />}
-              <Text style={{ color: appTheme.colors.text, fontSize: 13, fontWeight: '800' }}>
+              {isReplacing ? <ActivityIndicator size="small" color={theme.colors.text} /> : <RefreshCw size={16} color={theme.colors.text} />}
+              <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '800' }}>
                 {isReplacing ? 'Replacing…' : `Replace media${media.handle ? ` · keeps ${media.handle}` : ''}`}
               </Text>
             </Pressable>
           ) : null}
-          <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${accessibleName}`} onPress={confirmRemove} style={({ pressed }) => ({ minHeight: 52, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: 'rgba(251,113,133,0.34)', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-            <Trash2 size={17} color={appTheme.colors.danger} />
-            <Text style={{ color: appTheme.colors.danger, fontSize: 13, fontWeight: '800' }}>Remove reference</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${accessibleName}`} onPress={confirmRemove} style={({ pressed }) => ({ minHeight: 52, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.danger, 0.34), alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+            <Trash2 size={17} color={theme.colors.danger} />
+            <Text style={{ color: theme.colors.danger, fontSize: 13, fontWeight: '800' }}>Remove reference</Text>
           </Pressable>
         </SheetPanel>
       </View>
@@ -3745,6 +3761,7 @@ function CreatorPersistentBar({
   onRetryQuote: () => void;
   onAction: () => void;
 }) {
+  const theme = useAppTheme();
   const actionLabel = action === 'result'
     ? 'View result'
     : action === 'progress'
@@ -3761,20 +3778,20 @@ function CreatorPersistentBar({
   return (
     <View testID="creator-persistent-bar" pointerEvents="box-none" style={{ position: 'absolute', left: 14, right: 14, bottom, zIndex: 8, gap: 7 }}>
       {blocker ? (
-        <View testID="creator-contextual-blocker" accessibilityRole="alert" style={{ minHeight: 40, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(251,191,36,0.28)', backgroundColor: 'rgba(34,29,20,0.97)', paddingHorizontal: 12, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: appTheme.colors.amber }} />
-          <Text numberOfLines={2} style={{ flex: 1, color: appTheme.colors.textSecondary, fontSize: 11, fontWeight: '700', lineHeight: 15 }}>{blocker}</Text>
+        <View testID="creator-contextual-blocker" accessibilityRole="alert" style={{ minHeight: 40, borderRadius: 14, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.amber, 0.28), backgroundColor: theme.colors.panelSoft, paddingHorizontal: 12, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: theme.colors.amber }} />
+          <Text numberOfLines={2} style={{ flex: 1, color: theme.colors.textSecondary, fontSize: 11, fontWeight: '700', lineHeight: 15 }}>{blocker}</Text>
         </View>
       ) : null}
-      <View style={{ minHeight: 72, borderRadius: 24, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.borderStrong, backgroundColor: 'rgba(20,20,23,0.98)', padding: 8, flexDirection: 'row', alignItems: 'center', gap: 8, boxShadow: '0 16px 46px rgba(0,0,0,0.42)' }}>
+      <View style={{ minHeight: 72, borderRadius: 24, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.panel, padding: 8, flexDirection: 'row', alignItems: 'center', gap: 8, boxShadow: theme.shadow.floating.boxShadow }}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`Generation parameters. ${summary}`}
           onPress={onOpenParameters}
-          style={({ pressed }) => ({ minHeight: 54, flex: 0.9, borderRadius: 18, backgroundColor: pressed ? appTheme.colors.pressed : appTheme.colors.surfaceStrong, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+          style={({ pressed }) => ({ minHeight: 54, flex: 0.9, borderRadius: 18, backgroundColor: pressed ? theme.colors.pressed : theme.colors.surfaceStrong, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
-          <Settings2 size={16} color={appTheme.colors.textSecondary} />
-          <Text numberOfLines={1} style={{ color: appTheme.colors.text, fontSize: 12, fontWeight: '800' }}>{summary}</Text>
+          <Settings2 size={16} color={theme.colors.textSecondary} />
+          <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 12, fontWeight: '800' }}>{summary}</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
@@ -3782,9 +3799,9 @@ function CreatorPersistentBar({
           accessibilityState={{ disabled: actionDisabled }}
           disabled={actionDisabled}
           onPress={action === 'generate' && quoteStatus === 'error' ? onRetryQuote : onAction}
-          style={({ pressed }) => ({ minHeight: 54, flex: 1.2, borderRadius: 18, backgroundColor: actionDisabled ? appTheme.colors.surfaceStrong : appTheme.colors.primary, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center', opacity: actionDisabled ? 0.58 : pressed ? appTheme.opacity.pressed : 1 })}
+          style={({ pressed }) => ({ minHeight: 54, flex: 1.2, borderRadius: 18, backgroundColor: actionDisabled ? theme.colors.surfaceStrong : theme.colors.primaryFill, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center', opacity: actionDisabled ? 0.58 : pressed ? appTheme.opacity.pressed : 1 })}
         >
-          <Text accessibilityLiveRegion="polite" numberOfLines={1} style={{ color: actionDisabled ? appTheme.colors.muted : appTheme.colors.onPrimary, fontSize: 12, fontWeight: '900' }}>{actionLabel}</Text>
+          <Text accessibilityLiveRegion="polite" numberOfLines={1} style={{ color: actionDisabled ? theme.colors.muted : theme.colors.onPrimary, fontSize: 12, fontWeight: '900' }}>{actionLabel}</Text>
         </Pressable>
       </View>
     </View>
@@ -3810,6 +3827,7 @@ function SearchableModelPickerModal({
   onClose: () => void;
   onChange: (modelId: string) => void;
 }) {
+  const theme = useAppTheme();
   const [query, setQuery] = useState('');
   const reducedMotion = useReducedMotion();
   const drag = useSheetDismissDrag({ onDismiss: onClose, visible });
@@ -3821,21 +3839,21 @@ function SearchableModelPickerModal({
   return (
     <Modal visible={visible} transparent statusBarTranslucent animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose} onDismiss={() => setQuery('')}>
       <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-        <SheetBackdrop drag={drag} color="rgba(0,0,0,0.7)" onPress={onClose} />
-        <SheetPanel {...drag.contentPanHandlers} accessibilityViewIsModal style={[{ height: '78%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: appTheme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 20, gap: 12 }, drag.dragStyle]}>
+        <SheetBackdrop drag={drag} color={hexWithAlpha(theme.dim.color, 0.7 * theme.dim.scale)} onPress={onClose} />
+        <SheetPanel {...drag.contentPanHandlers} accessibilityViewIsModal style={[{ height: '78%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: theme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 20, gap: 12 }, drag.dragStyle]}>
           <SheetGrabber drag={drag} />
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <View style={{ flex: 1, gap: 2 }}>
-              <Text style={{ color: appTheme.colors.text, fontSize: 21, fontWeight: '800' }}>Choose model</Text>
-              <Text style={{ color: appTheme.colors.muted, fontSize: 12 }}>Defaults and quote update after selection.</Text>
+              <Text style={{ color: theme.colors.text, fontSize: 21, fontWeight: '800' }}>Choose model</Text>
+              <Text style={{ color: theme.colors.muted, fontSize: 12 }}>Defaults and quote update after selection.</Text>
             </View>
-            <Pressable accessibilityRole="button" accessibilityLabel="Close model picker" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-              <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
+            <Pressable accessibilityRole="button" accessibilityLabel="Close model picker" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+              <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
             </Pressable>
           </View>
-          <View style={{ minHeight: 52, borderRadius: 17, borderWidth: 1, borderColor: appTheme.colors.borderStrong, backgroundColor: appTheme.colors.surfaceInset, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 9 }}>
-            <Search size={18} color={appTheme.colors.muted} />
-            <TextInput accessibilityLabel="Search model names" value={query} onChangeText={setQuery} placeholder="Search models" placeholderTextColor={appTheme.colors.faint} autoCapitalize="none" autoCorrect={false} spellCheck={false} returnKeyType="search" clearButtonMode="while-editing" style={{ flex: 1, color: appTheme.colors.text, fontSize: 14, paddingVertical: 12 }} />
+          <View style={{ minHeight: 52, borderRadius: 17, borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.surfaceInset, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 9 }}>
+            <Search size={18} color={theme.colors.muted} />
+            <TextInput accessibilityLabel="Search model names" value={query} onChangeText={setQuery} placeholder="Search models" placeholderTextColor={theme.colors.faint} autoCapitalize="none" autoCorrect={false} spellCheck={false} returnKeyType="search" clearButtonMode="while-editing" style={{ flex: 1, color: theme.colors.text, fontSize: 14, paddingVertical: 12 }} />
           </View>
           <ScrollView {...drag.scrollProps} keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 8, paddingBottom: 28 }}>
             {filteredItems.map((item) => {
@@ -3847,25 +3865,25 @@ function SearchableModelPickerModal({
                   accessibilityState={{ selected }}
                   accessibilityLabel={`${item.displayName}. ${item.description}`}
                   onPress={() => onChange(item.id)}
-                  style={({ pressed }) => ({ minHeight: 76, borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: selected ? 'rgba(115,191,242,0.55)' : appTheme.colors.border, backgroundColor: selected ? 'rgba(115,191,242,0.1)' : appTheme.colors.surfaceStrong, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 12, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+                  style={({ pressed }) => ({ minHeight: 76, borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: selected ? hexWithAlpha(theme.colors.image, 0.55) : theme.colors.border, backgroundColor: selected ? hexWithAlpha(theme.colors.image, 0.1) : theme.colors.surfaceStrong, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 12, opacity: pressed ? appTheme.opacity.pressed : 1 })}
                 >
-                  <View style={{ width: 40, height: 40, borderRadius: 14, backgroundColor: selected ? 'rgba(115,191,242,0.18)' : appTheme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center' }}>
-                    <ImageIcon size={19} color={selected ? appTheme.colors.image : appTheme.colors.muted} />
+                  <View style={{ width: 40, height: 40, borderRadius: 14, backgroundColor: selected ? hexWithAlpha(theme.colors.image, 0.18) : theme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center' }}>
+                    <ImageIcon size={19} color={selected ? theme.colors.image : theme.colors.muted} />
                   </View>
                   <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
-                      <Text numberOfLines={1} style={{ flexShrink: 1, color: appTheme.colors.text, fontSize: 14, fontWeight: '800' }}>{item.displayName}</Text>
-                      {item.badge ? <Text style={{ color: appTheme.colors.image, fontSize: 11, fontWeight: '800' }}>{item.badge}</Text> : null}
+                      <Text numberOfLines={1} style={{ flexShrink: 1, color: theme.colors.text, fontSize: 14, fontWeight: '800' }}>{item.displayName}</Text>
+                      {item.badge ? <Text style={{ color: theme.colors.image, fontSize: 11, fontWeight: '800' }}>{item.badge}</Text> : null}
                     </View>
-                    <Text numberOfLines={2} style={{ color: appTheme.colors.muted, fontSize: 11, lineHeight: 15 }}>{item.description}</Text>
+                    <Text numberOfLines={2} style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 15 }}>{item.description}</Text>
                   </View>
-                  {selected ? <Check size={19} color={appTheme.colors.image} /> : null}
+                  {selected ? <Check size={19} color={theme.colors.image} /> : null}
                 </Pressable>
               );
             })}
-            {loading ? <Text accessibilityRole="text" style={{ color: appTheme.colors.muted, paddingVertical: 12 }}>Loading models…</Text> : null}
-            {error ? <Pressable accessibilityRole="button" onPress={onRetry} style={{ minHeight: 44, justifyContent: 'center' }}><Text style={{ color: appTheme.colors.text }}>{error} Tap to retry.</Text></Pressable> : null}
-            {!loading && !error && filteredItems.length === 0 ? <Text style={{ color: appTheme.colors.muted, textAlign: 'center', paddingVertical: 28 }}>No models found.</Text> : null}
+            {loading ? <Text accessibilityRole="text" style={{ color: theme.colors.muted, paddingVertical: 12 }}>Loading models…</Text> : null}
+            {error ? <Pressable accessibilityRole="button" onPress={onRetry} style={{ minHeight: 44, justifyContent: 'center' }}><Text style={{ color: theme.colors.text }}>{error} Tap to retry.</Text></Pressable> : null}
+            {!loading && !error && filteredItems.length === 0 ? <Text style={{ color: theme.colors.muted, textAlign: 'center', paddingVertical: 28 }}>No models found.</Text> : null}
           </ScrollView>
         </SheetPanel>
       </View>
@@ -3910,6 +3928,7 @@ function CreatorParameterSheet({
   onGenerate: () => void;
   generateDisabled: boolean;
 }) {
+  const theme = useAppTheme();
   const reducedMotion = useReducedMotion();
   const drag = useSheetDismissDrag({ onDismiss: onClose, visible });
   const quoteLabel = quoteStatus === 'ready' ? `${cost ?? 0} credits` : quoteStatus === 'error' ? 'Unavailable' : 'Calculating…';
@@ -3919,23 +3938,23 @@ function CreatorParameterSheet({
   return (
     <Modal visible={visible} transparent statusBarTranslucent animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose}>
       <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-        <SheetBackdrop drag={drag} color="rgba(0,0,0,0.7)" onPress={onClose} />
-        <SheetPanel {...drag.contentPanHandlers} testID="creator-parameter-sheet" accessibilityViewIsModal style={[{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: appTheme.colors.panel, paddingTop: 6, paddingBottom: bottomInset + 12 }, drag.dragStyle]}>
+        <SheetBackdrop drag={drag} color={hexWithAlpha(theme.dim.color, 0.7 * theme.dim.scale)} onPress={onClose} />
+        <SheetPanel {...drag.contentPanHandlers} testID="creator-parameter-sheet" accessibilityViewIsModal style={[{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: theme.colors.panel, paddingTop: 6, paddingBottom: bottomInset + 12 }, drag.dragStyle]}>
           <SheetGrabber drag={drag} />
           <View style={{ paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <View style={{ flex: 1, gap: 2 }}>
-              <Text style={{ color: appTheme.colors.text, fontSize: 21, fontWeight: '800' }}>Generation parameters</Text>
-              <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 12 }}>{model?.displayName ?? `${TOOL_META[draft.tool].title} settings`}</Text>
+              <Text style={{ color: theme.colors.text, fontSize: 21, fontWeight: '800' }}>Generation parameters</Text>
+              <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 12 }}>{model?.displayName ?? `${TOOL_META[draft.tool].title} settings`}</Text>
             </View>
-            <Pressable accessibilityRole="button" accessibilityLabel="Close generation parameters" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-              <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
+            <Pressable accessibilityRole="button" accessibilityLabel="Close generation parameters" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+              <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
             </Pressable>
           </View>
           <ScrollView {...drag.scrollProps} keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 20, gap: 18 }}>
             {!catalog || !model ? (
               <View style={{ minHeight: 100, alignItems: 'center', justifyContent: 'center', gap: 10 }}>
-                <ActivityIndicator color={appTheme.colors.image} />
-                <Text style={{ color: appTheme.colors.muted }}>Loading parameters…</Text>
+                <ActivityIndicator color={theme.colors.image} />
+                <Text style={{ color: theme.colors.muted }}>Loading parameters…</Text>
               </View>
             ) : (
               <>
@@ -3945,7 +3964,7 @@ function CreatorParameterSheet({
                     <ReadOnlyParameterValue value={sourceDurationSeconds ? `${sourceDurationSeconds}s from motion video` : 'Add motion video'} />
                   </OptionRow>
                 ) : null}
-                <View style={{ height: 1, backgroundColor: appTheme.colors.border }} />
+                <View style={{ height: 1, backgroundColor: theme.colors.border }} />
                 {draft.tool === 'image' && !model.controls.some((control) => control.key === 'outputFormat') ? (
                   <OptionRow title="Output format">
                     <ReadOnlyParameterValue value={draft.outputFormat.toUpperCase()} />
@@ -3954,20 +3973,20 @@ function CreatorParameterSheet({
                 <CatalogAdvancedControls model={model} draft={draft} onChange={onChange} hiddenControlKeys={hiddenControlKeys} />
               </>
             )}
-            {blocker ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.danger, fontSize: 12, fontWeight: '700', lineHeight: 17 }}>{blocker}</Text> : null}
+            {blocker ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, fontSize: 12, fontWeight: '700', lineHeight: 17 }}>{blocker}</Text> : null}
           </ScrollView>
-          <View style={{ paddingHorizontal: 20, paddingTop: 12, borderTopWidth: 1, borderTopColor: appTheme.colors.border, gap: 10 }}>
+          <View style={{ paddingHorizontal: 20, paddingTop: 12, borderTopWidth: 1, borderTopColor: theme.colors.border, gap: 10 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-              <Text style={{ color: appTheme.colors.muted, fontSize: 12, fontWeight: '700' }}>Live quote</Text>
-              <Text accessibilityLiveRegion="polite" style={{ color: quoteStatus === 'error' ? appTheme.colors.danger : appTheme.colors.text, fontSize: 13, fontWeight: '800' }}>{quoteLabel}</Text>
+              <Text style={{ color: theme.colors.muted, fontSize: 12, fontWeight: '700' }}>Live quote</Text>
+              <Text accessibilityLiveRegion="polite" style={{ color: quoteStatus === 'error' ? theme.colors.danger : theme.colors.text, fontSize: 13, fontWeight: '800' }}>{quoteLabel}</Text>
             </View>
             <View
               accessibilityRole="text"
               accessibilityLabel={`Available balance, ${balanceLabel}`}
               style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
             >
-              <Text style={{ color: appTheme.colors.muted, fontSize: 12, fontWeight: '700' }}>Available balance</Text>
-              <Text style={{ color: appTheme.colors.textSecondary, fontSize: 13, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{balanceLabel}</Text>
+              <Text style={{ color: theme.colors.muted, fontSize: 12, fontWeight: '700' }}>Available balance</Text>
+              <Text style={{ color: theme.colors.textSecondary, fontSize: 13, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{balanceLabel}</Text>
             </View>
             <PrimaryButton
               label={quoteStatus === 'ready' ? `Generate · ${cost ?? 0} credits` : quoteStatus === 'error' ? retryLabel : quoteLabel}
@@ -4057,6 +4076,7 @@ function GenerationWorkspace({
   onPost: () => void;
   onCreateAnother: () => void;
 }) {
+  const theme = useAppTheme();
   const reducedMotion = useReducedMotion();
   const safeAreaInsets = useSafeAreaInsets();
   const succeeded = Boolean(outputUrl);
@@ -4072,16 +4092,16 @@ function GenerationWorkspace({
   const waitDetail = generationWaitDetail(waitPhase, elapsedSeconds);
   return (
     <Modal visible={visible} animationType={reducedMotion ? 'none' : 'slide'} presentationStyle="fullScreen" onRequestClose={onMinimize}>
-      <View testID="generation-workspace" accessibilityViewIsModal style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+      <View testID="generation-workspace" accessibilityViewIsModal style={{ flex: 1, backgroundColor: theme.colors.background }}>
         <View style={{ minHeight: safeAreaInsets.top + 60, paddingTop: safeAreaInsets.top, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
           <View style={{ flex: 1, gap: 2 }}>
-            <Text style={{ color: appTheme.colors.text, fontSize: 20, fontWeight: '800' }}>
+            <Text style={{ color: theme.colors.text, fontSize: 20, fontWeight: '800' }}>
               {succeeded ? `Your ${medium}` : pollingInterrupted ? 'Generation is still running' : attemptUnconfirmed ? 'Generation not confirmed' : failed ? 'Generation failed' : `Creating ${medium}`}
             </Text>
-            <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11 }}>{settingsSummary}</Text>
+            <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11 }}>{settingsSummary}</Text>
           </View>
-          <Pressable accessibilityRole="button" accessibilityLabel={succeeded || failed || attemptUnconfirmed ? 'Back to creator' : 'Minimize generation'} onPress={onMinimize} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-            <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
+          <Pressable accessibilityRole="button" accessibilityLabel={succeeded || failed || attemptUnconfirmed ? 'Back to creator' : 'Minimize generation'} onPress={onMinimize} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+            <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
           </Pressable>
         </View>
 
@@ -4091,10 +4111,10 @@ function GenerationWorkspace({
               <MediaPreview url={outputUrl} kind={previewKind} height={480} radius={26} nativeControls={previewKind === 'video'} />
               <View style={{ gap: 10 }}>
                 {showNotificationPrompt ? (
-                  <View style={{ borderRadius: 18, borderWidth: 1, borderColor: 'rgba(255,122,89,0.28)', backgroundColor: appTheme.colors.surfaceStrong, padding: 13, gap: 10 }}>
+                  <View style={{ borderRadius: 18, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.primary, 0.28), backgroundColor: theme.colors.surfaceStrong, padding: 13, gap: 10 }}>
                     <View style={{ gap: 3 }}>
-                      <Text style={{ color: appTheme.colors.text, fontSize: 14, fontWeight: '800' }}>Know when longer creations finish</Text>
-                      <Text style={{ color: appTheme.colors.muted, fontSize: 11, lineHeight: 16 }}>Notifications are only requested after you choose Enable.</Text>
+                      <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: '800' }}>Know when longer creations finish</Text>
+                      <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 16 }}>Notifications are only requested after you choose Enable.</Text>
                     </View>
                     <View style={{ flexDirection: 'row', gap: 8 }}>
                       <View style={{ flex: 1 }}><SecondaryButton label="Not now" onPress={onDismissNotifications} /></View>
@@ -4114,12 +4134,12 @@ function GenerationWorkspace({
             </>
           ) : pollingInterrupted ? (
             <View style={{ flex: 1, minHeight: 560, justifyContent: 'center', gap: 18 }}>
-              <View style={{ height: 310, borderRadius: 28, borderWidth: 1, borderColor: 'rgba(251,191,36,0.24)', backgroundColor: appTheme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28 }}>
-                <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: 'rgba(251,191,36,0.12)', alignItems: 'center', justifyContent: 'center' }}>
-                  <Sparkles size={28} color={appTheme.colors.amber} />
+              <View style={{ height: 310, borderRadius: 28, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.amber, 0.24), backgroundColor: theme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28 }}>
+                <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: hexWithAlpha(theme.colors.amber, 0.12), alignItems: 'center', justifyContent: 'center' }}>
+                  <Sparkles size={28} color={theme.colors.amber} />
                 </View>
-                <Text style={{ color: appTheme.colors.text, fontSize: 20, fontWeight: '800', textAlign: 'center' }}>Progress check interrupted</Text>
-                <Text accessibilityRole="alert" selectable style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 19, textAlign: 'center' }}>
+                <Text style={{ color: theme.colors.text, fontSize: 20, fontWeight: '800', textAlign: 'center' }}>Progress check interrupted</Text>
+                <Text accessibilityRole="alert" selectable style={{ color: theme.colors.muted, fontSize: 13, lineHeight: 19, textAlign: 'center' }}>
                   {error || 'The generation may still be running. Check its existing job instead of starting another one.'}
                 </Text>
               </View>
@@ -4128,12 +4148,12 @@ function GenerationWorkspace({
             </View>
           ) : attemptUnconfirmed ? (
             <View style={{ flex: 1, minHeight: 560, justifyContent: 'center', gap: 18 }}>
-              <View style={{ height: 310, borderRadius: 28, borderWidth: 1, borderColor: appTheme.colors.borderStrong, backgroundColor: appTheme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28 }}>
-                <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
-                  <Sparkles size={28} color={appTheme.colors.amber} />
+              <View style={{ height: 310, borderRadius: 28, borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28 }}>
+                <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
+                  <Sparkles size={28} color={theme.colors.amber} />
                 </View>
-                <Text style={{ color: appTheme.colors.text, fontSize: 20, fontWeight: '800', textAlign: 'center' }}>We couldn’t confirm this {medium} started</Text>
-                <Text accessibilityRole="alert" selectable style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 19, textAlign: 'center' }}>
+                <Text style={{ color: theme.colors.text, fontSize: 20, fontWeight: '800', textAlign: 'center' }}>We couldn’t confirm this {medium} started</Text>
+                <Text accessibilityRole="alert" selectable style={{ color: theme.colors.muted, fontSize: 13, lineHeight: 19, textAlign: 'center' }}>
                   {error || GENERATION_ATTEMPT_UNCONFIRMED_MESSAGE}
                 </Text>
               </View>
@@ -4146,12 +4166,12 @@ function GenerationWorkspace({
             </View>
           ) : failed ? (
             <View style={{ flex: 1, minHeight: 560, justifyContent: 'center', gap: 18 }}>
-              <View style={{ height: 310, borderRadius: 28, borderWidth: 1, borderColor: 'rgba(251,113,133,0.24)', backgroundColor: appTheme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28 }}>
-                <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: 'rgba(251,113,133,0.12)', alignItems: 'center', justifyContent: 'center' }}>
-                  <X size={28} color={appTheme.colors.danger} />
+              <View style={{ height: 310, borderRadius: 28, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.danger, 0.24), backgroundColor: theme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28 }}>
+                <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: hexWithAlpha(theme.colors.danger, 0.12), alignItems: 'center', justifyContent: 'center' }}>
+                  <X size={28} color={theme.colors.danger} />
                 </View>
-                <Text style={{ color: appTheme.colors.text, fontSize: 20, fontWeight: '800', textAlign: 'center' }}>We couldn’t create this {medium}</Text>
-                <Text accessibilityRole="alert" selectable style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 19, textAlign: 'center' }}>{error || 'Your inputs are preserved. Try again when you’re ready.'}</Text>
+                <Text style={{ color: theme.colors.text, fontSize: 20, fontWeight: '800', textAlign: 'center' }}>We couldn’t create this {medium}</Text>
+                <Text accessibilityRole="alert" selectable style={{ color: theme.colors.muted, fontSize: 13, lineHeight: 19, textAlign: 'center' }}>{error || 'Your inputs are preserved. Try again when you’re ready.'}</Text>
               </View>
               {/* "Retry" ran a full new paid generation behind a bare verb,
                   where every other route to that spend states the price. */}
@@ -4160,18 +4180,18 @@ function GenerationWorkspace({
             </View>
           ) : (
             <View style={{ flex: 1, minHeight: 620, gap: 18 }}>
-              <View accessibilityRole="progressbar" accessibilityLabel={`${TOOL_META[tool].title} generation in progress`} accessibilityValue={{ text: waitDetail }} style={{ flex: 1, minHeight: 430, borderRadius: 28, borderWidth: 1, borderColor: appTheme.colors.borderStrong, backgroundColor: appTheme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 18 }}>
-                <View style={{ width: 82, height: 82, borderRadius: 28, backgroundColor: 'rgba(255,122,89,0.12)', alignItems: 'center', justifyContent: 'center' }}>
-                  <Sparkles size={38} color={appTheme.colors.primary} />
+              <View accessibilityRole="progressbar" accessibilityLabel={`${TOOL_META[tool].title} generation in progress`} accessibilityValue={{ text: waitDetail }} style={{ flex: 1, minHeight: 430, borderRadius: 28, borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 18 }}>
+                <View style={{ width: 82, height: 82, borderRadius: 28, backgroundColor: hexWithAlpha(theme.colors.primary, 0.12), alignItems: 'center', justifyContent: 'center' }}>
+                  <Sparkles size={38} color={theme.colors.primary} />
                 </View>
-                <Text style={{ color: appTheme.colors.text, fontSize: 21, fontWeight: '800' }}>{waitTitle}</Text>
-                <ActivityIndicator color={appTheme.colors.primary} size="large" />
+                <Text style={{ color: theme.colors.text, fontSize: 21, fontWeight: '800' }}>{waitTitle}</Text>
+                <ActivityIndicator color={theme.colors.primary} size="large" />
                 {/* The one thing on screen that changes while nothing else does.
                     Progress indicators: a vague status "seldom adds value", and
                     knowing how long it has run is what lets someone decide
                     whether to keep waiting when the provider reports no progress. */}
-                <Text accessibilityLiveRegion="polite" style={{ color: appTheme.colors.muted, fontSize: 12, textAlign: 'center', paddingHorizontal: 40, lineHeight: 18 }}>{waitDetail}</Text>
-                <Text style={{ color: appTheme.colors.faint, fontSize: 12, textAlign: 'center', paddingHorizontal: 40 }}>You can minimize this view. Generation will continue in the background.</Text>
+                <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.muted, fontSize: 12, textAlign: 'center', paddingHorizontal: 40, lineHeight: 18 }}>{waitDetail}</Text>
+                <Text style={{ color: theme.colors.faint, fontSize: 12, textAlign: 'center', paddingHorizontal: 40 }}>You can minimize this view. Generation will continue in the background.</Text>
               </View>
               <View style={{ flexDirection: 'row', gap: 10 }}>
                 <View style={{ flex: 1 }}><SecondaryButton label="Minimize" onPress={onMinimize} /></View>
@@ -4204,19 +4224,20 @@ const GUIDED_PROMPTS: Record<CreatorToolId, string[]> = {
 };
 
 function ToolSwitcher({ value, onChange }: { value: CreatorToolId; onChange: (tool: CreatorToolId) => void }) {
+  const theme = useAppTheme();
   return (
     <View
       style={{
         minHeight: 48,
         flexDirection: 'row',
         borderBottomWidth: 1,
-        borderBottomColor: appTheme.colors.border,
+        borderBottomColor: theme.colors.border,
       }}
     >
       {(['image', 'video', 'motion'] as const).map((tool) => {
         const active = value === tool;
         const meta = TOOL_META[tool];
-        const color = accentColor(meta.accent);
+        const color = accentColor(meta.accent, theme.colors);
         return (
           <Pressable
             key={tool}
@@ -4235,7 +4256,7 @@ function ToolSwitcher({ value, onChange }: { value: CreatorToolId; onChange: (to
           >
             <Text
               style={{
-                color: active ? appTheme.colors.text : appTheme.colors.muted,
+                color: active ? theme.colors.text : theme.colors.muted,
                 fontSize: 14,
                 fontWeight: active ? '900' : '700',
               }}
@@ -4359,6 +4380,7 @@ function PreparedReferenceIds({
   max: number;
   onChange: (items: string[]) => void;
 }) {
+  const theme = useAppTheme();
   const [draft, setDraft] = useState('');
   const add = () => {
     const value = draft.trim();
@@ -4379,7 +4401,7 @@ function PreparedReferenceIds({
           submitBehavior="submit"
           returnKeyType="done"
           placeholder={placeholder}
-          placeholderTextColor={appTheme.colors.faint}
+          placeholderTextColor={theme.colors.faint}
           autoCapitalize="none"
           autoCorrect={false}
           spellCheck={false}
@@ -4389,9 +4411,9 @@ function PreparedReferenceIds({
             borderRadius: 16,
             borderCurve: 'continuous',
             borderWidth: 1,
-            borderColor: 'rgba(255,255,255,0.12)',
-            backgroundColor: '#0B0C0C',
-            color: '#ffffff',
+            borderColor: hexWithAlpha(theme.colors.text, 0.12),
+            backgroundColor: theme.colors.surfaceInset,
+            color: theme.colors.text,
             paddingHorizontal: 12,
             fontSize: 13,
           }}
@@ -4408,9 +4430,9 @@ function PreparedReferenceIds({
             borderCurve: 'continuous',
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: 'rgba(255,122,89,0.16)',
+            backgroundColor: hexWithAlpha(theme.colors.primary, 0.16),
             borderWidth: 1,
-            borderColor: 'rgba(255,122,89,0.38)',
+            borderColor: hexWithAlpha(theme.colors.primary, 0.38),
             opacity: pressed ? appTheme.opacity.pressed : (items.length >= max ? 0.45 : 1),
           })}
         >
@@ -4418,10 +4440,10 @@ function PreparedReferenceIds({
         </Pressable>
       </View>
       {items.map((item) => (
-        <View key={item} style={{ minHeight: 46, borderRadius: 15, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', backgroundColor: 'rgba(255,255,255,0.035)', paddingLeft: 12, paddingRight: 6, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <Text selectable numberOfLines={1} style={{ flex: 1, color: appTheme.colors.textSecondary, fontFamily: 'monospace', fontSize: 12 }}>{item}</Text>
+        <View key={item} style={{ minHeight: 46, borderRadius: 15, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.text, 0.08), backgroundColor: hexWithAlpha(theme.colors.text, 0.035), paddingLeft: 12, paddingRight: 6, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Text selectable numberOfLines={1} style={{ flex: 1, color: theme.colors.textSecondary, fontFamily: 'monospace', fontSize: 12 }}>{item}</Text>
           <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item}`} onPress={() => onChange(items.filter((value) => value !== item))} hitSlop={8} style={({ pressed }) => ({ padding: 9, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-            <Trash2 size={16} color={appTheme.colors.muted} />
+            <Trash2 size={16} color={theme.colors.muted} />
           </Pressable>
         </View>
       ))}
@@ -4505,9 +4527,10 @@ function CatalogAdvancedControls({ model, draft, onChange, hiddenControlKeys = [
 }
 
 function OptionRow({ title, children }: { title: string; children: React.ReactNode }) {
+  const theme = useAppTheme();
   return (
     <View style={{ gap: 8 }}>
-      <Text style={{ color: appTheme.colors.muted, fontSize: 12, fontWeight: '800', textTransform: 'uppercase' }}>{title}</Text>
+      <Text style={{ color: theme.colors.muted, fontSize: 12, fontWeight: '800', textTransform: 'uppercase' }}>{title}</Text>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>{children}</View>
     </View>
   );
@@ -4546,7 +4569,8 @@ function ParameterChoiceOptions({
   accent: ToolAccent;
   onChange: (value: string) => void;
 }) {
-  const color = accentColor(accent);
+  const theme = useAppTheme();
+  const color = accentColor(accent, theme.colors);
   const width = parameterChoiceWidth(options);
   return (
     <View testID={`parameter-choice-options-${controlKey}`} style={{ width: '100%', flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -4567,15 +4591,15 @@ function ParameterChoiceOptions({
               minHeight: 48,
               borderRadius: 14,
               borderWidth: 1,
-              borderColor: active ? `${color}8a` : appTheme.colors.border,
-              backgroundColor: active ? `${color}20` : pressed ? appTheme.colors.pressed : appTheme.colors.surfaceStrong,
+              borderColor: active ? `${color}8a` : theme.colors.border,
+              backgroundColor: active ? `${color}20` : pressed ? theme.colors.pressed : theme.colors.surfaceStrong,
               paddingHorizontal: 10,
               alignItems: 'center',
               justifyContent: 'center',
               opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
-            <Text numberOfLines={2} style={{ color: active ? appTheme.colors.text : appTheme.colors.muted, fontSize: 12, lineHeight: 16, fontWeight: active ? '800' : '700', textAlign: 'center' }}>
+            <Text numberOfLines={2} style={{ color: active ? theme.colors.text : theme.colors.muted, fontSize: 12, lineHeight: 16, fontWeight: active ? '800' : '700', textAlign: 'center' }}>
               {option.label}
             </Text>
           </Pressable>
@@ -4604,15 +4628,16 @@ function ParameterStepper({
   onDecrement: () => void;
   onIncrement: () => void;
 }) {
-  const color = accentColor(accent);
+  const theme = useAppTheme();
+  const color = accentColor(accent, theme.colors);
   const buttonStyle = (disabled: boolean, pressed: boolean) => ({
     width: '31%' as const,
     minWidth: 68,
     minHeight: 48,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: appTheme.colors.border,
-    backgroundColor: pressed ? appTheme.colors.pressed : appTheme.colors.surfaceStrong,
+    borderColor: theme.colors.border,
+    backgroundColor: pressed ? theme.colors.pressed : theme.colors.surfaceStrong,
     alignItems: 'center' as const,
     justifyContent: 'center' as const,
     opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
@@ -4626,14 +4651,14 @@ function ParameterStepper({
         onPress={onDecrement}
         style={({ pressed }) => buttonStyle(decrementDisabled, pressed)}
       >
-        <Text style={{ color: appTheme.colors.muted, fontSize: 18, fontWeight: '700' }}>−</Text>
+        <Text style={{ color: theme.colors.muted, fontSize: 18, fontWeight: '700' }}>−</Text>
       </Pressable>
       <View
         accessibilityRole="text"
         accessibilityLabel={`${controlLabel}, ${value}`}
         style={{ width: '31%', minWidth: 68, minHeight: 48, borderRadius: 14, borderWidth: 1, borderColor: `${color}8a`, backgroundColor: `${color}20`, alignItems: 'center', justifyContent: 'center' }}
       >
-        <Text style={{ color: appTheme.colors.text, fontSize: 12, fontWeight: '800' }}>{value}</Text>
+        <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '800' }}>{value}</Text>
       </View>
       <Pressable
         accessibilityRole="button"
@@ -4642,7 +4667,7 @@ function ParameterStepper({
         onPress={onIncrement}
         style={({ pressed }) => buttonStyle(incrementDisabled, pressed)}
       >
-        <Text style={{ color: appTheme.colors.muted, fontSize: 18, fontWeight: '700' }}>+</Text>
+        <Text style={{ color: theme.colors.muted, fontSize: 18, fontWeight: '700' }}>+</Text>
       </Pressable>
     </View>
   );
@@ -4659,7 +4684,8 @@ function AspectRatioOptions({
   accent: ToolAccent;
   onChange: (value: string) => void;
 }) {
-  const color = accentColor(accent);
+  const theme = useAppTheme();
+  const color = accentColor(accent, theme.colors);
   return (
     <View testID="aspect-ratio-options" style={{ width: '100%', flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
       {options.map((option) => {
@@ -4679,8 +4705,8 @@ function AspectRatioOptions({
               minHeight: 48,
               borderRadius: 14,
               borderWidth: 1,
-              borderColor: active ? `${color}8a` : appTheme.colors.border,
-              backgroundColor: active ? `${color}20` : pressed ? appTheme.colors.pressed : appTheme.colors.surfaceStrong,
+              borderColor: active ? `${color}8a` : theme.colors.border,
+              backgroundColor: active ? `${color}20` : pressed ? theme.colors.pressed : theme.colors.surfaceStrong,
               paddingHorizontal: 6,
               flexDirection: 'row',
               alignItems: 'center',
@@ -4698,11 +4724,11 @@ function AspectRatioOptions({
                   height: previewSize.height,
                   borderRadius: 2,
                   borderWidth: 1.5,
-                  borderColor: active ? color : appTheme.colors.textSecondary,
+                  borderColor: active ? color : theme.colors.textSecondary,
                 }}
               />
             ) : null}
-            <Text numberOfLines={1} style={{ color: active ? appTheme.colors.text : appTheme.colors.muted, fontSize: 11, fontWeight: active ? '800' : '700' }}>
+            <Text numberOfLines={1} style={{ color: active ? theme.colors.text : theme.colors.muted, fontSize: 11, fontWeight: active ? '800' : '700' }}>
               {option.label}
             </Text>
           </Pressable>
@@ -4713,15 +4739,16 @@ function AspectRatioOptions({
 }
 
 function ReadOnlyParameterValue({ value }: { value: string }) {
+  const theme = useAppTheme();
   return (
     <View
       accessibilityRole="text"
       accessibilityLabel={`${value}. Fixed for this model`}
       testID="read-only-parameter-value"
-      style={{ width: '100%', minHeight: 48, borderRadius: 16, backgroundColor: appTheme.colors.surfaceInset, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
+      style={{ width: '100%', minHeight: 48, borderRadius: 16, backgroundColor: theme.colors.surfaceInset, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
     >
-      <Text style={{ color: appTheme.colors.text, fontSize: 13, fontWeight: '800' }}>{value}</Text>
-      <Text style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '700' }}>Fixed for this model</Text>
+      <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '800' }}>{value}</Text>
+      <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700' }}>Fixed for this model</Text>
     </View>
   );
 }
@@ -4739,9 +4766,10 @@ function Chip({ label, active, onPress, accent = 'motion' }: { label: string; ac
 }
 
 function ToggleRow({ title, value, onValueChange }: { title: string; value: boolean; onValueChange: (value: boolean) => void }) {
+  const theme = useAppTheme();
   return (
     <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-      <Text style={{ color: '#ffffff', fontSize: 15, fontWeight: '800' }}>{title}</Text>
+      <Text style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>{title}</Text>
       <Pressable
         testID="compact-toggle-control"
         accessibilityRole="switch"
@@ -4765,8 +4793,8 @@ function ToggleRow({ title, value, onValueChange }: { title: string; value: bool
           pointerEvents="none"
           value={value}
           style={{ transform: [{ scale: 0.76 }] }}
-          thumbColor={value ? '#1A0D08' : '#CAC6BD'}
-          trackColor={{ false: '#343838', true: '#FF7A59' }}
+          thumbColor={value ? theme.colors.onPrimary : theme.colors.switchThumbOff}
+          trackColor={{ false: theme.colors.switchTrackOff, true: theme.colors.primaryFill }}
         />
       </Pressable>
     </View>
@@ -4777,6 +4805,7 @@ function ToggleRow({ title, value, onValueChange }: { title: string; value: bool
 const ReferenceLinkRenewal = createContext<((media: MediaDraft) => Promise<string>) | null>(null);
 
 function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: number }) {
+  const theme = useAppTheme();
   // A saved link can have run out. Retrying the thumbnail then fetches a fresh
   // one instead of asking for the dead link again.
   const renewLink = useContext(ReferenceLinkRenewal);
@@ -4792,15 +4821,15 @@ function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: numb
           borderRadius: 16,
           borderCurve: 'continuous',
           borderWidth: 1,
-          borderColor: 'rgba(240,171,252,0.26)',
-          backgroundColor: appTheme.colors.pressed,
+          borderColor: hexWithAlpha(theme.colors.motion, 0.26),
+          backgroundColor: theme.colors.pressed,
           alignItems: 'center',
           justifyContent: 'center',
           gap: 6,
         }}
       >
-        <AudioLines size={22} color={appTheme.colors.motion} />
-        <Text style={{ color: '#f5d0fe', fontSize: 11, fontWeight: '800' }}>Audio</Text>
+        <AudioLines size={22} color={theme.colors.motion} />
+        <Text style={{ color: theme.colors.motion, fontSize: 11, fontWeight: '800' }}>Audio</Text>
       </View>
     );
   }
@@ -4815,7 +4844,7 @@ function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: numb
         borderRadius: 16,
         borderCurve: 'continuous',
         overflow: 'hidden',
-        backgroundColor: appTheme.colors.surfaceStrong,
+        backgroundColor: theme.colors.surfaceStrong,
       }}
     >
       {kind === 'image' ? (
@@ -4849,10 +4878,10 @@ function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: numb
             borderRadius: 12,
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: 'rgba(0,0,0,0.58)',
+            backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.58),
           }}
         >
-          <Play size={13} color="#ffffff" fill="#ffffff" />
+          <Play size={13} color={mediaColors.onMedia} fill={mediaColors.onMedia} />
         </View>
       ) : null}
     </View>

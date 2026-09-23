@@ -6,6 +6,7 @@ import { CreatorAvatar } from '@/components/ui';
 import { haptic } from '@/lib/haptics';
 import { MotionView, usePressMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 /** The creator byline reads as a single line of text; its reach is widened rather than its height. */
 const CREATOR_ROW_HEIGHT = 32;
@@ -77,6 +78,7 @@ export function FeedCardShell({
   timeLabel: string;
   title: string;
 }) {
+  const theme = useAppTheme();
   // The whole card presses down, not just the tapped region: the header and
   // action rows are separate targets, but the object under the thumb is the
   // card, and that is what should move.
@@ -97,8 +99,8 @@ export function FeedCardShell({
       <Text
         numberOfLines={media ? 2 : 3}
         style={media
-          ? { color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '600' }
-          : { color: appTheme.colors.text, ...appTheme.type.sectionTitle, fontSize: 19, lineHeight: 25 }}
+          ? { color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '600' }
+          : { color: theme.colors.text, ...appTheme.type.sectionTitle, fontSize: 19, lineHeight: 25 }}
       >
         {title}
       </Text>
@@ -113,8 +115,8 @@ export function FeedCardShell({
           borderRadius: appTheme.radii.lg,
           borderCurve: 'continuous',
           borderWidth: 1,
-          borderColor: appTheme.colors.borderSubtle,
-          backgroundColor: appTheme.colors.panel,
+          borderColor: theme.colors.borderSubtle,
+          backgroundColor: theme.colors.panel,
           // No `overflow: 'hidden'`. Every child is inset from the corners (the
           // media sits between the header and the actions), so the clip drew
           // nothing, but it made iOS render each visible card's rounded corners
@@ -150,10 +152,10 @@ export function FeedCardShell({
           })}
         >
           <CreatorAvatar uri={creatorAvatar} name={creatorName} size={22} />
-          <Text numberOfLines={1} style={{ color: appTheme.colors.textSecondary, ...appTheme.type.caption, fontWeight: '800', flexShrink: 1 }}>
+          <Text numberOfLines={1} style={{ color: theme.colors.textSecondary, ...appTheme.type.caption, fontWeight: '800', flexShrink: 1 }}>
             {creatorLabel}
           </Text>
-          <Text style={{ color: appTheme.colors.faint, ...appTheme.type.caption }}>
+          <Text style={{ color: theme.colors.faint, ...appTheme.type.caption }}>
             {`· ${timeLabel}`}
           </Text>
         </Pressable>
@@ -179,7 +181,7 @@ export function FeedCardShell({
           onPress={onMorePress}
           style={({ pressed }) => ({ width: 28, height: 32, alignItems: 'flex-end', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
-          <MoreVertical size={appTheme.icon.compact} color={appTheme.colors.faint} />
+          <MoreVertical size={appTheme.icon.compact} color={theme.colors.faint} />
         </Pressable>
       </View>
 
@@ -238,13 +240,14 @@ export function FeedCardAction({
   onPress: () => void;
   tone?: 'default' | 'primary' | 'success' | 'warning';
 }) {
+  const theme = useAppTheme();
   const labelColor = tone === 'primary'
-    ? appTheme.colors.primary
+    ? theme.colors.primary
     : tone === 'success'
-      ? appTheme.colors.success
+      ? theme.colors.success
       : tone === 'warning'
-        ? appTheme.colors.warning
-        : appTheme.colors.faint;
+        ? theme.colors.warning
+        : theme.colors.faint;
   const motion = usePressMotion(Boolean(disabled || loading), { scale: appTheme.motion.scale.pressedControl });
 
   return (

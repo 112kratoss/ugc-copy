@@ -104,7 +104,9 @@ import { formatCreditAmount } from '@/lib/pricing';
 import { reportStartupMilestone } from '@/lib/startup-interactive';
 import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
-import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
+import { hexWithAlpha, linearGradient } from '@/lib/eased-fade';
+import { appTheme, mediaColors, type ToolAccent } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import type {
   ShowcaseFeedEventType,
   ShowcaseFeedItem,
@@ -113,19 +115,6 @@ import type {
 } from '@/lib/types';
 import { buildShareUrl, getNativeRemixCreateHref } from '@/lib/viewer-actions';
 import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
-
-const DASHBOARD_COLORS = {
-  background: appTheme.colors.background,
-  surface: appTheme.colors.panel,
-  surfaceRaised: appTheme.colors.panelSoft,
-  border: appTheme.colors.borderSubtle,
-  borderStrong: appTheme.colors.border,
-  text: appTheme.colors.text,
-  muted: appTheme.colors.muted,
-  faint: appTheme.colors.faint,
-  coral: appTheme.colors.primary,
-  coralSoft: appTheme.colors.pressed,
-} as const;
 
 const TOOL_PREVIEW_IMAGES = {
   kingdom: require('../assets/images/home-previews/image.jpg'),
@@ -142,22 +131,30 @@ const TOP_SLIDE_HEIGHT = 170;
 // dozen slides at once, on Home's first render and on every lane switch (the
 // list is keyed per lane): 17–20 ms of main-thread painting per switch on the
 // iPhone 16e, more than a 60 Hz frame. On Android both draw through a shader,
-// with the same pixels.
+// with the same pixels. They shade pictures, so they are the same in both
+// schemes.
+function railShade(bottomAlpha: number) {
+  return linearGradient('to bottom', [
+    { color: hexWithAlpha(mediaColors.mediaGround, 0.04), at: 0 },
+    { color: hexWithAlpha(mediaColors.mediaGround, bottomAlpha), at: 1 },
+  ]);
+}
 const RAIL_PROMO_SCRIM: ViewStyle = {
   position: 'absolute',
   inset: 0,
-  experimental_backgroundImage: 'linear-gradient(to bottom, rgba(0,0,0,0.04), rgba(0,0,0,0.72))',
+  experimental_backgroundImage: railShade(0.72),
 };
 const RAIL_PREVIEW_SCRIM: ViewStyle = {
   position: 'absolute',
   inset: 0,
-  experimental_backgroundImage: 'linear-gradient(to bottom, rgba(0,0,0,0.04), rgba(0,0,0,0.48))',
+  experimental_backgroundImage: railShade(0.48),
 };
 // Only the cards that can be on screen when a lane first lands rise into
 // place; everything past that mounts plain while scrolling.
 const FEED_REVEAL_COUNT = 6;
 
 export function HomeDashboard() {
+  const theme = useAppTheme();
   const {
     comments: requestedComments,
     replyTo: requestedReplyTo,
@@ -810,7 +807,7 @@ export function HomeDashboard() {
     // Tiles on this screen are what the reel grows out of and returns to.
     <FeedVideoActivationContext.Provider value={activationStore}>
     <MediaZoomSurface>
-    <View style={{ flex: 1, backgroundColor: DASHBOARD_COLORS.background }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <FlashList
         // A lane is a new feed, not a mutation of the visible one. Remounting
         // gives it a true native origin; reusing the list preserves iOS's old
@@ -831,9 +828,9 @@ export function HomeDashboard() {
           <RefreshControl
             refreshing={pullRefreshing}
             onRefresh={handleRefresh}
-            tintColor={DASHBOARD_COLORS.faint}
-            colors={[DASHBOARD_COLORS.coral]}
-            progressBackgroundColor={DASHBOARD_COLORS.surfaceRaised}
+            tintColor={theme.colors.faint}
+            colors={[theme.colors.primary]}
+            progressBackgroundColor={theme.colors.panelSoft}
           />
         )}
         showsVerticalScrollIndicator={false}
@@ -910,7 +907,7 @@ export function HomeDashboard() {
         )}
         ListFooterComponent={feedQuery.isFetchingNextPage ? (
           <View style={{ paddingVertical: 20, alignItems: 'center' }}>
-            <ActivityIndicator color={DASHBOARD_COLORS.faint} />
+            <ActivityIndicator color={theme.colors.faint} />
           </View>
         ) : feedQuery.isFetchNextPageError ? (
           <FeedLoadMoreErrorFooter onRetry={retryNextPage} />
@@ -967,6 +964,7 @@ export function HomeDashboard() {
 }
 
 function HomeTopBar({ credits, onMenuPress }: { credits: number | null; onMenuPress: () => void }) {
+  const theme = useAppTheme();
   return (
     <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
       <TopBarControl
@@ -977,7 +975,7 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number | null; onMenuPr
         }}
         style={{ width: 48 }}
       >
-        <WorkspaceSideMenuGlyph size={appTheme.icon.default} color={DASHBOARD_COLORS.text} />
+        <WorkspaceSideMenuGlyph size={appTheme.icon.default} color={theme.colors.text} />
       </TopBarControl>
 
       {/* The title slot is deliberately empty. Toolbars: "Don't title windows
@@ -998,11 +996,11 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number | null; onMenuPr
           style={{ minWidth: 68, paddingHorizontal: 10 }}
         >
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Crown size={appTheme.icon.sm} color={appTheme.colors.commerce} fill={`${appTheme.colors.commerce}33`} />
+            <Crown size={appTheme.icon.sm} color={theme.colors.commerce} fill={`${theme.colors.commerce}33`} />
             {/* A dash until the balance has loaded: a 0 there reads as an empty
                 balance to someone who has credits. */}
-            <Text style={{ color: credits === null ? DASHBOARD_COLORS.muted : DASHBOARD_COLORS.text, fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{credits === null ? '–' : formatCreditAmount(credits)}</Text>
-            <Plus size={14} color={DASHBOARD_COLORS.coral} />
+            <Text style={{ color: credits === null ? theme.colors.muted : theme.colors.text, fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{credits === null ? '–' : formatCreditAmount(credits)}</Text>
+            <Plus size={14} color={theme.colors.primary} />
           </View>
         </TopBarControl>
       </View>
@@ -1022,6 +1020,7 @@ function TopBarControl({
   onPress: () => void;
   style?: ViewStyle;
 }) {
+  const theme = useAppTheme();
   const motion = usePressMotion(false, { scale: appTheme.motion.scale.pressedControl });
 
   return (
@@ -1039,8 +1038,8 @@ function TopBarControl({
             justifyContent: 'center',
             borderRadius: 24,
             borderWidth: 1,
-            borderColor: DASHBOARD_COLORS.border,
-            backgroundColor: DASHBOARD_COLORS.surface,
+            borderColor: theme.colors.borderSubtle,
+            backgroundColor: theme.colors.panel,
           },
           style,
         ]}
@@ -1271,6 +1270,7 @@ function TopSlider({
  * indicator" — so the current dot is simply the brightest thing in the row.
  */
 function SlideDots({ count, index }: { count: number; index: number }) {
+  const theme = useAppTheme();
   if (count < 2) return null;
 
   return (
@@ -1286,7 +1286,7 @@ function SlideDots({ count, index }: { count: number; index: number }) {
             width: 6,
             height: 6,
             borderRadius: 3,
-            backgroundColor: dot === index % count ? DASHBOARD_COLORS.text : DASHBOARD_COLORS.border,
+            backgroundColor: dot === index % count ? theme.colors.text : theme.colors.borderSubtle,
           }}
         />
       ))}
@@ -1309,6 +1309,7 @@ function TopSlide({
   slide: HomeFeedSlide;
   width: number;
 }) {
+  const theme = useAppTheme();
   // Declared before the per-kind branches below: these are hooks, so they have
   // to run on every render regardless of which slide this is. `usePressMotion`
   // handles the reduced-motion preference itself, which is why this component
@@ -1326,22 +1327,22 @@ function TopSlide({
           borderRadius: 20,
           borderCurve: 'continuous',
           borderWidth: 1,
-          borderColor: DASHBOARD_COLORS.borderStrong,
-          backgroundColor: DASHBOARD_COLORS.surfaceRaised,
+          borderColor: theme.colors.border,
+          backgroundColor: theme.colors.panelSoft,
           padding: 14,
           justifyContent: 'space-between',
         }}
       >
         <View style={{ gap: 6 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: activeGenerationCount > 0 ? '#34d399' : DASHBOARD_COLORS.coral }} />
-            <Text numberOfLines={1} style={{ color: DASHBOARD_COLORS.muted, fontSize: 11, fontWeight: '800', letterSpacing: 0.8, textTransform: 'uppercase' }}>
+            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: activeGenerationCount > 0 ? theme.colors.success : theme.colors.primary }} />
+            <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', letterSpacing: 0.8, textTransform: 'uppercase' }}>
               {activeGenerationCount > 0
                 ? `${activeGenerationCount} render${activeGenerationCount === 1 ? '' : 's'} in progress`
                 : 'Creator workspace'}
             </Text>
           </View>
-          <Text numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82} style={{ color: DASHBOARD_COLORS.text, fontSize: 22, lineHeight: 27, fontWeight: '800', letterSpacing: -0.45 }}>
+          <Text numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82} style={{ color: theme.colors.text, fontSize: 22, lineHeight: 27, fontWeight: '800', letterSpacing: -0.45 }}>
             {title}
           </Text>
         </View>
@@ -1361,7 +1362,7 @@ function TopSlide({
           style={({ pressed }) => ({
             minHeight: 44,
             borderRadius: 14,
-            backgroundColor: DASHBOARD_COLORS.coral,
+            backgroundColor: theme.colors.primaryFill,
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1369,8 +1370,8 @@ function TopSlide({
             opacity: pressed ? appTheme.opacity.pressed : 1,
           })}
         >
-          <WandSparkles size={appTheme.icon.compact} color={appTheme.colors.onPrimary} />
-          <Text style={{ color: appTheme.colors.onPrimary, fontSize: 14, fontWeight: '800' }}>{slide.ctaLabel}</Text>
+          <WandSparkles size={appTheme.icon.compact} color={theme.colors.onPrimary} />
+          <Text style={{ color: theme.colors.onPrimary, fontSize: 14, fontWeight: '800' }}>{slide.ctaLabel}</Text>
         </Pressable>
         </MotionView>
       </View>
@@ -1391,8 +1392,8 @@ function TopSlide({
             borderRadius: 20,
             borderCurve: 'continuous',
             borderWidth: 1,
-            borderColor: DASHBOARD_COLORS.border,
-            backgroundColor: DASHBOARD_COLORS.surface,
+            borderColor: theme.colors.borderSubtle,
+            backgroundColor: theme.colors.panel,
             overflow: 'hidden',
             justifyContent: 'flex-end',
           }}
@@ -1402,8 +1403,8 @@ function TopSlide({
           ) : null}
           <View style={RAIL_PROMO_SCRIM} />
           <View style={{ padding: 12, gap: 4 }}>
-            <Text numberOfLines={1} style={{ color: '#ffffff', fontSize: 16, fontWeight: '800' }}>{slide.title}</Text>
-            <Text numberOfLines={2} style={{ color: 'rgba(255,255,255,0.78)', fontSize: 12, fontWeight: '600' }}>{slide.body}</Text>
+            <Text numberOfLines={1} style={{ color: mediaColors.onMedia, fontSize: 16, fontWeight: '800' }}>{slide.title}</Text>
+            <Text numberOfLines={2} style={{ color: hexWithAlpha(mediaColors.onMedia, 0.78), fontSize: 12, fontWeight: '600' }}>{slide.body}</Text>
           </View>
         </View>
       </Pressable>
@@ -1434,8 +1435,8 @@ function TopSlide({
           borderRadius: 20,
           borderCurve: 'continuous',
           borderWidth: 1,
-          borderColor: DASHBOARD_COLORS.border,
-          backgroundColor: DASHBOARD_COLORS.surface,
+          borderColor: theme.colors.borderSubtle,
+          backgroundColor: theme.colors.panel,
           justifyContent: 'space-between',
           overflow: 'hidden',
         }}
@@ -1444,14 +1445,14 @@ function TopSlide({
           <ToolPreview
             variant={slide.previewVariant}
             previewUrl={previewUrl}
-            icon={<Icon size={18} color="#ffffff" fill={slide.id === 'video' ? 'transparent' : 'rgba(255,255,255,0.14)'} />}
+            icon={<Icon size={18} color={mediaColors.onMedia} fill={slide.id === 'video' ? 'transparent' : hexWithAlpha(mediaColors.onMedia, 0.14)} />}
           />
         ) : null}
         <View style={{ gap: 4, flexShrink: 0, paddingHorizontal: 12, paddingBottom: 11, paddingTop: 10 }}>
-          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: appTheme.colors.text, fontSize: 16, fontWeight: '800' }}>
+          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: theme.colors.text, fontSize: 16, fontWeight: '800' }}>
             {slide.title}
           </Text>
-          <Text numberOfLines={2} style={{ color: DASHBOARD_COLORS.muted, fontSize: 12, lineHeight: 17, fontWeight: '600' }}>
+          <Text numberOfLines={2} style={{ color: theme.colors.muted, fontSize: 12, lineHeight: 17, fontWeight: '600' }}>
             {slide.body}
           </Text>
         </View>
@@ -1471,12 +1472,13 @@ function ToolPreview({
   previewUrl: string | null;
   icon: ReactNode;
 }) {
+  const theme = useAppTheme();
   return (
     // `flexShrink` so the artwork yields height to the caption at large Dynamic
     // Type sizes. The card height is fixed so every slide in the rail matches,
     // and without this the caption was the child that lost the space race — its
     // second line was sliced in half at 1.5x text.
-    <View style={{ height: 82, flexShrink: 1, overflow: 'hidden', backgroundColor: DASHBOARD_COLORS.surfaceRaised }}>
+    <View style={{ height: 82, flexShrink: 1, overflow: 'hidden', backgroundColor: theme.colors.panelSoft }}>
       <Image source={TOOL_PREVIEW_IMAGES[variant]} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
       {previewUrl ? (
         <Image
@@ -1488,7 +1490,7 @@ function ToolPreview({
         />
       ) : null}
       <View style={RAIL_PREVIEW_SCRIM} />
-      <View style={{ position: 'absolute', left: 9, top: 9, width: 30, height: 30, borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.38)', alignItems: 'center', justifyContent: 'center' }}>
+      <View style={{ position: 'absolute', left: 9, top: 9, width: 30, height: 30, borderRadius: 12, backgroundColor: mediaColors.mediaScrim, alignItems: 'center', justifyContent: 'center' }}>
         {icon}
       </View>
     </View>
@@ -1504,6 +1506,7 @@ function FeedChips({
   horizontalPadding: number;
   onSelect: (chipId: HomeFeedChipId) => void;
 }) {
+  const theme = useAppTheme();
   return (
     <View style={{ flexDirection: 'row', gap: 18, paddingHorizontal: horizontalPadding }}>
       {HOME_FEED_CHIPS.map((chip) => {
@@ -1517,14 +1520,14 @@ function FeedChips({
             onPress={() => onSelect(chip.id)}
             style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', gap: 6, opacity: pressed ? appTheme.opacity.pressed : 1 })}
           >
-            <Text style={{ color: active ? DASHBOARD_COLORS.text : DASHBOARD_COLORS.faint, fontSize: 15, fontWeight: '800' }}>
+            <Text style={{ color: active ? theme.colors.text : theme.colors.faint, fontSize: 15, fontWeight: '800' }}>
               {chip.label}
             </Text>
             <View
               style={{
                 height: 2,
                 borderRadius: 1,
-                backgroundColor: active ? DASHBOARD_COLORS.coral : 'transparent',
+                backgroundColor: active ? theme.colors.primary : 'transparent',
               }}
             />
           </Pressable>

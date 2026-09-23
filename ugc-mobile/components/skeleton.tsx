@@ -3,6 +3,7 @@ import { Animated, Easing, View, type DimensionValue, type StyleProp, type ViewS
 
 import { useReducedMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 /**
  * Loading placeholders shaped like the content they stand in for. A spinner
@@ -29,8 +30,6 @@ const BoneView = (
   ?? (({ children }: { children?: React.ReactNode }) => children ?? null)
 ) as typeof Animated.View;
 
-const BONE_FILL = 'rgba(255,248,237,0.07)';
-const BONE_FILL_STRONG = 'rgba(255,248,237,0.11)';
 const STATIC_OPACITY = 0.7;
 const PULSE_MIN_OPACITY = 0.45;
 const PULSE_HALF_MS = 820;
@@ -80,6 +79,7 @@ export function SkeletonBone({
   strong?: boolean;
   style?: StyleProp<ViewStyle>;
 }) {
+  const theme = useAppTheme();
   const reducedMotion = useReducedMotion();
 
   useEffect(() => {
@@ -100,7 +100,7 @@ export function SkeletonBone({
           height,
           borderRadius: radius,
           borderCurve: 'continuous',
-          backgroundColor: strong ? BONE_FILL_STRONG : BONE_FILL,
+          backgroundColor: strong ? theme.colors.boneStrong : theme.colors.bone,
           opacity: value ?? STATIC_OPACITY,
         },
         style,
@@ -111,6 +111,7 @@ export function SkeletonBone({
 
 /** Two feed cards: attribution row, a two-line title, tall media, an action row. */
 export function HomeFeedSkeleton({ width, cards = 2 }: { width: number; cards?: number }) {
+  const theme = useAppTheme();
   const mediaHeight = Math.round(width * 0.95);
 
   return (
@@ -123,8 +124,8 @@ export function HomeFeedSkeleton({ width, cards = 2 }: { width: number; cards?: 
             borderRadius: appTheme.radii.lg,
             borderCurve: 'continuous',
             borderWidth: 1,
-            borderColor: appTheme.colors.borderSubtle,
-            backgroundColor: appTheme.colors.panel,
+            borderColor: theme.colors.borderSubtle,
+            backgroundColor: theme.colors.panel,
             overflow: 'hidden',
           }}
         >
@@ -208,6 +209,7 @@ export function CardListSkeleton({
   /** What is loading, for assistive technology. */
   label: string;
 }) {
+  const theme = useAppTheme();
   return (
     <View accessibilityRole="progressbar" accessibilityLabel={label} style={{ gap: 12 }}>
       {Array.from({ length: rows }, (_, index) => (
@@ -218,8 +220,8 @@ export function CardListSkeleton({
             gap: 12,
             alignItems: 'center',
             borderWidth: 1,
-            borderColor: appTheme.colors.borderSubtle,
-            backgroundColor: appTheme.colors.panel,
+            borderColor: theme.colors.borderSubtle,
+            backgroundColor: theme.colors.panel,
             borderRadius: appTheme.radii.xl,
             borderCurve: 'continuous',
             padding: appTheme.spacing.card,
@@ -244,6 +246,7 @@ export function CardListSkeleton({
  * themselves with a text card that vanished and let the panel jump in.
  */
 export function DetailSkeleton({ label }: { label: string }) {
+  const theme = useAppTheme();
   return (
     <View
       accessibilityRole="progressbar"
@@ -251,8 +254,8 @@ export function DetailSkeleton({ label }: { label: string }) {
       style={{
         gap: 14,
         borderWidth: 1,
-        borderColor: appTheme.colors.borderSubtle,
-        backgroundColor: appTheme.colors.panel,
+        borderColor: theme.colors.borderSubtle,
+        backgroundColor: theme.colors.panel,
         borderRadius: appTheme.radii.xl,
         borderCurve: 'continuous',
         padding: appTheme.spacing.panel,
@@ -273,6 +276,7 @@ export function DetailSkeleton({ label }: { label: string }) {
  * A row of stat tiles: the invite metrics grid, which loads as a unit.
  */
 export function MetricGridSkeleton({ tiles = 4, label }: { tiles?: number; label: string }) {
+  const theme = useAppTheme();
   return (
     <View
       accessibilityRole="progressbar"
@@ -287,8 +291,8 @@ export function MetricGridSkeleton({ tiles = 4, label }: { tiles?: number; label
             flexBasis: '44%',
             gap: 10,
             borderWidth: 1,
-            borderColor: appTheme.colors.borderSubtle,
-            backgroundColor: appTheme.colors.panel,
+            borderColor: theme.colors.borderSubtle,
+            backgroundColor: theme.colors.panel,
             borderRadius: appTheme.radii.lg,
             borderCurve: 'continuous',
             padding: appTheme.spacing.card,

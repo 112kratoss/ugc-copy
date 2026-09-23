@@ -24,15 +24,13 @@ import { useCrossFade, usePressMotion, useReducedMotion, useSpringState } from '
 import { useTabBarGenerationCount } from '@/lib/use-active-generations';
 import { useTabBarBadge } from '@/lib/use-notification-badge';
 import { resolvedBottomInset } from '@/lib/safe-area';
-import { ADAPTIVE_INACTIVE_COLOR, useTabBarAmbientColor } from '@/lib/tab-bar-ambient';
+import { ADAPTIVE_INACTIVE_COLOR, ADAPTIVE_INACTIVE_LIGHT_COLOR, useTabBarAmbientColor } from '@/lib/tab-bar-ambient';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
-const PRIMARY = appTheme.colors.primary ?? '#FF7A59';
-const PRIMARY_STRONG = appTheme.colors.primaryStrong ?? '#FF8A6D';
-const ON_PRIMARY = appTheme.colors.onPrimary ?? '#1A0E0A';
-// Read with a fallback like the colours above: the focused tests mock the
-// theme down to a couple of colours and have no motion block at all.
+// Read with a fallback: the focused tests mock the theme down to a couple of
+// colours and have no motion block at all.
 const CONTROL_PRESS_SCALE = appTheme.motion?.scale.pressedControl ?? 0.9;
 const ANDROID_PRESS_SCALE = 0.96;
 // Bounded by the "Create" label sitting under it inside the dock, which the iOS
@@ -45,55 +43,43 @@ const ANDROID_PRESS_SCALE = 0.96;
 // edge stays unbroken and the arc reads as a separate, temporary thing.
 const RING_GAP = 4;
 const RING_WIDTH = 2;
-const RING_COLOR = appTheme.colors.primaryStrong ?? '#FF8A6D';
 
 const ANDROID_CREATE_SIZE = 58;
 const ANDROID_CREATE_COMPACT_SIZE = 52;
 
-// The glass branch drops the opaque panel fill on purpose — a near-solid
-// background cancels the material outright.
+// The bar's materials live in the theme (`theme.tabBar`), one set per scheme:
 //
-// Legibility is handled by brightening the labels rather than by darkening the
-// tint. Muted grey works on the solid bar because that bar is a known colour;
-// under glass the backdrop is whatever post scrolled past, so the text has to
-// carry itself. Darkening the tint instead would just walk back to a flat bar.
-const GLASS_TINT = 'rgba(17,18,21,0.20)';
-const GLASS_BORDER = 'rgba(255,255,255,0.16)';
-// Liquid Glass adapts to its backdrop, but it adapts on brightness, not hue —
-// a warm backdrop still arrives warm, which is why iOS drifted olive over skin
-// tones exactly like Android did. So it gets the same cool lift, at roughly
-// half strength: the material is already doing most of the work, and this
-// branch has the least headroom before a wash starts milking it into a slab.
-const GLASS_FROST_LIFT = 'rgba(236,240,255,0.07)';
-const TRANSLUCENT_INACTIVE = 'rgba(255,255,255,0.88)';
-// The adaptive fill is fully opaque: no pixels, text, or motion from behind the
-// bar show through. What adapts is the colour, sampled from the band of the
-// nearest card the dock actually sits over. `tab-bar-ambient.ts` owns both that
-// sampling and the contrast cap that keeps this label and the coral active tint
-// clear of the fill — which is why the label colour is defined over there.
-const FALLBACK_BORDER = appTheme.colors.border ?? 'rgba(255,248,237,0.12)';
-// Depth, and only depth. A fixed top-light/bottom-shade wash over the tint,
-// held apart from the tint itself so the pill still reads as a raised surface
-// without the gradient having any say in what colour the bar is.
-const ADAPTIVE_SHADE: readonly [string, string] = ['rgba(255,255,255,0.05)', 'rgba(0,0,0,0.16)'];
-// The create disc used to ring itself in opaque panel grey to separate it from
-// the bar. Against a real material that ring reads as a hole punched through
-// the glass, so it borrows the same rim light the surface uses.
-const DISC_RIM = 'rgba(255,255,255,0.18)';
-// The disc's drop shadow, 0 6px 16px at 24 % black, through the layer's own
-// shadow props (React Native draws a box shadow with half its blur as the
-// radius, hence 8). On an opaque view Fabric gives these a shadow path; the
-// equivalent box shadow is a masked layer that iOS renders offscreen on every
-// frame the feed moves under the dock.
-const CREATE_DISC_SHADOW = {
-  shadowColor: '#000000',
+// - `glassTint` / `glassBorder`: the glass branch drops the opaque panel fill on
+//   purpose — a near-solid background cancels the material outright. Legibility
+//   is handled by the labels (`glassInactive`) rather than by darkening the
+//   tint; under glass the backdrop is whatever post scrolled past, so the text
+//   has to carry itself. Darkening the tint would walk back to a flat bar.
+// - `glassFrostLift`: Liquid Glass adapts to its backdrop on brightness, not
+//   hue — a warm backdrop still arrives warm, which is why iOS drifted olive
+//   over skin tones exactly like Android did — so it gets a cool lift, at
+//   roughly half the strength the material could take before it milks into a
+//   slab.
+// - The adaptive fill is fully opaque: what adapts is the colour, sampled from
+//   the band of the nearest card the dock sits over. `tab-bar-ambient.ts` owns
+//   that sampling and the contrast limit that keeps the labels and the coral
+//   active tint clear of the fill, which is why the label colours live there.
+//   `adaptiveShade` is depth and only depth: a fixed top-light/bottom-shade wash
+//   over the tint, held apart from it so the gradient has no say in the colour.
+// - `discRim`: the create disc used to ring itself in opaque panel grey. Against
+//   a real material that ring reads as a hole punched through the glass, so it
+//   borrows the same rim light the surface uses.
+// - `solidFill`: Reduce Transparency gets a genuinely opaque bar. This is the one
+//   branch that should *not* thin out — those users asked for less see-through.
+//
+// The disc's drop shadow, 0 6px 16px, through the layer's own shadow props
+// (React Native draws a box shadow with half its blur as the radius, hence 8).
+// On an opaque view Fabric gives these a shadow path; the equivalent box shadow
+// is a masked layer that iOS renders offscreen on every frame the feed moves
+// under the dock. The colour and weight come from `theme.tabBar`.
+const CREATE_DISC_SHADOW_SHAPE = {
   shadowOffset: { width: 0, height: 6 },
-  shadowOpacity: 0.24,
   shadowRadius: 8,
 } as const;
-// Reduce Transparency gets a genuinely opaque bar. This is the one branch that
-// should *not* thin out — those users asked for less see-through, not more.
-const SOLID_FILL = '#111215';
 
 // Same swap the create menu uses: the focused component tests mock react-native
 // down to the primitives this file renders, so Animated.View is absent there.
@@ -155,6 +141,7 @@ export function MagicTabBar({
   navigation,
   hidden = false,
 }: BottomTabBarProps & { hidden?: boolean }) {
+  const theme = useAppTheme();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const [createMenuVisible, setCreateMenuVisible] = useState(false);
@@ -178,15 +165,15 @@ export function MagicTabBar({
   // Every tab, not just Home: the store is authoritative, and a surface with no
   // media to report hands the neutral dock back when it blurs. Read only by the
   // adaptive surface; glass and the solid bar leave the bar unsubscribed.
-  const fallbackFill = useTabBarAmbientColor(surfaceMode === 'adaptive');
+  const fallbackFill = useTabBarAmbientColor(surfaceMode === 'adaptive', theme.scheme);
   const { isCompact, centerSize, barHeight, centerGap, tabIconSize, tabLabelSize } = metrics;
   // Any translucent surface needs the text to carry itself; only the opaque
   // bar is a known enough backdrop for muted grey.
   const inactiveColor = surfaceMode === 'glass'
-    ? TRANSLUCENT_INACTIVE
+    ? theme.tabBar.glassInactive
     : surfaceMode === 'adaptive'
-      ? ADAPTIVE_INACTIVE_COLOR
-      : appTheme.colors.muted;
+      ? (theme.scheme === 'light' ? ADAPTIVE_INACTIVE_LIGHT_COLOR : ADAPTIVE_INACTIVE_COLOR)
+      : theme.colors.muted;
 
   const navigateTo = (routeName: string) => {
     const event = navigation.emit({
@@ -342,17 +329,19 @@ export function MagicTabBar({
             justifyContent: 'center',
             gap: 1,
             borderWidth: 1,
-            borderColor: DISC_RIM,
-            backgroundColor: pressed ? PRIMARY_STRONG : PRIMARY,
+            borderColor: theme.tabBar.discRim,
+            backgroundColor: pressed ? theme.colors.primaryFillPressed : theme.colors.primaryFill,
             elevation: 3,
-            ...CREATE_DISC_SHADOW,
+            ...CREATE_DISC_SHADOW_SHAPE,
+            shadowColor: theme.tabBar.discShadowColor,
+            shadowOpacity: theme.tabBar.discShadowOpacity,
           })}
         >
-          <Plus size={isCompact ? 23 : 25} color={ON_PRIMARY} />
+          <Plus size={isCompact ? 23 : 25} color={theme.colors.onPrimary} />
           <Text
             numberOfLines={1}
             maxFontSizeMultiplier={1.4}
-            style={{ color: ON_PRIMARY, fontSize: 11, lineHeight: 13, fontWeight: '800' }}
+            style={{ color: theme.colors.onPrimary, fontSize: 11, lineHeight: 13, fontWeight: '800' }}
           >
             Create
           </Text>
@@ -528,6 +517,7 @@ function useAndroidDockPop(reducedMotion: boolean) {
  * display an indeterminate progress indicator."
  */
 function GenerationRing({ size, running }: { size: number; running: boolean }) {
+  const theme = useAppTheme();
   const reducedMotion = useReducedMotion();
   const [spin] = useState(() => (IS_TEST_ENVIRONMENT ? null : new Animated.Value(0)));
 
@@ -569,10 +559,10 @@ function GenerationRing({ size, running }: { size: number; running: boolean }) {
         borderRadius: (size + RING_GAP * 2) / 2,
         borderWidth: RING_WIDTH,
         borderColor: 'transparent',
-        borderTopColor: RING_COLOR,
-        borderRightColor: reducedMotion ? RING_COLOR : 'transparent',
-        borderBottomColor: reducedMotion ? RING_COLOR : 'transparent',
-        borderLeftColor: reducedMotion ? RING_COLOR : 'transparent',
+        borderTopColor: theme.colors.primaryStrong,
+        borderRightColor: reducedMotion ? theme.colors.primaryStrong : 'transparent',
+        borderBottomColor: reducedMotion ? theme.colors.primaryStrong : 'transparent',
+        borderLeftColor: reducedMotion ? theme.colors.primaryStrong : 'transparent',
         transform: spin
           ? [{ rotate: spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) }]
           : undefined,
@@ -599,6 +589,7 @@ function AndroidNavigationDock({
   onNavigate: (route: string) => void;
   onCreate: () => void;
 }) {
+  const theme = useAppTheme();
   const press = usePressMotion(false, { scale: ANDROID_PRESS_SCALE });
   const createMotion = usePressMotion(false, { scale: CONTROL_PRESS_SCALE });
   const createSize = isCompact ? ANDROID_CREATE_COMPACT_SIZE : ANDROID_CREATE_SIZE;
@@ -618,7 +609,7 @@ function AndroidNavigationDock({
     left: 0,
     width: indicatorWidth,
     borderRadius: appTheme.radii.pill,
-    backgroundColor: appTheme.colors.navigationSelected,
+    backgroundColor: theme.colors.navigationSelected,
   };
   const indicatorTranslation = (value: Animated.Value | undefined, fallbackSlot: number) => (
     value?.interpolate({ inputRange: [0, 4], outputRange: [0, slotWidth * 4] })
@@ -632,7 +623,7 @@ function AndroidNavigationDock({
       active={activeRoute === item.route}
       iconSize={20}
       labelSize={11}
-      inactiveColor={appTheme.colors.muted}
+      inactiveColor={theme.colors.muted}
       badge={item.route === 'studio' ? alertsBadge : null}
       onPress={() => onNavigate(item.route)}
       onDockPressIn={dockPop.onPressIn}
@@ -652,15 +643,15 @@ function AndroidNavigationDock({
         padding: 8,
         borderRadius: appTheme.radii.pill,
         borderWidth: 1,
-        borderColor: appTheme.colors.borderSubtle,
-        borderTopColor: appTheme.colors.border,
-        backgroundColor: appTheme.colors.panel,
-        ...appTheme.shadow?.navigation,
+        borderColor: theme.colors.borderSubtle,
+        borderTopColor: theme.colors.border,
+        backgroundColor: theme.colors.panel,
+        ...theme.shadow?.navigation,
       }, dockPop.style]}
     >
       <LinearGradient
         pointerEvents="none"
-        colors={['rgba(255,255,255,0.025)', 'rgba(0,0,0,0.08)']}
+        colors={theme.tabBar.dockSheen}
         start={{ x: 0.5, y: 0 }}
         end={{ x: 0.5, y: 1 }}
         style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: appTheme.radii.pill }}
@@ -707,7 +698,7 @@ function AndroidNavigationDock({
           style={{ flex: 1, minHeight: 50, alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 4 }}
         >
           <Text numberOfLines={1} maxFontSizeMultiplier={1.4}
-            style={{ color: appTheme.colors.text, fontSize: 11, lineHeight: 14, fontWeight: '700' }}>
+            style={{ color: theme.colors.text, fontSize: 11, lineHeight: 14, fontWeight: '700' }}>
             Create
           </Text>
         </View>
@@ -742,22 +733,22 @@ function AndroidNavigationDock({
           flex: 1,
           borderRadius: createSize / 2,
           borderWidth: 1,
-          borderColor: DISC_RIM,
+          borderColor: theme.tabBar.discRim,
           alignItems: 'center',
           justifyContent: 'center',
           overflow: 'hidden',
           elevation: 6,
-          ...appTheme.shadow?.navigationCreate,
+          ...theme.shadow?.navigationCreate,
         }}
       >
         <LinearGradient
           pointerEvents="none"
-          colors={[appTheme.colors.navigationCreateTop ?? PRIMARY_STRONG, appTheme.colors.navigationCreateBottom ?? PRIMARY]}
+          colors={[theme.colors.navigationCreateTop, theme.colors.navigationCreateBottom]}
           start={{ x: 0.5, y: 0 }}
           end={{ x: 0.5, y: 1 }}
           style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
         />
-        <Plus size={appTheme.icon.feature} color="#ffffff" />
+        <Plus size={appTheme.icon.feature} color={theme.tabBar.createGlyph} />
       </Pressable>
       <GenerationRing size={createSize} running={runningGenerations > 0} />
     </AnimatedView>
@@ -776,6 +767,7 @@ function AndroidNavigationDock({
  * which is where a reader who needs larger type actually gets it.
  */
 function TabBadge({ value, iconSize }: { value: string; iconSize: number }) {
+  const theme = useAppTheme();
   return (
     <View
       pointerEvents="none"
@@ -797,13 +789,13 @@ function TabBadge({ value, iconSize }: { value: string; iconSize: number }) {
         borderCurve: 'continuous',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: appTheme.colors.badge,
+        backgroundColor: theme.colors.badge,
       }}
     >
       <Text
         numberOfLines={1}
         maxFontSizeMultiplier={1}
-        style={{ color: appTheme.colors.onBadge, fontSize: 11, lineHeight: 13, fontWeight: '800' }}
+        style={{ color: theme.colors.onBadge, fontSize: 11, lineHeight: 13, fontWeight: '800' }}
       >
         {value}
       </Text>
@@ -822,27 +814,28 @@ function TabBarSurface({
   fallbackFill: string;
   children: ReactNode;
 }) {
+  const theme = useAppTheme();
   const shape = {
     minHeight: barHeight,
     overflow: 'hidden' as const,
     borderRadius: barHeight / 2,
     borderCurve: 'continuous' as const,
     borderWidth: 1,
-    boxShadow: '0 8px 24px rgba(0,0,0,0.24)',
+    boxShadow: theme.tabBar.surfaceShadow,
   };
 
   if (mode === 'glass') {
-    // No backgroundColor: the material is the surface. colorScheme is pinned
-    // dark because app.json sets userInterfaceStyle dark — 'auto' would track
-    // the system and light up the bar on a light-mode device.
+    // No backgroundColor: the material is the surface. colorScheme is the
+    // app's resolved scheme rather than 'auto': the app can hold a scheme the
+    // phone is not in (Settings → Appearance), and the bar follows the app.
     return (
       <GlassView
         glassEffectStyle="regular"
-        colorScheme="dark"
-        tintColor={GLASS_TINT}
-        style={{ ...shape, borderColor: GLASS_BORDER }}
+        colorScheme={theme.scheme}
+        tintColor={theme.tabBar.glassTint}
+        style={{ ...shape, borderColor: theme.tabBar.glassBorder }}
       >
-        <FrostLift color={GLASS_FROST_LIFT} />
+        <FrostLift color={theme.tabBar.glassFrostLift} />
         {children}
       </GlassView>
     );
@@ -850,7 +843,7 @@ function TabBarSurface({
 
   if (mode === 'solid') {
     return (
-      <View style={{ ...shape, borderColor: appTheme.colors.border, backgroundColor: SOLID_FILL }}>
+      <View style={{ ...shape, borderColor: theme.colors.border, backgroundColor: theme.tabBar.solidFill }}>
         {children}
       </View>
     );
@@ -881,10 +874,11 @@ function AdaptiveSurface({
   fill: string;
   children: ReactNode;
 }) {
+  const theme = useAppTheme();
   const { from, to, progress } = useCrossFade(fill);
 
   return (
-    <View testID="tab-bar-adaptive-surface" style={{ ...shape, borderColor: FALLBACK_BORDER, backgroundColor: from }}>
+    <View testID="tab-bar-adaptive-surface" style={{ ...shape, borderColor: theme.colors.border, backgroundColor: from }}>
       <AnimatedView
         pointerEvents="none"
         testID="tab-bar-adaptive-fill"
@@ -901,7 +895,7 @@ function AdaptiveSurface({
       <LinearGradient
         testID="tab-bar-adaptive-shade"
         pointerEvents="none"
-        colors={ADAPTIVE_SHADE}
+        colors={theme.tabBar.adaptiveShade}
         start={{ x: 0.5, y: 0 }}
         end={{ x: 0.5, y: 1 }}
         style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
@@ -949,8 +943,9 @@ function TabButton({
   onDockPressIn?: () => void;
   onDockPressOut?: () => void;
 }) {
+  const theme = useAppTheme();
   const Icon = item.Icon;
-  const color = active ? PRIMARY : inactiveColor;
+  const color = active ? theme.colors.primary : inactiveColor;
   const progress = useSpringState(active);
   const press = usePressMotion(false, { scale: android ? ANDROID_PRESS_SCALE : CONTROL_PRESS_SCALE });
   const iconScale = progress?.interpolate({
@@ -981,7 +976,7 @@ function TabButton({
         borderRadius: android ? 25 : 18,
         borderCurve: 'continuous',
         // The Android content presses as one unit inside the selection capsule.
-        backgroundColor: pressed && !android ? appTheme.colors.surfaceStrong : 'transparent',
+        backgroundColor: pressed && !android ? theme.colors.surfaceStrong : 'transparent',
       })}
     >
       {/* A sibling of the content column, not a child of the scaled icon
@@ -995,7 +990,7 @@ function TabButton({
           transform: [{ scale: iconScale ?? 1 }],
         }}>
           <AnimatedView>
-            <Icon size={iconSize} color={color} fill={android && active ? appTheme.colors.navigationIconFill : 'none'} fillOpacity={0.45} />
+            <Icon size={iconSize} color={color} fill={android && active ? theme.colors.navigationIconFill : 'none'} fillOpacity={0.45} />
           </AnimatedView>
         </AnimatedView>
         {/* Capped scaling: the bar is a fixed-height row of five slots around a

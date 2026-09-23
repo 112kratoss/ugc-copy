@@ -27,6 +27,7 @@ import {
 import { BackGlyph, ShareGlyph } from '@/lib/platform-glyphs';
 import type { PostResourceKind } from '@/lib/types';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
 import { verticalHitSlop } from '@/lib/hit-target';
 import { haptic } from '@/lib/haptics';
@@ -91,6 +92,7 @@ export function PostDetailsPage({
   topInset: number;
   width: number;
 }) {
+  const theme = useAppTheme();
   const details = item.details;
   const unlock = details?.unlock ?? null;
   const { api, user } = useAuth();
@@ -134,7 +136,7 @@ export function PostDetailsPage({
   }, []);
 
   if (!details) {
-    return <View style={{ width, height, backgroundColor: appTheme.colors.app }} />;
+    return <View style={{ width, height, backgroundColor: theme.colors.app }} />;
   }
 
   const bundle = resourceQuery.data?.bundle;
@@ -181,7 +183,7 @@ export function PostDetailsPage({
     : details.body;
 
   return (
-    <View style={{ width, height, backgroundColor: appTheme.colors.app }}>
+    <View style={{ width, height, backgroundColor: theme.colors.app }}>
       <DetailsHeader
         backLabel={getDetailsBackLabel(item)}
         onActionsOpen={onActionsOpen}
@@ -203,7 +205,7 @@ export function PostDetailsPage({
             <Text
               numberOfLines={DETAILS_TITLE_MAX_LINES}
               selectable
-              style={{ color: appTheme.colors.text, ...appTheme.type.pageTitle, fontWeight: '800' }}
+              style={{ color: theme.colors.text, ...appTheme.type.pageTitle, fontWeight: '800' }}
             >
               {details.title}
             </Text>
@@ -224,17 +226,17 @@ export function PostDetailsPage({
             })}
           >
             <CreatorAvatar name={meta.creatorLabel} uri={details.creatorAvatar} size={28} />
-            <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
+            <Text numberOfLines={1} style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
               {meta.creatorLabel}
             </Text>
             {meta.timeLabel ? (
-              <Text style={{ color: appTheme.colors.faint, ...appTheme.type.bodySm }}>
+              <Text style={{ color: theme.colors.faint, ...appTheme.type.bodySm }}>
                 {`· ${meta.timeLabel}`}
               </Text>
             ) : null}
           </Pressable>
           {meta.metaParts.length > 0 ? (
-            <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
+            <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
               {meta.metaParts.join(' · ')}
             </Text>
           ) : null}
@@ -262,7 +264,7 @@ export function PostDetailsPage({
             <DetailActionButton
               grow
               label={primaryAction.label}
-              icon={<Repeat2 size={appTheme.icon.compact} color={appTheme.colors.textInverse} />}
+              icon={<Repeat2 size={appTheme.icon.compact} color={theme.colors.onPrimary} />}
               primary
               loading={remixLoading}
               onPress={() => void onRecreate(item)}
@@ -281,7 +283,7 @@ export function PostDetailsPage({
               disabled={!item.canShare}
               grow
               label="Share"
-              icon={<ShareGlyph size={appTheme.icon.compact} color={appTheme.colors.text} />}
+              icon={<ShareGlyph size={appTheme.icon.compact} color={theme.colors.text} />}
               onPress={() => void onShare(item)}
             />
             {onComments && item.canComment ? (
@@ -289,7 +291,7 @@ export function PostDetailsPage({
                 accessibilityLabel="Comments"
                 grow
                 label={commentCount > 0 ? formatCompactCount(commentCount) : 'Comment'}
-                icon={<MessageCircle size={appTheme.icon.compact} color={appTheme.colors.text} />}
+                icon={<MessageCircle size={appTheme.icon.compact} color={theme.colors.text} />}
                 onPress={onComments}
               />
             ) : null}
@@ -338,11 +340,11 @@ export function PostDetailsPage({
               {resourceError ? <ErrorText message={resourceError} /> : null}
             </View>
           ) : (
-            <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: `${accentColor(unlockAccent)}55`, backgroundColor: appTheme.colors.surface, padding: appTheme.spacing.card, gap: appTheme.spacing.gap }}>
+            <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: `${accentColor(unlockAccent, theme.colors)}55`, backgroundColor: theme.colors.surface, padding: appTheme.spacing.card, gap: appTheme.spacing.gap }}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12 }}>
                 <View style={{ flex: 1, gap: 5 }}>
-                  <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>Creator's resources</Text>
-                  <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
+                  <Text style={{ color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>Creator's resources</Text>
+                  <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
                     {bundle?.previewText ?? unlock.previewText ?? 'The prompt, files and notes behind this result.'}
                   </Text>
                 </View>
@@ -350,11 +352,11 @@ export function PostDetailsPage({
               </View>
               <ResourceKindRow kinds={resourceKinds} />
               {sectionState === 'loading' ? (
-                <ActivityIndicator color={appTheme.colors.primary} />
+                <ActivityIndicator color={theme.colors.primary} />
               ) : sectionState === 'error' ? (
                 <View style={{ gap: 10 }}>
                   <ErrorText message={resourceQuery.error instanceof Error ? resourceQuery.error.message : 'Could not load these resources.'} />
-                  <DetailActionButton label="Try again" icon={<FileText size={appTheme.icon.compact} color={appTheme.colors.text} />} onPress={() => void resourceQuery.refetch()} />
+                  <DetailActionButton label="Try again" icon={<FileText size={appTheme.icon.compact} color={theme.colors.text} />} onPress={() => void resourceQuery.refetch()} />
                 </View>
               ) : (
                 <>
@@ -366,7 +368,7 @@ export function PostDetailsPage({
                   <View style={{ gap: 10 }}>
                     <DetailActionButton
                       label={!user ? 'Sign in to unlock' : unlock.accessMode === 'free' ? 'Get resources — Free' : 'Unlock with credits'}
-                      icon={<Lock size={appTheme.icon.compact} color={appTheme.colors.textInverse} />}
+                      icon={<Lock size={appTheme.icon.compact} color={theme.colors.onPrimary} />}
                       loading={unlockMutation.isPending}
                       primary
                       onPress={() => {
@@ -407,6 +409,7 @@ function DetailsHeader({
   title: string;
   topInset: number;
 }) {
+  const theme = useAppTheme();
   return (
     <View
       style={{
@@ -416,22 +419,22 @@ function DetailsHeader({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
-        backgroundColor: appTheme.colors.app,
+        backgroundColor: theme.colors.app,
       }}
     >
       {onBack ? (
         <HeaderButton accessibilityLabel={backLabel} onPress={onBack}>
-          <BackGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
+          <BackGlyph size={appTheme.icon.feature} color={theme.colors.text} />
         </HeaderButton>
       ) : (
         <View style={{ width: 48, height: 48 }} />
       )}
-      <Text numberOfLines={1} style={{ flex: 1, textAlign: 'center', color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>
+      <Text numberOfLines={1} style={{ flex: 1, textAlign: 'center', color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>
         {title}
       </Text>
       {onActionsOpen ? (
         <HeaderButton accessibilityLabel="More options" onPress={onActionsOpen}>
-          <MoreVertical size={appTheme.icon.feature} color={appTheme.colors.text} />
+          <MoreVertical size={appTheme.icon.feature} color={theme.colors.text} />
         </HeaderButton>
       ) : (
         <View style={{ width: 48, height: 48 }} />
@@ -441,6 +444,7 @@ function DetailsHeader({
 }
 
 function HeaderButton({ accessibilityLabel, children, onPress }: { accessibilityLabel: string; children: React.ReactNode; onPress: () => void }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -453,7 +457,7 @@ function HeaderButton({ accessibilityLabel, children, onPress }: { accessibility
         borderRadius: 24,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: appTheme.colors.surfaceStrong,
+        backgroundColor: theme.colors.surfaceStrong,
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
@@ -463,9 +467,10 @@ function HeaderButton({ accessibilityLabel, children, onPress }: { accessibility
 }
 
 function ResourcesHeading({ pills }: { pills: Array<{ label: string; accent: ToolAccent }> }) {
+  const theme = useAppTheme();
   return (
     <View style={{ gap: 8 }}>
-      <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>
+      <Text style={{ color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>
         Creator's resources
       </Text>
       <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
@@ -476,18 +481,20 @@ function ResourcesHeading({ pills }: { pills: Array<{ label: string; accent: Too
 }
 
 function ErrorText({ message }: { message: string }) {
+  const theme = useAppTheme();
   return (
-    <Text selectable style={{ color: appTheme.semantic.danger.foreground, ...appTheme.type.label }}>
+    <Text selectable style={{ color: theme.semantic.danger.foreground, ...appTheme.type.label }}>
       {message}
     </Text>
   );
 }
 
 function DetailStat({ label, value }: { label: string; value: string }) {
+  const theme = useAppTheme();
   return (
-    <View style={{ flexGrow: 1, flexBasis: 148, borderRadius: appTheme.radii.md, borderCurve: 'continuous', backgroundColor: appTheme.colors.surfaceStrong, padding: appTheme.spacing.gap, gap: 4 }}>
-      <Text numberOfLines={1} style={{ color: appTheme.colors.muted, ...appTheme.type.caption, textTransform: 'uppercase' }}>{label}</Text>
-      <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{value}</Text>
+    <View style={{ flexGrow: 1, flexBasis: 148, borderRadius: appTheme.radii.md, borderCurve: 'continuous', backgroundColor: theme.colors.surfaceStrong, padding: appTheme.spacing.gap, gap: 4 }}>
+      <Text numberOfLines={1} style={{ color: theme.colors.muted, ...appTheme.type.caption, textTransform: 'uppercase' }}>{label}</Text>
+      <Text numberOfLines={1} style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{value}</Text>
     </View>
   );
 }
@@ -498,11 +505,12 @@ function DetailStat({ label, value }: { label: string; value: string }) {
  * reader's attention to tell them nothing.
  */
 function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
+  const theme = useAppTheme();
   if (!children) return null;
 
   return (
     <View style={{ gap: 8 }}>
-      <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>{title}</Text>
+      <Text style={{ color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>{title}</Text>
       {children}
     </View>
   );
@@ -513,13 +521,14 @@ function normalizeComparable(value: string) {
 }
 
 function CopyableText({ text, onCopy }: { text: string; onCopy: (text: string) => Promise<void> }) {
+  const theme = useAppTheme();
   return (
-    <View style={{ borderRadius: appTheme.radii.md, borderCurve: 'continuous', backgroundColor: appTheme.colors.surface, padding: appTheme.spacing.gap, gap: appTheme.spacing.gap }}>
-      <Text selectable style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>{text}</Text>
+    <View style={{ borderRadius: appTheme.radii.md, borderCurve: 'continuous', backgroundColor: theme.colors.surface, padding: appTheme.spacing.gap, gap: appTheme.spacing.gap }}>
+      <Text selectable style={{ color: theme.colors.textSecondary, ...appTheme.type.bodySm }}>{text}</Text>
       <View style={{ flexDirection: 'row' }}>
         <ResourceAction
           confirmLabel="Copied"
-          icon={<Copy size={appTheme.icon.xs} color={appTheme.colors.success} />}
+          icon={<Copy size={appTheme.icon.xs} color={theme.colors.success} />}
           label="Copy"
           onPress={() => onCopy(text)}
         />
@@ -548,7 +557,8 @@ function DetailActionButton({
   onPress: () => void;
   primary?: boolean;
 }) {
-  const primaryColor = appTheme.colors.primary;
+  const theme = useAppTheme();
+  const primaryColor = theme.colors.primaryFill;
   return (
     <Pressable
       accessibilityRole="button"
@@ -563,25 +573,26 @@ function DetailActionButton({
         justifyContent: 'center',
         gap: 8,
         borderRadius: 22,
-        backgroundColor: primary ? primaryColor : appTheme.colors.surfaceStrong,
+        backgroundColor: primary ? primaryColor : theme.colors.surfaceStrong,
         opacity: disabled ? 0.45 : pressed ? appTheme.opacity.pressed : 1,
         paddingHorizontal: 15,
       })}
     >
-      {loading ? <ActivityIndicator color={primary ? appTheme.colors.textInverse : appTheme.colors.text} /> : icon}
-      <Text numberOfLines={1} style={{ color: primary ? appTheme.colors.textInverse : appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>{label}</Text>
+      {loading ? <ActivityIndicator color={primary ? theme.colors.onPrimary : theme.colors.text} /> : icon}
+      <Text numberOfLines={1} style={{ color: primary ? theme.colors.onPrimary : theme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>{label}</Text>
     </Pressable>
   );
 }
 
 function ResourceKindRow({ kinds }: { kinds: PostResourceKind[] }) {
+  const theme = useAppTheme();
   if (!kinds.length) return null;
   return (
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
       {kinds.map((kind) => (
-        <View key={kind} style={{ flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: appTheme.colors.surfaceStrong, paddingHorizontal: 10, paddingVertical: 6 }}>
-          <FileText size={appTheme.icon.xs} color={appTheme.colors.textSecondary} />
-          <Text style={{ color: appTheme.colors.text, ...appTheme.type.caption, fontWeight: '800' }}>{resourceKindLabel(kind)}</Text>
+        <View key={kind} style={{ flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, paddingHorizontal: 10, paddingVertical: 6 }}>
+          <FileText size={appTheme.icon.xs} color={theme.colors.textSecondary} />
+          <Text style={{ color: theme.colors.text, ...appTheme.type.caption, fontWeight: '800' }}>{resourceKindLabel(kind)}</Text>
         </View>
       ))}
     </View>

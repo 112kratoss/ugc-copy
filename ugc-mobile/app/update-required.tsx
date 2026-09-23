@@ -4,16 +4,17 @@ import { RefreshCw, Sparkles } from 'lucide-react-native';
 
 import { AppText, Card, Kicker, PrimaryButton, SecondaryButton } from '@/components/ui';
 import { env } from '@/lib/env';
-import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 export default function UpdateRequiredScreen() {
+  const theme = useAppTheme();
   const storeUrl = Platform.OS === 'ios' ? env.appStoreUrl : env.playStoreUrl;
   return (
-    <View style={{ flex: 1, justifyContent: 'center', backgroundColor: appTheme.colors.background, padding: 20 }}>
+    <View style={{ flex: 1, justifyContent: 'center', backgroundColor: theme.colors.background, padding: 20 }}>
       <Stack.Screen options={{ headerShown: false, gestureEnabled: false }} />
       <Card accent="primary" padding="lg" style={{ alignItems: 'center', gap: 18, paddingVertical: 34 }}>
-        <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.selectedStrong }}>
-          <Sparkles size={32} color={appTheme.colors.primary} />
+        <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.selectedStrong }}>
+          <Sparkles size={32} color={theme.colors.primary} />
         </View>
         <View style={{ alignItems: 'center', gap: 8 }}>
           <Kicker color="primary">Update required</Kicker>
@@ -24,7 +25,7 @@ export default function UpdateRequiredScreen() {
         </View>
         <PrimaryButton label="Open store" onPress={() => void Linking.openURL(storeUrl)} />
         <SecondaryButton label="Check again" onPress={() => void Linking.openURL('magicbooklet://')} accessibilityHint="Returns to the app after updating" />
-        <RefreshCw size={18} color={appTheme.colors.faint} accessibilityElementsHidden />
+        <RefreshCw size={18} color={theme.colors.faint} accessibilityElementsHidden />
       </Card>
     </View>
   );

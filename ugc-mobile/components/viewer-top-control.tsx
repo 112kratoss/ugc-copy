@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { AccessibilityInfo, Platform, Pressable, type ViewStyle } from 'react-native';
 
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import { viewerTopControlTop, VIEWER_TOP_CONTROL_SIZE } from '@/lib/viewer-chrome';
 
 type ViewerTopControlProps = {
@@ -16,6 +17,10 @@ type ViewerTopControlProps = {
 
 /** The reel's Back and sound controls share one fixed, accessible glass surface. */
 export function ViewerTopControl({ label, onPress, topInset, side, selected, children }: ViewerTopControlProps) {
+  // The reel's scope is dark in both schemes. The glass has to be told: left on
+  // 'auto' it follows the window, and a light-mode window would put light glass
+  // over the video.
+  const theme = useAppTheme();
   const [glassAvailable] = useState(() => (
     Platform.OS === 'ios' && isLiquidGlassAvailable() && isGlassEffectAPIAvailable()
   ));
@@ -54,7 +59,7 @@ export function ViewerTopControl({ label, onPress, topInset, side, selected, chi
 
   if (glass) {
     return (
-      <GlassView glassEffectStyle="regular" isInteractive style={frame}>
+      <GlassView glassEffectStyle="regular" colorScheme={theme.scheme} isInteractive style={frame}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={label}
