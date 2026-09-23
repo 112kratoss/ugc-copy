@@ -131,7 +131,22 @@ function releaseSoon(player: VideoPlayer) {
   }, RELEASED_LOAN_GRACE_MS);
 }
 
+/**
+ * Feed tiles play silently, and a reel may have turned the sound on. A player
+ * leaves the reel silent — handed back, given back or released — rather than
+ * when its tile takes it: a tile that takes it late, or never, would otherwise
+ * leave a video playing aloud behind a reel that has gone.
+ */
+function silence(player: VideoPlayer) {
+  try {
+    player.muted = true;
+  } catch {
+    // Already released, or its native side is gone.
+  }
+}
+
 function settle(player: VideoPlayer, loan: Loan) {
+  silence(player);
   loans.delete(player);
   releaseVideoLoanHold(player);
   if (loan.timeout) clearTimeout(loan.timeout);
@@ -288,6 +303,7 @@ export function handBackVideoPlayer(player: VideoPlayer, tileKey: string, url: s
   const loan = loans.get(player);
   if (!loan || loan.stage !== 'adopted') return false;
   if (pendingReturn) dropReturn(pendingReturn);
+  silence(player);
   loan.stage = 'returning';
   handedBack.add(player);
   const pending: VideoReturn = {

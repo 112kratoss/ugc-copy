@@ -201,7 +201,8 @@ describe('S6 — the reel can be silenced without leaving it', () => {
 
   it('honours the mute preference and always silences prepared neighbours', () => {
     expect(viewer).toContain('instance.muted = !active || isViewerAudioMuted();');
-    expect(viewer).toContain('player.muted = !active || audioMuted;');
+    // And silences a reel that has started to leave (viewer-leaving-silence.test.ts).
+    expect(viewer).toContain('player.muted = !active || audioMuted || leaving;');
     expect(viewer).not.toContain('instance.muted = false;');
   });
 });
