@@ -3,7 +3,7 @@ import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/r
 import { router, useLocalSearchParams } from 'expo-router';
 import { ImageIcon, MoreVertical, Play, RefreshCw, Search, X } from 'lucide-react-native';
 import { useIsFocused, useScrollToTop } from '@react-navigation/native';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AccessibilityInfo, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -23,6 +23,7 @@ import {
   useWorkspaceSideMenu,
 } from '@/components/workspace-side-menu-gesture-layer';
 import { useAuth } from '@/lib/auth';
+import { createFeedVideoActivationStore, FeedVideoActivationContext, useFeedVideoActivation } from '@/lib/feed-video-activation';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { buildImmersiveShowcaseItems, showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
@@ -200,10 +201,11 @@ export default function ShowcaseScreen() {
     [user?.id]
   );
   const activeToolLabel = useMemo(() => activeTool ? formatToolLabel(activeTool) : null, [activeTool]);
-  const [activeVideoIds, setActiveVideoIds] = useState<string[]>([]);
+  // Playback lives outside React state: each pin subscribes to its own id, so
+  // an election re-renders the pins it concerns rather than the whole grid.
+  // Player-level focus gating keeps tab switches out of it too.
+  const [activationStore] = useState(() => createFeedVideoActivationStore());
   const [resolvedAspectRatios, setResolvedAspectRatios] = useState<Record<string, number>>({});
-  // Player-level focus gating avoids invalidating every cell on a tab switch.
-  const visibleActiveVideoIds = activeVideoIds;
   const [isSwipingMedia, setIsSwipingMedia] = useState(false);
   const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
   const [searchVisible, setSearchVisible] = useState(false);
@@ -264,8 +266,12 @@ export default function ShowcaseScreen() {
     if (!isFocused) void flushShowcaseFeedEvents();
   }, [isFocused]);
   const dispatchActivation = useCallback((event: ShowcaseActivationEvent) => {
-    runShowcaseActivation({ activation: activationRef, settleTimer: settleTimerRef }, event, setActiveVideoIds);
-  }, []);
+    runShowcaseActivation(
+      { activation: activationRef, settleTimer: settleTimerRef },
+      event,
+      (activeIds) => activationStore.publish({ activeIds }),
+    );
+  }, [activationStore]);
 
   useEffect(() => () => {
     if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
@@ -426,7 +432,7 @@ export default function ShowcaseScreen() {
 
   useEffect(() => {
     dispatchActivation({ type: 'reset' });
-    setActiveVideoIds([]);
+    activationStore.publish({ activeIds: [] });
     setFeedbackItem(null);
     // Every carousel is about to unmount; their releases would land after the
     // new list has already opened locks of its own.
@@ -437,7 +443,21 @@ export default function ShowcaseScreen() {
     loadingMoreRef.current = false;
     lastLoadMoreAtRef.current = 0;
     lastLoadMorePageCountRef.current = null;
+    // Another filter or tool is another feed, so it opens at the top, as a
+    // first visit does. The list keeps its offset across a data change, and a
+    // tool can arrive by link (a creator's tool) while this grid sits deep in
+    // the previous feed.
+    feedRef.current?.scrollToOffset({ offset: 0, animated: false });
   }, [activeFilterId, activeTool]);
+
+  // FlashList reports viewability by index, not by post: new posts landing on
+  // the indices already on screen (a filter switch to a cached feed, a
+  // refresh, a removed post) report nothing. The reset above would then leave
+  // the grid without a video, or the election would hold a post that has
+  // gone, until the next scroll. Recomputing reports the posts now there.
+  useEffect(() => {
+    if (cards.length) feedRef.current?.recomputeViewableItems();
+  }, [cards]);
 
   const clearToolFilter = () => {
     setActiveTool(null);
@@ -660,11 +680,12 @@ export default function ShowcaseScreen() {
   }, []);
 
   // Memoized: an inline literal here changes identity on every parent render,
-  // which makes FlashList re-render every mounted cell instead of only when
-  // activation or a resolved ratio actually changed.
+  // which makes FlashList re-render every mounted cell instead of only when a
+  // resolved ratio actually changed. Activation is not in here: pins read it
+  // from the store themselves.
   const feedExtraData = useMemo(
-    () => ({ visibleActiveVideoIds, resolvedAspectRatios }),
-    [visibleActiveVideoIds, resolvedAspectRatios]
+    () => ({ resolvedAspectRatios }),
+    [resolvedAspectRatios]
   );
 
   const renderCard: ListRenderItem<ShowcaseMasonryCard> = useCallback(({ item, target, index }) => {
@@ -673,7 +694,7 @@ export default function ShowcaseScreen() {
         <MasonryPin
           card={item}
           layout={gridLayout}
-          activeVideo={target === 'Cell' && visibleActiveVideoIds.includes(item.id)}
+          playbackEligible={target === 'Cell'}
           resolvedAspectRatio={resolvedAspectRatios[item.id]}
           onAspectRatio={queueAspectRatio}
           onOpenCreator={openCreator}
@@ -683,10 +704,11 @@ export default function ShowcaseScreen() {
         />
       </MasonryCardCell>
     );
-  }, [gridLayout, visibleActiveVideoIds, resolvedAspectRatios, openCreator, openPost, handleMediaScrollToggle]);
+  }, [gridLayout, resolvedAspectRatios, openCreator, openPost, handleMediaScrollToggle]);
 
   return (
     // Pins on this grid are what the reel grows out of and returns to.
+    <FeedVideoActivationContext.Provider value={activationStore}>
     <MediaZoomSurface>
     <WorkspaceSideMenuGestureLayer bottomOffset={tabBarMetrics.contentBottomPadding} enabled={!isSwipingMedia}>
       <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
@@ -705,6 +727,14 @@ export default function ShowcaseScreen() {
         onMomentumScrollEnd={() => dispatchActivation({ type: 'momentumEnd' })}
         getItemType={(item) => item.mediaKind ?? item.item.category}
         keyExtractor={(item) => item.id}
+        // FlashList's default keeps whichever post is first on screen in place
+        // across a data change, finding it again by key. A filter switch is a
+        // new feed, though: Free's first post also sits further down All, so
+        // Free → All opened there rather than at the top. Off, little is lost:
+        // in this masonry a card that grows or leaves above the screen
+        // re-places every card after it, and pinning one card never held the
+        // rest still.
+        maintainVisibleContentPosition={{ disabled: true }}
         masonry
         numColumns={2}
         // Keep the ranked data array intact, but allow visual column placement
@@ -729,8 +759,15 @@ export default function ShowcaseScreen() {
           paddingHorizontal: FEED_HORIZONTAL_PADDING,
           paddingBottom: tabBarMetrics.contentBottomOverlapPadding + appTheme.spacing.section,
         }}
+        // The header keeps one height in every load state. FlashList offsets
+        // the first card by the header's height, but the render that delivers
+        // the first page still reads the height from before it, and the list's
+        // own record of where it is scrolled stays off by the difference until
+        // something scrolls. With the loading skeleton in here that put every
+        // card below the screen: nothing counted as viewable and no video
+        // started. Loading, failure and emptiness render in ListEmptyComponent.
         ListHeaderComponent={
-          <View style={{ gap: 14, paddingBottom: 16 }}>
+          <View style={{ paddingBottom: 16 }}>
             <View style={{ gap: 10 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                 {/* The edge swipe used to be the only way into the workspace
@@ -790,25 +827,25 @@ export default function ShowcaseScreen() {
                 ) : null}
               </ScrollView>
             </View>
-            {showcaseQuery.error && !hasItems ? (
-              <View style={{ gap: appTheme.spacing.gap }}>
-                <StatusBlock
-                  tone="danger"
-                  title="Could not load Explore"
-                  body={showcaseFeedErrorBody(showcaseQuery.error)}
-                />
-                <SecondaryButton label="Retry Explore" onPress={handleRefresh} />
-              </View>
-            ) : null}
-            {isFirstLoad ? <ShowcaseSkeletonGrid layout={gridLayout} /> : null}
           </View>
         }
         ListEmptyComponent={
-          !isFirstLoad && !showcaseQuery.error && !hasItems ? (
+          showcaseQuery.error ? (
+            <View style={{ gap: appTheme.spacing.gap }}>
+              <StatusBlock
+                tone="danger"
+                title="Could not load Explore"
+                body={showcaseFeedErrorBody(showcaseQuery.error)}
+              />
+              <SecondaryButton label="Retry Explore" onPress={handleRefresh} />
+            </View>
+          ) : isFirstLoad ? (
+            <ShowcaseSkeletonGrid layout={gridLayout} />
+          ) : (
             <StatusBlock title="No posts loaded" body={activeToolLabel
               ? `No posts made with ${activeToolLabel} matched this view.`
               : `No posts matched ${activeFilter.label.toLowerCase()} yet. Pull to refresh or switch filters.`} />
-          ) : null
+          )
         }
         ListFooterComponent={
           isFirstLoad ? null
@@ -843,6 +880,7 @@ export default function ShowcaseScreen() {
       </View>
     </WorkspaceSideMenuGestureLayer>
     </MediaZoomSurface>
+    </FeedVideoActivationContext.Provider>
   );
 }
 
@@ -994,7 +1032,7 @@ function BottomLoader() {
 const MasonryPin = memo(function MasonryPin({
   card,
   layout,
-  activeVideo,
+  playbackEligible,
   resolvedAspectRatio,
   onAspectRatio,
   onFeedbackOpen,
@@ -1004,7 +1042,8 @@ const MasonryPin = memo(function MasonryPin({
 }: {
   card: ShowcaseMasonryCard;
   layout: ShowcaseGridLayout;
-  activeVideo: boolean;
+  /** Whether this render is a real cell, the only kind that may play; see renderCard. */
+  playbackEligible: boolean;
   resolvedAspectRatio?: number;
   onAspectRatio: (cardId: string, ratio: number) => void;
   onFeedbackOpen: (item: ShowcaseFeedItem) => void;
@@ -1017,6 +1056,9 @@ const MasonryPin = memo(function MasonryPin({
   const mediaHeight = getShowcaseMediaHeight(card, columnWidth, resolvedAspectRatio);
   const accent = accentColor(card.accent);
   const isVideoCard = isShowcaseVideoPreviewCandidate(card.item);
+  const activationStore = useContext(FeedVideoActivationContext);
+  const activation = useFeedVideoActivation(activationStore, card.id);
+  const activeVideo = playbackEligible && activation === 'visible';
   const showActiveVideo = isVideoCard && activeVideo && Boolean(card.mediaUrl);
   // Reduce Motion turns every preview back into a poster without changing the
   // election, so the badge asks the same question the tile does.

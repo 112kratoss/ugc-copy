@@ -14,7 +14,7 @@ import {
   WandSparkles,
 } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Linking, Pressable, RefreshControl, Share, Text, useWindowDimensions, View, type ViewStyle } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Linking, Pressable, RefreshControl, Share, Text, useWindowDimensions, View, type NativeScrollEvent, type NativeSyntheticEvent, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CommentsSheet } from '@/components/comments-sheet';
@@ -50,24 +50,23 @@ import {
   getInitialHomeSlideIndex,
   pickHomeSlidePreviews,
   shouldAutoAdvanceHomeSlides,
+  shouldTurnHomeSlides,
   type HomeFeedCard,
   type HomeFeedChipId,
   type HomeFeedSlide,
   type HomeLoopedSlide,
 } from '@/lib/home-feed-view-model';
 import { getOwnerPostSalesSummary } from '@/lib/home-view-model';
+import { createHomeFeedPlaybackController } from '@/lib/home-feed-playback';
+import { createFeedVideoActivationStore, FeedVideoActivationContext } from '@/lib/feed-video-activation';
+import { useAppForeground } from '@/lib/app-foreground';
 import { immersiveViewerHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
-import {
-  SHOWCASE_DRAW_DISTANCE,
-  SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS,
-  SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS,
-} from '@/lib/media-performance';
+import { SHOWCASE_DRAW_DISTANCE } from '@/lib/media-performance';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
 import { MotionView, usePressMotion, useReducedMotion } from '@/lib/motion';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
-import { selectActiveShowcaseVideoIds, selectPreparedShowcaseVideoIds } from '@/lib/showcase-display';
 import {
   SHOWCASE_PLAYBACK_VIEWABILITY,
   SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY,
@@ -171,15 +170,33 @@ export function HomeDashboard() {
 
   const [menuVisible, setMenuVisible] = useState(false);
   const [activeChipId, setActiveChipId] = useState<HomeFeedChipId>('for-you');
-  const [activeVideoIds, setActiveVideoIds] = useState<string[]>([]);
-  // The cards, of any kind, that last met the playback threshold. A moment with
-  // none (mid-fling, the header in view) keeps the last set, so the players
-  // prepared around it are not released and rebuilt on the way past.
-  const [playbackViewableIds, setPlaybackViewableIds] = useState<string[]>([]);
-  // The videos that same report chose to play. Prepared players are anchored
-  // here rather than to `activeVideoIds`, which empties the moment a scroll
-  // leaves no card qualified; see selectPreparedShowcaseVideoIds.
-  const [preparedAnchorIds, setPreparedAnchorIds] = useState<string[]>([]);
+  // Playback lives outside React state: each tile subscribes to its own id,
+  // so an election re-renders that tile and never this screen or the list.
+  const [activationStore] = useState(() => createFeedVideoActivationStore());
+  const [playbackController] = useState(() => createHomeFeedPlaybackController(activationStore));
+  const foreground = useAppForeground();
+  useEffect(() => playbackController.connect(), [playbackController]);
+  useEffect(() => {
+    if (!isFocused || !foreground) playbackController.dispatch({ type: 'stop' });
+  }, [foreground, isFocused, playbackController]);
+  // Read by the header rail's timer at each tick, never rendered: where the
+  // rail's bottom edge sits in the header (measured) and how far the feed has
+  // scrolled, so a turn is skipped while the rail is off screen or the feed
+  // moves (shouldTurnHomeSlides) without this screen re-rendering on scroll.
+  const railBottomRef = useRef<number | null>(null);
+  const feedOffsetRef = useRef(0);
+  const reportRailBottom = useCallback((bottom: number) => {
+    railBottomRef.current = bottom;
+  }, []);
+  const trackFeedOffset = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    feedOffsetRef.current = event.nativeEvent.contentOffset.y;
+  }, []);
+  const mayTurnSlides = useCallback(() => shouldTurnHomeSlides({
+    // The header starts below the list's top padding.
+    railBottom: railBottomRef.current === null ? null : topInset + railBottomRef.current,
+    feedOffset: feedOffsetRef.current,
+    feedMoving: playbackController.isMoving(),
+  }), [playbackController, topInset]);
   const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
   const [commentsItem, setCommentsItem] = useState<ShowcaseFeedItem | null>(null);
   const [commentsReplyToId, setCommentsReplyToId] = useState<string | null>(null);
@@ -189,8 +206,6 @@ export function HomeDashboard() {
   // Held by the list, not the card: FlashList recycles card views, and local
   // expansion state would follow a recycled view onto an unrelated post.
   const [expandedBodyIds, setExpandedBodyIds] = useState<string[]>([]);
-  // FeedVideoPreview owns focus gating; the list only changes for viewability.
-  const visibleActiveVideoIds = activeVideoIds;
 
   const activeChip = HOME_FEED_CHIPS.find((chip) => chip.id === activeChipId) ?? HOME_FEED_CHIPS[0];
   const queryKey = useMemo(
@@ -280,25 +295,8 @@ export function HomeDashboard() {
     const visibleItems = viewableItems
       .filter((token) => token.isViewable && token.item)
       .map((token) => token.item.item);
-    const nextVideoIds = selectActiveShowcaseVideoIds(visibleItems, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS);
-    setActiveVideoIds((current) => (
-      current.length === nextVideoIds.length && current.every((id, index) => id === nextVideoIds[index])
-        ? current
-        : nextVideoIds
-    ));
-    if (!visibleItems.length) return;
-    const nextViewableIds = visibleItems.map((item) => item.id);
-    setPlaybackViewableIds((current) => (
-      current.length === nextViewableIds.length && current.every((id, index) => id === nextViewableIds[index])
-        ? current
-        : nextViewableIds
-    ));
-    setPreparedAnchorIds((current) => (
-      current.length === nextVideoIds.length && current.every((id, index) => id === nextVideoIds[index])
-        ? current
-        : nextVideoIds
-    ));
-  }, [reportAmbientMedia]);
+    playbackController.dispatch({ type: 'viewableItemsChanged', items: visibleItems });
+  }, [playbackController, reportAmbientMedia]);
 
   const onQualifiedViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<HomeFeedCard>> }) => {
     if (!feedEventRuntimeRef.current.isFocused) return;
@@ -400,21 +398,11 @@ export function HomeDashboard() {
   }, [api, feedItems, requestedCommentsPostId, requestedReplyToId]);
 
   const cards = useMemo(() => buildHomeFeedCards(feedItems), [feedItems]);
-  // The videos around the playing one keep a paused player with its first
-  // frame drawn, so the next autoplay handoff is a resume rather than a load.
-  const preparedVideoIds = useMemo(
-    () => selectPreparedShowcaseVideoIds(
-      cards.map((card) => card.item),
-      { viewableIds: playbackViewableIds, anchorIds: preparedAnchorIds, activeIds: visibleActiveVideoIds },
-      SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS,
-    ),
-    [cards, playbackViewableIds, preparedAnchorIds, visibleActiveVideoIds],
-  );
-  // FlashList rerenders visible cells only when extraData changes identity.
-  const feedExtraData = useMemo(
-    () => ({ activeVideoIds: visibleActiveVideoIds, preparedVideoIds }),
-    [preparedVideoIds, visibleActiveVideoIds],
-  );
+  // The controller picks the prepared neighbours in card order, so it needs
+  // the cards as the list shows them, after every page and refetch.
+  useEffect(() => {
+    playbackController.dispatch({ type: 'itemsChanged', items: cards.map((card) => card.item) });
+  }, [cards, playbackController]);
   const slidePreviews = useMemo(() => pickHomeSlidePreviews(cards), [cards]);
   const hasItems = cards.length > 0;
   const isFirstLoad = feedQuery.isLoading && !hasItems;
@@ -527,6 +515,9 @@ export function HomeDashboard() {
     qualifiedImpressionsRef.current.clear();
     lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
+    playbackController.dispatch({ type: 'reset' });
+    // The lane remounts the list at its top, and a list at rest sends no scroll.
+    feedOffsetRef.current = 0;
     setActiveChipId(chipId);
   };
 
@@ -777,8 +768,6 @@ export function HomeDashboard() {
       <HomeFeedCardView
         card={card}
         contentWidth={contentWidth}
-        showActiveVideo={visibleActiveVideoIds.includes(card.id)}
-        showPreparedVideo={preparedVideoIds.includes(card.id)}
         bodyExpanded={expandedBodyIds.includes(card.id)}
         onOpen={(zoom) => openCard(card, { zoom })}
         onToggleBody={() => toggleBodyExpanded(card.id)}
@@ -802,6 +791,7 @@ export function HomeDashboard() {
 
   return (
     // Tiles on this screen are what the reel grows out of and returns to.
+    <FeedVideoActivationContext.Provider value={activationStore}>
     <MediaZoomSurface>
     <View style={{ flex: 1, backgroundColor: DASHBOARD_COLORS.background }}>
       <FlashList
@@ -814,7 +804,6 @@ export function HomeDashboard() {
         keyExtractor={(card) => card.id}
         renderItem={renderCard}
         getItemType={(card) => card.previewKind}
-        extraData={feedExtraData}
         drawDistance={SHOWCASE_DRAW_DISTANCE}
         maintainVisibleContentPosition={{ disabled: activeChip.filters.sort !== 'recent' }}
         onStartReached={requestPreviousPage}
@@ -831,6 +820,11 @@ export function HomeDashboard() {
           />
         )}
         showsVerticalScrollIndicator={false}
+        onScroll={trackFeedOffset}
+        onScrollBeginDrag={() => playbackController.dispatch({ type: 'dragBegin' })}
+        onScrollEndDrag={(event) => playbackController.dispatch({ type: 'dragEnd', velocityY: event.nativeEvent.velocity?.y })}
+        onMomentumScrollBegin={() => playbackController.dispatch({ type: 'momentumBegin' })}
+        onMomentumScrollEnd={() => playbackController.dispatch({ type: 'momentumEnd' })}
         viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
         contentInsetAdjustmentBehavior="never"
         // Home cards end in real controls and resource banners. Reserve the
@@ -848,6 +842,8 @@ export function HomeDashboard() {
               displayName={displayName}
               horizontalPadding={horizontalPadding}
               isFocused={isFocused}
+              mayTurn={mayTurnSlides}
+              onRailBottom={reportRailBottom}
               reduceMotion={reduceMotion}
               signedIn={Boolean(user)}
               slidePreviews={slidePreviews}
@@ -949,6 +945,7 @@ export function HomeDashboard() {
       />
     </View>
     </MediaZoomSurface>
+    </FeedVideoActivationContext.Provider>
   );
 }
 
@@ -1046,6 +1043,8 @@ function TopSlider({
   displayName,
   horizontalPadding,
   isFocused,
+  mayTurn,
+  onRailBottom,
   reduceMotion,
   signedIn,
   slidePreviews,
@@ -1055,6 +1054,10 @@ function TopSlider({
   displayName: string;
   horizontalPadding: number;
   isFocused: boolean;
+  /** Asked at each tick of the rotation; a tick it declines turns nothing. */
+  mayTurn: () => boolean;
+  /** The rail's bottom edge, relative to the header it sits in. */
+  onRailBottom: (bottom: number) => void;
   reduceMotion: boolean;
   signedIn: boolean;
   slidePreviews: Partial<Record<ToolAccent, string>>;
@@ -1095,6 +1098,10 @@ function TopSlider({
     if (!autoAdvance) return;
 
     const timer = setInterval(() => {
+      // A turn re-renders this rail and runs an animated scroll. Off screen it
+      // is work no one sees, and under a moving feed it lands in that scroll's
+      // frames, so the tick passes and the rhythm carries on.
+      if (!mayTurn()) return;
       const nextIndex = advanceHomeSlide(slideIndexRef.current, slides.length);
       slideIndexRef.current = nextIndex;
       setPageIndex(nextIndex % slides.length);
@@ -1105,7 +1112,7 @@ function TopSlider({
     }, HOME_SLIDE_INTERVAL_MS);
 
     return () => clearInterval(timer);
-  }, [autoAdvance, gap, slideWidth, slides.length]);
+  }, [autoAdvance, gap, mayTurn, slideWidth, slides.length]);
 
   // Pending work must not outlive the slider: the resume would call setState on
   // an unmounted component after a tab switch, and the centering frame would
@@ -1170,7 +1177,10 @@ function TopSlider({
   }, [gap, loopedSlides.length, scheduleResume, slideWidth, slides.length]);
 
   return (
-    <View style={{ gap: 10 }}>
+    <View
+      style={{ gap: 10 }}
+      onLayout={(event) => onRailBottom(event.nativeEvent.layout.y + event.nativeEvent.layout.height)}
+    >
     <FlashList
       ref={listRef}
       data={loopedSlides}

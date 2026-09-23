@@ -1,10 +1,11 @@
 import { MessageCircle, Repeat2 } from 'lucide-react-native';
-import { memo } from 'react';
+import { memo, useCallback, useContext } from 'react';
 import { Text, View } from 'react-native';
 
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
 import { MediaZoomSourceView, useMediaZoomSource } from '@/components/media-zoom';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
+import { FeedVideoActivationContext, useFeedVideoActivation } from '@/lib/feed-video-activation';
 import { PostTextBlock } from '@/components/post-text-block';
 import { SaveHeart } from '@/components/save-heart';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
@@ -22,8 +23,6 @@ import { accentColor, appTheme } from '@/lib/theme';
 export const HomeFeedCardView = memo(function HomeFeedCardView({
   card,
   contentWidth,
-  showActiveVideo,
-  showPreparedVideo,
   bodyExpanded,
   onOpen,
   onToggleBody,
@@ -37,9 +36,6 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
 }: {
   card: HomeFeedCard;
   contentWidth: number;
-  showActiveVideo: boolean;
-  /** Keep this card's video loaded and paused, ready to play; see FeedVideoPreview. */
-  showPreparedVideo: boolean;
   bodyExpanded: boolean;
   /** Opens the post, carrying the zoom the tile hands the push on iOS 18 (lib/apple-zoom.ts). */
   onOpen: (zoom: AppleZoomOpen | null) => void;
@@ -56,7 +52,14 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   const hasMedia = card.previewKind !== 'text' && Boolean(card.mediaUrl);
   const mediaHeight = hasMedia ? getHomeFeedMediaHeight(card, contentWidth) : 0;
   const bodyWidth = contentWidth - appTheme.spacing.card * 2;
-  const videoActivation = showActiveVideo ? 'visible' : showPreparedVideo ? 'prepared' : 'never';
+  // Subscribed per card, so an election re-renders this card and no other,
+  // and the list never re-renders for playback (lib/feed-video-activation.ts).
+  const activationStore = useContext(FeedVideoActivationContext);
+  const videoActivation = useFeedVideoActivation(activationStore, card.id);
+  const reportVideoReady = useCallback(
+    (ready: boolean) => activationStore?.setReady(card.id, ready),
+    [activationStore, card.id],
+  );
   // The media is what opens: the reel grows out of this rectangle, carrying
   // this picture, and shrinks back into it when the reader comes back.
   const mediaItems = getShowcasePreviewMediaItems(card.item);
@@ -104,6 +107,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
             radius={0}
             recyclingKey={`home-feed:${card.id}`}
             videoActivation={videoActivation}
+            onVideoReadyChange={reportVideoReady}
             videoBackdrop="none"
             videoContentFit="cover"
           />

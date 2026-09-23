@@ -520,8 +520,9 @@ describe('FeedVideoPreview', () => {
 
     expect(videoState.createVideoPlayer).toHaveBeenCalledTimes(1);
     expect(videoState.player.play).not.toHaveBeenCalled();
-    // Waiting, it holds only the head of the clip.
-    expect(videoState.player.bufferOptions).toEqual({ preferredForwardBufferDuration: 3 });
+    // Waiting, it buffers as far ahead as a playing tile, so starting it later
+    // changes nothing about it but whether it plays.
+    expect(videoState.player.bufferOptions).toEqual({ preferredForwardBufferDuration: 8 });
     expect(posterOpacity(tree!)).toBe(1);
 
     renderer.act(() => {
@@ -570,6 +571,48 @@ describe('FeedVideoPreview', () => {
     expect(videoState.createVideoPlayer).toHaveBeenCalledTimes(1);
     expect(videoState.player.play).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
+  });
+
+  it('sets the buffer target once and leaves it alone through every handoff', () => {
+    // On iOS a buffer change is a synchronous media-server call that the main
+    // thread can end up waiting on; changing it at each handoff froze scrolling
+    // for 40–80ms (see FEED_PREVIEW_FORWARD_BUFFER_SECONDS).
+    const writes: unknown[] = [];
+    let stored = videoState.player.bufferOptions;
+    Object.defineProperty(videoState.player, 'bufferOptions', {
+      configurable: true,
+      get: () => stored,
+      set: (value) => {
+        writes.push(value);
+        stored = value;
+      },
+    });
+    vi.useFakeTimers();
+    try {
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<FeedVideoPreview {...posterProps} active={false} prepared />);
+      });
+      renderer.act(() => {
+        tree!.root.findByType('video-view' as never).props.onFirstFrameRender();
+      });
+      for (const active of [true, false, true, false]) {
+        renderer.act(() => {
+          tree!.update(<FeedVideoPreview {...posterProps} active={active} prepared={!active} />);
+        });
+      }
+
+      expect(videoState.player.play).toHaveBeenCalledTimes(2);
+      expect(writes).toEqual([{ preferredForwardBufferDuration: 8 }]);
+    } finally {
+      vi.useRealTimers();
+      Object.defineProperty(videoState.player, 'bufferOptions', {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: stored,
+      });
+    }
   });
 
   it('releases a prepared player that leaves the window, and a new one redraws before the poster lifts', () => {
@@ -646,6 +689,39 @@ describe('FeedVideoPreview', () => {
     expect(tree!.root.findAll((node) => String(node.type) === 'activity-indicator')).toHaveLength(0);
     vi.useRealTimers();
   });
+
+  it('reports a drawn player as ready and withdraws it on unmount', () => {
+    const onReadyChange = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active={false} prepared onReadyChange={onReadyChange} />);
+    });
+    // Mounted paused without a frame: starting it would still be a load.
+    expect(onReadyChange).toHaveBeenLastCalledWith(false);
+    renderer.act(() => tree.root.findByType('video-view' as never).props.onFirstFrameRender());
+    expect(onReadyChange).toHaveBeenLastCalledWith(true);
+    onReadyChange.mockClear();
+    renderer.act(() => tree.unmount());
+    expect(onReadyChange).toHaveBeenCalledTimes(1);
+    expect(onReadyChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('withdraws readiness when playback fails after the first frame', () => {
+    const onReadyChange = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active onReadyChange={onReadyChange} />);
+    });
+    renderer.act(() => tree.root.findByType('video-view' as never).props.onFirstFrameRender());
+    expect(onReadyChange).toHaveBeenLastCalledWith(true);
+    const calls = videoState.player.addListener.mock.calls as unknown as Array<[string, (event: { status: string }) => void]>;
+    const statusListener = calls.find(([name]) => name === 'statusChange')?.[1];
+    renderer.act(() => statusListener?.({ status: 'error' }));
+    expect(onReadyChange).toHaveBeenLastCalledWith(false);
+    expect(findRetry(tree)).toHaveLength(1);
+    renderer.act(() => tree.unmount());
+  });
+
 });
 
 describe('FeedVideoPreview backdrop', () => {

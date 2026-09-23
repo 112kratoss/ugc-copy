@@ -105,7 +105,7 @@ describe('the top carousel says how much of it there is', () => {
     expect(slider).toContain('setPageIndex(slideIndexRef.current % slides.length)');
     expect(slider).toContain('setPageIndex(initialIndex % slides.length)');
     const interval = slider.slice(slider.indexOf('const timer = setInterval'));
-    expect(interval).toContain('}, [autoAdvance, gap, slideWidth, slides.length]);');
+    expect(interval).toContain('}, [autoAdvance, gap, mayTurn, slideWidth, slides.length]);');
   });
 
   /**
