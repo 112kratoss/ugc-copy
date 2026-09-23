@@ -18,6 +18,7 @@ const getPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
 ));
 const removePersistedMediaMock = vi.hoisted(() => vi.fn(async () => undefined));
 const generationCatalogRefetchMock = vi.hoisted(() => vi.fn());
+const modelCatalogState = vi.hoisted(() => ({ missingIds: [] as string[] }));
 const restoredFile = new File(['image-bytes'], 'restored-element.png', { type: 'image/png' });
 
 const maybeSingleMock = vi.fn(async () => ({ data: null, error: null }));
@@ -92,7 +93,7 @@ vi.mock('@/lib/generation-model-client', async () => {
   return {
     ...actual,
     useWebGenerationModelCatalog: () => ({
-      summaries: [], missingIds: [], detailsReady: true, isLoadingModels: false,
+      summaries: [], missingIds: modelCatalogState.missingIds, detailsReady: true, isLoadingModels: false,
       catalog: {
         revision: 'test-catalog-rev',
         schemaVersion: 1,
@@ -141,6 +142,7 @@ describe('CreateImageClient persisted elements', () => {
     }]);
     removePersistedMediaMock.mockClear();
     generationCatalogRefetchMock.mockClear();
+    modelCatalogState.missingIds = [];
     maybeSingleMock.mockClear();
     URL.createObjectURL = vi.fn(() => 'blob:restored-element') as typeof URL.createObjectURL;
     URL.revokeObjectURL = vi.fn() as typeof URL.revokeObjectURL;
@@ -247,5 +249,24 @@ describe('CreateImageClient persisted elements', () => {
     await waitFor(() => {
       expect(screen.queryByText(/Your references are preserved/)).not.toBeInTheDocument();
     });
+  });
+});
+
+describe('CreateImageClient model notices', () => {
+  beforeEach(() => {
+    getPersistedImageElementRecordsMock.mockReset();
+    getPersistedImageElementRecordsMock.mockResolvedValue([]);
+    modelCatalogState.missingIds = [];
+    window.scrollTo = vi.fn();
+  });
+
+  it('titles a model notice as model settings, not as a remix', async () => {
+    modelCatalogState.missingIds = ['nano-banana-2'];
+
+    render(<CreateImageClient prefill={{}} />);
+
+    expect(await screen.findByText(/This model is no longer available/)).toBeInTheDocument();
+    expect(screen.queryByText('Remixing Community Creation')).not.toBeInTheDocument();
+    expect(screen.getByText('Model settings')).toBeInTheDocument();
   });
 });

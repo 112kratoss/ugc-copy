@@ -7,6 +7,7 @@ import type { PersistedImageElementRecord, PersistedSubjectRecord } from '@/lib/
 const mockPush = vi.fn();
 const mockUpdateCredits = vi.fn();
 const generationCatalogRefetchMock = vi.hoisted(() => vi.fn());
+const modelCatalogState = vi.hoisted(() => ({ missingIds: [] as string[] }));
 const temporaryUploadMock = vi.hoisted(() => vi.fn());
 const getPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
   async (_key: string): Promise<PersistedImageElementRecord[]> => {
@@ -146,7 +147,7 @@ vi.mock('@/lib/generation-model-client', async () => {
   return {
     ...actual,
     useWebGenerationModelCatalog: () => ({
-      summaries: [], missingIds: [], detailsReady: true, isLoadingModels: false,
+      summaries: [], missingIds: modelCatalogState.missingIds, detailsReady: true, isLoadingModels: false,
       catalog: {
         revision: 'test-catalog-rev',
         schemaVersion: 1,
@@ -227,6 +228,7 @@ describe('CreateVideoClient Kling video elements', () => {
     mockPush.mockClear();
     mockUpdateCredits.mockClear();
     generationCatalogRefetchMock.mockClear();
+    modelCatalogState.missingIds = [];
     temporaryUploadMock.mockReset();
     temporaryUploadMock.mockImplementation(async (file: File) => ({
       signedUrl: `https://signed.example.com/uploads/user-1/${file.name}`,
@@ -435,6 +437,16 @@ describe('CreateVideoClient Kling video elements', () => {
     await waitFor(() => {
       expect(screen.queryByText(/Your references are preserved/)).not.toBeInTheDocument();
     });
+  });
+
+  it('titles a model notice as model settings, not as a remix', async () => {
+    modelCatalogState.missingIds = ['kling-3.0-video'];
+
+    render(<CreateVideoClient prefill={{}} />);
+
+    expect(await screen.findByText(/This model is no longer available/)).toBeInTheDocument();
+    expect(screen.queryByText('Remixing Community Creation')).not.toBeInTheDocument();
+    expect(screen.getByText('Model settings')).toBeInTheDocument();
   });
 
   it('keeps the Kling video elements panel visible in single-shot and multi-shot modes', async () => {
