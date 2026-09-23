@@ -1,7 +1,8 @@
 import InlineMediaVideo from '@/components/InlineMediaVideo';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { ArrowLeft, ArrowRight, CheckCircle2, Clock3, Expand, Loader2, RefreshCw, Sparkles, X } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import { ArrowLeft, ArrowRight, CheckCircle2, Clock3, Expand, Loader2, RefreshCw, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import clsx from 'clsx';
 import { createPortal } from 'react-dom';
 
@@ -394,12 +395,14 @@ export function StudioControlCard({
   );
 }
 
-export function StudioRemixNotice({
-  label = 'Remixing Community Creation',
+function StudioNoticeCard({
+  icon: Icon,
+  label,
   description,
   action,
 }: {
-  label?: string;
+  icon: LucideIcon;
+  label: string;
   description: string;
   action?: ReactNode;
 }) {
@@ -408,7 +411,7 @@ export function StudioRemixNotice({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-start gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-[var(--ui-primary)]/25 bg-[var(--ui-primary-soft)] text-[var(--ui-primary-strong)]">
-            <Sparkles className="h-4 w-4" />
+            <Icon className="h-4 w-4" />
           </div>
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.22em] text-[var(--ui-primary-strong)]">
@@ -421,6 +424,28 @@ export function StudioRemixNotice({
       </div>
     </StudioPanel>
   );
+}
+
+export function StudioRemixNotice({
+  label = 'Remixing Community Creation',
+  description,
+  action,
+}: {
+  label?: string;
+  description: string;
+  action?: ReactNode;
+}) {
+  return <StudioNoticeCard icon={Sparkles} label={label} description={description} action={action} />;
+}
+
+/**
+ * The creators' model notices: the selected model was retired or replaced,
+ * unsupported settings were reset, or the model list failed to load. Same card
+ * as StudioRemixNotice with a title of its own, because these show on any
+ * creator page, not only on remixes.
+ */
+export function StudioModelNotice({ description }: { description: string }) {
+  return <StudioNoticeCard icon={SlidersHorizontal} label="Model settings" description={description} />;
 }
 
 /**

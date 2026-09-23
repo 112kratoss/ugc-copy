@@ -16,6 +16,7 @@ import {
     StudioBackgroundProcessingNotice,
     StudioGenerationStatus,
     StudioMediaPreviewModal,
+    StudioModelNotice,
     StudioRemixHydrationNotice,
     StudioRemixNotice,
     StudioRunPanel,
@@ -3293,7 +3294,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             )}
                             {catalogNotice ? (
                                 <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
-                                    <StudioRemixNotice description={catalogNotice} />
+                                    <StudioModelNotice description={catalogNotice} />
                                 </motion.div>
                             ) : null}
                         </AnimatePresence>

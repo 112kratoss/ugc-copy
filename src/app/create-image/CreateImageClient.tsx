@@ -12,6 +12,7 @@ import {
     StudioBackgroundProcessingNotice,
     StudioGenerationStatus,
     StudioMediaPreviewModal,
+    StudioModelNotice,
     StudioRemixHydrationNotice,
     StudioRemixNotice,
     StudioRunPanel,
@@ -1183,7 +1184,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     animate={{ opacity: 1, y: 0 }}
                                     exit={{ opacity: 0, y: -12 }}
                                 >
-                                    <StudioRemixNotice description={catalogNotice} />
+                                    <StudioModelNotice description={catalogNotice} />
                                 </motion.div>
                             ) : null}
                             {remixId && isRemixLoading && (
