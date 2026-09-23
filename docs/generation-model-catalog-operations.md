@@ -209,18 +209,18 @@ release in place.
 
 ## Adding later models
 
+The end-to-end procedure for adding a model (provider checks, where it registers
+in code, emitting and pinning its release, and deploying the code before
+publishing) is [model-onboarding.md](model-onboarding.md). This section covers
+only what the catalog allows.
+
 A model using schema-v2 controls and an existing allowlisted server adapter can
 be launched with another reviewed manifest and no mobile build. A new provider
 protocol still requires a backend adapter deployment. It must never be modeled
 as an arbitrary URL or executable payload template in the database.
 
-To make the CLI available as an npm command, add this package script:
-
-```json
-{
-  "ops:generation-model-catalog": "tsx --env-file-if-exists=.env.local scripts/ops/generation-model-catalog.ts"
-}
-```
+The CLI also runs as `npm run ops:generation-model-catalog -- <command> …`,
+which loads `.env.local` when it exists.
 
 ## Every release is emitted, then pinned
 

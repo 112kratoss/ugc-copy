@@ -4,6 +4,7 @@ Verbatim provider evidence for every model we integrate. Each file records, with
 capture date and source URLs, the exact `model` enum values, input field names and
 enums, and the market-page pricing a model shipped against. Tests cite these files
 (`VERIFIED_PROVIDER_IDS` comments), so they are evidence, not documentation prose.
+Capturing it is the first step of [model onboarding](../model-onboarding.md).
 
 ## Gathering evidence
 
