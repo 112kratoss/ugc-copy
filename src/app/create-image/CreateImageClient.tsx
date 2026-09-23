@@ -259,10 +259,13 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     }, [prefillPrompt, prefillModel, prefillAspectRatio, remixId]);
 
 
-    useEffect(() => {
-        if (modelCatalog.missingIds.includes(selectedModel)) setCatalogNotice('This model is no longer available. Your draft is saved; choose another model.');
-        else if (modelCatalog.error) setCatalogNotice(modelCatalog.error.message);
-    }, [modelCatalog.missingIds, modelCatalog.error, selectedModel]);
+    // Derived, not kept in `catalogNotice`: a retired model or a failed load shows only
+    // while it still applies, so choosing another model or a successful reload clears
+    // it. It takes the notice slot ahead of a one-off notice, which can be dismissed.
+    const catalogProblem = modelCatalog.missingIds.includes(selectedModel)
+        ? 'This model is no longer available. Your draft is saved; choose another model.'
+        : modelCatalog.error?.message || null;
+    const modelNotice = catalogProblem ?? catalogNotice;
     const model = IMAGE_MODELS[selectedModel] ?? IMAGE_MODELS['nano-banana-2'];
     const imageModelOptions = modelCatalog.summaries.filter(item => item.kind === 'image').map(item => ({ ...(IMAGE_MODELS as unknown as Record<string, typeof IMAGE_MODELS[keyof typeof IMAGE_MODELS]>)[item.id], ...item, badge: item.badge ?? '' }));
     const normalizedModelSearchQuery = modelSearchQuery.trim().toLowerCase();
@@ -1178,13 +1181,17 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 controls={
                     <>
                         <AnimatePresence>
-                            {catalogNotice ? (
+                            {modelNotice ? (
                                 <motion.div
+                                    key="model-notice"
                                     initial={{ opacity: 0, y: 12 }}
                                     animate={{ opacity: 1, y: 0 }}
                                     exit={{ opacity: 0, y: -12 }}
                                 >
-                                    <StudioModelNotice description={catalogNotice} />
+                                    <StudioModelNotice
+                                        description={modelNotice}
+                                        onDismiss={catalogProblem ? undefined : () => setCatalogNotice(null)}
+                                    />
                                 </motion.div>
                             ) : null}
                             {remixId && isRemixLoading && (
@@ -1295,6 +1302,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                                     role="option"
                                                     aria-selected={isActive}
                                                     onClick={() => {
+                                                        // A notice about the previous model no longer applies.
+                                                        if (m.id !== selectedModel) setCatalogNotice(null);
                                                         setSelectedModel(m.id as ModelId);
                                                         setIsModelDropdownOpen(false);
                                                         setModelSearchQuery('');

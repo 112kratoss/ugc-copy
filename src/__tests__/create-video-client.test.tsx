@@ -7,7 +7,11 @@ import type { PersistedImageElementRecord, PersistedSubjectRecord } from '@/lib/
 const mockPush = vi.fn();
 const mockUpdateCredits = vi.fn();
 const generationCatalogRefetchMock = vi.hoisted(() => vi.fn());
-const modelCatalogState = vi.hoisted(() => ({ missingIds: [] as string[] }));
+const modelCatalogState = vi.hoisted(() => ({
+  missingIds: [] as string[],
+  error: null as Error | null,
+  summaries: [] as Array<{ id: string; kind: string; displayName: string; description: string }>,
+}));
 const temporaryUploadMock = vi.hoisted(() => vi.fn());
 const getPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
   async (_key: string): Promise<PersistedImageElementRecord[]> => {
@@ -147,7 +151,7 @@ vi.mock('@/lib/generation-model-client', async () => {
   return {
     ...actual,
     useWebGenerationModelCatalog: () => ({
-      summaries: [], missingIds: modelCatalogState.missingIds, detailsReady: true, isLoadingModels: false,
+      summaries: modelCatalogState.summaries, missingIds: modelCatalogState.missingIds, detailsReady: true, isLoadingModels: false,
       catalog: {
         revision: 'test-catalog-rev',
         schemaVersion: 1,
@@ -200,7 +204,7 @@ vi.mock('@/lib/generation-model-client', async () => {
           },
         ],
       },
-      error: null,
+      error: modelCatalogState.error,
       isLoading: false,
       revision: 'test-catalog-rev',
       refetch: generationCatalogRefetchMock,
@@ -218,6 +222,18 @@ vi.mock('@/lib/generation-model-client', async () => {
   };
 });
 
+const videoModelSummaries = [
+  { id: 'kling-3.0-video', kind: 'video', displayName: 'Kling 3.0 Cinematic', description: 'Test video model' },
+  { id: 'seedance-1.5-pro', kind: 'video', displayName: 'Seedance 1.5 Pro', description: 'Test element-capable video model' },
+];
+
+function chooseModel(container: HTMLElement, displayName: string) {
+  const picker = container.querySelector<HTMLButtonElement>('button[aria-haspopup="listbox"]');
+  expect(picker).not.toBeNull();
+  fireEvent.click(picker!);
+  fireEvent.click(screen.getByRole('option', { name: new RegExp(displayName) }));
+}
+
 describe('CreateVideoClient Kling video elements', () => {
   const originalCreateObjectURL = URL.createObjectURL;
   const originalRevokeObjectURL = URL.revokeObjectURL;
@@ -229,6 +245,8 @@ describe('CreateVideoClient Kling video elements', () => {
     mockUpdateCredits.mockClear();
     generationCatalogRefetchMock.mockClear();
     modelCatalogState.missingIds = [];
+    modelCatalogState.error = null;
+    modelCatalogState.summaries = [];
     temporaryUploadMock.mockReset();
     temporaryUploadMock.mockImplementation(async (file: File) => ({
       signedUrl: `https://signed.example.com/uploads/user-1/${file.name}`,
@@ -447,6 +465,56 @@ describe('CreateVideoClient Kling video elements', () => {
     expect(await screen.findByText(/This model is no longer available/)).toBeInTheDocument();
     expect(screen.queryByText('Remixing Community Creation')).not.toBeInTheDocument();
     expect(screen.getByText('Model settings')).toBeInTheDocument();
+  });
+
+  it('clears the missing-model notice once another model is chosen', async () => {
+    modelCatalogState.missingIds = ['kling-3.0-video'];
+    modelCatalogState.summaries = videoModelSummaries;
+    const view = render(<CreateVideoClient prefill={{}} />);
+    expect(await screen.findByText(/This model is no longer available/)).toBeInTheDocument();
+
+    chooseModel(view.container, 'Seedance 1.5 Pro');
+
+    await waitFor(() => {
+      expect(screen.queryByText(/This model is no longer available/)).not.toBeInTheDocument();
+    });
+  });
+
+  it('clears the load-error notice once the model list loads again', async () => {
+    modelCatalogState.error = new Error('Could not load models.');
+    const view = render(<CreateVideoClient prefill={{}} />);
+    expect(await screen.findByText('Could not load models.')).toBeInTheDocument();
+
+    modelCatalogState.error = null;
+    view.rerender(<CreateVideoClient prefill={{}} />);
+
+    await waitFor(() => {
+      expect(screen.queryByText('Could not load models.')).not.toBeInTheDocument();
+    });
+  });
+
+  it('lets the creator dismiss a settings-reset notice', async () => {
+    // Veo 3.1 has no "std" mode, so opening it resets Kling's default.
+    render(<CreateVideoClient prefill={{ model: 'veo-3.1' }} />);
+    expect(await screen.findByText(/Unsupported choices were reset/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss model notice' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Unsupported choices were reset/)).not.toBeInTheDocument();
+    });
+  });
+
+  it('clears a settings-reset notice when the creator picks another model', async () => {
+    modelCatalogState.summaries = videoModelSummaries;
+    const view = render(<CreateVideoClient prefill={{ model: 'veo-3.1' }} />);
+    expect(await screen.findByText(/Unsupported choices were reset/)).toBeInTheDocument();
+
+    chooseModel(view.container, 'Seedance 1.5 Pro');
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Unsupported choices were reset/)).not.toBeInTheDocument();
+    });
   });
 
   it('keeps the Kling video elements panel visible in single-shot and multi-shot modes', async () => {

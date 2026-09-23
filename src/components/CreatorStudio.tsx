@@ -400,25 +400,39 @@ function StudioNoticeCard({
   label,
   description,
   action,
+  onDismiss,
+  dismissLabel = 'Dismiss notice',
 }: {
   icon: LucideIcon;
   label: string;
   description: string;
   action?: ReactNode;
+  onDismiss?: () => void;
+  dismissLabel?: string;
 }) {
   return (
     <StudioPanel className="p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-start gap-3">
+        <div className="flex min-w-0 flex-1 items-start gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-[var(--ui-primary)]/25 bg-[var(--ui-primary-soft)] text-[var(--ui-primary-strong)]">
             <Icon className="h-4 w-4" />
           </div>
-          <div>
+          <div className="min-w-0 flex-1">
             <div className="text-xs font-semibold uppercase tracking-[0.22em] text-[var(--ui-primary-strong)]">
               {label}
             </div>
             <p className="mt-1 text-sm text-zinc-300">{description}</p>
           </div>
+          {onDismiss ? (
+            <button
+              type="button"
+              onClick={onDismiss}
+              aria-label={dismissLabel}
+              className="ui-focus-ring -mr-1 -mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-zinc-400 transition hover:bg-white/10 hover:text-white"
+            >
+              <X className="h-4 w-4" aria-hidden />
+            </button>
+          ) : null}
         </div>
         {action ? <div className="shrink-0">{action}</div> : null}
       </div>
@@ -442,10 +456,25 @@ export function StudioRemixNotice({
  * The creators' model notices: the selected model was retired or replaced,
  * unsupported settings were reset, or the model list failed to load. Same card
  * as StudioRemixNotice with a title of its own, because these show on any
- * creator page, not only on remixes.
+ * creator page, not only on remixes. Pass onDismiss for a one-off change; leave
+ * it off for a problem that clears itself once fixed, such as a retired model.
  */
-export function StudioModelNotice({ description }: { description: string }) {
-  return <StudioNoticeCard icon={SlidersHorizontal} label="Model settings" description={description} />;
+export function StudioModelNotice({
+  description,
+  onDismiss,
+}: {
+  description: string;
+  onDismiss?: () => void;
+}) {
+  return (
+    <StudioNoticeCard
+      icon={SlidersHorizontal}
+      label="Model settings"
+      description={description}
+      onDismiss={onDismiss}
+      dismissLabel="Dismiss model notice"
+    />
+  );
 }
 
 /**

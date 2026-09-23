@@ -1,9 +1,15 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateMotionClient from '@/app/create-motion/CreateMotionClient';
 
-const modelCatalogState = vi.hoisted(() => ({ missingIds: [] as string[] }));
+const modelCatalogState = vi.hoisted(() => ({
+  missingIds: [] as string[],
+  error: null as Error | null,
+  summaries: [] as Array<{ id: string; kind: string; displayName: string; description: string }>,
+}));
+const quoteState = vi.hoisted(() => ({ errorCode: null as string | null }));
+const generationCatalogRefetchMock = vi.hoisted(() => vi.fn());
 
 const maybeSingleMock = vi.fn(async () => ({ data: null, error: null }));
 const queryBuilder = {
@@ -74,7 +80,7 @@ vi.mock('@/lib/generation-model-client', async () => {
   return {
     ...actual,
     useWebGenerationModelCatalog: () => ({
-      summaries: [], missingIds: modelCatalogState.missingIds, detailsReady: true, isLoadingModels: false,
+      summaries: modelCatalogState.summaries, missingIds: modelCatalogState.missingIds, detailsReady: true, isLoadingModels: false,
       catalog: {
         revision: 'test-catalog-rev',
         schemaVersion: 1,
@@ -91,27 +97,49 @@ vi.mock('@/lib/generation-model-client', async () => {
           },
         ],
       },
-      error: null,
+      error: modelCatalogState.error,
       isLoading: false,
       revision: 'test-catalog-rev',
-      refetch: vi.fn(),
+      refetch: generationCatalogRefetchMock,
     }),
-    useWebGenerationModelQuote: () => ({
-      status: 'ready',
-      quote: {
-        modelId: 'kling-3.0',
-        catalogRevision: 'test-catalog-rev',
-        normalizedSettings: {},
-        costCredits: 20,
-      },
-      error: null,
-    }),
+    useWebGenerationModelQuote: () => (quoteState.errorCode
+      ? {
+        status: 'error',
+        quote: null,
+        error: new actual.WebCatalogRequestError('The model catalog changed.', 409, quoteState.errorCode),
+      }
+      : {
+        status: 'ready',
+        quote: {
+          modelId: 'kling-3.0',
+          catalogRevision: 'test-catalog-rev',
+          normalizedSettings: {},
+          costCredits: 20,
+        },
+        error: null,
+      }),
   };
 });
+
+const motionModelSummaries = [
+  { id: 'kling-3.0', kind: 'motion', displayName: 'Kling 3.0 Motion', description: 'Test motion model' },
+  { id: 'kling-2.6', kind: 'motion', displayName: 'Kling 2.6', description: 'Test stable motion model' },
+];
+
+function chooseModel(container: HTMLElement, displayName: string) {
+  const picker = container.querySelector<HTMLButtonElement>('button[aria-haspopup="listbox"]');
+  expect(picker).not.toBeNull();
+  fireEvent.click(picker!);
+  fireEvent.click(screen.getByRole('option', { name: new RegExp(displayName) }));
+}
 
 describe('CreateMotionClient model notices', () => {
   beforeEach(() => {
     modelCatalogState.missingIds = [];
+    modelCatalogState.error = null;
+    modelCatalogState.summaries = [];
+    quoteState.errorCode = null;
+    generationCatalogRefetchMock.mockClear();
     maybeSingleMock.mockClear();
     window.scrollTo = vi.fn();
   });
@@ -124,5 +152,56 @@ describe('CreateMotionClient model notices', () => {
     expect(await screen.findByText(/This model is no longer available/)).toBeInTheDocument();
     expect(screen.queryByText('Remixing Community Creation')).not.toBeInTheDocument();
     expect(screen.getByText('Model settings')).toBeInTheDocument();
+  });
+
+  it('clears the missing-model notice once another model is chosen', async () => {
+    modelCatalogState.missingIds = ['kling-3.0'];
+    modelCatalogState.summaries = motionModelSummaries;
+    const view = render(<CreateMotionClient prefill={{}} />);
+    expect(await screen.findByText(/This model is no longer available/)).toBeInTheDocument();
+
+    chooseModel(view.container, 'Kling 2.6');
+
+    await waitFor(() => {
+      expect(screen.queryByText(/This model is no longer available/)).not.toBeInTheDocument();
+    });
+  });
+
+  it('clears the load-error notice once the model list loads again', async () => {
+    modelCatalogState.error = new Error('Could not load models.');
+    const view = render(<CreateMotionClient prefill={{}} />);
+    expect(await screen.findByText('Could not load models.')).toBeInTheDocument();
+
+    modelCatalogState.error = null;
+    view.rerender(<CreateMotionClient prefill={{}} />);
+
+    await waitFor(() => {
+      expect(screen.queryByText('Could not load models.')).not.toBeInTheDocument();
+    });
+  });
+
+  it('lets the creator dismiss a catalog-changed notice', async () => {
+    quoteState.errorCode = 'CATALOG_CHANGED';
+    render(<CreateMotionClient prefill={{}} />);
+    expect(await screen.findByText(/Review the refreshed options/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss model notice' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Review the refreshed options/)).not.toBeInTheDocument();
+    });
+  });
+
+  it('clears a catalog-changed notice when the creator picks another model', async () => {
+    quoteState.errorCode = 'CATALOG_CHANGED';
+    modelCatalogState.summaries = motionModelSummaries;
+    const view = render(<CreateMotionClient prefill={{}} />);
+    expect(await screen.findByText(/Review the refreshed options/)).toBeInTheDocument();
+
+    chooseModel(view.container, 'Kling 2.6');
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Review the refreshed options/)).not.toBeInTheDocument();
+    });
   });
 });

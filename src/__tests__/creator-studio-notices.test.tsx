@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
 import { StudioModelNotice, StudioRemixNotice } from '@/components/CreatorStudio';
 
@@ -18,5 +18,16 @@ describe('creator studio notices', () => {
     expect(remixNotice).toHaveTextContent('Remixing Community Creation');
     expect(modelNotice).toHaveTextContent('Model settings');
     expect(modelNotice).not.toHaveTextContent('Remixing Community Creation');
+  });
+
+  it('offers a dismiss button only when the model notice can be dismissed', () => {
+    const onDismiss = vi.fn();
+    const view = render(<StudioModelNotice description="This model is no longer available." />);
+    expect(screen.queryByRole('button', { name: 'Dismiss model notice' })).not.toBeInTheDocument();
+
+    view.rerender(<StudioModelNotice description="Model settings changed." onDismiss={onDismiss} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss model notice' }));
+
+    expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });
