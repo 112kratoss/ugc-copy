@@ -443,7 +443,21 @@ export default function ShowcaseScreen() {
     loadingMoreRef.current = false;
     lastLoadMoreAtRef.current = 0;
     lastLoadMorePageCountRef.current = null;
+    // Another filter or tool is another feed, so it opens at the top, as a
+    // first visit does. The list keeps its offset across a data change, and a
+    // tool can arrive by link (a creator's tool) while this grid sits deep in
+    // the previous feed.
+    feedRef.current?.scrollToOffset({ offset: 0, animated: false });
   }, [activeFilterId, activeTool]);
+
+  // FlashList reports viewability by index, not by post: new posts landing on
+  // the indices already on screen (a filter switch to a cached feed, a
+  // refresh, a removed post) report nothing. The reset above would then leave
+  // the grid without a video, or the election would hold a post that has
+  // gone, until the next scroll. Recomputing reports the posts now there.
+  useEffect(() => {
+    if (cards.length) feedRef.current?.recomputeViewableItems();
+  }, [cards]);
 
   const clearToolFilter = () => {
     setActiveTool(null);
@@ -713,6 +727,14 @@ export default function ShowcaseScreen() {
         onMomentumScrollEnd={() => dispatchActivation({ type: 'momentumEnd' })}
         getItemType={(item) => item.mediaKind ?? item.item.category}
         keyExtractor={(item) => item.id}
+        // FlashList's default keeps whichever post is first on screen in place
+        // across a data change, finding it again by key. A filter switch is a
+        // new feed, though: Free's first post also sits further down All, so
+        // Free → All opened there rather than at the top. Off, little is lost:
+        // in this masonry a card that grows or leaves above the screen
+        // re-places every card after it, and pinning one card never held the
+        // rest still.
+        maintainVisibleContentPosition={{ disabled: true }}
         masonry
         numColumns={2}
         // Keep the ranked data array intact, but allow visual column placement
@@ -737,8 +759,15 @@ export default function ShowcaseScreen() {
           paddingHorizontal: FEED_HORIZONTAL_PADDING,
           paddingBottom: tabBarMetrics.contentBottomOverlapPadding + appTheme.spacing.section,
         }}
+        // The header keeps one height in every load state. FlashList offsets
+        // the first card by the header's height, but the render that delivers
+        // the first page still reads the height from before it, and the list's
+        // own record of where it is scrolled stays off by the difference until
+        // something scrolls. With the loading skeleton in here that put every
+        // card below the screen: nothing counted as viewable and no video
+        // started. Loading, failure and emptiness render in ListEmptyComponent.
         ListHeaderComponent={
-          <View style={{ gap: 14, paddingBottom: 16 }}>
+          <View style={{ paddingBottom: 16 }}>
             <View style={{ gap: 10 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                 {/* The edge swipe used to be the only way into the workspace
@@ -798,25 +827,25 @@ export default function ShowcaseScreen() {
                 ) : null}
               </ScrollView>
             </View>
-            {showcaseQuery.error && !hasItems ? (
-              <View style={{ gap: appTheme.spacing.gap }}>
-                <StatusBlock
-                  tone="danger"
-                  title="Could not load Explore"
-                  body={showcaseFeedErrorBody(showcaseQuery.error)}
-                />
-                <SecondaryButton label="Retry Explore" onPress={handleRefresh} />
-              </View>
-            ) : null}
-            {isFirstLoad ? <ShowcaseSkeletonGrid layout={gridLayout} /> : null}
           </View>
         }
         ListEmptyComponent={
-          !isFirstLoad && !showcaseQuery.error && !hasItems ? (
+          showcaseQuery.error ? (
+            <View style={{ gap: appTheme.spacing.gap }}>
+              <StatusBlock
+                tone="danger"
+                title="Could not load Explore"
+                body={showcaseFeedErrorBody(showcaseQuery.error)}
+              />
+              <SecondaryButton label="Retry Explore" onPress={handleRefresh} />
+            </View>
+          ) : isFirstLoad ? (
+            <ShowcaseSkeletonGrid layout={gridLayout} />
+          ) : (
             <StatusBlock title="No posts loaded" body={activeToolLabel
               ? `No posts made with ${activeToolLabel} matched this view.`
               : `No posts matched ${activeFilter.label.toLowerCase()} yet. Pull to refresh or switch filters.`} />
-          ) : null
+          )
         }
         ListFooterComponent={
           isFirstLoad ? null

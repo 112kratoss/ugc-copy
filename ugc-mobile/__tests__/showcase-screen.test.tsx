@@ -8,14 +8,29 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
 const queryState = vi.hoisted(() => ({
+  error: null as Error | null,
   fetchNextPage: vi.fn(() => Promise.resolve()),
   filter: 'all',
   hasNextPage: false,
   isFetchNextPageError: false,
   isFetching: false,
   isFetchingNextPage: false,
+  isLoading: false,
   pages: [{ items: [], pageInfo: { hasMore: false, nextOffset: null } }] as Array<Record<string, unknown>>,
   refetch: vi.fn(() => Promise.resolve()),
+  tool: undefined as string | undefined,
+}));
+
+// One object for every render, as the real context provides: a fresh `user`
+// per render would rebuild the grid's cards each time.
+const authState = vi.hoisted(() => ({
+  api: {
+    blockUser: vi.fn(),
+    recordShowcaseFeedEvent: vi.fn(() => Promise.resolve()),
+    reportPost: vi.fn(),
+    reportUser: vi.fn(),
+  },
+  user: { id: 'viewer-1' },
 }));
 
 vi.mock('@shopify/flash-list', () => ({
@@ -28,13 +43,13 @@ vi.mock('@tanstack/react-query', () => ({
       pages: queryState.pages,
       pageParams: [{ offset: 0 }],
     },
-    error: null,
+    error: queryState.error,
     fetchNextPage: queryState.fetchNextPage,
     hasNextPage: queryState.hasNextPage,
     isFetchNextPageError: queryState.isFetchNextPageError,
     isFetching: queryState.isFetching,
     isFetchingNextPage: queryState.isFetchingNextPage,
-    isLoading: false,
+    isLoading: queryState.isLoading,
     isRefetching: false,
     refetch: queryState.refetch,
   }),
@@ -51,7 +66,7 @@ vi.mock('expo-router', () => ({
     push: vi.fn(),
     setParams: vi.fn(),
   },
-  useLocalSearchParams: () => ({ filter: queryState.filter }),
+  useLocalSearchParams: () => ({ filter: queryState.filter, tool: queryState.tool }),
 }));
 
 vi.mock('@react-navigation/native', () => ({
@@ -130,8 +145,11 @@ vi.mock('@/components/ui', () => ({
 }));
 
 vi.mock('@/components/workspace-side-menu-gesture-layer', () => ({
+  WORKSPACE_SIDE_MENU_LABEL: 'Open workspace menu',
   WorkspaceSideMenuGestureLayer: ({ children, ...props }: MockProps) =>
     React.createElement('workspace-side-menu-gesture-layer', props, children),
+  WorkspaceSideMenuGlyph: (props: MockProps) => React.createElement('workspace-side-menu-glyph', props),
+  useWorkspaceSideMenu: () => null,
 }));
 
 vi.mock('@/components/reveal', () => ({
@@ -143,15 +161,7 @@ vi.mock('@/components/skeleton', () => ({
 }));
 
 vi.mock('@/lib/auth', () => ({
-  useAuth: () => ({
-    api: {
-      blockUser: vi.fn(),
-      recordShowcaseFeedEvent: vi.fn(() => Promise.resolve()),
-      reportPost: vi.fn(),
-      reportUser: vi.fn(),
-    },
-    user: { id: 'viewer-1' },
-  }),
+  useAuth: () => authState,
 }));
 
 vi.mock('@/lib/feed-event-queue', () => ({
@@ -206,9 +216,56 @@ function feedItem() {
   };
 }
 
+/** The props the screen hands FlashList in the current query state. */
+function flashListProps() {
+  let tree: renderer.ReactTestRenderer | undefined;
+  renderer.act(() => {
+    tree = renderer.create(<ShowcaseScreen />);
+  });
+  const props = tree!.root.find((node) => String(node.type) === 'flash-list').props;
+  renderer.act(() => tree!.unmount());
+  return props;
+}
+
+/** Draws one of those props on its own, as FlashList would. */
+function renderAlone(element: React.ReactNode) {
+  let tree: renderer.ReactTestRenderer | undefined;
+  renderer.act(() => {
+    tree = renderer.create(<>{element}</>);
+  });
+  return tree!;
+}
+
+type Shape = string | { type: string; children: Shape[] };
+
+/** What a rendered tree is made of, host types and text, leaving out how it is styled. */
+function shapeOf(element: React.ReactNode): Shape[] {
+  const tree = renderAlone(element);
+  const shape = toShapes(tree.toJSON());
+  renderer.act(() => tree.unmount());
+  return shape;
+}
+
+function toShapes(node: renderer.ReactTestRendererNode | renderer.ReactTestRendererJSON[] | null): Shape[] {
+  if (node === null) return [];
+  if (typeof node === 'string') return [node];
+  if (Array.isArray(node)) return node.flatMap(toShapes);
+  return [{ type: node.type, children: (node.children ?? []).flatMap(toShapes) }];
+}
+
+/** The filter chip with this label in a rendered list header. */
+function filterChip(header: renderer.ReactTestRenderer, label: string) {
+  return header.root.find((node) => (
+    String(node.type) === 'pressable'
+    && node.props.accessibilityState !== undefined
+    && node.findAll((child) => String(child.type) === 'text' && child.props.children === label).length > 0
+  ));
+}
+
 describe('Showcase screen', () => {
   beforeEach(() => {
     vi.mocked(Image.loadAsync).mockClear();
+    queryState.error = null;
     queryState.fetchNextPage.mockClear();
     queryState.refetch.mockClear();
     queryState.filter = 'all';
@@ -216,7 +273,113 @@ describe('Showcase screen', () => {
     queryState.isFetchNextPageError = false;
     queryState.isFetching = false;
     queryState.isFetchingNextPage = false;
+    queryState.isLoading = false;
     queryState.pages = [{ items: [], pageInfo: { hasMore: false, nextOffset: null } }];
+    queryState.tool = undefined;
+  });
+
+  it('keeps the list header one height while the feed loads, fails or comes back empty', () => {
+    // FlashList offsets the first card by the header's height, but the render
+    // that delivers the first page reads the height from before it. With the
+    // loading skeleton in the header, a cold first visit left every card
+    // "below the screen": nothing was viewable and no video played until a
+    // scroll. Whatever the load state shows has to live below the header.
+    queryState.pages = [{ items: [feedItem()], pageInfo: { hasMore: false, nextOffset: null } }];
+    const loaded = flashListProps();
+
+    queryState.pages = [];
+    queryState.isLoading = true;
+    const loading = flashListProps();
+
+    queryState.isLoading = false;
+    queryState.error = new Error('Network request failed');
+    const failed = flashListProps();
+
+    queryState.error = null;
+    const empty = flashListProps();
+
+    const header = shapeOf(loaded.ListHeaderComponent);
+    expect(shapeOf(loading.ListHeaderComponent)).toEqual(header);
+    expect(shapeOf(failed.ListHeaderComponent)).toEqual(header);
+    expect(shapeOf(empty.ListHeaderComponent)).toEqual(header);
+
+    const skeleton = renderAlone(loading.ListEmptyComponent);
+    expect(skeleton.root.findAll((node) => String(node.type) === 'skeleton-bone').length).toBeGreaterThan(0);
+    renderer.act(() => skeleton.unmount());
+
+    const failure = renderAlone(failed.ListEmptyComponent);
+    expect(failure.root.findByProps({ title: 'Could not load Explore' }).props.tone).toBe('danger');
+    expect(failure.root.findAllByProps({ label: 'Retry Explore' })).not.toHaveLength(0);
+    renderer.act(() => failure.unmount());
+  });
+
+  it('recomputes viewability when new posts land on the indices already on screen', () => {
+    // FlashList reports viewability by index. A filter switch to a cached feed
+    // puts different posts at the same indices and reports nothing, which left
+    // the grid with no video after the filter reset its election.
+    const recomputeViewableItems = vi.fn();
+    queryState.pages = [{ items: [feedItem()], pageInfo: { hasMore: false, nextOffset: null } }];
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ShowcaseScreen />, {
+        createNodeMock: (element) => (
+          String(element.type) === 'flash-list' ? { recomputeViewableItems, scrollToOffset: vi.fn() } : null
+        ),
+      });
+    });
+
+    // A render that leaves the posts alone has nothing new to report.
+    recomputeViewableItems.mockClear();
+    renderer.act(() => tree!.update(<ShowcaseScreen />));
+    expect(recomputeViewableItems).not.toHaveBeenCalled();
+
+    queryState.pages = [{
+      items: [{ ...feedItem(), id: 'post-2', title: 'Landscape' }],
+      pageInfo: { hasMore: false, nextOffset: null },
+    }];
+    renderer.act(() => tree!.update(<ShowcaseScreen />));
+    expect(recomputeViewableItems).toHaveBeenCalledTimes(1);
+
+    renderer.act(() => tree!.unmount());
+  });
+
+  it('opens another filter or tool at the top of its feed', () => {
+    // FlashList v2 keeps whichever post is first on screen in place across a
+    // data change unless maintainVisibleContentPosition is disabled. Free's
+    // first post also sits further down All, so switching Free → All to the
+    // cached All feed opened it mid-way down instead of at the top.
+    const list = { recomputeViewableItems: vi.fn(), scrollToOffset: vi.fn() };
+    queryState.pages = [{ items: [feedItem()], pageInfo: { hasMore: false, nextOffset: null } }];
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ShowcaseScreen />, {
+        createNodeMock: (element) => (String(element.type) === 'flash-list' ? list : null),
+      });
+    });
+
+    const flashList = tree!.root.find((node) => String(node.type) === 'flash-list');
+    expect(flashList.props.maintainVisibleContentPosition).toEqual({ disabled: true });
+
+    // Without that anchor the list keeps its offset, so a new feed has to go
+    // to the top itself: from a chip, and from a link that sets a tool, which
+    // can arrive while the grid is deep in the previous feed.
+    list.scrollToOffset.mockClear();
+    const header = renderAlone(flashList.props.ListHeaderComponent);
+    renderer.act(() => filterChip(header, 'Free').props.onPress());
+    renderer.act(() => header.unmount());
+    expect(list.scrollToOffset).toHaveBeenCalledTimes(1);
+    expect(list.scrollToOffset).toHaveBeenCalledWith({ offset: 0, animated: false });
+
+    list.scrollToOffset.mockClear();
+    renderer.act(() => tree!.update(<ShowcaseScreen />));
+    expect(list.scrollToOffset).not.toHaveBeenCalled();
+
+    queryState.tool = 'seedance';
+    renderer.act(() => tree!.update(<ShowcaseScreen />));
+    expect(list.scrollToOffset).toHaveBeenCalledTimes(1);
+    expect(list.scrollToOffset).toHaveBeenCalledWith({ offset: 0, animated: false });
+
+    renderer.act(() => tree!.unmount());
   });
 
   it('does not load every cached preview just to measure missing dimensions', async () => {
