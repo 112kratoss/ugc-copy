@@ -342,3 +342,38 @@ describe('a player held on its tile while iOS\'s zoom carries it up', () => {
     expect(isVideoLoanHeld(tile, url)).toBe(false);
   });
 });
+
+describe('a player leaving the reel', () => {
+  // Feed tiles are silent; the reel turns a lent player's sound on.
+  it('is silent the moment it is handed back, before any tile takes it', () => {
+    const player = adoptedPlayer();
+    player.muted = false;
+
+    handBackVideoPlayer(player, TILE, STREAM);
+
+    expect(player.muted).toBe(true);
+  });
+
+  it('goes back silent to a tile that still holds it', () => {
+    const player = fakePlayer();
+    const giveBack = vi.fn(() => expect(player.muted).toBe(true));
+    lendVideoPlayer(player, giveBack);
+    adoptVideoPlayer(player);
+    player.muted = false;
+
+    releaseAdoptedVideoPlayer(player);
+
+    expect(giveBack).toHaveBeenCalledTimes(1);
+    expect(player.muted).toBe(true);
+  });
+
+  it('is silent when released because its tile has gone', () => {
+    const player = adoptedPlayer();
+    player.muted = false;
+
+    releaseAdoptedVideoPlayer(player);
+
+    expect(player.muted).toBe(true);
+    expect(player.pause).toHaveBeenCalledTimes(1);
+  });
+});

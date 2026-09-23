@@ -132,6 +132,7 @@ import type { PostLifecycleVisibility } from '@/lib/post-lifecycle-policy';
 import { flattenProfileOwnerPostPages, profileOwnerPostsQueryOptions } from '@/lib/profile-media-query';
 import { isProfileLibrarySource, useProfileLibrarySource } from '@/lib/use-profile-library-source';
 import { applyPostVisibilityToCaches } from '@/lib/viewer-media-cache';
+import { useScreenLeaving } from '@/lib/use-screen-leaving';
 import { useViewerPlaybackGate } from '@/lib/use-viewer-playback-gate';
 import { useStableSignedUrl } from '@/lib/use-stable-signed-url';
 import { verticalHitSlop } from '@/lib/hit-target';
@@ -175,6 +176,8 @@ const VIEWER_PLAY_BADGE_SIZE = 72;
 const NEIGHBOUR_PLAYERS_DELAY_MS = 400;
 
 const ViewerPlaybackContext = createContext<ReturnType<typeof createViewerPlaybackHandoff> | null>(null);
+/** The reel has started to go off screen (lib/use-screen-leaving.ts): its videos are silent from then on. */
+const ViewerLeavingContext = createContext(false);
 
 export default function ImmersivePreviewViewerScreen() {
   const params = useLocalSearchParams<ViewerParams>();
@@ -193,6 +196,7 @@ export default function ImmersivePreviewViewerScreen() {
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
   const [playbackHandoff] = useState(createViewerPlaybackHandoff);
+  const leaving = useScreenLeaving();
   const reducedMotion = useReducedMotion();
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -1033,6 +1037,7 @@ export default function ImmersivePreviewViewerScreen() {
 
   return (
     <ViewerPlaybackContext.Provider value={playbackHandoff}>
+    <ViewerLeavingContext.Provider value={leaving}>
     {/* The reel is drawn inside a window that grows out of the tapped tile and
         shrinks back into it, so opening a post reads as that post getting
         bigger rather than as another screen arriving. */}
@@ -1332,6 +1337,7 @@ export default function ImmersivePreviewViewerScreen() {
       ) : null}
     </View>
     </MediaZoomStage>
+    </ViewerLeavingContext.Provider>
     </ViewerPlaybackContext.Provider>
   );
 }
@@ -2264,9 +2270,15 @@ function ActiveVideoAttempt({
   const timedOut = useVideoLoadDeadline(player, status);
   const playbackFailed = hasError || timedOut;
 
+  // Silent as soon as the reel starts to leave. A back swipe or a zoom's drag
+  // removes the reel only once its transition is over, and until then this
+  // player kept its sound: on the iPhone it went on for up to a second after
+  // the reel had gone. Only the sound stops: the picture keeps moving into the
+  // tile the reel shrinks back to, and a swipe let go of early brings it back.
+  const leaving = useContext(ViewerLeavingContext);
   useEffect(() => {
-    player.muted = !active || audioMuted;
-  }, [active, audioMuted, player]);
+    player.muted = !active || audioMuted || leaving;
+  }, [active, audioMuted, leaving, player]);
 
   // Lets the reel's scroll-end handler start this player before the
   // activation render reaches it (see lib/viewer-playback-handoff.ts).
