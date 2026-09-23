@@ -8,11 +8,9 @@ vi.mock('react-native', () => ({
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
 }));
 
-vi.mock('expo-linear-gradient', () => ({
-  LinearGradient: ({ children, ...props }: MockProps) => React.createElement('linear-gradient', props, children),
-}));
-
 import { BAND_BLUR_RADIUS, LetterboxBands } from '../components/letterbox-bands';
+import { hexWithAlpha } from '../lib/eased-fade';
+import { LETTERBOX_EDGE_ALPHA } from '../lib/letterbox';
 
 // A portrait frame around a landscape picture: a band above and one below.
 const frame = { width: 400, height: 800 };
@@ -24,6 +22,13 @@ function render(element: React.ReactElement) {
     tree = renderer.create(element);
   });
   return tree;
+}
+
+/** The bands' shades: views drawn with React Native's own gradient. */
+function shades(tree: renderer.ReactTestRenderer): string[] {
+  return tree.root
+    .findAll((node) => node.type === 'view' && typeof node.props.style?.experimental_backgroundImage === 'string')
+    .map((node) => node.props.style.experimental_backgroundImage);
 }
 
 describe('LetterboxBands', () => {
@@ -48,7 +53,23 @@ describe('LetterboxBands', () => {
       expect(image.props.contentFit).toBe('fill');
       expect(image.props.style.transform).toEqual([{ scaleY: -1 }]);
     }
-    expect(tree.root.findAllByType('linear-gradient' as never)).toHaveLength(2);
+    expect(shades(tree)).toHaveLength(2);
+  });
+
+  it('shades each band darkest at its frame edge, running towards the picture', () => {
+    // Above and below a landscape picture, then either side of a square one.
+    const portrait = shades(render(<LetterboxBands frame={frame} aspectRatio={aspectRatio} source={null} />));
+    const landscape = shades(render(<LetterboxBands frame={{ width: 800, height: 400 }} aspectRatio={1} source={null} />));
+    expect([...portrait, ...landscape].map((shade) => shade.slice(0, shade.indexOf(',')))).toEqual([
+      'linear-gradient(to bottom',
+      'linear-gradient(to top',
+      'linear-gradient(to right',
+      'linear-gradient(to left',
+    ]);
+    for (const shade of [...portrait, ...landscape]) {
+      expect(shade).toContain(`, ${hexWithAlpha('#000000', LETTERBOX_EDGE_ALPHA)} 0%, `);
+      expect(shade.endsWith(', #00000000 100%)')).toBe(true);
+    }
   });
 
   it('blurs a picture without a thumbhash, as the bands always have', () => {
@@ -75,13 +96,13 @@ describe('LetterboxBands', () => {
       />
     );
     expect(tree.root.findAllByType('image')).toHaveLength(0);
-    expect(tree.root.findAllByType('linear-gradient' as never)).toHaveLength(2);
+    expect(shades(tree)).toHaveLength(2);
   });
 
   it('draws only the shade without a picture and nothing for a picture of unknown shape', () => {
     const shadeOnly = render(<LetterboxBands frame={frame} aspectRatio={aspectRatio} source={null} />);
     expect(shadeOnly.root.findAllByType('image')).toHaveLength(0);
-    expect(shadeOnly.root.findAllByType('linear-gradient' as never)).toHaveLength(2);
+    expect(shades(shadeOnly)).toHaveLength(2);
 
     const unknown = render(
       <LetterboxBands frame={frame} aspectRatio={null} source={{ uri: 'https://cdn.example.com/preview.webp', thumbhash: 'th' }} />

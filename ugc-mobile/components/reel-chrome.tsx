@@ -1,5 +1,4 @@
 import { Image } from 'expo-image';
-import { LinearGradient } from 'expo-linear-gradient';
 import { FileText, Globe, Heart, Images, LockKeyhole, MessageCircle, MoreHorizontal, Repeat2, Wand2 } from 'lucide-react-native';
 import { cloneElement, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { ActivityIndicator, Animated, Easing, Pressable, Text, View } from 'react-native';
@@ -35,6 +34,19 @@ import { renderReelIcon } from '@/components/reel-icon';
 
 /** The creator byline reads as a single line of text; its reach is widened rather than its height. */
 const CREATOR_ROW_HEIGHT = 34;
+
+/**
+ * The shade behind the caption and the rail, as React Native's own gradient,
+ * which on iOS is a CAGradientLayer that the render server draws.
+ * expo-linear-gradient painted each shade into a bitmap on the main thread
+ * whenever its view appeared or changed size, and a reel opening does both:
+ * the slide and its neighbours mount their shades, each grows to its caption
+ * once that is measured, and the top shade and any letterbox bands come too.
+ * On the iPhone 16e that was 16–27 ms of painting at every open and every
+ * swipe, more than a 60 Hz frame. On Android both draw through a shader, with
+ * the same pixels.
+ */
+const CAPTION_SCRIM = 'linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.42) 42%, rgba(0,0,0,0.84) 100%)';
 
 export const REEL_TEXT_SHADOW = {
   textShadowColor: 'rgba(0,0,0,0.55)',
@@ -106,11 +118,9 @@ export function ReelSlideChrome({
 
   return (
     <>
-      <LinearGradient
+      <View
         pointerEvents="none"
-        colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.42)', 'rgba(0,0,0,0.84)']}
-        locations={[0, 0.42, 1]}
-        style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: scrimHeight }}
+        style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: scrimHeight, experimental_backgroundImage: CAPTION_SCRIM }}
       />
 
       {/* Media count indicator. The trailing half of the viewer's badge row —

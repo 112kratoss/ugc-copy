@@ -29,3 +29,16 @@ export function hexWithAlpha(hex: string, alpha: number) {
   const clamped = Math.min(1, Math.max(0, alpha));
   return `${hex.slice(0, 7)}${Math.round(clamped * 255).toString(16).padStart(2, '0')}`;
 }
+
+/**
+ * Colour stops as a CSS linear gradient, for React Native's own gradient
+ * (`experimental_backgroundImage`), with each stop's position `at` (0–1) along
+ * the gradient written as a percentage.
+ */
+export function linearGradient(
+  direction: 'to top' | 'to bottom' | 'to left' | 'to right',
+  stops: readonly { color: string; at: number }[],
+) {
+  const list = stops.map(({ color, at }) => `${color} ${Number((at * 100).toFixed(4))}%`);
+  return `linear-gradient(${direction}, ${list.join(', ')})`;
+}

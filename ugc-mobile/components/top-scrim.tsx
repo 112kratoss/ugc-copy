@@ -1,6 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
+import { View } from 'react-native';
 
-import { hexWithAlpha } from '@/lib/eased-fade';
+import { hexWithAlpha, linearGradient } from '@/lib/eased-fade';
 import { appTheme } from '@/lib/theme';
 import { viewerTopScrim } from '@/lib/viewer-chrome';
 
@@ -22,18 +23,18 @@ import { viewerTopScrim } from '@/lib/viewer-chrome';
  * The `media` variant is the reel's: over a full-bleed photo it has to keep the
  * clock readable on white, and it reaches down behind the reel's control row
  * with an eased fade — see `viewerTopScrim`, which `hig-full-screen.test.ts`
- * holds to both.
+ * holds to both. It mounts as the reel opens, so it is React Native's own
+ * gradient, as the reel's other shades are (`components/reel-chrome.tsx` says why).
  */
 export function TopScrim({ topInset, over = 'app' }: { topInset: number; over?: 'app' | 'media' }) {
   const ground = appTheme.colors.background;
   if (over === 'media') {
     const { height, stops } = viewerTopScrim(topInset);
+    const shade = linearGradient('to bottom', stops.map((stop) => ({ color: hexWithAlpha(ground, stop.alpha), at: stop.offset / height })));
     return (
-      <LinearGradient
-        colors={stops.map((stop) => hexWithAlpha(ground, stop.alpha)) as [string, string, ...string[]]}
-        locations={stops.map((stop) => stop.offset / height) as [number, number, ...number[]]}
+      <View
         pointerEvents="none"
-        style={{ position: 'absolute', top: 0, left: 0, right: 0, height }}
+        style={{ position: 'absolute', top: 0, left: 0, right: 0, height, experimental_backgroundImage: shade }}
       />
     );
   }
