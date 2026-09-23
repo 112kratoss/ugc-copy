@@ -8,6 +8,7 @@ Live runbooks are at the root of this folder; everything dated or reference-only
 - [local-development.md](local-development.md) — local Supabase stack and the dev server.
 - [supabase-local-prod-workflow.md](supabase-local-prod-workflow.md) — migrations and local/production parity.
 - [generation-model-catalog-operations.md](generation-model-catalog-operations.md) — model catalog releases: validate, stage, publish, rollback.
+- [model-onboarding.md](model-onboarding.md) — adding a generation model end to end: provider checks, code registration, the release, rollout.
 - [moderation-operations.md](moderation-operations.md) — staffed moderation queue and the service-role CLI.
 - [mobile-store-product-catalog.md](mobile-store-product-catalog.md) — IAP tier provisioning.
 - [post-resource-bundle-v1.md](post-resource-bundle-v1.md) — paid resource bundles.
