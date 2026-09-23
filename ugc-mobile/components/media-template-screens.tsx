@@ -60,7 +60,7 @@ import {
 } from '@/lib/template-run-resume';
 import { formatCreditAmount } from '@/lib/pricing';
 import { hexWithAlpha } from '@/lib/eased-fade';
-import { appTheme, mediaColors } from '@/lib/theme';
+import { appTheme, mediaColors, themes } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import { invalidateActiveGenerations } from '@/lib/active-generations';
 import type {
@@ -227,14 +227,15 @@ function TemplatePoster({ template, previewAttempt, onPreviewError }: {
           locations={[0.35, 0.58, 1]}
           style={{ position: 'absolute', inset: 0, justifyContent: 'flex-end', padding: 18, gap: 6 }}
         >
+          {/* On the gradient's black foot, so the dark palette in both schemes. */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
             <View style={{ width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(mediaColors.onMedia, 0.14) }}>
-              <Play size={16} fill={theme.colors.text} color={theme.colors.text} />
+              <Play size={16} fill={themes.dark.colors.text} color={themes.dark.colors.text} />
             </View>
-            <Kicker color={theme.colors.primary}>{template.outputKind} template</Kicker>
+            <Kicker color={themes.dark.colors.primary}>{template.outputKind} template</Kicker>
           </View>
-          <AppText variant="sectionTitle" numberOfLines={2}>{template.name}</AppText>
-          <AppText variant="caption" color={theme.colors.textSecondary} numberOfLines={1}>by {creatorName(template)}</AppText>
+          <AppText variant="sectionTitle" color={themes.dark.colors.text} numberOfLines={2}>{template.name}</AppText>
+          <AppText variant="caption" color={themes.dark.colors.textSecondary} numberOfLines={1}>by {creatorName(template)}</AppText>
         </LinearGradient>
       </View>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>

@@ -18,7 +18,7 @@ import {
 } from '@/lib/media-recovery';
 import { useMediaSource } from '@/lib/use-media-source';
 import { hexWithAlpha } from '@/lib/eased-fade';
-import { appTheme, mediaColors } from '@/lib/theme';
+import { appTheme, mediaColors, themes } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
 export function MediaPreview({
@@ -431,6 +431,9 @@ function MediaFallback({
     gap: 8,
     overflow: 'hidden' as const,
   };
+  // Over the dimmed thumbhash the plate is dark whatever the scheme, so its text
+  // takes the dark palette; on the bare plate it follows the app.
+  const ink = thumbhash ? themes.dark.colors : theme.colors;
 
   const content = (
     <>
@@ -446,10 +449,10 @@ function MediaFallback({
           <View pointerEvents="none" style={{ position: 'absolute', inset: 0, backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.55) }} />
         </>
       ) : null}
-      <ImageOff size={28} color={theme.colors.faint} />
-      <Text style={{ color: theme.colors.textSecondary, fontSize: 12, fontWeight: '800' }}>{label}</Text>
+      <ImageOff size={28} color={ink.faint} />
+      <Text style={{ color: ink.textSecondary, fontSize: 12, fontWeight: '800' }}>{label}</Text>
       {onRetry ? (
-        <Text style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '700' }}>
+        <Text style={{ color: ink.faint, fontSize: 11, fontWeight: '700' }}>
           {renewing ? 'Refreshing image…' : retrying ? 'Trying again…' : 'Tap to retry'}
         </Text>
       ) : null}

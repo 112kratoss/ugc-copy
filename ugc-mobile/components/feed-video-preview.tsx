@@ -29,7 +29,7 @@ import {
 import { MEDIA_DISPLAY_DEADLINE_MS } from '@/lib/media-recovery';
 import { useMediaSource } from '@/lib/use-media-source';
 import { hexWithAlpha } from '@/lib/eased-fade';
-import { appTheme, mediaColors } from '@/lib/theme';
+import { appTheme, mediaColors, themes } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import {
   beginPlaybackStall,
@@ -369,7 +369,8 @@ export function FeedVideoPreview({
               backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.55),
             }}
           >
-            <ActivityIndicator color={theme.colors.text} />
+            {/* On the video's dark chip, so the dark scheme's ink in both schemes. */}
+            <ActivityIndicator color={themes.dark.colors.text} />
           </View>
         </View>
       ) : null}

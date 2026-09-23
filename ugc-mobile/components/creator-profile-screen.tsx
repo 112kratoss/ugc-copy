@@ -38,7 +38,7 @@ import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from '@/lib/showca
 import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
 import { CreatorProfileSkeleton } from '@/components/skeleton';
 import { hexWithAlpha } from '@/lib/eased-fade';
-import { accentColor, appTheme, mediaColors } from '@/lib/theme';
+import { accentColor, appTheme, mediaColors, themes } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { CreatorProfileResponse, ShowcaseFeedItem } from '@/lib/types';
 import { buildShareUrl } from '@/lib/viewer-actions';
@@ -573,7 +573,7 @@ function CreatorTabs({ activeTab, data, onChange }: { activeTab: CreatorProfileT
   };
 
   return (
-    <View style={{ flexDirection: 'row', gap: 4, borderRadius: 18, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.overlayStrong, padding: 4 }}>
+    <View style={{ flexDirection: 'row', gap: 4, borderRadius: 18, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surfaceInset, padding: 4 }}>
       {CREATOR_PROFILE_TABS.map((tab) => {
         const active = activeTab === tab.id;
         return (
@@ -633,14 +633,15 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><ImageIcon size={appTheme.icon.hero} color={theme.colors.faint} /></View>
           )}
           {hasVideo ? (
-            <View style={{ position: 'absolute', top: 8, right: 8, width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.overlay }}>
+            <View style={{ position: 'absolute', top: 8, right: 8, width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: themes.dark.colors.overlay }}>
               <Play size={appTheme.icon.sm} color={mediaColors.onMedia} fill={mediaColors.onMedia} />
             </View>
           ) : null}
+          {/* The badges sit on the picture, so they keep the dark scheme's chip and accent whatever the phone uses. */}
           {item.asset ? (
-            <View style={{ position: 'absolute', top: 8, left: 8, maxWidth: '72%', flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.overlayStrong, paddingHorizontal: 8, paddingVertical: 5 }}>
-              <Lock size={appTheme.icon.xs} color={theme.colors.commerce} />
-              <Text numberOfLines={1} style={{ color: theme.colors.commerce, ...appTheme.type.caption, fontWeight: '700' }}>
+            <View style={{ position: 'absolute', top: 8, left: 8, maxWidth: '72%', flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: themes.dark.colors.overlayStrong, paddingHorizontal: 8, paddingVertical: 5 }}>
+              <Lock size={appTheme.icon.xs} color={themes.dark.colors.commerce} />
+              <Text numberOfLines={1} style={{ color: themes.dark.colors.commerce, ...appTheme.type.caption, fontWeight: '700' }}>
                 {item.asset.accessMode === 'free' ? 'Free' : item.asset.priceQuote?.formatted ?? 'Unlock'}
               </Text>
             </View>

@@ -2,8 +2,8 @@
 
 Status: implemented on branch `feat/mobile-light-mode` (2026-09-23), not yet merged.
 - It ships with the next store build, 0.1.6. The native half cannot go over the air (see Shipping).
-- Verified on the iOS 26.4 simulator against production data, including a dev client built from this branch. Test suite green: 264 files, 2,562 tests.
-- Still open: the Android and iPhone device passes, and the store build (§7).
+- Verified on the iOS 26.4 simulator and the Android 16 emulator against production data, each with a dev client built from this branch. Test suite green: 264 files, 2,564 tests.
+- Still open: the iPhone device pass and the store build (see "Still to do before release").
 
 Scope: `ugc-mobile/` only. The web app keeps `color-scheme: dark`.
 
@@ -70,6 +70,7 @@ Scope: `ugc-mobile/` only. The web app keeps `color-scheme: dark`.
   - shared static tokens;
   - `appTheme` carrying no colours.
 - `theme-color-literals.test.ts` — no raw colour literal anywhere. The budget table is empty; `EXEMPT` names each file whose colours are the point: the reel, the lightbox, onboarding, the dock maths, letterbox shading and the web shell. It also pins each dark surface inside its dark scope.
+- The same file fails a scheme colour drawn on a picture's dark overlay: a `mediaColors` background or a gradient with a dark foot, followed within a few lines by a `theme.colors` foreground. What sits on a picture takes `themes.dark.colors` or `mediaColors`.
 - `appearance.test.ts`, `system-bars.test.tsx`, `appearance-native-config.test.ts`, and additions to `settings-screen`, `tab-bar-ambient` and `auth-screen-apple` (white Apple button on dark, black on light).
 
 ## Verified on the simulator (iOS 26.4, production data)
@@ -93,6 +94,35 @@ This is a dev client built from this branch: Info.plist `Automatic`, the new spl
 - **System follows the phone live, both directions,** under iOS's own appearance crossfade. The Home video keeps playing through the switch.
 - **A change made while backgrounded is taken on return,** with no dark frame first.
 
+### On the Android emulator (2026-09-24)
+
+This used a dev client built from this branch, on the Pixel 9a emulator (Android 16, API 36) switched to 3-button navigation. The emulator's settings and its dev client were restored afterwards. Contrast figures were measured from screenshots.
+
+- **Settings → Appearance** switches the app in the same frame, in every direction:
+  - A Light choice holds on a dark phone.
+  - On System, the app follows the phone live, both ways. The copy reads "Matches your phone — light right now".
+- **The 3-button navigation bar follows the surface every time.** Dark icons on light (4.6–5.7:1), light icons on dark (17.7:1). The reel opened from a light grid turns them light, and closing it hands them back.
+- **Light surfaces:**
+  - Home, Explore, Settings, the side menu, a creator page and the dock are on paper, with dark status-bar icons.
+  - Home's top fade runs from paper into the feed.
+- **The Google button on paper** is Google's dark artwork, which matches the black Apple button on light. Kept.
+- **The splash colours are in the built APK:** `splashscreen_background` is `#fbf8f4`, and `#000000` at night. A dev client puts its own launcher windows in front of the splash, so the moment itself is for the store build.
+- **The letterbox question is closed.**
+  - Feed cards size each frame to its media, and Explore crops pictures to fill. Only a video whose real shape differs from its recorded one shows the dimmed, blurred edge, and none did in about 20 cards.
+  - The black bars on one Explore tile are in that picture itself.
+- **Bugs found and fixed:**
+  - The creator page's Posts/Recipes/Tools track used the `overlayStrong` scrim, which is a dark grey on paper (1.26:1 labels). It now matches the other segmented controls, `surfaceInset` with a `border` (7.1:1 light, 7.9:1 dark). This makes the dark track a hair lighter.
+  - Scheme colours drawn on pictures' dark overlays:
+    - the creator tile's price and lock chip;
+    - the edit-profile "Change cover" pill;
+    - a feed video's loading spinner;
+    - the image error plate over its thumbhash;
+    - a template's title card.
+    They take `themes.dark.colors` now, and the new guard above catches the pattern.
+- **An Android build from a clean worktree needs about 10 GB free.**
+  - It compiles React Native's Android code from source (the repo patches it), about 2.5 GB of intermediates.
+  - expo-updates' CMake step has no `ndkVersion`, so the Android Gradle Plugin installs its default NDK 27.0.12077973 (about 3 GB). That is the "stale" NDK that keeps coming back after disk cleanups.
+
 ## Shipping
 
 - **Fingerprint.** `app.json` (automatic, splash) and `package.json` (expo-navigation-bar) are fingerprint inputs on both platforms.
@@ -102,11 +132,7 @@ This is a dev client built from this branch: Info.plist `Automatic`, the new spl
 
 ## Still to do before release
 
-1. **Android pass** on the emulator or the S24, which needs a new dev build.
-   - The 3-button navigation bar across a switch and in the reel.
-   - The light dock.
-   - The Google button on paper.
-   - The letterbox shade in light feed cards: the owner decides whether to keep the black edge or fade it toward the page.
+1. **Android pass: done on the emulator** (see above). A look on the S24 is optional, for feel.
 2. **iPhone pass.**
    - System following the phone, including the Auto schedule.
    - The light splash handing over to Home.

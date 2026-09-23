@@ -35,7 +35,7 @@ import { getProfileHandle, getProfileInitials, getProfileName } from '@/lib/prof
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { hexWithAlpha } from '@/lib/eased-fade';
-import { appTheme, mediaColors } from '@/lib/theme';
+import { appTheme, mediaColors, themes } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { ProfileResponse } from '@/lib/types';
 import { haptic } from '@/lib/haptics';
@@ -454,7 +454,7 @@ export function EditProfileScreen() {
               )}
               <LinearGradient colors={[hexWithAlpha(mediaColors.mediaGround, 0.08), hexWithAlpha(mediaColors.mediaGround, 0.76)]} style={{ position: 'absolute', inset: 0 }} />
               <View style={{ position: 'absolute', right: 14, bottom: 14 }}>
-                <ActionPill icon={<ImageIcon size={appTheme.icon.sm} color={theme.colors.text} />} label="Change cover" />
+                <ActionPill icon={<ImageIcon size={appTheme.icon.sm} color={themes.dark.colors.text} />} label="Change cover" />
               </View>
             </Pressable>
 
@@ -721,12 +721,13 @@ function GlassForm({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Drawn on the cover photo, under its dark shade, so dark in both schemes. */
 function ActionPill({ icon, label }: { icon: React.ReactNode; label: string }) {
-  const theme = useAppTheme();
+  const onPhoto = themes.dark.colors;
   return (
-    <View style={{ minHeight: appTheme.touch.default, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.overlayStrong, paddingHorizontal: 14, paddingVertical: 9 }}>
+    <View style={{ minHeight: appTheme.touch.default, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: appTheme.radii.pill, backgroundColor: onPhoto.overlayStrong, paddingHorizontal: 14, paddingVertical: 9 }}>
       {icon}
-      <AppText variant="label">{label}</AppText>
+      <AppText variant="label" color={onPhoto.text}>{label}</AppText>
     </View>
   );
 }

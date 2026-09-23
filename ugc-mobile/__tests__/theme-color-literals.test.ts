@@ -116,3 +116,62 @@ describe('light mode — theme colours adopted by ratchet', () => {
     expect(over).toEqual([]);
   });
 });
+
+/**
+ * A picture's own shade is black in both schemes (`mediaColors`), so whatever
+ * is drawn on it must be too: the dark palette (`themes.dark.colors`) or
+ * `mediaColors`. The scheme's colours go dark on light — ink text, deep
+ * accents — and vanish on the shade. The Android pass of 2026-09-23 found this
+ * on a video's loading spinner, an image's error plate and a template's title
+ * card, after the same slip on Explore's pins.
+ *
+ * A line that sets a dark picture overlay as its background, or a gradient with
+ * a dark foot, followed within a few lines by a foreground from `theme.colors`,
+ * is the tell. The reach stops short of the caption a card draws under its
+ * picture, which rightly follows the app.
+ */
+const DARK_PICTURE_OVERLAY = /backgroundColor:\s*(?:hexWithAlpha\(mediaColors\.mediaGround\b|mediaColors\.(?:mediaGround|mediaChip|mediaScrim|mediaScrimStrong)\b)|colors=\{\[[^\]]*mediaColors\.mediaGround\b/;
+const SCHEME_FOREGROUND = /\b(?:color|fill)[=:]\s*\{?\s*theme\.colors\.\w+/;
+const OVERLAY_REACH = 8;
+
+export function schemeColoursOnPictureOverlays(source: string) {
+  const lines = stripComments(source).split('\n');
+  const found: number[] = [];
+  lines.forEach((line, index) => {
+    if (!DARK_PICTURE_OVERLAY.test(line)) return;
+    for (let next = index; next < Math.min(index + OVERLAY_REACH, lines.length); next += 1) {
+      if (SCHEME_FOREGROUND.test(lines[next])) found.push(next + 1);
+    }
+  });
+  return [...new Set(found)];
+}
+
+describe('light mode — what is drawn on a picture keeps the dark palette', () => {
+  it('flags a scheme colour on a picture overlay and passes the dark palette', () => {
+    const flagged = [
+      "<View style={{ backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.55) }}>",
+      '  <ActivityIndicator color={theme.colors.text} />',
+      '</View>',
+    ].join('\n');
+    const fixed = flagged.replace('theme.colors.text', 'themes.dark.colors.text');
+    expect(schemeColoursOnPictureOverlays(flagged)).toEqual([2]);
+    expect(schemeColoursOnPictureOverlays(fixed)).toEqual([]);
+
+    const titleCard = [
+      '<LinearGradient colors={[hexWithAlpha(mediaColors.mediaGround, 0.03), hexWithAlpha(mediaColors.mediaGround, 0.94)]}>',
+      '  <Kicker color={theme.colors.primary}>video template</Kicker>',
+      '</LinearGradient>',
+    ].join('\n');
+    expect(schemeColoursOnPictureOverlays(titleCard)).toEqual([2]);
+  });
+
+  it('finds none in the app', () => {
+    const offenders = files.flatMap((filePath) => {
+      const relativePath = path.relative(mobileRoot, filePath).replaceAll(path.sep, '/');
+      if (relativePath in EXEMPT) return [];
+      return schemeColoursOnPictureOverlays(readFileSync(filePath, 'utf8')).map((line) => `${relativePath}:${line}`);
+    });
+
+    expect(offenders).toEqual([]);
+  });
+});
