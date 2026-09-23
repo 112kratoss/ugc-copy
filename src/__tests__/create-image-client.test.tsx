@@ -18,7 +18,11 @@ const getPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
 ));
 const removePersistedMediaMock = vi.hoisted(() => vi.fn(async () => undefined));
 const generationCatalogRefetchMock = vi.hoisted(() => vi.fn());
-const modelCatalogState = vi.hoisted(() => ({ missingIds: [] as string[] }));
+const modelCatalogState = vi.hoisted(() => ({
+  missingIds: [] as string[],
+  error: null as Error | null,
+  summaries: [] as Array<{ id: string; kind: string; displayName: string; description: string }>,
+}));
 const restoredFile = new File(['image-bytes'], 'restored-element.png', { type: 'image/png' });
 
 const maybeSingleMock = vi.fn(async () => ({ data: null, error: null }));
@@ -93,7 +97,7 @@ vi.mock('@/lib/generation-model-client', async () => {
   return {
     ...actual,
     useWebGenerationModelCatalog: () => ({
-      summaries: [], missingIds: modelCatalogState.missingIds, detailsReady: true, isLoadingModels: false,
+      summaries: modelCatalogState.summaries, missingIds: modelCatalogState.missingIds, detailsReady: true, isLoadingModels: false,
       catalog: {
         revision: 'test-catalog-rev',
         schemaVersion: 1,
@@ -110,7 +114,7 @@ vi.mock('@/lib/generation-model-client', async () => {
           },
         ],
       },
-      error: null,
+      error: modelCatalogState.error,
       isLoading: false,
       revision: 'test-catalog-rev',
       refetch: generationCatalogRefetchMock,
@@ -143,6 +147,8 @@ describe('CreateImageClient persisted elements', () => {
     removePersistedMediaMock.mockClear();
     generationCatalogRefetchMock.mockClear();
     modelCatalogState.missingIds = [];
+    modelCatalogState.error = null;
+    modelCatalogState.summaries = [];
     maybeSingleMock.mockClear();
     URL.createObjectURL = vi.fn(() => 'blob:restored-element') as typeof URL.createObjectURL;
     URL.revokeObjectURL = vi.fn() as typeof URL.revokeObjectURL;
@@ -252,11 +258,25 @@ describe('CreateImageClient persisted elements', () => {
   });
 });
 
+const imageModelSummaries = [
+  { id: 'nano-banana-2', kind: 'image', displayName: 'Nano Banana 2.0', description: 'Test image model' },
+  { id: 'imagen-4', kind: 'image', displayName: 'Imagen 4', description: 'Test prompt-only image model' },
+];
+
+function chooseModel(container: HTMLElement, displayName: string) {
+  const picker = container.querySelector<HTMLButtonElement>('button[aria-haspopup="listbox"]');
+  expect(picker).not.toBeNull();
+  fireEvent.click(picker!);
+  fireEvent.click(screen.getByRole('option', { name: new RegExp(displayName) }));
+}
+
 describe('CreateImageClient model notices', () => {
   beforeEach(() => {
     getPersistedImageElementRecordsMock.mockReset();
     getPersistedImageElementRecordsMock.mockResolvedValue([]);
     modelCatalogState.missingIds = [];
+    modelCatalogState.error = null;
+    modelCatalogState.summaries = [];
     window.scrollTo = vi.fn();
   });
 
@@ -268,5 +288,57 @@ describe('CreateImageClient model notices', () => {
     expect(await screen.findByText(/This model is no longer available/)).toBeInTheDocument();
     expect(screen.queryByText('Remixing Community Creation')).not.toBeInTheDocument();
     expect(screen.getByText('Model settings')).toBeInTheDocument();
+  });
+
+  it('clears the missing-model notice once another model is chosen', async () => {
+    modelCatalogState.missingIds = ['nano-banana-2'];
+    modelCatalogState.summaries = imageModelSummaries;
+    const view = render(<CreateImageClient prefill={{}} />);
+    expect(await screen.findByText(/This model is no longer available/)).toBeInTheDocument();
+    // It lasts as long as the problem, so there is nothing to dismiss.
+    expect(screen.queryByRole('button', { name: 'Dismiss model notice' })).not.toBeInTheDocument();
+
+    chooseModel(view.container, 'Imagen 4');
+
+    await waitFor(() => {
+      expect(screen.queryByText(/This model is no longer available/)).not.toBeInTheDocument();
+    });
+  });
+
+  it('clears the load-error notice once the model list loads again', async () => {
+    modelCatalogState.error = new Error('Could not load models.');
+    const view = render(<CreateImageClient prefill={{}} />);
+    expect(await screen.findByText('Could not load models.')).toBeInTheDocument();
+
+    modelCatalogState.error = null;
+    view.rerender(<CreateImageClient prefill={{}} />);
+
+    await waitFor(() => {
+      expect(screen.queryByText('Could not load models.')).not.toBeInTheDocument();
+    });
+  });
+
+  it('lets the creator dismiss a settings-reset notice', async () => {
+    // Ideogram V3 has no "auto" aspect ratio, so opening it resets the default one.
+    render(<CreateImageClient prefill={{ model: 'ideogram-v3' }} />);
+    expect(await screen.findByText(/Unsupported choices were reset/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss model notice' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Unsupported choices were reset/)).not.toBeInTheDocument();
+    });
+  });
+
+  it('clears a settings-reset notice when the creator picks another model', async () => {
+    modelCatalogState.summaries = imageModelSummaries;
+    const view = render(<CreateImageClient prefill={{ model: 'ideogram-v3' }} />);
+    expect(await screen.findByText(/Unsupported choices were reset/)).toBeInTheDocument();
+
+    chooseModel(view.container, 'Imagen 4');
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Unsupported choices were reset/)).not.toBeInTheDocument();
+    });
   });
 });

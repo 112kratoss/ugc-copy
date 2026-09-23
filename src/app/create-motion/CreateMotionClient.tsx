@@ -170,10 +170,13 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     }, [prefillPrompt, prefillModel, remixId]);
 
 
-    useEffect(() => {
-        if (modelCatalog.missingIds.includes(selectedModel)) setCatalogNotice('This model is no longer available. Your draft is saved; choose another model.');
-        else if (modelCatalog.error) setCatalogNotice(modelCatalog.error.message);
-    }, [modelCatalog.missingIds, modelCatalog.error, selectedModel]);
+    // Derived, not kept in `catalogNotice`: a retired model or a failed load shows only
+    // while it still applies, so choosing another model or a successful reload clears
+    // it. It takes the notice slot ahead of a one-off notice, which can be dismissed.
+    const catalogProblem = modelCatalog.missingIds.includes(selectedModel)
+        ? 'This model is no longer available. Your draft is saved; choose another model.'
+        : modelCatalog.error?.message || null;
+    const modelNotice = catalogProblem ?? catalogNotice;
     const model = MOTION_MODELS[selectedModel] ?? MOTION_MODELS['kling-3.0'];
     const motionModelOptions = modelCatalog.summaries.filter(item => item.kind === 'motion').map(item => ({ ...(MOTION_MODELS as unknown as Record<string, typeof MOTION_MODELS[keyof typeof MOTION_MODELS]>)[item.id], ...item, badge: item.badge ?? '' }));
     const normalizedModelSearchQuery = modelSearchQuery.trim().toLowerCase();
@@ -799,9 +802,12 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                 controls={
                     <>
                         <AnimatePresence>
-                            {catalogNotice ? (
-                                <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
-                                    <StudioModelNotice description={catalogNotice} />
+                            {modelNotice ? (
+                                <motion.div key="model-notice" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
+                                    <StudioModelNotice
+                                        description={modelNotice}
+                                        onDismiss={catalogProblem ? undefined : () => setCatalogNotice(null)}
+                                    />
                                 </motion.div>
                             ) : null}
                             {remixId && isRemixLoading && (
@@ -913,6 +919,8 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                                         role="option"
                                                         aria-selected={isActive}
                                                         onClick={() => {
+                                                            // A notice about the previous model no longer applies.
+                                                            if (motionModel.id !== selectedModel) setCatalogNotice(null);
                                                             setSelectedModel(motionModel.id as ModelId);
                                                             setIsModelDropdownOpen(false);
                                                             setModelSearchQuery('');

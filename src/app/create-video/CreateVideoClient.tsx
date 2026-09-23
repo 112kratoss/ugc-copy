@@ -747,10 +747,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     }, [prefillPrompt, prefillModel, prefillAspectRatio, prefillDuration, remixId]);
 
 
-    useEffect(() => {
-        if (modelCatalog.missingIds.includes(selectedModel)) setCatalogNotice('This model is no longer available. Your draft is saved; choose another model.');
-        else if (modelCatalog.error) setCatalogNotice(modelCatalog.error.message);
-    }, [modelCatalog.missingIds, modelCatalog.error, selectedModel]);
+    // Derived, not kept in `catalogNotice`: a retired model or a failed load shows only
+    // while it still applies, so choosing another model or a successful reload clears
+    // it. It takes the notice slot ahead of a one-off notice, which can be dismissed.
+    const catalogProblem = modelCatalog.missingIds.includes(selectedModel)
+        ? 'This model is no longer available. Your draft is saved; choose another model.'
+        : modelCatalog.error?.message || null;
+    const modelNotice = catalogProblem ?? catalogNotice;
     const videoModel = VIDEO_MODELS[selectedModel] ?? VIDEO_MODELS['kling-3.0-video'];
     const videoModelOptions = modelCatalog.summaries.filter(item => item.kind === 'video').map(item => ({ ...(VIDEO_MODELS as unknown as Record<string, typeof VIDEO_MODELS[keyof typeof VIDEO_MODELS]>)[item.id], ...item, badge: item.badge ?? '' }));
     const normalizedModelSearchQuery = modelSearchQuery.trim().toLowerCase();
@@ -2572,6 +2575,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const handleSelectModel = (modelId: VideoModelId) => {
         const nextModel = VIDEO_MODELS[modelId];
 
+        // A notice about the previous model no longer applies.
+        if (modelId !== selectedModel) setCatalogNotice(null);
         setSelectedModel(modelId);
         setIsModelDropdownOpen(false);
         setModelSearchQuery('');
@@ -3292,9 +3297,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     />
                                 </motion.div>
                             )}
-                            {catalogNotice ? (
-                                <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
-                                    <StudioModelNotice description={catalogNotice} />
+                            {modelNotice ? (
+                                <motion.div key="model-notice" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
+                                    <StudioModelNotice
+                                        description={modelNotice}
+                                        onDismiss={catalogProblem ? undefined : () => setCatalogNotice(null)}
+                                    />
                                 </motion.div>
                             ) : null}
                         </AnimatePresence>
