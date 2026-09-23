@@ -7,7 +7,7 @@
     "tree against this file and refuses to publish on a mismatch.",
     "",
     "Update this file in the same commit that ships a new binary, and never to",
-    "silence the preflight \u2014 a mismatch means the update cannot land, not that",
+    "silence the preflight — a mismatch means the update cannot land, not that",
     "the record is stale.",
     "",
     "\"setAside\" lists files that landed on main after that binary was built and",
@@ -18,25 +18,25 @@
   ],
   "targets": {
     "android": {
-      "fingerprint": "7a2df8d1315311cc2c1918693250a2e751da7695",
+      "fingerprint": "2d4421b05ba6a84852602d69de16770822f79daf",
       "appVersion": "0.1.5",
-      "buildNumber": 72,
-      "shipped": "2026-09-19",
+      "buildNumber": 73,
+      "shipped": "2026-09-21",
       "tracks": [
         "production",
         "alpha"
       ],
-      "$note": "Built from main 74f4bba (#181; EAS build 50ea8bad, workflow run 35436568550), submitted to the Play closed alpha 2026-09-19 and promoted to production 2026-09-20 (full rollout, Google published it the same day; managed publishing is off). First binary with the scoped light video hosts (patches/expo-video+55.0.21+002+android-light-player-view.patch), expo-video built from source, and expo-network. Now the binary in every Play user's hands, so an update published against this fingerprint reaches production; 0.1.4 (71) at db146ca386f52f78a12416a2077621628eb04300 is only whatever has not updated yet."
+      "$note": "Built from main 6d435fb1 (EAS build cfd8e7ab, workflow run 35538699951), published to the Play closed alpha 2026-09-21 and promoted to production at full rollout; Play delivered it the same day (the owner's Galaxy S24 Ultra updated 2026-09-21 10:25). channel:insights on 2026-09-23 counted 75 users on 73 and 4 still on 0.1.5 (72) at 7a2df8d1315311cc2c1918693250a2e751da7695 over two days. Android native code is identical between 72 and 73: the iOS-only cache-ownership patch moved the fingerprint because patches/ is hashed whole, so an update from main reaches 72 only if that patch is set aside for it."
     },
     "ios": {
-      "fingerprint": "a75a17fb257cf1c69eedf2ea87b564b5009e3360",
+      "fingerprint": "835877cfddddf3644cf2e03bc8da01d7aec206d0",
       "appVersion": "0.1.5",
-      "buildNumber": 53,
-      "shipped": "2026-09-19",
+      "buildNumber": 54,
+      "shipped": "2026-09-21",
       "tracks": [
         "testflight"
       ],
-      "$note": "Built from main 74f4bba (#181; EAS build 4f957233, workflow run 35436568550) and uploaded to TestFlight for the internal group Team (Expo) 2026-09-19 10:17 UTC. Submitted to App Review as version 0.1.5 on 2026-09-20 (automatic release on approval, all users immediately); until Apple approves it, the App Store still serves 0.1.4 (52) at c2e22bfa7e480143c37e68b757aa9a91d3bd0c95, which no update from main can reach, so an update published against this fingerprint reaches TestFlight only."
+      "$note": "Built from main 6d435fb1 (EAS build 5310dd5b, workflow run 35538699951) and uploaded to TestFlight for the internal group Team (Expo) 2026-09-20 21:35 UTC. First binary carrying patches/expo-video+55.0.21+003+ios-cache-ownership.patch alongside the range-cache patch. Submitted to App Review as 0.1.5 on 2026-09-21 after 0.1.5 (53) was pulled out of review and detached, so 53 now backs no submission and no update from main can reach it — the cache-ownership patch is iOS native, so 53 fingerprints differently and cannot be set aside. Until Apple approves this one, the App Store still serves 0.1.4 (52) at c2e22bfa7e480143c37e68b757aa9a91d3bd0c95, so an update published against this fingerprint reaches TestFlight only. channel:insights on 2026-09-23 counted 2 users on 54 and none on 52 over two days."
     }
   }
 }
