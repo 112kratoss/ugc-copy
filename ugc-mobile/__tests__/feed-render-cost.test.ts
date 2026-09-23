@@ -39,6 +39,19 @@ describe('feed render cost on iOS', () => {
     expect(disc).toMatch(/backgroundColor: pressed \? PRIMARY_STRONG : PRIMARY/);
   });
 
+  it('leaves the header rail\'s gradients to the render server', () => {
+    // expo-linear-gradient paints on the main thread each time its view appears,
+    // and the rail mounts a dozen slides on Home's first render and on every lane
+    // switch: 17–20 ms of painting. React Native's own gradient is a CAGradientLayer.
+    const home = source('components/home-dashboard.tsx');
+    expect(home).not.toContain("from 'expo-linear-gradient'");
+    expect(home).toContain("experimental_backgroundImage: 'linear-gradient(to bottom, rgba(0,0,0,0.04), rgba(0,0,0,0.72))'");
+    expect(home).toContain("experimental_backgroundImage: 'linear-gradient(to bottom, rgba(0,0,0,0.04), rgba(0,0,0,0.48))'");
+    const promo = home.slice(home.indexOf("if (slide.kind === 'promo')"), home.indexOf('const Icon = slide.id'));
+    expect(promo).toContain('<View style={RAIL_PROMO_SCRIM} />');
+    const preview = home.slice(home.indexOf('function ToolPreview'), home.indexOf('function FeedChips'));
+    expect(preview).toContain('<View style={RAIL_PREVIEW_SCRIM} />');
+  });
 });
 
 /**
