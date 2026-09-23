@@ -412,6 +412,31 @@ describe('CreateVideoClient Kling video elements', () => {
     expect(setPersistedImageElementRecordsMock).not.toHaveBeenCalled();
   });
 
+  it('clears the capacity explanation once the extra reference is removed', async () => {
+    getPersistedImageElementRecordsMock.mockResolvedValueOnce(
+      Array.from({ length: 3 }, (_, index) => ({
+        id: `saved-element-${index + 1}`,
+        displayName: `Saved element ${index + 1}`,
+        file: new File([`image-${index + 1}`], `saved-element-${index + 1}.png`, { type: 'image/png' }),
+      }))
+    );
+
+    render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+    expect(await screen.findByText(/Your references are preserved/)).toBeInTheDocument();
+
+    const extraImage = screen.getByAltText('Saved element 3');
+    const removeButton = extraImage.closest('div.relative')?.querySelectorAll('button')[1];
+    expect(removeButton).toBeDefined();
+    fireEvent.click(removeButton!);
+
+    await waitFor(() => {
+      expect(screen.queryByAltText('Saved element 3')).not.toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(/Your references are preserved/)).not.toBeInTheDocument();
+    });
+  });
+
   it('keeps the Kling video elements panel visible in single-shot and multi-shot modes', async () => {
     render(<CreateVideoClient prefill={{}} />);
 
