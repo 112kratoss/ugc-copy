@@ -1349,14 +1349,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         }
     }, [selectedModel, videoModel, mode, aspectRatio, singleDuration, resolution, modelCatalog.detailsReady, catalogDescriptor]);
 
-    useEffect(() => {
-        if (!canUseVideoElements || elements.length <= videoElementSupport.maxElements) {
-            return;
-        }
-
-        if (!modelCatalog.detailsReady) return;
-        setError(`This model supports ${videoElementSupport.maxElements} reference images. Your references are preserved; remove extras or choose another model.`);
-    }, [canUseVideoElements, elements.length, modelCatalog.detailsReady, videoElementSupport.maxElements]);
+    // Derived, not kept in `error`: it clears the moment the references fit the model
+    // again, instead of lingering until the next generation.
+    const referenceLimitMessage = canUseVideoElements && modelCatalog.detailsReady && elements.length > videoElementSupport.maxElements
+        ? `This model supports ${videoElementSupport.maxElements} reference image${videoElementSupport.maxElements === 1 ? '' : 's'}. Your references are preserved; remove extras or choose another model.`
+        : null;
 
     useEffect(() => {
         if (!remixId) return;
@@ -4629,6 +4626,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                             phaseLabel={backgroundTiming?.phaseLabel ?? null}
                                             timingLabel={backgroundTimingLabel}
                                         />
+                                    ) : referenceLimitMessage ? (
+                                        <p className="text-sm text-red-400">{referenceLimitMessage}</p>
                                     ) : error ? (
                                         <p className="text-sm text-red-400">{error}</p>
                                     ) : quoteState.status === 'error' ? (

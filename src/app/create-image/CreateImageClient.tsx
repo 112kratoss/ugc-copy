@@ -324,9 +324,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     // When model or aspect changes, clamp model-specific controls.
     useEffect(() => {
         if (!modelCatalog.detailsReady) return;
-        if (elements.length > model.maxImages) {
-            setError(`This model now supports ${model.maxImages} reference images. Your references are preserved; remove extras or choose another model.`);
-        }
 
         const nextAspectRatio = (model.aspectRatios as readonly string[]).includes(aspectRatio)
             ? aspectRatio
@@ -349,7 +346,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         if (qualityModes.length > 0 && !qualityModes.includes(qualityMode)) {
             setQualityMode(catalogChoiceDefault(catalogDescriptor, 'qualityMode', qualityModes[0]) as ImageQualityMode);
         }
-    }, [aspectRatio, catalogDescriptor, elements.length, model, modelCatalog.detailsReady, qualityMode, resolution, selectedModel]);
+    }, [aspectRatio, catalogDescriptor, model, modelCatalog.detailsReady, qualityMode, resolution, selectedModel]);
 
     // Close dropdown on click outside
     useEffect(() => {
@@ -848,6 +845,11 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const referencedElementHandles = extractPromptHandles(prompt).filter((handle) => elementHandles.includes(handle));
     const isElementEnhancementLocked = referencedElementHandles.length > 0;
     const staleElementMentions = findUnknownPromptHandles(prompt, elementHandles);
+    // Derived, not kept in `error`: it clears the moment the references fit the model
+    // again, instead of lingering until the next generation.
+    const referenceLimitMessage = modelCatalog.detailsReady && elements.length > model.maxImages
+        ? `This model now supports ${model.maxImages} reference image${model.maxImages === 1 ? '' : 's'}. Your references are preserved; remove extras or choose another model.`
+        : null;
     const mentionSuggestions = activeMentionQuery
         ? elements.filter((element) => {
             const normalizedQuery = activeMentionQuery.query.toLowerCase();
@@ -1778,6 +1780,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                             phaseLabel={backgroundTiming?.phaseLabel ?? null}
                                             timingLabel={backgroundTimingLabel}
                                         />
+                                    ) : referenceLimitMessage ? (
+                                        <p className="text-sm text-red-400">{referenceLimitMessage}</p>
                                     ) : error ? (
                                         <p className="text-sm text-red-400">{error}</p>
                                     ) : staleElementMentions.length > 0 ? (

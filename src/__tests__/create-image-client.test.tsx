@@ -222,8 +222,30 @@ describe('CreateImageClient persisted elements', () => {
     await waitFor(() => {
       expect(screen.getAllByText('15/14')).not.toHaveLength(0);
     });
-    // An effect sets the explanation after the counter commits, so it can land a render later.
     expect(await screen.findByText(/Your references are preserved/)).toBeInTheDocument();
     expect(setPersistedImageElementRecordsMock).not.toHaveBeenCalled();
+  });
+
+  it('clears the over-limit explanation once the extra reference is removed', async () => {
+    getPersistedImageElementRecordsMock.mockResolvedValueOnce(Array.from({ length: 15 }, (_, index) => ({
+      id: `restored-${index + 1}`,
+      displayName: `Restored ${index + 1}`,
+      file: new File([`image-${index + 1}`], `restored-${index + 1}.png`, { type: 'image/png' }),
+    })));
+
+    render(<CreateImageClient prefill={{}} />);
+    expect(await screen.findByText(/Your references are preserved/)).toBeInTheDocument();
+
+    const extraImage = await screen.findByAltText('Restored 15');
+    const removeButton = extraImage.closest('div.relative')?.querySelectorAll('button')[1];
+    expect(removeButton).toBeDefined();
+    fireEvent.click(removeButton!);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('14/14')).not.toHaveLength(0);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(/Your references are preserved/)).not.toBeInTheDocument();
+    });
   });
 });
