@@ -2,7 +2,6 @@ import { FlashList, type FlashListRef, type ListRenderItem, type ViewToken } fro
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { useIsFocused, useScrollToTop } from '@react-navigation/native';
 import { Image } from 'expo-image';
-import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
   Crown,
@@ -136,6 +135,24 @@ const TOOL_PREVIEW_IMAGES = {
 
 const LOAD_MORE_COOLDOWN_MS = 800;
 const TOP_SLIDE_HEIGHT = 170;
+// The dark washes under the header rail's captions, as React Native's own
+// gradient background. On iOS that is a CAGradientLayer, which the render
+// server draws. expo-linear-gradient painted each one into a bitmap on the main
+// thread whenever its view appeared or resized, and the rail mounts about a
+// dozen slides at once, on Home's first render and on every lane switch (the
+// list is keyed per lane): 17–20 ms of main-thread painting per switch on the
+// iPhone 16e, more than a 60 Hz frame. On Android both draw through a shader,
+// with the same pixels.
+const RAIL_PROMO_SCRIM: ViewStyle = {
+  position: 'absolute',
+  inset: 0,
+  experimental_backgroundImage: 'linear-gradient(to bottom, rgba(0,0,0,0.04), rgba(0,0,0,0.72))',
+};
+const RAIL_PREVIEW_SCRIM: ViewStyle = {
+  position: 'absolute',
+  inset: 0,
+  experimental_backgroundImage: 'linear-gradient(to bottom, rgba(0,0,0,0.04), rgba(0,0,0,0.48))',
+};
 // Only the cards that can be on screen when a lane first lands rise into
 // place; everything past that mounts plain while scrolling.
 const FEED_REVEAL_COUNT = 6;
@@ -1383,7 +1400,7 @@ function TopSlide({
           {slide.imageUrl ? (
             <Image source={{ uri: slide.imageUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
           ) : null}
-          <LinearGradient colors={['rgba(0,0,0,0.04)', 'rgba(0,0,0,0.72)']} style={{ position: 'absolute', inset: 0 }} />
+          <View style={RAIL_PROMO_SCRIM} />
           <View style={{ padding: 12, gap: 4 }}>
             <Text numberOfLines={1} style={{ color: '#ffffff', fontSize: 16, fontWeight: '800' }}>{slide.title}</Text>
             <Text numberOfLines={2} style={{ color: 'rgba(255,255,255,0.78)', fontSize: 12, fontWeight: '600' }}>{slide.body}</Text>
@@ -1470,7 +1487,7 @@ function ToolPreview({
           style={{ position: 'absolute', inset: 0 }}
         />
       ) : null}
-      <LinearGradient colors={['rgba(0,0,0,0.04)', 'rgba(0,0,0,0.48)']} style={{ position: 'absolute', inset: 0 }} />
+      <View style={RAIL_PREVIEW_SCRIM} />
       <View style={{ position: 'absolute', left: 9, top: 9, width: 30, height: 30, borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.38)', alignItems: 'center', justifyContent: 'center' }}>
         {icon}
       </View>
