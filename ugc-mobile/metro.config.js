@@ -36,6 +36,14 @@ const lucideEsmRoot = path.resolve(path.dirname(require.resolve('lucide-react-na
 const PURCHASES_ENTRY = path.join('react-native-purchases', 'dist', 'purchases.js');
 const purchasesBrowserStub = path.join(__dirname, 'bundler', 'revenuecat-browser-stub.js');
 
+// Every Expo Router layout loads the NativeTabs trigger (withLayoutContext checks
+// each child against it). On Android the trigger's Material icon converter
+// imports expo-symbols, which requires all seven weights of the Material Symbols
+// font: about 3 MB of every Play download of 0.1.6. The app has no NativeTabs,
+// so Android gets the converter Expo ships for the other platforms, which draws
+// no icon, and the fonts drop out of the bundle.
+const NATIVE_TAB_TRIGGER = path.join('expo-router', 'build', 'native-tabs', 'NativeTabTrigger.js');
+
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   if (moduleName.startsWith(LUCIDE_ESM_PREFIX)) {
     return {
@@ -49,6 +57,16 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
     && context.originModulePath.endsWith(PURCHASES_ENTRY)
   ) {
     return { type: 'sourceFile', filePath: purchasesBrowserStub };
+  }
+  if (
+    platform === 'android'
+    && moduleName === './utils/materialIconConverter'
+    && context.originModulePath.endsWith(NATIVE_TAB_TRIGGER)
+  ) {
+    return {
+      type: 'sourceFile',
+      filePath: path.join(path.dirname(context.originModulePath), 'utils', 'materialIconConverter.js'),
+    };
   }
   return context.resolveRequest(context, moduleName, platform);
 };

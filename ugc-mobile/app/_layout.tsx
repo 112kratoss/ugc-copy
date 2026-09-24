@@ -1,8 +1,12 @@
-import { BricolageGrotesque_700Bold, BricolageGrotesque_800ExtraBold, useFonts } from '@expo-google-fonts/bricolage-grotesque';
+// One module per weight: the package root requires all seven, and every font a
+// bundle requires ships inside the app binary.
+import { BricolageGrotesque_700Bold } from '@expo-google-fonts/bricolage-grotesque/700Bold';
+import { BricolageGrotesque_800ExtraBold } from '@expo-google-fonts/bricolage-grotesque/800ExtraBold';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { QueryClient, QueryClientProvider, focusManager, useQueryClient } from '@tanstack/react-query';
 import { requireOptionalNativeModule } from 'expo';
 import Constants from 'expo-constants';
+import { useFonts } from 'expo-font';
 import { AppMetricsRoot } from 'expo-observe';
 import { Stack, router, usePathname } from 'expo-router';
 import { LucideProvider } from 'lucide-react-native';

@@ -5,10 +5,11 @@ import path from 'node:path';
 import { transformSync, type PluginItem, type TransformOptions } from '@babel/core';
 import { describe, expect, it, vi } from 'vitest';
 
-// Guards the two hooks in bundler/ that keep dead weight out of the native
-// bundles: lucide icons imported one module at a time, and RevenueCat's browser
-// implementation replaced by a stand-in on iOS and Android. Together they took
-// the Android Hermes bundle from 6.48 MB to 4.60 MB (2026-09-12).
+// Guards what keeps dead weight out of the native bundles: lucide icons imported
+// one module at a time, and RevenueCat's browser implementation replaced by a
+// stand-in on iOS and Android. Together they took the Android Hermes bundle from
+// 6.48 MB to 4.60 MB (2026-09-12). Fonts are guarded too: every font a bundle
+// requires ships inside the app binary, whether or not a screen draws it.
 
 const mobileRoot = path.resolve(__dirname, '..');
 const requireFromMobile = createRequire(path.join(mobileRoot, 'package.json'));
@@ -30,17 +31,22 @@ function importsOf(code: string) {
   return [...code.matchAll(/^import\s+(.+?)\s+from\s+"([^"]+)";$/gm)].map(([, what, from]) => ({ what, from }));
 }
 
+function filesUnder(dir: string, name: RegExp): string[] {
+  return readdirSync(dir).flatMap((entry) => {
+    const full = path.join(dir, entry);
+    if (statSync(full).isDirectory()) return filesUnder(full, name);
+    return name.test(entry) ? [full] : [];
+  });
+}
+
+function sourceFilesWhere(matches: (source: string) => boolean) {
+  return ['app', 'components', 'lib']
+    .flatMap((dir) => filesUnder(path.join(mobileRoot, dir), /\.tsx?$/))
+    .filter((file) => matches(readFileSync(file, 'utf8')));
+}
+
 function sourceFilesImporting(specifier: string) {
-  const found: string[] = [];
-  const visit = (dir: string) => {
-    for (const entry of readdirSync(dir)) {
-      const full = path.join(dir, entry);
-      if (statSync(full).isDirectory()) visit(full);
-      else if (/\.tsx?$/.test(entry) && readFileSync(full, 'utf8').includes(`from '${specifier}'`)) found.push(full);
-    }
-  };
-  for (const dir of ['app', 'components', 'lib']) visit(path.join(mobileRoot, dir));
-  return found;
+  return sourceFilesWhere((source) => source.includes(`from '${specifier}'`));
 }
 
 describe('lucide direct imports', () => {
@@ -129,6 +135,50 @@ describe('metro resolution', () => {
 
     expect(resolution.type).toBe('sourceFile');
     expect(existsSync(resolution.filePath ?? '')).toBe(true);
+  });
+
+  const nativeTabs = path.join(mobileRoot, 'node_modules/expo-router/build/native-tabs');
+
+  it("gives Android Expo Router's other-platform icon converter, which never reaches expo-symbols", () => {
+    const resolution = resolve('./utils/materialIconConverter', 'android', path.join(nativeTabs, 'NativeTabTrigger.js'));
+
+    expect(resolution).toEqual({ type: 'sourceFile', filePath: path.join(nativeTabs, 'utils', 'materialIconConverter.js') });
+    expect(readFileSync(resolution.filePath ?? '', 'utf8')).not.toContain('require(');
+  });
+
+  it('leaves the icon converter to Metro on iOS and for any other importer', () => {
+    expect(resolve('./utils/materialIconConverter', 'ios', path.join(nativeTabs, 'NativeTabTrigger.js'))).toEqual({ type: 'default' });
+    expect(resolve('./utils/materialIconConverter', 'android', path.join(mobileRoot, 'lib/icons.ts'))).toEqual({ type: 'default' });
+  });
+});
+
+describe('Material Symbols on Android', () => {
+  const router = path.join(mobileRoot, 'node_modules/expo-router/build');
+  const requiring = (specifier: string) => filesUnder(router, /\.js$/)
+    .filter((file) => readFileSync(file, 'utf8').includes(`require("${specifier}")`))
+    .map((file) => path.relative(router, file));
+
+  it('reaches the bundle only through the icon converter the redirect replaces', () => {
+    // An SDK update that imports expo-symbols anywhere else brings all seven
+    // font weights back, and needs the redirect in metro.config.js revisited.
+    expect(requiring('expo-symbols')).toEqual(['native-tabs/utils/materialIconConverter.android.js']);
+    expect(requiring('./utils/materialIconConverter')).toEqual(['native-tabs/NativeTabTrigger.js']);
+  });
+
+  it('is never drawn by the app: no NativeTabs, no SymbolView', () => {
+    // Either would need the real converter back on Android.
+    expect(sourceFilesImporting('expo-router/unstable-native-tabs')).toEqual([]);
+    expect(sourceFilesImporting('expo-symbols')).toEqual([]);
+  });
+});
+
+describe('bundled fonts', () => {
+  it('imports each Google font weight from its own module, never a family root', () => {
+    // A family root requires every weight it publishes, seven for Bricolage
+    // Grotesque, and useFonts comes from expo-font rather than through one.
+    expect(sourceFilesWhere((source) => /from '@expo-google-fonts\/[\w-]+'/.test(source))).toEqual([]);
+    expect(sourceFilesWhere((source) => /from '@expo-google-fonts\/[\w-]+\/\d00\w+'/.test(source)))
+      .toEqual([path.join(mobileRoot, 'app', '_layout.tsx')]);
   });
 });
 
