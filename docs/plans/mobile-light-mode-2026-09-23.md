@@ -3,7 +3,7 @@
 Status: merged to main on 2026-09-24 (#202), ahead of the store build.
 - It ships with the next store build, 0.1.6. The native half cannot go over the air (see Shipping).
 - Verified against production data on the iOS 26.4 simulator and the Android 16 emulator (dev clients built from this branch), and on the owner's iPhone 16e and Galaxy S24 Ultra (Release builds). Test suite green: 264 files, 2,566 tests.
-- Still open: the App Review demo account and the store build (see "Still to do before release").
+- Still open: the App Review demo account, then App Review and the Play production rollout of 0.1.6 (see "Still to do before release").
 
 Scope: `ugc-mobile/` only. The web app keeps `color-scheme: dark`.
 
@@ -168,4 +168,4 @@ This used a Release APK of this branch, installed as the side-by-side `com.magic
 1. **Android pass: done** on the emulator and on the S24 (see above).
 2. **iPhone pass: done** (see above).
 3. **App Review demo account** checked in light.
-4. **Store build 0.1.6** on both platforms.
+4. **Store build 0.1.6** on both platforms: built from main `f6e882a2` on 2026-09-24 (workflow run 35983639391), together with the iOS light video host (#203). iOS 0.1.6 (55) went to TestFlight and Android 0.1.6 (74) to the Play closed alpha; `ota-targets.json` records both. App Review and the Play production rollout wait for the owner.
