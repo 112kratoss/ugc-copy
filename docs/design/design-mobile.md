@@ -2,7 +2,9 @@
 
 Audience: designers, engineers, and AI agents working in the Expo/React Native app at `ugc-mobile/**`.
 
-Read this before editing mobile UI. This file is the mobile source of truth for typography, color, spacing, icons, layout, components, and UX structure. The older research source is [docs/ui-consistency-research-2026-06-14.md](./ui-consistency-research-2026-06-14.md).
+Read this before editing mobile UI. It covers what each token, primitive and screen pattern is for, and which rules the tests enforce. The values themselves live in code (`lib/theme.ts`, `components/ui.tsx`), and code wins wherever the two disagree.
+
+Rewritten against the code on 2026-09-24 (app 0.1.6). The reasoning behind the original rules is in [ui-consistency-research-2026-06-14.md](./ui-consistency-research-2026-06-14.md). Most of what follows was shaped by the HIG audit recorded in [docs/archive/hig-alignment-2026-08-27.md](../archive/hig-alignment-2026-08-27.md).
 
 ## Purpose
 
@@ -10,15 +12,18 @@ Magicbooklet mobile should feel like a premium AI creator studio in your pocket,
 
 The app can be visually rich, but the system underneath must be strict. Addictive and beautiful mobile apps work because they repeat familiar patterns: predictable tabs, consistent typography, obvious primary actions, clear progress, rewarding results, and low-friction recovery.
 
-## Reference Principles
+## References
 
-Use these references as direction, not as brands to copy:
-
-- [Apple Human Interface Guidelines](https://developer.apple.com/design/human-interface-guidelines): legibility, Dynamic Type, platform navigation, safe areas, and 44pt minimum hit regions.
-- [Material Design 3](https://m3.material.io/): role-based typography, semantic color, shape, 8dp layout rhythm, 4dp detail rhythm, and 48dp touch targets.
-- [Pinterest Gestalt](https://gestalt.pinterest.systems/): media-led surfaces stay consistent through reusable components, tokens, and shared language.
-- [CapCut](https://www.capcut.com/): creator tools should be packaged as quick starts, templates, and obvious task entry points.
-- Habit-forming apps such as Duolingo, TikTok, Instagram, and Calm: use clear reward loops, immediate feedback, and repeatable navigation. Do not copy dark patterns, anxiety loops, or confusing gesture-only controls.
+- **Apple's Human Interface Guidelines come first.** Mobile UI is held to them, and the numeric floors are tests (see [What the tests enforce](#what-the-tests-enforce)).
+  - The HIG pages are client-rendered.
+  - The full text of any chapter is JSON at `developer.apple.com/tutorials/data/design/human-interface-guidelines/<page>.json`.
+- **Look for a native API before building a behaviour** (`AGENTS.md`). Examples:
+  - UIKit's zoom transition opens the reel on iOS.
+  - The platform's own sheets, pickers and haptics come before anything drawn in JavaScript.
+- [Material Design 3](https://m3.material.io/): Android conventions and the 48dp touch rhythm.
+- [Pinterest Gestalt](https://gestalt.pinterest.systems/): media-led surfaces stay consistent through shared components, tokens and language.
+- [CapCut](https://www.capcut.com/): creator tools packaged as quick starts and obvious entry points.
+- Habit-forming apps such as Instagram, TikTok, Duolingo and Calm: clear reward loops, immediate feedback and repeatable navigation. Never their dark patterns, anxiety loops, or gesture-only controls.
 
 ## Product North Star
 
@@ -33,7 +38,7 @@ Every screen should support one of these jobs:
 
 - Start creating.
 - Review or continue a generation.
-- Browse and save inspiration.
+- Browse, save and discuss community work.
 - Publish or unlock creator resources.
 - Manage profile, credits, and settings.
 
@@ -45,7 +50,7 @@ If a surface does not support one of these jobs, it should be simplified or move
 
 Use this tone:
 
-- Premium and cinematic — obsidian on dark, warm paper on light; the reel stays dark in both.
+- Premium and cinematic: obsidian on dark, warm paper on light. The reel stays dark in both.
 - Confident rather than loud.
 - Media-first rather than form-first.
 - Friendly enough for first-time creators.
@@ -63,42 +68,59 @@ Avoid:
 
 Use a layered studio model:
 
-1. Background: the app canvas — true black, or warm paper.
-2. Panels: a real step away from the canvas — lighter on dark, a tinted fill on paper.
-3. Cards: repeatable work units with media, title, metadata, action.
-4. Accents: image/video/motion/workflow/commerce colors.
+1. Background: the app canvas, true black or warm paper.
+2. Panels: a real step away from the canvas, lighter on dark and a tinted fill on paper.
+3. Cards: repeatable work units with media, title, metadata and action.
+4. Accents: the tool colours (image, video, motion, workflow, commerce) and coral.
 5. Primary actions: high-contrast, easy to reach, stable wording.
 
-Gradients are allowed for:
-
-- Primary create/generate CTA.
-- Tool identity moments.
-- Media placeholders.
-- Subtle background washes.
-
-Gradients are not allowed as a substitute for hierarchy.
+Gradients are for the primary create moment, tool identity, media placeholders, and the shades that protect text over pictures. They are never a substitute for hierarchy.
 
 ## Source Files
 
-Use existing shared layers first:
+Use the shared layers before writing anything local:
 
-- Mobile tokens: `ugc-mobile/lib/theme.ts`
-- Mobile primitives: `ugc-mobile/components/ui.tsx`
-- Tab metrics: `ugc-mobile/lib/tab-bar-layout.ts`
-- Safe-area helpers: `ugc-mobile/lib/safe-area.ts`
-- Current home: `ugc-mobile/components/home-dashboard.tsx`
-- Current create flow: `ugc-mobile/components/media-creation-screen.tsx`
-- Current tab bar: `ugc-mobile/components/magic-tab-bar.tsx`
-- Current create menu: `ugc-mobile/components/magic-create-menu.tsx`
+- **Tokens:** `lib/theme.ts`, which holds both palettes and the static tokens.
+  - Read it through `useAppTheme()` in `lib/theme-context.tsx`.
+  - The scheme is resolved in `lib/appearance.ts`.
+- **Primitives:** `components/ui.tsx`.
+- **Motion:** `lib/motion.ts` (`MotionView`, `usePressMotion`, `useReducedMotion`, `useOverlayPresence`).
+- **Haptics:** `lib/haptics.ts`.
+- **Geometry:** `lib/hit-target.ts` for touch reach, `lib/safe-area.ts` for insets, `lib/tab-bar-layout.ts` for the dock's metrics.
+- **Chrome:** `components/magic-tab-bar.tsx` (the dock), `magic-create-menu.tsx`, `home-side-menu.tsx`, `top-scrim.tsx`.
+- **Overlays:** `components/overlay-host.tsx`, `action-sheet.tsx`, `dialog.tsx`, `sheet-chrome.tsx`.
+- **Feeds and media:**
+  - `components/feed-card-shell.tsx`, `home-feed-card.tsx`, `reel-chrome.tsx`;
+  - `media-zoom.tsx` with `lib/apple-zoom.ts`;
+  - `letterbox-bands.tsx`, `skeleton.tsx`, `reveal.tsx`, `save-heart.tsx`.
 
-When touching a mobile screen, migrate the touched surface toward these shared files. Do not invent a local style system.
+When touching a mobile screen, move the touched surface onto these shared files. Do not invent a local style system.
+
+## What the tests enforce
+
+The guards below fail the mobile suite, so a red guard is a real violation: fix the control, never the threshold. Adopting a further HIG rule means extending a guard, so every later screen inherits it.
+
+| Test | Holds |
+| --- | --- |
+| `hig-type-and-contrast.test.ts` | 11pt minimum type, 4.5:1 contrast for text on every panel in both schemes, 44pt hit regions, no `fontWeight` on a display variant |
+| `hig-dynamic-type.test.tsx` | Text always follows the OS text size, within each tier's cap |
+| `hig-icon-size.test.ts`, `hig-icon-weight.test.tsx` | Icon sizes come from the ramp; one stroke weight app-wide |
+| `theme-color-literals.test.ts` | No raw colour outside the `EXEMPT` list |
+| `theme-palette-parity.test.ts` | The light and dark palettes carry the same names |
+| `motion-token-compliance.test.ts` | Press opacity and springs come from the theme; every timing names its easing |
+| `hig-vocabulary.test.ts` | Haptics go through `lib/haptics.ts`; ellipses are the `…` character |
+| `feed-render-cost.test.ts` | The drawing rules in [Feeds and the reel](#feeds-and-the-reel) |
+| `bundle-shaping.test.ts` | Icons and fonts imported one module at a time |
+| `hig-<surface>.test.ts(x)` | The fixes each surface's audit made: home, collections, profile, post composer, post details, alerts, auth, onboarding, navigation chrome, modality, full screen, branding, create hub, generative creation, edit profile |
 
 ## Tokens
 
 `lib/theme.ts` is the single source of truth, in two layers:
 
-- **Scheme tokens** — `colors`, `semantic`, `state`, `shadow`, `dim`, `tabBar` — exist once per scheme and are read through `useAppTheme()` (`lib/theme-context.tsx`). Never read a colour from a module constant: React Compiler memoises it for the life of the process, so it would not redraw on a scheme switch. `appTheme` carries no colours at all.
-- **Static tokens** — `radii`, `spacing`, `type`, `typeScale`, `icon`, `touch`, `opacity`, `motion` — are the same in both schemes and read from `appTheme` anywhere, module scope included.
+- **Scheme tokens** (`colors`, `semantic`, `state`, `shadow`, `dim`, `tabBar`):
+  - They exist once per scheme and are read through `useAppTheme()` (`lib/theme-context.tsx`).
+  - Never read a colour from a module constant. React Compiler memoises it for the life of the process, so it would not redraw on a scheme switch. `appTheme` carries no colours at all.
+- **Static tokens** (`radii`, `spacing`, `type`, `typeScale`, `icon`, `touch`, `opacity`, `motion`) are the same in both schemes and read from `appTheme` anywhere, module scope included.
 
 ### Color
 
@@ -120,790 +142,512 @@ Core (dark · light):
 | `mediaPlaceholder` | `#050506` | `#ece6de` | The ground a picture loads onto |
 | `scrim` | black 58% | ink 32% | Behind a bottom sheet |
 
-Coral: `primary` is coral as a *foreground* — text, icons, borders and thin marks (progress bars, dots, underlines) — `#ff7a59` on dark, `#a83d1c` on light. `primaryFill` is coral as a *surface* — buttons, the selected segment — bright `#ff7a59` in both schemes, always with `onPrimary` ink (`#1a0d08`, 7.4:1); `primaryFillPressed` is its pressed step. The bright coral is 2.4:1 as text on paper, which is why the two are separate.
+**Coral** comes in two tokens:
+- `primary` is coral as a foreground: text, icons, borders and thin marks such as progress bars, dots and underlines. It is `#ff7a59` on dark and `#a83d1c` on light.
+- `primaryFill` is coral as a surface: buttons and the selected segment. It is bright `#ff7a59` in both schemes, always with `onPrimary` ink (`#1a0d08`, 7.4:1). `primaryFillPressed` is its pressed step.
+- They are separate because the bright coral is only 2.4:1 as text on paper.
 
-Tool accents (`image`, `video`, `motion`, `workflow`, `amber`/`commerce`) and semantic tones (`info`, `success`, `warning`, `danger`) follow the same split: pastel on dark, deep on light for text and marks. A *solid* accent fill uses `accentFill(accent)` with `onAccentFill(accent)` — the bright set, in both schemes. A wash is the scheme's accent at low alpha: `hexWithAlpha(theme.colors.image, 0.12)`.
+**Tool accents** (`image`, `video`, `motion`, `workflow`, `amber`/`commerce`) and **semantic tones** (`info`, `success`, `warning`, `danger`) follow the same split: pastel on dark, deep on light, for text and marks.
+- A *solid* accent fill uses `accentFill(accent)` with `onAccentFill(accent)`, the bright set, in both schemes.
+- A wash is the scheme's accent at low alpha: `hexWithAlpha(theme.colors.image, 0.12)`.
 
-Over pictures: text, icons, scrims and chips drawn on a photo or video frame use `mediaColors` (`onMedia`, `mediaScrim`, `mediaChip`, `mediaGround`…), identical in both schemes — the picture decides what sits on it. A component drawn entirely over a picture (a grid tile's state chip, an Explore pin) takes `themes.dark` outright.
+**Over pictures**, text, icons, scrims and chips drawn on a photo or video frame use `mediaColors` (`onMedia`, `mediaScrim`, `mediaChip`, `mediaGround`…). They are identical in both schemes, because the picture decides what sits on it. A component drawn entirely over a picture (a grid tile's state chip, an Explore pin) takes `themes.dark` outright.
 
-Surfaces that stay dark in both schemes: the reel (`app/viewer.tsx`), the zoom flight, the media lightbox and onboarding, each wrapped in `<ThemeScope scheme="dark">` with a light-content status bar while in front. Sheets the reel opens (actions, comments, unlock) return to the app's scheme through `AppSchemeScope`.
+**Surfaces that stay dark in both schemes** are the reel (`app/viewer.tsx`), the zoom flight, the media lightbox and onboarding.
+- Each is wrapped in `<ThemeScope scheme="dark">`, with a light-content status bar while in front.
+- Sheets the reel opens (actions, comments, unlock) return to the app's scheme through `AppSchemeScope`.
 
 Rules:
 
-- Colours come from `useAppTheme()`, `mediaColors`, or `accentFill`. A raw colour literal fails `theme-color-literals.test.ts` unless its file is listed in that test's `EXEMPT` map with the reason the colour is the point.
-- Elevation in light is fill step plus hairline, never a new shadow: a shadow on scrolled content costs iOS an offscreen pass every frame. The shadow tokens keep the same shapes in both schemes, at a third of the weight on paper.
+- Colours come from `useAppTheme()`, `mediaColors`, or `accentFill`. A raw colour literal fails `theme-color-literals.test.ts` unless its file is listed in that test's `EXEMPT` map, with the reason the colour is the point.
+- Elevation in light mode is a fill step plus a hairline, never a new shadow. A shadow on scrolled content costs iOS an offscreen pass every frame. The shadow tokens keep the same shapes in both schemes, at a third of the weight on paper.
 - Use one accent per screen section unless the screen is a launcher.
 - Never place muted text on low-contrast gradients.
 
 ### Typography
 
-Mobile should use native scalable text. The app currently loads `SpaceMono`, but the product UI should not become monospace-led. Use the platform font or intentionally bundled brand font for product text; reserve monospace for technical IDs only.
+Two faces:
 
-Type roles:
+- **Display: Bricolage Grotesque**, loaded from the bundle in the root layout, weights 700 and 800 only.
+  - It carries the titles, the numbers and the wordmark (`BrandLockup`).
+  - Until it loads, the splash screen stays up, so the first screen never swaps fonts in view.
+- **Everything else: the system font** (San Francisco, Roboto), so running text, labels and buttons match the OS and scale with it.
 
-| Role | Size / Line | Weight | Use |
+Roles (`appTheme.type`):
+
+| Role | Size / line | Face | Use |
 | --- | --- | --- | --- |
-| `display` | 34 / 40 | 800 | Rare hero or major launchpad heading |
-| `pageTitle` | 30 / 36 | 800 | Screen title |
-| `sectionTitle` | 22 / 28 | 800 | Section title |
-| `cardTitle` | 18 / 24 | 800 | Card or panel title |
-| `body` | 16 / 24 | 400 | Main readable copy |
-| `bodySm` | 14 / 21 | 400 | Compact explanatory copy |
-| `label` | 12 / 16 | 700 | Form labels, buttons, small controls |
-| `caption` | 11 / 15 | 600 | Metadata only |
-| `button` | 15 / 20 | 800 | Buttons |
-| `metric` | 34 / 38 | 800 | Numbers and dashboard stats |
+| `display` | 36 / 42 | Bricolage 800, tracking −0.6 | Rare hero moments: the welcome screen, a large empty state |
+| `pageTitle` | 30 / 36 | Bricolage 800, −0.3 | Screen title, once per screen |
+| `sectionTitle` | 22 / 28 | Bricolage 800, −0.1 | Grouped content |
+| `cardTitle` | 18 / 24 | Bricolage 700 | Cards and panels |
+| `metric` | 34 / 40 | Bricolage 800, −0.3 | Balances and stats |
+| `body` | 16 / 24 | System 400 | Running text |
+| `bodySm` | 14 / 21 | System 400 | Compact explanatory copy |
+| `label` | 13 / 18 | System 700 | Form labels, small controls |
+| `button` | 15 / 20 | System 700 | Buttons |
+| `caption` | 12 / 17 | System 600 | Metadata only |
 
 Rules:
 
-- Use `AppText` from `components/ui.tsx` for new text.
-- Use `pageTitle` once per screen.
-- Use `sectionTitle` for grouped content.
-- Use `cardTitle` for repeated cards and panels.
-- Use `body` or `bodySm` for instructions.
-- Use `caption` only for low-risk metadata, never for required instructions.
-- Avoid `fontSize: 10` and `fontSize: 11` for anything the user needs to understand before acting.
-- Avoid heavy all-caps except `Kicker` labels of one to three words.
-- Avoid negative letter spacing.
-- Prefer sentence case for UI labels.
+- Use `AppText` with a variant rather than restyling type inline.
+- **Never give a display variant a `fontWeight`.** Each display role names its weight through the font file and sets `fontWeight: '400'`. Asked for another weight, iOS ignores it but Android drops the face altogether and draws the system font.
+- **Dynamic Type is always on**, capped per tier (`appTheme.typeScale`):
+  - titles and metrics follow the OS setting up to 1.35×;
+  - controls and metadata up to 1.6×;
+  - running text up to 2×.
+  `AppText` applies its variant's cap; opting out fails `hig-dynamic-type.test.tsx`.
+- **Headers:** `display` and `pageTitle` are announced as headers automatically. Pass `heading` for any other heading.
+- **Truncated text isn't selectable.** Text with `numberOfLines` stops being selectable, because Android draws selectable text past its truncation.
+- **Letter spacing and case:**
+  - The tracking on the display roles belongs to the face; don't add letter spacing anywhere else.
+  - Use sentence case. All caps is only for a one-to-three-word `Kicker`.
+- **Adding a font:** import each weight from its own module (`@expo-google-fonts/<family>/<weight>`) and take `useFonts` from `expo-font`. Every font the bundle requires ships inside the app binary.
 
 ### Spacing
 
-Use a 4pt base and 8pt major rhythm.
+A 4pt base with an 8pt rhythm, named by role (`appTheme.spacing`):
 
-Primitive scale:
-
-| Token | Value |
-| --- | --- |
-| `0` | 0 |
-| `1` | 4 |
-| `2` | 8 |
-| `3` | 12 |
-| `4` | 16 |
-| `5` | 20 |
-| `6` | 24 |
-| `8` | 32 |
-| `10` | 40 |
-| `12` | 48 |
-| `16` | 64 |
-
-Semantic spacing:
-
-| Role | Value | Use |
+| Token | Value | Use |
 | --- | --- | --- |
-| `screen` | 16 | Screen horizontal padding |
+| `unit` | 4 | The base step |
 | `compact` | 8 | Tight icon/text gap |
-| `gap` | 12 | Default internal gap |
+| `gap` | 12 | Default gap inside a component |
+| `screen` | 16 | Screen horizontal padding |
 | `card` | 16 | Card padding |
 | `panel` | 20 | Large panel padding |
-| `section` | 32 | Section-to-section spacing |
+| `section` | 32 | Between sections (`Screen` applies it) |
 | `page` | 48 | Large vertical separation |
 
 Rules:
 
-- Avoid new `18px` screen padding.
-- Avoid arbitrary `gap: 13`, `gap: 17`, `padding: 19`, etc.
-- Use `contentContainerStyle` for scroll padding.
-- Main tab screens must reserve bottom space from `getMagicTabBarMetrics`.
-- Dense controls can use 8 or 12 gaps, not 4 unless icon-only.
+- No arbitrary values such as `gap: 13`, `padding: 19` or a new 18pt screen margin.
+- Scroll padding goes in `contentContainerStyle`.
+- Tab roots reserve the dock's height from `getMagicTabBarMetrics` (`Screen insideTab` does it).
 
 ### Radius
 
-Use a small radius scale:
-
-| Role | Value | Use |
+| Token | Value | Use |
 | --- | --- | --- |
 | `xs` | 8 | Tiny tags, thumbnails |
 | `sm` | 12 | Compact controls |
 | `md` | 16 | Inputs, buttons, small cards |
-| `lg` | 20 | Standard cards |
-| `xl` | 24 | Panels and media cards |
-| `modal` | 28 | Sheets and large dialogs |
-| `pill` | 999 | Pills and round buttons |
+| `lg` | 20 | Feed and standard cards |
+| `xl` | 24 | Panels, media cards, the top corners of sheets |
+| `pill` | 999 | Pills, chips, round buttons |
 
-Rules:
-
-- Use `borderCurve: 'continuous'` for rounded rectangles.
-- Media frames use 16, 20, or 24 depending on size.
-- Buttons use pill or 16, not unique radii per screen.
-- Avoid arbitrary 26, 30, 34 values unless a component token owns them.
+Use `borderCurve: 'continuous'` on rounded rectangles, and nothing off this scale unless a component owns the value.
 
 ### Elevation
 
-Mobile dark UI should rely mostly on borders, alpha, and blur rather than heavy shadows.
-
-Tokens:
-
-- `shadow.none`: default.
-- `shadow.surface`: low lift for cards.
-- `shadow.panel`: stronger lift for floating panels.
-- `shadow.modal`: strongest lift for sheets and menus.
-- `glow.accent`: rare accent glow for the center create button or primary generate CTA.
+Dark surfaces separate by fill and hairline first. `theme.shadow` holds shadows by role (`panel`, `floating`, `sheet`, `drawer`, `dock` for surfaces that float over content), and they are drawn at a third of the weight on paper.
 
 Rules:
 
-- Do not add random shadow strings inline.
-- Avoid shadows on every card in a feed.
-- Use glow only for primary moments, not normal content.
+- **No box shadow on anything that scrolls.** iOS renders it with an offscreen pass every frame. Feed cards are flat.
+- **The create disc uses a path shadow over its opaque coral fill, not `boxShadow`.** React Native computes a shadow path only over an opaque background.
+- Don't write shadow strings inline.
 
 ### Motion
 
-Motion should help people understand state changes.
+Motion explains a change of state; it is never decoration. The tokens are in `appTheme.motion`:
 
-Durations:
+- **Durations:** `navigation` 140 ms, `navigationSwell` 90, `state` 180, `reveal` 360. Every timing names its easing.
+- **Springs over eased curves:**
+  - `pressIn` is close to critically damped, so a surface lands under the finger at once.
+  - `release` is underdamped, so it settles back with a small visible rebound.
+  - `panel` is for drawers and sheets, damped enough that a 360pt panel never overshoots its edge.
+  - `navigationSettle` settles the dock's selection.
+- **Press scales:** controls 0.9, buttons 0.96, cards 0.975. A 1–2% change reads as nothing under a thumb.
+- Use `usePressMotion`, `MotionView`, `useSpringState` and `useOverlayPresence` from `lib/motion.ts` rather than new animation code.
+- **Reduced motion** (`useReducedMotion()`) swaps travel for a fade or a cut. Tab switches drop their animation, and `SaveHeart` becomes a plain swap.
+- **List entrances:** `Reveal` fades a list's first page into place once, at mount. Recycled cells never replay it.
+- **Opening the reel:** a tile opens it with UIKit's zoom transition on iOS (`Link.AppleZoom`, `lib/apple-zoom.ts`) and with the zoom flight in `components/media-zoom.tsx` elsewhere. The reel's chrome draws inside the zoom window, so the hand-over changes no pixel.
 
-- `fast`: 120ms
-- `base`: 160ms
-- `slow`: 240ms
+### Haptics
 
-Rules:
+`haptic.select`, `light`, `soft`, `medium`, `success` and `error` from `lib/haptics.ts` are the whole vocabulary. On Android each maps to an OS constant (`ANDROID_EFFECTS`).
+- Use them for selection changes, save, generate, publish and errors.
+- Never on scroll or on every tap.
 
-- Animate menus, sheets, generation state changes, and success confirmations.
-- Use subtle press feedback on buttons.
-- Avoid scaling every card on every press if it makes lists feel jumpy.
-- Respect reduced-motion settings where possible.
-- Haptics are useful for create, generate, save, publish, and errors.
+## Icons
 
-## Icon System
+Use `lucide-react-native`. A Babel plugin rewrites each import to that icon's own module.
 
-Use `lucide-react-native` for product icons.
+- **Sizes** come from `appTheme.icon`, stepped to sit beside the type ramp:
+  - `xs` 14 beside `caption`;
+  - `sm` 16 beside `label` or `bodySm`;
+  - `compact` 18 beside `body`;
+  - `default` 20 for a standalone control;
+  - `feature` 24 beside `sectionTitle`;
+  - `hero` 32 for hero and empty states.
 
-Sizes:
-
-- 16: metadata and tiny inline actions.
-- 18: compact actions.
-- 20: normal actions.
-- 24: feature marks.
-- 28-32: large create menu actions only.
-
-Rules:
-
-- Icon-only buttons need `accessibilityLabel`.
-- Pair unfamiliar icons with text.
-- Keep stroke width near `2` or `2.2`; do not mix visual weights casually.
-- Selected state should use color, fill, background, or badge, not a different icon family.
-- Use familiar metaphors:
-  - Create: `Sparkles`, `WandSparkles`, `Plus`
-  - Image: `Image`
-  - Video: `Play`, `Video`
-  - Motion: `Rocket`, `Sparkles`
-  - Feed/community: `Users`, `Heart`, `Share2`
-  - Profile/account: `User`, `Settings`, `Wallet`, `Crown`
-  - Navigation: `ChevronLeft`, `ChevronRight`, `X`
+  A size off the ramp fails `hig-icon-size.test.ts`.
+- **Stroke:** one weight for the whole set, 2.2. The `LucideProvider` in the root layout sets it once, so call sites pass a size and never a stroke.
+- **Labels:** icon-only buttons need an `accessibilityLabel`. Pair unfamiliar icons with text.
+- **Selected state** shows through colour, fill, background or a badge, never a different icon family.
+- **Metaphors:**
+  - Home `Home`, Explore `Compass`, Alerts `Bell`, Profile `User`.
+  - Create `Plus`, `Sparkles`, `WandSparkles`.
+  - Image `Image`; video `Play`, `Video`; motion `Rocket`.
+  - Community `Heart`, `MessageCircle`, `Share2`.
+  - Account `Settings`, `Wallet`, `Crown` (credits).
+  - Navigation `ChevronLeft`, `ChevronRight`, `X`.
 
 ## Accessibility And Touch
 
-Minimum targets:
-
-- iOS: at least 44 x 44pt.
-- Android / Material: aim for at least 48 x 48dp.
-- Primary CTA: 48-58px tall.
-- Icon-only controls: at least 44 x 44.
-- Chips can look smaller, but their hit area should not be smaller than 44.
-
-Text:
-
-- Important text should remain readable with larger font settings.
-- Do not lock critical text to tiny single-line labels.
-- Error text should be selectable when useful.
-- Important data such as IDs, prompt snippets, and file names can be selectable.
-
-Media overlays:
-
-- Add scrims or gradient protection behind text.
-- Do not put critical copy on visually noisy media.
-- Keep action buttons separated enough to prevent accidental taps.
-
-Keyboard:
-
-- Forms must use `keyboardShouldPersistTaps="handled"`.
-- Inputs near the bottom need keyboard-aware padding.
-- Focus order should follow visual order.
+- **Hit regions:** 44 × 44pt minimum (`MIN_HIT_TARGET_PT`).
+  - A control drawn smaller extends its reach with `verticalHitSlop()` from `lib/hit-target.ts`.
+  - `appTheme.touch` sizes controls at 48 by default and 56 when roomy, which also meets Material's 48dp.
+- **Contrast:** 4.5:1 for text on every panel surface, in both schemes.
+- **Text size:** it scales with the OS; see Typography.
+- **VoiceOver and TalkBack:**
+  - Label icon buttons.
+  - Give an `accessibilityHint` where the result isn't obvious.
+  - Announce headers.
+  - Expose selected and disabled state.
+- **Reduce Transparency:** the dock turns it into an opaque fill on iOS.
+- **Keyboard:**
+  - Screens that take input use `Screen keyboardAware`, and forms keep taps with `keyboardShouldPersistTaps="handled"`.
+  - A sheet with a text field renders through the overlay host, because Android reports no keyboard height inside a React Native `Modal`.
+  - Focus order follows visual order.
+- **Text over pictures:** it sits on a shade (`mediaColors`, the caption scrim). Critical copy never goes on noisy media.
+- **Selectable text:** errors, IDs and prompts are selectable where useful.
 
 ## Navigation Model
 
-### Main Tabs
+### The dock
 
-The bottom tab bar is the persistent product map. It should have three to five top-level destinations.
+`components/magic-tab-bar.tsx` draws a floating dock with five places: Home, Explore, the coral Create disc, Alerts and Profile.
 
-Current visible tabs:
+- Labels are always visible. The active tab takes the coral tint, and Alerts carries the unread badge.
+- **iOS** draws the dock in Liquid Glass where the OS has it, and otherwise a fill tinted from the content behind it. It honours Reduce Transparency.
+- **Android** draws its own opaque dock.
+- The dock **hides, never unmounts,** while the Create workspace is up. A blur view torn down mid-fade crashes.
+- Credits (`(tabs)/pricing`) is a tab route with no dock button. The credits pill in Home's top bar opens it.
+- Don't add a destination to the dock without removing one.
 
-- Home
-- Feed
-- Alerts
-- Profile
-- Center create action
+### Create menu
 
-Rules:
+The disc opens two choices, each with its description (`lib/create-menu-view-model.ts`):
+- **Create**: "Image, Video, and Motion".
+- **Post**: "Share finished media".
 
-- Tabs are for navigation; the center `+` is a special product action and must be treated as a deliberate exception.
-- Keep tab labels visible.
-- Active tab must be obvious through color and label/icon state.
-- Do not add more visible tabs unless one is removed.
-- Secondary destinations such as Credits, Unlocks, Settings, Help, and Seller Dashboard belong behind profile, menu, or contextual links.
+Keep generating and publishing visibly different.
 
-### Center Create Menu
+### Side menu
 
-The center create action should open a short, confident choice:
+Home's menu button opens a drawer (`components/home-side-menu.tsx`) with Templates, Invite & Earn, Your Sales, Your Unlocks, Settings, and Help & Support. Secondary destinations belong there or behind Profile, not in the dock.
 
-- `Create`: image, video, motion.
-- `Post`: publish existing work or external media.
+### Stack screens
 
-Rules:
+These screens push over the tabs:
+- `create/[tool]`, `post/new`, `post/[id]`, `viewer` (the reel);
+- `creators/[username]`, `showcase/[id]`;
+- `edit-profile`, `settings`, `help`, `invite`, `unlocks`, `unlock/[unlockId]`;
+- `marketplace/[assetId]`, `seller-dashboard`;
+- `templates`, `templates/[slug]`, `template-runs/[runId]`;
+- `profile-media-feed`, `delete-account`.
 
-- Show both label and short body copy. The current data already includes useful bodies in `create-menu-view-model.ts`.
-- Keep actions large and reachable.
-- Dismiss with backdrop tap and close button.
-- Do not hide the difference between generating content and publishing content.
+`auth`, `onboarding` and `update-required` sit outside the tab flow. The last two turn the back gesture off.
 
-### Stack Screens
+Every pushed screen has a real way back, including its loading and error states. Forms and settings should not feel like feed pages.
 
-Use native stack behavior for focused flows:
+## Overlays
 
-- `create/[tool]`
-- `post/new`
-- `viewer`
-- `edit-profile`
-- `settings`
-- `marketplace/[assetId]`
+- **Action sheets** (`showActionSheet`, `components/action-sheet.tsx`) draw in-window through `OverlayHost`, so a sheet opened from another sheet draws above it.
+- **Dialogs** (`showConfirmDialog`, `showMessageDialog`, `components/dialog.tsx`) use a `Modal`. A dialog has no text field and has to sit above everything.
+- **Sheets with a text field** (comments, editors) render through `components/overlay-host.tsx`, never a React Native `Modal`, for the keyboard reason above.
+- **Sheet chrome** (`components/sheet-chrome.tsx`) is the one dismissal contract every bottom sheet shares.
+  - The grabber really drags.
+  - A swipe down or a tap on the backdrop dismisses the sheet.
+  - Its top corners are `radii.xl`.
 
-Rules:
-
-- Use real back affordances.
-- Full-screen media viewer may hide the tab bar.
-- Forms and settings should not feel like feed pages.
+  Drawing a grabber without the drag is worse than drawing none.
+- Keep sheet action lists short, put destructive or final actions last, and never use a sheet for ordinary page navigation.
 
 ## Component System
 
-New or migrated UI should use these primitives from `components/ui.tsx` or add them there first.
-
-### Screen
-
-Use for normal screen shells.
-
-Spec:
-
-- Background: `bg.page`
-- Horizontal padding: `screen`
-- Section gap: `section`
-- Safe-area-aware top and bottom.
-- Tab screens use `insideTab`.
-
-Use when:
-
-- Home sections
-- Profile sections
-- Settings/help
-- Create launchpad
-
-Avoid:
-
-- Custom per-screen padding unless the surface is a full-screen viewer or masonry feed.
-
-### AppText
-
-Use for all normal text.
-
-Spec:
-
-- Accepts semantic variant.
-- Accepts semantic color.
-- Defaults to selectable for readable data where appropriate.
-
-Avoid:
-
-- Inline text styles in new components unless the style is a one-off decorative mark.
-
-### SectionHeader
-
-Use for page sections.
-
-Spec:
-
-- Optional eyebrow.
-- Title.
-- Optional body.
-- Optional action.
-
-Rules:
-
-- Section titles should clearly tell users what the area does.
-- Do not use vague headings such as "More" when a job can be named.
-
-### Card
-
-Use for repeatable content units.
-
-Spec:
-
-- Radius: `xl` or `lg`.
-- Padding: `card` or `panel`.
-- Border: `border.subtle` or accent-tinted for selected state.
-- Gap: `gap`.
-
-Card hierarchy:
-
-1. Media or icon.
-2. Title.
-3. Short body or metadata.
-4. One clear action or tap target.
-
-Avoid:
-
-- Cards inside decorative cards.
-- Mixed radii within the same list.
-- More than one primary action per card.
-
-### Buttons
-
-Use `PrimaryButton` for the main action and `SecondaryButton` for support.
-
-Primary:
-
-- Height: 48-58.
-- Filled with accent or high-contrast gradient.
-- Text uses `button`.
-- One per decision area.
-
-Secondary:
-
-- Height: at least 44.
-- Bordered or soft surface.
-- Never competes visually with the primary.
-
-Ghost/icon:
-
-- Use for toolbar actions.
-- Must have accessibility label.
-
-Button copy:
-
-- Use verbs: Generate image, Create video, Publish post, Save, Share, Recreate.
-- Avoid vague labels such as "Open" when the destination matters.
-
-### Inputs
-
-Use `AppTextInput` or a shared input wrapper.
-
-Spec:
-
-- Label above input.
-- Radius: `md`.
-- Border: `border.default`.
-- Background: `surface.inset`.
-- Minimum height: 48 for single-line, 112+ for prompt/body.
-- Placeholder should be useful, not cute.
-
-Rules:
-
-- Required fields should be obvious.
-- Optional fields should say optional.
-- Long prompt input should have helper text and enhancement action nearby.
-
-### Pills And Chips
-
-Use for filters, statuses, metadata, model options, and unlock tags.
-
-Spec:
-
-- Visual height may be 32-36.
-- Hit target should be 44+.
-- Radius: pill.
-- Active state uses accent border/background.
-
-Rules:
-
-- Use chips for small choices, not for complex decisions.
-- If a choice affects cost, show the cost nearby.
-- Avoid horizontal chip rows that hide required choices off-screen.
-
-### MediaFrame
-
-Use for all image/video previews.
-
-Spec:
-
-- Stable aspect ratio before load.
-- Radius: 16, 20, or 24.
-- Border: subtle.
-- Background: `surface.inset`.
-- Optional gradient scrim for overlays.
-
-Rules:
-
-- Media should be the first visual signal in feeds and viewer surfaces.
-- Do not stretch media.
-- Video previews need play/pause affordance.
-- Text-only posts use a text preview card, not an empty media box.
-
-### StatusBlock
-
-Use for empty, loading, success, warning, and error states.
-
-Spec:
-
-- Title.
-- Body.
-- Optional action.
-- Tone: neutral, success, warning, danger.
-
-Rules:
-
-- Errors must explain the next step.
-- Empty states should offer a useful action.
-- Loading states should preserve layout when possible.
-
-### Sheets And Menus
-
-Use for temporary focused choices.
-
-Spec:
-
-- Backdrop with blur/dim.
-- Rounded top sheet or centered panel.
-- Grabber or clear close button.
-- Actions at the bottom when destructive or final.
-
-Rules:
-
-- Do not use sheets for normal page navigation.
-- Keep sheet action lists short.
-- Close/dismiss must be obvious.
-
-## Screen Templates
+New or migrated UI uses these primitives from `components/ui.tsx`. A missing one gets added there first.
+
+| Primitive | Use |
+| --- | --- |
+| `Screen` | The standard shell: scroll, safe areas, `screen` padding, `section` gaps. `insideTab` reserves the dock; `keyboardAware` suits input screens |
+| `AppText` | All text: a variant and a theme colour, with header semantics and scale caps built in |
+| `BrandLockup` | The product name: `compact` in chrome, `hero` on the welcome screen |
+| `Kicker` | A one-to-three-word eyebrow in caps |
+| `SectionHeader`, `SectionTitle` | Eyebrow, title, body and an optional action for a page section |
+| `Card` | A repeatable unit: `default`, `soft` or `inset`, padding `sm`/`md`/`lg`, an optional tool accent |
+| `SurfaceSection` | A titled panel grouping related controls |
+| `DisclosureSection` | A section that expands and collapses (advanced settings) |
+| `ChoiceChip` | One choice among a few, with real selected state |
+| `Pill` | A static tag, optionally with an icon |
+| `MetricCard` | A number with its label, an optional icon, body and action |
+| `ReadinessRow` | A pre-flight line: neutral, ready, warning, danger |
+| `ToggleRow` | A labelled switch with an explanation |
+| `PrimaryButton` | The one main action of a decision area. It takes a coral fill or a tool accent, and `loadingLabel` narrates the wait ("Publishing…") |
+| `SecondaryButton` | Supporting actions; never competes with the primary |
+| `IconButton` | An icon-only control; its label is required |
+| `AppTextInput` | Label above; `hint`, an announced `error`, a `footer` for counts, a clear button |
+| `BottomActionDock` | The action dock at the foot of a long form |
+| `MediaFrame` | A picture or video with its aspect ratio held before load |
+| `StatusBlock` | Empty, info, success, warning and error states: a title and a next step |
+| `WebLinkButton` | Opens a web page (help, legal) |
+| `CreatorAvatar` | A creator's photo with an initial as fallback |
+
+Beyond `ui.tsx`:
+
+- `feed-card-shell.tsx`: the frame every feed card shares.
+- `skeleton.tsx`: loading bones shaped like the content, breathing on one shared pulse.
+- `reveal.tsx`: the first page's entrance.
+- `save-heart.tsx`: the optimistic save pop.
+- `top-scrim.tsx`: the fade under the status bar on scrolling tab roots.
+- `double-tap-pressable.tsx`: a double-tap on media.
+
+Card hierarchy: media or icon, then title, then a short body or metadata, then one clear action. Avoid cards inside decorative cards, mixed radii in one list, and more than one primary action per card.
+
+Button copy uses verbs ("Generate image", "Publish post", "Save", "Remix"). A bare "Open" is fine only when the destination is obvious.
+
+## Screen Patterns
+
+These describe the app as of 0.1.6; each screen's `hig-*` test pins the details.
 
 ### Home
 
-Job: orient the creator and start the next useful action.
+`components/home-dashboard.tsx`. Job: the community feed, with the next thing to make one tap away.
 
-Structure:
-
-1. Compact top bar: menu, brand, credits, alerts.
-2. Welcome/status panel.
-3. Creator paths.
-4. Recent studio if available.
-5. Showcase and unlock rails.
-
-Rules:
-
-- The first useful action should be visible without scrolling.
-- `Create new` should feel primary.
-- Metrics should support confidence, not crowd the screen.
-- Signed-out users should understand they can explore before sign-in.
-- Avoid a marketing hero that delays creator paths.
-
-### Create Launchpad
-
-Job: choose what to create.
-
-Structure:
-
-1. Page title and credits.
-2. Tool cards: Image, Video, Motion.
-3. Short description and estimated starting cost.
-4. Recent drafts or recipes if available.
+1. **Top bar.**
+   - The menu button (side menu) sits on the left.
+   - The credits pill sits on the right: crown, balance, and `+`. It shows a dash until the balance loads, because a 0 reads as an empty account.
+   - The title slot is deliberately empty.
+2. **Header rail.** Swipeable slides: continue in the creator workspace, the Image, Video and Motion tools, and promos. It turns every few seconds, but only while Home is at rest and on screen.
+3. **Lanes:** For You, Notes (posts with writing), Recent, Unlocks. A lane is a new feed, so switching remounts the list at its top.
+4. **The feed.** A FlashList of cards:
+   - media cards open the reel;
+   - written posts open the post page;
+   - the comment control opens comments directly.
 
 Rules:
 
-- Tool cards should show what each creates, not just model names.
-- Keep workflow/future tools visually secondary until available.
-- The launchpad should not expose every generation setting.
+- The For You first page is kept on the device, so a cold start draws the last posts while the feed refreshes.
+- The list header's height must not change with load state, because FlashList anchors on it.
 
-### Generation Workspace
+### Explore
 
-Job: provide the minimum input, adjust options if needed, generate, then continue.
+`app/(tabs)/showcase.tsx`. Job: browse community media and open it.
 
-Phase 3 decision: Create is a prompt-first single page, not a wizard. Keep Image, Video, and Motion in one native workspace with progressive disclosure. Essentials and References stay visible; Advanced settings are collapsed by default.
-
-Recommended structure:
-
-1. Header with credits, cost, and active tool.
-2. Tool switcher: Image, Video, Motion.
-3. Prompt panel.
-4. Essentials: model plus high-frequency settings.
-5. References: optional image/video/audio inputs or required motion media.
-6. Advanced settings collapsed by default.
-7. Readiness rows and primary generate action.
-8. Progress and result panel after submit.
+1. The title, with search (a full-screen overlay) and the workspace menu.
+2. Filters: All, Unlocks, Free, Paid, Remixable.
+3. A masonry grid of media posts. Text-only posts live on Home's Notes lane and the post page.
+4. A skeleton grid while loading, and paging at the foot.
 
 Rules:
 
-- First-time path should be prompt -> generate.
-- Advanced settings should not block the first output.
-- Cost must be visible before generating.
-- Upload guidance should explain accepted media and why it is needed.
-- Model pickers should explain benefit in plain language.
-- Prompt enhancement should not look like the primary action.
-- Users should be able to leave and find progress in Alerts/Studio.
-- Successful results should offer a `Post this` handoff when a generation ID exists, plus Alerts and Create Another actions.
+- A post whose preview is still rendering keeps its place in the grid.
+- A tile opens the reel with a zoom from the tile itself.
 
-Image-specific:
+### The reel
 
-- Prompt is required unless using a reference-only supported path.
-- Aspect ratio and resolution are common settings.
-- References are optional and should not dominate the default path.
+`app/viewer.tsx` and `components/reel-chrome.tsx`. Job: watch full-screen and act on a post.
 
-Video-specific:
+- **Scheme:** dark in both schemes, with a light status bar while in front.
+- **Paging:**
+  - Vertical paging between posts, with one video playing at a time.
+  - A swipe left opens the post's details page.
+- **Right rail:** Save, Comment, Share, Details, and Remix or Recreate (coral).
+  - Own posts add Publish and a visibility control.
+  - Paid posts add Unlock.
+- **Chrome:**
+  - The creator and caption sit on a shade at the bottom.
+  - Letterbox bands surround pictures that don't fill the screen.
+  - A top shade sits under the status bar.
+- **Loading:** before the data lands, the reel shows the tapped tile's own picture (and its playing video), never a spinner.
 
-- Start with a recommended model/mode.
-- Hide complex multi-shot controls until enabled.
-- Explain sound, duration, and resolution in terms of result and cost.
-- Frames/elements mode needs plain-language help.
+### Post page and details
 
-Motion-specific:
+`app/post/[id].tsx` and `components/post-details-page.tsx`.
 
-- Character image and reference motion video are required.
-- Show these required uploads before optional prompt.
-- Duration should come from reference video where possible.
+- Written posts read as a page, not a reel. Page 0 is the post, and a swipe left reaches the same details page media posts have: how it was made, references, resources and unlock.
+- Every state keeps a way back: loaded, loading, or gone.
 
-### Feed / Showcase
+### Comments
 
-Job: browse, save, open, remix, and learn from community work.
+`components/comments-sheet.tsx`. Threaded comments in a sheet:
 
-Structure:
+- replies sit under their parent, and the thread pages as you scroll;
+- report, remove and delete appear where allowed;
+- writing needs an account, and a guest goes to sign-in and comes back to the thread.
 
-1. Title and compact feed controls.
-2. Filter chips.
-3. Masonry/media grid.
-4. Loading, empty, and error states.
+### Post composer
 
-Rules:
+`app/post/new.tsx`. One vertical page, no wizard, in this order:
 
-- Media comes first.
-- Gutters must stay consistent.
-- Text-only posts need beautiful text cards.
-- Save/share/open actions must be touch-friendly.
-- Filter chips should have real selected state.
-- Avoid controls that look active but do nothing.
+1. **Made With:** attribution.
+2. **Title.**
+3. **Proof:** the media or text being posted. Generated media stays attached as it is.
+4. **Story:** the public content shown in Explore.
+5. **Unlock:** optional gated resources, free or paid.
+6. **Publish:** who can see it.
 
-### Viewer
-
-Job: inspect media and take the next action.
-
-Structure:
-
-1. Full-screen media.
-2. Safe-area top controls: back, more/share.
-3. Right-side or bottom action stack: save, share, download, recreate.
-4. Bottom metadata: creator, title, caption, unlock/resource cue.
+Then the footer with the publish action.
 
 Rules:
 
-- Media should be uninterrupted.
-- Overlay text needs strong contrast.
-- Actions should stay in predictable positions.
-- Recreate/remix should be a major action when allowed.
-- Details can live in a sheet or secondary pane.
+- "Post to feed" after generating and "Post this creation" in the reel both open the composer for review. Neither publishes immediately.
+- Generation references and exact prompts attach only when the creator chooses them.
+- Marketplace details appear only once a free or paid package is chosen.
+- Removing something offers Undo just above the footer, where it stays in reach.
+- After publishing, the share sheet is offered, then Profile opens on Posts with the new post in view.
 
-### Post Composer
+### Create workspace
 
-Job: publish a text post, external media, Magicbooklet creation, or unlockable resource.
+`app/(tabs)/creator.tsx` and `components/media-creation-screen.tsx`. Job: the minimum input, the options when wanted, generate, then continue.
 
-Phase 2 decision: use a guided single-page composer, not a multi-step wizard. The user should scan one vertical flow with clear sections for public post, unlockable resources, preview, and publish readiness. Full create/generation redesign remains later; post publishing should feel feed-first and fast.
+Create is a prompt-first single page for Image, Video and Motion, not a wizard.
 
-Phase 4 decision: creation-to-post publishing is one continuous workspace. `Post this` opens the composer for review; it never publishes immediately. Creation-backed posts default to a normal feed post, with references, exact prompt resources, free packages, and paid packages controlled explicitly by the user.
-
-Recommended order:
-
-1. Selected creation hero when launched from a generation.
-2. Public post: title, caption/body, visibility.
-3. Content source picker only when no creation is already selected.
-4. Collapsed post settings: source/tool and category.
-5. Resource package: none, free, or paid.
-6. Explicit creation package toggles: attach references, use exact prompt as resource, allow remix.
-7. Resource fields when free or paid is selected.
-8. Preview.
-9. Bottom publish dock with readiness and CTA.
-
-Rules:
-
-- Keep the mental order familiar: what is it, what content, how to describe it, where it belongs, whether it is unlockable.
-- Marketplace details should appear only after free/paid package is selected.
-- Source/tool and category should be available but quieter than title, caption, visibility, and package decisions.
-- Generation references must not auto-attach by default; use explicit package toggles.
-- Use readiness rows for public post, resource package, preview, and publish state so blocked actions explain themselves without a separate wizard screen.
-- Publish CTA should live in a compact bottom dock when practical.
-- After publish, open the new post in the viewer so the reward is immediate.
+- **Structure:** the tool switcher, the prompt, the model and its common settings, and references. Advanced settings are collapsed by default. Readiness and the generate action close the page.
+- **Cost:** it is visible before generating and matches the credits pill.
+- **Inputs:**
+  - The first-time path is prompt, then generate.
+  - References are optional, except Motion's required character image and reference motion video, which come before the prompt.
+  - Upload guidance says what is accepted and why.
+- **Models:** pickers explain each model's benefit in plain words. Prompt enhancement never looks like the primary action.
+- **After generating:** the screen offers Post to feed (once there is a generation), Open Alerts, and Back to creator. It may also ask to turn on notifications. Progress survives leaving the screen and can be found in Alerts.
 
 ### Profile
 
-Job: understand identity, media, saved items, posts, credits, and seller status.
+`components/profile-dashboard.tsx`. The title (`pageTitle`, announced as a header), the profile header with edit, then Saved / Creations / Posts as a segmented control, then the grid.
 
-Structure:
+- A signed-out profile invites sign-in without looking broken.
+- Each segment's empty state says what will appear there.
 
-1. Profile header and edit action.
-2. Stats: creations, posts, saved.
-3. Credits/wallet cards.
-4. Media tabs: Saved, Creations, Posts.
-5. Gallery grid.
+### Alerts
 
-Rules:
+`app/(tabs)/studio.tsx`. Titled "Alerts".
 
-- Signed-out state should clearly invite sign-in without looking broken.
-- Gallery cards should use consistent aspect ratio and action labels.
-- Credits and wallet should use compact metric cards so money/status surfaces match feed and marketplace hierarchy.
-- Saved, Creations, and Posts tabs should use shared chip language with real selected state.
-- Empty states should explain what will appear here.
+- Generation progress and history come first. Preferences follow, grouped as Generation updates, Creator activity, and Unlocks & credits, with the device's push state.
+- Failures say what still works ("In-app history still works") and how to retry.
+- Completed generations open their output.
 
-### Alerts / Studio
+### Credits
 
-Job: monitor generation progress, completion, failures, notifications, and recovery.
+`app/(tabs)/pricing.tsx`. "Top up credits":
 
-Structure:
+- the store's packs and Restore purchases;
+- a clear state for each reason a purchase can't happen, such as purchases unavailable in this build, turned off on the device, or packs unavailable;
+- a guest can buy first and create an account later.
 
-1. Title and notification preferences action.
-2. Active generation status.
-3. Completed/failed notifications.
-4. Retry/open actions.
+Buying and restoring show loading, success and error states.
 
-Rules:
+### Settings
 
-- Active generation states should be visually distinct.
-- Failed states need retry or clear next step.
-- Completed states should open the output.
-- Notification summary, push device state, preferences, and category explanations should use shared cards/metrics so Alerts feels like a product surface, not a system log.
-- Notification settings should sit below the history/recovery flow and should not crowd the status list.
+`app/settings.tsx`.
 
-### Pricing / Credits
+- Appearance is a segmented control with radio semantics (System, Light, Dark), and the change lands in the same frame.
+- Below it come the account rows (profile, credits, invite, alerts), help, the legal pages, and account deletion.
 
-Job: understand balance, buy credits, restore purchases, and know what actions cost.
+### Onboarding
 
-Rules:
+`app/onboarding.tsx`. It stays dark in both schemes, because its art is made for black. The app takes the phone's appearance from the first screen after it.
 
-- Credits should appear in the top bar and create flow.
-- The pricing screen should also show a compact balance/store readiness row before packs.
-- Credit packs use shared cards, typed credit totals, and a small `Popular` pill where applicable.
-- Pricing screen should use clear plan cards.
-- Buying or restoring must show loading, success, and error states.
-- Cost language should match the create flow.
+## Feeds And The Reel
+
+What scrolls and swipes has a frame budget, and every rule here came from a measured regression on the phones. `feed-render-cost.test.ts` pins them.
+
+- **Round feed cards without clipping them.** `overflow: 'hidden'` on a card costs iOS an offscreen pass per card per frame.
+- **No box shadows on scrolled content.** The create disc uses a path shadow over its opaque fill.
+- **Gradients use React Native's own** on anything that mounts while scrolling or swiping: `experimental_backgroundImage` with `linearGradient()` from `lib/eased-fade.ts`, drawn by the render server. expo-linear-gradient paints on the main thread each time its view appears, which cost 16–27 ms per rail switch and per reel open on the iPhone.
+- **Pause what nobody sees.**
+  - The header rail stops turning while the feed moves or is off screen.
+  - The dock subscribes to the sampled colour only where it paints it.
+- **One video plays at a time.**
+  - The feed elects one player.
+  - Set player properties once rather than on every hand-off, because AVPlayer writes stall iOS scrolling.
+- **FlashList for every feed.**
+  - The list header keeps its height through loading.
+  - Masonry cells keep their place when a preview arrives.
+- **Measure before and after** on the phones: Instruments on the iPhone, Perfetto on the Android. Keep only changes with a measured gain; feel is the final judge.
 
 ## Habit And Retention Patterns
 
 Use positive loops:
 
-- Immediate reward: after generation or publish, show the result.
+- Immediate reward: after generation or publishing, show the result.
 - Progress visibility: active jobs are easy to find.
-- Saved inspiration: saving should feel lightweight.
-- Recreate loop: community work can become a new creation quickly.
+- Saved inspiration: saving is one light tap with a visible pop.
+- The remix loop: community work becomes a new creation quickly.
 - Gentle status: credits and render state are visible but not stressful.
 
 Avoid:
 
 - Anxiety-based reminders.
-- Confusing streak mechanics unrelated to creator value.
+- Streak mechanics unrelated to creator value.
 - Surprise credit usage.
 - Hiding failures.
 - Gesture-only critical navigation.
 
 ## UX Writing
 
-Voice:
-
-- Clear.
-- Short.
-- Creator-focused.
-- Specific about result and consequence.
+Voice: clear, short, creator-focused, specific about result and consequence.
 
 Examples:
 
-- Good: "Generate image"
-- Avoid: "Submit"
-- Good: "Add start frame"
-- Avoid: "Upload"
-- Good: "Costs 18 credits"
-- Avoid: "Premium"
-- Good: "Could not upload. Try a JPG, PNG, or HEIC under the limit."
-- Avoid: "Upload failed."
+- Good: "Generate image". Avoid: "Submit".
+- Good: "Add start frame". Avoid: "Upload".
+- Good: "Costs 18 credits". Avoid: "Premium".
+- Good: "Could not upload. Try a JPG, PNG, or HEIC under the limit." Avoid: "Upload failed."
 
 Rules:
 
-- Use action verbs.
-- Explain cost before commitment.
-- Explain model settings in result language.
-- Error messages should say what happened and what to do next.
-- Empty states should give a next action.
+- Use action verbs, and explain cost before commitment.
+- Explain model settings in terms of the result.
+- Error messages say what happened, what still works, and what to do next.
+- Empty states offer a next action.
+- One name per thing across the app: the tab and its screen title both say Alerts.
+- Ellipses are the `…` character, and a waiting button says what it is doing ("Publishing…").
 
 ## State Patterns
 
-Every screen or component that fetches or mutates data must cover:
+Every screen or component that fetches or mutates data covers:
 
 - Empty.
-- Loading.
-- Saving/uploading.
+- Loading: a skeleton in the content's shape, not a spinner, where the layout is known.
+- Saving or uploading.
 - Success.
-- Error.
-- Retry.
-- Signed-out.
+- Error, with a retry.
+- Signed-out, and guest where it differs.
 - Insufficient credits where relevant.
 
 Generation state language:
 
 - `Ready`: inputs valid and cost known.
-- `Uploading`: file is moving to storage.
-- `Starting`: request accepted.
-- `Processing`: model is working.
-- `Completed`: output is ready.
+- `Uploading`: the file is moving to storage.
+- `Starting`: the request was accepted.
+- `Processing`: the model is working.
+- `Completed`: the output is ready.
 - `Failed`: explain and offer recovery.
 
-## Current Known Gaps
-
-These should guide the next refactor passes:
-
-- `magic-create-menu.tsx` does not render the body copy already available in `create-menu-view-model.ts`.
-- Several screens still use inline type, spacing, border, radius, and shadow values.
-- Some tab labels and route names differ: `studio` is titled Notifications but tab label says Alerts. Pick one user-facing language.
-- Home has multiple competing starts. Clarify the primary start and make secondary starts quieter.
-- Model choices need clearer creator-facing explanations and cost context.
-
-## Migration Rules
-
-When editing mobile UI:
+## When Editing Mobile UI
 
 1. Start with the job of the screen.
-2. Use `Screen`, `AppText`, `Card`, buttons, pills, inputs, and status blocks first.
-3. Use `appTheme` tokens instead of raw values.
-4. Keep the existing behavior unless the task explicitly changes UX.
-5. Migrate only the touched surface unless a shared primitive must change.
-6. Preserve safe-area and tab-bar padding.
-7. Verify small width, large text, loading, error, and signed-out states.
+2. Reach for `Screen`, `AppText`, `Card`, the buttons, chips, inputs and status blocks first.
+3. Take every value from `appTheme` and every colour from `useAppTheme()`.
+4. Keep the existing behaviour unless the task changes the UX.
+5. Move only the touched surface onto shared primitives, unless a shared primitive must change.
+6. Check both schemes, a small width, the largest text size, and the loading, error and signed-out states. Check on a device or simulator, not only in tests.
 
-Do not add:
-
-- New raw colors outside tokens.
-- New arbitrary spacing values outside the 4/8 rhythm.
-- Tiny required labels.
-- Touch targets below 44.
-- Inline SVGs for standard actions.
-- One-off card styles for repeated content.
-- Text over media without contrast protection.
-- New navigation destinations in the tab bar without removing another.
-
-## Implementation Priority
-
-Refactor in this order:
-
-1. Expand `appTheme` with any missing semantic tokens.
-2. Strengthen `components/ui.tsx` primitives.
-3. Fix the center create menu labels/body and action hierarchy.
-4. Simplify the generation workspace into primary path plus advanced sections.
-5. Normalize Home cards, rails, and metrics.
-6. Normalize Feed cards and viewer overlays.
-7. Normalize Profile, Alerts, Pricing, Settings, and composer states.
-
-## Review Checklist
-
-Before a mobile UI change is done, answer yes:
+Before a change is done, answer yes:
 
 - Is the primary action obvious within three seconds?
-- Does the screen use shared tokens/primitives?
-- Are type roles consistent?
-- Are icons from Lucide and paired with labels when needed?
-- Is spacing on the 4/8 rhythm?
-- Are touch targets at least 44 high/wide?
-- Is cost visible before paid/generation actions?
-- Are empty/loading/error/success states covered?
-- Does the screen work with safe areas and the bottom tab bar?
-- Does the UI still feel premium, calm, and media-led?
+- Does the screen use the shared tokens and primitives, in both schemes?
+- Are type roles consistent, and does the text scale?
+- Are icons Lucide, from the ramp, and labelled where needed?
+- Are touch targets at least 44pt?
+- Is cost visible before paid or generation actions?
+- Are the empty, loading, error and success states covered?
+- Does the screen respect safe areas and the dock?
+- If it scrolls or swipes, does it follow [Feeds and the reel](#feeds-and-the-reel)?
+- Does it still feel premium, calm and media-led?
 
 ## Final Principle
 
