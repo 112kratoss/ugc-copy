@@ -29,6 +29,7 @@ import {
   PrimaryButton,
   SecondaryButton,
 } from '@/components/ui';
+import { ensureAiDataConsent } from '@/lib/ai-data-consent';
 import { acquireActivityLock } from '@/lib/app-activity';
 import { showConfirmDialog } from '@/lib/dialog';
 import { useAuth } from '@/lib/auth';
@@ -1284,6 +1285,8 @@ function IdentityCreationScreen({
       openAuthForCurrentDraft();
       return;
     }
+    // The enhancer is Google's Gemini: the prompt leaves the phone.
+    if (!(await ensureAiDataConsent())) return;
     setMessage(null);
     setPromptMessage(null);
     setIsEnhancing(true);
@@ -1511,6 +1514,9 @@ function IdentityCreationScreen({
       setMessage(GENERATION_ATTEMPT_CHOICE_MESSAGE);
       return;
     }
+    // Last, so the question comes only for a run that is ready to go, and a
+    // refusal leaves the draft exactly as it was.
+    if (!(await ensureAiDataConsent())) return;
     setMessage(null);
     setPromptMessage(null);
     setStatus(null);
@@ -1538,6 +1544,8 @@ function IdentityCreationScreen({
   const checkPendingAttempt = async () => {
     const attempt = pendingAttempt;
     if (!attempt || activeGenerationRequestKeyRef.current || attempt.identityUserId !== identityUserId) return;
+    // The replay sends the saved request again, and permission may have been withdrawn since.
+    if (!(await ensureAiDataConsent())) return;
     setMessage(null);
     setPromptMessage(null);
     setStatus(null);

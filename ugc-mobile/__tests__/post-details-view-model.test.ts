@@ -151,16 +151,17 @@ describe('getDetailsPrimaryAction', () => {
 });
 
 describe('getUnlockPriceLabel', () => {
-  it('says Free before and after the quote arrives', () => {
+  it('says Free before and after the bundle loads', () => {
     expect(getUnlockPriceLabel(unlock(), undefined)).toBe('Free');
-    expect(getUnlockPriceLabel(unlock(), { priceQuote: { formatted: '₹0' } })).toBe('Free');
+    expect(getUnlockPriceLabel(unlock(), { priceUsdCents: 0 })).toBe('Free');
   });
 
-  it('prefers the live quote for a paid bundle', () => {
-    const paid = unlock({ accessMode: 'paid', priceLabel: '$4.00' });
+  it('prices a paid bundle in credits, from the loaded bundle once it arrives', () => {
+    const paid = unlock({ accessMode: 'paid', priceLabel: '400 credits' });
 
-    expect(getUnlockPriceLabel(paid, undefined)).toBe('$4.00');
-    expect(getUnlockPriceLabel(paid, { priceQuote: { formatted: '₹340' } })).toBe('₹340');
+    expect(getUnlockPriceLabel(paid, undefined)).toBe('400 credits');
+    // A creator can reprice after the feed was read; the loaded record wins.
+    expect(getUnlockPriceLabel(paid, { priceUsdCents: 1200 })).toBe('1,200 credits');
   });
 
   it('is nothing without an unlock', () => {

@@ -158,7 +158,8 @@ describe('showcase feed view model', () => {
     expect(cards[0]?.unlock).toEqual({
       accent: 'commerce',
       ctaLabel: 'View unlock',
-      label: '$9',
+      // The credits the unlock costs, never the web checkout's cash quote.
+      label: '900 credits',
       summary: 'Prompt + Notes',
     });
     expect(cards[1]?.unlock).toEqual({

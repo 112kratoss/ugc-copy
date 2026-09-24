@@ -69,9 +69,17 @@ describe('unlock library view model', () => {
     expect(getUnlockStateBadge(createUnlock())).toBeNull();
   });
 
-  it('prices unlocks in credits, matching what the buyer spent', () => {
-    expect(formatUnlockPrice(500)).toBe('500 credits ($5.00)');
-    expect(formatUnlockPrice(10)).toBe('10 credits ($0.10)');
+  it('prices unlocks in credits alone, matching what the buyer spent', () => {
+    expect(formatUnlockPrice(500)).toBe('500 credits');
+    expect(formatUnlockPrice(10)).toBe('10 credits');
+    // Grouped like every other credit amount in the app.
+    expect(formatUnlockPrice(125000)).toBe('1,25,000 credits');
+  });
+
+  it('never shows a cash price beside an unlock (App Review 2.1(b), 0.1.6)', () => {
+    for (const cents of [1, 10, 99, 900, 1234, 250000]) {
+      expect(formatUnlockPrice(cents)).not.toMatch(/[$₹€£]|USD|INR/);
+    }
   });
 
   it('labels a free unlock rather than showing zero', () => {

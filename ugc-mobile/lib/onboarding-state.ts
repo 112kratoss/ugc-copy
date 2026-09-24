@@ -105,10 +105,10 @@ export function parseInstallOnboardingState(value: string | null): InstallOnboar
 }
 
 /**
- * Whether the Creator Pack card should advertise a claimable reward.
+ * Whether the welcome-credits card should advertise a claimable reward.
  *
  * Only `eligible` qualifies. `unavailable` used to count too, which meant the
- * card read "Your Creator Pack is waiting" whenever the grant program was off
+ * card read "Your welcome credits are waiting" whenever the grant program was off
  * or the lookup failed — and tapping it routed into onboarding, where the claim
  * button is hidden for exactly those statuses. The card then returned on every
  * visit with no way to clear it.

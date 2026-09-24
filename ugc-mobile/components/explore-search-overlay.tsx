@@ -38,6 +38,7 @@ import type {
   ShowcaseFeedItem,
 } from '@/lib/types';
 import { useHardwareBack } from '@/lib/use-hardware-back';
+import { formatUnlockCreditPrice } from '@/lib/pricing';
 
 const SEARCH_TYPES: Array<{ id: PublicSearchType; label: string }> = [
   { id: 'top', label: 'Top' },
@@ -191,7 +192,7 @@ function RecipeRow({ recipe }: { recipe: RecipeSearchResult }) {
         <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 14, fontWeight: '800' }}>{recipe.title}</Text>
         <Text numberOfLines={2} style={{ color: theme.colors.muted, fontSize: 12, lineHeight: 17 }}>{recipe.summary || recipe.previewText}</Text>
         <Text style={{ color: theme.colors.success, fontSize: 12, fontWeight: '800' }}>
-          {recipe.accessMode === 'free' ? 'Free' : recipe.priceQuote.formatted}
+          {recipe.accessMode === 'free' ? 'Free' : formatUnlockCreditPrice(recipe.priceUsdCents)}
         </Text>
       </View>
     </Pressable>

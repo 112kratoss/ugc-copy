@@ -25,6 +25,7 @@ function relativePath(filePath: string) {
 }
 
 const mobileSourceFiles = sourceRoots.flatMap((root) => sourceFiles(path.join(mobileRoot, root)));
+const AI_DATA_DISCLOSURE_FILE = 'lib/ai-data-consent.ts';
 
 describe('mobile backend boundary', () => {
   it('routes HTTP business calls through the shared API client', () => {
@@ -68,12 +69,14 @@ describe('mobile backend boundary', () => {
   });
 
   it('keeps provider, payment, and service-role secrets server-side', () => {
+    const openAiName = /\bOpenAI\b/;
+    const kieName = /kie\.ai/i;
     const forbiddenPatterns = [
       /\bRazorpay\b/,
-      /\bOpenAI\b/,
+      openAiName,
       /api\.openai/i,
       /\bKIE\b/,
-      /kie\.ai/i,
+      kieName,
       /api\.replicate/i,
       /fal\.ai/i,
       /\bproviderModel\b/,
@@ -82,13 +85,22 @@ describe('mobile backend boundary', () => {
       /\bSUPABASE_SERVICE\b/,
       /\bservice_role\b/,
     ];
+    // The one file that may name the companies: the disclosure App Review
+    // requires before a prompt or media goes to a third-party AI service
+    // (guidelines 5.1.1(i) and 5.1.2(i)). It names them for people to read. It
+    // still may not carry an endpoint, a model mapping or a key.
+    const disclosureNames = new Set([openAiName, kieName]);
     const violatingFiles = mobileSourceFiles
       .filter((filePath) => {
         const source = readFileSync(filePath, 'utf8');
-        return forbiddenPatterns.some((pattern) => pattern.test(source));
+        const patterns = relativePath(filePath) === AI_DATA_DISCLOSURE_FILE
+          ? forbiddenPatterns.filter((pattern) => !disclosureNames.has(pattern))
+          : forbiddenPatterns;
+        return patterns.some((pattern) => pattern.test(source));
       })
       .map(relativePath);
 
     expect(violatingFiles).toEqual([]);
+    expect(readFileSync(path.join(mobileRoot, AI_DATA_DISCLOSURE_FILE), 'utf8')).toMatch(kieName);
   });
 });

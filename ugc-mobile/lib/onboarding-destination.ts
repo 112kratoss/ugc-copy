@@ -30,8 +30,8 @@ export interface OnboardingDestinationInput {
  * fetch is needed.
  *
  * Identity is checked *above* completion on purpose. Claiming a handle is
- * separate from claiming the Creator Pack, and most accounts that can never
- * claim the pack (created before the program activated) are also the ones still
+ * separate from claiming the welcome credits, and most accounts that can never
+ * claim them (created before the program activated) are also the ones still
  * carrying a generated `creator-xxxxxxxx` handle. Suppressing the card for them
  * would silence the one prompt that is genuinely actionable.
  *

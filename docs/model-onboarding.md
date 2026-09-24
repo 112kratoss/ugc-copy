@@ -89,6 +89,9 @@ The compiler and the tests below name anything left out. This is where each fact
 | Progress bar estimate | `src/lib/generation-timing.ts` | `IMAGE_MODEL_BASE_ESTIMATE_MS`, `VIDEO_MODEL_BASE_ESTIMATE_MS` |
 | Prompt enhancer | `src/lib/prompt-enhancer-playbooks.ts` | `ENHANCER_PLAYBOOKS`, `MODEL_ALIASES` |
 | "Made with" attribution | `src/lib/source-tools.ts` | `APP_SOURCE_TOOL` |
+| Who receives the prompt and media: the model's maker, named in the privacy policy | `src/lib/ai-data-recipients.ts` | `AI_MODEL_MAKER_BY_MODEL_ID` |
+
+A maker the app has not named before needs two more entries, because App Review requires the app and the privacy policy to name everyone who receives a person's data (guidelines 5.1.1(i) and 5.1.2(i)): `AI_MODEL_MAKERS` in `src/lib/ai-data-recipients.ts`, and `AI_MODEL_MAKERS` in `ugc-mobile/lib/ai-data-consent.ts`. Raise `AI_DATA_CONSENT_VERSION` in the same file, so every phone asks again. `src/__tests__/ai-data-recipients.test.ts` fails until both lists are complete.
 
 Only when it applies:
 

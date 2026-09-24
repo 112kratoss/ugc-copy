@@ -319,7 +319,8 @@ describe('immersive preview view model', () => {
       postId: 'unlock-post',
       title: 'Creator prompt pack',
       accessMode: 'paid',
-      priceLabel: '₹863 unlock',
+      // In credits, as the unlock is paid in the app, never the web's cash quote.
+      priceLabel: '900 credits',
       previewText: 'Unlock the reusable prompt.',
       resourceKinds: ['prompt', 'notes'],
       allowRemix: true,

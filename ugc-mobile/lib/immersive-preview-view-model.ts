@@ -4,6 +4,7 @@ import { withAppleZoom, type AppleZoomOpen } from './apple-zoom';
 import { getCreationAvailability, type CreationAvailability } from './creation-library';
 import { getGenerationKind, getGenerationLabel, getGenerationRenderableMediaKind } from './generation-media';
 import { formatCompactCount } from './home-view-model';
+import { formatUnlockCreditPrice } from './pricing';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from './showcase-display';
 
 export type PreviewViewerSource =
@@ -537,9 +538,10 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
         postId: item.asset.postId || item.id,
         title: item.asset.title.trim() || title,
         accessMode: item.asset.accessMode,
+        // In credits, as the unlock is paid: never the web checkout's cash quote.
         priceLabel: item.asset.accessMode === 'free'
           ? 'Free'
-          : item.asset.priceQuote?.formatted ?? formatUsdCents(item.asset.priceUsdCents),
+          : formatUnlockCreditPrice(item.asset.priceUsdCents),
         previewText: item.asset.previewText?.trim() || null,
         resourceKinds: normalizeResourceKinds(item.asset.resourceKinds),
         allowRemix: Boolean(item.asset.allowRemix),
@@ -756,7 +758,7 @@ function ownerPostToImmersiveItem(
         postId: item.id,
         title,
         accessMode: item.bundle.accessMode,
-        priceLabel: item.bundle.accessMode === 'free' ? 'Free' : formatUsdCents(item.bundle.priceUsdCents),
+        priceLabel: item.bundle.accessMode === 'free' ? 'Free' : formatUnlockCreditPrice(item.bundle.priceUsdCents),
         previewText: null,
         resourceKinds: normalizeResourceKinds(item.bundle.resourceKinds),
         allowRemix: item.bundle.resourceKinds.includes('remix'),
@@ -804,7 +806,7 @@ function canUnlockRemixShowcaseItem(item: ShowcaseFeedItem) {
 
 function showcaseBadge(item: ShowcaseFeedItem) {
   if (item.asset?.accessMode === 'free') return 'Free unlock';
-  if (item.asset?.priceQuote?.formatted) return item.asset.priceQuote.formatted;
+  if (item.asset) return formatUnlockCreditPrice(item.asset.priceUsdCents);
   if (canRecreateShowcaseItem(item)) return 'Remix';
   if (item.category === 'text' || item.postFormat === 'text') return 'Prompt';
   if (item.creationMode === 'motion') return 'Motion';
@@ -832,10 +834,6 @@ function categoryLabel(
 function normalizeResourceKinds(kinds: Array<string | PostResourceKind> | null | undefined): PostResourceKind[] {
   const allowed = new Set<PostResourceKind>(['prompt', 'workflow', 'files', 'notes', 'remix']);
   return (kinds ?? []).filter((kind): kind is PostResourceKind => allowed.has(kind as PostResourceKind));
-}
-
-function formatUsdCents(amount: number) {
-  return `$${(amount / 100).toFixed(2)}`;
 }
 
 function showcaseResource(item: ShowcaseFeedItem): ImmersivePreviewResource | undefined {

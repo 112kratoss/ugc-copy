@@ -41,6 +41,7 @@ vi.mock('lucide-react-native', () => {
     FileText: icon('FileText'),
     Gift: icon('Gift'),
     ShieldCheck: icon('ShieldCheck'),
+    Sparkles: icon('Sparkles'),
     Trash2: icon('Trash2'),
     UserRound: icon('UserRound'),
   };
@@ -94,6 +95,12 @@ vi.mock('@/lib/appearance', () => ({
 }));
 vi.mock('@/lib/dialog', () => ({ showMessageDialog }));
 
+const aiDataConsent = vi.hoisted(() => ({ grantedAt: null as string | null }));
+
+vi.mock('@/lib/ai-data-consent', () => ({
+  useAiDataConsent: () => ({ hydrated: true, grantedAt: aiDataConsent.grantedAt }),
+}));
+
 import SettingsScreen from '../app/settings';
 import { recordCreatorSession, resetCreatorSessionForTests } from '../lib/creator-session-diagnostics';
 
@@ -119,6 +126,7 @@ beforeEach(() => {
   appearance.available = true;
   appearance.preference = 'system';
   appearance.set.mockClear();
+  aiDataConsent.grantedAt = null;
   routerPush.mockClear();
   openUrl.mockClear();
   authState.user = { id: 'user-1', email: 'creator@example.com' };
@@ -206,6 +214,18 @@ describe('settings screen (HIG S16)', () => {
     const help = rowByTitle(tree, 'Help & support');
     renderer.act(() => { (help.props.onPress as () => void)(); });
     expect(routerPush).toHaveBeenCalledWith('/help');
+  });
+
+  it('opens AI data sharing, whose row says whether prompts and media may go to AI services', () => {
+    const notAllowed = rowByTitle(renderScreen(), 'AI data sharing');
+    expect(notAllowed.props.accessibilityRole).toBe('button');
+    expect(notAllowed.props.accessibilityLabel).toContain('Not allowed. You’ll be asked before anything is sent to AI services.');
+    renderer.act(() => { (notAllowed.props.onPress as () => void)(); });
+    expect(routerPush).toHaveBeenCalledWith('/ai-data-sharing');
+
+    aiDataConsent.grantedAt = '2026-09-25T08:00:00.000Z';
+    const allowed = rowByTitle(renderScreen(), 'AI data sharing');
+    expect(allowed.props.accessibilityLabel).toContain('Allowed. Your prompts and media go to AI services when you create.');
   });
 
   it('copies media diagnostics, named by the running version, from a long-press on the version line', async () => {

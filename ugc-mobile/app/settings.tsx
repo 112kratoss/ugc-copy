@@ -1,10 +1,11 @@
 import { useSyncExternalStore } from 'react';
 import { router } from 'expo-router';
-import { ArrowUpRight, Bell, ChevronRight, CircleHelp, CreditCard, FileText, Gift, ShieldCheck, Trash2, UserRound } from 'lucide-react-native';
+import { ArrowUpRight, Bell, ChevronRight, CircleHelp, CreditCard, FileText, Gift, ShieldCheck, Sparkles, Trash2, UserRound } from 'lucide-react-native';
 import { Linking, Pressable, View } from 'react-native';
 
 import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
 import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
+import { useAiDataConsent } from '@/lib/ai-data-consent';
 import { formatAppVersionLabel, readAppVersionParts, readUpdateRuntime } from '@/lib/app-version-label';
 import {
   APPEARANCE_PREFERENCES,
@@ -31,6 +32,7 @@ import { useAppTheme } from '@/lib/theme-context';
 export default function SettingsScreen() {
   const theme = useAppTheme();
   const { user, credits } = useAuth();
+  const aiDataConsent = useAiDataConsent();
   const versionLabel = formatAppVersionLabel(readAppVersionParts());
   // For support: the OTA runtime and channel, and how the last draft this launch
   // opened came back. It sits above the version, which stays the last line.
@@ -83,6 +85,17 @@ export default function SettingsScreen() {
           <AppearanceSetting />
         </>
       ) : null}
+
+      <GroupLabel>Privacy</GroupLabel>
+
+      <SettingsCard
+        icon={<Sparkles size={appTheme.icon.feature} color={theme.colors.primary} />}
+        title="AI data sharing"
+        body={aiDataConsent.grantedAt
+          ? 'Allowed. Your prompts and media go to AI services when you create.'
+          : 'Not allowed. You’ll be asked before anything is sent to AI services.'}
+        onPress={() => router.push('/ai-data-sharing' as never)}
+      />
 
       <GroupLabel>Support & legal</GroupLabel>
 

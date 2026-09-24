@@ -1,3 +1,4 @@
+import { formatUnlockCreditPrice } from '@/lib/pricing';
 import type { ViewerUnlockItem } from '@/lib/types';
 
 export type UnlockStateBadge = {
@@ -27,18 +28,15 @@ export function getUnlockStateBadge(item: ViewerUnlockItem): UnlockStateBadge {
 }
 
 export function formatUnlockPrice(priceUsdCents: number): string {
-  if (priceUsdCents <= 0) {
-    return 'Free';
-  }
-
   // "credits", not "tokens": this is a buyer-facing surface, and the buyer
   // spent credits — the unlock runs through `unlockBundleWithCredits` and
   // decrements the credit balance. The list previously said "900 tokens" for
   // an item the detail screen one tap away called "900 credits paid", which
   // read as two different currencies. Seller-side pricing copy still says
-  // tokens; sellers are paid in USD, so that split is left alone.
-  const usd = (priceUsdCents / 100).toFixed(2);
-  return `${priceUsdCents} credits ($${usd})`;
+  // tokens; sellers are paid in USD, so that split is left alone. The dollar
+  // figure that used to follow in brackets is gone too: see
+  // `formatUnlockCreditPrice`.
+  return formatUnlockCreditPrice(priceUsdCents);
 }
 
 export function formatUnlockDate(value: string): string {
