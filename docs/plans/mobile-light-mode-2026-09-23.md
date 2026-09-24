@@ -1,6 +1,6 @@
 # Mobile light mode
 
-Status: implemented on branch `feat/mobile-light-mode` (2026-09-23), not yet merged.
+Status: merged to main on 2026-09-24 (#202), ahead of the store build.
 - It ships with the next store build, 0.1.6. The native half cannot go over the air (see Shipping).
 - Verified against production data on the iOS 26.4 simulator and the Android 16 emulator (dev clients built from this branch), and on the owner's iPhone 16e and Galaxy S24 Ultra (Release builds). Test suite green: 264 files, 2,566 tests.
 - Still open: the App Review demo account and the store build (see "Still to do before release").
@@ -159,7 +159,7 @@ This used a Release APK of this branch, installed as the side-by-side `com.magic
 ## Shipping
 
 - **Fingerprint.** `app.json` (automatic, splash) and `package.json` (expo-navigation-bar) are fingerprint inputs on both platforms.
-- **Merge timing.** Merge right before dispatching the 0.1.6 store build. After that, OTAs from main reach only 0.1.6, and nothing can be set aside, because app.json touches both platforms. Ship any pending 0.1.5 OTA fixes first.
+- **Merge timing.** Merged on 2026-09-24, earlier than planned, at the owner's request. Main's head before it, `f1cdbda1`, was already the last 0.1.5 OTA, so nothing was stranded. From here, OTAs from main reach only 0.1.6, and nothing can be set aside, because app.json touches both platforms. A fix for 0.1.5 before 0.1.6 ships needs a branch from `f1cdbda1`, published with `scripts/publish-ota.mjs --ref <commit> --allow-unmerged`.
 - **`ota-targets.json`** is updated in the commit that ships the binary.
 - **Rebased onto #197 and #201**, which moved the Home rail's and the reel's shades to React Native's own gradient. The rail shades are drawn in `mediaColors.mediaGround` through `linearGradient`, the same in both schemes.
 
