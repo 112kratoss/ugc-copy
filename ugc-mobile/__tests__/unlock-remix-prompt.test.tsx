@@ -80,7 +80,7 @@ function lockedRemixItem(overrides: Partial<ImmersivePreviewItem> = {}): Immersi
     mediaItems: [],
     creatorLabel: '@batman',
     creatorAvatar: null,
-    badge: '$9',
+    badge: '900 credits',
     saveLabel: '0',
     commentLabel: '0',
     commentCount: 0,
@@ -117,7 +117,7 @@ function lockedRemixItem(overrides: Partial<ImmersivePreviewItem> = {}): Immersi
         resourceId: 'asset-123',
         title: 'Paid remix kit',
         accessMode: 'paid',
-        priceLabel: '$9',
+        priceLabel: '900 credits',
         previewText: 'Reusable prompt and remix access.',
         allowRemix: true,
         resourceKinds: ['prompt', 'remix'],
@@ -182,7 +182,8 @@ describe('UnlockRemixPrompt', () => {
     const { invalidateSpy, onClose, onUnlocked, tree } = renderPrompt();
 
     await renderer.act(async () => {
-      findPressableByAccessibilityLabel(tree.root, 'Unlock to remix').props.onPress();
+      // The button spends credits at once, so it says how many.
+      findPressableByAccessibilityLabel(tree.root, 'Unlock for 900 credits').props.onPress();
       await Promise.resolve();
       await Promise.resolve();
     });

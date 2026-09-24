@@ -23,7 +23,7 @@ export function OnboardingResumeCard({ compact = false }: { compact?: boolean })
   if (!isOnboardingActionable(destination)) return null;
 
   const title = destination === 'reward'
-    ? 'Your Creator Pack is waiting'
+    ? 'Your welcome credits are waiting'
     : destination === 'identity'
       ? user ? 'Finish your creator setup' : 'Claim your creator name and credits'
       : 'See the new creator setup';

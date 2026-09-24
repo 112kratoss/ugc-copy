@@ -115,7 +115,7 @@ describe('reconciling install state with the account', () => {
 });
 
 describe('welcome reward pending', () => {
-  it('advertises a claimable Creator Pack only while it is eligible', () => {
+  it('advertises claimable welcome credits only while they are eligible', () => {
     expect(isWelcomeRewardPending('eligible')).toBe(true);
   });
 

@@ -62,6 +62,17 @@ const nativeAlertState = vi.hoisted(() => ({
   alert: vi.fn(),
 }));
 
+// Permission to send prompts and media to AI services is its own module's job
+// (`__tests__/ai-data-consent.test.ts`). Here it answers yes unless a case says
+// otherwise, and the cases check that the screen asks before anything is sent.
+const aiDataConsentState = vi.hoisted(() => ({
+  ensure: vi.fn(async () => true),
+}));
+
+vi.mock('@/lib/ai-data-consent', () => ({
+  ensureAiDataConsent: aiDataConsentState.ensure,
+}));
+
 vi.mock('expo-router', () => ({
   router: routerState,
 }));
@@ -294,6 +305,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     catalogState.refetch.mockReset();
     EMPTY_MISSING_IDS.length = 0;
     nativeAlertState.alert.mockReset();
+    aiDataConsentState.ensure.mockReset().mockResolvedValue(true);
     vi.mocked(pickAudioDocument).mockReset();
     vi.mocked(pickMedia).mockReset();
     vi.mocked(pickMediaList).mockReset();
@@ -2140,6 +2152,74 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     // Generated, not bounced to /auth.
     expect(authState.api.startImageGeneration).toHaveBeenCalledTimes(1);
     expect(routerState.push).not.toHaveBeenCalled();
+  });
+
+  it('asks before a generation leaves the phone, and sends nothing when the person declines', async () => {
+    // App Review rejected 0.1.6 (55) under guidelines 5.1.1(i) and 5.1.2(i):
+    // prompts and media went to third-party AI services without permission.
+    vi.useFakeTimers();
+    aiDataConsentState.ensure.mockResolvedValue(false);
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="image" />);
+    });
+    renderer.act(() => {
+      tree!.root.findAll((node) => String(node.type) === 'textinput')[0].props.onChangeText('A product shot on linen.');
+    });
+    await renderer.act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Generate \u00b7 8 credits').props.onPress();
+    });
+
+    expect(aiDataConsentState.ensure).toHaveBeenCalledTimes(1);
+    expect(authState.api.startImageGeneration).not.toHaveBeenCalled();
+    // Not even saved as an attempt: there is no request to check later.
+    expect(draftStorage.setItem.mock.calls.map(([key]) => key))
+      .not.toContainEqual(expect.stringContaining('generation.pendingAttempt'));
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value)
+      .toBe('A product shot on linen.');
+
+    // Allowed on the next press, the same draft goes out.
+    aiDataConsentState.ensure.mockResolvedValue(true);
+    authState.api.startImageGeneration.mockResolvedValue({
+      success: true,
+      predictionId: 'prediction-after-consent',
+      generationId: 'gen-after-consent',
+      status: 'processing',
+      remainingCredits: 990,
+    });
+    authState.api.getImageGeneration.mockResolvedValue({ status: 'processing' });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Generate \u00b7 8 credits').props.onPress();
+    });
+    expect(authState.api.startImageGeneration).toHaveBeenCalledTimes(1);
+    expect(authState.api.startImageGeneration.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+      prompt: 'A product shot on linen.',
+    }));
+  });
+
+  it('asks before a prompt is enhanced, and leaves the prompt alone when the person declines', async () => {
+    aiDataConsentState.ensure.mockResolvedValue(false);
+    authState.api.enhancePrompt.mockReset().mockResolvedValue({ enhancedPrompt: 'Enhanced.', remainingCredits: 900 });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="image" />);
+    });
+    renderer.act(() => {
+      tree!.root.findAll((node) => String(node.type) === 'textinput')[0].props.onChangeText('serum on a stone');
+    });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Enhance').props.onPress();
+    });
+
+    expect(aiDataConsentState.ensure).toHaveBeenCalledTimes(1);
+    expect(authState.api.enhancePrompt).not.toHaveBeenCalled();
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('serum on a stone');
   });
 
   it('offers a post handoff after a generation succeeds with a generation id', async () => {

@@ -46,6 +46,7 @@ import { installMediaQueryRetention, pruneInactiveMediaQueries } from '@/lib/med
 import { restorePersistedHomeFeed } from '@/lib/persisted-home-feed';
 import { reportStartupMilestone } from '@/lib/startup-interactive';
 import { STARTUP_VERSION_CHECK_FALLBACK_MS, type StartupVersionCheckStatus } from '@/lib/startup-readiness';
+import { hydrateAiDataConsent } from '@/lib/ai-data-consent';
 import { hydrateAppearancePreference, useResolvedColorScheme } from '@/lib/appearance';
 import { useNavigationBarSurface } from '@/lib/system-bars';
 import { appTheme, mediaColors, themes, type AppTheme } from '@/lib/theme';
@@ -126,6 +127,10 @@ AppState.addEventListener('change', (state) => {
 // (the layout holds the splash on it beside the fonts), so an app set to Light
 // on a dark phone never shows a dark first frame.
 const appearanceHydration = hydrateAppearancePreference();
+
+// Read at launch, so a person who has already allowed AI data sharing gets no
+// wait at all when they first tap Generate. The splash does not wait on it.
+void hydrateAiDataConsent();
 
 function navigationThemeFor(theme: AppTheme) {
   const base = theme.scheme === 'dark' ? DarkTheme : DefaultTheme;
@@ -322,6 +327,7 @@ function RootLayoutNav() {
                 <Stack.Screen name="settings" options={{ title: 'Settings' }} />
                 <Stack.Screen name="delete-account" options={{ title: 'Delete Account' }} />
                 <Stack.Screen name="help" options={{ title: 'Help & Support' }} />
+                <Stack.Screen name="ai-data-sharing" options={{ title: 'AI Data Sharing' }} />
                 </Stack>
                 </OverlayHost>
                 {/* Above every screen: the flight a tapped tile's picture makes

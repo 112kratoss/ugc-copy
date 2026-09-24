@@ -1,5 +1,5 @@
 import { formatCompactCount, formatRelativeTime } from './home-view-model';
-import { formatCreditAmount } from './pricing';
+import { formatCreditAmount, formatUnlockCreditPrice } from './pricing';
 import type { ImmersivePostUnlockDetails, ImmersivePreviewItem } from './immersive-preview-view-model';
 import type { MarketplaceResourceDetail, PostResourceBundleResources } from './types';
 
@@ -129,13 +129,17 @@ export function getDetailsPrimaryAction(
 
 export function getUnlockPriceLabel(
   unlock: ImmersivePostUnlockDetails | null,
-  bundle: Pick<MarketplaceResourceDetail, 'priceQuote'> | null | undefined
+  bundle: Pick<MarketplaceResourceDetail, 'priceUsdCents'> | null | undefined
 ) {
   if (!unlock) return null;
-  // A free bundle is "Free" before and after the price quote arrives. The
-  // quote formats it as a zero amount, which reads as a glitch, not a gift.
+  // A free bundle is "Free" before and after the bundle's own record arrives.
   if (unlock.accessMode === 'free') return 'Free';
-  return bundle?.priceQuote?.formatted ?? unlock.priceLabel;
+  // The loaded record wins, since a creator can reprice after the feed was
+  // read. It is shown in credits, as the unlock is paid, and never as the cash
+  // `priceQuote` the web checkout uses.
+  return typeof bundle?.priceUsdCents === 'number'
+    ? formatUnlockCreditPrice(bundle.priceUsdCents)
+    : unlock.priceLabel;
 }
 
 export type ResourceSectionState = 'none' | 'loading' | 'error' | 'locked' | 'unlocked';

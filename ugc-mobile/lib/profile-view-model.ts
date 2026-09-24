@@ -3,8 +3,9 @@ import { buildImmersiveShowcaseItems, type ImmersivePreviewItem, type PreviewVie
 
 import { isCreationLibraryMember } from './creation-library';
 import { getGenerationKind, getGenerationLabel, getGenerationRenderableMediaKind } from './generation-media';
-import { formatCompactCount, formatRelativeTime, formatUsdCents } from './home-view-model';
+import { formatCompactCount, formatRelativeTime } from './home-view-model';
 import { mediaItemAspectRatio } from './media-zoom-transition';
+import { formatUnlockCreditPrice } from './pricing';
 
 export type ProfilePreviewState = 'image' | 'videoPoster' | 'videoFallback' | 'text' | 'artFallback';
 
@@ -418,7 +419,7 @@ export function savedShowcaseToProfileMediaCards(items: ShowcaseFeedItem[] | nul
 
 function ownerPostBadge(item: OwnerPostListItem) {
   if (item.bundle?.accessMode === 'free') return 'Free unlock';
-  if (item.bundle?.accessMode === 'paid') return formatUsdCents(item.bundle.priceUsdCents);
+  if (item.bundle?.accessMode === 'paid') return formatUnlockCreditPrice(item.bundle.priceUsdCents);
   if (item.category === 'text' || item.postFormat === 'text') return 'Prompt';
   if (item.mediaKind === 'video' || item.category === 'video') return 'Video';
   return 'Post';

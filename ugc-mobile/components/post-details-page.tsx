@@ -367,7 +367,7 @@ export function PostDetailsPage({
                   />
                   <View style={{ gap: 10 }}>
                     <DetailActionButton
-                      label={!user ? 'Sign in to unlock' : unlock.accessMode === 'free' ? 'Get resources — Free' : 'Unlock with credits'}
+                      label={!user ? 'Sign in to unlock' : unlock.accessMode === 'free' ? 'Get resources — Free' : unlockPriceLabel ? `Unlock for ${unlockPriceLabel}` : 'Unlock with credits'}
                       icon={<Lock size={appTheme.icon.compact} color={theme.colors.onPrimary} />}
                       loading={unlockMutation.isPending}
                       primary

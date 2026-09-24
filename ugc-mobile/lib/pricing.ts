@@ -60,3 +60,20 @@ export function formatCreditAmount(value: number | null | undefined) {
   const safeValue = Math.max(0, Math.trunc(value ?? 0));
   return safeValue.toLocaleString(CREDIT_LOCALE);
 }
+
+/**
+ * A creator's price for an unlock, as a buyer pays it in the app: in credits.
+ * Bundle prices are kept in US cents, and an unlock costs one credit per cent
+ * (the server's `credit_cost` is `price_usd_cents`), so the number carries over
+ * unchanged.
+ *
+ * No unlock shows a cash price here. The only things the app sells for money
+ * are the credit packs, through the store. App Review read a "$9" beside an
+ * unlock as an in-app purchase that had never been submitted (guideline 2.1(b),
+ * 0.1.6).
+ */
+export function formatUnlockCreditPrice(priceUsdCents: number | null | undefined) {
+  const credits = Math.max(0, Math.trunc(priceUsdCents ?? 0));
+  if (credits === 0) return 'Free';
+  return `${formatCreditAmount(credits)} ${credits === 1 ? 'credit' : 'credits'}`;
+}

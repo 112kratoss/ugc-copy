@@ -78,9 +78,9 @@ export default function MarketplaceAssetScreen() {
   const confirmPaidUnlock = () => {
     showActionSheet({
       title: 'Unlock this resource?',
-      message: `${formatUnlockPrice(unlockPrice)} comes off your credit balance right away.`,
+      message: `${formatUnlockPrice(unlockPrice)} will come off your credit balance right away.`,
       actions: [{
-        label: `Unlock for ${unlockPrice} credits`,
+        label: `Unlock for ${formatUnlockPrice(unlockPrice)}`,
         onPress: () => unlockMutation.mutate(),
       }],
     });
@@ -239,7 +239,7 @@ export default function MarketplaceAssetScreen() {
                   ) : null}
                 </View>
                 <PrimaryButton
-                  label={unlockMutation.isPending ? 'Unlocking…' : `Unlock for ${unlockPrice} credits`}
+                  label={unlockMutation.isPending ? 'Unlocking…' : `Unlock for ${formatUnlockPrice(unlockPrice)}`}
                   loading={unlockMutation.isPending}
                   disabled={creditShortfall > 0 || unlockMutation.isPending}
                   onPress={confirmPaidUnlock}

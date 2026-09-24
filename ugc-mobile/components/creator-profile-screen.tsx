@@ -42,6 +42,7 @@ import { accentColor, appTheme, mediaColors, themes } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { CreatorProfileResponse, ShowcaseFeedItem } from '@/lib/types';
 import { buildShareUrl } from '@/lib/viewer-actions';
+import { formatUnlockCreditPrice } from '@/lib/pricing';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
 
 const PROFILE_PAGE_SIZE = 24;
@@ -642,7 +643,7 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
             <View style={{ position: 'absolute', top: 8, left: 8, maxWidth: '72%', flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: themes.dark.colors.overlayStrong, paddingHorizontal: 8, paddingVertical: 5 }}>
               <Lock size={appTheme.icon.xs} color={themes.dark.colors.commerce} />
               <Text numberOfLines={1} style={{ color: themes.dark.colors.commerce, ...appTheme.type.caption, fontWeight: '700' }}>
-                {item.asset.accessMode === 'free' ? 'Free' : item.asset.priceQuote?.formatted ?? 'Unlock'}
+                {item.asset.accessMode === 'free' ? 'Free' : formatUnlockCreditPrice(item.asset.priceUsdCents)}
               </Text>
             </View>
           ) : null}

@@ -32,6 +32,7 @@ import {
   StatusBlock,
 } from '@/components/ui';
 import { showConfirmDialog } from '@/lib/dialog';
+import { withAiDataConsent } from '@/lib/ai-data-consent';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import {
@@ -530,7 +531,8 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
               previews={localPreviews}
               uploadingSlot={uploadingSlot}
               onUpload={(slot) => void uploadSlot(slot)}
-              onStart={() => startMutation.mutate()}
+              // Starting, retrying and approving each send inputs on to the models.
+              onStart={() => void withAiDataConsent(() => startMutation.mutate())}
               starting={startMutation.isPending}
               credits={credits}
               estimatedTotalCredits={run.estimatedTotalCredits ?? template?.estimatedTotalCredits ?? null}
@@ -545,8 +547,8 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
               retryingStepId={retryMutation.isPending ? retryMutation.variables ?? null : null}
               approvingStepId={approvalMutation.isPending ? approvalMutation.variables ?? null : null}
               restartTemplateId={template?.slug ?? run.templateId}
-              onRetry={(stepId) => retryMutation.mutate(stepId)}
-              onApprove={(stepId) => approvalMutation.mutate(stepId)}
+              onRetry={(stepId) => void withAiDataConsent(() => retryMutation.mutate(stepId))}
+              onApprove={(stepId) => void withAiDataConsent(() => approvalMutation.mutate(stepId))}
             />
           )}
 

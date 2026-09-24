@@ -62,7 +62,10 @@ vi.mock('@/lib/copy-to-clipboard', () => ({ copyToClipboard: vi.fn() }));
 
 vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
 
-vi.mock('@/lib/pricing', () => ({ formatCreditAmount: (amount: number) => String(amount) }));
+vi.mock('@/lib/pricing', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/pricing')>()),
+  formatCreditAmount: (amount: number) => String(amount),
+}));
 
 vi.mock('@/lib/unlock-cache', () => ({ refreshUnlockedBundleCaches: vi.fn() }));
 
@@ -120,7 +123,7 @@ describe('marketplace asset screen (HIG S18)', () => {
     expect(showActionSheet).toHaveBeenCalledTimes(1);
 
     const request = showActionSheet.mock.calls[0]?.[0] as { message: string; actions: Array<{ label: string; onPress?: () => void }> };
-    expect(request.message).toContain('900 credits ($9.00)');
+    expect(request.message).toBe('900 credits will come off your credit balance right away.');
     request.actions[0]?.onPress?.();
     expect(mutate).toHaveBeenCalledTimes(1);
   });

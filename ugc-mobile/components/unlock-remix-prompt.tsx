@@ -42,7 +42,12 @@ export function UnlockRemixPrompt({
   const accent: ToolAccent = unlock?.accessMode === 'free' ? 'workflow' : 'commerce';
   const accentValue = accentColor(accent, theme.colors);
   const resourceKinds = unlock?.resourceKinds ?? [];
-  const ctaLabel = user ? 'Unlock to remix' : 'Sign in to unlock';
+  // A paid unlock spends credits the moment this is pressed, so the button says how many.
+  const ctaLabel = !user
+    ? 'Sign in to unlock'
+    : unlock?.accessMode === 'paid' && unlock.priceLabel
+      ? `Unlock for ${unlock.priceLabel}`
+      : 'Unlock to remix';
 
   const handleUnlock = async () => {
     if (!item || !unlock) return;

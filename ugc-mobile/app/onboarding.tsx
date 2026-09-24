@@ -207,7 +207,7 @@ function OnboardingFlow() {
   // Depend only on the local field that affects routing. `update({ goal })`
   // always refreshes the state's `updatedAt`; depending on the whole state
   // object made that write recreate this callback, retrigger the effect below,
-  // and hold signed-in creators in an endless profile/Creator Pack fetch loop.
+  // and hold signed-in creators in an endless profile/welcome-credits fetch loop.
   }, [adoptWelcome, api, goal, identityDeferredAt, update, user]);
 
   useEffect(() => {
@@ -345,7 +345,7 @@ function OnboardingFlow() {
       // The reward stage is for people who can actually claim. Anyone else —
       // most often an account that predates the grant program — has now
       // finished everything the flow can offer, so end it rather than show a
-      // Creator Pack figure they will never receive.
+      // welcome-credits figure they will never receive.
       if (nextWelcome.status === 'eligible') {
         setStage('reward');
       } else {
@@ -403,14 +403,14 @@ function OnboardingFlow() {
         void trackOnboardingEvent(api, 'reward_claimed', { goal, step: 'reward' });
       } else {
         setMessage(result.status === 'unavailable'
-          ? 'Your Creator Pack is temporarily unavailable. You can continue and claim it from Home.'
+          ? 'Your welcome credits are temporarily unavailable. You can continue and claim them from Home.'
           : result.status === 'requires_account'
-            ? 'Create an account to unlock your Creator Pack.'
+            ? 'Create an account to claim your welcome credits.'
             // The one-time pack was already claimed by a previous (since
             // deleted) account using this sign-in. Nothing was added, so this
             // branch must never reach celebrateCredits/updateCredits.
             : result.status === 'identity_already_claimed'
-              ? 'This sign-in already received the one-time Creator Pack on a previous account.'
+              ? 'This sign-in already received the one-time welcome credits on a previous account.'
               : 'Finish your creator name before claiming this reward.');
       }
     } catch (error) {
@@ -504,7 +504,7 @@ function OnboardingFlow() {
             <Card style={{ marginTop: 40, alignItems: 'center', paddingVertical: 40 }}>
               <ActivityIndicator color={theme.colors.primary} />
               <AppText variant="cardTitle">Preparing your creator setup</AppText>
-              <AppText variant="bodySm" color="muted">Checking your profile and Creator Pack.</AppText>
+              <AppText variant="bodySm" color="muted">Checking your profile and welcome credits.</AppText>
               {message ? <Text accessibilityRole="alert" accessibilityLiveRegion="assertive" style={{ color: theme.colors.danger, textAlign: 'center' }}>{message}</Text> : null}
               {message ? <SecondaryButton label="Try again" onPress={() => void loadAuthenticatedStage()} /> : null}
               {/* Onboarding must stay optional even when it breaks. Without
@@ -592,9 +592,12 @@ function OnboardingFlow() {
                     <Sparkles size={appTheme.icon.hero} color={theme.colors.primary} />
                   </View>
                   <View style={{ alignItems: 'center', gap: 8 }}>
-                    <Kicker color="primary">Creator Pack</Kicker>
+                    {/* "Welcome credits", as the server and the web call them. This was the
+                        "Creator Pack": a free grant named like the paid Creator credit pack, which
+                        a guest was told to "unlock" by creating an account. */}
+                    <Kicker color="primary">Welcome credits</Kicker>
                     <AppText heading variant="pageTitle" style={{ textAlign: 'center' }}>
-                      {claimed ? 'Your Creator Pack is ready' : 'Claim your Creator Pack'}
+                      {claimed ? 'Your welcome credits are ready' : 'Claim your welcome credits'}
                     </AppText>
                     <AppText variant="bodySm" color="muted" style={{ textAlign: 'center' }}>
                       {claimed
@@ -608,7 +611,7 @@ function OnboardingFlow() {
                       <AppText variant="label" color="textSecondary">creation credits</AppText>
                     </View>
                   ) : null}
-                  <AppText variant="caption" color="faint" style={{ textAlign: 'center' }}>Creation credits cannot be used for marketplace purchases.</AppText>
+                  <AppText variant="caption" color="faint" style={{ textAlign: 'center' }}>Welcome credits are for creating. They can’t unlock creators’ resources.</AppText>
                 </Card>
               </Animated.View>
               {message ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, textAlign: 'center' }}>{message}</Text> : null}
