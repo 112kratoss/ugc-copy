@@ -9,7 +9,6 @@ import { Copy, ImageOff, Lock, Play, Volume2, VolumeX } from 'lucide-react-nativ
 import { useIsFocused } from '@react-navigation/native';
 import { createContext, useContext, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
-import Reanimated, { useAnimatedStyle } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
@@ -28,7 +27,6 @@ import {
   endPlaybackStall,
   forgetPlayback,
 } from '@/lib/playback-metrics';
-import { reelNeighbourChromeRevealed, setReelNeighbourChromeRevealed } from '@/lib/reel-neighbour-chrome';
 import { createViewerPlaybackHandoff } from '@/lib/viewer-playback-handoff';
 import { reconcileViewerSessionItems } from '@/lib/viewer-session-items';
 import { isVideoPlayerHandedBack } from '@/lib/video-player-loans';
@@ -404,13 +402,6 @@ function ImmersivePreviewViewer() {
     [items, savedPosition, initialId]
   );
   const activeIndex = Math.max(0, items.findIndex((item) => item.id === position?.itemId));
-  // Neighbour slides keep their rail and caption mounted but out of the draw
-  // walk until a drag begins (lib/reel-neighbour-chrome). The landed slide is
-  // always shown by `active`; the previous one hides again once the index has
-  // moved on, or when a drag settles back where it started.
-  useEffect(() => {
-    setReelNeighbourChromeRevealed(false);
-  }, [activeIndex]);
   // ExoPlayer creation can block Android's handoff commit for hundreds of ms.
   // First activate the already-prepared player; refresh the neighbouring player
   // range in a lower-priority render. iOS keeps its existing preparation timing.
@@ -1087,9 +1078,6 @@ function ImmersivePreviewViewer() {
         contentOffset={initialContentOffset ?? undefined}
         keyExtractor={(item) => `${item.source}-${item.id}`}
         maxToRenderPerBatch={IMMERSIVE_VERTICAL_LIST_TUNING.maxToRenderPerBatch}
-        onScrollBeginDrag={() => {
-          setReelNeighbourChromeRevealed(true);
-        }}
         onMomentumScrollEnd={(event) => {
           const nextIndex = Math.round(event.nativeEvent.contentOffset.y / height);
           const clampedIndex = Math.max(0, Math.min(items.length - 1, nextIndex));
@@ -1100,10 +1088,7 @@ function ImmersivePreviewViewer() {
           // The reader put the list here, so the alignment effect has nothing
           // to correct.
           nativeRowRef.current = { index: clampedIndex, height };
-          if (clampedIndex === activeIndex) {
-            setReelNeighbourChromeRevealed(false);
-            return;
-          }
+          if (clampedIndex === activeIndex) return;
           // Swap playback now, on the scroll-end event, rather than after the
           // reel re-renders: on Android that render is a few hundred ms during
           // which the landed video would otherwise sit frozen on its first frame.
@@ -1586,12 +1571,14 @@ function ImmersiveSlide({
     onSave(item, 'double-tap');
   }, [doubleTapHeart, item, onSave, saveLoading]);
 
-  // A neighbour's chrome is drawn only while a drag is under way (lib/reel-neighbour-chrome).
-  const chromeVisibility = useAnimatedStyle(() => ({
-    display: active || reelNeighbourChromeRevealed.get() ? ('flex' as const) : ('none' as const),
-  }), [active]);
+  // Every mounted slide keeps its rail and caption drawn. Hiding the neighbours'
+  // chrome at rest (`display: none`, shown again as a drag began) took ~2 ms
+  // off each resting video frame, which has 33 ms to spare, but showing it again
+  // was a layout pass over both neighbours' chrome at the first touch: on an S24
+  // the reel followed the finger after a median 47 ms with the hiding and 33 ms
+  // without (alternated runs, 2026-09-24).
   const renderChrome = () => (zoomLanded && !chromeHidden ? (
-    <Reanimated.View pointerEvents="box-none" onLayout={onChromeLayout} style={[{ position: 'absolute', inset: 0 }, chromeVisibility]}>
+    <View pointerEvents="box-none" onLayout={onChromeLayout} style={{ position: 'absolute', inset: 0 }}>
       {renderOverlays()}
       <DoubleTapSaveHeart
         opacity={doubleTapHeart.opacity}
@@ -1599,7 +1586,7 @@ function ImmersiveSlide({
         position={doubleTapHeart.position}
         scale={doubleTapHeart.scale}
       />
-    </Reanimated.View>
+    </View>
   ) : null);
 
   const renderOverlays = () => {
