@@ -175,3 +175,73 @@ describe('light mode — what is drawn on a picture keeps the dark palette', () 
     expect(offenders).toEqual([]);
   });
 });
+
+/**
+ * A coral fill is `primaryFill`, the bright coral with ink (`onPrimary`) on it in
+ * both schemes. `primary` and `primaryStrong` go deep on light, and ink on them
+ * falls to about 3:1. They stay right for marks (a dot, a bar, a thin rule), which
+ * carry no text. So the tell is a deep-coral fill, written directly or through a
+ * local alias, followed by an `onPrimary` foreground. The iPhone pass of
+ * 2026-09-24 found it on the Alerts tab's Enable button and on edit-profile's Save.
+ */
+const DEEP_CORAL = /theme\.colors\.(?:primary|primaryStrong)\b/;
+const FILL_TO_TEXT_REACH = 25;
+
+function usedAsSolidColour(expression: string, token: RegExp) {
+  const pattern = new RegExp(token.source, 'g');
+  for (let match = pattern.exec(expression); match; match = pattern.exec(expression)) {
+    const before = expression.slice(0, match.index);
+    // A `${colour}24` tint or a hexWithAlpha(colour, α) wash is not a solid fill.
+    if (before.endsWith('${') || /hexWithAlpha\(\s*$/.test(before)) continue;
+    return true;
+  }
+  return false;
+}
+
+export function deepCoralFillsUnderInk(source: string) {
+  const code = stripComments(source);
+  const lines = code.split('\n');
+  const aliases = [...code.matchAll(new RegExp(`const (\\w+) = [^;\\n]*${DEEP_CORAL.source}[^;\\n]*;`, 'g'))]
+    .map((match) => new RegExp(`\\b${match[1]}\\b`));
+  const found: number[] = [];
+  for (const match of code.matchAll(/backgroundColor:([^,}]*)/g)) {
+    const expression = match[1];
+    const solid = usedAsSolidColour(expression, DEEP_CORAL) || aliases.some((alias) => usedAsSolidColour(expression, alias));
+    if (!solid) continue;
+    const line = code.slice(0, match.index).split('\n').length;
+    if (lines.slice(line - 1, line - 1 + FILL_TO_TEXT_REACH).some((text) => text.includes('onPrimary'))) found.push(line);
+  }
+  return found;
+}
+
+describe('light mode — ink sits on the bright coral, never the deep one', () => {
+  it('flags a deep-coral fill under ink, direct or through an alias, and passes marks, washes and primaryFill', () => {
+    const direct = [
+      "style={{ backgroundColor: pressed ? theme.colors.primaryStrong : theme.colors.primary }}",
+      "<AppText color={theme.colors.onPrimary}>Save</AppText>",
+    ].join('\n');
+    const aliased = [
+      "const color = accent === 'image' ? theme.colors.image : theme.colors.primary;",
+      "style={{ backgroundColor: isPrimary ? color : `${color}24` }}",
+      "<AppText color=\"onPrimary\">Enable</AppText>",
+    ].join('\n');
+    expect(deepCoralFillsUnderInk(direct)).toEqual([1]);
+    expect(deepCoralFillsUnderInk(aliased)).toEqual([2]);
+    expect(deepCoralFillsUnderInk(direct.replace(/theme\.colors\.primary(Strong)?\b/g, 'theme.colors.primaryFill'))).toEqual([]);
+    expect(deepCoralFillsUnderInk("<View style={{ width: 6, height: 6, backgroundColor: theme.colors.primary }} />")).toEqual([]);
+    expect(deepCoralFillsUnderInk([
+      "style={{ backgroundColor: hexWithAlpha(theme.colors.primary, 0.12) }}",
+      "<Text style={{ color: theme.colors.onPrimary }} />",
+    ].join('\n'))).toEqual([]);
+  });
+
+  it('finds none in the app', () => {
+    const offenders = files.flatMap((filePath) => {
+      const relativePath = path.relative(mobileRoot, filePath).replaceAll(path.sep, '/');
+      if (relativePath in EXEMPT) return [];
+      return deepCoralFillsUnderInk(readFileSync(filePath, 'utf8')).map((line) => `${relativePath}:${line}`);
+    });
+
+    expect(offenders).toEqual([]);
+  });
+});

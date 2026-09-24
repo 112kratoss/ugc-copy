@@ -681,7 +681,7 @@ function EditHeader({
             gap: 7,
             backgroundColor: disabled
               ? theme.colors.panelSoft
-              : pressed ? theme.colors.primaryStrong : theme.colors.primary,
+              : pressed ? theme.colors.primaryFillPressed : theme.colors.primaryFill,
             opacity: disabled ? appTheme.opacity.disabled : 1,
           })}
         >

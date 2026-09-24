@@ -563,6 +563,9 @@ function CompactActionButton({
   const theme = useAppTheme();
   const color = accent === 'image' ? theme.colors.image : theme.colors.primary;
   const isPrimary = accent === 'primary';
+  // A coral fill is the bright coral in both schemes, with ink on it; `primary`
+  // goes deep on light and is for coral text and washes.
+  const fill = theme.colors.primaryFill;
 
   return (
     <Pressable
@@ -576,9 +579,9 @@ function CompactActionButton({
         alignItems: 'center',
         justifyContent: 'center',
         borderRadius: appTheme.radii.pill,
-        backgroundColor: isPrimary ? color : `${color}24`,
+        backgroundColor: isPrimary ? fill : `${color}24`,
         borderWidth: 1,
-        borderColor: `${color}66`,
+        borderColor: `${isPrimary ? fill : color}66`,
         opacity: !onPress ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
         paddingHorizontal: 12,
       })}

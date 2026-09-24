@@ -2,8 +2,8 @@
 
 Status: implemented on branch `feat/mobile-light-mode` (2026-09-23), not yet merged.
 - It ships with the next store build, 0.1.6. The native half cannot go over the air (see Shipping).
-- Verified on the iOS 26.4 simulator and the Android 16 emulator against production data, each with a dev client built from this branch. Test suite green: 264 files, 2,564 tests.
-- Still open: the iPhone device pass and the store build (see "Still to do before release").
+- Verified against production data on the iOS 26.4 simulator and the Android 16 emulator (dev clients built from this branch), and on the owner's iPhone 16e and Galaxy S24 Ultra (Release builds). Test suite green: 264 files, 2,566 tests.
+- Still open: the App Review demo account and the store build (see "Still to do before release").
 
 Scope: `ugc-mobile/` only. The web app keeps `color-scheme: dark`.
 
@@ -123,6 +123,39 @@ This used a dev client built from this branch, on the Pixel 9a emulator (Android
   - It compiles React Native's Android code from source (the repo patches it), about 2.5 GB of intermediates.
   - expo-updates' CMake step has no `ndkVersion`, so the Android Gradle Plugin installs its default NDK 27.0.12077973 (about 3 GB). That is the "stale" NDK that keeps coming back after disk cleanups.
 
+### On the iPhone (2026-09-24)
+
+This used a Release build of this branch, installed as the separate "Magicbooklet Zoom" app on the iPhone 16e (iOS 26.6.2), signed by the free team. The XCUITest runner in `.claude/tools/reelprobe` drove it and filmed it by screenshot bursts at about 6–10 fps.
+
+- **Light, with the phone in Light and the app on System:** every tab, the dock and Settings are on paper. The phone's own Settings app confirmed the phone was in Light.
+- **The app's own setting:** Dark holds on a Light phone, and the choice survives an app update (reinstall).
+- **Following the phone:** the owner switched Dark Mode on and off from Control Center with the app open, then again from the home screen with a return to the app. The app followed each time, and the owner judged both switches clean. The Auto schedule flips the same system setting, so these two cases (app open, app in the background) cover it; it was not tried separately.
+- **Cold launches:**
+  - Light: the launch screen fades in during the icon zoom, and light Home follows at about 950 ms.
+  - Dark: the black launch screen, then dark Home, with no light frame.
+- **The reel** opens dark from a light grid, with a light status bar and dark glass, and closes back to light Home within one ~100 ms sample.
+- **Bugs found and fixed:**
+  - The Alerts tab's "Enable" push button (`CompactActionButton` in `app/(tabs)/studio.tsx`) filled with `primary` under `onPrimary` ink: 3.19:1 on light.
+  - The edit-profile Save button did the same, with `primaryStrong` when pressed.
+  - Both now fill with `primaryFill` (7.87:1 on the phone). Dark is unchanged, because the two coral tokens are equal there.
+  - A guard in `theme-color-literals.test.ts` now flags a deep-coral fill, written directly or through a local alias, followed by `onPrimary` text. Marks and washes pass.
+- **Device notes:**
+  - The phone was nearly out of storage. iOS cleared caches to fit the 62 MB install.
+  - Auto-Lock ends UI tests (a black frame, then the runner exits), so a long unattended watch needs the owner nearby.
+  - The free team's certificate was renewed during the build, so the owner re-trusted it under VPN & Device Management.
+
+### On the S24 (2026-09-24)
+
+This used a Release APK of this branch, installed as the side-by-side `com.magicbooklet.mobile.dev` app on the owner's Galaxy S24 Ultra (Android 16, gesture navigation). The build script is adapted from `archive/home-scroll-audit-2026-09-22/android-ab/build_dev_apk.sh` to build from the worktree. It took 6 minutes, with the arm64 React Native compiled from source.
+
+- **Following the phone:** with the phone dark and the app on System, it opens dark, signed in.
+- **The app's own setting:** Light lands in the same frame (status bar 4 → 252).
+- **The gesture handle** adapts on its own: a lighter hint on the dark screen, a darker one on paper.
+- **Light screens:** Home, Explore, Alerts, Profile and the dock are on paper with dark status icons.
+- **The reel** opens dark from the light grid, with a white gesture handle, and closes back to light Home.
+- **Fixes confirmed:** the creator page's tabs track reads white with labels at about 7:1.
+- **No crashes** in the crash buffer throughout. The app was left on System.
+
 ## Shipping
 
 - **Fingerprint.** `app.json` (automatic, splash) and `package.json` (expo-navigation-bar) are fingerprint inputs on both platforms.
@@ -132,12 +165,7 @@ This used a dev client built from this branch, on the Pixel 9a emulator (Android
 
 ## Still to do before release
 
-1. **Android pass: done on the emulator** (see above). A look on the S24 is optional, for feel.
-2. **iPhone pass.**
-   - System following the phone, including the Auto schedule.
-   - The light splash handing over to Home.
-   - Control Center switches landing when it closes.
-   - No flicker on background and return.
-   - Reel open and close from a light grid, recorded frame by frame.
+1. **Android pass: done** on the emulator and on the S24 (see above).
+2. **iPhone pass: done** (see above).
 3. **App Review demo account** checked in light.
 4. **Store build 0.1.6** on both platforms.
