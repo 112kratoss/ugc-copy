@@ -1,6 +1,6 @@
 # Home scrolling hitch investigation and fix plan
 
-> Archived 2026-09-23. Its JavaScript layers shipped with the set-once buffer target in #195 (the per-tile activation store, the stepped and hysteretic prepared window, the fast-coast hold, the carousel pause, the tab bar subscription and the render fixes). Layer 2, the iOS light video host, stays an experiment in `ugc-mobile/experiments/ios-light-video-view/` until a store build carries it. Kept as the investigation log.
+> Archived 2026-09-23. Its JavaScript layers shipped with the set-once buffer target in #195 (the per-tile activation store, the stepped and hysteretic prepared window, the fast-coast hold, the carousel pause, the tab bar subscription and the render fixes). Layer 2, the iOS light video host, ships with store build 0.1.6 as `ugc-mobile/patches/expo-video+55.0.21+004+ios-light-video-view.patch`, after an iPhone 16e A/B on 2026-09-24 (the numbers are in `ugc-mobile/experiments/ios-light-video-view/README.md`). Kept as the investigation log.
 
 Current follow-up: [September 23 plan](home-scroll-follow-up-2026-09-23.md). The owner still reports stuttering after these experiments. Preserve the log below as history; its proposed fixes and inferred frozen-frame counts are not a completed-fix claim.
 

@@ -1,6 +1,8 @@
-# iOS light video host (experiment)
+> **Graduated on 2026-09-24** into `patches/expo-video+55.0.21+004+ios-light-video-view.patch` for store build 0.1.6, applied by `postinstall` like every shipped patch; the copy that lived here is gone, so "Apply and reverse" below is history. Measured before it moved, on the iPhone 16e: two Release builds of main `0d570a16`, without (LH0) and with (LH1) this patch, alternated, Time Profiler over four Home drags each way and a reel open (`archive/home-scroll-audit-2026-09-22/device-ab/run_lh.sh`, runner part `light-host`). Per 40 s run: `AVPlayerViewController` on the main thread 22 and 29 ms against 0 and 0; React Native's clip walk 1,013–1,015 ms against 901–907 ms, because the tree it recurses through is shallower; main-thread time outside accessibility (on because XCUITest drives the phone) 2,599–2,637 ms against 2,308–2,344 ms.
 
-Not shipped. This patch lives outside `patches/` on purpose: `@expo/fingerprint` hashes `patches/` and the patched `node_modules/expo-video/ios`, so keeping it here keeps JavaScript-only over-the-air updates reaching the binaries already in testers' hands. Graduate it into `patches/expo-video+55.0.21+004+ios-light-video-view.patch` only in the commit a store build is made from, and update `ota-targets.json` when that binary ships.
+# iOS light video host
+
+Before 0.1.6 this patch lived outside `patches/` on purpose: `@expo/fingerprint` hashes `patches/` and the patched `node_modules/expo-video/ios`, so keeping it here keeps JavaScript-only over-the-air updates reaching the binaries already in testers' hands. Graduate it into `patches/expo-video+55.0.21+004+ios-light-video-view.patch` only in the commit a store build is made from, and update `ota-targets.json` when that binary ships.
 
 ## What it changes
 
