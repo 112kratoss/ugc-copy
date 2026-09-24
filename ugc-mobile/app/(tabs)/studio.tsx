@@ -32,7 +32,9 @@ import {
 } from '@/lib/notifications';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
-import { appTheme } from '@/lib/theme';
+import { hexWithAlpha } from '@/lib/eased-fade';
+import { appTheme, type ThemeColorName } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import type { MobileNotification, MobileNotificationCategory, MobileNotificationPreferences as PreferenceState } from '@/lib/types';
 
 const NOTIFICATION_CATEGORIES = [
@@ -40,30 +42,32 @@ const NOTIFICATION_CATEGORIES = [
     title: 'Generation updates',
     body: 'Finished renders, failed runs, and long-running jobs land here first.',
     icon: WandSparkles,
-    color: appTheme.colors.motion,
+    tone: 'motion',
   },
   {
     title: 'Creator activity',
     body: 'New followers, saves, remixes, and authenticated shares are grouped into a quieter history.',
     icon: Heart,
-    color: appTheme.colors.danger,
+    tone: 'danger',
   },
   {
     title: 'Unlocks & credits',
     body: 'Credit purchases, restores, and resource unlocks stay visible after the push fades.',
     icon: CreditCard,
-    color: appTheme.colors.amber,
+    tone: 'amber',
   },
 ] as const;
 
-const CATEGORY_META: Record<MobileNotificationCategory, { color: string; label: string; Icon: typeof BellRing }> = {
-  generation: { color: appTheme.colors.motion, label: 'Generation', Icon: WandSparkles },
-  commerce: { color: appTheme.colors.amber, label: 'Unlocks', Icon: CreditCard },
-  social: { color: appTheme.colors.danger, label: 'Creator', Icon: Heart },
-  system: { color: appTheme.colors.info, label: 'System', Icon: BellRing },
+// Tones are colour names, resolved against the scheme's palette when a row draws.
+const CATEGORY_META: Record<MobileNotificationCategory, { tone: ThemeColorName; label: string; Icon: typeof BellRing }> = {
+  generation: { tone: 'motion', label: 'Generation', Icon: WandSparkles },
+  commerce: { tone: 'amber', label: 'Unlocks', Icon: CreditCard },
+  social: { tone: 'danger', label: 'Creator', Icon: Heart },
+  system: { tone: 'info', label: 'System', Icon: BellRing },
 };
 
 export default function StudioScreen() {
+  const theme = useAppTheme();
   const { user, api } = useAuth();
   const queryClient = useQueryClient();
   const insets = useSafeAreaInsets();
@@ -162,12 +166,12 @@ export default function StudioScreen() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <ScrollView
         ref={scrollRef}
         contentInsetAdjustmentBehavior="never"
         showsVerticalScrollIndicator={false}
-        style={{ flex: 1, backgroundColor: appTheme.colors.background }}
+        style={{ flex: 1, backgroundColor: theme.colors.background }}
         contentContainerStyle={{
           paddingTop: topInset + 18,
           paddingHorizontal: horizontalPadding,
@@ -312,19 +316,21 @@ function NotificationHeader({
 }
 
 function LoadingState() {
+  const theme = useAppTheme();
   return (
     <Card variant="soft" style={{ minHeight: 144, alignItems: 'center', justifyContent: 'center' }}>
-      <ActivityIndicator color={appTheme.colors.primary} />
+      <ActivityIndicator color={theme.colors.primary} />
       <AppText variant="bodySm" color="muted" style={{ fontWeight: '700' }}>Loading alerts</AppText>
     </Card>
   );
 }
 
 function CaughtUpState() {
+  const theme = useAppTheme();
   return (
     <Card accent="workflow" variant="soft" style={{ minHeight: 156, justifyContent: 'center' }}>
-      <View style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(52,211,153,0.13)', borderWidth: 1, borderColor: 'rgba(52,211,153,0.28)' }}>
-        <CheckCircle2 size={appTheme.icon.feature} color={appTheme.colors.success} />
+      <View style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(theme.colors.success, 0.13), borderWidth: 1, borderColor: hexWithAlpha(theme.colors.success, 0.28) }}>
+        <CheckCircle2 size={appTheme.icon.feature} color={theme.colors.success} />
       </View>
       <View style={{ gap: 6 }}>
         <AppText variant="cardTitle">You are all caught up.</AppText>
@@ -365,6 +371,7 @@ function NotificationPreferences({
   disabled: boolean;
   onToggle: (key: keyof PreferenceState, value: boolean) => void;
 }) {
+  const theme = useAppTheme();
   const rows: Array<{ key: keyof PreferenceState; title: string; body: string }> = [
     { key: 'generationEnabled', title: 'Generation', body: 'Finished and failed renders.' },
     { key: 'commerceEnabled', title: 'Credits & unlocks', body: 'Purchases, restores, and resource access.' },
@@ -382,8 +389,8 @@ function NotificationPreferences({
           borderRadius: appTheme.radii.lg,
           borderCurve: 'continuous',
           borderWidth: 1,
-          borderColor: appTheme.colors.borderSubtle,
-          backgroundColor: appTheme.colors.surfaceInset,
+          borderColor: theme.colors.borderSubtle,
+          backgroundColor: theme.colors.surfaceInset,
           overflow: 'hidden',
         }}
       >
@@ -407,7 +414,7 @@ function NotificationPreferences({
                 paddingHorizontal: 14,
                 paddingVertical: 12,
                 borderTopWidth: index === 0 ? 0 : 1,
-                borderTopColor: appTheme.colors.borderSubtle,
+                borderTopColor: theme.colors.borderSubtle,
                 opacity: disabled ? 0.62 : pressed ? appTheme.opacity.pressed : 1,
               })}
             >
@@ -415,7 +422,7 @@ function NotificationPreferences({
                 <AppText variant="body" style={{ fontWeight: '700' }}>{row.title}</AppText>
                 <AppText variant="caption" color="muted">{row.body}</AppText>
               </View>
-              <Icon size={appTheme.icon.hero} color={enabled ? appTheme.colors.success : appTheme.colors.faint} />
+              <Icon size={appTheme.icon.hero} color={enabled ? theme.colors.success : theme.colors.faint} />
             </Pressable>
           );
         })}
@@ -441,6 +448,7 @@ function PushControlCard({
   onEnable: () => void;
   onTogglePush: (value: boolean) => void;
 }) {
+  const theme = useAppTheme();
   const preferencesReady = Boolean(preferences);
   const pushEnabled = preferences?.pushEnabled ?? false;
   let title = 'Push alerts';
@@ -488,7 +496,7 @@ function PushControlCard({
       showToggle = false;
   }
 
-  const iconColor = actionAccent === 'image' ? appTheme.colors.image : appTheme.colors.primary;
+  const iconColor = actionAccent === 'image' ? theme.colors.image : theme.colors.primary;
 
   return (
     <Card
@@ -524,9 +532,9 @@ function PushControlCard({
           })}
         >
           {pushEnabled ? (
-            <ToggleRight size={appTheme.icon.hero} color={appTheme.colors.success} />
+            <ToggleRight size={appTheme.icon.hero} color={theme.colors.success} />
           ) : (
-            <ToggleLeft size={appTheme.icon.hero} color={appTheme.colors.faint} />
+            <ToggleLeft size={appTheme.icon.hero} color={theme.colors.faint} />
           )}
         </Pressable>
       ) : action || isPending ? (
@@ -552,8 +560,12 @@ function CompactActionButton({
   loading?: boolean;
   accent: 'primary' | 'image';
 }) {
-  const color = accent === 'image' ? appTheme.colors.image : appTheme.colors.primary;
+  const theme = useAppTheme();
+  const color = accent === 'image' ? theme.colors.image : theme.colors.primary;
   const isPrimary = accent === 'primary';
+  // A coral fill is the bright coral in both schemes, with ink on it; `primary`
+  // goes deep on light and is for coral text and washes.
+  const fill = theme.colors.primaryFill;
 
   return (
     <Pressable
@@ -567,15 +579,15 @@ function CompactActionButton({
         alignItems: 'center',
         justifyContent: 'center',
         borderRadius: appTheme.radii.pill,
-        backgroundColor: isPrimary ? color : `${color}24`,
+        backgroundColor: isPrimary ? fill : `${color}24`,
         borderWidth: 1,
-        borderColor: `${color}66`,
+        borderColor: `${isPrimary ? fill : color}66`,
         opacity: !onPress ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
         paddingHorizontal: 12,
       })}
     >
       {loading ? (
-        <ActivityIndicator color={isPrimary ? appTheme.colors.onPrimary : color} />
+        <ActivityIndicator color={isPrimary ? theme.colors.onPrimary : color} />
       ) : (
         <AppText selectable={false} variant="caption" color={isPrimary ? 'onPrimary' : color} style={{ fontWeight: '800' }} numberOfLines={1}>
           {label}
@@ -586,7 +598,9 @@ function CompactActionButton({
 }
 
 function NotificationRow({ notification, onPress }: { notification: MobileNotification; onPress: () => void }) {
+  const theme = useAppTheme();
   const meta = CATEGORY_META[notification.category] ?? CATEGORY_META.system;
+  const toneColor = theme.colors[meta.tone];
   const Icon = meta.Icon;
 
   return (
@@ -601,28 +615,28 @@ function NotificationRow({ notification, onPress }: { notification: MobileNotifi
         borderRadius: 22,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: notification.isRead ? appTheme.colors.borderSubtle : `${meta.color}66`,
-        backgroundColor: notification.isRead ? appTheme.colors.surface : appTheme.colors.selected,
+        borderColor: notification.isRead ? theme.colors.borderSubtle : `${toneColor}66`,
+        backgroundColor: notification.isRead ? theme.colors.surface : theme.colors.selected,
         padding: 14,
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
-      <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${meta.color}1c`, borderWidth: 1, borderColor: `${meta.color}4a` }}>
-        <Icon size={appTheme.icon.default} color={meta.color} />
+      <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${toneColor}1c`, borderWidth: 1, borderColor: `${toneColor}4a` }}>
+        <Icon size={appTheme.icon.default} color={toneColor} />
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 6 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <AppText variant="body" style={{ flex: 1, fontWeight: '700' }} numberOfLines={2}>
             {notification.title}
           </AppText>
-          {!notification.isRead ? <UnreadDot color={meta.color} /> : null}
+          {!notification.isRead ? <UnreadDot color={toneColor} /> : null}
         </View>
         <AppText variant="bodySm" color="muted" numberOfLines={3}>
           {notification.body}
         </AppText>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <Badge label={meta.label} color={meta.color} />
-          {notification.eventCount > 1 ? <Badge label={`${notification.eventCount} updates`} color={appTheme.colors.primary} /> : null}
+          <Badge label={meta.label} color={toneColor} />
+          {notification.eventCount > 1 ? <Badge label={`${notification.eventCount} updates`} color={theme.colors.primary} /> : null}
           <AppText variant="caption" color="faint" style={{ fontWeight: '800' }}>
             {formatRelativeTime(notification.updatedAt)}
           </AppText>
@@ -665,12 +679,13 @@ function Badge({ label, color }: { label: string; color: string }) {
 }
 
 function NotificationCategoryList() {
+  const theme = useAppTheme();
   return (
     <View style={{ gap: 12 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <AppText variant="cardTitle">What shows here</AppText>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-          <Clock3 size={appTheme.icon.xs} color={appTheme.colors.faint} />
+          <Clock3 size={appTheme.icon.xs} color={theme.colors.faint} />
           <AppText variant="caption" color="faint" style={{ fontWeight: '800' }}>History</AppText>
         </View>
       </View>
@@ -687,8 +702,8 @@ function NotificationCategoryList() {
               gap: 12,
             }}
           >
-            <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${item.color}1c`, borderWidth: 1, borderColor: `${item.color}4a` }}>
-              <Icon size={appTheme.icon.default} color={item.color} />
+            <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors[item.tone]}1c`, borderWidth: 1, borderColor: `${theme.colors[item.tone]}4a` }}>
+              <Icon size={appTheme.icon.default} color={theme.colors[item.tone]} />
             </View>
             <View style={{ flex: 1, minWidth: 0, gap: 5 }}>
               <AppText variant="body" style={{ fontWeight: '800' }}>{item.title}</AppText>

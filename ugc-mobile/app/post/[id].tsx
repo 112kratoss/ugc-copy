@@ -36,6 +36,7 @@ import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
 import { buildTextPostPage } from '@/lib/text-post-page-view-model';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import type { ShowcasePostResponse } from '@/lib/types';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
@@ -55,6 +56,7 @@ const CREATOR_ROW_HEIGHT = 32;
  * posts have. There is no vertical reel, so the body simply scrolls.
  */
 export default function PostScreen() {
+  const theme = useAppTheme();
   const params = useLocalSearchParams<{ id: string; source?: string; comments?: string; replyTo?: string }>();
   const postId = Array.isArray(params.id) ? params.id[0] : params.id;
   const source = Array.isArray(params.source) ? params.source[0] : params.source;
@@ -217,15 +219,15 @@ export default function PostScreen() {
 
   if (!item) {
     return (
-      <View style={{ flex: 1, backgroundColor: appTheme.colors.app }}>
+      <View style={{ flex: 1, backgroundColor: theme.colors.app }}>
         <BackControl topInset={topInset} />
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: appTheme.spacing.panel, gap: appTheme.spacing.gap }}>
           {postQueryIsError ? (
             <>
-              <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800', textAlign: 'center' }}>
+              <Text style={{ color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800', textAlign: 'center' }}>
                 This post isn&apos;t available
               </Text>
-              <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm, textAlign: 'center' }}>
+              <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm, textAlign: 'center' }}>
                 It may have been deleted or made private. Check your connection and try again.
               </Text>
               <Pressable
@@ -238,16 +240,16 @@ export default function PostScreen() {
                   alignItems: 'center',
                   justifyContent: 'center',
                   borderRadius: 22,
-                  backgroundColor: appTheme.colors.surfaceStrong,
+                  backgroundColor: theme.colors.surfaceStrong,
                   opacity: pressed ? appTheme.opacity.pressed : 1,
                   paddingHorizontal: 22,
                 })}
               >
-                <Text style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>Try again</Text>
+                <Text style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>Try again</Text>
               </Pressable>
             </>
           ) : (
-            <ActivityIndicator color={appTheme.colors.primary} />
+            <ActivityIndicator color={theme.colors.primary} />
           )}
         </View>
       </View>
@@ -278,7 +280,7 @@ export default function PostScreen() {
   });
 
   return (
-    <View style={{ flex: 1, backgroundColor: appTheme.colors.app }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.app }}>
       {/* First in the tree, on top by z-order. VoiceOver reads a screen in
           hierarchy order, and behind the pager this arrow — the only visible
           way off the screen — came after the post and every one of its
@@ -409,6 +411,7 @@ function leavePost() {
 }
 
 function BackControl({ topInset }: { topInset: number }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -425,11 +428,11 @@ function BackControl({ topInset }: { topInset: number }) {
         borderRadius: 22,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: appTheme.colors.surfaceStrong,
+        backgroundColor: theme.colors.surfaceStrong,
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
-      <BackGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
+      <BackGlyph size={appTheme.icon.feature} color={theme.colors.text} />
     </Pressable>
   );
 }
@@ -455,6 +458,7 @@ function TextPostContent({
   onSave: () => void;
   onShare: () => void;
 }) {
+  const theme = useAppTheme();
   const content = buildTextPostPage(item);
   const stateChip = getViewerStateChip(item);
   const slots = getViewerActionSlots(item);
@@ -479,11 +483,11 @@ function TextPostContent({
           style={({ pressed }) => ({ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: CREATOR_ROW_HEIGHT, opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
           <CreatorAvatar name={content.handle} uri={item.creatorAvatar} size={26} />
-          <Text numberOfLines={1} style={{ color: appTheme.colors.textSecondary, ...appTheme.type.caption, fontWeight: '800' }}>
+          <Text numberOfLines={1} style={{ color: theme.colors.textSecondary, ...appTheme.type.caption, fontWeight: '800' }}>
             {content.handle}
           </Text>
           {content.timeLabel ? (
-            <Text style={{ color: appTheme.colors.faint, ...appTheme.type.caption }}>
+            <Text style={{ color: theme.colors.faint, ...appTheme.type.caption }}>
               {`· ${content.timeLabel}`}
             </Text>
           ) : null}
@@ -501,14 +505,14 @@ function TextPostContent({
             opacity: pressed ? appTheme.opacity.pressed : 1,
           })}
         >
-          <MoreVertical size={appTheme.icon.compact} color={appTheme.colors.faint} />
+          <MoreVertical size={appTheme.icon.compact} color={theme.colors.faint} />
         </Pressable>
       </View>
 
       {/* The same size the details page gives the same post's title: 25/31 was
           a step the ramp does not have, and the two pages of one screen were
           setting one title two ways. */}
-      <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.pageTitle, fontWeight: '800' }}>
+      <Text selectable style={{ color: theme.colors.text, ...appTheme.type.pageTitle, fontWeight: '800' }}>
         {content.title}
       </Text>
 
@@ -517,12 +521,12 @@ function TextPostContent({
           style={{
             alignSelf: 'flex-start',
             borderRadius: appTheme.radii.pill,
-            backgroundColor: appTheme.colors.surfaceStrong,
+            backgroundColor: theme.colors.surfaceStrong,
             paddingHorizontal: 10,
             paddingVertical: 5,
           }}
         >
-          <Text style={{ color: appTheme.colors.textSecondary, fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
+          <Text style={{ color: theme.colors.textSecondary, fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
             {content.flairLabel}
           </Text>
         </View>
@@ -532,13 +536,13 @@ function TextPostContent({
               alignSelf: 'flex-start',
               borderRadius: appTheme.radii.pill,
               borderWidth: 1,
-              borderColor: appTheme.semantic[stateChip.tone].border,
-              backgroundColor: appTheme.semantic[stateChip.tone].background,
+              borderColor: theme.semantic[stateChip.tone].border,
+              backgroundColor: theme.semantic[stateChip.tone].background,
               paddingHorizontal: 10,
               paddingVertical: 5,
             }}
           >
-            <Text style={{ color: appTheme.semantic[stateChip.tone].foreground, fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
+            <Text style={{ color: theme.semantic[stateChip.tone].foreground, fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
               {stateChip.label}
             </Text>
           </View>
@@ -546,12 +550,12 @@ function TextPostContent({
       </View>
 
       {content.body ? (
-        <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.body, lineHeight: 26 }}>
+        <Text selectable style={{ color: theme.colors.text, ...appTheme.type.body, lineHeight: 26 }}>
           {content.body}
         </Text>
       ) : null}
 
-      <View style={{ height: 1, backgroundColor: appTheme.colors.borderSubtle, marginTop: 4 }} />
+      <View style={{ height: 1, backgroundColor: theme.colors.borderSubtle, marginTop: 4 }} />
 
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' }}>
         {slots.map((slot) => {
@@ -573,7 +577,7 @@ function TextPostContent({
               <FeedCardAction
                 key={slot.id}
                 accessibilityLabel={slot.a11yLabel ?? slot.label}
-                icon={<MessageCircle size={appTheme.icon.compact} color={appTheme.colors.faint} />}
+                icon={<MessageCircle size={appTheme.icon.compact} color={theme.colors.faint} />}
                 label={slot.label}
                 onPress={onComments}
               />
@@ -584,7 +588,7 @@ function TextPostContent({
               <FeedCardAction
                 key={slot.id}
                 accessibilityLabel={slot.a11yLabel ?? slot.label}
-                icon={<ShareGlyph size={appTheme.icon.compact} color={appTheme.colors.faint} />}
+                icon={<ShareGlyph size={appTheme.icon.compact} color={theme.colors.faint} />}
                 label={slot.label}
                 onPress={onShare}
               />
@@ -595,7 +599,7 @@ function TextPostContent({
               <FeedCardAction
                 key={slot.id}
                 accessibilityLabel={slot.a11yLabel ?? slot.label}
-                icon={<FileText size={appTheme.icon.compact} color={appTheme.colors.faint} />}
+                icon={<FileText size={appTheme.icon.compact} color={theme.colors.faint} />}
                 label={slot.label}
                 onPress={onDetails}
               />
@@ -606,7 +610,7 @@ function TextPostContent({
               <FeedCardAction
                 key={slot.id}
                 accessibilityLabel={slot.a11yLabel ?? slot.label}
-                icon={<Repeat2 size={appTheme.icon.compact} color={appTheme.colors.primary} />}
+                icon={<Repeat2 size={appTheme.icon.compact} color={theme.colors.primary} />}
                 label={slot.label}
                 onPress={onActionsOpen}
                 tone="primary"

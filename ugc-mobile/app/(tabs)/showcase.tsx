@@ -86,7 +86,9 @@ import { SkeletonBone } from '@/components/skeleton';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
 import { MotionView, usePressMotion, useReducedMotion } from '@/lib/motion';
-import { accentColor, appTheme } from '@/lib/theme';
+import { hexWithAlpha } from '@/lib/eased-fade';
+import { accentColor, appTheme, mediaColors, themes } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import type { ShowcaseFeedEventType, ShowcaseFeedItem, ShowcaseFeedResponse, ShowcasePostResponse } from '@/lib/types';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
 
@@ -170,6 +172,7 @@ function runShowcaseActivation(
 }
 
 export default function ShowcaseScreen() {
+  const theme = useAppTheme();
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
   const routeParams = useLocalSearchParams<{ filter?: string | string[]; tool?: string | string[] }>();
@@ -711,7 +714,7 @@ export default function ShowcaseScreen() {
     <FeedVideoActivationContext.Provider value={activationStore}>
     <MediaZoomSurface>
     <WorkspaceSideMenuGestureLayer bottomOffset={tabBarMetrics.contentBottomPadding} enabled={!isSwipingMedia}>
-      <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+      <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
         <FlashList
         ref={feedRef}
         contentInsetAdjustmentBehavior="never"
@@ -752,7 +755,7 @@ export default function ShowcaseScreen() {
         showsVerticalScrollIndicator={false}
         style={{
           flex: 1,
-          backgroundColor: appTheme.colors.background,
+          backgroundColor: theme.colors.background,
         }}
         contentContainerStyle={{
           paddingTop: topInset + 12,
@@ -774,19 +777,19 @@ export default function ShowcaseScreen() {
                     menu from here, which Gestures forbids — a shortcut gesture
                     supplements a control, it never replaces one. */}
                 <WorkspaceMenuButton />
-                <Text accessibilityRole="header" selectable style={{ flex: 1, color: appTheme.colors.text, ...appTheme.type.pageTitle }}>
+                <Text accessibilityRole="header" selectable style={{ flex: 1, color: theme.colors.text, ...appTheme.type.pageTitle }}>
                   Explore
                 </Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                   <IconButton label="Search creators, posts, and recipes" onPress={() => setSearchVisible(true)}>
-                    <Search size={appTheme.icon.default} color={appTheme.colors.text} />
+                    <Search size={appTheme.icon.default} color={theme.colors.text} />
                   </IconButton>
                   <IconButton
                     disabled={showcaseQuery.isFetching && !showcaseQuery.isFetchingNextPage}
                     label="Refresh Explore"
                     onPress={handleRefresh}
                   >
-                    <RefreshCw size={appTheme.icon.default} color={appTheme.colors.text} />
+                    <RefreshCw size={appTheme.icon.default} color={theme.colors.text} />
                   </IconButton>
                 </View>
               </View>
@@ -815,14 +818,14 @@ export default function ShowcaseScreen() {
                       alignItems: 'center',
                       gap: 5,
                       borderRadius: appTheme.radii.pill,
-                      backgroundColor: `${appTheme.colors.commerce}1f`,
+                      backgroundColor: `${theme.colors.commerce}1f`,
                       opacity: pressed ? appTheme.opacity.pressed : 1,
                       paddingLeft: 11,
                       paddingRight: 9,
                     })}
                   >
-                    <Text style={{ color: appTheme.colors.text, ...appTheme.type.label }}>{activeToolLabel}</Text>
-                    <X size={14} color={appTheme.colors.text} />
+                    <Text style={{ color: theme.colors.text, ...appTheme.type.label }}>{activeToolLabel}</Text>
+                    <X size={14} color={theme.colors.text} />
                   </Pressable>
                 ) : null}
               </ScrollView>
@@ -911,12 +914,13 @@ function MasonryCardCell({ children, layout, index = 0 }: { children: React.Reac
 }
 
 function WorkspaceMenuButton() {
+  const theme = useAppTheme();
   const sideMenu = useWorkspaceSideMenu();
   if (!sideMenu) return null;
 
   return (
     <IconButton label={WORKSPACE_SIDE_MENU_LABEL} onPress={sideMenu.open}>
-      <WorkspaceSideMenuGlyph size={appTheme.icon.default} color={appTheme.colors.text} />
+      <WorkspaceSideMenuGlyph size={appTheme.icon.default} color={theme.colors.text} />
     </IconButton>
   );
 }
@@ -932,6 +936,7 @@ function IconButton({
   label: string;
   onPress?: () => void;
 }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -944,7 +949,7 @@ function IconButton({
         alignItems: 'center',
         justifyContent: 'center',
         borderRadius: appTheme.radii.pill,
-        backgroundColor: pressed ? appTheme.colors.surfaceStrong : 'transparent',
+        backgroundColor: pressed ? theme.colors.surfaceStrong : 'transparent',
         opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
       })}
     >
@@ -962,6 +967,7 @@ function FeedFilterTab({
   label: string;
   onPress: () => void;
 }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -973,11 +979,11 @@ function FeedFilterTab({
         opacity: pressed ? appTheme.opacity.pressed : 1,
         paddingHorizontal: 10,
         borderBottomWidth: 2,
-        borderBottomColor: active ? appTheme.colors.primary : 'transparent',
+        borderBottomColor: active ? theme.colors.primary : 'transparent',
       })}
     >
       <Text style={{
-        color: active ? appTheme.colors.text : appTheme.colors.muted,
+        color: active ? theme.colors.text : theme.colors.muted,
         ...appTheme.type.label,
         fontWeight: active ? '800' : '700',
       }}>
@@ -1022,9 +1028,10 @@ function SkeletonPin({ height, layout }: { height: number; layout: ShowcaseGridL
 }
 
 function BottomLoader() {
+  const theme = useAppTheme();
   return (
     <View style={{ minHeight: 52, alignItems: 'center', justifyContent: 'center' }}>
-      <ActivityIndicator color={appTheme.colors.primary} />
+      <ActivityIndicator color={theme.colors.primary} />
     </View>
   );
 }
@@ -1051,10 +1058,11 @@ const MasonryPin = memo(function MasonryPin({
   onOpenPost: (item: ShowcaseFeedItem, zoom: AppleZoomOpen | null) => void;
   onScrollToggle?: (scrolling: boolean) => void;
 }) {
+  const theme = useAppTheme();
   const { width } = useWindowDimensions();
   const columnWidth = (width - FEED_HORIZONTAL_PADDING * 2 - layout.columnGap) / 2;
   const mediaHeight = getShowcaseMediaHeight(card, columnWidth, resolvedAspectRatio);
-  const accent = accentColor(card.accent);
+  const accent = accentColor(card.accent, theme.colors);
   const isVideoCard = isShowcaseVideoPreviewCandidate(card.item);
   const activationStore = useContext(FeedVideoActivationContext);
   const activation = useFeedVideoActivation(activationStore, card.id);
@@ -1099,7 +1107,7 @@ const MasonryPin = memo(function MasonryPin({
           borderRadius: layout.mediaRadius,
           borderCurve: 'continuous',
           overflow: 'hidden',
-          backgroundColor: '#050506',
+          backgroundColor: theme.colors.mediaPlaceholder,
         }}
       >
         <MediaZoomSourceView source={zoomSource} style={{ width: columnWidth, height: mediaHeight }}>
@@ -1128,7 +1136,9 @@ const MasonryPin = memo(function MasonryPin({
             <VisualFallbackPreview accent={accent} height={mediaHeight} radius={layout.mediaRadius} />
           )
         )}
-        {signal ? <PinBadge label={signal.label} accent={accentColor(signal.accent)} /> : null}
+        {/* The pin sits on a dark glass chip over the picture, so it takes the
+            dark palette's bright tones in both schemes. */}
+        {signal ? <PinBadge label={signal.label} accent={accentColor(signal.accent, themes.dark.colors)} /> : null}
         {isVideoCard && !coverVideoStreaming ? <VideoCornerPlay /> : null}
         </MediaZoomSourceView>
       </Pressable>
@@ -1153,7 +1163,7 @@ const MasonryPin = memo(function MasonryPin({
           })}
         >
           <CreatorAvatar uri={card.creatorAvatar} name={creatorLabel} />
-          <Text numberOfLines={1} style={{ color: appTheme.colors.muted, flex: 1, ...appTheme.type.caption, fontWeight: '700' }}>
+          <Text numberOfLines={1} style={{ color: theme.colors.muted, flex: 1, ...appTheme.type.caption, fontWeight: '700' }}>
             {creatorLabel}
           </Text>
         </Pressable>
@@ -1170,11 +1180,11 @@ const MasonryPin = memo(function MasonryPin({
             alignItems: 'center',
             justifyContent: 'center',
             borderRadius: appTheme.radii.pill,
-            backgroundColor: pressed ? appTheme.colors.surfaceStrong : 'transparent',
+            backgroundColor: pressed ? theme.colors.surfaceStrong : 'transparent',
             opacity: pressed ? appTheme.opacity.pressed : 1,
           })}
         >
-          <MoreVertical size={18} color={appTheme.colors.muted} />
+          <MoreVertical size={18} color={theme.colors.muted} />
         </Pressable>
       </View>
     </View>
@@ -1196,7 +1206,7 @@ function PinBadge({ label, accent }: { label: string; accent: string }) {
         top: 10,
         maxWidth: '82%',
         borderRadius: appTheme.radii.pill,
-        backgroundColor: 'rgba(5,5,7,0.78)',
+        backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.78),
         paddingHorizontal: 9,
         // The caption ramp's own line box is 17pt; the padding is what keeps the
         // pill the height it has always been rather than an override on the type.
@@ -1223,15 +1233,16 @@ function VideoCornerPlay() {
         borderRadius: 15.5,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: 'rgba(0,0,0,0.42)',
+        backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.42),
       }}
     >
-      <Play size={16} color="#ffffff" fill="#ffffff" />
+      <Play size={16} color={mediaColors.onMedia} fill={mediaColors.onMedia} />
     </View>
   );
 }
 
 function VisualFallbackPreview({ accent, height, radius }: { accent: string; height: number; radius: number }) {
+  const theme = useAppTheme();
   return (
     <View
       style={{
@@ -1239,8 +1250,8 @@ function VisualFallbackPreview({ accent, height, radius }: { accent: string; hei
         borderRadius: radius,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: appTheme.colors.borderSubtle,
-        backgroundColor: appTheme.colors.surfaceInset,
+        borderColor: theme.colors.borderSubtle,
+        backgroundColor: theme.colors.surfaceInset,
         overflow: 'hidden',
         alignItems: 'center',
         justifyContent: 'center',
@@ -1252,6 +1263,7 @@ function VisualFallbackPreview({ accent, height, radius }: { accent: string; hei
 }
 
 function VideoPinPreview({ accent, height, radius }: { accent: string; height: number; radius: number }) {
+  const theme = useAppTheme();
   return (
     <View
       style={{
@@ -1262,7 +1274,7 @@ function VideoPinPreview({ accent, height, radius }: { accent: string; height: n
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: `${accent}4d`,
-        backgroundColor: '#07070c',
+        backgroundColor: theme.colors.mediaPlaceholder,
         overflow: 'hidden',
       }}
     >

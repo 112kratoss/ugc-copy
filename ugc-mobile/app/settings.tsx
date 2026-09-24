@@ -6,6 +6,13 @@ import { Linking, Pressable, View } from 'react-native';
 import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
 import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
 import { formatAppVersionLabel, readAppVersionParts, readUpdateRuntime } from '@/lib/app-version-label';
+import {
+  APPEARANCE_PREFERENCES,
+  isAppearanceChoiceAvailable,
+  setAppearancePreference,
+  useAppearancePreference,
+  type AppearancePreference,
+} from '@/lib/appearance';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
 import { formatSupportDetails, readCreatorSession, subscribeCreatorSession } from '@/lib/creator-session-diagnostics';
 import { showMessageDialog } from '@/lib/dialog';
@@ -14,12 +21,15 @@ import {
   readMediaDiagnostics,
   summarizeMediaDiagnostics,
 } from '@/lib/media-diagnostics';
+import { haptic } from '@/lib/haptics';
 import { formatCreditAmount } from '@/lib/pricing';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 export default function SettingsScreen() {
+  const theme = useAppTheme();
   const { user, credits } = useAuth();
   const versionLabel = formatAppVersionLabel(readAppVersionParts());
   // For support: the OTA runtime and channel, and how the last draft this launch
@@ -40,44 +50,51 @@ export default function SettingsScreen() {
       <GroupLabel>Account</GroupLabel>
 
       <SettingsCard
-        icon={<UserRound size={appTheme.icon.feature} color={appTheme.colors.primary} />}
+        icon={<UserRound size={appTheme.icon.feature} color={theme.colors.primary} />}
         title="Profile"
         body={user?.email ?? 'Sign in to connect your creator profile.'}
         onPress={() => router.push(user ? '/profile' as never : '/auth' as never)}
       />
 
       <SettingsCard
-        icon={<CreditCard size={appTheme.icon.feature} color={appTheme.colors.amber} />}
+        icon={<CreditCard size={appTheme.icon.feature} color={theme.colors.amber} />}
         title="Credits"
         body={`${formatCreditAmount(credits)} credits available on this account.`}
         onPress={() => router.push('/pricing' as never)}
       />
 
       <SettingsCard
-        icon={<Gift size={appTheme.icon.feature} color={appTheme.colors.commerce} />}
+        icon={<Gift size={appTheme.icon.feature} color={theme.colors.commerce} />}
         title="Invite & Earn"
         body={user ? 'Share your referral link and track bonus credits.' : 'Apply an invite code or sign in to share your link.'}
         onPress={() => router.push('/invite' as never)}
       />
 
       <SettingsCard
-        icon={<Bell size={appTheme.icon.feature} color={appTheme.colors.info} />}
+        icon={<Bell size={appTheme.icon.feature} color={theme.colors.info} />}
         title="Alerts"
         body="Review your alerts history and creator updates."
         onPress={() => router.push('/studio' as never)}
       />
 
+      {isAppearanceChoiceAvailable() ? (
+        <>
+          <GroupLabel>Display</GroupLabel>
+          <AppearanceSetting />
+        </>
+      ) : null}
+
       <GroupLabel>Support & legal</GroupLabel>
 
       <SettingsCard
-        icon={<CircleHelp size={appTheme.icon.feature} color={appTheme.colors.text} />}
+        icon={<CircleHelp size={appTheme.icon.feature} color={theme.colors.text} />}
         title="Help & support"
         body="Find quick guidance for creations, unlocks, and contacting support."
         onPress={() => router.push('/help' as never)}
       />
 
       <SettingsCard
-        icon={<ShieldCheck size={appTheme.icon.feature} color={appTheme.colors.info} />}
+        icon={<ShieldCheck size={appTheme.icon.feature} color={theme.colors.info} />}
         title="Privacy policy"
         body="Review how Magicbooklet collects, uses, stores, and deletes data."
         external
@@ -85,7 +102,7 @@ export default function SettingsScreen() {
       />
 
       <SettingsCard
-        icon={<FileText size={appTheme.icon.feature} color={appTheme.colors.muted} />}
+        icon={<FileText size={appTheme.icon.feature} color={theme.colors.muted} />}
         title="Terms of service"
         body="Review the terms that apply to accounts, credits, and creations."
         external
@@ -93,7 +110,7 @@ export default function SettingsScreen() {
       />
 
       <SettingsCard
-        icon={<ShieldCheck size={appTheme.icon.feature} color={appTheme.colors.warning} />}
+        icon={<ShieldCheck size={appTheme.icon.feature} color={theme.colors.warning} />}
         title="Child safety standards"
         body="Review our zero-tolerance policy and report child-safety concerns."
         external
@@ -102,7 +119,7 @@ export default function SettingsScreen() {
 
       {user ? (
         <SettingsCard
-          icon={<Trash2 size={appTheme.icon.feature} color={appTheme.colors.danger} />}
+          icon={<Trash2 size={appTheme.icon.feature} color={theme.colors.danger} />}
           title="Delete account"
           body="Permanently delete your account and personal data."
           destructive
@@ -110,7 +127,7 @@ export default function SettingsScreen() {
         />
       ) : (
         <SettingsCard
-          icon={<Trash2 size={appTheme.icon.feature} color={appTheme.colors.danger} />}
+          icon={<Trash2 size={appTheme.icon.feature} color={theme.colors.danger} />}
           title="Account deletion"
           body="See how to request deletion of an existing Magicbooklet account."
           external
@@ -158,6 +175,86 @@ async function copyMediaDiagnostics(versionLabel: string) {
   });
 }
 
+const APPEARANCE_LABELS: Record<AppearancePreference, string> = {
+  system: 'System',
+  light: 'Light',
+  dark: 'Dark',
+};
+
+/**
+ * Follow the phone, or hold one scheme whatever it says. Drawn as the app's
+ * segmented control (the same track and solid selected fill as `ModeTabs` on
+ * the sign-in screen and `ProfileSegment`) with radio semantics, because this
+ * picks a setting rather than switching a view. The change lands in the same
+ * frame; there is nothing to confirm.
+ */
+function AppearanceSetting() {
+  const theme = useAppTheme();
+  const preference = useAppearancePreference();
+  const body = preference === 'system'
+    ? `Matches your phone — ${theme.scheme === 'dark' ? 'dark' : 'light'} right now.`
+    : `Stays ${preference} whatever your phone uses.`;
+
+  return (
+    <Card style={{ gap: 14 }}>
+      <View style={{ gap: 3 }}>
+        <AppText variant="cardTitle">Appearance</AppText>
+        <AppText variant="bodySm" color="muted">{body}</AppText>
+      </View>
+      <View
+        accessibilityRole="radiogroup"
+        accessibilityLabel="Appearance"
+        style={{
+          flexDirection: 'row',
+          gap: 4,
+          padding: 4,
+          borderRadius: 18,
+          borderCurve: 'continuous',
+          borderWidth: 1,
+          borderColor: theme.colors.border,
+          backgroundColor: theme.colors.surfaceInset,
+        }}
+      >
+        {APPEARANCE_PREFERENCES.map((option) => {
+          const active = option === preference;
+          return (
+            <Pressable
+              key={option}
+              accessibilityRole="radio"
+              accessibilityLabel={APPEARANCE_LABELS[option]}
+              accessibilityState={{ checked: active }}
+              onPress={() => {
+                if (active) return;
+                haptic.select();
+                setAppearancePreference(option);
+              }}
+              style={({ pressed }) => ({
+                flex: 1,
+                minHeight: appTheme.touch.compact,
+                borderRadius: 14,
+                borderCurve: 'continuous',
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: active ? theme.colors.primaryFill : 'transparent',
+                opacity: pressed ? appTheme.opacity.pressed : 1,
+              })}
+            >
+              <AppText
+                selectable={false}
+                variant="label"
+                color={active ? theme.colors.onPrimary : theme.colors.muted}
+                numberOfLines={1}
+              >
+                {APPEARANCE_LABELS[option]}
+              </AppText>
+            </Pressable>
+          );
+        })}
+      </View>
+    </Card>
+  );
+}
+
 function GroupLabel({ children }: { children: string }) {
   return (
     <View style={{ marginTop: appTheme.spacing.compact }}>
@@ -182,6 +279,7 @@ function SettingsCard({
   external?: boolean;
   destructive?: boolean;
 }) {
+  const theme = useAppTheme();
   const Trailing = external ? ArrowUpRight : ChevronRight;
   return (
     <Pressable
@@ -192,14 +290,14 @@ function SettingsCard({
       style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}
     >
       <Card style={{ minHeight: 92, flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-        <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
+        <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
           {icon}
         </View>
         <View style={{ flex: 1, gap: 3 }}>
           <AppText variant="cardTitle" color={destructive ? 'danger' : undefined}>{title}</AppText>
           <AppText variant="bodySm" color="muted">{body}</AppText>
         </View>
-        <Trailing size={appTheme.icon.default} color={appTheme.colors.faint} />
+        <Trailing size={appTheme.icon.default} color={theme.colors.faint} />
       </Card>
     </Pressable>
   );

@@ -47,6 +47,7 @@ import { getProfileHandle } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { BackGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import { getNativeRemixCreateHref, getViewerShareIntent, getViewerShareSourceSurface } from '@/lib/viewer-actions';
 import {
   changePostVisibility,
@@ -83,6 +84,7 @@ const LANDING_TICK_MS = 250;
  * reliability audit, C1, C3, C8).
  */
 export function ProfileMediaFeedScreen() {
+  const theme = useAppTheme();
   const params = useLocalSearchParams<ProfileMediaFeedParams>();
   const source = normalizeViewerSource(params.source);
   const initialId = normalizeParam(params.initialId);
@@ -391,7 +393,7 @@ export function ProfileMediaFeedScreen() {
   if (library.isLoading || selection === 'loading') {
     return (
       <FeedShell title={libraryName} topInset={topInset} bottomInset={bottomInset}>
-        <ActivityIndicator accessibilityLabel="Loading media" color={appTheme.colors.primary} />
+        <ActivityIndicator accessibilityLabel="Loading media" color={theme.colors.primary} />
       </FeedShell>
     );
   }
@@ -437,8 +439,8 @@ export function ProfileMediaFeedScreen() {
   if (!cards.length) {
     return (
       <FeedShell title={libraryName} topInset={topInset} bottomInset={bottomInset}>
-        <Text style={{ color: appTheme.colors.text, ...appTheme.type.sectionTitle, fontWeight: '800' }}>Nothing here yet</Text>
-        <Text style={{ color: appTheme.colors.muted, marginTop: 8 }}>This item may have been removed.</Text>
+        <Text style={{ color: theme.colors.text, ...appTheme.type.sectionTitle, fontWeight: '800' }}>Nothing here yet</Text>
+        <Text style={{ color: theme.colors.muted, marginTop: 8 }}>This item may have been removed.</Text>
       </FeedShell>
     );
   }
@@ -446,7 +448,7 @@ export function ProfileMediaFeedScreen() {
   const showEnrichmentNotice = library.enrichmentFailed && items.some((item) => Boolean(item.linkedPostId));
 
   return (
-    <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <FeedTopBar title={libraryName} topInset={topInset} />
       {landing.phase === 'failed' ? (
         <FeedNotice
@@ -541,7 +543,7 @@ export function ProfileMediaFeedScreen() {
           pointerEvents="none"
           style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}
         >
-          <ActivityIndicator accessibilityLabel={`Opening ${noun}`} color={appTheme.colors.primary} />
+          <ActivityIndicator accessibilityLabel={`Opening ${noun}`} color={theme.colors.primary} />
         </View>
       ) : null}
       </View>
@@ -592,6 +594,7 @@ function leaveFeed() {
 }
 
 function FeedTopBar({ title, topInset }: { title: string; topInset: number }) {
+  const theme = useAppTheme();
   return (
     <View
       style={{
@@ -602,8 +605,8 @@ function FeedTopBar({ title, topInset }: { title: string; topInset: number }) {
         alignItems: 'center',
         gap: 6,
         borderBottomWidth: 1,
-        borderBottomColor: appTheme.colors.borderSubtle,
-        backgroundColor: appTheme.colors.background,
+        borderBottomColor: theme.colors.borderSubtle,
+        backgroundColor: theme.colors.background,
       }}
     >
       <Pressable
@@ -619,9 +622,9 @@ function FeedTopBar({ title, topInset }: { title: string; topInset: number }) {
           opacity: pressed ? appTheme.opacity.pressed : 1,
         })}
       >
-        <BackGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
+        <BackGlyph size={appTheme.icon.feature} color={theme.colors.text} />
       </Pressable>
-      <Text style={{ color: appTheme.colors.text, ...appTheme.type.sectionTitle, fontWeight: '800' }}>
+      <Text style={{ color: theme.colors.text, ...appTheme.type.sectionTitle, fontWeight: '800' }}>
         {title}
       </Text>
     </View>
@@ -630,7 +633,8 @@ function FeedTopBar({ title, topInset }: { title: string; topInset: number }) {
 
 /** A non-blocking problem the reader can act on, above the cards it concerns. */
 function FeedNotice({ label, onPress }: { label: string; onPress: () => void }) {
-  const tone = appTheme.semantic.warning;
+  const theme = useAppTheme();
+  const tone = theme.semantic.warning;
 
   return (
     <Pressable
@@ -660,9 +664,10 @@ function FeedNotice({ label, onPress }: { label: string; onPress: () => void }) 
 }
 
 function FeedFooterLoader() {
+  const theme = useAppTheme();
   return (
     <View style={{ minHeight: 64, alignItems: 'center', justifyContent: 'center' }}>
-      <ActivityIndicator accessibilityLabel="Loading more" color={appTheme.colors.primary} />
+      <ActivityIndicator accessibilityLabel="Loading more" color={theme.colors.primary} />
     </View>
   );
 }
@@ -678,8 +683,9 @@ function FeedShell({
   bottomInset: number;
   children: React.ReactNode;
 }) {
+  const theme = useAppTheme();
   return (
-    <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <FeedTopBar title={title} topInset={topInset} />
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: bottomInset, paddingHorizontal: 24 }}>
         {children}

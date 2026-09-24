@@ -1,5 +1,5 @@
 import { BricolageGrotesque_700Bold, BricolageGrotesque_800ExtraBold, useFonts } from '@expo-google-fonts/bricolage-grotesque';
-import { DarkTheme, ThemeProvider } from '@react-navigation/native';
+import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { QueryClient, QueryClientProvider, focusManager, useQueryClient } from '@tanstack/react-query';
 import { requireOptionalNativeModule } from 'expo';
 import Constants from 'expo-constants';
@@ -42,7 +42,10 @@ import { installMediaQueryRetention, pruneInactiveMediaQueries } from '@/lib/med
 import { restorePersistedHomeFeed } from '@/lib/persisted-home-feed';
 import { reportStartupMilestone } from '@/lib/startup-interactive';
 import { STARTUP_VERSION_CHECK_FALLBACK_MS, type StartupVersionCheckStatus } from '@/lib/startup-readiness';
-import { appTheme } from '@/lib/theme';
+import { hydrateAppearancePreference, useResolvedColorScheme } from '@/lib/appearance';
+import { useNavigationBarSurface } from '@/lib/system-bars';
+import { appTheme, mediaColors, themes, type AppTheme } from '@/lib/theme';
+import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -115,18 +118,26 @@ AppState.addEventListener('change', (state) => {
   focusManager.setFocused(state === 'active');
 });
 
-const navigationTheme = {
-  ...DarkTheme,
-  colors: {
-    ...DarkTheme.colors,
-    primary: appTheme.colors.primary ?? '#FF7A59',
-    background: appTheme.colors.background,
-    card: appTheme.colors.panel,
-    text: appTheme.colors.text,
-    border: appTheme.colors.border,
-    notification: appTheme.colors.danger,
-  },
-};
+// The saved Settings → Appearance choice is read while the splash is still up
+// (the layout holds the splash on it beside the fonts), so an app set to Light
+// on a dark phone never shows a dark first frame.
+const appearanceHydration = hydrateAppearancePreference();
+
+function navigationThemeFor(theme: AppTheme) {
+  const base = theme.scheme === 'dark' ? DarkTheme : DefaultTheme;
+  return {
+    ...base,
+    colors: {
+      ...base.colors,
+      primary: theme.colors.primary,
+      background: theme.colors.background,
+      card: theme.colors.panel,
+      text: theme.colors.text,
+      border: theme.colors.border,
+      notification: theme.colors.danger,
+    },
+  };
+}
 
 function RootLayout() {
   return <RootLayoutNav />;
@@ -137,11 +148,27 @@ export default AppMetricsRoot.wrap(RootLayout);
 function RootLayoutNav() {
   const reducedMotion = useReducedMotion();
   const [fontsLoaded, fontError] = useFonts({ BricolageGrotesque_700Bold, BricolageGrotesque_800ExtraBold });
+  const [appearanceReady, setAppearanceReady] = useState(false);
+  const scheme = useResolvedColorScheme();
+  const theme = themes[scheme];
+  // Android's navigation bar icons follow the app's scheme; a dark surface
+  // above (the reel) takes over while it is in front.
+  useNavigationBarSurface(scheme);
 
   useEffect(() => {
-    if (!fontsLoaded && !fontError) return;
+    let active = true;
+    void appearanceHydration.then(() => {
+      if (active) setAppearanceReady(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if ((!fontsLoaded && !fontError) || !appearanceReady) return;
     void SplashScreen.hideAsync().catch(() => undefined);
-  }, [fontError, fontsLoaded]);
+  }, [appearanceReady, fontError, fontsLoaded]);
 
   useEffect(() => {
     const fallback = setTimeout(() => {
@@ -151,6 +178,7 @@ function RootLayoutNav() {
   }, []);
 
   return (
+    <ThemeScope scheme={scheme}>
     <QueryClientProvider client={queryClient}>
       {/* One stroke weight for every interface icon in the app (HIG Icons).
           Call sites choose a size; the weight is never passed per-icon. */}
@@ -166,10 +194,13 @@ function RootLayoutNav() {
           <OtaUpdateCoordinator />
           <MediaDiagnosticsCoordinator />
           <SafeAreaProvider>
-            <ThemeProvider value={navigationTheme}>
+            <ThemeProvider value={navigationThemeFor(theme)}>
               <GestureHandlerRootView style={{ flex: 1 }}>
-              <View style={{ flex: 1, backgroundColor: appTheme.colors.app }}>
-                <StatusBar style="light" />
+              <View style={{ flex: 1, backgroundColor: theme.colors.app }}>
+                {/* Light icons on the dark scheme, dark icons on paper. The reel
+                    mounts its own light-content bar above this one while it is
+                    open, because it stays dark in both schemes. */}
+                <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
                 {/* Above the navigator so a hosted surface can cover the tab
                     bar, and inside the app's own window so keyboard avoidance
                     reaches it — which a React Native Modal cannot offer on
@@ -184,10 +215,10 @@ function RootLayoutNav() {
                   gestureEnabled: true,
                   headerBackButtonDisplayMode: 'minimal',
                   headerShadowVisible: false,
-                  headerStyle: { backgroundColor: appTheme.colors.background },
-                  headerTintColor: appTheme.colors.text,
+                  headerStyle: { backgroundColor: theme.colors.background },
+                  headerTintColor: theme.colors.text,
                   headerTitleStyle: { fontWeight: '700' },
-                  contentStyle: { backgroundColor: appTheme.colors.background },
+                  contentStyle: { backgroundColor: theme.colors.background },
                 }}
               >
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
@@ -200,7 +231,7 @@ function RootLayoutNav() {
                     title: 'Sign In',
                     presentation: 'modal',
                     animation: reducedMotion ? 'none' : 'fade_from_bottom',
-                    contentStyle: { backgroundColor: appTheme.colors.background },
+                    contentStyle: { backgroundColor: theme.colors.background },
                   }}
                 />
                 {/* Same iOS 26 full-screen back pan as `post/new` below, and
@@ -237,7 +268,7 @@ function RootLayoutNav() {
                     fullScreenGestureEnabled: false,
                     presentation: 'card',
                     animation: reducedMotion ? 'none' : 'simple_push',
-                    contentStyle: { backgroundColor: appTheme.colors.background },
+                    contentStyle: { backgroundColor: theme.colors.background },
                   }}
                 />
                 <Stack.Screen
@@ -245,7 +276,7 @@ function RootLayoutNav() {
                   options={{
                     headerShown: false,
                     animation: reducedMotion ? 'none' : 'simple_push',
-                    contentStyle: { backgroundColor: appTheme.colors.app },
+                    contentStyle: { backgroundColor: theme.colors.app },
                   }}
                 />
                 {/* The reel opens by growing out of the tapped tile and shrinks back
@@ -266,7 +297,7 @@ function RootLayoutNav() {
                   options={({ route }) => ({
                     headerShown: false,
                     presentation: Platform.OS === 'android' ? 'transparentModal' : 'card',
-                    contentStyle: { backgroundColor: Platform.OS === 'android' ? 'transparent' : '#000' },
+                    contentStyle: { backgroundColor: Platform.OS === 'android' ? 'transparent' : mediaColors.mediaGround },
                     animation: reducedMotion ? 'none' : viewerAnimation(route.params),
                     animationDuration: 250,
                   })}
@@ -294,7 +325,9 @@ function RootLayoutNav() {
                     interrupt. Nothing is rendered unless a post is opening or
                     closing. An open draws the post whole — rail, caption and
                     controls — from its first frame. */}
-                <MediaZoomFlightLayer renderPost={renderZoomPost} />
+                <ThemeScope scheme="dark">
+                  <MediaZoomFlightLayer renderPost={renderZoomPost} />
+                </ThemeScope>
               </View>
               </GestureHandlerRootView>
             </ThemeProvider>
@@ -303,10 +336,12 @@ function RootLayoutNav() {
       </AuthProvider>
       </LucideProvider>
     </QueryClientProvider>
+    </ThemeScope>
   );
 }
 
 function StartupCoordinator() {
+  const theme = useAppTheme();
   const { api, isLoading, user } = useAuth();
   const { isHydrated, state, storageAvailable } = useOnboarding();
   const pathname = usePathname();
@@ -375,7 +410,7 @@ function StartupCoordinator() {
   }, [isHydrated, isLoading, pathname, state.status, storageAvailable, user, versionCheckStatus]);
 
   if ((!isHydrated || isLoading) && pathname === '/') {
-    return <View pointerEvents="none" style={{ position: 'absolute', inset: 0, zIndex: 100, backgroundColor: appTheme.colors.background }} />;
+    return <View pointerEvents="none" style={{ position: 'absolute', inset: 0, zIndex: 100, backgroundColor: theme.colors.background }} />;
   }
   return null;
 }

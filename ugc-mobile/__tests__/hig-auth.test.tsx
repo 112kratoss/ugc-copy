@@ -3,7 +3,7 @@ import renderer from 'react-test-renderer';
 import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { appTheme } from '../lib/theme';
+import { appTheme, themes } from '../lib/theme';
 import { MIN_HIT_TARGET_PT } from '../lib/hit-target';
 import {
   GENERIC_SIGN_IN_FAILURE,
@@ -290,7 +290,7 @@ describe('S2 — the front door uses the app\'s own controls', () => {
       expect(hosts(tree, tab)[0].props.accessibilityRole).toBe('tab');
       expect(styleOf(tree, tab).minHeight).toBeGreaterThanOrEqual(MIN_HIT_TARGET_PT);
     }
-    expect(styleOf(tree, selected).backgroundColor).toBe(appTheme.colors.primary);
+    expect(styleOf(tree, selected).backgroundColor).toBe(themes.dark.colors.primaryFill);
     expect(styleOf(tree, unselected).backgroundColor).toBe('transparent');
   });
 

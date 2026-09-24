@@ -6,6 +6,7 @@ import { PrimaryButton, SecondaryButton } from '@/components/ui';
 import { useReducedMotion } from '@/lib/motion';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 /**
  * The only OTA update the app ever mentions out loud.
@@ -35,6 +36,7 @@ export function CriticalUpdateSheet({
   onRestart: () => void;
   visible: boolean;
 }) {
+  const theme = useAppTheme();
   const reducedMotion = useReducedMotion();
   const insets = useSafeAreaInsets();
   const bottomInset = resolvedBottomInset(insets.bottom);
@@ -53,7 +55,7 @@ export function CriticalUpdateSheet({
         <SheetPanel
           {...drag.contentPanHandlers}
           style={[
-            sheetPanelStyle(),
+            sheetPanelStyle(theme.colors),
             { paddingBottom: Math.max(bottomInset, appTheme.spacing.panel) },
             drag.dragStyle,
           ]}
@@ -68,14 +70,14 @@ export function CriticalUpdateSheet({
           >
             <Text
               accessibilityRole="header"
-              style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}
+              style={{ color: theme.colors.text, ...appTheme.type.cardTitle }}
             >
               An important fix is ready
             </Text>
             {/* Says what restarting costs, because that is the only thing the
                 person actually needs to decide. No version number, no changelog
                 — neither helps them answer the question being asked. */}
-            <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
+            <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
               Restarting takes a moment and you will come back to where you are now.
             </Text>
           </View>

@@ -55,15 +55,6 @@ vi.mock('@/lib/safe-area', () => ({
   resolvedBottomInset: (value: number) => value,
 }));
 
-vi.mock('@/lib/theme', () => ({
-  appTheme: {
-    colors: {
-      muted: '#a1a1aa',
-      borderStrong: 'rgba(255,248,237,0.22)',
-    },
-    icon: { feature: 24 },
-  },
-}));
 
 import { MagicCreateMenu } from '../components/magic-create-menu';
 import { CREATE_MENU_ACTIONS, getCreateMenuActionHref } from '../lib/create-menu-view-model';

@@ -59,7 +59,9 @@ import {
   rememberActiveTemplateRun,
 } from '@/lib/template-run-resume';
 import { formatCreditAmount } from '@/lib/pricing';
-import { appTheme } from '@/lib/theme';
+import { hexWithAlpha } from '@/lib/eased-fade';
+import { appTheme, mediaColors, themes } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import { invalidateActiveGenerations } from '@/lib/active-generations';
 import type {
   MediaTemplateDetail,
@@ -92,6 +94,7 @@ function inputSummary(template: Pick<MediaTemplateSummary, 'inputSlots'>) {
 }
 
 export function MediaTemplateCatalogScreen() {
+  const theme = useAppTheme();
   const { api, user } = useAuth();
   const templatesQuery = useQuery({
     queryKey: ['media-templates'],
@@ -156,8 +159,8 @@ export function MediaTemplateCatalogScreen() {
             borderRadius: appTheme.radii.xl,
             borderCurve: 'continuous',
             borderWidth: 1,
-            borderColor: `${appTheme.colors.primary}66`,
-            backgroundColor: appTheme.colors.surfaceInset,
+            borderColor: `${theme.colors.primary}66`,
+            backgroundColor: theme.colors.surfaceInset,
             padding: 15,
             flexDirection: 'row',
             alignItems: 'center',
@@ -165,8 +168,8 @@ export function MediaTemplateCatalogScreen() {
             opacity: pressed ? appTheme.opacity.pressed : 1,
           })}
         >
-          <View style={{ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.pressed }}>
-            <RefreshCw size={20} color={appTheme.colors.primary} />
+          <View style={{ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.pressed }}>
+            <RefreshCw size={20} color={theme.colors.primary} />
           </View>
           <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
             <AppText variant="label">Resume creation</AppText>
@@ -174,7 +177,7 @@ export function MediaTemplateCatalogScreen() {
               {templateRunStageLabel(activeRun)} · {activeRun.templateTitle}
             </AppText>
           </View>
-          <ArrowRight size={20} color={appTheme.colors.primary} />
+          <ArrowRight size={20} color={theme.colors.primary} />
         </Pressable>
       ) : null}
 
@@ -208,6 +211,7 @@ function TemplatePoster({ template, previewAttempt, onPreviewError }: {
   previewAttempt: number;
   onPreviewError: () => void;
 }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -216,21 +220,22 @@ function TemplatePoster({ template, previewAttempt, onPreviewError }: {
       onPress={() => router.push(`/templates/${encodeURIComponent(template.slug)}` as never)}
       style={({ pressed }) => ({ gap: 11, opacity: pressed ? appTheme.opacity.pressed : 1 })}
     >
-      <View style={{ minHeight: 280, aspectRatio: 4 / 5, overflow: 'hidden', borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: appTheme.colors.surfaceInset }}>
+      <View style={{ minHeight: 280, aspectRatio: 4 / 5, overflow: 'hidden', borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: theme.colors.surfaceInset }}>
         <TemplatePosterImage key={`${template.thumbnailUrl}:${previewAttempt}`} template={template} onError={onPreviewError} />
         <LinearGradient
-          colors={['rgba(8,8,10,0.03)', 'rgba(8,8,10,0.18)', 'rgba(8,8,10,0.94)']}
+          colors={[hexWithAlpha(mediaColors.mediaGround, 0.03), hexWithAlpha(mediaColors.mediaGround, 0.18), hexWithAlpha(mediaColors.mediaGround, 0.94)]}
           locations={[0.35, 0.58, 1]}
           style={{ position: 'absolute', inset: 0, justifyContent: 'flex-end', padding: 18, gap: 6 }}
         >
+          {/* On the gradient's black foot, so the dark palette in both schemes. */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
-            <View style={{ width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.14)' }}>
-              <Play size={16} fill={appTheme.colors.text} color={appTheme.colors.text} />
+            <View style={{ width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(mediaColors.onMedia, 0.14) }}>
+              <Play size={16} fill={themes.dark.colors.text} color={themes.dark.colors.text} />
             </View>
-            <Kicker color={appTheme.colors.primary}>{template.outputKind} template</Kicker>
+            <Kicker color={themes.dark.colors.primary}>{template.outputKind} template</Kicker>
           </View>
-          <AppText variant="sectionTitle" numberOfLines={2}>{template.name}</AppText>
-          <AppText variant="caption" color={appTheme.colors.textSecondary} numberOfLines={1}>by {creatorName(template)}</AppText>
+          <AppText variant="sectionTitle" color={themes.dark.colors.text} numberOfLines={2}>{template.name}</AppText>
+          <AppText variant="caption" color={themes.dark.colors.textSecondary} numberOfLines={1}>by {creatorName(template)}</AppText>
         </LinearGradient>
       </View>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
@@ -238,18 +243,19 @@ function TemplatePoster({ template, previewAttempt, onPreviewError }: {
           {inputSummary(template)}
           {template.estimatedTotalCredits === null ? '' : ` · about ${template.estimatedTotalCredits} credits`}
         </AppText>
-        <ArrowRight size={20} color={appTheme.colors.primary} />
+        <ArrowRight size={20} color={theme.colors.primary} />
       </View>
     </Pressable>
   );
 }
 
 function TemplatePosterImage({ template, onError }: { template: MediaTemplateSummary; onError: () => void }) {
+  const theme = useAppTheme();
   const [failed, setFailed] = useState(false);
   const OutputIcon = template.outputKind === 'video' ? Video : ImageIcon;
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-      <OutputIcon size={appTheme.icon.hero} color={appTheme.colors.faint} />
+      <OutputIcon size={appTheme.icon.hero} color={theme.colors.faint} />
       {template.thumbnailUrl && !failed ? (
         <Image
           source={{ uri: template.thumbnailUrl }}
@@ -330,20 +336,21 @@ function TemplateDetailContent({
   starting: boolean;
   onUse: () => void;
 }) {
+  const theme = useAppTheme();
   return (
     <>
       <View style={{ gap: 8 }}>
-        <Kicker color={appTheme.colors.primary}>{template.category}</Kicker>
+        <Kicker color={theme.colors.primary}>{template.category}</Kicker>
         <AppText variant="pageTitle">{template.name}</AppText>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <CircleUserRound size={appTheme.icon.sm} color={appTheme.colors.muted} />
+          <CircleUserRound size={appTheme.icon.sm} color={theme.colors.muted} />
           <AppText variant="bodySm" color="muted">by {creatorName(template)}</AppText>
           {template.useCount > 0 ? <AppText variant="caption" color="faint">· {template.useCount} uses</AppText> : null}
         </View>
       </View>
 
       {template.videoUrl ? <RecoverableVideoPreview url={template.videoUrl} resolveRetryUrl={resolveVideoRetry}
-        style={{ width: '100%', height: 430, borderRadius: appTheme.radii.lg, backgroundColor: appTheme.colors.panelSoft }} />
+        style={{ width: '100%', height: 430, borderRadius: appTheme.radii.lg, backgroundColor: theme.colors.panelSoft }} />
         : <MediaPreview url={template.thumbnailUrl} kind="image" height={430} />}
       {template.description ? <AppText variant="body" color="textSecondary">{template.description}</AppText> : null}
 
@@ -353,8 +360,8 @@ function TemplateDetailContent({
           const SlotIcon = slot.kind === 'video' ? Video : ImageIcon;
           return (
             <View key={slot.key} style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start' }}>
-              <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: appTheme.colors.pressed, alignItems: 'center', justifyContent: 'center' }}>
-                <SlotIcon size={16} color={appTheme.colors.primary} />
+              <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: theme.colors.pressed, alignItems: 'center', justifyContent: 'center' }}>
+                <SlotIcon size={16} color={theme.colors.primary} />
               </View>
               <View style={{ flex: 1, gap: 2 }}>
                 <AppText variant="label">{index + 1}. {slot.label}</AppText>
@@ -373,7 +380,7 @@ function TemplateDetailContent({
             <AppText variant="caption" color="muted">Retries show their own cost before confirmation.</AppText>
           </View>
           <View style={{ alignItems: 'flex-end', gap: 4 }}>
-            <CircleDollarSign size={20} color={appTheme.colors.primary} />
+            <CircleDollarSign size={20} color={theme.colors.primary} />
             <AppText variant="label">{creditLabel(totalTemplateEstimate(template))}</AppText>
           </View>
         </View>
@@ -588,13 +595,14 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
 }
 
 function RunHeader({ run, template }: { run: TemplateRun; template?: MediaTemplateSummary }) {
+  const theme = useAppTheme();
   const progress = templateRunProgress(run);
   const activeLabel = prioritizeTemplateRunSteps(run.steps)
     .find((step) => !isTemplateRunStepSuccessful(step))?.label;
   return (
     <View style={{ gap: 14 }}>
       <View style={{ gap: 5 }}>
-        <Kicker color={appTheme.colors.primary}>{progress.complete} of {progress.total} complete</Kicker>
+        <Kicker color={theme.colors.primary}>{progress.complete} of {progress.total} complete</Kicker>
         <AppText variant="pageTitle">{templateRunStageLabel(run)}</AppText>
         <AppText variant="bodySm" color="muted">{activeLabel ?? template?.name ?? run.templateTitle}</AppText>
       </View>
@@ -605,7 +613,7 @@ function RunHeader({ run, template }: { run: TemplateRun; template?: MediaTempla
         style={{ flexDirection: 'row', gap: 6 }}
       >
         {Array.from({ length: Math.max(progress.total, 1) }, (_, index) => (
-          <View key={index} style={{ flex: 1, height: 4, borderRadius: 2, backgroundColor: index < progress.complete ? appTheme.colors.success : index === progress.complete ? appTheme.colors.primary : appTheme.colors.borderStrong }} />
+          <View key={index} style={{ flex: 1, height: 4, borderRadius: 2, backgroundColor: index < progress.complete ? theme.colors.success : index === progress.complete ? theme.colors.primary : theme.colors.borderStrong }} />
         ))}
       </View>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -635,6 +643,7 @@ function InputStage({
   credits: number | null;
   estimatedTotalCredits: number | null;
 }) {
+  const theme = useAppTheme();
   const uploadedBySlot = new Map(run.inputs.map((input) => [input.slotKey, input]));
   const ready = hasAllTemplateInputs(run);
   const canAfford = canAffordTemplateCredits(credits, estimatedTotalCredits);
@@ -669,16 +678,16 @@ function InputStage({
                 borderCurve: 'continuous',
                 borderWidth: 1,
                 borderStyle: preview ? 'solid' : 'dashed',
-                borderColor: uploaded ? appTheme.colors.success : appTheme.colors.borderStrong,
-                backgroundColor: appTheme.colors.surfaceInset,
+                borderColor: uploaded ? theme.colors.success : theme.colors.borderStrong,
+                backgroundColor: theme.colors.surfaceInset,
                 opacity: pressed ? appTheme.opacity.pressed : 1,
                 alignItems: 'center',
                 justifyContent: 'center',
               })}
             >
-              {preview ? <MediaPreview url={preview} kind={slot.kind} height={210} /> : <SlotIcon size={appTheme.icon.hero} color={appTheme.colors.faint} />}
-              <View style={{ position: preview ? 'absolute' : 'relative', bottom: preview ? 14 : undefined, minWidth: 132, minHeight: 48, borderRadius: 24, paddingHorizontal: 16, backgroundColor: 'rgba(8,8,10,0.82)', flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center' }}>
-                {uploadingSlot === slot.key ? <ActivityIndicator color={appTheme.colors.primary} /> : <Upload size={18} color={appTheme.colors.primary} />}
+              {preview ? <MediaPreview url={preview} kind={slot.kind} height={210} /> : <SlotIcon size={appTheme.icon.hero} color={theme.colors.faint} />}
+              <View style={{ position: preview ? 'absolute' : 'relative', bottom: preview ? 14 : undefined, minWidth: 132, minHeight: 48, borderRadius: 24, paddingHorizontal: 16, backgroundColor: hexWithAlpha(theme.colors.panel, 0.9), flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center' }}>
+                {uploadingSlot === slot.key ? <ActivityIndicator color={theme.colors.primary} /> : <Upload size={18} color={theme.colors.primary} />}
                 <AppText variant="label">{uploadingSlot === slot.key ? 'Uploading…' : uploaded ? `Replace ${slot.kind}` : `Choose ${slot.kind}`}</AppText>
               </View>
             </Pressable>
@@ -799,6 +808,7 @@ function RunStepCard({
   onRetry: () => void;
   onApprove: () => void;
 }) {
+  const theme = useAppTheme();
   const successful = isTemplateRunStepSuccessful(step);
   const failed = isTemplateRunStepFailed(step);
   const awaitingApproval = isTemplateRunStepAwaitingApproval(step);
@@ -842,7 +852,7 @@ function RunStepCard({
     <View style={{ gap: 10 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <View style={{ flex: 1, flexDirection: 'row', gap: 9, alignItems: 'center' }}>
-          {step.kind === 'approval' ? <ShieldCheck size={appTheme.icon.default} color={appTheme.colors.primary} /> : step.mediaKind === 'video' ? <Video size={appTheme.icon.default} color={appTheme.colors.video} /> : <ImageIcon size={appTheme.icon.default} color={appTheme.colors.image} />}
+          {step.kind === 'approval' ? <ShieldCheck size={appTheme.icon.default} color={theme.colors.primary} /> : step.mediaKind === 'video' ? <Video size={appTheme.icon.default} color={theme.colors.video} /> : <ImageIcon size={appTheme.icon.default} color={theme.colors.image} />}
           <AppText variant="cardTitle">{step.label}</AppText>
         </View>
         <Pill label={statusLabel} accent={statusAccent} />
@@ -850,8 +860,8 @@ function RunStepCard({
       {step.outputUrl ? (
         <MediaPreview url={step.mediaKind === 'video' ? step.renditionUrl || step.outputUrl : step.outputUrl} kind={step.mediaKind} height={step.mediaKind === 'video' ? 300 : 390} />
       ) : (
-        <View style={{ minHeight: 220, borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: appTheme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-          {failed ? <RefreshCw size={appTheme.icon.hero} color={appTheme.colors.danger} /> : <ActivityIndicator size="large" color={appTheme.colors.primary} />}
+        <View style={{ minHeight: 220, borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: theme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+          {failed ? <RefreshCw size={appTheme.icon.hero} color={theme.colors.danger} /> : <ActivityIndicator size="large" color={theme.colors.primary} />}
           <AppText variant="bodySm" color="muted">
             {needsReplacementInput
               ? 'This upload needs to be replaced'
@@ -913,6 +923,7 @@ function ResultStage({
   api: ReturnType<typeof useAuth>['api'];
   userId: string;
 }) {
+  const theme = useAppTheme();
   const queryClient = useQueryClient();
   const [startingAnother, setStartingAnother] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -968,8 +979,8 @@ function ResultStage({
   return (
     <View style={{ gap: 16 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-        <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: appTheme.semantic.success.background, alignItems: 'center', justifyContent: 'center' }}>
-          <Check size={18} color={appTheme.colors.success} />
+        <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: theme.semantic.success.background, alignItems: 'center', justifyContent: 'center' }}>
+          <Check size={18} color={theme.colors.success} />
         </View>
         <AppText variant="cardTitle">Final {result.kind}</AppText>
       </View>
@@ -998,7 +1009,7 @@ function ResultStage({
         <SecondaryButton label="Publish & share" onPress={() => publishResult({ shareAfterPublish: true })} />
       ) : null}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-        <Download size={appTheme.icon.xs} color={appTheme.colors.muted} />
+        <Download size={appTheme.icon.xs} color={theme.colors.muted} />
         <AppText variant="caption" color="muted">The original full-quality file opens outside the app.</AppText>
       </View>
       <SecondaryButton label={startingAnother ? 'Starting…' : 'Create another version'} disabled={startingAnother} onPress={() => void createAnother()} />
@@ -1007,9 +1018,10 @@ function ResultStage({
 }
 
 function LoadingState({ label }: { label: string }) {
+  const theme = useAppTheme();
   return (
     <View accessibilityLiveRegion="polite" style={{ minHeight: 260, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-      <ActivityIndicator size="large" color={appTheme.colors.primary} />
+      <ActivityIndicator size="large" color={theme.colors.primary} />
       <AppText variant="bodySm" color="muted">{label}</AppText>
     </View>
   );

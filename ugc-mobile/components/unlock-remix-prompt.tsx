@@ -9,7 +9,9 @@ import { useAuth } from '@/lib/auth';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
+import { hexWithAlpha } from '@/lib/eased-fade';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import type { PostResourceKind } from '@/lib/types';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
 import { haptic } from '@/lib/haptics';
@@ -29,6 +31,7 @@ export function UnlockRemixPrompt({
   onUnlocked: (item: ImmersivePreviewItem) => void | Promise<void>;
   visible: boolean;
 }) {
+  const theme = useAppTheme();
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
   const [unlocking, setUnlocking] = useState(false);
@@ -37,7 +40,7 @@ export function UnlockRemixPrompt({
   const drag = useSheetDismissDrag({ onDismiss: onClose, visible });
   const unlock = item?.details?.unlock ?? null;
   const accent: ToolAccent = unlock?.accessMode === 'free' ? 'workflow' : 'commerce';
-  const accentValue = accentColor(accent);
+  const accentValue = accentColor(accent, theme.colors);
   const resourceKinds = unlock?.resourceKinds ?? [];
   const ctaLabel = user ? 'Unlock to remix' : 'Sign in to unlock';
 
@@ -84,7 +87,7 @@ export function UnlockRemixPrompt({
       visible={visible}
     >
       <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-        <SheetBackdrop drag={drag} color="rgba(0,0,0,0.62)" label="Close unlock prompt" onPress={onClose} />
+        <SheetBackdrop drag={drag} color={hexWithAlpha(theme.dim.color, 0.62 * theme.dim.scale)} label="Close unlock prompt" onPress={onClose} />
         <SheetPanel
           {...drag.contentPanHandlers}
           style={[
@@ -95,7 +98,7 @@ export function UnlockRemixPrompt({
               borderWidth: 1,
               borderBottomWidth: 0,
               borderColor: `${accentValue}55`,
-              backgroundColor: appTheme.colors.app,
+              backgroundColor: theme.colors.app,
               paddingHorizontal: 22,
               paddingBottom: bottomInset + 24,
               gap: appTheme.spacing.gap,
@@ -106,10 +109,10 @@ export function UnlockRemixPrompt({
           <SheetGrabber drag={drag} />
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 14 }}>
             <View style={{ flex: 1, gap: 5 }}>
-              <Text style={{ color: appTheme.colors.faint, ...appTheme.type.label, textTransform: 'uppercase' }}>
+              <Text style={{ color: theme.colors.faint, ...appTheme.type.label, textTransform: 'uppercase' }}>
                 Remix locked
               </Text>
-              <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>
+              <Text style={{ color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>
                 Unlock resources to remix
               </Text>
             </View>
@@ -123,24 +126,24 @@ export function UnlockRemixPrompt({
                 borderRadius: 24,
                 alignItems: 'center',
                 justifyContent: 'center',
-                backgroundColor: appTheme.colors.surfaceStrong,
+                backgroundColor: theme.colors.surfaceStrong,
                 opacity: pressed ? appTheme.opacity.pressed : 1,
               })}
             >
-              <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
+              <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
             </Pressable>
           </View>
 
-          <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: appTheme.colors.surfaceStrong, padding: appTheme.spacing.card, gap: appTheme.spacing.gap }}>
+          <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: theme.colors.surfaceStrong, padding: appTheme.spacing.card, gap: appTheme.spacing.gap }}>
             <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
               <View style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: `${accentValue}22` }}>
                 <Lock size={20} color={accentValue} />
               </View>
               <View style={{ flex: 1, gap: 5 }}>
-                <Text style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
+                <Text style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
                   {unlock.title || item.title}
                 </Text>
-                <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
+                <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
                   {unlock.previewText || 'Unlock the creator resources attached to this post, then remix it in the editor.'}
                 </Text>
               </View>
@@ -153,7 +156,7 @@ export function UnlockRemixPrompt({
             <ResourceKindRow kinds={resourceKinds} />
           </View>
 
-          {error ? <Text selectable style={{ color: appTheme.colors.danger, ...appTheme.type.caption, fontWeight: '800' }}>{error}</Text> : null}
+          {error ? <Text selectable style={{ color: theme.colors.danger, ...appTheme.type.caption, fontWeight: '800' }}>{error}</Text> : null}
 
           <Pressable
             accessibilityRole="button"
@@ -169,17 +172,17 @@ export function UnlockRemixPrompt({
               justifyContent: 'center',
               gap: 9,
               borderRadius: appTheme.radii.pill,
-              backgroundColor: appTheme.colors.primary,
+              backgroundColor: theme.colors.primaryFill,
               opacity: unlocking ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
               paddingHorizontal: 18,
             })}
           >
             {unlocking ? (
-              <ActivityIndicator color={appTheme.colors.textInverse} />
+              <ActivityIndicator color={theme.colors.onPrimary} />
             ) : (
-              <Lock size={appTheme.icon.default} color={appTheme.colors.textInverse} />
+              <Lock size={appTheme.icon.default} color={theme.colors.onPrimary} />
             )}
-            <Text style={{ color: appTheme.colors.textInverse, ...appTheme.type.bodySm, fontWeight: '800' }}>
+            <Text style={{ color: theme.colors.onPrimary, ...appTheme.type.bodySm, fontWeight: '800' }}>
               {unlocking ? 'Unlocking…' : ctaLabel}
             </Text>
           </Pressable>
@@ -190,14 +193,15 @@ export function UnlockRemixPrompt({
 }
 
 function ResourceKindRow({ kinds }: { kinds: PostResourceKind[] }) {
+  const theme = useAppTheme();
   if (!kinds.length) return null;
 
   return (
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
       {kinds.map((kind) => (
-        <View key={kind} style={{ flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: appTheme.colors.surface, paddingHorizontal: 10, paddingVertical: 6 }}>
-          <FileText size={appTheme.icon.xs} color={appTheme.colors.textSecondary} />
-          <Text style={{ color: appTheme.colors.text, ...appTheme.type.caption, fontWeight: '800' }}>{resourceKindLabel(kind)}</Text>
+        <View key={kind} style={{ flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surface, paddingHorizontal: 10, paddingVertical: 6 }}>
+          <FileText size={appTheme.icon.xs} color={theme.colors.textSecondary} />
+          <Text style={{ color: theme.colors.text, ...appTheme.type.caption, fontWeight: '800' }}>{resourceKindLabel(kind)}</Text>
         </View>
       ))}
     </View>

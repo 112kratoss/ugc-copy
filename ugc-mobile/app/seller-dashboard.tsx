@@ -8,8 +8,10 @@ import { AppText, Card, PrimaryButton, Screen, SecondaryButton, SectionTitle, St
 import { useAuth } from '@/lib/auth';
 import { formatUsdCents, getOwnerPostSalesSummary } from '@/lib/home-view-model';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 export default function SellerDashboardScreen() {
+  const theme = useAppTheme();
   const { user, api } = useAuth();
   const {
     data,
@@ -68,8 +70,8 @@ export default function SellerDashboardScreen() {
       {!isLoading && !error ? (
         <>
           <View style={{ flexDirection: 'row', gap: 12 }}>
-            <MetricCard icon={<DollarSign size={appTheme.icon.feature} color={appTheme.colors.info} />} label="Total sales" value={formatUsdCents(summary.earningsUsdCents)} />
-            <MetricCard icon={<BarChart3 size={appTheme.icon.feature} color={appTheme.colors.primary} />} label="Unlocks sold" value={String(summary.salesCount)} />
+            <MetricCard icon={<DollarSign size={appTheme.icon.feature} color={theme.colors.info} />} label="Total sales" value={formatUsdCents(summary.earningsUsdCents)} />
+            <MetricCard icon={<BarChart3 size={appTheme.icon.feature} color={theme.colors.primary} />} label="Unlocks sold" value={String(summary.salesCount)} />
           </View>
 
           <SecondaryButton label="Refresh dashboard" onPress={() => void refetch()} />
@@ -85,11 +87,11 @@ export default function SellerDashboardScreen() {
               >
                 <Card accent={item.bundle?.accessMode === 'free' ? 'workflow' : 'amber'}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                    <PackageCheck size={appTheme.icon.feature} color={item.bundle?.accessMode === 'free' ? appTheme.colors.success : appTheme.colors.commerce} />
+                    <PackageCheck size={appTheme.icon.feature} color={item.bundle?.accessMode === 'free' ? theme.colors.success : theme.colors.commerce} />
                     <AppText numberOfLines={1} variant="cardTitle" style={{ flex: 1 }}>
                       {item.title || 'Untitled listing'}
                     </AppText>
-                    <ChevronRight size={20} color={appTheme.colors.faint} />
+                    <ChevronRight size={20} color={theme.colors.faint} />
                   </View>
                   <AppText variant="bodySm" color="muted">
                     {item.bundle?.salesCount ?? 0} sales · {formatUsdCents(item.bundle?.earningsUsdCents)} tracked earnings
@@ -128,11 +130,12 @@ function sentenceLabel(value: string) {
 }
 
 function MetricCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+  const theme = useAppTheme();
   return (
     <View accessible accessibilityLabel={`${label}: ${value}`} style={{ flex: 1 }}>
       <Card>
         <View style={{ gap: 10 }}>
-          <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: appTheme.colors.surface, alignItems: 'center', justifyContent: 'center' }}>
+          <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: theme.colors.surface, alignItems: 'center', justifyContent: 'center' }}>
             {icon}
           </View>
           <AppText variant="caption" color="faint">{label}</AppText>

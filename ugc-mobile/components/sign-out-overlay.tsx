@@ -6,6 +6,7 @@ import { AppText } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { MotionView, useOverlayPresence } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 
 /**
@@ -34,6 +35,7 @@ export function SignOutOverlay() {
 }
 
 export function SignOutCover({ active }: { active: boolean }) {
+  const theme = useAppTheme();
   const shown = useMinimumVisibility(active, SIGN_OUT_COVER_MIN_VISIBLE_MS);
   const { mounted, animatedStyle } = useOverlayPresence(shown);
 
@@ -56,7 +58,7 @@ export function SignOutCover({ active }: { active: boolean }) {
         accessibilityViewIsModal
         style={[{ position: 'absolute', inset: 0 }, animatedStyle]}
       >
-        <View style={{ position: 'absolute', inset: 0, backgroundColor: appTheme.colors.overlay }} />
+        <View style={{ position: 'absolute', inset: 0, backgroundColor: theme.colors.overlay }} />
         <View
           style={{
             flex: 1,
@@ -77,13 +79,13 @@ export function SignOutCover({ active }: { active: boolean }) {
               borderRadius: appTheme.radii.xl,
               borderCurve: 'continuous',
               borderWidth: 1,
-              borderColor: appTheme.colors.border,
-              backgroundColor: appTheme.colors.panelSoft,
+              borderColor: theme.colors.border,
+              backgroundColor: theme.colors.panelSoft,
               paddingVertical: appTheme.spacing.panel,
               paddingHorizontal: appTheme.spacing.section,
             }}
           >
-            <ActivityIndicator size="large" color={appTheme.colors.primary} />
+            <ActivityIndicator size="large" color={theme.colors.primary} />
             <View style={{ alignItems: 'center', gap: appTheme.spacing.unit }}>
               <AppText variant="sectionTitle" selectable={false}>Signing out…</AppText>
               <AppText variant="bodySm" color="textSecondary" selectable={false}>One moment</AppText>

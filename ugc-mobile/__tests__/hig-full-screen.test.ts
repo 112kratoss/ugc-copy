@@ -34,7 +34,7 @@ import {
   viewerTopScrim,
 } from '../lib/viewer-chrome';
 import { contrastRatio, MIN_BODY_CONTRAST } from '../lib/color-contrast';
-import { appTheme } from '../lib/theme';
+import { appTheme, themes } from '../lib/theme';
 
 /**
  * S6's rules, in the form a suite can hold. Sources: Going full screen, Playing
@@ -67,7 +67,7 @@ describe('S6 — the status bar over full-bleed media', () => {
   // over a pure-white photo, the status bar's white glyphs clear body-text
   // contrast wherever they are drawn. Blended in 8-bit sRGB, as the renderer does.
   const shadeOverWhite = (alpha: number) => {
-    const ground = appTheme.colors.background;
+    const ground = themes.dark.colors.background;
     const channel = (offset: number) => {
       const value = Number.parseInt(ground.slice(offset, offset + 2), 16);
       return Math.round(alpha * value + (1 - alpha) * 255).toString(16).padStart(2, '0');

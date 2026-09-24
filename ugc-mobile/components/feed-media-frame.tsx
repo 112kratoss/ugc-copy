@@ -5,7 +5,9 @@ import { View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { FEED_VIDEO_VIEW_PROPS } from '@/lib/feed-video-view-props';
 import { useMediaSource } from '@/lib/use-media-source';
-import { appTheme } from '@/lib/theme';
+import { hexWithAlpha } from '@/lib/eased-fade';
+import { mediaColors } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import { BackdropImage } from '@/components/backdrop-image';
 import { StableMediaImage } from '@/components/media-preview';
 
@@ -73,6 +75,7 @@ const BACKDROP_BLUR_RADIUS = 24;
 export { FEED_VIDEO_VIEW_PROPS };
 
 export function FeedMediaFrame(props: FeedMediaFrameProps) {
+  const theme = useAppTheme();
   const foregroundUrl = props.kind === 'image' ? props.url : props.posterUrl;
   const foregroundCacheKey = props.cacheKey ?? (props.recyclingKey
     ? `${props.recyclingKey}:${props.kind === 'image' ? 'foreground' : 'video-poster'}`
@@ -85,7 +88,7 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
     ?? (backdropUrl === foregroundUrl ? foregroundCacheKey : undefined);
   const backdropSource = backdropCacheKey ? { ...source, cacheKey: backdropCacheKey } : source;
   const {
-    backgroundColor = appTheme.colors.app,
+    backgroundColor = theme.colors.app,
     borderColor,
     borderWidth = borderColor ? 1 : 0,
     children,
@@ -120,7 +123,7 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
                 recyclingKey={props.recyclingKey ? `${props.recyclingKey}:backdrop` : undefined}
                 style={[absoluteFill, { backgroundColor }]}
               />
-              <View pointerEvents="none" style={[absoluteFill, { backgroundColor: 'rgba(0,0,0,0.34)' }]} />
+              <View pointerEvents="none" style={[absoluteFill, { backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.34) }]} />
             </>
           ) : null}
           <StableMediaImage
@@ -149,7 +152,7 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
             />
           ) : null}
           {(props.videoBackdrop ?? 'blurred') === 'blurred' ? (
-            <View pointerEvents="none" style={[absoluteFill, { backgroundColor: 'rgba(0,0,0,0.44)' }]} />
+            <View pointerEvents="none" style={[absoluteFill, { backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.44) }]} />
           ) : null}
           <VideoView
             {...FEED_VIDEO_VIEW_PROPS}

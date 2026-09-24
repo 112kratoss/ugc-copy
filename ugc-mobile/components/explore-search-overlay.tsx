@@ -29,6 +29,7 @@ import {
 } from '@/lib/search-history';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import type {
   CreatorSearchResult,
   PublicSearchResponse,
@@ -74,6 +75,7 @@ function SearchTab({
   label: string;
   onPress: () => void;
 }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="tab"
@@ -84,12 +86,12 @@ function SearchTab({
         minHeight: 44,
         justifyContent: 'center',
         borderRadius: appTheme.radii.pill,
-        backgroundColor: active ? appTheme.colors.text : 'transparent',
+        backgroundColor: active ? theme.colors.text : 'transparent',
         opacity: disabled ? 0.35 : pressed ? appTheme.opacity.pressed : 1,
         paddingHorizontal: 17,
       })}
     >
-      <Text style={{ color: active ? appTheme.colors.textInverse : appTheme.colors.muted, fontSize: 13, fontWeight: '700' }}>
+      <Text style={{ color: active ? theme.colors.textInverse : theme.colors.muted, fontSize: 13, fontWeight: '700' }}>
         {label}
       </Text>
     </Pressable>
@@ -97,6 +99,7 @@ function SearchTab({
 }
 
 function CreatorRow({ creator }: { creator: CreatorSearchResult }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -109,23 +112,24 @@ function CreatorRow({ creator }: { creator: CreatorSearchResult }) {
         gap: 13,
         borderRadius: appTheme.radii.lg,
         borderWidth: 1,
-        borderColor: appTheme.colors.borderSubtle,
-        backgroundColor: appTheme.colors.surface,
+        borderColor: theme.colors.borderSubtle,
+        backgroundColor: theme.colors.surface,
         opacity: pressed ? appTheme.opacity.pressed : 1,
         padding: 13,
       })}
     >
       <CreatorAvatar uri={creator.avatarUrl} name={creator.displayName} size={48} />
       <View style={{ flex: 1 }}>
-        <Text numberOfLines={1} style={{ color: appTheme.colors.text, fontSize: 15, fontWeight: '800' }}>{creator.displayName}</Text>
-        <Text numberOfLines={1} style={{ marginTop: 2, color: appTheme.colors.muted, fontSize: 13 }}>@{creator.username}</Text>
+        <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>{creator.displayName}</Text>
+        <Text numberOfLines={1} style={{ marginTop: 2, color: theme.colors.muted, fontSize: 13 }}>@{creator.username}</Text>
       </View>
-      <Text style={{ color: appTheme.colors.faint, fontSize: 12 }}>{creator.publicPostCount} posts</Text>
+      <Text style={{ color: theme.colors.faint, fontSize: 12 }}>{creator.publicPostCount} posts</Text>
     </Pressable>
   );
 }
 
 function PostRow({ item }: { item: ShowcaseFeedItem }) {
+  const theme = useAppTheme();
   const preview = postPreview(item);
   return (
     <Pressable
@@ -137,27 +141,28 @@ function PostRow({ item }: { item: ShowcaseFeedItem }) {
         overflow: 'hidden',
         borderRadius: appTheme.radii.lg,
         borderWidth: 1,
-        borderColor: appTheme.colors.borderSubtle,
-        backgroundColor: appTheme.colors.surface,
+        borderColor: theme.colors.borderSubtle,
+        backgroundColor: theme.colors.surface,
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
       {preview ? (
         <Image source={{ uri: preview }} contentFit="cover" style={{ width: '100%', aspectRatio: 1.15 }} />
       ) : (
-        <View style={{ width: '100%', aspectRatio: 1.15, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.panel }}>
-          <Search size={appTheme.icon.feature} color={appTheme.colors.primary} />
+        <View style={{ width: '100%', aspectRatio: 1.15, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panel }}>
+          <Search size={appTheme.icon.feature} color={theme.colors.primary} />
         </View>
       )}
       <View style={{ gap: 3, padding: 12 }}>
-        <Text numberOfLines={1} style={{ color: appTheme.colors.text, fontSize: 14, fontWeight: '800' }}>{item.title}</Text>
-        <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 12 }}>{item.creator.name}</Text>
+        <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 14, fontWeight: '800' }}>{item.title}</Text>
+        <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 12 }}>{item.creator.name}</Text>
       </View>
     </Pressable>
   );
 }
 
 function RecipeRow({ recipe }: { recipe: RecipeSearchResult }) {
+  const theme = useAppTheme();
   const preview = recipe.post?.mediaPreviewUrl ?? recipe.post?.mediaUrl ?? null;
   return (
     <Pressable
@@ -170,22 +175,22 @@ function RecipeRow({ recipe }: { recipe: RecipeSearchResult }) {
         overflow: 'hidden',
         borderRadius: appTheme.radii.lg,
         borderWidth: 1,
-        borderColor: appTheme.colors.borderSubtle,
-        backgroundColor: appTheme.colors.surface,
+        borderColor: theme.colors.borderSubtle,
+        backgroundColor: theme.colors.surface,
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
       {preview ? (
         <Image source={{ uri: preview }} contentFit="cover" style={{ width: 106 }} />
       ) : (
-        <View style={{ width: 106, alignItems: 'center', justifyContent: 'center', backgroundColor: `${appTheme.colors.success}12` }}>
-          <BookOpen size={appTheme.icon.feature} color={appTheme.colors.success} />
+        <View style={{ width: 106, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.success}12` }}>
+          <BookOpen size={appTheme.icon.feature} color={theme.colors.success} />
         </View>
       )}
       <View style={{ minWidth: 0, flex: 1, gap: 5, justifyContent: 'center', padding: 13 }}>
-        <Text numberOfLines={1} style={{ color: appTheme.colors.text, fontSize: 14, fontWeight: '800' }}>{recipe.title}</Text>
-        <Text numberOfLines={2} style={{ color: appTheme.colors.muted, fontSize: 12, lineHeight: 17 }}>{recipe.summary || recipe.previewText}</Text>
-        <Text style={{ color: appTheme.colors.success, fontSize: 12, fontWeight: '800' }}>
+        <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 14, fontWeight: '800' }}>{recipe.title}</Text>
+        <Text numberOfLines={2} style={{ color: theme.colors.muted, fontSize: 12, lineHeight: 17 }}>{recipe.summary || recipe.previewText}</Text>
+        <Text style={{ color: theme.colors.success, fontSize: 12, fontWeight: '800' }}>
           {recipe.accessMode === 'free' ? 'Free' : recipe.priceQuote.formatted}
         </Text>
       </View>
@@ -202,6 +207,7 @@ export function ExploreSearchOverlay({
   onClose: () => void;
   visible: boolean;
 }) {
+  const theme = useAppTheme();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const isFocused = useIsFocused();
@@ -312,15 +318,15 @@ export function ExploreSearchOverlay({
       style={[{ position: 'absolute', inset: 0, zIndex: 20 }, animatedStyle]}
     >
     <KeyboardAvoidingArea
-      style={{ flex: 1, backgroundColor: appTheme.colors.background }}
+      style={{ flex: 1, backgroundColor: theme.colors.background }}
     >
-      <View style={{ paddingTop: insets.top + 8, paddingHorizontal: appTheme.spacing.screen, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: appTheme.colors.borderSubtle }}>
+      <View style={{ paddingTop: insets.top + 8, paddingHorizontal: appTheme.spacing.screen, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: theme.colors.borderSubtle }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           <Pressable accessibilityRole="button" accessibilityLabel="Close search" onPress={requestClose} hitSlop={10} style={{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' }}>
-            <BackGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
+            <BackGlyph size={appTheme.icon.feature} color={theme.colors.text} />
           </Pressable>
-          <View style={{ minHeight: 50, minWidth: 0, flex: 1, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: appTheme.colors.border, backgroundColor: appTheme.colors.surfaceInset, paddingHorizontal: 15 }}>
-            <Search size={appTheme.icon.default} color={appTheme.colors.muted} />
+          <View style={{ minHeight: 50, minWidth: 0, flex: 1, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surfaceInset, paddingHorizontal: 15 }}>
+            <Search size={appTheme.icon.default} color={theme.colors.muted} />
             <TextInput
               ref={inputRef}
               accessibilityLabel="Search creators, posts, and recipes"
@@ -330,10 +336,10 @@ export function ExploreSearchOverlay({
               maxLength={100}
               onChangeText={setQuery}
               placeholder="Search Magicbooklet"
-              placeholderTextColor={appTheme.colors.faint}
+              placeholderTextColor={theme.colors.faint}
               returnKeyType="search"
               value={query}
-              style={{ minWidth: 0, flex: 1, color: appTheme.colors.text, fontSize: 15, paddingVertical: 12 }}
+              style={{ minWidth: 0, flex: 1, color: theme.colors.text, fontSize: 15, paddingVertical: 12 }}
             />
             {query ? (
               <Pressable
@@ -342,7 +348,7 @@ export function ExploreSearchOverlay({
                 onPress={() => setQuery('')}
                 style={{ minWidth: 44, minHeight: 44, marginRight: -13, alignItems: 'center', justifyContent: 'center' }}
               >
-                <X size={appTheme.icon.compact} color={appTheme.colors.muted} />
+                <X size={appTheme.icon.compact} color={theme.colors.muted} />
               </Pressable>
             ) : null}
           </View>
@@ -374,14 +380,14 @@ export function ExploreSearchOverlay({
           history.length ? (
             <View style={{ gap: 12 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Text style={{ color: appTheme.colors.text, fontSize: 17, fontWeight: '800' }}>Recent searches</Text>
+                <Text style={{ color: theme.colors.text, fontSize: 17, fontWeight: '800' }}>Recent searches</Text>
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Clear all recent searches"
                   onPress={() => void clearSearchHistory().then(() => setHistory([]))}
                   style={{ minHeight: 44, justifyContent: 'center' }}
                 >
-                  <Text style={{ color: appTheme.colors.primary, fontSize: 13, fontWeight: '700' }}>Clear</Text>
+                  <Text style={{ color: theme.colors.primary, fontSize: 13, fontWeight: '700' }}>Clear</Text>
                 </Pressable>
               </View>
               {history.map((item) => (
@@ -392,8 +398,8 @@ export function ExploreSearchOverlay({
                     onPress={() => setQuery(item)}
                     style={{ minHeight: 46, flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 }}
                   >
-                    <Clock3 size={appTheme.icon.sm} color={appTheme.colors.faint} />
-                    <Text numberOfLines={1} style={{ flex: 1, color: appTheme.colors.textSecondary, fontSize: 15 }}>{item}</Text>
+                    <Clock3 size={appTheme.icon.sm} color={theme.colors.faint} />
+                    <Text numberOfLines={1} style={{ flex: 1, color: theme.colors.textSecondary, fontSize: 15 }}>{item}</Text>
                   </Pressable>
                   <Pressable
                     accessibilityRole="button"
@@ -401,7 +407,7 @@ export function ExploreSearchOverlay({
                     onPress={() => void forgetSearchQuery(item).then(setHistory)}
                     style={{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' }}
                   >
-                    <X size={appTheme.icon.sm} color={appTheme.colors.faint} />
+                    <X size={appTheme.icon.sm} color={theme.colors.faint} />
                   </Pressable>
                 </View>
               ))}
@@ -411,8 +417,8 @@ export function ExploreSearchOverlay({
           )
         ) : loading && !hasResults ? (
           <View style={{ minHeight: 260, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-            <ActivityIndicator color={appTheme.colors.primary} />
-            <Text style={{ color: appTheme.colors.muted, fontSize: 13 }}>Searching…</Text>
+            <ActivityIndicator color={theme.colors.primary} />
+            <Text style={{ color: theme.colors.muted, fontSize: 13 }}>Searching…</Text>
           </View>
         ) : error && !hasResults ? (
           <View style={{ gap: 12 }}>
@@ -425,13 +431,13 @@ export function ExploreSearchOverlay({
           <View style={{ gap: 25 }}>
             {(type === 'top' || type === 'creators') && result.creators.items.length ? (
               <View style={{ gap: 10 }}>
-                <Text accessibilityRole="header" style={{ color: appTheme.colors.text, fontSize: 18, fontWeight: '800' }}>Creators</Text>
+                <Text accessibilityRole="header" style={{ color: theme.colors.text, fontSize: 18, fontWeight: '800' }}>Creators</Text>
                 {result.creators.items.map((creator) => <CreatorRow key={creator.id} creator={creator} />)}
               </View>
             ) : null}
             {(type === 'top' || type === 'posts') && result.posts.items.length ? (
               <View style={{ gap: 10 }}>
-                <Text accessibilityRole="header" style={{ color: appTheme.colors.text, fontSize: 18, fontWeight: '800' }}>Posts</Text>
+                <Text accessibilityRole="header" style={{ color: theme.colors.text, fontSize: 18, fontWeight: '800' }}>Posts</Text>
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
                   {result.posts.items.map((post) => <View key={post.id} style={{ width: '48%' }}><PostRow item={post} /></View>)}
                 </View>
@@ -439,12 +445,12 @@ export function ExploreSearchOverlay({
             ) : null}
             {(type === 'top' || type === 'recipes') && result.recipes.items.length ? (
               <View style={{ gap: 10 }}>
-                <Text accessibilityRole="header" style={{ color: appTheme.colors.text, fontSize: 18, fontWeight: '800' }}>Recipes</Text>
+                <Text accessibilityRole="header" style={{ color: theme.colors.text, fontSize: 18, fontWeight: '800' }}>Recipes</Text>
                 {result.recipes.items.map((recipe) => <RecipeRow key={recipe.id} recipe={recipe} />)}
               </View>
             ) : null}
             {nextCursor ? <SecondaryButton disabled={loadingMore} label={loadingMore ? 'Loading…' : 'Show more'} onPress={() => void runSearch(nextCursor)} /> : null}
-            {error ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.danger, textAlign: 'center', fontSize: 13 }}>{error}</Text> : null}
+            {error ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, textAlign: 'center', fontSize: 13 }}>{error}</Text> : null}
           </View>
         )}
       </ScrollView>

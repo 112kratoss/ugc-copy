@@ -44,6 +44,7 @@ import { SheetGrabber, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import type { CommentReportReason } from '@/lib/api-client';
 import type {
   OwnerPostsResponse,
@@ -99,6 +100,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   initialReplyToId,
   unavailableMessage,
 }, ref) {
+  const theme = useAppTheme();
   const reducedMotion = useReducedMotion();
   const queryClient = useQueryClient();
   const { api, user } = useAuth();
@@ -498,7 +500,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
               opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
-            <Text style={{ color: appTheme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>
+            <Text style={{ color: theme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>
               {expanded
                 ? 'Hide replies'
                 : `View ${comment.replyCount} ${comment.replyCount === 1 ? 'reply' : 'replies'}`}
@@ -538,7 +540,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
       onLayout={presentation === 'inline' ? captureCommentsOffset : undefined}
       style={{
         borderTopWidth: presentation === 'inline' ? 8 : 0,
-        borderTopColor: appTheme.colors.background,
+        borderTopColor: theme.colors.background,
         paddingHorizontal: appTheme.spacing.panel,
         paddingTop: presentation === 'inline' ? appTheme.spacing.panel : 0,
         paddingBottom: appTheme.spacing.compact,
@@ -546,11 +548,11 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
       }}
     >
       {presentation === 'sheet' && postTitle ? (
-        <Text numberOfLines={2} style={{ color: appTheme.colors.muted, ...appTheme.type.caption, fontWeight: '800' }}>
+        <Text numberOfLines={2} style={{ color: theme.colors.muted, ...appTheme.type.caption, fontWeight: '800' }}>
           {postTitle}
         </Text>
       ) : null}
-      <Text accessibilityRole="header" style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}>
+      <Text accessibilityRole="header" style={{ color: theme.colors.text, ...appTheme.type.cardTitle }}>
         {serverCommentCount > 0 ? `Comments · ${serverCommentCount}` : 'Comments'}
       </Text>
     </View>
@@ -574,14 +576,14 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
           alignItems: 'center',
           justifyContent: 'center',
           borderRadius: appTheme.radii.md,
-          backgroundColor: appTheme.colors.primary,
+          backgroundColor: theme.colors.primaryFill,
           opacity: pressed ? appTheme.opacity.pressed : 1,
         })}
       >
         {commentsQuery.isRefetching ? (
-          <ActivityIndicator color={appTheme.colors.onPrimary} />
+          <ActivityIndicator color={theme.colors.onPrimary} />
         ) : (
-          <Text style={{ color: appTheme.colors.onPrimary, ...appTheme.type.bodySm, fontWeight: '800' }}>
+          <Text style={{ color: theme.colors.onPrimary, ...appTheme.type.bodySm, fontWeight: '800' }}>
             Try again
           </Text>
         )}
@@ -591,7 +593,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
 
   const emptyState = !enabled && unavailableMessage ? (
     <View style={{ paddingVertical: appTheme.spacing.section, paddingHorizontal: appTheme.spacing.panel }}>
-      <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
+      <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
         {unavailableMessage}
       </Text>
     </View>
@@ -601,10 +603,10 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     </View>
   ) : (
     <View style={{ paddingVertical: appTheme.spacing.section, paddingHorizontal: appTheme.spacing.panel, gap: 4 }}>
-      <Text style={{ color: appTheme.colors.text, ...appTheme.type.body, fontWeight: '800' }}>
+      <Text style={{ color: theme.colors.text, ...appTheme.type.body, fontWeight: '800' }}>
         No comments yet
       </Text>
-      <Text style={{ color: appTheme.colors.faint, ...appTheme.type.bodySm }}>
+      <Text style={{ color: theme.colors.faint, ...appTheme.type.bodySm }}>
         Be the first to share what you think about this post.
       </Text>
     </View>
@@ -637,7 +639,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
       ListEmptyComponent={emptyState}
       ListFooterComponent={commentsQuery.isFetchingNextPage ? (
         <View style={{ minHeight: 48, alignItems: 'center', justifyContent: 'center' }}>
-          <ActivityIndicator color={appTheme.colors.faint} />
+          <ActivityIndicator color={theme.colors.faint} />
         </View>
       ) : null}
       contentContainerStyle={presentation === 'inline' ? { paddingBottom: appTheme.spacing.section } : undefined}
@@ -648,8 +650,8 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     <View
       style={{
         borderTopWidth: 1,
-        borderTopColor: appTheme.colors.borderStrong,
-        backgroundColor: presentation === 'inline' ? appTheme.colors.app : 'transparent',
+        borderTopColor: theme.colors.borderStrong,
+        backgroundColor: presentation === 'inline' ? theme.colors.app : 'transparent',
         paddingHorizontal: appTheme.spacing.panel,
         paddingTop: appTheme.spacing.gap,
         paddingBottom: Math.max(bottomInset, appTheme.spacing.panel),
@@ -658,7 +660,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     >
       {replyTo ? (
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.compact }}>
-          <Text numberOfLines={1} style={{ color: appTheme.colors.faint, ...appTheme.type.caption, flex: 1 }}>
+          <Text numberOfLines={1} style={{ color: theme.colors.faint, ...appTheme.type.caption, flex: 1 }}>
             {`Replying to ${getCommentDisplay(replyTo).authorLabel}`}
           </Text>
           <Pressable
@@ -667,7 +669,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
             onPress={() => setReplyTo(null)}
             style={({ pressed }) => ({ minWidth: 48, minHeight: 48, alignItems: 'flex-end', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
           >
-            <Text style={{ color: appTheme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>Cancel</Text>
+            <Text style={{ color: theme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>Cancel</Text>
           </Pressable>
         </View>
       ) : null}
@@ -686,7 +688,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
             : presentation === 'inline'
               ? 'Join the conversation…'
               : 'Add a comment…'}
-          placeholderTextColor={appTheme.colors.faint}
+          placeholderTextColor={theme.colors.faint}
           onPressIn={() => { if (!user) requireSignIn(replyTo); }}
           style={{
             flex: 1,
@@ -695,9 +697,9 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
             borderRadius: appTheme.radii.md,
             borderCurve: 'continuous',
             borderWidth: 1,
-            borderColor: appTheme.colors.borderStrong,
-            backgroundColor: appTheme.colors.surface,
-            color: appTheme.colors.text,
+            borderColor: theme.colors.borderStrong,
+            backgroundColor: theme.colors.surface,
+            color: theme.colors.text,
             paddingHorizontal: appTheme.spacing.gap,
             paddingTop: 12,
             paddingBottom: 12,
@@ -717,16 +719,16 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
             borderCurve: 'continuous',
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: canSubmit ? appTheme.colors.primary : appTheme.colors.surface,
+            backgroundColor: canSubmit ? theme.colors.primaryFill : theme.colors.surface,
             opacity: pressed ? appTheme.opacity.pressed : 1,
           })}
         >
           {submitting ? (
-            <ActivityIndicator color={appTheme.colors.onPrimary} />
+            <ActivityIndicator color={theme.colors.onPrimary} />
           ) : (
             <SendHorizontal
               size={18}
-              color={canSubmit ? appTheme.colors.onPrimary : appTheme.colors.faint}
+              color={canSubmit ? theme.colors.onPrimary : theme.colors.faint}
             />
           )}
         </Pressable>
@@ -754,11 +756,11 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
         borderCurve: 'continuous',
         borderWidth: 1,
         borderBottomWidth: 0,
-        borderColor: appTheme.colors.borderStrong,
-        backgroundColor: appTheme.colors.panel,
+        borderColor: theme.colors.borderStrong,
+        backgroundColor: theme.colors.panel,
       } : {
         flex: 1,
-        backgroundColor: appTheme.colors.app,
+        backgroundColor: theme.colors.app,
       }}
     >
       {presentation === 'sheet' ? (
@@ -792,7 +794,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
             accessibilityRole="button"
             accessibilityLabel="Close comments"
             onPress={onClose}
-            style={({ pressed }) => ({ flex: 1, backgroundColor: 'rgba(0,0,0,0.58)', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+            style={({ pressed }) => ({ flex: 1, backgroundColor: theme.colors.scrim, opacity: pressed ? appTheme.opacity.pressed : 1 })}
           />
         </Animated.View>
       ) : null}
@@ -825,6 +827,7 @@ function RepliesList({
   hasActions: (comment: PostComment) => boolean;
   onActions: CommentActionHandler;
 }) {
+  const theme = useAppTheme();
   const { api, user } = useAuth();
   const repliesQuery = useInfiniteQuery({
     queryKey: createPostCommentRepliesQueryKey(postId, parentId, user?.id),
@@ -850,7 +853,7 @@ function RepliesList({
         accessibilityLabel="Loading replies"
         style={{ minHeight: 48, paddingLeft: appTheme.spacing.panel + 33, justifyContent: 'center' }}
       >
-        <ActivityIndicator color={appTheme.colors.faint} />
+        <ActivityIndicator color={theme.colors.faint} />
       </View>
     );
   }
@@ -874,7 +877,7 @@ function RepliesList({
             gap: appTheme.spacing.compact,
           }}
         >
-          <Text accessibilityRole="alert" style={{ color: appTheme.semantic.danger.foreground, ...appTheme.type.caption }}>
+          <Text accessibilityRole="alert" style={{ color: theme.semantic.danger.foreground, ...appTheme.type.caption }}>
             Some replies could not be loaded.
           </Text>
           <Pressable
@@ -888,7 +891,7 @@ function RepliesList({
               opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
-            <Text style={{ color: appTheme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>
+            <Text style={{ color: theme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>
               Try again
             </Text>
           </Pressable>
@@ -910,9 +913,9 @@ function RepliesList({
           })}
         >
           {repliesQuery.isFetchingNextPage ? (
-            <ActivityIndicator color={appTheme.colors.faint} />
+            <ActivityIndicator color={theme.colors.faint} />
           ) : (
-            <Text style={{ color: appTheme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>
+            <Text style={{ color: theme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>
               Load more replies
             </Text>
           )}
@@ -933,6 +936,7 @@ function CommentRowView({
   onActions?: CommentActionHandler;
   onReply?: CommentActionHandler;
 }) {
+  const theme = useAppTheme();
   const display = getCommentDisplay(comment);
 
   return (
@@ -948,14 +952,14 @@ function CommentRowView({
       <CreatorAvatar uri={comment.author?.avatarUrl ?? null} name={display.authorLabel} size={25} />
       <View style={{ flex: 1, gap: 3 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.compact }}>
-          <Text numberOfLines={1} style={{ color: appTheme.colors.textSecondary, ...appTheme.type.caption, fontWeight: '800', flexShrink: 1 }}>
+          <Text numberOfLines={1} style={{ color: theme.colors.textSecondary, ...appTheme.type.caption, fontWeight: '800', flexShrink: 1 }}>
             {display.authorLabel}
           </Text>
-          <Text style={{ color: appTheme.colors.faint, ...appTheme.type.caption }}>{display.timeLabel}</Text>
+          <Text style={{ color: theme.colors.faint, ...appTheme.type.caption }}>{display.timeLabel}</Text>
         </View>
         <Text
           style={{
-            color: display.isDeleted ? appTheme.colors.faint : appTheme.colors.text,
+            color: display.isDeleted ? theme.colors.faint : theme.colors.text,
             ...appTheme.type.bodySm,
             fontStyle: display.isDeleted ? 'italic' : 'normal',
           }}
@@ -969,7 +973,7 @@ function CommentRowView({
             onPress={() => onReply(comment)}
             style={({ pressed }) => ({ minHeight: 48, alignSelf: 'flex-start', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
           >
-            <Text style={{ color: appTheme.colors.faint, ...appTheme.type.caption, fontWeight: '800' }}>Reply</Text>
+            <Text style={{ color: theme.colors.faint, ...appTheme.type.caption, fontWeight: '800' }}>Reply</Text>
           </Pressable>
         ) : null}
       </View>
@@ -980,7 +984,7 @@ function CommentRowView({
           onPress={() => onActions(comment)}
           style={({ pressed }) => ({ width: 48, height: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
-          <MoreHorizontal size={16} color={appTheme.colors.faint} />
+          <MoreHorizontal size={16} color={theme.colors.faint} />
         </Pressable>
       ) : null}
     </View>

@@ -79,6 +79,19 @@ const copyToClipboard = vi.hoisted(() => vi.fn(async (_text: string, _announceme
 const showMessageDialog = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/copy-to-clipboard', () => ({ copyToClipboard }));
+
+const appearance = vi.hoisted(() => ({
+  available: true,
+  preference: 'system' as 'system' | 'light' | 'dark',
+  set: vi.fn(),
+}));
+
+vi.mock('@/lib/appearance', () => ({
+  APPEARANCE_PREFERENCES: ['system', 'light', 'dark'],
+  isAppearanceChoiceAvailable: () => appearance.available,
+  useAppearancePreference: () => appearance.preference,
+  setAppearancePreference: appearance.set,
+}));
 vi.mock('@/lib/dialog', () => ({ showMessageDialog }));
 
 import SettingsScreen from '../app/settings';
@@ -103,12 +116,57 @@ function rowByTitle(tree: renderer.ReactTestRenderer, title: string) {
 }
 
 beforeEach(() => {
+  appearance.available = true;
+  appearance.preference = 'system';
+  appearance.set.mockClear();
   routerPush.mockClear();
   openUrl.mockClear();
   authState.user = { id: 'user-1', email: 'creator@example.com' };
   versionLabel.value = VERSION_LABEL;
   updateRuntime.value = { runtimeVersion: null, channel: null };
   resetCreatorSessionForTests();
+});
+
+function appearanceOptions(tree: renderer.ReactTestRenderer) {
+  return tree.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityRole === 'radio');
+}
+
+describe('settings screen — appearance', () => {
+  it('offers System, Light and Dark as one radio group, checked by the stored choice', () => {
+    appearance.preference = 'light';
+    const tree = renderScreen();
+    const group = tree.root.find((node) => String(node.type) === 'view' && node.props.accessibilityRole === 'radiogroup');
+    expect(group.props.accessibilityLabel).toBe('Appearance');
+
+    const options = appearanceOptions(tree);
+    expect(options.map((node) => node.props.accessibilityLabel)).toEqual(['System', 'Light', 'Dark']);
+    expect(options.map((node) => node.props.accessibilityState.checked)).toEqual([false, true, false]);
+  });
+
+  it('switches on a tap, and does nothing for the choice already made', () => {
+    const tree = renderScreen();
+    const [system, , dark] = appearanceOptions(tree);
+
+    renderer.act(() => { (dark.props.onPress as () => void)(); });
+    expect(appearance.set).toHaveBeenCalledWith('dark');
+
+    appearance.set.mockClear();
+    renderer.act(() => { (system.props.onPress as () => void)(); });
+    expect(appearance.set).not.toHaveBeenCalled();
+  });
+
+  it('says what System means right now', () => {
+    const tree = renderScreen();
+    const body = tree.root.findAll((node) => String(node.type) === 'text' && node.props.variant === 'bodySm')
+      .map((node) => node.props.children as string);
+    expect(body).toContain('Matches your phone — dark right now.');
+  });
+
+  it('hides the choice on a binary that still pins the app dark', () => {
+    appearance.available = false;
+    const tree = renderScreen();
+    expect(appearanceOptions(tree)).toHaveLength(0);
+  });
 });
 
 describe('settings screen (HIG S16)', () => {

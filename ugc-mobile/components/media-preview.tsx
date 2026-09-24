@@ -17,7 +17,9 @@ import {
   type MediaRecoverySlot,
 } from '@/lib/media-recovery';
 import { useMediaSource } from '@/lib/use-media-source';
-import { appTheme } from '@/lib/theme';
+import { hexWithAlpha } from '@/lib/eased-fade';
+import { appTheme, mediaColors, themes } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 export function MediaPreview({
   url,
@@ -35,6 +37,7 @@ export function MediaPreview({
   /** A fresh link for a video whose own has stopped working. */
   resolveRetryUrl?: () => Promise<string>;
 }) {
+  const theme = useAppTheme();
   const { requestKey } = useMediaSource(url || '');
   const sourceKey = `${url}|${requestKey}`;
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
@@ -76,11 +79,11 @@ export function MediaPreview({
         height,
         borderRadius: radius,
         borderWidth: 1,
-        borderColor: appTheme.colors.border,
+        borderColor: theme.colors.border,
         // A neutral tile rather than near-black: while a large preview loads,
         // #050506 is indistinguishable from the page behind it, so the card
         // reads as a hole punched in the layout instead of media on its way.
-        backgroundColor: appTheme.colors.panelSoft,
+        backgroundColor: theme.colors.panelSoft,
       }}
     />
   );
@@ -416,17 +419,21 @@ function MediaFallback({
   /** Cover the parent instead of taking a 4:5 frame of its width: the plate over a retrying image. */
   fill?: boolean;
 }) {
+  const theme = useAppTheme();
   const frameStyle = {
     ...(fill
       ? { position: 'absolute' as const, inset: 0 }
-      : { width: '100%' as const, aspectRatio: 4 / 5, height, borderWidth: 1, borderColor: appTheme.colors.border }),
+      : { width: '100%' as const, aspectRatio: 4 / 5, height, borderWidth: 1, borderColor: theme.colors.border }),
     borderRadius: radius,
-    backgroundColor: appTheme.colors.surfaceInset,
+    backgroundColor: theme.colors.surfaceInset,
     alignItems: 'center' as const,
     justifyContent: 'center' as const,
     gap: 8,
     overflow: 'hidden' as const,
   };
+  // Over the dimmed thumbhash the plate is dark whatever the scheme, so its text
+  // takes the dark palette; on the bare plate it follows the app.
+  const ink = thumbhash ? themes.dark.colors : theme.colors;
 
   const content = (
     <>
@@ -439,13 +446,13 @@ function MediaFallback({
             pointerEvents="none"
             style={{ position: 'absolute', inset: 0 }}
           />
-          <View pointerEvents="none" style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(3,3,6,0.55)' }} />
+          <View pointerEvents="none" style={{ position: 'absolute', inset: 0, backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.55) }} />
         </>
       ) : null}
-      <ImageOff size={28} color={appTheme.colors.faint} />
-      <Text style={{ color: appTheme.colors.textSecondary, fontSize: 12, fontWeight: '800' }}>{label}</Text>
+      <ImageOff size={28} color={ink.faint} />
+      <Text style={{ color: ink.textSecondary, fontSize: 12, fontWeight: '800' }}>{label}</Text>
       {onRetry ? (
-        <Text style={{ color: appTheme.colors.faint, fontSize: 11, fontWeight: '700' }}>
+        <Text style={{ color: ink.faint, fontSize: 11, fontWeight: '700' }}>
           {renewing ? 'Refreshing image…' : retrying ? 'Trying again…' : 'Tap to retry'}
         </Text>
       ) : null}
@@ -483,6 +490,7 @@ function VideoPreview({
   nativeControls: boolean;
   resolveRetryUrl?: () => Promise<string>;
 }) {
+  const theme = useAppTheme();
   return (
     <RecoverableVideoPreview
       url={url}
@@ -493,7 +501,7 @@ function VideoPreview({
         aspectRatio: 4 / 5,
         height,
         borderRadius: radius,
-        backgroundColor: '#050506',
+        backgroundColor: theme.colors.mediaPlaceholder,
       }}
     />
   );

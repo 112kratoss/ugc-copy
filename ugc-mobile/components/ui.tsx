@@ -26,10 +26,11 @@ import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { haptic } from '@/lib/haptics';
 import { useAnimatedState, usePressMotion } from '@/lib/motion';
-import { appTheme, type ToolAccent, accentColor, onAccentColor } from '@/lib/theme';
+import { appTheme, type ThemeColorName, type ThemeColors, type ToolAccent, accentColor, accentFill, onAccentFill } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 type TextVariant = keyof typeof appTheme.type;
-type ThemeColor = keyof typeof appTheme.colors;
+type ThemeColor = ThemeColorName;
 type IconComponent = React.ComponentType<{
   color?: string;
   size?: number;
@@ -72,8 +73,8 @@ function variantScaleCap(variant: TextVariant): number {
   return appTheme.typeScale.control;
 }
 
-function colorValue(color: ThemeColor | string) {
-  return color in appTheme.colors ? appTheme.colors[color as ThemeColor] : color;
+function colorValue(color: ThemeColor | string, colors: ThemeColors) {
+  return color in colors ? colors[color as ThemeColor] : color;
 }
 
 function isHeadingVariant(variant: TextVariant) {
@@ -97,6 +98,7 @@ export function Screen({
    */
   keyboardAware?: boolean;
 }) {
+  const theme = useAppTheme();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const topPadding = appTheme.spacing.screen + (insideTab ? resolvedTopInset(insets.top) : 0);
@@ -114,7 +116,7 @@ export function Screen({
       <View
         style={{
           flex: 1,
-          backgroundColor: appTheme.colors.background,
+          backgroundColor: theme.colors.background,
           paddingHorizontal: appTheme.spacing.screen,
           paddingTop: topPadding,
           paddingBottom: bottomPadding,
@@ -131,7 +133,7 @@ export function Screen({
       automaticallyAdjustKeyboardInsets
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
-      style={{ flex: 1, backgroundColor: appTheme.colors.background }}
+      style={{ flex: 1, backgroundColor: theme.colors.background }}
       contentContainerStyle={{
         paddingHorizontal: appTheme.spacing.screen,
         paddingTop: topPadding,
@@ -146,7 +148,7 @@ export function Screen({
   if (!keyboardAware) return scroller;
 
   return (
-    <KeyboardAvoidingArea iosScrollViewAdjustsInsets style={{ backgroundColor: appTheme.colors.background }}>
+    <KeyboardAvoidingArea iosScrollViewAdjustsInsets style={{ backgroundColor: theme.colors.background }}>
       {scroller}
     </KeyboardAvoidingArea>
   );
@@ -164,6 +166,7 @@ export function AppText({
   maxFontSizeMultiplier,
   ...textProps
 }: AppTextProps) {
+  const theme = useAppTheme();
   // Android drops `numberOfLines` truncation when the text is selectable: it
   // lays the full string out and draws the extra lines past the single-line box
   // it measured, so a long title spills over whatever sits beneath it instead
@@ -178,7 +181,7 @@ export function AppText({
       maxFontSizeMultiplier={maxFontSizeMultiplier ?? variantScaleCap(variant)}
       selectable={isSelectable}
       numberOfLines={numberOfLines}
-      style={[textRole(variant), { color: colorValue(color) }, style]}
+      style={[textRole(variant), { color: colorValue(color, theme.colors) }, style]}
     >
       {children}
     </Text>
@@ -202,6 +205,7 @@ export function AppText({
  * `fontWeight` (see `hig-type-and-contrast.test.ts`).
  */
 export function BrandLockup({ size = 'compact' }: { size?: 'compact' | 'hero' }) {
+  const theme = useAppTheme();
   const hero = size === 'hero';
 
   return (
@@ -216,7 +220,7 @@ export function BrandLockup({ size = 'compact' }: { size?: 'compact' | 'hero' })
         minWidth: 0,
       }}
     >
-      <Sparkles size={hero ? appTheme.icon.hero : appTheme.icon.feature} color={appTheme.colors.primary} />
+      <Sparkles size={hero ? appTheme.icon.hero : appTheme.icon.feature} color={theme.colors.primary} />
       <AppText
         selectable={false}
         numberOfLines={1}
@@ -304,15 +308,16 @@ export function Card({
   padding?: 'sm' | 'md' | 'lg';
   style?: StyleProp<ViewStyle>;
 }) {
+  const theme = useAppTheme();
   const paddingValue = {
     sm: appTheme.spacing.gap,
     md: appTheme.spacing.card,
     lg: appTheme.spacing.panel,
   }[padding];
   const backgroundColor = {
-    default: appTheme.colors.panel,
-    soft: appTheme.colors.surface,
-    inset: appTheme.colors.surfaceInset,
+    default: theme.colors.panel,
+    soft: theme.colors.surface,
+    inset: theme.colors.surfaceInset,
   }[variant];
 
   return (
@@ -321,13 +326,13 @@ export function Card({
         {
           gap: appTheme.spacing.gap,
           borderWidth: 1,
-          borderColor: accent ? `${accentColor(accent)}55` : appTheme.colors.borderSubtle,
+          borderColor: accent ? `${accentColor(accent, theme.colors)}55` : theme.colors.borderSubtle,
           backgroundColor,
           borderRadius: appTheme.radii.xl,
           borderCurve: 'continuous',
           padding: paddingValue,
         },
-        variant === 'default' ? (appTheme.shadow.panel as ViewStyle) : null,
+        variant === 'default' ? (theme.shadow.panel as ViewStyle) : null,
         style,
       ]}
     >
@@ -353,11 +358,12 @@ export function SurfaceSection({
   action?: React.ReactNode;
   style?: StyleProp<ViewStyle>;
 }) {
+  const theme = useAppTheme();
   return (
     <Card accent={accent} style={style}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: appTheme.spacing.gap }}>
         <View style={{ flex: 1, gap: 5 }}>
-          {eyebrow ? <Kicker color={accent ? accentColor(accent) : 'faint'}>{eyebrow}</Kicker> : null}
+          {eyebrow ? <Kicker color={accent ? accentColor(accent, theme.colors) : 'faint'}>{eyebrow}</Kicker> : null}
           <AppText heading variant="cardTitle">{title}</AppText>
           {body ? (
             <AppText variant="bodySm" color="muted">
@@ -387,7 +393,8 @@ export function DisclosureSection({
   body?: string;
   accent?: ToolAccent;
 }) {
-  const color = accent ? accentColor(accent) : appTheme.colors.textSecondary;
+  const theme = useAppTheme();
+  const color = accent ? accentColor(accent, theme.colors) : theme.colors.textSecondary;
   const motion = usePressMotion(false, { scale: appTheme.motion.scale.pressedControl });
 
   return (
@@ -412,8 +419,8 @@ export function DisclosureSection({
               minHeight: appTheme.touch.default,
               alignItems: 'center',
               justifyContent: 'center',
-              borderWidth: motion.focused ? appTheme.state.focus.width : 1,
-              borderColor: motion.focused ? appTheme.state.focus.color : `${color}55`,
+              borderWidth: motion.focused ? theme.state.focus.width : 1,
+              borderColor: motion.focused ? theme.state.focus.color : `${color}55`,
               borderRadius: appTheme.radii.pill,
               backgroundColor: `${color}1f`,
               opacity: pressed ? appTheme.opacity.pressed : 1,
@@ -449,7 +456,8 @@ export function ChoiceChip({
   grow?: boolean;
   compact?: boolean;
 }) {
-  const color = accentColor(accent);
+  const theme = useAppTheme();
+  const color = accentColor(accent, theme.colors);
   const motion = usePressMotion(disabled);
 
   return (
@@ -479,15 +487,15 @@ export function ChoiceChip({
           alignItems: 'center',
           justifyContent: 'center',
           borderRadius: appTheme.radii.pill,
-          borderWidth: motion.focused ? appTheme.state.focus.width : 1,
+          borderWidth: motion.focused ? theme.state.focus.width : 1,
           borderColor: motion.focused
-            ? appTheme.state.focus.color
+            ? theme.state.focus.color
             : active
-              ? accent === 'primary' ? appTheme.state.selected.border : `${color}8a`
-              : appTheme.colors.border,
+              ? accent === 'primary' ? theme.state.selected.border : `${color}8a`
+              : theme.colors.border,
           backgroundColor: active
-            ? accent === 'primary' ? appTheme.state.selected.background : `${color}20`
-            : pressed ? appTheme.colors.pressed : appTheme.colors.surfaceStrong,
+            ? accent === 'primary' ? theme.state.selected.background : `${color}20`
+            : pressed ? theme.colors.pressed : theme.colors.surfaceStrong,
           opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
           paddingHorizontal: compact ? appTheme.spacing.gap : appTheme.spacing.card,
         })}
@@ -495,7 +503,7 @@ export function ChoiceChip({
         <AppText
           selectable={false}
           variant={compact ? 'caption' : 'label'}
-          color={active ? appTheme.colors.text : appTheme.colors.muted}
+          color={active ? theme.colors.text : theme.colors.muted}
           numberOfLines={1}
           style={{ fontWeight: active ? '800' : '700' }}
         >
@@ -525,6 +533,7 @@ export function MetricCard({
   trailing?: React.ReactNode;
   compact?: boolean;
 }) {
+  const theme = useAppTheme();
   const motion = usePressMotion(!onPress);
   const content = (
     <>
@@ -536,7 +545,7 @@ export function MetricCard({
             borderRadius: compact ? 17 : 21,
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: accent ? `${accentColor(accent)}1f` : appTheme.colors.surfaceStrong,
+            backgroundColor: accent ? `${accentColor(accent, theme.colors)}1f` : theme.colors.surfaceStrong,
           }}
         >
           {icon}
@@ -595,7 +604,7 @@ export function MetricCard({
           style={[
             { minHeight: compact ? 76 : 104 },
             motion.focused
-              ? { borderColor: appTheme.state.focus.color, borderWidth: appTheme.state.focus.width }
+              ? { borderColor: theme.state.focus.color, borderWidth: theme.state.focus.width }
               : null,
           ]}
         >
@@ -615,13 +624,14 @@ export function ReadinessRow({
   body: string;
   state?: 'neutral' | 'ready' | 'warning' | 'danger';
 }) {
+  const theme = useAppTheme();
   const semantic = state === 'ready'
-    ? appTheme.semantic.success
+    ? theme.semantic.success
     : state === 'warning'
-      ? appTheme.semantic.warning
+      ? theme.semantic.warning
       : state === 'danger'
-        ? appTheme.semantic.danger
-        : appTheme.semantic.neutral;
+        ? theme.semantic.danger
+        : theme.semantic.neutral;
 
   return (
     <View
@@ -671,7 +681,8 @@ export function ToggleRow({
   disabled?: boolean;
   accent?: ToolAccent;
 }) {
-  const color = accentColor(accent);
+  const theme = useAppTheme();
+  const color = accentColor(accent, theme.colors);
   const motion = usePressMotion(disabled);
   const progress = useAnimatedState(value);
   const thumbTranslate = progress?.interpolate({
@@ -699,11 +710,11 @@ export function ToggleRow({
           minHeight: appTheme.touch.roomy,
           borderRadius: appTheme.radii.lg,
           borderCurve: 'continuous',
-          borderWidth: motion.focused ? appTheme.state.focus.width : 1,
+          borderWidth: motion.focused ? theme.state.focus.width : 1,
           borderColor: motion.focused
-            ? appTheme.state.focus.color
-            : value ? `${color}66` : appTheme.colors.border,
-          backgroundColor: value ? `${color}16` : pressed ? appTheme.colors.pressed : appTheme.colors.surfaceStrong,
+            ? theme.state.focus.color
+            : value ? `${color}66` : theme.colors.border,
+          backgroundColor: value ? `${color}16` : pressed ? theme.colors.pressed : theme.colors.surfaceStrong,
           flexDirection: 'row',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -714,7 +725,7 @@ export function ToggleRow({
         })}
       >
         <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-          <AppText selectable={false} variant="label" color={value ? color : appTheme.colors.text}>
+          <AppText selectable={false} variant="label" color={value ? color : theme.colors.text}>
             {label}
           </AppText>
           {body ? (
@@ -729,8 +740,8 @@ export function ToggleRow({
             height: 30,
             borderRadius: 15,
             borderWidth: 1,
-            borderColor: value ? `${color}88` : appTheme.colors.borderStrong,
-            backgroundColor: value ? `${color}30` : appTheme.colors.surfaceInset,
+            borderColor: value ? `${color}88` : theme.colors.borderStrong,
+            backgroundColor: value ? `${color}30` : theme.colors.surfaceInset,
             justifyContent: 'center',
             paddingHorizontal: 3,
           }}
@@ -740,7 +751,7 @@ export function ToggleRow({
             width: 22,
             height: 22,
             borderRadius: 11,
-              backgroundColor: value ? color : appTheme.colors.muted,
+              backgroundColor: value ? accentFill(accent) : theme.colors.muted,
               transform: thumbTranslate ? [{ translateX: thumbTranslate }] : undefined,
           }}
           />
@@ -765,7 +776,8 @@ export function BottomActionDock({
   accent?: ToolAccent;
   style?: StyleProp<ViewStyle>;
 }) {
-  const color = accentColor(accent);
+  const theme = useAppTheme();
+  const color = accentColor(accent, theme.colors);
 
   return (
     <View
@@ -775,11 +787,11 @@ export function BottomActionDock({
           borderCurve: 'continuous',
           borderWidth: 1,
           borderColor: `${color}55`,
-          backgroundColor: appTheme.colors.panel,
+          backgroundColor: theme.colors.panel,
           padding: appTheme.spacing.card,
           gap: appTheme.spacing.gap,
         },
-        appTheme.shadow.panel as ViewStyle,
+        theme.shadow.panel as ViewStyle,
         style,
       ]}
     >
@@ -823,11 +835,12 @@ export function PrimaryButton({
   size?: 'default' | 'roomy';
   accessibilityHint?: string;
 }) {
-  const fillColor = accentColor(accent);
+  const theme = useAppTheme();
+  const fillColor = accentFill(accent);
   const unavailable = Boolean(disabled || loading);
   const textColor = disabled
-    ? appTheme.colors.muted
-    : onAccentColor(accent);
+    ? theme.colors.muted
+    : onAccentFill(accent);
   const motion = usePressMotion(unavailable);
 
   return (
@@ -852,9 +865,9 @@ export function PrimaryButton({
           alignItems: 'center',
           justifyContent: 'center',
           borderRadius: appTheme.radii.pill,
-          borderWidth: appTheme.state.focus.width,
-          borderColor: motion.focused ? appTheme.state.focus.color : 'transparent',
-          backgroundColor: disabled ? appTheme.colors.panelSoft : fillColor,
+          borderWidth: theme.state.focus.width,
+          borderColor: motion.focused ? theme.state.focus.color : 'transparent',
+          backgroundColor: disabled ? theme.colors.panelSoft : fillColor,
           opacity: pressed ? appTheme.opacity.pressed : disabled ? appTheme.opacity.disabled : 1,
           paddingHorizontal: appTheme.spacing.panel,
         })}
@@ -885,6 +898,7 @@ export function SecondaryButton({
   disabled?: boolean;
   accessibilityHint?: string;
 }) {
+  const theme = useAppTheme();
   const motion = usePressMotion(Boolean(disabled));
 
   return (
@@ -905,9 +919,9 @@ export function SecondaryButton({
           alignItems: 'center',
           justifyContent: 'center',
           borderRadius: appTheme.radii.pill,
-          borderWidth: motion.focused ? appTheme.state.focus.width : 1,
-          borderColor: motion.focused ? appTheme.state.focus.color : appTheme.colors.border,
-          backgroundColor: pressed ? appTheme.colors.pressed : appTheme.colors.panelSoft,
+          borderWidth: motion.focused ? theme.state.focus.width : 1,
+          borderColor: motion.focused ? theme.state.focus.color : theme.colors.border,
+          backgroundColor: pressed ? theme.colors.pressed : theme.colors.panelSoft,
           opacity: pressed ? appTheme.opacity.pressed : disabled ? appTheme.opacity.disabled : 1,
           paddingHorizontal: appTheme.spacing.card,
         })}
@@ -936,7 +950,7 @@ export function AppTextInput({
   onBlur,
   onClear,
   onFocus,
-  placeholderTextColor = appTheme.colors.faint,
+  placeholderTextColor,
   style,
   value,
   ...props
@@ -964,6 +978,7 @@ export function AppTextInput({
   /** Lets a caller move focus to this field, e.g. from the previous field's Return key. */
   inputRef?: React.RefObject<TextInput | null>;
 }) {
+  const theme = useAppTheme();
   const generatedId = useId();
   const labelId = `field-label-${generatedId.replace(/:/g, '')}`;
   const [focused, setFocused] = useState(false);
@@ -1008,8 +1023,8 @@ export function AppTextInput({
             setFocused(true);
             onFocus?.(event);
           }}
-          placeholderTextColor={placeholderTextColor}
-          selectionColor={appTheme.colors.primary}
+          placeholderTextColor={placeholderTextColor ?? theme.colors.faint}
+          selectionColor={theme.colors.primary}
           textAlignVertical={multiline ? 'top' : 'center'}
           value={value}
           style={[
@@ -1020,15 +1035,15 @@ export function AppTextInput({
               // the field and nudge its text by a pixel on every tap.
               borderWidth: 1,
               borderColor: error
-                ? appTheme.colors.danger
-                : focused ? appTheme.state.focus.color : appTheme.colors.border,
+                ? theme.colors.danger
+                : focused ? theme.state.focus.color : theme.colors.border,
               outlineStyle: 'solid',
-              outlineColor: appTheme.state.focus.color,
-              outlineWidth: focused ? appTheme.state.focus.width : 0,
+              outlineColor: theme.state.focus.color,
+              outlineWidth: focused ? theme.state.focus.width : 0,
               borderRadius: appTheme.radii.md,
               borderCurve: 'continuous',
-              backgroundColor: disabled ? appTheme.colors.surface : appTheme.colors.surfaceInset,
-              color: disabled ? appTheme.colors.muted : appTheme.colors.text,
+              backgroundColor: disabled ? theme.colors.surface : theme.colors.surfaceInset,
+              color: disabled ? theme.colors.muted : theme.colors.text,
               ...textRole('bodySm'),
               paddingHorizontal: appTheme.spacing.card,
               paddingVertical: appTheme.spacing.gap,
@@ -1052,7 +1067,7 @@ export function AppTextInput({
               opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
-            <X size={appTheme.icon.compact} color={appTheme.colors.muted} />
+            <X size={appTheme.icon.compact} color={theme.colors.muted} />
           </Pressable>
         ) : null}
       </View>
@@ -1081,7 +1096,8 @@ export function Pill({
   icon?: IconComponent;
   style?: StyleProp<ViewStyle>;
 }) {
-  const color = accent ? accentColor(accent) : appTheme.colors.textSecondary;
+  const theme = useAppTheme();
+  const color = accent ? accentColor(accent, theme.colors) : theme.colors.textSecondary;
 
   return (
     <View
@@ -1096,9 +1112,9 @@ export function Pill({
           gap: appTheme.spacing.compact,
           alignSelf: 'flex-start',
           borderWidth: 1,
-          borderColor: accent ? `${color}55` : appTheme.colors.borderSubtle,
+          borderColor: accent ? `${color}55` : theme.colors.borderSubtle,
           borderRadius: appTheme.radii.pill,
-          backgroundColor: accent ? `${color}1f` : appTheme.colors.surface,
+          backgroundColor: accent ? `${color}1f` : theme.colors.surface,
           paddingHorizontal: appTheme.spacing.gap,
           paddingVertical: 6,
         },
@@ -1130,7 +1146,8 @@ export function IconButton({
   style?: StyleProp<ViewStyle>;
   accessibilityHint?: string;
 }) {
-  const color = accent ? accentColor(accent) : appTheme.colors.text;
+  const theme = useAppTheme();
+  const color = accent ? accentColor(accent, theme.colors) : theme.colors.text;
   const motion = usePressMotion(Boolean(disabled), { scale: appTheme.motion.scale.pressedControl });
 
   return (
@@ -1152,14 +1169,14 @@ export function IconButton({
             minWidth: appTheme.touch.default,
             alignItems: 'center',
             justifyContent: 'center',
-            borderWidth: motion.focused ? appTheme.state.focus.width : 1,
+            borderWidth: motion.focused ? theme.state.focus.width : 1,
             borderColor: motion.focused
-              ? appTheme.state.focus.color
-              : accent ? `${color}55` : appTheme.colors.border,
+              ? theme.state.focus.color
+              : accent ? `${color}55` : theme.colors.border,
             borderRadius: appTheme.radii.pill,
             backgroundColor: accent
               ? `${color}1f`
-              : pressed ? appTheme.colors.pressed : appTheme.colors.surface,
+              : pressed ? theme.colors.pressed : theme.colors.surface,
             opacity: pressed ? appTheme.opacity.pressed : disabled ? appTheme.opacity.disabled : 1,
           },
           style,
@@ -1182,6 +1199,7 @@ export function MediaFrame({
   accent?: ToolAccent;
   style?: StyleProp<ViewStyle>;
 }) {
+  const theme = useAppTheme();
   return (
     <View
       style={[
@@ -1189,10 +1207,10 @@ export function MediaFrame({
           aspectRatio,
           overflow: 'hidden',
           borderWidth: 1,
-          borderColor: accent ? `${accentColor(accent)}44` : appTheme.colors.borderSubtle,
+          borderColor: accent ? `${accentColor(accent, theme.colors)}44` : theme.colors.borderSubtle,
           borderRadius: appTheme.radii.xl,
           borderCurve: 'continuous',
-          backgroundColor: appTheme.colors.surfaceInset,
+          backgroundColor: theme.colors.surfaceInset,
         },
         style,
       ]}
@@ -1211,7 +1229,8 @@ export function StatusBlock({
   title: string;
   body?: string;
 }) {
-  const semantic = appTheme.semantic[tone];
+  const theme = useAppTheme();
+  const semantic = theme.semantic[tone];
 
   return (
     <View
@@ -1246,6 +1265,7 @@ export function WebLinkButton({
   label: string;
   accessibilityHint?: string;
 }) {
+  const theme = useAppTheme();
   const motion = usePressMotion();
 
   return (
@@ -1264,9 +1284,9 @@ export function WebLinkButton({
             alignItems: 'center',
             justifyContent: 'center',
             borderRadius: appTheme.radii.pill,
-            borderWidth: motion.focused ? appTheme.state.focus.width : 1,
-            borderColor: motion.focused ? appTheme.state.focus.color : appTheme.colors.borderStrong,
-            backgroundColor: pressed ? appTheme.colors.pressed : appTheme.colors.surface,
+            borderWidth: motion.focused ? theme.state.focus.width : 1,
+            borderColor: motion.focused ? theme.state.focus.color : theme.colors.borderStrong,
+            backgroundColor: pressed ? theme.colors.pressed : theme.colors.surface,
             opacity: pressed ? appTheme.opacity.pressed : 1,
             paddingHorizontal: appTheme.spacing.card,
           })}
@@ -1291,6 +1311,7 @@ export function CreatorAvatar({
   name: string;
   size?: number;
 }) {
+  const theme = useAppTheme();
   const initial = getAvatarInitial(name);
 
   return (
@@ -1302,14 +1323,14 @@ export function CreatorAvatar({
         overflow: 'hidden',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: appTheme.colors.panelSoft,
+        backgroundColor: theme.colors.panelSoft,
       }}
     >
       {/* The initial is drawn whether or not there is a photo, and the photo
           covers it once it arrives. Rendered only in the photo's absence, a
           cold post page showed a blank disc where a face was about to be —
           HIG Images asks a placeholder to stand in while content loads. */}
-      <Text style={{ color: appTheme.colors.text, fontSize: Math.max(10, Math.round(size * 0.44)), fontWeight: '800' }}>
+      <Text style={{ color: theme.colors.text, fontSize: Math.max(10, Math.round(size * 0.44)), fontWeight: '800' }}>
         {initial}
       </Text>
       {uri ? (

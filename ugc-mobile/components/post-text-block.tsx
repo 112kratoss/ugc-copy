@@ -2,6 +2,7 @@ import { memo } from 'react';
 import { Pressable, Text, View } from 'react-native';
 
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 /**
  * The body of a feed post — the same muted, clamped paragraph for every kind.
@@ -27,6 +28,7 @@ export const PostTextBlock = memo(function PostTextBlock({
   expanded: boolean;
   onToggle: () => void;
 }) {
+  const theme = useAppTheme();
   if (!text) return null;
 
   return (
@@ -36,7 +38,7 @@ export const PostTextBlock = memo(function PostTextBlock({
         // expanded ids survive a refetch, so a card that stops offering the
         // toggle would otherwise be stuck unclamped with no way to collapse.
         numberOfLines={expanded && canExpand ? undefined : clampLines}
-        style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}
+        style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}
       >
         {text}
       </Text>
@@ -53,7 +55,7 @@ export const PostTextBlock = memo(function PostTextBlock({
             opacity: pressed ? appTheme.opacity.pressed : 1,
           })}
         >
-          <Text style={{ color: appTheme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>
+          <Text style={{ color: theme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>
             {expanded ? 'Show less' : 'Read more'}
           </Text>
         </Pressable>

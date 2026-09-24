@@ -2,7 +2,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { View } from 'react-native';
 
 import { hexWithAlpha, linearGradient } from '@/lib/eased-fade';
-import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import { viewerTopScrim } from '@/lib/viewer-chrome';
 
 /**
@@ -27,7 +27,8 @@ import { viewerTopScrim } from '@/lib/viewer-chrome';
  * gradient, as the reel's other shades are (`components/reel-chrome.tsx` says why).
  */
 export function TopScrim({ topInset, over = 'app' }: { topInset: number; over?: 'app' | 'media' }) {
-  const ground = appTheme.colors.background;
+  const theme = useAppTheme();
+  const ground = theme.colors.background;
   if (over === 'media') {
     const { height, stops } = viewerTopScrim(topInset);
     const shade = linearGradient('to bottom', stops.map((stop) => ({ color: hexWithAlpha(ground, stop.alpha), at: stop.offset / height })));

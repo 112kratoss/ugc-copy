@@ -73,7 +73,9 @@ import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { formatCreditAmount } from '@/lib/pricing';
 import { SHOWCASE_PLAYBACK_VIEWABILITY } from '@/lib/showcase-feed-events';
 import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
-import { appTheme } from '@/lib/theme';
+import { hexWithAlpha } from '@/lib/eased-fade';
+import { appTheme, mediaColors, themes } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import type {
   GenerationListResponse,
   OwnerPostsResponse,
@@ -91,19 +93,6 @@ const PROFILE_MEDIA_SWIPE_AXIS_RATIO = 1.25;
 // Three rows rise into place when a tab's media lands; later rows mount plain.
 const PROFILE_GALLERY_REVEAL_COUNT = PROFILE_GALLERY_COLUMNS * 3;
 
-const PROFILE_COLORS = {
-  background: appTheme.colors.background,
-  surface: appTheme.colors.panel,
-  surfaceRaised: appTheme.colors.panelSoft,
-  border: appTheme.colors.border,
-  borderStrong: appTheme.colors.borderStrong,
-  text: appTheme.colors.text,
-  muted: appTheme.colors.muted,
-  faint: appTheme.colors.faint,
-  coral: appTheme.colors.primary,
-  coralSoft: appTheme.colors.pressed,
-} as const;
-
 export function ProfileDashboard({
   initialTab = DEFAULT_PROFILE_MEDIA_TAB,
   highlightedPostId = null,
@@ -111,6 +100,7 @@ export function ProfileDashboard({
   initialTab?: ProfileMediaTab;
   highlightedPostId?: string | null;
 } = {}) {
+  const theme = useAppTheme();
   const { user, api, credits } = useAuth();
   const isFocused = useIsFocused();
   const [activeTab, setActiveTab] = useState<ProfileMediaTab>(initialTab);
@@ -418,13 +408,13 @@ export function ProfileDashboard({
           />
           <View style={{ flexDirection: 'row', gap: 10 }}>
             <BalanceCard
-              icon={<Crown size={appTheme.icon.default} color={appTheme.colors.commerce} />}
+              icon={<Crown size={appTheme.icon.default} color={theme.colors.commerce} />}
               label="Credits"
               value={formatCreditAmount(credits ?? profile?.credits)}
               onPress={() => router.push('/pricing' as never)}
             />
             <BalanceCard
-              icon={<Wallet size={appTheme.icon.default} color={PROFILE_COLORS.coral} />}
+              icon={<Wallet size={appTheme.icon.default} color={theme.colors.primary} />}
               label="Wallet"
               value={formatUsdCents(salesSummary.earningsUsdCents)}
               onPress={() => router.push('/seller-dashboard' as never)}
@@ -500,6 +490,7 @@ function ProfileMediaList({
   onPostsScopeChange?: (scope: ProfilePostsScope) => void;
   topInset: number;
 }) {
+  const theme = useAppTheme();
   const listRef = useRef<FlashListRef<ProfileMediaCard>>(null);
   useScrollToTop(listRef);
   const { width } = useWindowDimensions();
@@ -533,7 +524,7 @@ function ProfileMediaList({
   return (
     // Saved tiles here are what the reel grows out of and returns to.
     <MediaZoomSurface>
-    <View {...swipeResponder.panHandlers} style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+    <View {...swipeResponder.panHandlers} style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <FlashList
         ref={listRef}
         data={isLoading ? [] : cards}
@@ -608,7 +599,7 @@ function ProfileMediaList({
           </Reveal>
         )}
         showsVerticalScrollIndicator={false}
-        style={{ flex: 1, backgroundColor: appTheme.colors.background }}
+        style={{ flex: 1, backgroundColor: theme.colors.background }}
         contentInsetAdjustmentBehavior="never"
         contentContainerStyle={{
           paddingTop: topInset + 12,
@@ -653,21 +644,22 @@ function ProfileTitle() {
 }
 
 function SignedOutCard() {
+  const theme = useAppTheme();
   return (
     <View
       style={{
         borderRadius: 22,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: PROFILE_COLORS.border,
-        backgroundColor: PROFILE_COLORS.surface,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.panel,
         padding: 18,
         gap: 14,
       }}
     >
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 13 }}>
-        <View style={{ width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', backgroundColor: PROFILE_COLORS.surfaceRaised, borderWidth: 1, borderColor: PROFILE_COLORS.borderStrong }}>
-          <UserRound size={appTheme.icon.feature} color={PROFILE_COLORS.muted} />
+        <View style={{ width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panelSoft, borderWidth: 1, borderColor: theme.colors.borderStrong }}>
+          <UserRound size={appTheme.icon.feature} color={theme.colors.muted} />
         </View>
         <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
           <AppText variant="cardTitle" style={{ fontSize: 19, lineHeight: 24 }}>Sign in to your creator profile</AppText>
@@ -683,13 +675,13 @@ function SignedOutCard() {
         style={({ pressed }) => ({
           minHeight: 50,
           borderRadius: 18,
-          backgroundColor: PROFILE_COLORS.coral,
+          backgroundColor: theme.colors.primaryFill,
           alignItems: 'center',
           justifyContent: 'center',
           opacity: pressed ? appTheme.opacity.pressed : 1,
         })}
       >
-        <Text style={{ color: '#111114', fontSize: 15, fontWeight: '800' }}>Sign in</Text>
+        <Text style={{ color: theme.colors.onPrimary, fontSize: 15, fontWeight: '800' }}>Sign in</Text>
       </Pressable>
     </View>
   );
@@ -712,6 +704,7 @@ function ProfileHeroCard({
   stats: ReturnType<typeof getProfileStats>;
   onEdit: () => void;
 }) {
+  const theme = useAppTheme();
   return (
     <View
       style={{
@@ -719,21 +712,21 @@ function ProfileHeroCard({
         borderRadius: 24,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: PROFILE_COLORS.border,
-        backgroundColor: PROFILE_COLORS.surface,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.panel,
       }}
     >
-      <View style={{ height: 84, overflow: 'hidden', backgroundColor: PROFILE_COLORS.surfaceRaised }}>
+      <View style={{ height: 84, overflow: 'hidden', backgroundColor: theme.colors.panelSoft }}>
         {profile?.coverUrl ? (
           <Image source={{ uri: profile.coverUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
         ) : (
           <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-            <View style={{ width: 36, height: 1, backgroundColor: PROFILE_COLORS.borderStrong }} />
-            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: PROFILE_COLORS.coral }} />
-            <View style={{ width: 36, height: 1, backgroundColor: PROFILE_COLORS.borderStrong }} />
+            <View style={{ width: 36, height: 1, backgroundColor: theme.colors.borderStrong }} />
+            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: theme.colors.primary }} />
+            <View style={{ width: 36, height: 1, backgroundColor: theme.colors.borderStrong }} />
           </View>
         )}
-        {profile?.coverUrl ? <LinearGradient colors={['rgba(0,0,0,0.06)', 'rgba(0,0,0,0.56)']} style={{ position: 'absolute', inset: 0 }} /> : null}
+        {profile?.coverUrl ? <LinearGradient colors={[hexWithAlpha(mediaColors.mediaGround, 0.06), hexWithAlpha(mediaColors.mediaGround, 0.56)]} style={{ position: 'absolute', inset: 0 }} /> : null}
       </View>
 
       <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
@@ -746,7 +739,7 @@ function ProfileHeroCard({
             style={({ pressed }) => ({
               minHeight: 48,
               borderRadius: 18,
-              backgroundColor: PROFILE_COLORS.coral,
+              backgroundColor: theme.colors.primaryFill,
               flexDirection: 'row',
               alignItems: 'center',
               justifyContent: 'center',
@@ -755,33 +748,33 @@ function ProfileHeroCard({
               opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
-            <Pencil size={appTheme.icon.sm} color="#111114" />
+            <Pencil size={appTheme.icon.sm} color={theme.colors.onPrimary} />
             {/* The name the control has always had in its accessibility label,
                 now the name it draws — and the name the screen it opens gives
                 itself. S10's rule, on a smaller scale: a destination answers to
                 the control that reaches it. */}
-            <Text style={{ color: '#111114', fontSize: 14, fontWeight: '800' }}>Edit profile</Text>
+            <Text style={{ color: theme.colors.onPrimary, fontSize: 14, fontWeight: '800' }}>Edit profile</Text>
           </Pressable>
         </View>
 
         <View style={{ gap: 5, paddingTop: 12 }}>
-          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: PROFILE_COLORS.text, fontSize: 23, lineHeight: 28, fontWeight: '800', letterSpacing: -0.35 }}>{displayName}</Text>
-          <Text numberOfLines={1} style={{ color: PROFILE_COLORS.coral, fontSize: 13, fontWeight: '800' }}>{handle}</Text>
+          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: theme.colors.text, fontSize: 23, lineHeight: 28, fontWeight: '800', letterSpacing: -0.35 }}>{displayName}</Text>
+          <Text numberOfLines={1} style={{ color: theme.colors.primary, fontSize: 13, fontWeight: '800' }}>{handle}</Text>
           {profile?.bio ? (
-            <Text numberOfLines={2} style={{ color: PROFILE_COLORS.muted, fontSize: 13, lineHeight: 19 }}>{profile.bio}</Text>
+            <Text numberOfLines={2} style={{ color: theme.colors.muted, fontSize: 13, lineHeight: 19 }}>{profile.bio}</Text>
           ) : (
-            <Text numberOfLines={1} style={{ color: PROFILE_COLORS.muted, fontSize: 13, lineHeight: 19 }}>
+            <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 13, lineHeight: 19 }}>
               {email ? `Signed in as ${email}` : 'Creator profile ready for saved media and posts.'}
             </Text>
           )}
         </View>
 
-        <View style={{ height: 1, backgroundColor: PROFILE_COLORS.border, marginVertical: 13 }} />
+        <View style={{ height: 1, backgroundColor: theme.colors.border, marginVertical: 13 }} />
         <View style={{ flexDirection: 'row', gap: 8 }}>
           {stats.map((stat) => (
             <View key={stat.label} style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'baseline', justifyContent: 'center', gap: 5 }}>
-              <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: PROFILE_COLORS.text, fontSize: 16, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{stat.value}</Text>
-              <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72} style={{ color: PROFILE_COLORS.muted, fontSize: 11, fontWeight: '700' }}>{stat.label}</Text>
+              <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: theme.colors.text, fontSize: 16, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{stat.value}</Text>
+              <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700' }}>{stat.label}</Text>
             </View>
           ))}
         </View>
@@ -791,6 +784,7 @@ function ProfileHeroCard({
 }
 
 function ProfileAvatar({ profile, initials }: { profile?: ProfileResponse | null; initials: string }) {
+  const theme = useAppTheme();
   return (
     <View
       style={{
@@ -798,14 +792,14 @@ function ProfileAvatar({ profile, initials }: { profile?: ProfileResponse | null
         height: 68,
         borderRadius: 34,
         padding: 3,
-        backgroundColor: PROFILE_COLORS.background,
+        backgroundColor: theme.colors.background,
       }}
     >
-        <View style={{ flex: 1, overflow: 'hidden', borderRadius: 31, alignItems: 'center', justifyContent: 'center', backgroundColor: PROFILE_COLORS.surfaceRaised, borderWidth: 2, borderColor: PROFILE_COLORS.coral }}>
+        <View style={{ flex: 1, overflow: 'hidden', borderRadius: 31, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panelSoft, borderWidth: 2, borderColor: theme.colors.primary }}>
           {profile?.avatarUrl ? (
             <Image source={{ uri: profile.avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
           ) : (
-            <Text style={{ color: PROFILE_COLORS.text, fontSize: 21, fontWeight: '800' }}>{initials}</Text>
+            <Text style={{ color: theme.colors.text, fontSize: 21, fontWeight: '800' }}>{initials}</Text>
           )}
         </View>
     </View>
@@ -823,6 +817,7 @@ function BalanceCard({
   value: string;
   onPress: () => void;
 }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -834,8 +829,8 @@ function BalanceCard({
         borderRadius: 20,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: PROFILE_COLORS.border,
-        backgroundColor: PROFILE_COLORS.surface,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.panel,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10,
@@ -843,19 +838,20 @@ function BalanceCard({
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
-      <View style={{ width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: PROFILE_COLORS.surfaceRaised }}>
+      <View style={{ width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panelSoft }}>
         {icon}
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-        <Text numberOfLines={1} style={{ color: PROFILE_COLORS.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</Text>
-        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.74} style={{ color: PROFILE_COLORS.text, fontSize: 17, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{value}</Text>
+        <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</Text>
+        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.74} style={{ color: theme.colors.text, fontSize: 17, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{value}</Text>
       </View>
-      <ChevronRight size={16} color={PROFILE_COLORS.faint} />
+      <ChevronRight size={16} color={theme.colors.faint} />
     </Pressable>
   );
 }
 
 function SellerDashboardButton() {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -866,8 +862,8 @@ function SellerDashboardButton() {
         borderRadius: 20,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: PROFILE_COLORS.border,
-        backgroundColor: PROFILE_COLORS.surface,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.panel,
         paddingHorizontal: 14,
         flexDirection: 'row',
         alignItems: 'center',
@@ -875,19 +871,20 @@ function SellerDashboardButton() {
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
-      <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: PROFILE_COLORS.coralSoft, alignItems: 'center', justifyContent: 'center' }}>
-        <Store size={appTheme.icon.default} color={PROFILE_COLORS.coral} />
+      <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: theme.colors.pressed, alignItems: 'center', justifyContent: 'center' }}>
+        <Store size={appTheme.icon.default} color={theme.colors.primary} />
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
         <AppText variant="label" numberOfLines={1} style={{ fontSize: 14 }}>Your Sales</AppText>
         <AppText variant="caption" color="muted" numberOfLines={1}>Sales, unlocks, and listings</AppText>
       </View>
-      <ChevronRight size={20} color={PROFILE_COLORS.faint} />
+      <ChevronRight size={20} color={theme.colors.faint} />
     </Pressable>
   );
 }
 
 function InviteAndEarnButton() {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
@@ -898,8 +895,8 @@ function InviteAndEarnButton() {
         borderRadius: 20,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: `${appTheme.colors.commerce}55`,
-        backgroundColor: `${appTheme.colors.commerce}0f`,
+        borderColor: `${theme.colors.commerce}55`,
+        backgroundColor: `${theme.colors.commerce}0f`,
         paddingHorizontal: 14,
         flexDirection: 'row',
         alignItems: 'center',
@@ -907,14 +904,14 @@ function InviteAndEarnButton() {
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
-      <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: `${appTheme.colors.commerce}1f`, alignItems: 'center', justifyContent: 'center' }}>
-        <Gift size={appTheme.icon.default} color={appTheme.colors.commerce} />
+      <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: `${theme.colors.commerce}1f`, alignItems: 'center', justifyContent: 'center' }}>
+        <Gift size={appTheme.icon.default} color={theme.colors.commerce} />
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
         <AppText variant="label" numberOfLines={1} style={{ fontSize: 14 }}>Invite & Earn</AppText>
         <AppText variant="caption" color="muted" numberOfLines={1}>Share your link and earn bonus credits</AppText>
       </View>
-      <ChevronRight size={20} color={PROFILE_COLORS.faint} />
+      <ChevronRight size={20} color={theme.colors.faint} />
     </Pressable>
   );
 }
@@ -951,6 +948,7 @@ function ProfileMediaHeader({
 }
 
 function ProfileMediaEmpty({ title }: { title: string }) {
+  const theme = useAppTheme();
   return (
     <View
       style={{
@@ -958,15 +956,15 @@ function ProfileMediaEmpty({ title }: { title: string }) {
         borderRadius: 24,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: appTheme.colors.borderSubtle,
-        backgroundColor: appTheme.colors.surface,
+        borderColor: theme.colors.borderSubtle,
+        backgroundColor: theme.colors.surface,
         alignItems: 'center',
         justifyContent: 'center',
         padding: 20,
         gap: 8,
       }}
     >
-      <ImageIcon size={appTheme.icon.hero} color={appTheme.colors.faint} />
+      <ImageIcon size={appTheme.icon.hero} color={theme.colors.faint} />
       <AppText variant="cardTitle">{title}</AppText>
       <AppText variant="bodySm" color="muted" style={{ textAlign: 'center' }}>
         This section will fill as you save media, create generations, or publish posts.
@@ -976,9 +974,10 @@ function ProfileMediaEmpty({ title }: { title: string }) {
 }
 
 function ProfileGridFooterLoader() {
+  const theme = useAppTheme();
   return (
     <View style={{ minHeight: 52, alignItems: 'center', justifyContent: 'center' }}>
-      <ActivityIndicator color={PROFILE_COLORS.coral} />
+      <ActivityIndicator color={theme.colors.primary} />
     </View>
   );
 }
@@ -1005,8 +1004,9 @@ function getProfileMediaSwipeDirection(gestureState: PanResponderGestureState): 
 }
 
 function ProfileSegment({ value, onChange }: { value: ProfileMediaTab; onChange: (value: ProfileMediaTab) => void }) {
+  const theme = useAppTheme();
   return (
-    <View style={{ flexDirection: 'row', gap: 4, borderRadius: 18, borderWidth: 1, borderColor: PROFILE_COLORS.border, backgroundColor: PROFILE_COLORS.surface, padding: 4 }}>
+    <View style={{ flexDirection: 'row', gap: 4, borderRadius: 18, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.panel, padding: 4 }}>
       {PROFILE_MEDIA_TABS.map((tab) => {
         const active = tab === value;
         return (
@@ -1020,13 +1020,13 @@ function ProfileSegment({ value, onChange }: { value: ProfileMediaTab; onChange:
               flex: 1,
               minHeight: appTheme.touch.compact,
               borderRadius: 14,
-              backgroundColor: active ? PROFILE_COLORS.coral : 'transparent',
+              backgroundColor: active ? theme.colors.primaryFill : 'transparent',
               alignItems: 'center',
               justifyContent: 'center',
               opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
-            <Text numberOfLines={1} style={{ color: active ? '#111114' : PROFILE_COLORS.muted, fontSize: 12, fontWeight: '800' }}>{tab}</Text>
+            <Text numberOfLines={1} style={{ color: active ? theme.colors.onPrimary : theme.colors.muted, fontSize: 12, fontWeight: '800' }}>{tab}</Text>
           </Pressable>
         );
       })}
@@ -1043,6 +1043,7 @@ function ProfilePostsScopeControl({
   counts?: Record<ProfilePostsScope, number>;
   onChange: (scope: ProfilePostsScope) => void;
 }) {
+  const theme = useAppTheme();
   const options: Array<{ value: ProfilePostsScope; label: string }> = [
     { value: 'active', label: counts ? `Active (${counts.active})` : 'Active' },
     { value: 'archived', label: counts ? `Archived (${counts.archived})` : 'Archived' },
@@ -1063,14 +1064,14 @@ function ProfilePostsScopeControl({
               paddingHorizontal: 14,
               borderRadius: 999,
               borderWidth: 1,
-              borderColor: active ? PROFILE_COLORS.coral : PROFILE_COLORS.border,
-              backgroundColor: active ? 'rgba(255, 122, 89, 0.14)' : PROFILE_COLORS.surface,
+              borderColor: active ? theme.colors.primary : theme.colors.border,
+              backgroundColor: active ? hexWithAlpha(theme.colors.primary, 0.14) : theme.colors.panel,
               alignItems: 'center',
               justifyContent: 'center',
               opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
-            <Text numberOfLines={1} style={{ color: active ? PROFILE_COLORS.coral : PROFILE_COLORS.muted, fontSize: 12, fontWeight: '800' }}>
+            <Text numberOfLines={1} style={{ color: active ? theme.colors.primary : theme.colors.muted, fontSize: 12, fontWeight: '800' }}>
               {option.label}
             </Text>
           </Pressable>
@@ -1097,6 +1098,7 @@ function ProfileMediaTile({
   highlighted?: boolean;
   mediaWatchdog?: boolean;
 }) {
+  const theme = useAppTheme();
   const avatarUrl = item.avatarUrl ?? fallbackAvatarUrl ?? null;
   const avatarInitials = item.avatarUrl
     ? getGalleryInitials(item.avatarLabel ?? item.meta)
@@ -1178,19 +1180,19 @@ function ProfileMediaTile({
           borderRadius: 12,
           borderCurve: 'continuous',
           borderWidth: highlighted ? 2 : 1,
-          borderColor: highlighted ? PROFILE_COLORS.coral : PROFILE_COLORS.border,
-          backgroundColor: PROFILE_COLORS.surface,
+          borderColor: highlighted ? theme.colors.primary : theme.colors.border,
+          backgroundColor: theme.colors.panel,
         }}
       >
         <ProfileGalleryPreview item={item} height={height} watchdog={mediaWatchdog} />
         <LinearGradient
-          colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.16)', 'rgba(0,0,0,0.70)']}
+          colors={[hexWithAlpha(mediaColors.mediaGround, 0), hexWithAlpha(mediaColors.mediaGround, 0.16), mediaColors.mediaScrimStrong]}
           locations={[0, 0.48, 1]}
           style={{ position: 'absolute', inset: 0 }}
         />
         {item.mediaKind === 'video' ? (
-          <View style={{ position: 'absolute', top: 8, right: 8, width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.38)' }}>
-            <Play size={appTheme.icon.sm} color="#ffffff" fill="#ffffff" />
+          <View style={{ position: 'absolute', top: 8, right: 8, width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: mediaColors.mediaScrim }}>
+            <Play size={appTheme.icon.sm} color={mediaColors.onMedia} fill={mediaColors.onMedia} />
           </View>
         ) : null}
         {isSavedTile ? (
@@ -1233,9 +1235,9 @@ function ProfileSavedFeedOverlay({
           alignItems: 'center',
           gap: 6,
           borderRadius: 14,
-          backgroundColor: 'rgba(3,4,13,0.66)',
+          backgroundColor: mediaColors.mediaChip,
           borderWidth: 1,
-          borderColor: 'rgba(255,255,255,0.16)',
+          borderColor: hexWithAlpha(mediaColors.onMedia, 0.16),
           paddingHorizontal: 6,
           paddingVertical: 5,
         }}
@@ -1248,18 +1250,18 @@ function ProfileSavedFeedOverlay({
             overflow: 'hidden',
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: '#27272a',
+            backgroundColor: themes.dark.colors.panelSoft,
             borderWidth: 1,
-            borderColor: 'rgba(255,255,255,0.24)',
+            borderColor: hexWithAlpha(mediaColors.onMedia, 0.24),
           }}
         >
           {avatarUrl ? (
             <Image source={{ uri: avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
           ) : (
-            <Text style={{ color: '#fff', fontSize: 11, fontWeight: '800' }}>{avatarInitials}</Text>
+            <Text style={{ color: mediaColors.onMedia, fontSize: 11, fontWeight: '800' }}>{avatarInitials}</Text>
           )}
         </View>
-        <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, color: '#ffffff', fontSize: 11, fontWeight: '800' }}>
+        <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, color: mediaColors.onMedia, fontSize: 11, fontWeight: '800' }}>
           {item.avatarLabel || item.meta}
         </Text>
       </View>
@@ -1277,8 +1279,8 @@ function ProfileSavedFeedOverlay({
           gap: 4,
         }}
       >
-        <Heart size={14} color="#ffffff" fill="#ffffff" />
-        <Text numberOfLines={1} style={{ color: '#ffffff', fontSize: 12, fontWeight: '800', fontVariant: ['tabular-nums'] }}>
+        <Heart size={14} color={mediaColors.onMedia} fill={mediaColors.onMedia} />
+        <Text numberOfLines={1} style={{ color: mediaColors.onMedia, fontSize: 12, fontWeight: '800', fontVariant: ['tabular-nums'] }}>
           {countLabel}
         </Text>
       </View>
@@ -1292,6 +1294,11 @@ function ProfileSavedFeedOverlay({
  * things. A creation reports whether it reached a post; a post reports who can
  * see it.
  */
+/**
+ * The state glyph drawn on a grid tile. It sits on a dark glass chip over the
+ * picture, so it takes the dark palette's bright tones in both schemes — the
+ * deep light-scheme tones would vanish on that chip.
+ */
 export function getProfileTileState(item: ProfileMediaCard): {
   label: string;
   color: string;
@@ -1300,21 +1307,23 @@ export function getProfileTileState(item: ProfileMediaCard): {
   if (item.label === 'Creation') {
     const posted = Boolean(item.linkedPostLabel && item.linkedPostLabel !== 'Not posted');
     return posted
-      ? { label: item.linkedPostLabel ?? 'Posted', color: appTheme.colors.success, glyph: 'globe' }
-      : { label: 'Not posted', color: appTheme.colors.motion, glyph: 'sparkles' };
+      ? { label: item.linkedPostLabel ?? 'Posted', color: themes.dark.colors.success, glyph: 'globe' }
+      : { label: 'Not posted', color: themes.dark.colors.motion, glyph: 'sparkles' };
   }
   if (item.visibilityLabel === 'Public') {
-    return { label: 'Public', color: appTheme.colors.success, glyph: 'globe' };
+    return { label: 'Public', color: themes.dark.colors.success, glyph: 'globe' };
   }
   return {
     label: item.visibilityLabel ?? 'Private',
-    color: appTheme.colors.amber,
+    color: themes.dark.colors.amber,
     glyph: 'lock',
   };
 }
 
 function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
-  const accent = item.label === 'Creation' ? appTheme.colors.motion : appTheme.colors.image;
+  // Drawn over the picture: the dark theme in both schemes.
+  const theme = themes.dark;
+  const accent = item.label === 'Creation' ? theme.colors.motion : theme.colors.image;
   const icon = item.label === 'Creation'
     ? <Sparkles size={appTheme.icon.xs} color={accent} />
     : item.mediaKind === 'video'
@@ -1335,9 +1344,9 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
           borderRadius: 14,
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: 'rgba(3,4,13,0.62)',
+          backgroundColor: mediaColors.mediaChip,
           borderWidth: 1,
-          borderColor: item.label === 'Creation' ? 'rgba(167,139,250,0.35)' : 'rgba(56,189,248,0.3)',
+          borderColor: item.label === 'Creation' ? hexWithAlpha(themes.dark.colors.motion, 0.35) : hexWithAlpha(themes.dark.colors.image, 0.3),
         }}
       >
         {icon}
@@ -1362,7 +1371,7 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
           borderRadius: 11,
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: 'rgba(3,4,13,0.62)',
+          backgroundColor: mediaColors.mediaChip,
           borderWidth: 1,
           borderColor: state.color,
         }}
@@ -1382,6 +1391,7 @@ function ProfileGalleryPreview({
   height: number;
   watchdog?: boolean;
 }) {
+  const theme = useAppTheme();
   // `previewState` is the whole answer to what a tile draws, so the tile does
   // not second-guess it. It used to fall through to "any image card can paint
   // its own media", which reached past a state that had already decided
@@ -1395,7 +1405,7 @@ function ProfileGalleryPreview({
       : null;
   if (previewMediaUrl) {
     return (
-      <View style={{ width: '100%', height, overflow: 'hidden', backgroundColor: '#090914' }}>
+      <View style={{ width: '100%', height, overflow: 'hidden', backgroundColor: theme.colors.surfaceInset }}>
         <StableMediaImage
           url={previewMediaUrl}
           cacheKey={item.previewCacheKey ?? item.id}
@@ -1424,11 +1434,12 @@ function ProfileGalleryPreview({
 }
 
 function ProfileTextPreview({ item, height }: { item: ProfileMediaCard; height: number }) {
-  const accent = item.label === 'Creation' ? appTheme.colors.motion : appTheme.colors.info;
+  const theme = useAppTheme();
+  const accent = item.label === 'Creation' ? theme.colors.motion : theme.colors.info;
   const label = item.label === 'Creation' ? 'Text creation' : 'Text post';
 
   return (
-    <View testID="profile-text-preview" style={{ height, overflow: 'hidden', backgroundColor: appTheme.colors.surfaceInset }}>
+    <View testID="profile-text-preview" style={{ height, overflow: 'hidden', backgroundColor: theme.colors.surfaceInset }}>
       <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 12, paddingTop: 46, paddingBottom: 14 }}>
         <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, backgroundColor: accent }} />
         <View
@@ -1445,7 +1456,7 @@ function ProfileTextPreview({ item, height }: { item: ProfileMediaCard; height: 
         >
           <Text numberOfLines={1} style={{ color: accent, fontSize: 11, fontWeight: '800' }}>{label}</Text>
         </View>
-        <Text numberOfLines={5} style={{ color: '#ffffff', fontSize: 13, lineHeight: 16, fontWeight: '800' }}>
+        <Text numberOfLines={5} style={{ color: theme.colors.text, fontSize: 13, lineHeight: 16, fontWeight: '800' }}>
           {item.previewText || item.title}
         </Text>
       </View>
@@ -1454,11 +1465,12 @@ function ProfileTextPreview({ item, height }: { item: ProfileMediaCard; height: 
 }
 
 function ProfileVideoFallback({ item, height }: { item: ProfileMediaCard; height: number }) {
+  const theme = useAppTheme();
   const label = item.badge ?? 'Video';
   const statusLabel = item.previewStatusLabel ?? (item.label === 'Creation' ? 'Tap to view media' : 'Preview unavailable');
 
   return (
-    <View testID="profile-video-preview-fallback" style={{ height, overflow: 'hidden', backgroundColor: appTheme.colors.surfaceInset }}>
+    <View testID="profile-video-preview-fallback" style={{ height, overflow: 'hidden', backgroundColor: theme.colors.surfaceInset }}>
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 12 }}>
         <View
           style={{
@@ -1467,17 +1479,17 @@ function ProfileVideoFallback({ item, height }: { item: ProfileMediaCard; height
             borderRadius: 21,
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: `${appTheme.colors.video}1f`,
+            backgroundColor: `${theme.colors.video}1f`,
             borderWidth: 1,
-            borderColor: `${appTheme.colors.video}66`,
+            borderColor: `${theme.colors.video}66`,
           }}
         >
-          <Play size={18} color="#ffffff" fill="#ffffff" />
+          <Play size={18} color={theme.colors.video} fill={theme.colors.video} />
         </View>
-        <Text style={{ marginTop: 10, color: '#ffffff', fontSize: 12, fontWeight: '800' }}>{label}</Text>
+        <Text style={{ marginTop: 10, color: theme.colors.text, fontSize: 12, fontWeight: '800' }}>{label}</Text>
         <Text
           numberOfLines={1}
-          style={{ marginTop: 3, color: 'rgba(255,255,255,0.66)', fontSize: 11, fontWeight: '800' }}
+          style={{ marginTop: 3, color: theme.colors.muted, fontSize: 11, fontWeight: '800' }}
         >
           {statusLabel}
         </Text>
@@ -1497,10 +1509,11 @@ function ProfileUnavailableFallback({
   showTitle?: boolean;
   statusLabel?: string;
 }) {
-  const accent = item.label === 'Creation' ? appTheme.colors.motion : appTheme.colors.image;
+  const theme = useAppTheme();
+  const accent = item.label === 'Creation' ? theme.colors.motion : theme.colors.image;
 
   return (
-    <View testID="profile-art-preview-fallback" style={{ height, overflow: 'hidden', backgroundColor: appTheme.colors.surfaceInset }}>
+    <View testID="profile-art-preview-fallback" style={{ height, overflow: 'hidden', backgroundColor: theme.colors.surfaceInset }}>
       <View style={{ flex: 1, justifyContent: 'center', padding: 10 }}>
         <View
           style={{
@@ -1519,13 +1532,13 @@ function ProfileUnavailableFallback({
             : <ImageIcon size={14} color={accent} />}
         </View>
         {showTitle ? (
-          <Text numberOfLines={2} style={{ marginTop: 10, color: '#ffffff', fontSize: 11, lineHeight: 14, fontWeight: '800' }}>
+          <Text numberOfLines={2} style={{ marginTop: 10, color: theme.colors.text, fontSize: 11, lineHeight: 14, fontWeight: '800' }}>
             {item.title}
           </Text>
         ) : null}
         <Text
           numberOfLines={1}
-          style={{ marginTop: showTitle ? 4 : 10, color: 'rgba(255,255,255,0.66)', fontSize: 11, fontWeight: '800' }}
+          style={{ marginTop: showTitle ? 4 : 10, color: theme.colors.muted, fontSize: 11, fontWeight: '800' }}
         >
           {statusLabel ?? item.previewStatusLabel ?? 'Preview unavailable'}
         </Text>

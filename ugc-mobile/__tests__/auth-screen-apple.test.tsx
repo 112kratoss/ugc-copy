@@ -40,7 +40,7 @@ vi.mock('expo-router', () => ({
 
 vi.mock('expo-apple-authentication', () => ({
   AppleAuthenticationButton: ({ ...props }: MockProps) => React.createElement('apple-authentication-button', props),
-  AppleAuthenticationButtonStyle: { WHITE: 'WHITE' },
+  AppleAuthenticationButtonStyle: { WHITE: 'WHITE', BLACK: 'BLACK' },
   AppleAuthenticationButtonType: { SIGN_IN: 'SIGN_IN', SIGN_UP: 'SIGN_UP' },
 }));
 
@@ -107,6 +107,7 @@ vi.mock('@/lib/google-auth', () => ({
 }));
 
 import AuthScreen from '../app/auth';
+import { ThemeScope } from '../lib/theme-context';
 
 describe('AuthScreen Apple sign-in', () => {
   beforeEach(() => {
@@ -205,6 +206,19 @@ describe('AuthScreen Apple sign-in', () => {
 
     expect(dismissTo).toHaveBeenCalledTimes(1);
     expect(dismissTo).toHaveBeenCalledWith('/(tabs)');
+  });
+
+  it('draws the white Apple button on the dark scheme and the black one on the light', () => {
+    let dark!: renderer.ReactTestRenderer;
+    let light!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      dark = renderer.create(<AuthScreen />);
+      light = renderer.create(<ThemeScope scheme="light"><AuthScreen /></ThemeScope>);
+    });
+    const styleOf = (tree: renderer.ReactTestRenderer) =>
+      tree.root.find((node) => String(node.type) === 'apple-authentication-button').props.buttonStyle;
+    expect(styleOf(dark)).toBe('WHITE');
+    expect(styleOf(light)).toBe('BLACK');
   });
 
   it('hides Apple sign-in outside iOS', () => {

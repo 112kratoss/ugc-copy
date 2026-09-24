@@ -23,19 +23,8 @@ import { env } from '@/lib/env';
 import { MIN_HIT_TARGET_PT } from '@/lib/hit-target';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import googleSignInAndroid from '../assets/images/google-signin-android.png';
-
-const workspace = {
-  background: appTheme.colors.background,
-  panel: appTheme.colors.panel,
-  border: appTheme.colors.border,
-  borderStrong: appTheme.colors.borderStrong,
-  text: appTheme.colors.text,
-  muted: appTheme.colors.muted,
-  faint: appTheme.colors.faint,
-  primary: appTheme.colors.primary,
-  onPrimary: appTheme.colors.onPrimary,
-};
 
 /**
  * Sign in with Apple: "Make a Sign in with Apple button no smaller than other
@@ -52,6 +41,7 @@ const THIRD_PARTY_BUTTON_RADIUS = THIRD_PARTY_BUTTON_HEIGHT / 2;
 const GOOGLE_BUTTON_ASPECT = 216 / 48;
 
 export default function AuthScreen() {
+  const theme = useAppTheme();
   const { returnTo, mode: requestedMode, notice: requestedNotice } = useLocalSearchParams<{
     returnTo?: string | string[];
     mode?: string | string[];
@@ -153,7 +143,7 @@ export default function AuthScreen() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: workspace.background }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <KeyboardAvoidingArea iosScrollViewAdjustsInsets>
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
@@ -211,6 +201,7 @@ export default function AuthScreen() {
 }
 
 function AuthHeader() {
+  const theme = useAppTheme();
   return (
     <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
       <Pressable
@@ -223,11 +214,11 @@ function AuthHeader() {
           borderRadius: 24,
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: appTheme.colors.panelSoft,
+          backgroundColor: theme.colors.panelSoft,
           opacity: pressed ? appTheme.opacity.pressed : 1,
         })}
       >
-        <CloseGlyph size={appTheme.icon.feature} color={workspace.text} />
+        <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
       </Pressable>
       <View style={{ flex: 1, alignItems: 'center', flexDirection: 'row', justifyContent: 'center' }}>
         <BrandLockup />
@@ -293,6 +284,7 @@ function AuthPanel({
   showAppleSignIn: boolean;
   showGoogleSignIn: boolean;
 }) {
+  const theme = useAppTheme();
   const passwordRef = useRef<TextInput | null>(null);
 
   return (
@@ -301,17 +293,17 @@ function AuthPanel({
         borderRadius: appTheme.radii.xl,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: workspace.border,
-        backgroundColor: workspace.panel,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.panel,
         padding: 18,
         gap: 16,
       }}
     >
       <View style={{ gap: 5 }}>
-        <Text accessibilityRole="header" selectable style={{ color: workspace.text, fontSize: 25, lineHeight: 31, fontWeight: '700' }}>
+        <Text accessibilityRole="header" selectable style={{ color: theme.colors.text, fontSize: 25, lineHeight: 31, fontWeight: '700' }}>
           {mode === 'login' ? 'Welcome back' : 'Create your account'}
         </Text>
-        <Text selectable style={{ color: workspace.muted, fontSize: 14, lineHeight: 21, fontWeight: '400' }}>
+        <Text selectable style={{ color: theme.colors.muted, fontSize: 14, lineHeight: 21, fontWeight: '400' }}>
           {mode === 'login'
             ? 'Open your workspace and continue creating.'
             : signUpSubtitle(showAppleSignIn, showGoogleSignIn)}
@@ -331,7 +323,7 @@ function AuthPanel({
         <View style={{ gap: 10 }}>
           <WorkspaceInput
             label="Email"
-            icon={<Mail size={appTheme.icon.compact} color={workspace.primary} />}
+            icon={<Mail size={appTheme.icon.compact} color={theme.colors.primary} />}
             autoCapitalize="none"
             autoCorrect={false}
             spellCheck={false}
@@ -355,14 +347,14 @@ function AuthPanel({
               // than left to `clearButtonMode`, which is iOS-only — this is the
               // same control on both platforms.
               <FieldButton label="Clear email" onPress={() => onEmailChange('')}>
-                <X size={appTheme.icon.compact} color={workspace.muted} />
+                <X size={appTheme.icon.compact} color={theme.colors.muted} />
               </FieldButton>
             ) : null}
           />
           <WorkspaceInput
             label="Password"
             inputRef={passwordRef}
-            icon={<LockKeyhole size={appTheme.icon.compact} color={workspace.primary} />}
+            icon={<LockKeyhole size={appTheme.icon.compact} color={theme.colors.primary} />}
             secureTextEntry={!showPassword}
             autoCapitalize="none"
             autoCorrect={false}
@@ -384,8 +376,8 @@ function AuthPanel({
                     relying solely on color to … communicate essential
                     information", the rule S13 applied to the profile grid. */}
                 {showPassword
-                  ? <EyeOff size={appTheme.icon.compact} color={workspace.primary} />
-                  : <Eye size={appTheme.icon.compact} color={workspace.muted} />}
+                  ? <EyeOff size={appTheme.icon.compact} color={theme.colors.primary} />
+                  : <Eye size={appTheme.icon.compact} color={theme.colors.muted} />}
               </FieldButton>
             }
           />
@@ -422,7 +414,11 @@ function AuthPanel({
               buttonType={mode === 'signup'
                 ? AppleAuthentication.AppleAuthenticationButtonType.SIGN_UP
                 : AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
-              buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+              // Apple's rule for the system button: white on a dark background,
+              // black on a light one.
+              buttonStyle={theme.scheme === 'dark'
+                ? AppleAuthentication.AppleAuthenticationButtonStyle.WHITE
+                : AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
               cornerRadius={THIRD_PARTY_BUTTON_RADIUS}
               onPress={onAppleSignIn}
               style={{ width: '100%', height: THIRD_PARTY_BUTTON_HEIGHT }}
@@ -456,7 +452,7 @@ function AuthPanel({
             })}
           >
             {isGoogleSubmitting ? (
-              <ActivityIndicator color={workspace.text} />
+              <ActivityIndicator color={theme.colors.text} />
             ) : (
               <Image
                 accessibilityIgnoresInvertColors
@@ -473,7 +469,7 @@ function AuthPanel({
       ) : null}
 
       <View style={{ alignItems: 'center', gap: 6 }}>
-        <Text style={{ color: workspace.faint, fontSize: 11, lineHeight: 17, textAlign: 'center' }}>
+        <Text style={{ color: theme.colors.faint, fontSize: 11, lineHeight: 17, textAlign: 'center' }}>
           By continuing, you agree to the Magicbooklet terms and acknowledge the privacy policy.
         </Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
@@ -484,7 +480,7 @@ function AuthPanel({
             hitSlop={8}
             style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}
           >
-            <Text style={{ color: workspace.primary, fontSize: 12, fontWeight: '700' }}>Privacy Policy</Text>
+            <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: '700' }}>Privacy Policy</Text>
           </Pressable>
           <Pressable
             accessibilityRole="link"
@@ -493,7 +489,7 @@ function AuthPanel({
             hitSlop={8}
             style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}
           >
-            <Text style={{ color: workspace.primary, fontSize: 12, fontWeight: '700' }}>Terms of Service</Text>
+            <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: '700' }}>Terms of Service</Text>
           </Pressable>
         </View>
       </View>
@@ -502,11 +498,12 @@ function AuthPanel({
 }
 
 function OrContinueWith() {
+  const theme = useAppTheme();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-      <View style={{ flex: 1, height: 1, backgroundColor: workspace.border }} />
-      <Text style={{ color: workspace.faint, fontSize: 12, fontWeight: '600' }}>or continue with</Text>
-      <View style={{ flex: 1, height: 1, backgroundColor: workspace.border }} />
+      <View style={{ flex: 1, height: 1, backgroundColor: theme.colors.border }} />
+      <Text style={{ color: theme.colors.faint, fontSize: 12, fontWeight: '600' }}>or continue with</Text>
+      <View style={{ flex: 1, height: 1, backgroundColor: theme.colors.border }} />
     </View>
   );
 }
@@ -519,8 +516,9 @@ function OrContinueWith() {
  * appearance for an element, apply it throughout") broken on the front door.
  */
 function ModeTabs({ mode, onChange }: { mode: 'login' | 'signup'; onChange: (mode: 'login' | 'signup') => void }) {
+  const theme = useAppTheme();
   return (
-    <View style={{ flexDirection: 'row', gap: 4, padding: 4, borderRadius: 18, backgroundColor: appTheme.colors.surfaceInset, borderWidth: 1, borderColor: workspace.border }}>
+    <View style={{ flexDirection: 'row', gap: 4, padding: 4, borderRadius: 18, backgroundColor: theme.colors.surfaceInset, borderWidth: 1, borderColor: theme.colors.border }}>
       {(['login', 'signup'] as const).map((item) => {
         const active = item === mode;
         return (
@@ -536,11 +534,11 @@ function ModeTabs({ mode, onChange }: { mode: 'login' | 'signup'; onChange: (mod
               borderRadius: 14,
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: active ? workspace.primary : 'transparent',
+              backgroundColor: active ? theme.colors.primaryFill : 'transparent',
               opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
-            <Text numberOfLines={1} style={{ color: active ? workspace.onPrimary : workspace.muted, fontSize: 13, fontWeight: '700' }}>
+            <Text numberOfLines={1} style={{ color: active ? theme.colors.onPrimary : theme.colors.muted, fontSize: 13, fontWeight: '700' }}>
               {item === 'login' ? 'Sign in' : 'Sign up'}
             </Text>
           </Pressable>
@@ -588,9 +586,10 @@ function WorkspaceInput({
   trailingIcon?: React.ReactNode;
   inputRef?: React.RefObject<TextInput | null>;
 }) {
+  const theme = useAppTheme();
   return (
     <View style={{ gap: appTheme.spacing.compact }}>
-      <Text style={{ color: appTheme.colors.textSecondary, fontSize: 13, lineHeight: 18, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase' }}>
+      <Text style={{ color: theme.colors.textSecondary, fontSize: 13, lineHeight: 18, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase' }}>
         {label}
       </Text>
       <View
@@ -599,8 +598,8 @@ function WorkspaceInput({
           borderRadius: 18,
           borderCurve: 'continuous',
           borderWidth: 1,
-          borderColor: workspace.borderStrong,
-          backgroundColor: appTheme.colors.surfaceInset,
+          borderColor: theme.colors.borderStrong,
+          backgroundColor: theme.colors.surfaceInset,
           flexDirection: 'row',
           alignItems: 'center',
           paddingLeft: 13,
@@ -608,18 +607,18 @@ function WorkspaceInput({
           gap: 10,
         }}
       >
-        <View style={{ width: 32, height: 32, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.pressed }}>
+        <View style={{ width: 32, height: 32, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.pressed }}>
           {icon}
         </View>
         <TextInput
           ref={inputRef}
           accessibilityLabel={label}
-          placeholderTextColor={workspace.faint}
-          selectionColor={workspace.primary}
-          cursorColor={workspace.primary}
+          placeholderTextColor={theme.colors.faint}
+          selectionColor={theme.colors.primary}
+          cursorColor={theme.colors.primary}
           textAlignVertical="center"
           style={{
-            color: workspace.text,
+            color: theme.colors.text,
             fontSize: 15,
             fontWeight: '500',
             outlineColor: 'transparent',
@@ -647,7 +646,8 @@ function InlineNotice({ title, body, tone = 'danger' }: {
   body: string;
   tone?: 'danger' | 'info';
 }) {
-  const palette = tone === 'info' ? appTheme.semantic.info : appTheme.semantic.danger;
+  const theme = useAppTheme();
+  const palette = tone === 'info' ? theme.semantic.info : theme.semantic.danger;
   return (
     <View
       accessibilityRole={tone === 'info' ? 'summary' : 'alert'}
@@ -665,7 +665,7 @@ function InlineNotice({ title, body, tone = 'danger' }: {
       <Text selectable style={{ color: palette.foreground, fontSize: 14, lineHeight: 20, fontWeight: '700' }}>
         {title}
       </Text>
-      <Text selectable style={{ color: workspace.muted, fontSize: 14, lineHeight: 19, fontWeight: '400' }}>
+      <Text selectable style={{ color: theme.colors.muted, fontSize: 14, lineHeight: 19, fontWeight: '400' }}>
         {body}
       </Text>
     </View>

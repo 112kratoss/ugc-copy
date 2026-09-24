@@ -2,6 +2,7 @@ import type { ComponentType } from 'react';
 import { View } from 'react-native';
 
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 type FeedMediaPlateGlyph = ComponentType<{ size?: number; color?: string; fill?: string }>;
 
@@ -33,6 +34,7 @@ export function FeedMediaPlate({
   /** Solid glyphs — the play triangle — read as a shape rather than an outline. */
   filled?: boolean;
 }) {
+  const theme = useAppTheme();
   return (
     <View
       style={{
@@ -48,8 +50,8 @@ export function FeedMediaPlate({
     >
       <Glyph
         size={appTheme.icon.default}
-        color={appTheme.colors.text}
-        {...(filled ? { fill: appTheme.colors.text } : {})}
+        color={theme.colors.text}
+        {...(filled ? { fill: theme.colors.text } : {})}
       />
     </View>
   );

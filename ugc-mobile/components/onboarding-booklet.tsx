@@ -5,7 +5,8 @@ import type { ComponentType } from 'react';
 import { Pressable, View } from 'react-native';
 
 import { AppText, Kicker, PrimaryButton } from '@/components/ui';
-import { appTheme } from '@/lib/theme';
+import { appTheme, type ThemeColorName } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import type { OnboardingGoal } from '@/lib/types';
 
 type IconComponent = ComponentType<{
@@ -18,7 +19,8 @@ export type BookletGoal = {
   id: OnboardingGoal;
   label: string;
   body: string;
-  color: string;
+  /** A palette colour name, resolved against the scheme when the goal draws. */
+  tone: ThemeColorName;
   image: number;
   imageLabel: string;
   icon: IconComponent;
@@ -39,6 +41,7 @@ export function OnboardingBookletGoal({
   onContinue: () => void;
   onBack: () => void;
 }) {
+  const theme = useAppTheme();
   const selected = goals.find((item) => item.id === selectedGoal) ?? goals[0];
   const artworkWidth = availableWidth + 32;
   const artworkHeight = Math.min(220, artworkWidth * (2 / 3));
@@ -73,7 +76,7 @@ export function OnboardingBookletGoal({
         />
         <LinearGradient
           pointerEvents="none"
-          colors={['rgba(16,16,18,0)', 'rgba(16,16,18,0.26)', appTheme.colors.background]}
+          colors={['rgba(16,16,18,0)', 'rgba(16,16,18,0.26)', theme.colors.background]}
           locations={[0.45, 0.72, 1]}
           style={{ position: 'absolute', inset: 0 }}
         />
@@ -97,8 +100,8 @@ export function OnboardingBookletGoal({
                   borderRadius: 18,
                   borderCurve: 'continuous',
                   borderWidth: isSelected ? 2 : 1,
-                  borderColor: isSelected ? item.color : appTheme.colors.borderSubtle,
-                  backgroundColor: isSelected ? `${item.color}1f` : appTheme.colors.surface,
+                  borderColor: isSelected ? theme.colors[item.tone] : theme.colors.borderSubtle,
+                  backgroundColor: isSelected ? `${theme.colors[item.tone]}1f` : theme.colors.surface,
                   alignItems: 'center',
                   justifyContent: 'center',
                   gap: 7,
@@ -106,7 +109,7 @@ export function OnboardingBookletGoal({
                 })}
               >
                 <View style={{ position: 'relative' }}>
-                  <Icon size={24} color={isSelected ? item.color : appTheme.colors.muted} />
+                  <Icon size={24} color={isSelected ? theme.colors[item.tone] : theme.colors.muted} />
                   {isSelected ? (
                     <View
                       style={{
@@ -116,12 +119,12 @@ export function OnboardingBookletGoal({
                         width: 20,
                         height: 20,
                         borderRadius: 10,
-                        backgroundColor: item.color,
+                        backgroundColor: theme.colors[item.tone],
                         alignItems: 'center',
                         justifyContent: 'center',
                       }}
                     >
-                      <Check size={appTheme.icon.xs} color={appTheme.colors.onPrimary} />
+                      <Check size={appTheme.icon.xs} color={theme.colors.onPrimary} />
                     </View>
                   ) : null}
                 </View>

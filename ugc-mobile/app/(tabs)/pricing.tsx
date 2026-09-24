@@ -37,6 +37,7 @@ import {
 } from '@/lib/pricing-view-model';
 import { MOBILE_PRICING_PLANS, formatCreditAmount, type MobilePricingPlan, type PricingPlanId } from '@/lib/pricing';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 function packageProductId(item: PurchasesPackage) {
   return item.product.identifier;
@@ -55,6 +56,7 @@ function PricingPlanCard({
   width: number;
   onPress: () => void;
 }) {
+  const theme = useAppTheme();
   const SelectionIcon = selected ? CheckCircle2 : Circle;
 
   return (
@@ -69,10 +71,10 @@ function PricingPlanCard({
         justifyContent: 'space-between',
         gap: appTheme.spacing.gap,
         borderWidth: 1,
-        borderColor: selected ? `${appTheme.colors.commerce}88` : appTheme.colors.borderSubtle,
+        borderColor: selected ? `${theme.colors.commerce}88` : theme.colors.borderSubtle,
         borderRadius: appTheme.radii.xl,
         borderCurve: 'continuous',
-        backgroundColor: selected ? `${appTheme.colors.commerce}16` : appTheme.colors.panel,
+        backgroundColor: selected ? `${theme.colors.commerce}16` : theme.colors.panel,
         opacity: pressed ? appTheme.opacity.pressed : 1,
         padding: appTheme.spacing.card,
       })}
@@ -85,7 +87,7 @@ function PricingPlanCard({
           {plan.popular ? <Pill label="Popular" accent="commerce" style={{ minHeight: 28, paddingVertical: 4 }} /> : null}
         </View>
         <SelectionIcon
-          color={selected ? appTheme.colors.commerce : appTheme.colors.faint}
+          color={selected ? theme.colors.commerce : theme.colors.faint}
           size={appTheme.icon.default}
         />
       </View>

@@ -5,7 +5,7 @@
     "version": "0.1.5",
     "icon": "./assets/images/icon.png",
     "scheme": "magicbooklet",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "automatic",
     "updates": {
       "url": "https://u.expo.dev/80e0b101-06da-4b8c-a31f-60c90ba9bdfb",
       "fallbackToCacheTimeout": 0
@@ -13,13 +13,17 @@
     "runtimeVersion": {
       "policy": "fingerprint"
     },
-    "splash": {
-      "image": "./assets/images/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#000000"
-    },
     "ios": {
       "supportsTablet": false,
+      "splash": {
+        "image": "./assets/images/splash-icon.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#fbf8f4",
+        "dark": {
+          "image": "./assets/images/splash-icon.png",
+          "backgroundColor": "#000000"
+        }
+      },
       "bundleIdentifier": "com.magicbooklet.mobile",
       "usesAppleSignIn": true,
       "associatedDomains": [
@@ -54,6 +58,15 @@
       }
     },
     "android": {
+      "splash": {
+        "image": "./assets/images/splash-icon.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#fbf8f4",
+        "dark": {
+          "image": "./assets/images/splash-icon.png",
+          "backgroundColor": "#000000"
+        }
+      },
       "package": "com.magicbooklet.mobile",
       "allowBackup": false,
       "googleServicesFile": "./google-services.json",

@@ -7,7 +7,7 @@ import { SecondaryButton } from '@/components/ui';
 import { useNativePreviewPlayback } from '@/lib/use-native-preview-playback';
 import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
-import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 type VideoPreviewProps = {
   url: string;
@@ -69,6 +69,7 @@ function VideoPreviewSession(props: VideoPreviewProps) {
 function VideoPreviewAttempt({
   url, style, nativeControls = true, autoPlay = false, contentFit, onRetry, renewing, renewalFailed,
 }: VideoPreviewProps & { onRetry: () => void; renewing: boolean; renewalFailed: boolean }) {
+  const theme = useAppTheme();
   const isFocused = useIsFocused();
   const { source } = useMediaSource(url);
   const previousPlayer = useRef<VideoPlayer | null>(null);
@@ -121,13 +122,13 @@ function VideoPreviewAttempt({
       />
       {!timedOut && (status === 'loading' || status === 'idle') ? (
         <View pointerEvents="none" style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
-          <ActivityIndicator accessibilityLabel="Loading video" color={appTheme.colors.primary} />
+          <ActivityIndicator accessibilityLabel="Loading video" color={theme.colors.primary} />
         </View>
       ) : null}
       {timedOut || status === 'error' ? (
         <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-          <View style={{ backgroundColor: appTheme.colors.panel, borderRadius: 20, padding: 20, gap: 12 }}>
-            <Text accessibilityRole="alert" style={{ color: appTheme.colors.text, fontSize: 16, textAlign: 'center' }}>
+          <View style={{ backgroundColor: theme.colors.panel, borderRadius: 20, padding: 20, gap: 12 }}>
+            <Text accessibilityRole="alert" style={{ color: theme.colors.text, fontSize: 16, textAlign: 'center' }}>
               {renewalFailed ? 'Couldn’t refresh video. Try again.' : 'Video couldn’t load'}
             </Text>
             <SecondaryButton label={renewing ? 'Refreshing video…' : 'Retry video'} disabled={renewing} onPress={onRetry} />

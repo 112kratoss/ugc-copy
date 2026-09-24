@@ -5,7 +5,9 @@ import { FlatList, Platform, Pressable, Text, View } from 'react-native';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { FeedMediaPlate } from '@/components/feed-media-plate';
-import { appTheme } from '@/lib/theme';
+import { hexWithAlpha } from '@/lib/eased-fade';
+import { appTheme, mediaColors } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { IMMERSIVE_HORIZONTAL_LIST_TUNING } from '@/lib/media-performance';
 import { useReducedMotion } from '@/lib/motion';
@@ -135,6 +137,7 @@ function ShowcaseMediaCarousel({
   diagnosticsSurface,
   width,
 }: ShowcaseMediaPreviewProps) {
+  const theme = useAppTheme();
   const [currentIndex, setCurrentIndex] = useState(0);
   const reportDragging = useCarouselDragReporter(onScrollToggle);
 
@@ -202,14 +205,14 @@ function ShowcaseMediaCarousel({
           gap: 4,
           borderRadius: 12,
           borderWidth: 1,
-          borderColor: 'rgba(255,255,255,0.1)',
-          backgroundColor: 'rgba(3,3,6,0.68)',
+          borderColor: hexWithAlpha(mediaColors.onMedia, 0.1),
+          backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.68),
           paddingHorizontal: 8,
           paddingVertical: 1,
         }}
       >
-        <Images size={appTheme.icon.xs} color={appTheme.colors.text} />
-        <Text style={{ color: appTheme.colors.text, ...appTheme.type.caption, fontWeight: '800' }}>
+        <Images size={appTheme.icon.xs} color={mediaColors.onMedia} />
+        <Text style={{ color: mediaColors.onMedia, ...appTheme.type.caption, fontWeight: '800' }}>
           {currentIndex + 1}/{mediaItems.length}
         </Text>
       </View>
@@ -233,7 +236,7 @@ function ShowcaseMediaCarousel({
               height: 5,
               width: index === currentIndex ? 12 : 5,
               borderRadius: 2.5,
-              backgroundColor: index === currentIndex ? '#ffffff' : 'rgba(255,255,255,0.45)',
+              backgroundColor: index === currentIndex ? mediaColors.onMedia : hexWithAlpha(mediaColors.onMedia, 0.45),
             }}
           />
         ))}
@@ -271,6 +274,7 @@ function ShowcaseMediaSlide({
   diagnosticsSurface?: string;
   width: number;
 }) {
+  const theme = useAppTheme();
   const previewUrl = getShowcaseMediaPreviewUrl(item);
   const [failedPreviewUrl, setFailedPreviewUrl] = useState<string | null>(null);
   const usablePreviewUrl = previewUrl && previewUrl !== failedPreviewUrl ? previewUrl : null;
@@ -287,10 +291,10 @@ function ShowcaseMediaSlide({
     return (
       <View
         testID="showcase-media-unavailable"
-        style={{ width, height, borderRadius: radius, overflow: 'hidden', backgroundColor: appTheme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center', padding: 16 }}
+        style={{ width, height, borderRadius: radius, overflow: 'hidden', backgroundColor: theme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center', padding: 16 }}
       >
-        <Text style={{ color: appTheme.colors.text, fontSize: 14, fontWeight: '800', textAlign: 'center' }}>This file is no longer available</Text>
-        <Text style={{ color: appTheme.colors.muted, fontSize: 12, marginTop: 6, textAlign: 'center' }}>Its only copy expired at the provider before it could be saved.</Text>
+        <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: '800', textAlign: 'center' }}>This file is no longer available</Text>
+        <Text style={{ color: theme.colors.muted, fontSize: 12, marginTop: 6, textAlign: 'center' }}>Its only copy expired at the provider before it could be saved.</Text>
       </View>
     );
   }
@@ -338,7 +342,7 @@ function ShowcaseMediaSlide({
           borderCurve: 'continuous',
           borderWidth: 1,
           borderColor: `${accent}4d`,
-          backgroundColor: '#050506',
+          backgroundColor: theme.colors.mediaPlaceholder,
           alignItems: 'center',
           justifyContent: 'center',
         }}

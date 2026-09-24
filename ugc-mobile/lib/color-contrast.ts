@@ -34,3 +34,12 @@ export function contrastRatio(foreground: string, background: string) {
 export function maxBackgroundLuminance(foreground: string, minimum = MIN_BODY_CONTRAST) {
   return (relativeLuminance(foreground) + 0.05) / minimum - 0.05;
 }
+
+/**
+ * The darkest a background may get while a darker `foreground` still clears
+ * `minimum` — the same inversion from the other side, for a light surface
+ * carrying dark labels.
+ */
+export function minBackgroundLuminance(foreground: string, minimum = MIN_BODY_CONTRAST) {
+  return (relativeLuminance(foreground) + 0.05) * minimum - 0.05;
+}

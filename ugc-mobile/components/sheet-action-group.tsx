@@ -2,6 +2,7 @@ import { Children, Fragment, type ComponentType } from 'react';
 import { Pressable, Text, View } from 'react-native';
 
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 type SheetActionIcon = ComponentType<{ color?: string; size?: number }>;
 
@@ -17,6 +18,7 @@ export function SheetActionGroup({
   children: React.ReactNode;
   testID?: string;
 }) {
+  const theme = useAppTheme();
   const rows = Children.toArray(children);
 
   return (
@@ -26,8 +28,8 @@ export function SheetActionGroup({
         borderRadius: appTheme.radii.lg,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: appTheme.colors.borderSubtle,
-        backgroundColor: appTheme.colors.panelSoft,
+        borderColor: theme.colors.borderSubtle,
+        backgroundColor: theme.colors.panelSoft,
         overflow: 'hidden',
       }}
     >
@@ -38,7 +40,7 @@ export function SheetActionGroup({
               style={{
                 height: 1,
                 marginLeft: appTheme.spacing.card + ACTION_ICON_WELL + ACTION_ICON_GAP,
-                backgroundColor: appTheme.colors.border,
+                backgroundColor: theme.colors.border,
               }}
             />
           ) : null}
@@ -64,6 +66,7 @@ export function SheetActionRow({
   onPress: () => void;
   tone?: 'default' | 'danger';
 }) {
+  const theme = useAppTheme();
   const danger = tone === 'danger';
 
   return (
@@ -81,7 +84,7 @@ export function SheetActionRow({
         gap: ACTION_ICON_GAP,
         paddingHorizontal: appTheme.spacing.card,
         paddingVertical: appTheme.spacing.gap,
-        backgroundColor: pressed ? appTheme.colors.surfaceStrong : 'transparent',
+        backgroundColor: pressed ? theme.colors.surfaceStrong : 'transparent',
         opacity: disabled ? appTheme.opacity.disabled : 1,
       })}
     >
@@ -92,16 +95,16 @@ export function SheetActionRow({
           borderRadius: ACTION_ICON_WELL / 2,
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: danger ? appTheme.semantic.danger.background : appTheme.colors.surfaceStrong,
+          backgroundColor: danger ? theme.semantic.danger.background : theme.colors.surfaceStrong,
         }}
       >
-        <Icon size={appTheme.icon.default} color={danger ? appTheme.colors.danger : appTheme.colors.textSecondary} />
+        <Icon size={appTheme.icon.default} color={danger ? theme.colors.danger : theme.colors.textSecondary} />
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-        <Text style={{ color: danger ? appTheme.colors.danger : appTheme.colors.text, ...appTheme.type.body, fontWeight: '700' }}>
+        <Text style={{ color: danger ? theme.colors.danger : theme.colors.text, ...appTheme.type.body, fontWeight: '700' }}>
           {label}
         </Text>
-        <Text style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>
+        <Text style={{ color: theme.colors.muted, ...appTheme.type.caption }}>
           {body}
         </Text>
       </View>

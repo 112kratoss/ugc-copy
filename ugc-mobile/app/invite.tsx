@@ -22,6 +22,7 @@ import { ShareGlyph } from '@/lib/platform-glyphs';
 import { formatCreditAmount } from '@/lib/pricing';
 import { normalizeReferralCode } from '@/lib/referral-attribution';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import type { ReferralReward, ReferralStats } from '@/lib/types';
 
 const DEFAULT_INVITER_PERCENT = 5;
@@ -29,6 +30,7 @@ const DEFAULT_INVITEE_PERCENT = 5;
 const REFERRAL_DISCLOSURE = 'Referral link — I may earn bonus credits if you top up.';
 
 export default function InviteScreen() {
+  const theme = useAppTheme();
   const { user, api } = useAuth();
   const overviewQuery = useQuery({
     queryKey: ['referrals-me', user?.id],
@@ -116,8 +118,8 @@ export default function InviteScreen() {
 
       <Card accent="commerce" padding="lg">
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-          <View style={{ width: 58, height: 58, borderRadius: 29, alignItems: 'center', justifyContent: 'center', backgroundColor: `${appTheme.colors.commerce}1f` }}>
-            <Gift size={appTheme.icon.feature} color={appTheme.colors.commerce} />
+          <View style={{ width: 58, height: 58, borderRadius: 29, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.commerce}1f` }}>
+            <Gift size={appTheme.icon.feature} color={theme.colors.commerce} />
           </View>
           <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
             <Kicker color="commerce">Share the magic</Kicker>
@@ -161,10 +163,10 @@ export default function InviteScreen() {
 
       <Card variant="soft">
         <AppText variant="cardTitle">How rewards work</AppText>
-        <RuleRow icon={<UserPlus size={appTheme.icon.compact} color={appTheme.colors.info} />} text={`A new friend joins within ${program?.attributionWindowDays ?? 30} days of opening your link.`} />
-        <RuleRow icon={<ShoppingBag size={appTheme.icon.compact} color={appTheme.colors.commerce} />} text={`They receive ${inviteePercent}% bonus credits on their first verified credit-pack purchase.`} />
-        <RuleRow icon={<CheckCircle2 size={appTheme.icon.compact} color={appTheme.colors.success} />} text={`You receive ${inviterPercent}% bonus credits on each verified credit-pack purchase they make.`} />
-        <RuleRow icon={<RotateCcw size={appTheme.icon.compact} color={appTheme.colors.warning} />} text="Refunded or disputed purchases reverse the matching bonus credits." />
+        <RuleRow icon={<UserPlus size={appTheme.icon.compact} color={theme.colors.info} />} text={`A new friend joins within ${program?.attributionWindowDays ?? 30} days of opening your link.`} />
+        <RuleRow icon={<ShoppingBag size={appTheme.icon.compact} color={theme.colors.commerce} />} text={`They receive ${inviteePercent}% bonus credits on their first verified credit-pack purchase.`} />
+        <RuleRow icon={<CheckCircle2 size={appTheme.icon.compact} color={theme.colors.success} />} text={`You receive ${inviterPercent}% bonus credits on each verified credit-pack purchase they make.`} />
+        <RuleRow icon={<RotateCcw size={appTheme.icon.compact} color={theme.colors.warning} />} text="Refunded or disputed purchases reverse the matching bonus credits." />
         <AppText variant="caption" color="faint">Bonus credits are for creation tools, have no cash value, and cannot unlock marketplace resources.</AppText>
       </Card>
     </Screen>
@@ -172,6 +174,7 @@ export default function InviteScreen() {
 }
 
 function SignedOutInvite() {
+  const theme = useAppTheme();
   const [codeInput, setCodeInput] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -194,8 +197,8 @@ function SignedOutInvite() {
       />
       <Card accent="commerce" padding="lg">
         <View style={{ alignItems: 'center', gap: 12, paddingVertical: 8 }}>
-          <View style={{ width: 68, height: 68, borderRadius: 34, alignItems: 'center', justifyContent: 'center', backgroundColor: `${appTheme.colors.commerce}1f` }}>
-            <Gift size={32} color={appTheme.colors.commerce} />
+          <View style={{ width: 68, height: 68, borderRadius: 34, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.commerce}1f` }}>
+            <Gift size={32} color={theme.colors.commerce} />
           </View>
           <AppText variant="sectionTitle" style={{ textAlign: 'center' }}>Friends create better together</AppText>
           <AppText variant="bodySm" color="muted" style={{ textAlign: 'center' }}>
@@ -234,11 +237,12 @@ function SignedOutInvite() {
 }
 
 function ReferralMetrics({ stats }: { stats: ReferralStats }) {
+  const theme = useAppTheme();
   const metrics = [
-    { label: 'Link visits', value: stats.visits, icon: ShareGlyph, color: appTheme.colors.info },
-    { label: 'Friends joined', value: stats.signups, icon: UsersRound, color: appTheme.colors.primary },
-    { label: 'Purchasers', value: stats.purchasers, icon: ShoppingBag, color: appTheme.colors.commerce },
-    { label: 'Credits earned', value: stats.creditsEarned, icon: Gift, color: appTheme.colors.success },
+    { label: 'Link visits', value: stats.visits, icon: ShareGlyph, color: theme.colors.info },
+    { label: 'Friends joined', value: stats.signups, icon: UsersRound, color: theme.colors.primary },
+    { label: 'Purchasers', value: stats.purchasers, icon: ShoppingBag, color: theme.colors.commerce },
+    { label: 'Credits earned', value: stats.creditsEarned, icon: Gift, color: theme.colors.success },
   ];
 
   return (
@@ -266,6 +270,7 @@ function ReferralMetrics({ stats }: { stats: ReferralStats }) {
 }
 
 function RewardActivity({ rewards }: { rewards: ReferralReward[] }) {
+  const theme = useAppTheme();
   return (
     <View style={{ gap: appTheme.spacing.gap }}>
       <AppText variant="sectionTitle">Recent rewards</AppText>
@@ -276,10 +281,10 @@ function RewardActivity({ rewards }: { rewards: ReferralReward[] }) {
           {rewards.map((reward, index) => (
             <View key={reward.id}>
               <View accessible accessibilityLabel={`${reward.status === 'reversed' ? 'Reversed' : 'Earned'} ${formatCreditAmount(reward.credits)} credits`} style={{ minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 }}>
-                <View style={{ width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: reward.status === 'reversed' ? appTheme.semantic.warning.background : appTheme.semantic.success.background }}>
+                <View style={{ width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: reward.status === 'reversed' ? theme.semantic.warning.background : theme.semantic.success.background }}>
                   {reward.status === 'reversed'
-                    ? <RotateCcw size={18} color={appTheme.colors.warning} />
-                    : <Gift size={18} color={appTheme.colors.success} />}
+                    ? <RotateCcw size={18} color={theme.colors.warning} />
+                    : <Gift size={18} color={theme.colors.success} />}
                 </View>
                 <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
                   <AppText variant="label">{reward.kind === 'invitee_first_purchase' ? 'Welcome bonus' : 'Friend top-up'}</AppText>
@@ -289,7 +294,7 @@ function RewardActivity({ rewards }: { rewards: ReferralReward[] }) {
                   {reward.status === 'reversed' ? '-' : '+'}{formatCreditAmount(reward.credits)}
                 </AppText>
               </View>
-              {index < rewards.length - 1 ? <View style={{ height: 1, backgroundColor: appTheme.colors.borderSubtle }} /> : null}
+              {index < rewards.length - 1 ? <View style={{ height: 1, backgroundColor: theme.colors.borderSubtle }} /> : null}
             </View>
           ))}
         </Card>
@@ -299,9 +304,10 @@ function RewardActivity({ rewards }: { rewards: ReferralReward[] }) {
 }
 
 function RuleRow({ icon, text }: { icon: React.ReactNode; text: string }) {
+  const theme = useAppTheme();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
-      <View style={{ width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.surfaceStrong }}>{icon}</View>
+      <View style={{ width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>{icon}</View>
       <AppText variant="bodySm" color="textSecondary" style={{ flex: 1, paddingTop: 6 }}>{text}</AppText>
     </View>
   );

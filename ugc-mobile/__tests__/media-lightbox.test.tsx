@@ -6,6 +6,9 @@ import { describe, expect, it, vi } from 'vitest';
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
 vi.mock('@react-navigation/native', () => ({ useIsFocused: () => true }));
+// The lightbox raises a light-content status bar over its dark stage; the bar
+// itself is platform chrome, not what this file tests.
+vi.mock('expo-status-bar', () => ({ StatusBar: () => null }));
 
 function resolvePressableStyle(style: unknown) {
   return typeof style === 'function'

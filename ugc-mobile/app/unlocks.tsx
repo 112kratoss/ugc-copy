@@ -9,6 +9,7 @@ import { CardListSkeleton } from '@/components/skeleton';
 import { AppText, Card, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import {
   formatUnlockDate,
   formatUnlockPrice,
@@ -153,6 +154,7 @@ const THUMBNAIL_SIZE = 56;
  * placeholder colour sits behind the image so a slow load is never a hole.
  */
 function UnlockThumbnail({ uri }: { uri: string | null }) {
+  const theme = useAppTheme();
   const [failed, setFailed] = useState(false);
   const showPlaceholder = !uri || failed;
 
@@ -166,13 +168,13 @@ function UnlockThumbnail({ uri }: { uri: string | null }) {
         overflow: 'hidden',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: appTheme.colors.panelSoft,
+        backgroundColor: theme.colors.panelSoft,
       }}
     >
       {/* The icon is the base layer rather than an either/or branch: an image
           that is still loading — or one that quietly resolves to nothing
           without ever firing onError — would otherwise leave a blank tile. */}
-      <PackageOpen size={20} color={appTheme.colors.muted} />
+      <PackageOpen size={20} color={theme.colors.muted} />
       {showPlaceholder ? null : (
         <Image
           accessibilityIgnoresInvertColors

@@ -1,3 +1,4 @@
+import { accentFill } from '@/lib/theme';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { router } from 'expo-router';
@@ -172,7 +173,7 @@ async function configureAndroidChannel() {
     name: 'Default',
     importance: Notifications.AndroidImportance.DEFAULT,
     vibrationPattern: [0, 250, 250, 250],
-    lightColor: '#ff7a59',
+    lightColor: accentFill('primary'),
   });
 }
 

@@ -14,7 +14,8 @@ import {
 } from '@/lib/profile-feed-card-view-model';
 import { mediaItemAspectRatio, showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
 import { ShareGlyph } from '@/lib/platform-glyphs';
-import { accentColor, appTheme } from '@/lib/theme';
+import { accentColor, appTheme, type ThemeColors } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import { getViewerActionSlots, type ViewerStateTone } from '@/lib/viewer-actions';
 
 export const ProfileFeedCardView = memo(function ProfileFeedCardView({
@@ -42,7 +43,8 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
   onActionsOpen: () => void;
   onAction: (action: string) => void;
 }) {
-  const accent = accentColor(card.accent);
+  const theme = useAppTheme();
+  const accent = accentColor(card.accent, theme.colors);
   const mediaHeight = getProfileFeedMediaHeight(card, contentWidth);
   const item = card.item;
   // The media is what opens: the reel grows out of this rectangle and shrinks
@@ -118,14 +120,14 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
             borderRadius: appTheme.radii.sm,
             borderCurve: 'continuous',
             borderWidth: 1,
-            borderColor: `${appTheme.colors.commerce}55`,
-            backgroundColor: `${appTheme.colors.commerce}1f`,
+            borderColor: `${theme.colors.commerce}55`,
+            backgroundColor: `${theme.colors.commerce}1f`,
           }}
         >
-          <Text style={{ color: appTheme.colors.commerce, ...appTheme.type.caption, fontWeight: '800' }}>
+          <Text style={{ color: theme.colors.commerce, ...appTheme.type.caption, fontWeight: '800' }}>
             {card.unlockLabel}
           </Text>
-          <Text numberOfLines={1} style={{ color: appTheme.colors.faint, ...appTheme.type.caption, flex: 1 }}>
+          <Text numberOfLines={1} style={{ color: theme.colors.faint, ...appTheme.type.caption, flex: 1 }}>
             {card.unlockSummary}
           </Text>
         </View>
@@ -135,7 +137,7 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
           key={slot.id}
           accessibilityLabel={`${slot.a11yLabel ?? slot.label} — ${card.title}`}
           disabled={Boolean(pendingAction) && pendingAction !== slot.action}
-          icon={profileActionIcon(slot.id, item.visibility ?? item.linkedPostVisibility)}
+          icon={profileActionIcon(slot.id, item.visibility ?? item.linkedPostVisibility, theme.colors)}
           // Share reads from its icon alone, the same as on the Home card, which
           // keeps the ownership actions the only labelled things in the row.
           label={slot.id === 'share' ? undefined : slot.label}
@@ -149,23 +151,24 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
 
 function profileActionIcon(
   id: string,
-  visibility: string | null | undefined
+  visibility: string | null | undefined,
+  colors: ThemeColors,
 ) {
-  const muted = appTheme.colors.faint;
+  const muted = colors.faint;
 
-  if (id === 'publish') return <Globe size={appTheme.icon.default} color={appTheme.colors.primary} />;
-  if (id === 'unlock') return <Wand2 size={appTheme.icon.default} color={appTheme.colors.success} />;
+  if (id === 'publish') return <Globe size={appTheme.icon.default} color={colors.primary} />;
+  if (id === 'unlock') return <Wand2 size={appTheme.icon.default} color={colors.success} />;
   if (id === 'visibility') {
     // The icon reports where the post (or the creation's linked post) sits now.
     const isPrivate = visibility === 'private' || visibility === 'unlisted';
     return isPrivate
-      ? <LockKeyhole size={appTheme.icon.default} color={appTheme.colors.warning} />
-      : <Globe size={appTheme.icon.default} color={appTheme.colors.success} />;
+      ? <LockKeyhole size={appTheme.icon.default} color={colors.warning} />
+      : <Globe size={appTheme.icon.default} color={colors.success} />;
   }
   if (id === 'comment') return <MessageCircle size={appTheme.icon.default} color={muted} />;
   if (id === 'share') return <ShareGlyph size={18} color={muted} />;
   if (id === 'details') return <FileText size={18} color={muted} />;
-  return <Repeat2 size={appTheme.icon.default} color={appTheme.colors.primary} />;
+  return <Repeat2 size={appTheme.icon.default} color={colors.primary} />;
 }
 
 /**
@@ -174,6 +177,7 @@ function profileActionIcon(
  * as its grid tile — rather than no media at all, and never asks for the file.
  */
 function UnavailableMediaPlate({ height }: { height: number }) {
+  const theme = useAppTheme();
   return (
     <View
       testID="profile-feed-media-unavailable"
@@ -185,14 +189,14 @@ function UnavailableMediaPlate({ height }: { height: number }) {
         justifyContent: 'center',
         gap: 6,
         paddingHorizontal: appTheme.spacing.card,
-        backgroundColor: appTheme.colors.surfaceInset,
+        backgroundColor: theme.colors.surfaceInset,
       }}
     >
-      <ImageOff size={appTheme.icon.feature} color={appTheme.colors.faint} />
-      <Text style={{ color: appTheme.colors.text, ...appTheme.type.label, textAlign: 'center' }}>
+      <ImageOff size={appTheme.icon.feature} color={theme.colors.faint} />
+      <Text style={{ color: theme.colors.text, ...appTheme.type.label, textAlign: 'center' }}>
         This file is no longer available
       </Text>
-      <Text style={{ color: appTheme.colors.muted, ...appTheme.type.caption, textAlign: 'center' }}>
+      <Text style={{ color: theme.colors.muted, ...appTheme.type.caption, textAlign: 'center' }}>
         Its only copy expired at the provider before it could be saved.
       </Text>
     </View>
@@ -200,7 +204,8 @@ function UnavailableMediaPlate({ height }: { height: number }) {
 }
 
 function ProfileStateChip({ label, tone }: { label: string; tone: ViewerStateTone }) {
-  const semantic = tone === 'neutral' ? appTheme.semantic.neutral : appTheme.semantic[tone];
+  const theme = useAppTheme();
+  const semantic = tone === 'neutral' ? theme.semantic.neutral : theme.semantic[tone];
 
   return (
     <View

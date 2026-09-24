@@ -220,6 +220,6 @@ describe('text worth taking away is selectable', () => {
    */
   it('lets the reader select the post, the prompt and the caption', () => {
     expect(postRoute).toContain('<Text selectable');
-    expect(detailsPage).toContain('<Text selectable style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>{text}</Text>');
+    expect(detailsPage).toContain('<Text selectable style={{ color: theme.colors.textSecondary, ...appTheme.type.bodySm }}>{text}</Text>');
   });
 });

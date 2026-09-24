@@ -6,6 +6,7 @@ import { AppText, PrimaryButton } from '@/components/ui';
 import { OnboardingHeader } from '@/components/onboarding-header';
 import { useReducedMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 import bookletHero from '../assets/images/onboarding-booklet-hero.jpg';
 
@@ -29,6 +30,7 @@ export function OnboardingWelcome({
   onSignIn,
   onSkip,
 }: OnboardingWelcomeProps) {
+  const theme = useAppTheme();
   const reducedMotion = useReducedMotion();
   const reveal = useRef(new Animated.Value(reducedMotion ? 1 : 0)).current;
   const heroHeight = Math.min(
@@ -107,9 +109,9 @@ export function OnboardingWelcome({
             and a weight in the system font, which is the face Branding reserves
             for body copy. `pageTitle` is what every other screen's title uses. */}
         <AppText heading variant="pageTitle" selectable>
-          <Text style={{ color: appTheme.colors.primary }}>Create. </Text>
-          <Text style={{ color: appTheme.colors.image }}>Share. </Text>
-          <Text style={{ color: appTheme.colors.motion }}>Earn.</Text>
+          <Text style={{ color: theme.colors.primary }}>Create. </Text>
+          <Text style={{ color: theme.colors.image }}>Share. </Text>
+          <Text style={{ color: theme.colors.motion }}>Earn.</Text>
         </AppText>
 
         <AppText variant="body" color="textSecondary" style={{ maxWidth: 290 }}>
@@ -147,7 +149,7 @@ export function OnboardingWelcome({
         >
           <AppText selectable={false} variant="bodySm" color="muted">
             Already have an account?{' '}
-            <Text style={{ color: appTheme.colors.primary, fontWeight: '700' }}>Sign in</Text>
+            <Text style={{ color: theme.colors.primary, fontWeight: '700' }}>Sign in</Text>
           </AppText>
         </Pressable>
       </Animated.View>

@@ -37,7 +37,9 @@ import { getShowcasePreviewMediaItems, hasShowcasePreviewMedia, hasShowcaseVideo
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from '@/lib/showcase-display';
 import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
 import { CreatorProfileSkeleton } from '@/components/skeleton';
-import { accentColor, appTheme } from '@/lib/theme';
+import { hexWithAlpha } from '@/lib/eased-fade';
+import { accentColor, appTheme, mediaColors, themes } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import type { CreatorProfileResponse, ShowcaseFeedItem } from '@/lib/types';
 import { buildShareUrl } from '@/lib/viewer-actions';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
@@ -61,6 +63,7 @@ export function CreatorProfileScreen({
   initialTab?: CreatorProfileTab;
   username: string;
 }) {
+  const theme = useAppTheme();
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
@@ -324,7 +327,7 @@ export function CreatorProfileScreen({
   const notFound = isNotFoundError(profileQuery.error);
   if (profileQuery.isLoading && !data) {
     return (
-      <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+      <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
         <Stack.Screen options={{ title: 'Creator' }} />
         <CreatorProfileSkeleton />
       </View>
@@ -339,7 +342,7 @@ export function CreatorProfileScreen({
     // that moves them on: a missing creator is not retryable, so it offers
     // Explore instead of a Retry that would fail the same way.
     return (
-      <View style={{ flex: 1, backgroundColor: appTheme.colors.background, paddingTop: 16, paddingHorizontal: 16, gap: appTheme.spacing.gap }}>
+      <View style={{ flex: 1, backgroundColor: theme.colors.background, paddingTop: 16, paddingHorizontal: 16, gap: appTheme.spacing.gap }}>
         <Stack.Screen options={{ title: 'Creator' }} />
         <StatusBlock
           tone={notFound ? 'neutral' : 'danger'}
@@ -377,7 +380,7 @@ export function CreatorProfileScreen({
     }
     if (item.kind === 'tabs') {
       return (
-        <View style={{ backgroundColor: appTheme.colors.background, paddingBottom: 12 }}>
+        <View style={{ backgroundColor: theme.colors.background, paddingBottom: 12 }}>
           <CreatorTabs activeTab={activeTab} data={data} onChange={setActiveTab} />
         </View>
       );
@@ -388,7 +391,7 @@ export function CreatorProfileScreen({
     if (item.kind === 'empty') {
       return (
         <EmptyState
-          icon={item.tab === 'unlocks' ? <Lock size={appTheme.icon.hero} color={appTheme.colors.faint} /> : item.tab === 'tools' ? <Layers3 size={appTheme.icon.hero} color={appTheme.colors.faint} /> : <ImageIcon size={appTheme.icon.hero} color={appTheme.colors.faint} />}
+          icon={item.tab === 'unlocks' ? <Lock size={appTheme.icon.hero} color={theme.colors.faint} /> : item.tab === 'tools' ? <Layers3 size={appTheme.icon.hero} color={theme.colors.faint} /> : <ImageIcon size={appTheme.icon.hero} color={theme.colors.faint} />}
           title={item.tab === 'unlocks' ? 'No recipes yet' : item.tab === 'tools' ? 'No tagged tools yet' : 'No posts yet'}
           body={item.tab === 'unlocks'
             ? 'Reusable prompts, files, notes, and remix access will appear here.'
@@ -414,7 +417,7 @@ export function CreatorProfileScreen({
   return (
     // Tiles on this profile are what the reel grows out of and returns to.
     <MediaZoomSurface>
-    <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       {/* The bar says what the view is, not who it contains: a username has no
           length bound, the profile header already prints the display name, and a
           title that changes as the query lands flickers on every open. */}
@@ -438,7 +441,7 @@ export function CreatorProfileScreen({
         showsVerticalScrollIndicator={false}
         stickyHeaderIndices={[1]}
         viewabilityConfig={viewabilityConfig}
-        style={{ flex: 1, width: '100%', maxWidth: 430, alignSelf: 'center', backgroundColor: appTheme.colors.background }}
+        style={{ flex: 1, width: '100%', maxWidth: 430, alignSelf: 'center', backgroundColor: theme.colors.background }}
         contentContainerStyle={{
           paddingTop: 12,
           paddingHorizontal: horizontalPadding,
@@ -447,7 +450,7 @@ export function CreatorProfileScreen({
         ListFooterComponent={
           profileQuery.isFetchingNextPage ? (
             <View style={{ minHeight: 72, alignItems: 'center', justifyContent: 'center' }}>
-              <ActivityIndicator color={appTheme.colors.image} />
+              <ActivityIndicator color={theme.colors.image} />
             </View>
           ) : profileQuery.isFetchNextPageError ? (
             <FeedLoadMoreErrorFooter onRetry={retryNextPage} />
@@ -478,18 +481,19 @@ function CreatorHeader({
   onShareProfile: () => void;
   socialLinks: Array<{ label: string; url: string }>;
 }) {
+  const theme = useAppTheme();
   const profile = data.profile;
   const initial = creatorInitial(profile);
 
   return (
-    <View style={{ overflow: 'hidden', borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.borderSubtle, backgroundColor: appTheme.colors.panel }}>
-      <View style={{ height: 136, backgroundColor: appTheme.colors.panelSoft }}>
+    <View style={{ overflow: 'hidden', borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.panel }}>
+      <View style={{ height: 136, backgroundColor: theme.colors.panelSoft }}>
         {profile.coverUrl ? (
           <Image source={{ uri: profile.coverUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
         ) : (
-          <View style={{ position: 'absolute', inset: 0, backgroundColor: appTheme.colors.panelSoft }} />
+          <View style={{ position: 'absolute', inset: 0, backgroundColor: theme.colors.panelSoft }} />
         )}
-        {profile.coverUrl ? <LinearGradient colors={['rgba(8,8,10,0.04)', 'rgba(8,8,10,0.90)']} style={{ position: 'absolute', inset: 0 }} /> : null}
+        {profile.coverUrl ? <LinearGradient colors={[hexWithAlpha(mediaColors.mediaGround, 0.04), hexWithAlpha(mediaColors.mediaGround, 0.9)]} style={{ position: 'absolute', inset: 0 }} /> : null}
       </View>
 
       <View style={{ padding: 16, paddingTop: 0, gap: 14 }}>
@@ -502,29 +506,29 @@ function CreatorHeader({
               <FollowButton following={data.viewer.isFollowing} loading={isFollowLoading} onPress={onFollowPress} />
             )}
             <CircleAction label="Share profile" onPress={onShareProfile}>
-              <ShareGlyph size={appTheme.icon.compact} color={appTheme.colors.text} />
+              <ShareGlyph size={appTheme.icon.compact} color={theme.colors.text} />
             </CircleAction>
             {!data.viewer.isOwner ? (
               <CircleAction label="More options" onPress={onSafetyOptions}>
-                <MoreVertical size={appTheme.icon.default} color={appTheme.colors.text} />
+                <MoreVertical size={appTheme.icon.default} color={theme.colors.text} />
               </CircleAction>
             ) : null}
           </View>
         </View>
 
         <View style={{ gap: 6 }}>
-          <Text selectable numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.74} style={{ color: appTheme.colors.text, fontSize: 29, lineHeight: 34, fontWeight: '800' }}>
+          <Text selectable numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.74} style={{ color: theme.colors.text, fontSize: 29, lineHeight: 34, fontWeight: '800' }}>
             {profile.displayName}
           </Text>
-          <Text selectable numberOfLines={1} style={{ color: appTheme.colors.primary, ...appTheme.type.bodySm, fontWeight: '700' }}>@{profile.username}</Text>
+          <Text selectable numberOfLines={1} style={{ color: theme.colors.primary, ...appTheme.type.bodySm, fontWeight: '700' }}>@{profile.username}</Text>
           {profile.location ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-              <MapPin size={14} color={appTheme.colors.muted} />
-              <Text selectable numberOfLines={1} style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>{profile.location}</Text>
+              <MapPin size={14} color={theme.colors.muted} />
+              <Text selectable numberOfLines={1} style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{profile.location}</Text>
             </View>
           ) : null}
-          {profile.bio ? <Text selectable style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>{profile.bio}</Text> : null}
-          {followError ? <Text accessibilityLiveRegion="polite" style={{ color: appTheme.colors.danger, ...appTheme.type.caption }}>{followError}</Text> : null}
+          {profile.bio ? <Text selectable style={{ color: theme.colors.textSecondary, ...appTheme.type.bodySm }}>{profile.bio}</Text> : null}
+          {followError ? <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.danger, ...appTheme.type.caption }}>{followError}</Text> : null}
         </View>
 
         {socialLinks.length ? (
@@ -540,6 +544,7 @@ function CreatorHeader({
 }
 
 function CreatorStats({ data }: { data: CreatorProfileResponse }) {
+  const theme = useAppTheme();
   const stats = [
     { label: 'Posts', value: data.stats.publicCreations },
     { label: 'Saves', value: data.stats.totalSaves },
@@ -548,11 +553,11 @@ function CreatorStats({ data }: { data: CreatorProfileResponse }) {
   ];
 
   return (
-    <View style={{ flexDirection: 'row', borderTopWidth: 1, borderTopColor: appTheme.colors.borderSubtle, paddingTop: 14 }}>
+    <View style={{ flexDirection: 'row', borderTopWidth: 1, borderTopColor: theme.colors.borderSubtle, paddingTop: 14 }}>
       {stats.map((stat, index) => (
-        <View key={stat.label} style={{ flex: 1, minWidth: 0, alignItems: 'center', gap: 3, borderLeftWidth: index ? 1 : 0, borderLeftColor: appTheme.colors.borderSubtle, paddingHorizontal: 2 }}>
-          <Text style={{ color: appTheme.colors.text, fontSize: 18, lineHeight: 22, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatCompactCount(stat.value)}</Text>
-          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>{stat.label}</Text>
+        <View key={stat.label} style={{ flex: 1, minWidth: 0, alignItems: 'center', gap: 3, borderLeftWidth: index ? 1 : 0, borderLeftColor: theme.colors.borderSubtle, paddingHorizontal: 2 }}>
+          <Text style={{ color: theme.colors.text, fontSize: 18, lineHeight: 22, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatCompactCount(stat.value)}</Text>
+          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{stat.label}</Text>
         </View>
       ))}
     </View>
@@ -560,6 +565,7 @@ function CreatorStats({ data }: { data: CreatorProfileResponse }) {
 }
 
 function CreatorTabs({ activeTab, data, onChange }: { activeTab: CreatorProfileTab; data: CreatorProfileResponse; onChange: (tab: CreatorProfileTab) => void }) {
+  const theme = useAppTheme();
   const counts: Record<CreatorProfileTab, number> = {
     creations: data.stats.publicCreations,
     unlocks: data.stats.unlocks,
@@ -567,7 +573,7 @@ function CreatorTabs({ activeTab, data, onChange }: { activeTab: CreatorProfileT
   };
 
   return (
-    <View style={{ flexDirection: 'row', gap: 4, borderRadius: 18, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.borderSubtle, backgroundColor: appTheme.colors.overlayStrong, padding: 4 }}>
+    <View style={{ flexDirection: 'row', gap: 4, borderRadius: 18, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surfaceInset, padding: 4 }}>
       {CREATOR_PROFILE_TABS.map((tab) => {
         const active = activeTab === tab.id;
         return (
@@ -576,9 +582,9 @@ function CreatorTabs({ activeTab, data, onChange }: { activeTab: CreatorProfileT
             accessibilityRole="tab"
             accessibilityState={{ selected: active }}
             onPress={() => onChange(tab.id)}
-            style={({ pressed }) => ({ flex: 1, minHeight: appTheme.touch.default, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: active ? appTheme.colors.primary : 'transparent', opacity: pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 5 })}
+            style={({ pressed }) => ({ flex: 1, minHeight: appTheme.touch.default, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: active ? theme.colors.primaryFill : 'transparent', opacity: pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 5 })}
           >
-            <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: active ? appTheme.colors.onPrimary : appTheme.colors.muted, ...appTheme.type.label, fontWeight: '700' }}>
+            <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: active ? theme.colors.onPrimary : theme.colors.muted, ...appTheme.type.label, fontWeight: '700' }}>
               {tab.label} {formatCompactCount(counts[tab.id])}
             </Text>
           </Pressable>
@@ -589,10 +595,11 @@ function CreatorTabs({ activeTab, data, onChange }: { activeTab: CreatorProfileT
 }
 
 function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeVideoPreview: boolean; item: ShowcaseFeedItem; onPress: (zoom: AppleZoomOpen | null) => void; width: number }) {
+  const theme = useAppTheme();
   const isTextPost = isTextOnlyShowcasePost(item);
   const displayText = getShowcasePostDisplayText(item);
   const height = Math.round(width * 1.25);
-  const accent = accentColor(item.category === 'video' ? 'video' : item.category === 'text' ? 'motion' : 'image');
+  const accent = accentColor(item.category === 'video' ? 'video' : item.category === 'text' ? 'motion' : 'image', theme.colors);
   const hasVideo = item.mediaKind === 'video' || item.category === 'video' || item.mediaItems?.some((mediaItem) => mediaItem.mediaKind === 'video');
   const tileMediaItems = getShowcasePreviewMediaItems(item);
   // The picture is what opens: the reel grows out of this rectangle.
@@ -612,28 +619,29 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
 
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.title || 'creator post'}`} onPress={open} onPressIn={zoomSource.prepare} style={({ pressed }) => ({ width, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-      <View style={{ minHeight: height + 92, overflow: 'hidden', borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.borderSubtle, backgroundColor: appTheme.colors.panel }}>
+      <View style={{ minHeight: height + 92, overflow: 'hidden', borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.panel }}>
         <MediaZoomSourceView source={zoomSource} style={{ width, height }}>
-        <View style={{ height, backgroundColor: appTheme.colors.surfaceInset }}>
+        <View style={{ height, backgroundColor: theme.colors.surfaceInset }}>
           {isTextPost ? (
-            <View style={{ flex: 1, padding: 13, justifyContent: 'space-between', backgroundColor: appTheme.colors.panelSoft }}>
+            <View style={{ flex: 1, padding: 13, justifyContent: 'space-between', backgroundColor: theme.colors.panelSoft }}>
               <FileText size={appTheme.icon.feature} color={accent} />
-              <Text numberOfLines={7} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>{displayText}</Text>
+              <Text numberOfLines={7} style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>{displayText}</Text>
             </View>
           ) : hasShowcasePreviewMedia(item) ? (
             <ShowcaseMediaPreview accent={accent} height={height} mediaItems={tileMediaItems} onPress={open} radius={0} recyclingKey={`creator-profile:${item.id}`} videoActivation={activeVideoPreview ? 'when-poster-missing' : 'never'} width={width} />
           ) : (
-            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><ImageIcon size={appTheme.icon.hero} color={appTheme.colors.faint} /></View>
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><ImageIcon size={appTheme.icon.hero} color={theme.colors.faint} /></View>
           )}
           {hasVideo ? (
-            <View style={{ position: 'absolute', top: 8, right: 8, width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.overlay }}>
-              <Play size={appTheme.icon.sm} color="#fff" fill="#fff" />
+            <View style={{ position: 'absolute', top: 8, right: 8, width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: themes.dark.colors.overlay }}>
+              <Play size={appTheme.icon.sm} color={mediaColors.onMedia} fill={mediaColors.onMedia} />
             </View>
           ) : null}
+          {/* The badges sit on the picture, so they keep the dark scheme's chip and accent whatever the phone uses. */}
           {item.asset ? (
-            <View style={{ position: 'absolute', top: 8, left: 8, maxWidth: '72%', flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: appTheme.colors.overlayStrong, paddingHorizontal: 8, paddingVertical: 5 }}>
-              <Lock size={appTheme.icon.xs} color={appTheme.colors.commerce} />
-              <Text numberOfLines={1} style={{ color: appTheme.colors.commerce, ...appTheme.type.caption, fontWeight: '700' }}>
+            <View style={{ position: 'absolute', top: 8, left: 8, maxWidth: '72%', flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: themes.dark.colors.overlayStrong, paddingHorizontal: 8, paddingVertical: 5 }}>
+              <Lock size={appTheme.icon.xs} color={themes.dark.colors.commerce} />
+              <Text numberOfLines={1} style={{ color: themes.dark.colors.commerce, ...appTheme.type.caption, fontWeight: '700' }}>
                 {item.asset.accessMode === 'free' ? 'Free' : item.asset.priceQuote?.formatted ?? 'Unlock'}
               </Text>
             </View>
@@ -642,13 +650,13 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
         </MediaZoomSourceView>
 
         <View style={{ minHeight: 92, padding: 10, gap: 6 }}>
-          <Text numberOfLines={2} style={{ minHeight: 38, color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>{item.title || displayText}</Text>
-          <Text numberOfLines={1} style={{ minHeight: 15, color: appTheme.colors.faint, ...appTheme.type.caption }}>
+          <Text numberOfLines={2} style={{ minHeight: 38, color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>{item.title || displayText}</Text>
+          <Text numberOfLines={1} style={{ minHeight: 15, color: theme.colors.faint, ...appTheme.type.caption }}>
             {item.sourceTool ? `Made with ${item.sourceTool}` : ' '}
           </Text>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
-            <TileStat icon={<Heart size={appTheme.icon.xs} color={appTheme.colors.muted} />} label={formatCompactCount(item.saveCount)} />
-            <TileStat icon={<Repeat2 size={appTheme.icon.xs} color={appTheme.colors.muted} />} label={formatCompactCount(item.remixCount)} />
+            <TileStat icon={<Heart size={appTheme.icon.xs} color={theme.colors.muted} />} label={formatCompactCount(item.saveCount)} />
+            <TileStat icon={<Repeat2 size={appTheme.icon.xs} color={theme.colors.muted} />} label={formatCompactCount(item.remixCount)} />
           </View>
         </View>
       </View>
@@ -657,55 +665,60 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
 }
 
 function CreatorToolRow({ tool }: { tool: CreatorTool }) {
+  const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`View posts made with ${tool.label}`}
       onPress={() => router.push({ pathname: '/(tabs)/showcase', params: { tool: tool.slug } } as never)}
-      style={({ pressed }) => ({ minHeight: 76, marginBottom: 10, borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.borderSubtle, backgroundColor: appTheme.colors.panel, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+      style={({ pressed }) => ({ minHeight: 76, marginBottom: 10, borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.panel, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, opacity: pressed ? appTheme.opacity.pressed : 1 })}
     >
-      <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${appTheme.colors.image}22` }}>
-        <Layers3 size={20} color={appTheme.colors.image} />
+      <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.image}22` }}>
+        <Layers3 size={20} color={theme.colors.image} />
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
-        <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}>{tool.label}</Text>
-        <Text numberOfLines={1} style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>{formatCompactCount(tool.count)} post{tool.count === 1 ? '' : 's'}</Text>
+        <Text numberOfLines={1} style={{ color: theme.colors.text, ...appTheme.type.cardTitle }}>{tool.label}</Text>
+        <Text numberOfLines={1} style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{formatCompactCount(tool.count)} post{tool.count === 1 ? '' : 's'}</Text>
       </View>
-      <ChevronRight size={appTheme.icon.default} color={appTheme.colors.faint} />
+      <ChevronRight size={appTheme.icon.default} color={theme.colors.faint} />
     </Pressable>
   );
 }
 
 function EditProfileButton({ onPress }: { onPress: () => void }) {
+  const theme = useAppTheme();
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel="Edit profile" onPress={onPress} style={({ pressed }) => ({ minHeight: 48, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 7, backgroundColor: appTheme.colors.primary, opacity: pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 15 })}>
-      <Pencil size={appTheme.icon.sm} color={appTheme.colors.onPrimary} />
-      <Text style={{ color: appTheme.colors.onPrimary, ...appTheme.type.label, fontWeight: '700' }}>Edit</Text>
+    <Pressable accessibilityRole="button" accessibilityLabel="Edit profile" onPress={onPress} style={({ pressed }) => ({ minHeight: 48, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 7, backgroundColor: theme.colors.primaryFill, opacity: pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 15 })}>
+      <Pencil size={appTheme.icon.sm} color={theme.colors.onPrimary} />
+      <Text style={{ color: theme.colors.onPrimary, ...appTheme.type.label, fontWeight: '700' }}>Edit</Text>
     </Pressable>
   );
 }
 
 function FollowButton({ following, loading, onPress }: { following: boolean; loading: boolean; onPress: () => void }) {
+  const theme = useAppTheme();
   return (
-    <Pressable accessibilityRole="button" accessibilityState={{ busy: loading, selected: following }} disabled={loading} onPress={onPress} style={({ pressed }) => ({ minHeight: 48, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 7, borderWidth: following ? 1 : 0, borderColor: appTheme.colors.borderStrong, backgroundColor: following ? appTheme.colors.surface : appTheme.colors.primary, opacity: loading ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 16 })}>
-      {loading ? <ActivityIndicator size="small" color={following ? appTheme.colors.text : appTheme.colors.onPrimary} /> : following ? <UserCheck size={16} color={appTheme.colors.text} /> : <UserPlus size={16} color={appTheme.colors.onPrimary} />}
-      <Text style={{ color: following ? appTheme.colors.text : appTheme.colors.onPrimary, ...appTheme.type.label, fontWeight: '700' }}>{following ? 'Following' : 'Follow'}</Text>
+    <Pressable accessibilityRole="button" accessibilityState={{ busy: loading, selected: following }} disabled={loading} onPress={onPress} style={({ pressed }) => ({ minHeight: 48, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 7, borderWidth: following ? 1 : 0, borderColor: theme.colors.borderStrong, backgroundColor: following ? theme.colors.surface : theme.colors.primaryFill, opacity: loading ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 16 })}>
+      {loading ? <ActivityIndicator size="small" color={following ? theme.colors.text : theme.colors.onPrimary} /> : following ? <UserCheck size={16} color={theme.colors.text} /> : <UserPlus size={16} color={theme.colors.onPrimary} />}
+      <Text style={{ color: following ? theme.colors.text : theme.colors.onPrimary, ...appTheme.type.label, fontWeight: '700' }}>{following ? 'Following' : 'Follow'}</Text>
     </Pressable>
   );
 }
 
 function SocialChip({ label, url }: { label: string; url: string }) {
+  const theme = useAppTheme();
   return (
-    <Pressable accessibilityRole="link" accessibilityLabel={`Open ${label}`} onPress={() => void Linking.openURL(url)} style={({ pressed }) => ({ minHeight: appTheme.touch.default, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: appTheme.colors.border, backgroundColor: appTheme.colors.surface, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 11, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-      {label === 'Website' ? <Globe size={14} color={appTheme.colors.text} /> : <ExternalLink size={14} color={appTheme.colors.text} />}
-      <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.label }}>{label}</Text>
+    <Pressable accessibilityRole="link" accessibilityLabel={`Open ${label}`} onPress={() => void Linking.openURL(url)} style={({ pressed }) => ({ minHeight: appTheme.touch.default, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 11, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+      {label === 'Website' ? <Globe size={14} color={theme.colors.text} /> : <ExternalLink size={14} color={theme.colors.text} />}
+      <Text numberOfLines={1} style={{ color: theme.colors.text, ...appTheme.type.label }}>{label}</Text>
     </Pressable>
   );
 }
 
 function CircleAction({ children, label, onPress }: { children: ReactNode; label: string; onPress: () => void }) {
+  const theme = useAppTheme();
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: appTheme.colors.border, backgroundColor: appTheme.colors.panelSoft, opacity: pressed ? appTheme.opacity.pressed : 1 })}>{children}</Pressable>
+    <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.panelSoft, opacity: pressed ? appTheme.opacity.pressed : 1 })}>{children}</Pressable>
   );
 }
 
@@ -715,17 +728,19 @@ function CircleAction({ children, label, onPress }: { children: ReactNode; label
  * two shapes depending on which screen you reached it from.
  */
 function CreatorAvatar({ avatarUrl, initial, size }: { avatarUrl: string | null; initial: string; size: number }) {
+  const theme = useAppTheme();
   return (
-    <View style={{ width: size, height: size, borderRadius: size / 2, padding: 3, backgroundColor: appTheme.colors.panel, borderWidth: 2, borderColor: appTheme.colors.primary }}>
-      <View style={{ flex: 1, overflow: 'hidden', borderRadius: size / 2 - 5, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.panelSoft }}>
-        {avatarUrl ? <Image source={{ uri: avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} /> : <Text selectable style={{ color: appTheme.colors.text, fontSize: 26, fontWeight: '800' }}>{initial}</Text>}
+    <View style={{ width: size, height: size, borderRadius: size / 2, padding: 3, backgroundColor: theme.colors.panel, borderWidth: 2, borderColor: theme.colors.primary }}>
+      <View style={{ flex: 1, overflow: 'hidden', borderRadius: size / 2 - 5, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panelSoft }}>
+        {avatarUrl ? <Image source={{ uri: avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} /> : <Text selectable style={{ color: theme.colors.text, fontSize: 26, fontWeight: '800' }}>{initial}</Text>}
       </View>
     </View>
   );
 }
 
 function TileStat({ icon, label }: { icon: ReactNode; label: string }) {
-  return <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>{icon}<Text style={{ color: appTheme.colors.muted, ...appTheme.type.caption, fontVariant: ['tabular-nums'] }}>{label}</Text></View>;
+  const theme = useAppTheme();
+  return <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>{icon}<Text style={{ color: theme.colors.muted, ...appTheme.type.caption, fontVariant: ['tabular-nums'] }}>{label}</Text></View>;
 }
 
 function EmptyState({ body, icon, title }: { body: string; icon: ReactNode; title: string }) {

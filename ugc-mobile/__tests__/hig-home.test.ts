@@ -86,7 +86,7 @@ describe('the top carousel says how much of it there is', () => {
    * the contrast that differentiates the current-page indicator."
    */
   it('separates the current dot by contrast, not by hue', () => {
-    expect(dots).toContain('DASHBOARD_COLORS.text : DASHBOARD_COLORS.border');
+    expect(dots).toContain('theme.colors.text : theme.colors.borderSubtle');
     expect(dots).not.toContain('coral');
   });
 

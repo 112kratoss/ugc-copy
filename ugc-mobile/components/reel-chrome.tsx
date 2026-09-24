@@ -9,7 +9,8 @@ import { hasImmersiveDetailsPage, type ImmersivePreviewItem } from '@/lib/immers
 import { useReducedMotion } from '@/lib/motion';
 import { ShareGlyph } from '@/lib/platform-glyphs';
 import { buildReelCaption, getRailCountLabel } from '@/lib/reel-overlay-view-model';
-import { appTheme } from '@/lib/theme';
+import { appTheme, type AppTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 import {
   getRailActionOpacity,
   getSaveHeartIconProps,
@@ -103,6 +104,7 @@ export function ReelSlideChrome({
   onActionsOpen,
   onCreatorOpen,
 }: ReelSlideChromeProps) {
+  const theme = useAppTheme();
   // The bottom scrim is sized to the text it protects, so it is measured.
   const [captionBlockHeight, setCaptionBlockHeight] = useState(0);
   const reelCaption = useMemo(() => buildReelCaption(item), [item]);
@@ -247,9 +249,9 @@ export function ReelSlideChrome({
           const ownerIcon = slot.id === 'publish'
             ? <Globe size={26} color="#050505" />
             : slot.id === 'unlock'
-              ? <Wand2 size={26} color={appTheme.colors.success} />
+              ? <Wand2 size={26} color={theme.colors.success} />
               : (item.visibility ?? item.linkedPostVisibility) === 'private' || (item.visibility ?? item.linkedPostVisibility) === 'unlisted'
-                ? <LockKeyhole size={26} color={appTheme.colors.warning} />
+                ? <LockKeyhole size={26} color={theme.colors.warning} />
                 : <Globe size={26} color="#ffffff" />;
 
           return (
@@ -304,13 +306,13 @@ export function ReelSlideChrome({
               style={{
                 borderRadius: 999,
                 borderWidth: 1,
-                borderColor: viewerStateChipStyle(stateChip.tone).border,
-                backgroundColor: viewerStateChipStyle(stateChip.tone).background,
+                borderColor: viewerStateChipStyle(stateChip.tone, theme.semantic).border,
+                backgroundColor: viewerStateChipStyle(stateChip.tone, theme.semantic).background,
                 paddingHorizontal: 10,
                 paddingVertical: 6,
               }}
             >
-              <Text numberOfLines={1} style={{ color: viewerStateChipStyle(stateChip.tone).foreground, fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
+              <Text numberOfLines={1} style={{ color: viewerStateChipStyle(stateChip.tone, theme.semantic).foreground, fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
                 {stateChip.label}
               </Text>
             </View>
@@ -371,8 +373,8 @@ export function ReelSlideChrome({
   );
 }
 
-function viewerStateChipStyle(tone: ViewerStateTone) {
-  const semantic = tone === 'neutral' ? appTheme.semantic.neutral : appTheme.semantic[tone];
+function viewerStateChipStyle(tone: ViewerStateTone, tones: AppTheme['semantic']) {
+  const semantic = tone === 'neutral' ? tones.neutral : tones[tone];
   return {
     foreground: semantic.foreground,
     // The semantic tints are tuned for app surfaces and wash out over media, so the
@@ -506,6 +508,7 @@ function RailActionButton({
   /** `bare` draws the icon straight on the picture; `circle` gives it a button. */
   variant?: 'circle' | 'bare';
 }) {
+  const theme = useAppTheme();
   const tapProgress = useRef(new Animated.Value(0)).current;
   const externalPopProgress = useRef(new Animated.Value(0)).current;
   const previousExternalPopTriggerRef = useRef(externalPopTrigger);
@@ -630,7 +633,7 @@ function RailActionButton({
           borderRadius: 27,
           borderWidth: primary || bare ? 0 : 1,
           borderColor: 'rgba(255,255,255,0.16)',
-          backgroundColor: bare ? 'transparent' : primary ? appTheme.colors.primary : 'rgba(12,12,16,0.42)',
+          backgroundColor: bare ? 'transparent' : primary ? theme.colors.primaryFill : 'rgba(12,12,16,0.42)',
         }}
       >
         {tapAnimationSpec && animationSpec ? (

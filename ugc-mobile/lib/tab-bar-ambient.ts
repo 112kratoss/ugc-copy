@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import { Platform } from 'react-native';
 
-import { maxBackgroundLuminance, relativeLuminance } from '@/lib/color-contrast';
-import { appTheme } from '@/lib/theme';
+import { maxBackgroundLuminance, minBackgroundLuminance, relativeLuminance } from '@/lib/color-contrast';
+import { themes, type ColorScheme } from '@/lib/theme';
 
 /** Opaque neutral dock. Every fill is a departure from this, and falls back to it. */
 export const DEFAULT_TAB_BAR_COLOR = '#1f1f24';
@@ -19,7 +19,7 @@ export const ADAPTIVE_INACTIVE_COLOR = '#d2d2d6';
 
 // Read like the theme colours in `magic-tab-bar.tsx`: focused component tests
 // mock `@/lib/theme` down to a handful of values and have no `primary`.
-const ACTIVE_TINT = appTheme.colors?.primary ?? '#ff7a59';
+const ACTIVE_TINT = themes?.dark?.colors?.primary ?? '#ff7a59';
 
 /**
  * The brightest the fill may get and still clear 4.5:1 for *both* tab-label
@@ -31,6 +31,22 @@ const ACTIVE_TINT = appTheme.colors?.primary ?? '#ff7a59';
 export const MAX_FILL_LUMINANCE = Math.min(
   maxBackgroundLuminance(ACTIVE_TINT),
   maxBackgroundLuminance(ADAPTIVE_INACTIVE_COLOR)
+);
+
+/**
+ * The light scheme's dock: warm paper a shade under the page, carrying ink
+ * labels and the deep coral active tint. Its constraint runs the other way —
+ * a *floor*, the darkest the fill may get with both labels still clearing
+ * 4.5:1 — and the coral binds again, landing near 0.70: room for a clear pastel
+ * of the media's hue, nowhere near enough for a saturated slab.
+ */
+export const DEFAULT_LIGHT_TAB_BAR_COLOR = '#f7f3ee';
+const LIGHT_BASE_RGB = [247, 243, 238] as const;
+export const ADAPTIVE_INACTIVE_LIGHT_COLOR = '#4a423b';
+const LIGHT_ACTIVE_TINT = themes?.light?.colors?.primary ?? '#a83d1c';
+export const MIN_LIGHT_FILL_LUMINANCE = Math.max(
+  minBackgroundLuminance(LIGHT_ACTIVE_TINT),
+  minBackgroundLuminance(ADAPTIVE_INACTIVE_LIGHT_COLOR)
 );
 
 /**
@@ -67,6 +83,13 @@ const MAX_FILL_CHROMA = 0.22;
 // the backstop for legibility; this is only about the fill staying a *panel*.
 const MIN_FILL_LIGHTNESS = 0.14;
 const MAX_FILL_LIGHTNESS = 0.26;
+// The same reshaping on paper: a narrow band near white, and a gentler lift
+// under a lower ceiling, because a tint at this lightness reads as colour at a
+// fraction of the chroma it needs in the dark.
+const LIGHT_MIN_FILL_LIGHTNESS = 0.9;
+const LIGHT_MAX_FILL_LIGHTNESS = 0.955;
+const LIGHT_CHROMA_LIFT = 1.2;
+const LIGHT_MAX_FILL_CHROMA = 0.1;
 
 export type Hsl = { hue: number; saturation: number; lightness: number };
 /** A sampled colour, kept in absolute chroma rather than HSL. See the knobs above. */
@@ -101,9 +124,9 @@ function rgbToHex(rgb: readonly number[]) {
   return `#${rgb.map(toHex).join('')}`;
 }
 
-function hexToRgb(color: string) {
+function hexToRgb(color: string, fallback: readonly number[] = BASE_RGB) {
   const match = /^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(color);
-  return match ? match.slice(1).map((channel) => Number.parseInt(channel, 16)) : [...BASE_RGB];
+  return match ? match.slice(1).map((channel) => Number.parseInt(channel, 16)) : [...fallback];
 }
 
 function blendRgb(from: readonly number[], to: readonly number[], amount: number) {
@@ -335,6 +358,45 @@ export function toneMapMediaColor(media: MediaTone): Hsl {
   };
 }
 
+/** The light scheme's version of `toneMapMediaColor`: same hue, a pastel band near white. */
+export function toneMapMediaColorLight(media: MediaTone): Hsl {
+  const lightness = LIGHT_MIN_FILL_LIGHTNESS
+    + clampUnit(media.lightness) * (LIGHT_MAX_FILL_LIGHTNESS - LIGHT_MIN_FILL_LIGHTNESS);
+  const chroma = Math.min(
+    Math.max(0, media.chroma - CHROMA_NOISE_FLOOR) * LIGHT_CHROMA_LIFT,
+    LIGHT_MAX_FILL_CHROMA
+  );
+
+  return {
+    hue: media.hue,
+    saturation: clampUnit(chroma / (1 - Math.abs(2 * lightness - 1))),
+    lightness,
+  };
+}
+
+/**
+ * Lift a light fill toward the neutral paper dock until the ink label and the
+ * deep coral both clear 4.5:1 on it — `capFillLuminance` from the other side.
+ */
+export function floorFillLuminance(color: string) {
+  if (relativeLuminance(color) >= MIN_LIGHT_FILL_LUMINANCE) return color;
+
+  const target = hexToRgb(color, LIGHT_BASE_RGB);
+  let low = 0;
+  let high = 1;
+
+  for (let step = 0; step < 24; step += 1) {
+    const mid = (low + high) / 2;
+    if (relativeLuminance(rgbToHex(blendRgb(target, LIGHT_BASE_RGB, mid))) < MIN_LIGHT_FILL_LUMINANCE) {
+      low = mid;
+    } else {
+      high = mid;
+    }
+  }
+
+  return rgbToHex(blendRgb(target, LIGHT_BASE_RGB, high));
+}
+
 /**
  * Pull a fill back toward the neutral dock until both tab-label colours clear
  * 4.5:1 against it. Binary search rather than a closed form: sRGB luminance is
@@ -361,20 +423,24 @@ export function capFillLuminance(color: string) {
   return rgbToHex(blendRgb(target, BASE_RGB, high));
 }
 
+export function neutralTabBarColor(scheme: ColorScheme) {
+  return scheme === 'light' ? DEFAULT_LIGHT_TAB_BAR_COLOR : DEFAULT_TAB_BAR_COLOR;
+}
+
 // Viewability fires on every settle; the same handful of cards are re-reported
-// constantly as a feed is scrolled back and forth.
+// constantly as a feed is scrolled back and forth. The band is decoded once per
+// picture and mapped per scheme, so a scheme switch costs two cheap tone maps,
+// never a second decode.
+const toneCache = new Map<string, MediaTone | null>();
 const fillCache = new Map<string, string>();
 const FILL_CACHE_LIMIT = 128;
 
-export function getTabBarFillFromThumbhash(thumbhash: string | null | undefined) {
-  if (!thumbhash) return DEFAULT_TAB_BAR_COLOR;
-
-  const cached = fillCache.get(thumbhash);
-  if (cached) return cached;
+function mediaToneFromThumbhash(thumbhash: string): MediaTone | null {
+  if (toneCache.has(thumbhash)) return toneCache.get(thumbhash) ?? null;
 
   const bytes = decodeBase64(thumbhash);
   const channels = bytes && readThumbhashChannels(bytes);
-  let fill = DEFAULT_TAB_BAR_COLOR;
+  let media: MediaTone | null = null;
 
   if (channels) {
     const samples: Rgb[] = [];
@@ -384,25 +450,39 @@ export function getTabBarFillFromThumbhash(thumbhash: string | null | undefined)
         samples.push(sampleAt(channels, (column + 0.5) / BAND_COLUMNS, v));
       }
     }
+    media = dominantBandTone(samples);
+  }
 
-    const media = dominantBandTone(samples);
-    if (media) {
-      const toned = toneMapMediaColor(media);
-      fill = capFillLuminance(
-        rgbToHex(hslToRgb(toned.hue, toned.saturation, toned.lightness).map((c) => c * 255))
-      );
-    }
+  if (toneCache.size >= FILL_CACHE_LIMIT) toneCache.clear();
+  toneCache.set(thumbhash, media);
+  return media;
+}
+
+export function getTabBarFillFromThumbhash(thumbhash: string | null | undefined, scheme: ColorScheme = 'dark') {
+  if (!thumbhash) return neutralTabBarColor(scheme);
+
+  const key = `${scheme}:${thumbhash}`;
+  const cached = fillCache.get(key);
+  if (cached) return cached;
+
+  const media = mediaToneFromThumbhash(thumbhash);
+  let fill = neutralTabBarColor(scheme);
+
+  if (media) {
+    const toned = scheme === 'light' ? toneMapMediaColorLight(media) : toneMapMediaColor(media);
+    const hex = rgbToHex(hslToRgb(toned.hue, toned.saturation, toned.lightness).map((c) => c * 255));
+    fill = scheme === 'light' ? floorFillLuminance(hex) : capFillLuminance(hex);
   }
 
   if (fillCache.size >= FILL_CACHE_LIMIT) fillCache.clear();
-  fillCache.set(thumbhash, fill);
+  fillCache.set(key, fill);
   return fill;
 }
 
-export function getTabBarFillFromSource(source: TabBarAmbientSource | null | undefined) {
+export function getTabBarFillFromSource(source: TabBarAmbientSource | null | undefined, scheme: ColorScheme = 'dark') {
   // No media means no colour to report. The dock going neutral over a text post
   // is correct information, not a gap to paper over with a category colour.
-  return getTabBarFillFromThumbhash(source?.thumbhash);
+  return getTabBarFillFromThumbhash(source?.thumbhash, scheme);
 }
 
 /** Select the visible card nearest the bottom dock, rather than the first one onscreen. */
@@ -423,7 +503,9 @@ export function selectBottomVisibleAmbientSource(viewableItems: AmbientViewToken
   return selected?.item ? { thumbhash: selected.item.previewThumbhash } : null;
 }
 
-let currentColor = DEFAULT_TAB_BAR_COLOR;
+// Both schemes' fills for the card under the dock, so a scheme switch repaints
+// from the picture already there instead of waiting for the next scroll.
+let currentFill: Record<ColorScheme, string> = { dark: DEFAULT_TAB_BAR_COLOR, light: DEFAULT_LIGHT_TAB_BAR_COLOR };
 const listeners = new Set<() => void>();
 
 function subscribe(listener: () => void) {
@@ -432,13 +514,20 @@ function subscribe(listener: () => void) {
 }
 
 function getSnapshot() {
-  return currentColor;
+  return currentFill.dark;
+}
+
+function getLightSnapshot() {
+  return currentFill.light;
 }
 
 export function setTabBarAmbientSource(source: TabBarAmbientSource | null | undefined) {
-  const nextColor = getTabBarFillFromSource(source);
-  if (nextColor === currentColor) return;
-  currentColor = nextColor;
+  const next = {
+    dark: getTabBarFillFromSource(source, 'dark'),
+    light: getTabBarFillFromSource(source, 'light'),
+  };
+  if (next.dark === currentFill.dark && next.light === currentFill.light) return;
+  currentFill = next;
   listeners.forEach((listener) => listener());
 }
 
@@ -465,6 +554,10 @@ function getNeutralSnapshot() {
   return DEFAULT_TAB_BAR_COLOR;
 }
 
+function getNeutralLightSnapshot() {
+  return DEFAULT_LIGHT_TAB_BAR_COLOR;
+}
+
 /**
  * `spends` is whether the surface on screen paints this colour. Only the
  * adaptive dock does: Liquid Glass tints itself from what scrolls under it,
@@ -473,12 +566,13 @@ function getNeutralSnapshot() {
  * viewability change that elects the next video — to arrive at a value it
  * throws away, the waste the Android gate above already removes.
  */
-export function useTabBarAmbientColor(spends = true) {
+export function useTabBarAmbientColor(spends = true, scheme: ColorScheme = 'dark') {
   const live = TINTS_THE_DOCK && spends;
+  const neutral = scheme === 'light' ? getNeutralLightSnapshot : getNeutralSnapshot;
   return useSyncExternalStore(
     live ? subscribe : subscribeNever,
-    live ? getSnapshot : getNeutralSnapshot,
-    getNeutralSnapshot
+    live ? (scheme === 'light' ? getLightSnapshot : getSnapshot) : neutral,
+    neutral
   );
 }
 

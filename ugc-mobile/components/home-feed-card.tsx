@@ -19,6 +19,7 @@ import { showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
 import { buildImmersiveShowcaseItems } from '@/lib/immersive-preview-view-model';
 import { getShowcasePreviewMediaItems } from '@/lib/showcase-media';
 import { accentColor, appTheme } from '@/lib/theme';
+import { useAppTheme } from '@/lib/theme-context';
 
 export const HomeFeedCardView = memo(function HomeFeedCardView({
   card,
@@ -48,7 +49,8 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   onShare: () => void;
   remixLoading?: boolean;
 }) {
-  const accent = accentColor(card.accent);
+  const theme = useAppTheme();
+  const accent = accentColor(card.accent, theme.colors);
   const hasMedia = card.previewKind !== 'text' && Boolean(card.mediaUrl);
   const mediaHeight = hasMedia ? getHomeFeedMediaHeight(card, contentWidth) : 0;
   const bodyWidth = contentWidth - appTheme.spacing.card * 2;
@@ -126,14 +128,14 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
             borderRadius: appTheme.radii.sm,
             borderCurve: 'continuous',
             borderWidth: 1,
-            borderColor: `${accentColor(card.unlock.accent)}55`,
-            backgroundColor: `${accentColor(card.unlock.accent)}1f`,
+            borderColor: `${accentColor(card.unlock.accent, theme.colors)}55`,
+            backgroundColor: `${accentColor(card.unlock.accent, theme.colors)}1f`,
           }}
         >
-          <Text style={{ color: accentColor(card.unlock.accent), ...appTheme.type.caption, fontWeight: '800' }}>
+          <Text style={{ color: accentColor(card.unlock.accent, theme.colors), ...appTheme.type.caption, fontWeight: '800' }}>
             {card.unlock.label}
           </Text>
-          <Text numberOfLines={1} style={{ color: appTheme.colors.faint, ...appTheme.type.caption, flex: 1 }}>
+          <Text numberOfLines={1} style={{ color: theme.colors.faint, ...appTheme.type.caption, flex: 1 }}>
             {card.unlock.summary}
           </Text>
         </View>
@@ -148,14 +150,14 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
           />
           <FeedCardAction
             accessibilityLabel={`Comments on ${card.title}`}
-            icon={<MessageCircle size={appTheme.icon.compact} color={appTheme.colors.faint} />}
+            icon={<MessageCircle size={appTheme.icon.compact} color={theme.colors.faint} />}
             label={card.commentLabel}
             onPress={onComments}
           />
           {card.canRemix ? (
             <FeedCardAction
               accessibilityLabel={`Remix ${card.title}`}
-              icon={<Repeat2 size={appTheme.icon.compact} color={appTheme.colors.faint} />}
+              icon={<Repeat2 size={appTheme.icon.compact} color={theme.colors.faint} />}
               label={card.remixLabel}
               loading={remixLoading}
               onPress={onRemix}
@@ -163,7 +165,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
           ) : null}
           <FeedCardAction
             accessibilityLabel={`Share ${card.title}`}
-            icon={<ShareGlyph size={appTheme.icon.compact} color={appTheme.colors.faint} />}
+            icon={<ShareGlyph size={appTheme.icon.compact} color={theme.colors.faint} />}
             onPress={onShare}
           />
         </>

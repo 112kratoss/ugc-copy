@@ -2,7 +2,7 @@ import React from 'react';
 import renderer from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
-import { appTheme } from '../lib/theme';
+import { appTheme, themes } from '../lib/theme';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
@@ -52,6 +52,6 @@ describe('PrimaryButton', () => {
     const label = tree!.root.find((node) => (
       String(node.type) === 'text' && node.props.children === 'Buy 500 credits'
     ));
-    expect(label.props.style).toContainEqual({ color: appTheme.colors.muted });
+    expect(label.props.style).toContainEqual({ color: themes.dark.colors.muted });
   });
 });
