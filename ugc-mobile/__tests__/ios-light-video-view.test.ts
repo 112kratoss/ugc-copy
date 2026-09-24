@@ -6,28 +6,32 @@ import { describe, expect, it } from 'vitest';
 import { FEED_VIDEO_VIEW_PROPS } from '../lib/feed-video-view-props';
 
 const projectRoot = join(__dirname, '..');
-const experimentPatch = 'experiments/ios-light-video-view/patches/expo-video+55.0.21.patch';
+const shippedPatch = 'patches/expo-video+55.0.21+004+ios-light-video-view.patch';
 
 /**
  * The iOS light video host (docs/archive/home-scroll-hitches-2026-09-22.md,
- * Layer 2). It is native, so it lives outside `patches/` until a store build
- * carries it: `@expo/fingerprint` hashes `patches/`, and a Swift file there
- * would strand every JavaScript-only update. Promotion moves the file to
- * `patches/expo-video+55.0.21+004+ios-light-video-view.patch` and updates the
- * first assertion here in the same store-build commit.
+ * Layer 2), shipped from store build 0.1.6. Until then it lived in
+ * `experiments/ios-light-video-view/`: `@expo/fingerprint` hashes `patches/`,
+ * so a Swift file there strands every JavaScript-only update to the binaries
+ * already out. On the iPhone 16e it took `AVPlayerViewController` off the main
+ * thread entirely (22–29 ms per 40 s of scrolling and a reel open) and made
+ * React Native's clip walk about 11% cheaper (see that folder's README).
  */
-describe('iOS light video host experiment', () => {
-  const patch = readFileSync(join(projectRoot, experimentPatch), 'utf8');
+describe('iOS light video host', () => {
+  const patch = readFileSync(join(projectRoot, shippedPatch), 'utf8');
   const added = patch
     .split('\n')
     .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
     .join('\n');
 
-  it('stays out of the shipped patches until a store build carries it', () => {
-    const shipped = readdirSync(join(projectRoot, 'patches'))
-      .filter((name) => name.startsWith('expo-video+'))
-      .map((name) => readFileSync(join(projectRoot, 'patches', name), 'utf8'));
-    expect(shipped.some((text) => text.includes('LightVideoView'))).toBe(false);
+  it('ships as the last expo-video patch, applied after the three it was written on', () => {
+    // patch-package applies a package's numbered patches in order, and this one
+    // was cut from a tree that already carried 001-003.
+    const shipped = readdirSync(join(projectRoot, 'patches')).filter((name) => name.startsWith('expo-video+')).sort();
+    expect(shipped.at(-1)).toBe('expo-video+55.0.21+004+ios-light-video-view.patch');
+    expect(shipped.filter((name) => readFileSync(join(projectRoot, 'patches', name), 'utf8').includes('LightVideoView'))).toEqual([
+      'expo-video+55.0.21+004+ios-light-video-view.patch',
+    ]);
   });
 
   it('draws through an AVPlayerLayer instead of an AVPlayerViewController', () => {
