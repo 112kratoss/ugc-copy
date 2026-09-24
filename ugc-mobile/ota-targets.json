@@ -18,25 +18,24 @@
   ],
   "targets": {
     "android": {
-      "fingerprint": "2d4421b05ba6a84852602d69de16770822f79daf",
-      "appVersion": "0.1.5",
-      "buildNumber": 73,
-      "shipped": "2026-09-21",
+      "fingerprint": "caae1cc09c42590610679de5bfd8a035f2bf9021",
+      "appVersion": "0.1.6",
+      "buildNumber": 74,
+      "shipped": "2026-09-24",
       "tracks": [
-        "production",
         "alpha"
       ],
-      "$note": "Built from main 6d435fb1 (EAS build cfd8e7ab, workflow run 35538699951), published to the Play closed alpha 2026-09-21 and promoted to production at full rollout; Play delivered it the same day (the owner's Galaxy S24 Ultra updated 2026-09-21 10:25). channel:insights on 2026-09-23 counted 75 users on 73 and 4 still on 0.1.5 (72) at 7a2df8d1315311cc2c1918693250a2e751da7695 over two days. Android native code is identical between 72 and 73: the iOS-only cache-ownership patch moved the fingerprint because patches/ is hashed whole, so an update from main reaches 72 only if that patch is set aside for it."
+      "$note": "Built from main f6e882a2 (EAS build 8ff7fbda, workflow run 35983639391) and submitted to the Play closed alpha 2026-09-24 (EAS submission 63d629df). First binary with light mode (#202: userInterfaceStyle automatic, per-platform splash with a dark variant, expo-navigation-bar) and the fourth expo-video patch, which is iOS-only but moves this fingerprint too because patches/ is hashed whole. The fingerprint equals a clean npm ci of f6e882a2, computed before the build. Play production still runs 0.1.5 (73) at 2d4421b05ba6a84852602d69de16770822f79daf until 0.1.6 is promoted, and no update from main can reach 73, so until then an update published against this fingerprint reaches alpha testers only."
     },
     "ios": {
-      "fingerprint": "835877cfddddf3644cf2e03bc8da01d7aec206d0",
-      "appVersion": "0.1.5",
-      "buildNumber": 54,
-      "shipped": "2026-09-21",
+      "fingerprint": "6d6b4df44431e437ddac4cb48043000802cedba8",
+      "appVersion": "0.1.6",
+      "buildNumber": 55,
+      "shipped": "2026-09-24",
       "tracks": [
         "testflight"
       ],
-      "$note": "Built from main 6d435fb1 (EAS build 5310dd5b, workflow run 35538699951) and uploaded to TestFlight for the internal group Team (Expo) 2026-09-20 21:35 UTC. First binary carrying patches/expo-video+55.0.21+003+ios-cache-ownership.patch alongside the range-cache patch. Submitted to App Review as 0.1.5 on 2026-09-21 after 0.1.5 (53) was pulled out of review and detached, so 53 now backs no submission and no update from main can reach it — the cache-ownership patch is iOS native, so 53 fingerprints differently and cannot be set aside. Until Apple approves this one, the App Store still serves 0.1.4 (52) at c2e22bfa7e480143c37e68b757aa9a91d3bd0c95, so an update published against this fingerprint reaches TestFlight only. channel:insights on 2026-09-23 counted 2 users on 54 and none on 52 over two days."
+      "$note": "Built from main f6e882a2 (EAS build acaef141, workflow run 35983639391) and uploaded to TestFlight for the internal group 2026-09-24 (EAS submission 4dc6e12c; Apple's processing reports by email). First iOS binary with light mode (#202) and the light video host (patches/expo-video+55.0.21+004+ios-light-video-view.patch). The fingerprint equals a clean npm ci of f6e882a2, computed before the build. The App Store still serves 0.1.5 (54) at 835877cfddddf3644cf2e03bc8da01d7aec206d0 (released 2026-09-21) until 0.1.6 is approved, and no update from main can reach 54, so until then an update published against this fingerprint reaches TestFlight only."
     }
   }
 }
