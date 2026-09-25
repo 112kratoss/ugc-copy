@@ -601,6 +601,13 @@ function RailActionButton({
     onPress();
   }, [onPress, runTapAnimation]);
 
+  // Only a button that pops gets a scale wrapper: Save, for its tap and for a
+  // double-tap on the picture, with both pops in one transform. A transform
+  // keeps a view out of Fabric's flattening, and two idle wrappers on every
+  // button were 11 of a slide rail's ~51 views, built with each slide.
+  const animatesIcon = Boolean(tapAnimationSpec) || externalPopTrigger !== undefined;
+  const glyph = bare && iconShadow ? <IconShadow>{icon}</IconShadow> : (renderReelIcon(icon, false) ?? icon);
+
   return (
     <Pressable
       accessibilityRole="button"
@@ -652,13 +659,11 @@ function RailActionButton({
         ) : null}
         {loading && !preserveIconWhileLoading ? (
           <ActivityIndicator color={primary ? '#050505' : '#fff'} />
-        ) : (
-          <Animated.View style={{ transform: [{ scale: iconScale }] }}>
-            <Animated.View style={{ transform: [{ scale: externalIconScale }] }}>
-              {bare && iconShadow ? <IconShadow>{icon}</IconShadow> : (renderReelIcon(icon, false) ?? icon)}
-            </Animated.View>
+        ) : animatesIcon ? (
+          <Animated.View style={{ transform: [{ scale: Animated.multiply(iconScale, externalIconScale) }] }}>
+            {glyph}
           </Animated.View>
-        )}
+        ) : glyph}
       </View>
       {label ? (
         <Text

@@ -27,7 +27,16 @@ const files = ['app', 'components', 'lib'].flatMap((root) => sourceFiles(path.jo
  * (the unlock thumbnail and the Google sign-in button), which is what let phase
  * 5b drop Fresco's GIF and WebP add-ons from the binary. This keeps it retired:
  * a new `Image` from react-native would quietly bring the second pipeline back.
+ *
+ * One exception, for bundled glyphs only: `components/reel-icon.tsx` draws the
+ * reel rail's 13 `require()` PNGs with the core Image. On Android an expo-image
+ * is four native views (a wrapper, a frame and two image views for its
+ * crossfade), and every slide builds its rail as it mounts, mid-swipe for the
+ * slide beyond the one being landed on. It adds no network image and no GIF or
+ * WebP, and Fresco itself starts at launch either way (`FrescoModule` is
+ * `needsEagerInit`), so the cost is those icons' bitmaps in its memory cache.
  */
+const BUNDLED_GLYPHS_ONLY = new Set(['components/reel-icon.tsx']);
 describe('React Native core Image stays retired', () => {
   it('imports no Image or ImageBackground component from react-native', () => {
     const offenders: string[] = [];
@@ -40,11 +49,20 @@ describe('React Native core Image stays retired', () => {
           .map((specifier) => specifier.trim())
           .filter((specifier) => specifier && !specifier.startsWith('type '))
           .map((specifier) => specifier.split(/\s+as\s+/)[0]);
-        if (components.includes('Image') || components.includes('ImageBackground')) {
-          offenders.push(path.relative(mobileRoot, file));
+        const relative = path.relative(mobileRoot, file);
+        if (components.includes('ImageBackground') || (components.includes('Image') && !BUNDLED_GLYPHS_ONLY.has(relative))) {
+          offenders.push(relative);
         }
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('lets the rail glyphs through only with bundled sources', () => {
+    // The exception above is for require() PNGs from lib/reel-icon-assets, never a URL.
+    const glyphs = readFileSync(path.join(mobileRoot, 'components/reel-icon.tsx'), 'utf8');
+    expect(glyphs).toContain("import { reelIconAssets } from '@/lib/reel-icon-assets';");
+    expect(glyphs).toMatch(/<Image source=\{source\}/);
+    expect(glyphs).not.toMatch(/uri\s*:/);
   });
 });
