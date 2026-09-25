@@ -5,7 +5,6 @@ import { Play, RotateCcw } from 'lucide-react-native';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
-import { BackdropImage } from '@/components/backdrop-image';
 import { FEED_VIDEO_VIEW_PROPS } from '@/components/feed-media-frame';
 import { FeedMediaPlate } from '@/components/feed-media-plate';
 import { StableMediaImage } from '@/components/media-preview';
@@ -52,9 +51,6 @@ const absoluteFill = {
 // the native view transaction to detach before releasing it.
 const PLAYER_RELEASE_GRACE_MS = 100;
 
-/** The blur a poster wash without a thumbhash is drawn with; see BackdropImage. */
-const VIDEO_BACKDROP_BLUR_RADIUS = 24;
-
 /**
  * A feed video tile: poster while idle, muted looping preview while active.
  *
@@ -94,7 +90,7 @@ export function FeedVideoPreview({
   height,
   radius,
   accent,
-  videoBackdrop = 'blurred',
+  videoBackdrop = 'solid',
   videoContentFit = 'contain',
   watchdog = false,
   diagnosticsSurface = 'feed',
@@ -136,7 +132,8 @@ export function FeedVideoPreview({
   height: number;
   radius: number;
   accent: string;
-  videoBackdrop?: 'blurred' | 'none';
+  /** Where a `contain`-fitted video leaves the tile empty once it plays: `solid` plain black (`mediaColors.mediaGround`), `none` the placeholder. */
+  videoBackdrop?: 'solid' | 'none';
   videoContentFit?: 'cover' | 'contain';
   /** Arms the poster image's display deadline; see `StableMediaImage`. */
   watchdog?: boolean;
@@ -145,7 +142,7 @@ export function FeedVideoPreview({
 }) {
   const theme = useAppTheme();
   const { source: streamSource, requestKey } = useMediaSource(streamUrl || '');
-  const { source: posterSource, requestKey: posterRequestKey } = useMediaSource(previewUrl || '');
+  const { requestKey: posterRequestKey } = useMediaSource(previewUrl || '');
   // Keep navigation focus at the player boundary. Making it list extraData
   // rerendered every mounted feed card on each tab switch just to pause one video.
   const isFocused = useIsFocused();
@@ -306,19 +303,8 @@ export function FeedVideoPreview({
         backgroundColor: theme.colors.mediaPlaceholder,
       }}
     >
-      {playerMounted && videoBackdrop === 'blurred' ? (
-        <>
-          {usablePreviewUrl || previewThumbhash ? (
-            <BackdropImage
-              thumbhash={previewThumbhash}
-              source={usablePreviewUrl ? posterSource : null}
-              blurRadius={VIDEO_BACKDROP_BLUR_RADIUS}
-              recyclingKey={`${url}:video-backdrop`}
-              style={[absoluteFill, { backgroundColor: theme.colors.mediaPlaceholder }]}
-            />
-          ) : null}
-          <View pointerEvents="none" style={[absoluteFill, { backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.44) }]} />
-        </>
+      {playerMounted && videoBackdrop === 'solid' ? (
+        <View pointerEvents="none" style={[absoluteFill, { backgroundColor: mediaColors.mediaGround }]} />
       ) : null}
 
       {playerMounted && streamUrl ? (

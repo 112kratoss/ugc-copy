@@ -459,7 +459,7 @@ Rules:
   - Paid posts add Unlock.
 - **Chrome:**
   - The creator and caption sit on a shade at the bottom.
-  - Letterbox bands surround pictures that don't fill the screen.
+  - Pictures and videos that don't fill the screen sit on plain black bands (`mediaColors.mediaGround`), as in a video player. The same black fills any contained picture or video elsewhere, such as reference tiles and creator-profile videos. Nothing is blurred: `media-blur-guard.test.ts` allows no `blurRadius`.
   - A top shade sits under the status bar.
 - **Loading:** before the data lands, the reel shows the tapped tile's own picture (and its playing video), never a spinner.
 

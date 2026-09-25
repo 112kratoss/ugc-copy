@@ -3,15 +3,14 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-// Every draw-time blur goes through BackdropImage, which prefers the picture's
-// thumbhash and asks the native loader to blur only where lib/media-blur.ts
-// says it can. A bare `<Image blurRadius>` anywhere else would put RenderScript
-// back on Glide's disk-cache thread on Android builds without the software
-// blur patch, which is how previews starved on 2026-09-18. Ratchet: only the
-// one file may pass blurRadius to expo-image.
+// Nothing in the app asks expo-image to blur. On Android, expo-image 55 blurs
+// through RenderScript on Glide's single disk-cache thread, and on 2026-09-18 a
+// RenderScript teardown hung there and starved every later image load until a
+// restart. Backdrops and letterbox bands have been plain black since 2026-09-25,
+// so the budget is zero: a new `blurRadius` needs expo-image 56's software blur
+// (or a patch carrying it) first.
 const root = path.join(__dirname, '..');
 const scanned = ['app', 'components', 'lib'];
-const allowed = new Set(['components/backdrop-image.tsx']);
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
@@ -21,25 +20,21 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
-describe('blurRadius stays inside BackdropImage', () => {
-  it('no expo-image element outside components/backdrop-image.tsx is asked to blur', () => {
+describe('no blurRadius in the app', () => {
+  it('scans real source files', () => {
+    // A positive control: the scan must see the files it guards.
+    const files = scanned.flatMap((dir) => sourceFiles(path.join(root, dir)).map((file) => path.relative(root, file)));
+    expect(files).toContain('components/feed-media-frame.tsx');
+    expect(files).toContain('components/letterbox-bands.tsx');
+  });
+
+  it('asks no image in app/, components/ or lib/ to blur', () => {
     const offenders: string[] = [];
     for (const dir of scanned) {
       for (const file of sourceFiles(path.join(root, dir))) {
-        const relative = path.relative(root, file);
-        if (allowed.has(relative)) continue;
-        const source = readFileSync(file, 'utf8');
-        // An opening <Image …> or <ImageBackground …> tag that carries blurRadius, across lines.
-        if (/<Image(?:Background)?\b[^>]*?\bblurRadius\b/s.test(source)) offenders.push(relative);
+        if (/\bblurRadius\b/.test(readFileSync(file, 'utf8'))) offenders.push(path.relative(root, file));
       }
     }
     expect(offenders).toEqual([]);
-  });
-
-  it('the one allowed file blurs only what nativeBlurRadius returns', () => {
-    const source = readFileSync(path.join(root, 'components/backdrop-image.tsx'), 'utf8');
-    expect(source).toContain('const radius = nativeBlurRadius(blurRadius);');
-    expect(source).toContain('blurRadius={radius}');
-    expect(source.match(/blurRadius=\{/g)).toHaveLength(1);
   });
 });

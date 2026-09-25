@@ -60,14 +60,16 @@ describe('feed render cost on iOS', () => {
 
   it('leaves the reel\'s shades to the render server', () => {
     // A reel opening mounts the slide's caption shade, which then grows to the
-    // caption, its neighbours' shades, the top shade and any letterbox bands.
-    // expo-linear-gradient painted every one of them on the main thread.
+    // caption, its neighbours' shades and the top shade. expo-linear-gradient
+    // painted every one of them on the main thread. The letterbox bands have
+    // been plain black since 2026-09-25, with no shade at all.
     const chrome = source('components/reel-chrome.tsx');
     const bands = source('components/letterbox-bands.tsx');
     for (const file of [chrome, bands]) expect(file).not.toContain("from 'expo-linear-gradient'");
     expect(chrome).toContain("const CAPTION_SCRIM = 'linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.42) 42%, rgba(0,0,0,0.84) 100%)'");
     expect(chrome).toContain('experimental_backgroundImage: CAPTION_SCRIM');
-    expect(bands).toContain('experimental_backgroundImage: SHADES[band.edge]');
+    expect(bands).toContain('backgroundColor: mediaColors.mediaGround');
+    expect(bands).not.toContain('experimental_backgroundImage');
     const scrim = source('components/top-scrim.tsx');
     const branch = scrim.indexOf("if (over === 'media')");
     const media = scrim.slice(branch, scrim.indexOf('\n  }\n', branch));
