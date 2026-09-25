@@ -4,7 +4,6 @@ import { BricolageGrotesque_700Bold } from '@expo-google-fonts/bricolage-grotesq
 import { BricolageGrotesque_800ExtraBold } from '@expo-google-fonts/bricolage-grotesque/800ExtraBold';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { QueryClient, QueryClientProvider, focusManager, useQueryClient } from '@tanstack/react-query';
-import { requireOptionalNativeModule } from 'expo';
 import Constants from 'expo-constants';
 import { useFonts } from 'expo-font';
 import { AppMetricsRoot } from 'expo-observe';
@@ -32,7 +31,6 @@ import { AuthProvider, useAuth } from '@/lib/auth';
 import { notificationBadgeQueryKey } from '@/lib/notification-badge';
 import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
 import { readAppVersionParts } from '@/lib/app-version-label';
-import { setNativeImageCapabilities, type NativeImageCapabilities } from '@/lib/media-blur';
 import { subscribeToAppForeground } from '@/lib/app-foreground';
 import { setMediaDiagnosticsReporter } from '@/lib/media-diagnostics';
 import { readPlaybackDevice, readPlaybackNetwork } from '@/lib/playback-device';
@@ -66,11 +64,6 @@ export const unstable_settings = {
 // FONT_SPLASH_FALLBACK_MS guarantees the splash can never hang on it.
 const FONT_SPLASH_FALLBACK_MS = 1200;
 void SplashScreen.preventAutoHideAsync().catch(() => undefined);
-
-// What this binary's expo-image can do, read before any picture is drawn: an
-// Android build whose blur still goes through RenderScript is never asked to
-// blur (lib/media-blur.ts).
-setNativeImageCapabilities(requireOptionalNativeModule<NativeImageCapabilities>('ExpoImage'));
 
 /** A post's rail, caption and controls, drawn in the window it grows in (`ZoomStill.post`). */
 function renderZoomPost(post: ImmersivePreviewItem) {

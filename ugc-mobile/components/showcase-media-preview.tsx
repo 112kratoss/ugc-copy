@@ -38,7 +38,7 @@ type ShowcaseMediaPreviewProps = {
   videoActivation?: VideoActivation;
   /** Whether the video on show holds a drawn player; see FeedVideoPreview's `onReadyChange`. */
   onVideoReadyChange?: (ready: boolean) => void;
-  videoBackdrop?: 'blurred' | 'none';
+  videoBackdrop?: 'solid' | 'none';
   videoContentFit?: 'cover' | 'contain';
   /**
    * Arms display deadlines for the media on screen. A carousel passes it only to
@@ -68,7 +68,7 @@ export function ShowcaseMediaPreview({
   recyclingKey,
   videoActivation = 'never',
   onVideoReadyChange,
-  videoBackdrop = 'blurred',
+  videoBackdrop = 'solid',
   videoContentFit = 'contain',
   watchdog = false,
   diagnosticsSurface,
@@ -131,7 +131,7 @@ function ShowcaseMediaCarousel({
   recyclingKey,
   videoActivation = 'never',
   onVideoReadyChange,
-  videoBackdrop = 'blurred',
+  videoBackdrop = 'solid',
   videoContentFit = 'contain',
   watchdog = false,
   diagnosticsSurface,
@@ -268,7 +268,7 @@ function ShowcaseMediaSlide({
   recyclingKey: string;
   videoActivation: VideoActivation;
   onVideoReadyChange?: (ready: boolean) => void;
-  videoBackdrop: 'blurred' | 'none';
+  videoBackdrop: 'solid' | 'none';
   videoContentFit: 'cover' | 'contain';
   watchdog: boolean;
   diagnosticsSurface?: string;

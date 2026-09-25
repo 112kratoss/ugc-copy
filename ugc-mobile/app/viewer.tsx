@@ -118,7 +118,7 @@ import {
   reportShowcaseMediaProgress,
   setShowcaseMediaProgressSink,
 } from '@/lib/showcase-media-progress';
-import { appTheme } from '@/lib/theme';
+import { appTheme, mediaColors } from '@/lib/theme';
 import { useNavigationBarSurface } from '@/lib/system-bars';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 import type { PostResourceKind, ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
@@ -2061,18 +2061,12 @@ function ImmersiveMedia({
   }, [holdsItsPlayer, openingDrawn, zoomOpened]);
   const videoActive = active && (openingDrawn || lentVideo !== null);
 
-  // The bands around a picture that does not fill the slide show the picture's
-  // own edge mirrored outward and blurred, shaded darkest at the screen's edge
-  // and not at all where the picture begins, so the band meets the picture
-  // without an edge (lib/letterbox.ts). They take the frame's backdrop slot, under
-  // the picture. A picture of unknown shape keeps the plain blurred backdrop.
+  // The bands around a picture that does not fill the slide are plain black
+  // (components/letterbox-bands.tsx). They take the frame's backdrop slot, under
+  // the picture. A picture of unknown shape gets the frame's own black backdrop.
   const mediaAspectRatio = mediaItemAspectRatio(mediaItem);
-  const bandThumbhash = mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash ?? null;
-  const bandSource = mediaItem.previewUrl
-    ? { uri: mediaItem.previewUrl, cacheKey: mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey, thumbhash: bandThumbhash }
-    : { uri: mediaItem.url, cacheKey: null, thumbhash: bandThumbhash };
   const letterboxBands = mediaAspectRatio ? (
-    <LetterboxBands frame={{ width, height }} aspectRatio={mediaAspectRatio} source={bandSource} />
+    <LetterboxBands frame={{ width, height }} aspectRatio={mediaAspectRatio} />
   ) : null;
 
   // Where the media sits on the page, for UIKit's zoom to grow the tile into
@@ -2081,7 +2075,7 @@ function ImmersiveMedia({
 
   if (mediaItem.mediaKind === 'video') {
     return (
-      <View style={{ width, height, backgroundColor: '#020203' }}>
+      <View style={{ width, height, backgroundColor: mediaColors.mediaGround }}>
         {zoomTargetRect}
         {/* This image stays mounted while players enter and leave the prepared
             range. Even a fast swipe that outruns decoding keeps a sharp poster
@@ -2091,7 +2085,6 @@ function ImmersiveMedia({
             kind="image"
             onImageDisplay={reportSlidePainted}
             url={mediaItem.previewUrl}
-            backdropUrl={mediaItem.previewUrl}
             imageBackdropContent={letterboxBands}
             cacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
             thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
@@ -2138,8 +2131,6 @@ function ImmersiveMedia({
           kind="image"
           onImageDisplay={reportSlidePainted}
           url={image.url}
-          backdropUrl={mediaItem.previewUrl}
-          backdropCacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
           imageBackdropContent={letterboxBands}
           cacheKey={image.cacheKey}
           thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}

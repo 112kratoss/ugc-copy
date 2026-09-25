@@ -1902,16 +1902,11 @@ export function MediaZoomFlightLayer({
             ]}
           >
             {/* The bands around a picture that does not fill the screen, drawn
-                as the reel draws them — the picture's own edge mirrored and
-                blurred, under the same eased shade — so they do not turn from
-                black into the reel's bands at the hand-off. Prepared with the
-                picture, under the finger. */}
+                as the reel draws them, in plain black, so nothing changes under
+                them at the hand-off. Prepared with the picture, under the
+                finger. */}
             <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, bandStyle]}>
-              <LetterboxBands
-                frame={still.geometry.screen}
-                aspectRatio={still.geometry.aspectRatio}
-                source={{ uri: still.preview.url, cacheKey: still.preview.cacheKey, thumbhash: still.preview.thumbhash }}
-              />
+              <LetterboxBands frame={still.geometry.screen} aspectRatio={still.geometry.aspectRatio} />
             </Animated.View>
             {/* Keyed apart, so a hold that turns from the poster into the video
                 — the finger's poster, then the tap's lent video — mounts a new

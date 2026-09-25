@@ -4,16 +4,11 @@ import type { ReactNode } from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { FEED_VIDEO_VIEW_PROPS } from '@/lib/feed-video-view-props';
-import { useMediaSource } from '@/lib/use-media-source';
-import { hexWithAlpha } from '@/lib/eased-fade';
 import { mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
-import { BackdropImage } from '@/components/backdrop-image';
 import { StableMediaImage } from '@/components/media-preview';
 
 type FeedMediaFrameBaseProps = {
-  backdropUrl?: string | null;
-  backdropCacheKey?: string;
   backgroundColor?: string;
   borderColor?: string;
   borderWidth?: number;
@@ -32,13 +27,13 @@ type FeedMediaFrameBaseProps = {
 
 type FeedImageFrameProps = FeedMediaFrameBaseProps & {
   kind: 'image';
-  imageBackdrop?: 'blurred' | 'none';
+  /** Where a `contain`-fitted picture leaves its frame empty: `solid` plain black (`mediaColors.mediaGround`), `none` the frame's own background. */
+  imageBackdrop?: 'solid' | 'none';
   /**
-   * Drawn beneath the picture in place of the blurred backdrop, when given. The
-   * reel's letterbox bands go here (`LetterboxBands`): the evenly dimmed backdrop
-   * leaves a hard edge where it meets the picture, and the bands reach a little
-   * way under the picture so a rounding gap along the seam cannot show — which
-   * only a picture drawn over them hides.
+   * Drawn beneath the picture in place of the black backdrop, when given. The
+   * reel's letterbox bands go here (`LetterboxBands`): they reach a little way
+   * under the picture so a rounding gap along the seam cannot show — which only
+   * a picture drawn over them hides.
    */
   imageBackdropContent?: ReactNode;
   imageContentFit?: 'cover' | 'contain';
@@ -57,7 +52,8 @@ type FeedVideoFrameProps = FeedMediaFrameBaseProps & {
   player: VideoPlayer | null;
   posterUrl?: string | null;
   posterVisible?: boolean;
-  videoBackdrop?: 'blurred' | 'none';
+  /** Where a `contain`-fitted video leaves its frame empty: `solid` plain black (`mediaColors.mediaGround`), `none` the frame's own background. */
+  videoBackdrop?: 'solid' | 'none';
   videoContentFit?: 'cover' | 'contain';
 };
 
@@ -68,9 +64,6 @@ const absoluteFill = {
   inset: 0,
 };
 
-/** The blur a backdrop without a thumbhash is drawn with; see BackdropImage. */
-const BACKDROP_BLUR_RADIUS = 24;
-
 // Shared by every feed-side VideoView; see lib/feed-video-view-props.ts.
 export { FEED_VIDEO_VIEW_PROPS };
 
@@ -80,13 +73,6 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
   const foregroundCacheKey = props.cacheKey ?? (props.recyclingKey
     ? `${props.recyclingKey}:${props.kind === 'image' ? 'foreground' : 'video-poster'}`
     : foregroundUrl);
-  const backdropUrl = props.backdropUrl || (props.kind === 'image' ? props.url : '');
-  const { source } = useMediaSource(backdropUrl);
-  // Share bytes only when both layers represent the same asset. A separate
-  // preview must never overwrite the full-size foreground's cache entry.
-  const backdropCacheKey = props.backdropCacheKey
-    ?? (backdropUrl === foregroundUrl ? foregroundCacheKey : undefined);
-  const backdropSource = backdropCacheKey ? { ...source, cacheKey: backdropCacheKey } : source;
   const {
     backgroundColor = theme.colors.app,
     borderColor,
@@ -114,17 +100,8 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
       {props.kind === 'image' ? (
         <>
           {props.imageBackdropContent}
-          {!props.imageBackdropContent && (props.imageBackdrop ?? 'blurred') === 'blurred' ? (
-            <>
-              <BackdropImage
-                thumbhash={props.thumbhash}
-                source={backdropSource}
-                blurRadius={BACKDROP_BLUR_RADIUS}
-                recyclingKey={props.recyclingKey ? `${props.recyclingKey}:backdrop` : undefined}
-                style={[absoluteFill, { backgroundColor }]}
-              />
-              <View pointerEvents="none" style={[absoluteFill, { backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.34) }]} />
-            </>
+          {!props.imageBackdropContent && (props.imageBackdrop ?? 'solid') === 'solid' ? (
+            <View pointerEvents="none" style={[absoluteFill, { backgroundColor: mediaColors.mediaGround }]} />
           ) : null}
           <StableMediaImage
             url={props.url}
@@ -142,17 +119,8 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
         </>
       ) : (
         <>
-          {props.backdropUrl && (props.videoBackdrop ?? 'blurred') === 'blurred' ? (
-            <BackdropImage
-              thumbhash={props.thumbhash}
-              source={backdropSource}
-              blurRadius={BACKDROP_BLUR_RADIUS}
-              recyclingKey={props.recyclingKey ? `${props.recyclingKey}:video-backdrop` : undefined}
-              style={[absoluteFill, { backgroundColor }]}
-            />
-          ) : null}
-          {(props.videoBackdrop ?? 'blurred') === 'blurred' ? (
-            <View pointerEvents="none" style={[absoluteFill, { backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.44) }]} />
+          {(props.videoBackdrop ?? 'solid') === 'solid' ? (
+            <View pointerEvents="none" style={[absoluteFill, { backgroundColor: mediaColors.mediaGround }]} />
           ) : null}
           <VideoView
             {...FEED_VIDEO_VIEW_PROPS}
