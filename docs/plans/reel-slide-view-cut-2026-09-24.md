@@ -1,8 +1,8 @@
 # Reel slide view cut
 
-Status: step 1 was measured on 2026-09-24 and not shipped; the step 1 result below gives the numbers. Step 2 passed its S24 A/B on 2026-09-25, and its Save check on the S24 the same day. It awaits the go-ahead to ship.
+Status: step 1 was measured on 2026-09-24 and not shipped; the step 1 result below gives the numbers. Step 2 shipped as #210 (`19881e5f`) on 2026-09-25, after its S24 A/B and Save check: over the air to Android 0.1.6 (74) that day, and in both 0.1.7 store builds (Android 75 is in production; iOS 57 is in App Review). Step 3 is next, when the owner asks for it.
 
-Scope: `ugc-mobile/app/viewer.tsx`, `components/reel-chrome.tsx` and `components/reel-icon.tsx`. Every change is JS, so each step can ship over the air to 0.1.6.
+Scope: `ugc-mobile/app/viewer.tsx`, `components/reel-chrome.tsx` and `components/reel-icon.tsx`. Every change is JS, so each step can ship over the air to the current store build, 0.1.7.
 
 Measure each step on the S24 first. iOS runs the same code and is checked in the batched iPhone pass.
 
@@ -108,4 +108,4 @@ Each step is A/B-tested against the step before it. A step is kept only if motio
 
 ## Shipping
 
-Ship one PR per kept step, or batch them. Each goes to 0.1.6 over the air with `publish-ota.mjs`, as #208 did.
+Ship one PR per kept step, or batch them. Each goes over the air to the current store build, 0.1.7, with `publish-ota.mjs`, as #208 and #210 did.
