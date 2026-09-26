@@ -42,7 +42,9 @@ cross-account content disclosure through those guarded API paths.
 Six restrictive policies validate the parent canvas on four child tables,
 the optional proposal's owner and canvas, and the optional generation's owner.
 They compose with the existing CRUD policies and active-identity restriction.
-No grants, service-role privileges, stored records, or API signatures change.
+The migration explicitly restates the four existing production workflow CRUD
+grants, which newer Supabase clean databases no longer inherit. Service-role
+privileges, stored records, and API signatures do not change.
 Lookups use the referenced primary keys. The migration sets a five-second lock
 timeout so acquisition fails rather than waiting indefinitely.
 
@@ -58,6 +60,9 @@ categories before the fix. No existing customer rows need repair.
 - Full database suite after replay: **74 files, 1,396 assertions passed**.
 - Migration contract: **3/3 Vitest checks passed**.
 - Focused ESLint, syntax check, and whitespace checks passed.
+- CI initially exposed missing ambient workflow grants on its newer Supabase
+  image. Revoking those same four local grants reproduced the exact failure;
+  explicit grants now preserve the deployed contract on fresh databases.
 - Production verifier: `scripts/ops/verify-workflow-parent-ownership.mjs`.
   Requires `--confirm --project-ref ildfmhozpibwiopeavfg` and environment
   credentials. It creates two disposable identities with empty workflows and

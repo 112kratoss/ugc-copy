@@ -4,6 +4,16 @@
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 
+-- Older projects inherit these grants, but new Supabase databases do not.
+-- State the existing production contract so parent-policy subqueries and
+-- valid workflow writes also work on a clean replay. RLS still scopes CRUD.
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
+  public.workflow_canvases,
+  public.workflow_canvas_history,
+  public.workflow_canvas_assistant_messages,
+  public.workflow_canvas_assistant_proposals
+TO authenticated;
+
 CREATE POLICY workflow_parent_owned
 ON public.workflow_canvas_history AS RESTRICTIVE FOR ALL TO authenticated
 USING (

@@ -30,11 +30,13 @@ describe('workflow parent ownership migration', () => {
     expect(migration).toContain('generation.user_id = (SELECT auth.uid())');
     expect(migration).toContain('proposal_id IS NULL');
     expect(migration).toContain('generation_id IS NULL');
-    expect(migration).not.toMatch(/\b(?:GRANT|REVOKE|SECURITY DEFINER|DROP POLICY)\b/);
+    expect(migration).not.toMatch(/\b(?:REVOKE|SECURITY DEFINER|DROP POLICY)\b/);
+    expect(migration).toContain('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE');
+    expect(migration).not.toMatch(/TO (?:PUBLIC|anon)/);
   });
 
   it('bounds production lock acquisition and changes no existing records', () => {
     expect(migration).toContain("SET LOCAL lock_timeout = '5s'");
-    expect(migration).not.toMatch(/\b(?:UPDATE|DELETE FROM|INSERT INTO|ALTER TABLE)\b/);
+    expect(migration).not.toMatch(/\b(?:UPDATE public|DELETE FROM|INSERT INTO|ALTER TABLE)\b/);
   });
 });
