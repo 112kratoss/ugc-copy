@@ -1,5 +1,7 @@
 # Mobile light mode
 
+> Archived 2026-09-26. Light mode shipped in the 0.1.6 store builds. On Android, 0.1.6 (74) reached Play production on 2026-09-24 and 0.1.7 (75) replaced it on 2026-09-25. On iOS, 0.1.6 never reached the App Store: build 55 was rejected on 2026-09-24 for reasons unrelated to light mode (#209 fixed them), and 56 was withdrawn in favour of 0.1.7. So light mode reaches iPhones with 0.1.7 (57), in App Review since 2026-09-25. Kept as the design record for the decisions below.
+
 Status: merged to main on 2026-09-24 (#202), ahead of the store build.
 - It ships with the next store build, 0.1.6. The native half cannot go over the air (see Shipping).
 - Verified against production data on the iOS 26.4 simulator and the Android 16 emulator (dev clients built from this branch), and on the owner's iPhone 16e and Galaxy S24 Ultra (Release builds). Test suite green: 264 files, 2,566 tests.
