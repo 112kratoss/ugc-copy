@@ -1,0 +1,122 @@
+{
+  "observed_at": "2026-09-26T05:42:36.150656+00:00",
+  "profile_policies": [
+    {
+      "kind": "PERMISSIVE",
+      "name": "Users can update own profile.",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "(( SELECT auth.uid() AS uid) = id)",
+      "command": "UPDATE",
+      "with_check": "(( SELECT auth.uid() AS uid) = id)"
+    },
+    {
+      "kind": "PERMISSIVE",
+      "name": "Users can view own profile",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "(( SELECT auth.uid() AS uid) = id)",
+      "command": "SELECT",
+      "with_check": null
+    },
+    {
+      "kind": "RESTRICTIVE",
+      "name": "authenticated_identity_active",
+      "roles": [
+        "authenticated"
+      ],
+      "using": "( SELECT current_identity_is_active() AS current_identity_is_active)",
+      "command": "ALL",
+      "with_check": "( SELECT current_identity_is_active() AS current_identity_is_active)"
+    }
+  ],
+  "restricted_tables": [
+    {
+      "rls": true,
+      "name": "account_deletion_jobs",
+      "anon_any_table_privilege": false,
+      "authenticated_any_table_privilege": false
+    },
+    {
+      "rls": true,
+      "name": "account_merge_tickets",
+      "anon_any_table_privilege": false,
+      "authenticated_any_table_privilege": false
+    },
+    {
+      "rls": true,
+      "name": "account_merges",
+      "anon_any_table_privilege": false,
+      "authenticated_any_table_privilege": false
+    },
+    {
+      "rls": true,
+      "name": "admin_sessions",
+      "anon_any_table_privilege": false,
+      "authenticated_any_table_privilege": false
+    }
+  ],
+  "admission_definition": "CREATE OR REPLACE FUNCTION public.current_identity_admission()\n RETURNS jsonb\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  SELECT jsonb_build_object(\n    'state', profile.identity_state,\n    'created_at', account.created_at,\n    'banned', COALESCE(account.banned_until > now(), false),\n    'session_valid', CASE\n      WHEN (SELECT auth.jwt() ->> 'session_id') IS NULL THEN true\n      WHEN (SELECT auth.jwt() ->> 'session_id')\n        !~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'\n        THEN false\n      ELSE EXISTS (\n        SELECT 1\n        FROM auth.sessions AS session\n        WHERE session.id = (SELECT auth.jwt() ->> 'session_id')::uuid\n          AND session.user_id = account.id\n      )\n    END\n  )\n  FROM auth.users AS account\n  LEFT JOIN public.profiles AS profile ON profile.id = account.id\n  WHERE account.id = (SELECT auth.uid())\n    AND account.deleted_at IS NULL;\n$function$\n",
+  "active_guard_definition": "CREATE OR REPLACE FUNCTION public.current_identity_is_active()\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  SELECT EXISTS (\n    SELECT 1\n    FROM public.profiles\n    WHERE id = (SELECT auth.uid())\n      AND identity_state = 'active'\n  );\n$function$\n",
+  "profile_auth_column_updates": [
+    "display_name",
+    "avatar_url",
+    "username",
+    "bio",
+    "cover_url",
+    "website_url",
+    "twitter_handle",
+    "instagram_handle",
+    "tiktok_handle",
+    "location"
+  ],
+  "registered_guard_definition": "CREATE OR REPLACE FUNCTION public.current_identity_is_registered()\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  SELECT COALESCE(\n    (\n      SELECT NOT COALESCE(users.is_anonymous, false)\n      FROM auth.users AS users\n      WHERE users.id = (SELECT auth.uid())\n    ),\n    false\n  );\n$function$\n",
+  "merge_credit_expressions_verified": [
+    "v_credits_moved := greatest(coalesce(v_guest.credits, 0), 0);",
+    "SET credits = greatest(coalesce(credits, 0), 0) + v_credits_moved"
+  ],
+  "production_project": "ildfmhozpibwiopeavfg",
+  "reviewed_source_commit": "e0f28361a3d2cf28dea860189fc9aa0227e655a1",
+  "production_app_version_build_id": "e0f28361a3d2cf28dea860189fc9aa0227e655a1",
+  "http_checks": [
+    {
+      "case": "profile_no_token",
+      "path": "/api/profile",
+      "status": 401
+    },
+    {
+      "case": "profile_malformed_bearer",
+      "path": "/api/profile",
+      "status": 401
+    },
+    {
+      "case": "profile_forged_admission_header_no_token",
+      "path": "/api/profile",
+      "status": 401
+    },
+    {
+      "case": "generations_no_token",
+      "path": "/api/generations",
+      "status": 401
+    },
+    {
+      "case": "admin_no_cookie",
+      "path": "/api/admin/users/credits",
+      "status": 401
+    },
+    {
+      "case": "regional_feed_malformed_bearer",
+      "path": "/api/showcase/feed",
+      "status": 401
+    }
+  ],
+  "http_check_notes": "Six sequential GET requests; all responses private, no-store. Admin GET checks proxy rejection only; actual admin mutation methods were not invoked.",
+  "local_test_results": {
+    "files_passed": 28,
+    "tests_passed": 219,
+    "production_credentials_supplied": false,
+    "notes": "Vitest source/mocked tests; not an authenticated production role matrix. Local supabase-auth-config test does not verify hosted config."
+  }
+}
