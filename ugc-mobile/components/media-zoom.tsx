@@ -231,6 +231,15 @@ const DISMISS_SAFETY_MS = CLOSE_MS + 220;
  * a frame or two of a video. A tile that never says so is uncovered after this.
  */
 const RETURN_DRAWN_DEADLINE_MS = 250;
+/**
+ * How long a lent video goes on being drawn twice after UIKit reports its zoom
+ * into the reel over (`MediaZoomLentVideo.landing`). The frame the second view
+ * is there for comes before that report reaches JS — 0.1–0.4 s before it on
+ * the simulator — so this only has to cover a report that arrives early.
+ */
+const LANDING_COPY_LINGER_MS = 250;
+/** A push whose end is never reported stops drawing it twice after this. */
+const LANDING_COPY_DEADLINE_MS = 3000;
 
 /**
  * A tap that opens its screen without a zoom holds the other tiles off for at
@@ -622,6 +631,21 @@ export interface MediaZoomLentVideo {
    * picture still growing over the reel would freeze on its last frame.
    */
   attached: boolean;
+  /**
+   * Under UIKit's zoom (iOS), from the hand-off until the push has landed.
+   * UIKit shows the pushed screen through a portal of it (the real view is
+   * hidden as the portal's source) inside a morph container whose spring
+   * settles with a long sub-pixel tail. While that tail runs — the picture
+   * looks still, 0.8–1.1 s after the tap, before the portals go as the push
+   * completes — the video layer inside the portal can miss one frame, and the
+   * poster beneath it, the clip's first frame, flashes up in the middle of the
+   * clip: 18 of 244 opens on the simulator (2026-09-26). Nothing the app holds
+   * changes at that frame: a per-frame native probe of the view, its ancestors
+   * and the portals saw no change. The slide draws the player a second time
+   * under that view until then, and the frame one view misses the other
+   * shows: 0 of 73 opens.
+   */
+  landing: boolean;
 }
 
 const MediaZoomLentVideoContext = createContext<MediaZoomLentVideo | null>(null);
@@ -1047,6 +1071,7 @@ export function useMediaZoomStage({
   const lentVideo = origin?.video ?? null;
   const [videoHandoff, setVideoHandoff] = useState<'pending' | 'attached' | 'failed'>(lentVideo ? 'pending' : 'failed');
   const adoptedVideoRef = useRef<VideoPlayer | null>(null);
+  const [videoLanding, setVideoLanding] = useState(nativeZoom && Boolean(lentVideo));
   const carriedPreview = lentVideo ? null : origin?.preview ?? null;
   const [carried, setCarried] = useState<ZoomPreview | null>(carriedPreview);
   const carryingRef = useRef(Boolean(carriedPreview));
@@ -1182,18 +1207,27 @@ export function useMediaZoomStage({
       setVideoHandoff('failed');
     }
   }, [lentVideo, nativeZoom]);
+  // Landed, the tile's view lets go at once, and the slide's second view of the
+  // player (`MediaZoomLentVideo.landing`) a moment later.
   useEffect(() => {
     if (!nativeZoom || !lentVideo) return;
     const player = lentVideo.player;
+    let landed: ReturnType<typeof setTimeout> | undefined;
     const listen = navigation.addListener as unknown as (
       type: 'transitionEnd',
       listener: (event: { data?: { closing?: boolean } }) => void
     ) => () => void;
     const unsubscribe = listen('transitionEnd', (event) => {
-      if (!event.data?.closing) releaseVideoLoanHold(player);
+      if (event.data?.closing) return;
+      releaseVideoLoanHold(player);
+      clearTimeout(landed);
+      landed = setTimeout(() => setVideoLanding(false), LANDING_COPY_LINGER_MS);
     });
+    const deadline = setTimeout(() => setVideoLanding(false), LANDING_COPY_DEADLINE_MS);
     return () => {
       unsubscribe();
+      clearTimeout(landed);
+      clearTimeout(deadline);
       releaseVideoLoanHold(player);
     };
   }, [lentVideo, nativeZoom, navigation]);
@@ -1602,9 +1636,9 @@ export function useMediaZoomStage({
 
   const lentVideoValue = useMemo<MediaZoomLentVideo | null>(() => (
     lentVideo && videoHandoff !== 'failed'
-      ? { video: lentVideo, attached: videoHandoff === 'attached' }
+      ? { video: lentVideo, attached: videoHandoff === 'attached', landing: videoLanding }
       : null
-  ), [lentVideo, videoHandoff]);
+  ), [lentVideo, videoHandoff, videoLanding]);
 
   return {
     zooming,
