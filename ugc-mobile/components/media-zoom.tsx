@@ -235,6 +235,12 @@ const DISMISS_SAFETY_MS = CLOSE_MS + 220;
  */
 const RETURN_DRAWN_DEADLINE_MS = 250;
 /**
+ * How many frames a close asks again for a tile that measured at nothing. The
+ * screen beneath a reel at rest is out of layout (lib/zoom-underlay.ts), and it
+ * comes back a frame after a close asks for it, on the UI thread.
+ */
+const TILE_REMEASURE_FRAMES = 4;
+/**
  * How long a lent video goes on being drawn twice after UIKit reports its zoom
  * into the reel over (`MediaZoomLentVideo.landing`). The frame the second view
  * is there for comes before that report reaches JS — 0.1–0.4 s before it on
@@ -1564,9 +1570,18 @@ export function useMediaZoomStage({
       plainLeave();
       return;
     }
-    handle.measure((rect) => {
+    // The screen beneath comes back into layout on the UI thread, a frame after
+    // `setZoomUnderlayHidden(false)` asks for it. Measured in that same moment
+    // a tile on it had no size, and every reel that had been up long enough to
+    // take that screen out of layout closed with a plain fade instead of
+    // shrinking. A tile that measures at nothing is asked again, a frame later.
+    const measureTile = (framesLeft: number) => handle.measure((rect) => {
       // Recovery may already have popped this viewer while measurement waited.
       if (leftRef.current) return;
+      if (!rect && framesLeft > 0) {
+        requestAnimationFrame(() => measureTile(framesLeft - 1));
+        return;
+      }
       if (!isReturnableRect(rect, screenRef.current)) {
         plainLeave();
         return;
@@ -1613,6 +1628,7 @@ export function useMediaZoomStage({
       // With no layer to step it the flight has already landed.
       if (live && !getZoomFlight()) leave();
     });
+    measureTile(TILE_REMEASURE_FRAMES);
   }, [following, interactive, leave, lentVideo, nativeZoom, origin, plainLeave, reducedMotion, returnableVideo, stageOpacity]);
 
   const stageProps = useAnimatedProps(() => ({
