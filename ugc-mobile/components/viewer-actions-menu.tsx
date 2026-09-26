@@ -29,6 +29,8 @@ export function ViewerActionsMenuProvider({ callbacksFor, children }: { callback
 
 type ViewerActionsMenuProps = Omit<NativeMenuProps, 'model'> & {
   item: ImmersivePreviewItem;
+  /** Rows this screen already is, such as View details on the details page. */
+  excludeActions?: string[];
   /**
    * False draws the plain button, whose press opens the sheet. The reel keeps
    * its neighbouring slides that way, so a swipe does not build a native menu
@@ -37,23 +39,28 @@ type ViewerActionsMenuProps = Omit<NativeMenuProps, 'model'> & {
   enabled?: boolean;
 };
 
-export function ViewerActionsMenu({ item, enabled = true, ...menu }: ViewerActionsMenuProps) {
+export function ViewerActionsMenu({ item, enabled = true, excludeActions, ...menu }: ViewerActionsMenuProps) {
   const callbacksFor = useContext(ViewerActionsMenuContext);
   if (!callbacksFor || !enabled) {
     return <View style={menu.style}>{menu.renderButton(menu.onFallbackPress)}</View>;
   }
-  return <ItemActionsMenu item={item} callbacks={callbacksFor(item)} {...menu} />;
+  return <ItemActionsMenu item={item} callbacks={callbacksFor(item)} excludeActions={excludeActions} {...menu} />;
 }
 
 function ItemActionsMenu({
   item,
   callbacks,
+  excludeActions,
   ...menu
-}: Omit<NativeMenuProps, 'model'> & { item: ImmersivePreviewItem; callbacks: ViewerActionCallbacks }) {
+}: Omit<NativeMenuProps, 'model'> & {
+  item: ImmersivePreviewItem;
+  callbacks: ViewerActionCallbacks;
+  excludeActions?: string[];
+}) {
   const { actions, handleAction, lifecyclePost, updateVisibility } = useViewerActionHandlers({ item, ...callbacks });
   const model = buildViewerActionsMenu({
     item,
-    actions,
+    actions: excludeActions?.length ? actions.filter((action) => !excludeActions.includes(action)) : actions,
     onAction: handleAction,
     visibility: lifecyclePost.visibility,
     onPickVisibility: (next) => void updateVisibility(lifecyclePost, next),

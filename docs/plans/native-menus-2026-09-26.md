@@ -1,6 +1,6 @@
 # Native menus for the ••• buttons
 
-Status: building. The inventory below was taken on 2026-09-26 at `c40fbe9e` (#215) on the branch `mobile/native-menus`. The owner chose native menus through Expo UI the same day, and settled the two open calls: the viewer menu opens with an icon row for the rail's actions, and the Create disc keeps its sheet.
+Status: building. The inventory below was taken on 2026-09-26 at `c40fbe9e` (#215) on the branch `mobile/native-menus`. The owner chose native menus through Expo UI the same day, and settled the two open calls: the viewer menu opens with an icon row for the rail's actions, and the Create disc keeps its sheet. Every ••• below is converted and checked on an iOS 26.4 simulator as a guest: Home, Explore, the reel, post details and the creator profile. The comment menu appears only to a signed-in viewer and waits for the iPhone pass. Android waits for the shared emulator.
 
 Scope: `ugc-mobile/` only; paths below are relative to it. Expo UI (`@expo/ui`) is a new native module, so this ships in store build 0.1.8, never over the air. Keep the branch unmerged until 0.1.8 is cut: once it is on `main`, OTAs published from `main` no longer match 0.1.7's fingerprint, which is what happened after #202. Develop and check on the S24 first; the iPhone gets one batched pass.
 
@@ -39,7 +39,7 @@ AGENTS.md asks for a native API before a hand-built behaviour.
 
 - **Viewer menu.** Replaces `components/viewer-action-sheet.tsx`, a `Modal` sheet with a title, a sentence, grouped rows with a second line each, and a scroll.
   - The groups become sections: Your post, Creation to post, Explore preferences and Safety.
-  - Someone else's post reaches about 11 items. Save, Comments, Share and Remix are already on the rail, so they move into a `ControlGroup` row of icons at the top of the menu (the owner's call, 2026-09-26). The same menu opens from screens without the rail, so nothing disappears there. Android has no such row, so they become its first rows.
+  - Someone else's post reaches about 11 items. Save, Comments and Share are already on the rail, so they move into a `ControlGroup` row of icons at the top of the menu (the owner's call, 2026-09-26); Remix leads the first section, since iOS fits three in the row. The same menu opens from screens without the rail, so nothing disappears there. Android has no such row, so they become its first rows.
   - A menu row carries one short subtitle at most, so the per-row descriptions go. A disabled row keeps its reason as the subtitle ("This post is archived").
   - Change visibility becomes a submenu with the current value checked. It replaces the second sheet from `pickPostVisibility`.
 - **Feed menu.** Replaces `components/feed-feedback-sheet.tsx`: Not interested and Hide @creator, then Report content, Report user and Block user.
@@ -52,8 +52,8 @@ Destructive picks keep their confirmation through `showConfirmDialog`, as the HI
 
 | Section | Control | Today | Becomes |
 | --- | --- | --- | --- |
-| Post composer footer | "Public ⌄" `app/post/new.tsx:1168` | `VisibilitySheet`: radio rows with a line each | Public, Unlisted and Private with the current one checked and each line as its subtitle. The button's label follows the choice. |
-| The post menus | Change visibility, `lib/post-lifecycle.ts:132` | a second action sheet | A submenu of the viewer menu |
+| Post composer footer | "Public ⌄" `app/post/new.tsx:1168` | `VisibilitySheet`: radio rows with a line each | **Stays a sheet** (decided 2026-09-27). An iOS menu row cannot carry its line (see below), and each choice needs it to be understood: "Unlisted" means nothing without "Only people with the link can open it". |
+| The post menus | Change visibility, `lib/post-lifecycle.ts:132` | a second action sheet | A submenu of the viewer menu. Whoever changes a live post's visibility has chosen it once already, so the bare names do. |
 
 ### The owner's call
 
@@ -73,6 +73,16 @@ Destructive picks keep their confirmation through `showConfirmDialog`, as the HI
 ### Later, out of scope
 
 Long-press context menus with a preview on feed cards and grid tiles, the way Photos does it. Nothing offers this today. Expo Router's `Link.Preview` and `Link.Menu` could do it over the air.
+
+## What the simulator showed (iOS 26.4, 2026-09-27)
+
+Checked with a dev client of this branch on a simulator of its own (`MagicBooklet Native Menus`), driven by an XCUITest runner copied from `.claude/tools/reelprobe` and filmed with `screencapture -l` on its window.
+
+- **The morph is the system's.** A SwiftUI `Menu` whose label is our glyph grows out of the button in about 200 ms and shrinks back in about 200 ms, the same motion as WhatsApp's.
+- **The label must be drawn from props.** Expo UI's `Image` applies its own `size` and `color` right on the symbol, so `font` and `foregroundStyle` modifiers lose to them, and the default menu style tints the label with the accent blue until `buttonStyle('plain')`.
+- **Rows are drawn from props only.** A subtitle needs a label built from child texts, and SwiftUI filled those in about a second after the menu opened, so rows grew under the finger. iOS rows carry no subtitle. The guest's "For this visit" is the section heading there instead.
+- **The icon row holds three.** A fourth quick action (Remix) was moved out of the row by iOS, so the model keeps Save, Comments and Share there and Remix leads the first section.
+- **The closing tap reached the app.** In Files, a tap outside the ••• menu only closes it. Ours also pressed whatever was under the finger (a tab, a carousel card): React Native's touch handler still receives that tap, most likely because the menu is hosted inside React Native's views. `lib/native-menu-shield.ts` fixes it: the menu's content raises a shield when it appears (`onAppear`, which fires on each open; `onDisappear` never fires), the root view claims the next touch in the responder capture phase, and a chosen row or the app leaving the foreground lowers it.
 
 ## Steps
 

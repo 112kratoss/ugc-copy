@@ -216,10 +216,11 @@ describe('viewer menu', () => {
       onAction: noop,
     });
 
-    expect(menu.quickActions.map((row) => row.label)).toEqual(['Save', 'Comments', 'Share', 'Remix']);
+    // Three icons: iOS fits no more in the row, so Remix leads the first section.
+    expect(menu.quickActions.map((row) => row.label)).toEqual(['Save', 'Comments', 'Share']);
     expect(menu.quickActions.every((row) => Boolean(row.systemImage))).toBe(true);
     expect(menu.sections.map((section) => section.title)).toEqual([undefined, 'Explore preferences', 'Safety']);
-    expect(menu.sections[0].items.map((item) => item.label)).toEqual(['View details', 'Open original post']);
+    expect(menu.sections[0].items.map((item) => item.label)).toEqual(['Remix', 'View details', 'Open original post']);
     expect(menu.sections[2].items.every((item) => item.kind === 'action' && item.destructive)).toBe(true);
   });
 

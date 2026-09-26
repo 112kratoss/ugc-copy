@@ -13,10 +13,12 @@ import { getViewerActionGroupLabel, getViewerActionLabel, isDestructiveViewerAct
 
 /**
  * The actions the reel's rail already shows. The menu opens with them as one
- * row of icons (the owner's call, 2026-09-26) rather than four full rows, and
- * keeps them there on the screens that have no rail.
+ * row of icons (the owner's call, 2026-09-26) rather than full rows, and keeps
+ * them there on the screens that have no rail. The row holds three: iOS moved
+ * a fourth (Remix) out of it on its own (simulator, 2026-09-27), so Remix and
+ * Unlock lead the first section instead, by choice rather than by overflow.
  */
-const QUICK_ACTIONS = new Set(['save', 'unsave', 'comment', 'share', 'recreate', 'unlock-remix']);
+const QUICK_ACTIONS = new Set(['save', 'unsave', 'comment', 'share']);
 
 /** SF Symbols for the iOS rows, one for each Lucide icon the sheet draws. */
 const VIEWER_ACTION_SYMBOLS: Record<string, string> = {

@@ -443,6 +443,7 @@ function DetailsHeader({
       {onActionsOpen ? (
         <ViewerActionsMenu
           item={item}
+          excludeActions={['view-details']}
           accessibilityLabel="More options"
           trigger={{
             width: 48,
