@@ -62,7 +62,9 @@ categories before the fix. No existing customer rows need repair.
 - Focused ESLint, syntax check, and whitespace checks passed.
 - CI initially exposed missing ambient workflow grants on its newer Supabase
   image. Revoking those same four local grants reproduced the exact failure;
-  explicit grants now preserve the deployed contract on fresh databases.
+  explicit grants and the matching active-identity policies now preserve the
+  deployed contract on fresh databases. Removing the four identity policies
+  also reproduced CI’s three revoked-session failures before they were fixed.
 - Production verifier: `scripts/ops/verify-workflow-parent-ownership.mjs`.
   Requires `--confirm --project-ref ildfmhozpibwiopeavfg` and environment
   credentials. It creates two disposable identities with empty workflows and

@@ -14,6 +14,33 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.workflow_canvas_assistant_proposals
 TO authenticated;
 
+-- The earlier identity-policy discovery skipped tables lacking ambient grants.
+-- Restate the matching production policies atomically with the explicit grants.
+DROP POLICY IF EXISTS authenticated_identity_active ON public.workflow_canvases;
+CREATE POLICY authenticated_identity_active
+ON public.workflow_canvases AS RESTRICTIVE FOR ALL TO authenticated
+USING ((SELECT public.current_identity_is_active()))
+WITH CHECK ((SELECT public.current_identity_is_active()));
+
+DROP POLICY IF EXISTS authenticated_identity_active ON public.workflow_canvas_history;
+CREATE POLICY authenticated_identity_active
+ON public.workflow_canvas_history AS RESTRICTIVE FOR ALL TO authenticated
+USING ((SELECT public.current_identity_is_active()))
+WITH CHECK ((SELECT public.current_identity_is_active()));
+
+DROP POLICY IF EXISTS authenticated_identity_active ON public.workflow_canvas_assistant_messages;
+CREATE POLICY authenticated_identity_active
+ON public.workflow_canvas_assistant_messages AS RESTRICTIVE FOR ALL TO authenticated
+USING ((SELECT public.current_identity_is_active()))
+WITH CHECK ((SELECT public.current_identity_is_active()));
+
+DROP POLICY IF EXISTS authenticated_identity_active ON public.workflow_canvas_assistant_proposals;
+CREATE POLICY authenticated_identity_active
+ON public.workflow_canvas_assistant_proposals AS RESTRICTIVE FOR ALL TO authenticated
+USING ((SELECT public.current_identity_is_active()))
+WITH CHECK ((SELECT public.current_identity_is_active()));
+
+
 CREATE POLICY workflow_parent_owned
 ON public.workflow_canvas_history AS RESTRICTIVE FOR ALL TO authenticated
 USING (

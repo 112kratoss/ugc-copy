@@ -21,7 +21,8 @@ describe('workflow parent ownership migration', () => {
       expect(migration).toContain(`canvas.id = ${table}.canvas_id`);
       expect(migration).toContain(`canvas.user_id = ${table}.user_id`);
     }
-    expect(migration.match(/WITH CHECK/g)).toHaveLength(6);
+    expect(migration.match(/WITH CHECK/g)).toHaveLength(10);
+    expect(migration.match(/CREATE POLICY authenticated_identity_active/g)).toHaveLength(4);
   });
 
   it('checks optional proposal and generation references without broadening grants', () => {
@@ -30,7 +31,7 @@ describe('workflow parent ownership migration', () => {
     expect(migration).toContain('generation.user_id = (SELECT auth.uid())');
     expect(migration).toContain('proposal_id IS NULL');
     expect(migration).toContain('generation_id IS NULL');
-    expect(migration).not.toMatch(/\b(?:REVOKE|SECURITY DEFINER|DROP POLICY)\b/);
+    expect(migration).not.toMatch(/\b(?:REVOKE|SECURITY DEFINER)\b/);
     expect(migration).toContain('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE');
     expect(migration).not.toMatch(/TO (?:PUBLIC|anon)/);
   });
