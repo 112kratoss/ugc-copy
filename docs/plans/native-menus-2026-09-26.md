@@ -1,6 +1,6 @@
 # Native menus for the ••• buttons
 
-Status: building. The inventory below was taken on 2026-09-26 at `c40fbe9e` (#215) on the branch `mobile/native-menus`. The owner chose native menus through Expo UI the same day, and settled the two open calls: the viewer menu opens with an icon row for the rail's actions, and the Create disc keeps its sheet. Every ••• below is converted and checked on an iOS 26.4 simulator as a guest: Home, Explore, the reel, post details and the creator profile. The comment menu appears only to a signed-in viewer and waits for the iPhone pass. Android waits for the shared emulator.
+Status: building. The inventory below was taken on 2026-09-26 at `c40fbe9e` (#215) on the branch `mobile/native-menus`. The owner chose native menus through Expo UI the same day, and settled the two open calls: the viewer menu opens with an icon row for the rail's actions, and the Create disc keeps its sheet. Every ••• below is converted and checked on an iOS 26.4 simulator as a guest (Home, Explore, the reel, post details, the creator profile) and on the S24 signed in (Home, the reel, a text post, a comment). Left for the iPhone pass: the comment menu on iOS, and Home and Explore scrolling (see Steps).
 
 Scope: `ugc-mobile/` only; paths below are relative to it. Expo UI (`@expo/ui`) is a new native module, so this ships in store build 0.1.8, never over the air. Keep the branch unmerged until 0.1.8 is cut: once it is on `main`, OTAs published from `main` no longer match 0.1.7's fingerprint, which is what happened after #202. Develop and check on the S24 first; the iPhone gets one batched pass.
 
@@ -83,6 +83,14 @@ Checked with a dev client of this branch on a simulator of its own (`MagicBookle
 - **Rows are drawn from props only.** A subtitle needs a label built from child texts, and SwiftUI filled those in about a second after the menu opened, so rows grew under the finger. iOS rows carry no subtitle. The guest's "For this visit" is the section heading there instead.
 - **The icon row holds three.** A fourth quick action (Remix) was moved out of the row by iOS, so the model keeps Save, Comments and Share there and Remix leads the first section.
 - **The closing tap reached the app.** In Files, a tap outside the ••• menu only closes it. Ours also pressed whatever was under the finger (a tab, a carousel card): React Native's touch handler still receives that tap, most likely because the menu is hosted inside React Native's views. `lib/native-menu-shield.ts` fixes it: the menu's content raises a shield when it appears (`onAppear`, which fires on each open; `onDisappear` never fires), the root view claims the next touch in the responder capture phase, and a chosen row or the app leaving the foreground lowers it.
+
+## What the S24 showed (release `.dev` build, 2026-09-27)
+
+Built from this branch with the JS embedded (`com.magicbooklet.mobile.dev`, 0.1.7, production values), signed in.
+
+- **Every menu opens Material's dropdown from its button,** right-aligned under it, or above it on the reel's rail where there is no room below: Home cards, the reel, a text post's ⋮ and a comment's •••. The dropdown grows out of its corner in about 100–150 ms.
+- **The closing tap stays in the dropdown.** Unlike the SwiftUI menu on iOS, the dropdown is a window of its own: with it open, a tap on the Notes tab only closed it. Android needs no shield.
+- **Rows read as expected:** the reel's icon-row actions become its first three rows, sections are separated by dividers, destructive rows are red, and a comment you wrote offers Delete alone.
 
 ## Steps
 
