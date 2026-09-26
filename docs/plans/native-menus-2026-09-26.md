@@ -1,6 +1,6 @@
 # Native menus for the ••• buttons
 
-Status: scoping. The inventory below was taken on 2026-09-26 at `c40fbe9e` (#215) on the branch `mobile/native-menus`, and nothing is built yet. The owner chose native menus through Expo UI the same day.
+Status: building. The inventory below was taken on 2026-09-26 at `c40fbe9e` (#215) on the branch `mobile/native-menus`. The owner chose native menus through Expo UI the same day, and settled the two open calls: the viewer menu opens with an icon row for the rail's actions, and the Create disc keeps its sheet.
 
 Scope: `ugc-mobile/` only; paths below are relative to it. Expo UI (`@expo/ui`) is a new native module, so this ships in store build 0.1.8, never over the air. Keep the branch unmerged until 0.1.8 is cut: once it is on `main`, OTAs published from `main` no longer match 0.1.7's fingerprint, which is what happened after #202. Develop and check on the S24 first; the iPhone gets one batched pass.
 
@@ -39,7 +39,7 @@ AGENTS.md asks for a native API before a hand-built behaviour.
 
 - **Viewer menu.** Replaces `components/viewer-action-sheet.tsx`, a `Modal` sheet with a title, a sentence, grouped rows with a second line each, and a scroll.
   - The groups become sections: Your post, Creation to post, Explore preferences and Safety.
-  - Someone else's post reaches about 11 items. Save, Comments, Share and Remix are already on the rail, so they either leave the menu or move into a `ControlGroup` row at its top.
+  - Someone else's post reaches about 11 items. Save, Comments, Share and Remix are already on the rail, so they move into a `ControlGroup` row of icons at the top of the menu (the owner's call, 2026-09-26). The same menu opens from screens without the rail, so nothing disappears there. Android has no such row, so they become its first rows.
   - A menu row carries one short subtitle at most, so the per-row descriptions go. A disabled row keeps its reason as the subtitle ("This post is archived").
   - Change visibility becomes a submenu with the current value checked. It replaces the second sheet from `pickPostVisibility`.
 - **Feed menu.** Replaces `components/feed-feedback-sheet.tsx`: Not interested and Hide @creator, then Report content, Report user and Block user.
@@ -59,7 +59,7 @@ Destructive picks keep their confirmation through `showConfirmDialog`, as the HI
 
 | Section | Control | Note |
 | --- | --- | --- |
-| Dock | Create disc `components/magic-tab-bar.tsx:315`, opening `MagicCreateMenu` | Two choices with descriptions (design-mobile.md, Create menu). A native menu would grow out of the disc, but two items is under the HIG's suggested minimum, and the disc's sheet is a designed surface. Recommended: leave it. |
+| Dock | Create disc `components/magic-tab-bar.tsx:315`, opening `MagicCreateMenu` | Two choices with descriptions (design-mobile.md, Create menu). A native menu would grow out of the disc, but two items is under the HIG's suggested minimum, and the disc's sheet is a designed surface. **Stays** (the owner's call, 2026-09-26). |
 | Comments | Report reasons, `components/comments-sheet.tsx:433` | Follows a Report pick. It could be a Report submenu. Recommended: keep it an action sheet, since it is a choice that follows an action. |
 
 ### Stays as it is

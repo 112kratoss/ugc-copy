@@ -11,9 +11,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
+import { NativeMenu } from '@/components/native-menu';
 import { AppText, SecondaryButton, StatusBlock } from '@/components/ui';
 import { showActionSheet } from '@/lib/action-sheet';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
+import { actionSheetFromMenu, menuAction, type NativeMenuModel } from '@/lib/native-menu';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
 import { useAuth } from '@/lib/auth';
@@ -253,15 +255,21 @@ export function CreatorProfileScreen({
    * destructive entries to the top and puts Cancel at the bottom, so neither
    * ordering is this screen's to get wrong.
    */
+  const safetyMenu: NativeMenuModel = {
+    quickActions: [],
+    sections: [{
+      id: 'safety',
+      items: [
+        menuAction({ id: 'report-user', label: 'Report user', systemImage: 'exclamationmark.shield', destructive: true, onSelect: handleReportUser }),
+        menuAction({ id: 'block-user', label: 'Block user', systemImage: 'nosign', destructive: true, onSelect: handleBlockUser }),
+      ],
+    }],
+  };
+  // Where native menus are missing, the ⋮ opens the same rows as an action
+  // sheet, titled with the handle they act on.
   const handleSafetyOptions = () => {
     if (!data || data.viewer.isOwner) return;
-    showActionSheet({
-      title: `@${data.profile.username}`,
-      actions: [
-        { label: 'Report user', destructive: true, onPress: handleReportUser },
-        { label: 'Block user', destructive: true, onPress: handleBlockUser },
-      ],
-    });
+    showActionSheet(actionSheetFromMenu(`@${data.profile.username}`, safetyMenu));
   };
 
   const openProfileItem = (item: ShowcaseFeedItem, zoom: AppleZoomOpen | null = null) => {
@@ -373,6 +381,7 @@ export function CreatorProfileScreen({
             onEditProfile={() => router.push('/edit-profile' as never)}
             onFollowPress={handleFollowPress}
             onSafetyOptions={handleSafetyOptions}
+            safetyMenu={safetyMenu}
             onShareProfile={handleShareProfile}
             socialLinks={socialLinks}
           />
@@ -470,6 +479,7 @@ function CreatorHeader({
   onEditProfile,
   onFollowPress,
   onSafetyOptions,
+  safetyMenu,
   onShareProfile,
   socialLinks,
 }: {
@@ -479,6 +489,8 @@ function CreatorHeader({
   onEditProfile: () => void;
   onFollowPress: () => void;
   onSafetyOptions: () => void;
+  /** The ⋮ menu (`lib/native-menu.ts`); `onSafetyOptions` opens the sheet where native menus are missing. */
+  safetyMenu: NativeMenuModel;
   onShareProfile: () => void;
   socialLinks: Array<{ label: string; url: string }>;
 }) {
@@ -510,9 +522,24 @@ function CreatorHeader({
               <ShareGlyph size={appTheme.icon.compact} color={theme.colors.text} />
             </CircleAction>
             {!data.viewer.isOwner ? (
-              <CircleAction label="More options" onPress={onSafetyOptions}>
-                <MoreVertical size={appTheme.icon.default} color={theme.colors.text} />
-              </CircleAction>
+              <NativeMenu
+                model={safetyMenu}
+                accessibilityLabel="More options"
+                trigger={{
+                  width: 48,
+                  height: 48,
+                  iconSize: appTheme.icon.default,
+                  iconColor: theme.colors.text,
+                  vertical: true,
+                  circle: { fill: theme.colors.panelSoft, ring: theme.colors.border },
+                }}
+                onFallbackPress={onSafetyOptions}
+                renderButton={(onPress) => (
+                  <CircleAction label="More options" onPress={onPress}>
+                    <MoreVertical size={appTheme.icon.default} color={theme.colors.text} />
+                  </CircleAction>
+                )}
+              />
             ) : null}
           </View>
         </View>

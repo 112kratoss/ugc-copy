@@ -3,6 +3,7 @@ import { memo, useCallback, useContext } from 'react';
 import { Text, View } from 'react-native';
 
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
+import { NativeMenu } from '@/components/native-menu';
 import { MediaZoomSourceView, useMediaZoomSource } from '@/components/media-zoom';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
 import { FeedVideoActivationContext, useFeedVideoActivation } from '@/lib/feed-video-activation';
@@ -17,6 +18,7 @@ import {
 import { ShareGlyph } from '@/lib/platform-glyphs';
 import { showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
 import { buildImmersiveShowcaseItems } from '@/lib/immersive-preview-view-model';
+import type { NativeMenuModel } from '@/lib/native-menu';
 import { getShowcasePreviewMediaItems } from '@/lib/showcase-media';
 import { accentColor, appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -28,6 +30,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   onOpen,
   onToggleBody,
   onFeedbackOpen,
+  feedbackMenu,
   onCreatorOpen,
   onSave,
   onComments,
@@ -42,6 +45,8 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   onOpen: (zoom: AppleZoomOpen | null) => void;
   onToggleBody: () => void;
   onFeedbackOpen: () => void;
+  /** The ⋮ menu; `onFeedbackOpen` opens the sheet where native menus are missing. */
+  feedbackMenu: NativeMenuModel;
   onCreatorOpen: () => void;
   onSave: () => void;
   onComments: () => void;
@@ -85,6 +90,15 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
       onCreatorPress={onCreatorOpen}
       onMorePress={onFeedbackOpen}
       moreAccessibilityLabel={`More options for ${card.title}`}
+      renderMoreMenu={({ trigger, renderButton }) => (
+        <NativeMenu
+          model={feedbackMenu}
+          accessibilityLabel={`More options for ${card.title}`}
+          trigger={trigger}
+          onFallbackPress={onFeedbackOpen}
+          renderButton={renderButton}
+        />
+      )}
       onOpen={() => zoomSource.capture(onOpen)}
       onOpenTouchStart={zoomSource.prepare}
       openAccessibilityLabel={`Open ${card.title}`}

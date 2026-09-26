@@ -3,6 +3,7 @@ import { memo } from 'react';
 import { Text, View } from 'react-native';
 
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
+import { ViewerActionsMenu } from '@/components/viewer-actions-menu';
 import { MediaZoomSourceView, useMediaZoomSource } from '@/components/media-zoom';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
 import { PostTextBlock } from '@/components/post-text-block';
@@ -73,6 +74,15 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
       creatorName={card.creatorName}
       onMorePress={onActionsOpen}
       moreAccessibilityLabel={`More options for ${card.title}`}
+      renderMoreMenu={({ trigger, renderButton }) => (
+        <ViewerActionsMenu
+          item={item}
+          accessibilityLabel={`More options for ${card.title}`}
+          trigger={trigger}
+          onFallbackPress={onActionsOpen}
+          renderButton={renderButton}
+        />
+      )}
       onOpen={() => zoomSource.capture(onOpen)}
       onOpenTouchStart={zoomSource.prepare}
       openAccessibilityLabel={`Open ${card.title}`}

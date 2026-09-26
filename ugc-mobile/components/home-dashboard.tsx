@@ -59,7 +59,9 @@ import { getOwnerPostSalesSummary } from '@/lib/home-view-model';
 import { createHomeFeedPlaybackController } from '@/lib/home-feed-playback';
 import { createFeedVideoActivationStore, FeedVideoActivationContext } from '@/lib/feed-video-activation';
 import { useAppForeground } from '@/lib/app-foreground';
+import { buildFeedFeedbackMenu } from '@/lib/feed-feedback-menu';
 import { immersiveViewerHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
+import type { NativeMenuModel } from '@/lib/native-menu';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
 import { SHOWCASE_DRAW_DISTANCE } from '@/lib/media-performance';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
@@ -643,8 +645,7 @@ export function HomeDashboard() {
       .finally(() => setRemixingItemId(null));
   };
 
-  const applyFeedFeedback = (eventType: 'not_interested' | 'hide_creator') => {
-    const item = feedbackItem;
+  const applyFeedFeedback = (item: ShowcaseFeedItem | null, eventType: 'not_interested' | 'hide_creator') => {
     if (!item) return;
     if (eventType === 'hide_creator' && (!item.creator.id || item.creator.id === user?.id)) return;
 
@@ -697,8 +698,7 @@ export function HomeDashboard() {
     return false;
   };
 
-  const reportFeedbackContent = () => {
-    const item = feedbackItem;
+  const reportFeedbackContent = (item: ShowcaseFeedItem | null) => {
     if (!item || !requireModerationSignIn()) return;
     setFeedbackItem(null);
     void showConfirmDialog({
@@ -725,8 +725,7 @@ export function HomeDashboard() {
     });
   };
 
-  const reportFeedbackUser = () => {
-    const item = feedbackItem;
+  const reportFeedbackUser = (item: ShowcaseFeedItem | null) => {
     if (!item?.creator.id || !requireModerationSignIn()) return;
     const creatorId = item.creator.id;
     setFeedbackItem(null);
@@ -747,8 +746,7 @@ export function HomeDashboard() {
     });
   };
 
-  const blockFeedbackUser = () => {
-    const item = feedbackItem;
+  const blockFeedbackUser = (item: ShowcaseFeedItem | null) => {
     if (!item?.creator.id || !requireModerationSignIn()) return;
     const creatorId = item.creator.id;
     setFeedbackItem(null);
@@ -773,6 +771,20 @@ export function HomeDashboard() {
     });
   };
 
+  // The menu each card's ⋮ opens (`lib/native-menu.ts`), acting on that card's
+  // post. `FeedFeedbackSheet` below is the fallback for a build without native
+  // menus, and acts on the post whose ⋮ opened it.
+  const feedbackMenu = (item: ShowcaseFeedItem): NativeMenuModel => buildFeedFeedbackMenu({
+    creatorLabel: item.creator.username || item.creator.name || 'this creator',
+    hideCreatorDisabled: !item.creator.id || item.creator.id === user?.id,
+    sessionOnly: !user,
+    onNotInterested: () => applyFeedFeedback(item, 'not_interested'),
+    onHideCreator: () => applyFeedFeedback(item, 'hide_creator'),
+    onReportContent: () => reportFeedbackContent(item),
+    onReportUser: () => reportFeedbackUser(item),
+    onBlockUser: () => blockFeedbackUser(item),
+  });
+
   // Memoized by React Compiler on everything it reads. The hand-written
   // useCallback it replaces left out the handlers below, so a card could keep
   // calling an old `remixItem` (and the `user` inside it) until a listed value
@@ -786,6 +798,7 @@ export function HomeDashboard() {
         onOpen={(zoom) => openCard(card, { zoom })}
         onToggleBody={() => toggleBodyExpanded(card.id)}
         onFeedbackOpen={() => setFeedbackItem(card.item)}
+        feedbackMenu={feedbackMenu(card.item)}
         onCreatorOpen={() => openCreator(card.item)}
         onSave={() => toggleSave({ postId: card.id, isSaved: card.isSaved, saveCount: card.item.saveCount })}
         onComments={() => {
@@ -919,12 +932,12 @@ export function HomeDashboard() {
       <FeedFeedbackSheet
         creatorLabel={feedbackItem?.creator.username || feedbackItem?.creator.name || 'this creator'}
         hideCreatorDisabled={!feedbackItem?.creator.id || feedbackItem.creator.id === user?.id}
-        onBlockUser={blockFeedbackUser}
+        onBlockUser={() => blockFeedbackUser(feedbackItem)}
         onClose={() => setFeedbackItem(null)}
-        onHideCreator={() => applyFeedFeedback('hide_creator')}
-        onNotInterested={() => applyFeedFeedback('not_interested')}
-        onReportContent={reportFeedbackContent}
-        onReportUser={reportFeedbackUser}
+        onHideCreator={() => applyFeedFeedback(feedbackItem, 'hide_creator')}
+        onNotInterested={() => applyFeedFeedback(feedbackItem, 'not_interested')}
+        onReportContent={() => reportFeedbackContent(feedbackItem)}
+        onReportUser={() => reportFeedbackUser(feedbackItem)}
         postTitle={feedbackItem?.title || 'this post'}
         sessionOnly={!user}
         visible={Boolean(feedbackItem)}

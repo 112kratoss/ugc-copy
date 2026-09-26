@@ -156,12 +156,17 @@ describe('a creator profile leads with the creator, not with reporting them', ()
     expect(creator).not.toContain('function SafetyAction');
   });
 
-  /** They stay reachable, one tap deeper, through the sheet N2 built. */
+  /**
+   * They stay reachable, one tap deeper: a More pull-down menu on the overflow
+   * control (Pull-down buttons), and the sheet N2 built where native menus are
+   * missing. Both draw the same destructive rows.
+   */
   it('offers them from an overflow control instead', () => {
     expect(creatorHeader).toContain('label="More options"');
-    expect(creator).toContain('showActionSheet({');
-    expect(creator).toContain("label: 'Report user', destructive: true");
-    expect(creator).toContain("label: 'Block user', destructive: true");
+    expect(creatorHeader).toContain('<NativeMenu');
+    expect(creator).toContain('showActionSheet(actionSheetFromMenu(');
+    expect(creator).toMatch(/label: 'Report user',[^\n]*destructive: true/);
+    expect(creator).toMatch(/label: 'Block user',[^\n]*destructive: true/);
   });
 
   /** Only on someone else's profile — you cannot report yourself. */
