@@ -1357,7 +1357,9 @@ function ImmersivePreviewViewer() {
  * playing video when the tile lent its player, drawn by a view of the same
  * player, so a zoom that lands before the data does lands on the clip the
  * reader was watching rather than on its poster or a spinner. The slide that
- * mounts takes that same player over, so nothing restarts.
+ * mounts takes that same player over, so nothing restarts. While UIKit's zoom
+ * lands a second view lies under the first, as on the slide, so the frame the
+ * first misses does not show the tile's picture (`MediaZoomLentVideo.landing`).
  */
 function ViewerShell({ topInset, bottomInset, preview = null, video = null, children }: { topInset: number; bottomInset: number; preview?: ZoomPreview | null; video?: MediaZoomLentVideo | null; children: React.ReactNode }) {
   return (
@@ -1374,6 +1376,15 @@ function ViewerShell({ topInset, bottomInset, preview = null, video = null, chil
         transition={0}
         style={{ position: 'absolute', inset: 0 }}
       /> : null}
+      {video?.attached && video.landing ? (
+        <FeedMediaFrame
+          kind="video"
+          player={video.video.player}
+          backgroundColor="transparent"
+          videoBackdrop="none"
+          style={{ position: 'absolute', inset: 0 }}
+        />
+      ) : null}
       {video?.attached ? (
         <FeedMediaFrame
           kind="video"
@@ -2387,6 +2398,10 @@ function ActiveVideoAttempt({
     revealedPlayerRef.current = lentPlayer;
     surfaceOpacity.setValue(1);
   }, [lentAttached, lentPlayer, surfaceOpacity]);
+  // While UIKit's zoom lands, a second view of the lent player lies under the
+  // surface: the frame the surface's own view misses as the transition
+  // completes shows the clip there, not the poster (`MediaZoomLentVideo.landing`).
+  const landingCopy = lentAttached && lentVideo?.landing === true;
 
   const revealSurface = () => {
     if (revealedPlayerRef.current === player) return;
@@ -2474,6 +2489,16 @@ function ActiveVideoAttempt({
         onSinglePress={togglePlayback}
         style={{ width, height, alignItems: 'center', justifyContent: 'center' }}
       >
+        {/* Under the surface while UIKit's zoom lands: see `landingCopy`. */}
+        {zoomLanded && landingCopy ? (
+          <FeedMediaFrame
+            kind="video"
+            player={player}
+            backgroundColor="transparent"
+            videoBackdrop="none"
+            style={{ position: 'absolute', left: 0, top: 0, width, height }}
+          />
+        ) : null}
         {/* The video's own view — the priciest view the reel creates, some
             10 ms on an S24 — waits for a zoom into the reel to land. The player
             is loading without it, and draws its frame into it the moment it
