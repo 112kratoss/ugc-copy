@@ -89,6 +89,7 @@ Checked with a dev client of this branch on a simulator of its own (`MagicBookle
 1. Add `@expo/ui` at the SDK 55 pin through `expo install`, build an Android dev client, and install it on the S24.
 2. Build one primitive, `components/native-menu.tsx`, and list it in `components/ui.tsx` as the design guide asks. It takes one description of a menu (sections, items, subtitles, destructive, disabled, checked) and draws it as a SwiftUI `Menu` on iOS and a Compose `DropdownMenu` on Android. The pure mapping lives in `lib/` and is unit-tested.
 3. Convert in this order: feed menu, comment menu, creator menu, the composer's visibility pop-up, then the viewer menu.
-4. Check each surface on the S24, then do one iPhone pass: the morph, both appearances, and Reduce Motion.
+4. Check each surface on the S24, then do one iPhone pass: the morph, both appearances, Reduce Motion, and the comment menu, which a guest never sees.
+   - **Measure Home and Explore scrolling on the iPhone before shipping.** Every card's ⋮ is now a SwiftUI `Host`, which is one `UIHostingController` per card, built as cells are created and updated as they are recycled. The reel mounts one only for the slide on screen, after it lands; the feeds mount one per card. If Instruments shows it in the hitches, mount the host only on cards at rest and keep the plain button (and its sheet) while the list moves. Android mounts its dropdown only while it is open, so it has no such cost.
 5. Update `docs/design/design-mobile.md` (Overlays: a ••• opens a native menu, and action sheets are for choices that follow an action). Extend the HIG guard tests if a rule is adopted.
 6. Hold the merge for 0.1.8, and record the OTA target when that store build ships.
