@@ -21,7 +21,7 @@ import { ActionSheetHost } from '@/components/action-sheet';
 import { DialogHost } from '@/components/dialog';
 import { OnboardingServerSync } from '@/components/onboarding-server-sync';
 import { MediaZoomFlightLayer } from '@/components/media-zoom';
-import { ZoomPostChrome } from '@/components/zoom-post-chrome';
+import { ZoomPostChrome, ZoomPostPreparer } from '@/components/zoom-post-chrome';
 import { OverlayHost } from '@/components/overlay-host';
 import { nativeMenuTouchGuardProps } from '@/lib/native-menu-shield';
 import { SignOutOverlay } from '@/components/sign-out-overlay';
@@ -334,6 +334,7 @@ function RootLayoutNav() {
                 <ThemeScope scheme="dark">
                   <MediaZoomFlightLayer renderPost={renderZoomPost} />
                 </ThemeScope>
+                <ZoomPostPreparer />
               </View>
               </GestureHandlerRootView>
             </ThemeProvider>

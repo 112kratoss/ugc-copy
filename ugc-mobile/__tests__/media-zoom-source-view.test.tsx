@@ -38,7 +38,15 @@ vi.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 59, bottom: 34, left: 0, right: 0 }),
 }));
 
-import { MediaZoomSourceView, useMediaZoomStage, type MediaZoomSource } from '../components/media-zoom';
+import {
+  MediaZoomSourceView,
+  MediaZoomSurface,
+  setZoomPostPreparer,
+  useMediaZoomSource,
+  useMediaZoomStage,
+  type MediaZoomSource,
+} from '../components/media-zoom';
+import type { ImmersivePreviewItem } from '../lib/immersive-preview-view-model';
 import { registerZoomSource, setPendingZoomOrigin, clearPendingZoomOrigin } from '../lib/media-zoom-transition';
 import { useMediaZoomTileKey } from '../lib/media-zoom-video-offer';
 
@@ -158,5 +166,31 @@ describe('the view a tile hands to the reel', () => {
     });
 
     expect(seen).toBe('surface\u0000post');
+  });
+
+  it('hands its post to the app shell as the finger lands, to ask ahead for what the post draws', () => {
+    const prepared: ImmersivePreviewItem[] = [];
+    const stop = setZoomPostPreparer((post) => {
+      prepared.push(post);
+    });
+    const post = { id: 'post' } as ImmersivePreviewItem;
+    let prepare: (() => void) | null = null;
+    const Tile = () => {
+      prepare = useMediaZoomSource({ itemId: 'post', aspectRatio: 0.5, post }).prepare;
+      return null;
+    };
+    renderer.act(() => {
+      renderer.create(
+        <MediaZoomSurface>
+          <Tile />
+        </MediaZoomSurface>
+      );
+    });
+
+    renderer.act(() => prepare?.());
+    stop();
+    renderer.act(() => prepare?.());
+
+    expect(prepared).toEqual([post]);
   });
 });

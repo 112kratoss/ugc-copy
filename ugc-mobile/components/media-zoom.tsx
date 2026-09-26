@@ -38,6 +38,7 @@ import {
   clearHiddenZoomSources,
   clearPendingZoomOrigin,
   computeZoomFrame,
+  createZoomUncovering,
   endTileOpen,
   getHeldZoomPicture,
   getHeldZoomPictureToken,
@@ -54,6 +55,7 @@ import {
   setZoomSourceHidden,
   subscribeToHeldZoomPicture,
   subscribeToZoomFlights,
+  UNCOVERED,
   type ZoomFlight,
   type ZoomGeometry,
   type ZoomOrigin,
@@ -61,6 +63,7 @@ import {
   type ZoomRect,
   type ZoomSize,
   type ZoomStill,
+  type ZoomUncovering,
   type ZoomVideo,
 } from '@/lib/media-zoom-transition';
 import {
@@ -304,6 +307,21 @@ const stillCarriesVideo = makeMutable(false);
 
 /** Starts and stops the layer's frame callback; set while the layer is mounted. */
 let tickerControl: ((active: boolean) => void) | null = null;
+/**
+ * What the app shell fetches for a post the moment a finger lands on its tile,
+ * so the window the post grows in and the reel it opens can draw it from their
+ * first frame: whom the reader follows (`ZoomPostPreparer`). The shell owns what
+ * a post's chrome reads, as it does for `MediaZoomFlightLayer`'s `renderPost`.
+ */
+let postPreparer: ((post: ImmersivePreviewItem) => void) | null = null;
+
+export function setZoomPostPreparer(preparer: (post: ImmersivePreviewItem) => void) {
+  postPreparer = preparer;
+  return () => {
+    if (postPreparer === preparer) postPreparer = null;
+  };
+}
+
 /** The layer's size and page position — the space every tile is measured in. */
 let layerScreen: ZoomSize = { width: 0, height: 0 };
 let layerOrigin = { x: 0, y: 0 };
@@ -622,6 +640,16 @@ export function useMediaZoomLanded() {
   return useContext(MediaZoomLandedContext);
 }
 
+const MediaZoomUncoveringContext = createContext<ZoomUncovering>(UNCOVERED);
+
+/**
+ * When the reel starts to be uncovered (`ZoomUncovering`): a slide that plays
+ * its own player waits for this, not for `useMediaZoomOpened`.
+ */
+export function useMediaZoomUncovering() {
+  return useContext(MediaZoomUncoveringContext);
+}
+
 /** A video the tile lent the reel, and whether the reel's own view may take its player yet. */
 export interface MediaZoomLentVideo {
   video: ZoomVideo;
@@ -780,7 +808,9 @@ export function useMediaZoomSource({
   }, [active, aspectRatio, hidden, itemId, measure, previewCacheKey, previewThumbhash, previewUrl, radius, surfaceId]);
 
   const prepare = useCallback(() => {
-    if (LAYER_FLIGHT && active && preview) prepareZoomPicture(preview, aspectRatio, false, post);
+    if (!active) return;
+    if (post) postPreparer?.(post);
+    if (LAYER_FLIGHT && preview) prepareZoomPicture(preview, aspectRatio, false, post);
   }, [active, aspectRatio, post, preview]);
 
   // A ref, not state: the offer changes as players come and go while the feed
@@ -953,6 +983,8 @@ export interface MediaZoomStageValue {
    * and its video has started moving.
    */
   landed: boolean;
+  /** The moment the reel starts to be uncovered; see `ZoomUncovering`. */
+  uncovering: ZoomUncovering;
   /**
    * Latches once the reel has drawn its picture, or stopped waiting for it. The
    * reel is pushed as the flight lands, and what it mounts after its picture —
@@ -1094,6 +1126,7 @@ export function useMediaZoomStage({
   const [drawn, setDrawn] = useState(!zooming);
   const settledRef = useRef(!zooming || !WAIT_FOR_TRANSITION);
   const handoffRef = useRef(!zooming);
+  const [uncovering] = useState(() => createZoomUncovering(!zooming));
   const dismissingRef = useRef(false);
   const leftRef = useRef(false);
   const closeRef = useRef<{ id: number; live: boolean } | null>(null);
@@ -1317,6 +1350,7 @@ export function useMediaZoomStage({
     if (!chromeDrawnRef.current) return;
     if (!neighboursDrawnRef.current && expectsNeighboursRef.current) return;
     handoffRef.current = true;
+    uncovering.mark();
     // A lent video: the reel adopts the player and its slide's view takes it,
     // and the layer's view lets go once that view has had a frame to draw. A
     // loan that has already ended — the reel took too long — leaves the slide
@@ -1329,7 +1363,7 @@ export function useMediaZoomStage({
     }
     if (lentVideo) setVideoHandoff('failed');
     fadeOutZoomStill(finishOpen);
-  }, [finishOpen, lentVideo, nativeZoom]);
+  }, [finishOpen, lentVideo, nativeZoom, uncovering]);
 
   useEffect(() => {
     if (ready) handoff();
@@ -1644,6 +1678,7 @@ export function useMediaZoomStage({
     zooming,
     opened,
     landed,
+    uncovering: uncovering.signal,
     drawn,
     reportNeighbourDrawn,
     reportChromeDrawn,
@@ -1705,7 +1740,9 @@ export function MediaZoomStage({
               <MediaZoomOpenedContext.Provider value={stage.opened}>
                 <MediaZoomLandedContext.Provider value={stage.landed && stage.drawn}>
                   <MediaZoomLentVideoContext.Provider value={stage.lentVideo}>
-                    {children}
+                    <MediaZoomUncoveringContext.Provider value={stage.uncovering}>
+                      {children}
+                    </MediaZoomUncoveringContext.Provider>
                   </MediaZoomLentVideoContext.Provider>
                 </MediaZoomLandedContext.Provider>
               </MediaZoomOpenedContext.Provider>

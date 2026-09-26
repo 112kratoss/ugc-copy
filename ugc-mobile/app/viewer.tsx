@@ -14,7 +14,7 @@ import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'reac
 
 import { DoubleTapPressable } from '@/components/double-tap-pressable';
 import { AppleZoomTarget, useAppleZoomRetarget, useAppleZoomSourceId } from '@/components/apple-zoom';
-import { MediaZoomChrome, MediaZoomStage, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage, type MediaZoomLentVideo } from '@/components/media-zoom';
+import { MediaZoomChrome, MediaZoomStage, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage, useMediaZoomUncovering, type MediaZoomLentVideo } from '@/components/media-zoom';
 import { mediaItemAspectRatio, mediaRectInScreen, showcaseViewerMediaPicture, type ZoomPreview } from '@/lib/media-zoom-transition';
 import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
@@ -2061,27 +2061,32 @@ function ImmersiveMedia({
   // carries on.
   const playbackUrl = getShowcasePlaybackUrl(mediaItem);
   const lentVideo = useMediaZoomLentVideo(playbackUrl);
-  // Nor does it start on the render that opens the reel: that render mounts the
-  // neighbouring slides and their players, which holds the UI thread (833 ms on
-  // the emulator), and a clip started into it stalls on its first frames. It
-  // starts two frames later, once that work has been drawn, so the wait is spent
-  // on a still picture rather than a frozen one. A slide mounted after the reel
-  // opened has nothing to wait for.
-  const [openingDrawn, setOpeningDrawn] = useState(zoomOpened);
+  // It starts a frame after the reel begins to be uncovered. By then what the
+  // landing mounts — the rail, the caption, the neighbouring slides and their
+  // players, which hold the UI thread — has been laid out, so the clip does not
+  // stall on its first frames. Waiting until the reel had opened also held the
+  // first frame through the uncovering fade, which shows that same frame, and a
+  // player's next frame takes about the fade's length to arrive anyway. A slide
+  // mounted once the reel is uncovered has nothing to wait for.
+  const zoomUncovering = useMediaZoomUncovering();
+  const [openingDrawn, setOpeningDrawn] = useState(() => zoomOpened || zoomUncovering.uncovered());
   const holdsItsPlayer = mediaItem.mediaKind === 'video' && lentVideo === null;
   useEffect(() => {
     // Only a slide holding its own player waits: rendering every slide again
-    // two frames after the reel opens would land in the very stretch it avoids.
-    if (!holdsItsPlayer || !zoomOpened || openingDrawn) return undefined;
-    let second = 0;
-    const first = requestAnimationFrame(() => {
-      second = requestAnimationFrame(() => setOpeningDrawn(true));
-    });
-    return () => {
-      cancelAnimationFrame(first);
-      cancelAnimationFrame(second);
+    // as the reel is uncovered would land in the very stretch it avoids.
+    if (!holdsItsPlayer || openingDrawn) return undefined;
+    let frame = 0;
+    const start = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => setOpeningDrawn(true));
     };
-  }, [holdsItsPlayer, openingDrawn, zoomOpened]);
+    const unsubscribe = zoomUncovering.subscribe(start);
+    if (zoomOpened || zoomUncovering.uncovered()) start();
+    return () => {
+      unsubscribe();
+      cancelAnimationFrame(frame);
+    };
+  }, [holdsItsPlayer, openingDrawn, zoomOpened, zoomUncovering]);
   const videoActive = active && (openingDrawn || lentVideo !== null);
 
   // The bands around a picture that does not fill the slide are plain black

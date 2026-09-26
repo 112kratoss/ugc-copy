@@ -10,6 +10,7 @@ import {
   clearPendingZoomOrigin,
   computeZoomFrame,
   coverScale,
+  createZoomUncovering,
   endTileOpen,
   getHeldZoomPicture,
   getZoomFlight,
@@ -30,6 +31,7 @@ import {
   showcaseMediaZoomPreview,
   showcaseViewerMediaPicture,
   subscribeToZoomFlights,
+  UNCOVERED,
   type ZoomFlightEvent,
   type ZoomGeometry,
   type ZoomRect,
@@ -579,5 +581,46 @@ describe('the register of tiles', () => {
     unregisterFirst();
 
     expect(getZoomSource('home', 'post-1')).toBe(second);
+  });
+});
+
+describe('the reel uncovered', () => {
+  it('tells every slide waiting on it, once, when it is marked', () => {
+    const uncovering = createZoomUncovering(false);
+    const first = vi.fn();
+    const second = vi.fn();
+    uncovering.signal.subscribe(first);
+    uncovering.signal.subscribe(second);
+    expect(uncovering.signal.uncovered()).toBe(false);
+
+    uncovering.mark();
+    uncovering.mark();
+
+    expect(uncovering.signal.uncovered()).toBe(true);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it('forgets a slide that stopped waiting', () => {
+    const uncovering = createZoomUncovering(false);
+    const listener = vi.fn();
+    const unsubscribe = uncovering.signal.subscribe(listener);
+
+    unsubscribe();
+    uncovering.mark();
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('is uncovered from the start for a reel that did not grow out of a tile', () => {
+    const uncovering = createZoomUncovering(true);
+    const listener = vi.fn();
+    uncovering.signal.subscribe(listener);
+
+    uncovering.mark();
+
+    expect(uncovering.signal.uncovered()).toBe(true);
+    expect(listener).not.toHaveBeenCalled();
+    expect(UNCOVERED.uncovered()).toBe(true);
   });
 });

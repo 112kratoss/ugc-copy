@@ -1,10 +1,31 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 
+import type { MagicbookletApiClient } from './api-client';
 import { useAuth } from './auth';
+
+const FOLLOW_STATE_STALE_MS = 1000 * 60 * 5;
 
 export function creatorFollowStateQueryKey(creatorId: string | null) {
   return ['creator-follow-state', creatorId] as const;
+}
+
+/**
+ * Asks ahead whether the signed-in reader follows a creator, into the cache
+ * `useCreatorFollow` reads — as a finger lands on one of their tiles, so a
+ * reel opening on the post already knows (`ZoomPostPreparer`). An answer still
+ * fresh is not asked for again.
+ */
+export function prefetchCreatorFollowState(
+  queryClient: QueryClient,
+  api: Pick<MagicbookletApiClient, 'getCreatorFollowState'>,
+  creatorId: string
+) {
+  return queryClient.prefetchQuery({
+    queryKey: creatorFollowStateQueryKey(creatorId),
+    queryFn: () => api.getCreatorFollowState(creatorId),
+    staleTime: FOLLOW_STATE_STALE_MS,
+  });
 }
 
 /**
@@ -27,7 +48,7 @@ export function useCreatorFollow({ creatorId, enabled }: { creatorId: string | n
     queryKey,
     enabled: enabled && canFollow,
     queryFn: () => api.getCreatorFollowState(creatorId!),
-    staleTime: 1000 * 60 * 5,
+    staleTime: FOLLOW_STATE_STALE_MS,
   });
 
   const mutation = useMutation({
