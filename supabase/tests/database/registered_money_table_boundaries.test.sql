@@ -108,6 +108,9 @@ select is(
     from pg_policies
     where schemaname = 'public'
       and policyname = 'registered_identity_only'
+      and tablename in ('transactions','creator_resource_wallets',
+        'creator_resource_wallet_entries','creator_payout_requests',
+        'marketplace_orders','marketplace_purchases')
       and permissive = 'RESTRICTIVE'
       and roles = array['authenticated']::name[]
   ),

@@ -1,6 +1,6 @@
 # Section 2 — saves, audit records and marketplace content
 
-Status: fixes validated locally; release pending. Continues the public table/view audit after PR #216.
+Status: deployed in PR #218; 29 live checks passed and fixtures removed. Evidence: `backend-section-02-social-marketplace-release-2026-09-27.md`. Continues the public table/view audit after PR #216.
 
 ## Confirmed findings
 
@@ -22,6 +22,6 @@ Status: fixes validated locally; release pending. Continues the public table/vie
 - Pre-fix production draft-create reproduction: HTTP 500; disposable account removed.
 - Focused save, saved-state, marketplace service/adapter tests: 21 passed. Three migration contract tests passed. New marketplace cases cover draft creation, own edits, foreign/missing assets, and foreign linked posts.
 - Clean replay of 252 migrations completed. Full database suite passed (75 files; final count recorded with release evidence).
-- Live verifier `scripts/ops/verify-social-table-boundaries.mjs` uses two disposable accounts, a private post, an inert generation and a draft guide. It checks owner/foreign/revoked reads, denies direct writes, verifies the private-post API rejection, creates/edits a draft via the real marketplace API and rejects a foreign edit. Cleanup targets only its fixtures. Pending deployment before execution.
+- Live verifier `scripts/ops/verify-social-table-boundaries.mjs` used two disposable accounts, a private post, an inert generation and a draft guide. All 29 checks passed: owner/foreign/revoked reads, denied direct writes, private-post API rejection, draft creation/editing and rejection of a foreign edit. Independent queries confirmed fixture cleanup.
 
 The previous workflow batch's production evidence is in `backend-section-02-workflow-release-2026-09-27.md`. Remaining Section 2 items include notification/preferences/push-token behavior, public table projections, and the separate RPC/Storage/Realtime batches. This report does not certify those surfaces.
