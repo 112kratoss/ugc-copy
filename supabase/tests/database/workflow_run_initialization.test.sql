@@ -142,6 +142,14 @@ select lives_ok(
   'the previous app direct-step compatibility grant remains until stage 3'
 );
 
+-- The earlier compatibility initializer now shares the API/legacy quota.
+-- Start this independent legacy limit case with a fresh fixture counter.
+reset role;
+delete from public.backend_rate_limits
+where scope = 'workflow-run:start'
+  and subject_key = 'a1000000-0000-4000-8000-000000000001';
+set local role authenticated;
+
 select lives_ok(
   $test$
     do $body$
