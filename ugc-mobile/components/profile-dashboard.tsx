@@ -26,6 +26,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { StableMediaImage } from '@/components/media-preview';
 import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
+import { PushOfferCard } from '@/components/push-offer-card';
 import { Reveal } from '@/components/reveal';
 import { ProfileGridSkeleton } from '@/components/skeleton';
 import { TopScrim } from '@/components/top-scrim';
@@ -96,9 +97,12 @@ const PROFILE_GALLERY_REVEAL_COUNT = PROFILE_GALLERY_COLUMNS * 3;
 export function ProfileDashboard({
   initialTab = DEFAULT_PROFILE_MEDIA_TAB,
   highlightedPostId = null,
+  justPublishedPostId = null,
 }: {
   initialTab?: ProfileMediaTab;
   highlightedPostId?: string | null;
+  /** A post the composer just published, which earns the notifications offer. */
+  justPublishedPostId?: string | null;
 } = {}) {
   const theme = useAppTheme();
   const { user, api, credits } = useAuth();
@@ -426,6 +430,7 @@ export function ProfileDashboard({
       )}
       horizontalPadding={horizontalPadding}
       highlightedPostId={highlightedPostId}
+      justPublishedPostId={justPublishedPostId}
       isFetchNextPageError={activeIsFetchNextPageError}
       isFetchingNextPage={activeIsFetchingNextPage}
       isLoading={isMediaLoading}
@@ -451,6 +456,7 @@ function ProfileMediaList({
   header,
   horizontalPadding,
   highlightedPostId,
+  justPublishedPostId,
   isFetchNextPageError,
   isFetchingNextPage,
   isLoading,
@@ -475,6 +481,7 @@ function ProfileMediaList({
   header: React.ReactNode;
   horizontalPadding: number;
   highlightedPostId?: string | null;
+  justPublishedPostId?: string | null;
   isFetchNextPageError?: boolean;
   isFetchingNextPage?: boolean;
   isLoading: boolean;
@@ -521,6 +528,16 @@ function ProfileMediaList({
     },
   ]).current;
 
+  // The notifications offer joins the header one commit after the first page
+  // does. FlashList sizes the render that delivers its first data against the
+  // previous render's header height, so a header that grows in that same render
+  // leaves its scroll offset stale (Explore's first-visit autoplay bug).
+  const [pushOfferReady, setPushOfferReady] = useState(false);
+  useEffect(() => {
+    if (!isLoading) setPushOfferReady(true);
+  }, [isLoading]);
+  const pushOfferPostId = pushOfferReady && activeTab === 'Posts' ? justPublishedPostId : null;
+
   return (
     // Saved tiles here are what the reel grows out of and returns to.
     <MediaZoomSurface>
@@ -547,6 +564,9 @@ function ProfileMediaList({
                 counts={postsScopeCounts}
                 onChange={onPostsScopeChange}
               />
+            ) : null}
+            {pushOfferPostId ? (
+              <PushOfferCard key={`post:${pushOfferPostId}`} moment="post" occasion={`post:${pushOfferPostId}`} />
             ) : null}
             {mediaError ? (
               <View style={{ gap: appTheme.spacing.gap }}>

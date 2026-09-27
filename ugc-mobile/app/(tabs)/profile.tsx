@@ -7,6 +7,8 @@ import { DEFAULT_PROFILE_MEDIA_TAB, type ProfileMediaTab } from '@/lib/profile-v
 type ProfileRouteParams = {
   tab?: string | string[];
   postId?: string | string[];
+  /** Set by the composer when `postId` was just published. */
+  published?: string | string[];
 };
 
 function normalizeParam(value: string | string[] | undefined) {
@@ -26,10 +28,17 @@ export default function ProfileScreen() {
   const params = useLocalSearchParams<ProfileRouteParams>();
   const initialTab = normalizeProfileTab(params.tab);
   const highlightedPostId = normalizeParam(params.postId) || null;
+  const justPublishedPostId = normalizeParam(params.published) === '1' ? highlightedPostId : null;
 
   if (isLoading) {
     return null;
   }
 
-  return <ProfileDashboard initialTab={initialTab} highlightedPostId={highlightedPostId} />;
+  return (
+    <ProfileDashboard
+      initialTab={initialTab}
+      highlightedPostId={highlightedPostId}
+      justPublishedPostId={justPublishedPostId}
+    />
+  );
 }

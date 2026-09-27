@@ -125,6 +125,7 @@ vi.mock('expo-linear-gradient', () => ({
 
 vi.mock('lucide-react-native', () => ({
   ArrowLeft: (props: MockProps) => React.createElement('glyph-icon', props),
+  BellRing: (props: MockProps) => React.createElement('bell-ring-icon', props),
   ChevronLeft: (props: MockProps) => React.createElement('glyph-icon', props),
   Share: (props: MockProps) => React.createElement('glyph-icon', props),
   Share2: (props: MockProps) => React.createElement('glyph-icon', props),
@@ -174,6 +175,9 @@ vi.mock('@/lib/auth', () => ({
   useAuth: () => authState,
 }));
 
+const notificationsMock = vi.hoisted(() => ({ registerForMobilePushNotifications: vi.fn() }));
+vi.mock('@/lib/notifications', () => notificationsMock);
+
 // Reference links are dated against the storage origin, so the suite fixes one.
 vi.mock('@/lib/env', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/env')>();
@@ -189,6 +193,7 @@ vi.mock('@/lib/use-generation-model-catalog', () => ({
 import { AppState } from 'react-native';
 import { createDefaultCreationDraft } from '../lib/media-creation-view-model';
 import { MediaCreationScreen } from '../components/media-creation-screen';
+import { PUSH_OFFER_STORAGE_KEY, resetPushOffersForTests } from '../lib/push-prompt';
 import { readCreatorSession, resetCreatorSessionForTests } from '../lib/creator-session-diagnostics';
 import { pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia } from '../lib/media';
 import { createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel } from './fixtures/generation-model-catalog';
@@ -223,6 +228,17 @@ vi.spyOn(renderer, 'create').mockImplementation((...args: Parameters<typeof rend
   tree.update = (next: React.ReactElement) => update(withClient(next));
   mountedTrees.push(tree);
   return tree;
+});
+
+// Push is already on unless a case says otherwise, so the notifications offer
+// stays out of the cases that are not about it. The client above is shared, so
+// the device's push state is dropped between cases too.
+beforeEach(() => {
+  notificationsMock.registerForMobilePushNotifications
+    .mockReset()
+    .mockResolvedValue({ status: 'registered', expoPushToken: 'ExponentPushToken[test]' });
+  resetPushOffersForTests();
+  testQueryClient.removeQueries({ queryKey: ['mobile-push-registration'] });
 });
 
 function collectText(root: renderer.ReactTestInstance) {
@@ -2270,6 +2286,184 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       params: { generationId: 'gen-1' },
     });
     vi.useRealTimers();
+  });
+
+  describe('notifications offer', () => {
+    const OFFER_TITLE = 'Get a notification when it’s ready';
+
+    /** Starts an image run that never settles, then lets the push check and offer history land. */
+    async function openWaitingWorkspace() {
+      authState.api.startImageGeneration.mockReturnValue(new Promise(() => undefined));
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<MediaCreationScreen initialTool="image" insideTab />);
+      });
+      renderer.act(() => {
+        tree!.root.findAll((node) => String(node.type) === 'textinput')[0].props.onChangeText('Create an editorial product image.');
+      });
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      await renderer.act(async () => {
+        void findPressableByText(tree!.root, 'Generate · 8 credits').props.onPress();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await settle();
+      return tree!;
+    }
+
+    async function settle() {
+      for (let pass = 0; pass < 3; pass += 1) {
+        await renderer.act(async () => {
+          await vi.advanceTimersByTimeAsync(10);
+        });
+      }
+    }
+
+    function askFirstThen(outcome: () => Promise<unknown>) {
+      notificationsMock.registerForMobilePushNotifications.mockImplementation(
+        (_api: unknown, options?: { requestPermission?: boolean }) => (
+          options?.requestPermission ? outcome() : Promise.resolve({ status: 'permission-required' })
+        ),
+      );
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('offers notifications while a creation runs, and reports a failed enable instead of leaving it unhandled', async () => {
+      vi.useFakeTimers();
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+      process.on('unhandledRejection', onUnhandled);
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      askFirstThen(() => Promise.reject(new Error('push token upload failed')));
+      try {
+        const tree = await openWaitingWorkspace();
+        expect(collectText(tree.root)).toContain('Creating image');
+        expect(collectText(tree.root)).toContain(OFFER_TITLE);
+
+        await renderer.act(async () => {
+          findPressableByText(tree.root, 'Notify me').props.onPress();
+        });
+        await settle();
+
+        expect(notificationsMock.registerForMobilePushNotifications).toHaveBeenCalledWith(authState.api, { requestPermission: true });
+        const text = collectText(tree.root);
+        expect(text).toContain('Couldn’t turn on notifications. Try again.');
+        expect(text).toContain('Notify me');
+        expect(consoleError).toHaveBeenCalledWith('Failed to register mobile push notifications', expect.any(Error));
+
+        vi.useRealTimers();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off('unhandledRejection', onUnhandled);
+        consoleError.mockRestore();
+      }
+    });
+
+    it('confirms in place once notifications are on', async () => {
+      vi.useFakeTimers();
+      askFirstThen(() => Promise.resolve({ status: 'registered', expoPushToken: 'ExponentPushToken[new]' }));
+      const tree = await openWaitingWorkspace();
+
+      await renderer.act(async () => {
+        findPressableByText(tree.root, 'Notify me').props.onPress();
+      });
+      await settle();
+
+      const text = collectText(tree.root);
+      expect(text).toContain('Notifications are on. We’ll tell you when it’s ready.');
+      expect(text).not.toContain('Notify me');
+    });
+
+    it('hides the offer when the system alert is declined', async () => {
+      vi.useFakeTimers();
+      askFirstThen(() => Promise.resolve({ status: 'denied' }));
+      const tree = await openWaitingWorkspace();
+
+      await renderer.act(async () => {
+        findPressableByText(tree.root, 'Notify me').props.onPress();
+      });
+      await settle();
+
+      expect(collectText(tree.root)).toContain('Creating image');
+      expect(collectText(tree.root)).not.toContain(OFFER_TITLE);
+    });
+
+    it('keeps the same offer through a minimize and reopen, and counts it once', async () => {
+      vi.useFakeTimers();
+      askFirstThen(() => new Promise(() => undefined));
+      const tree = await openWaitingWorkspace();
+      expect(collectText(tree.root)).toContain(OFFER_TITLE);
+
+      renderer.act(() => {
+        findPressableByText(tree.root, 'Minimize').props.onPress();
+      });
+      renderer.act(() => {
+        findPressableByText(tree.root, 'View progress').props.onPress();
+      });
+      await settle();
+
+      expect(collectText(tree.root)).toContain(OFFER_TITLE);
+      const offerWrites = draftStorage.setItem.mock.calls.filter(([key]) => key === PUSH_OFFER_STORAGE_KEY);
+      expect(offerWrites).toHaveLength(1);
+    });
+
+    it('does not offer notifications that are already on', async () => {
+      vi.useFakeTimers();
+      const tree = await openWaitingWorkspace();
+
+      expect(collectText(tree.root)).toContain('Creating image');
+      expect(collectText(tree.root)).not.toContain(OFFER_TITLE);
+    });
+
+    it('does not offer a guest, who cannot register for push, or even check', async () => {
+      vi.useFakeTimers();
+      authState.isGuest = true;
+      askFirstThen(() => Promise.resolve({ status: 'registered', expoPushToken: 'ExponentPushToken[guest]' }));
+      const tree = await openWaitingWorkspace();
+
+      expect(collectText(tree.root)).toContain('Creating image');
+      expect(collectText(tree.root)).not.toContain(OFFER_TITLE);
+      expect(notificationsMock.registerForMobilePushNotifications).not.toHaveBeenCalled();
+    });
+
+    it('no longer asks after a guided creation has already finished', async () => {
+      vi.useFakeTimers();
+      askFirstThen(() => Promise.resolve({ status: 'registered', expoPushToken: 'ExponentPushToken[late]' }));
+      (authState.api as Record<string, unknown>).recordOnboardingEvent = vi.fn().mockResolvedValue({ success: true });
+      authState.api.startImageGeneration.mockResolvedValue({
+        success: true,
+        predictionId: 'prediction-1',
+        generationId: 'gen-1',
+        status: 'processing',
+        remainingCredits: 980,
+      });
+      authState.api.getImageGeneration.mockResolvedValue({ status: 'succeeded', output: 'https://cdn.example.com/output.png' });
+
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<MediaCreationScreen initialTool="image" guided />);
+      });
+      renderer.act(() => {
+        tree!.root.findAll((node) => String(node.type) === 'textinput')[0].props.onChangeText('Create a glossy product hero shot.');
+      });
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      await renderer.act(async () => {
+        await findPressableByText(tree!.root, 'Generate · 8 credits').props.onPress();
+      });
+      await settle();
+
+      const text = collectText(tree!.root);
+      expect(text).toContain('Post to feed');
+      expect(text).not.toContain('Know when longer creations finish');
+      expect(text).not.toContain(OFFER_TITLE);
+    });
   });
 
   it('starts catalog-v2 models through the unified generation endpoint', async () => {

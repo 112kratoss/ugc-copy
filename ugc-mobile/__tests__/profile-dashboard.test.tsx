@@ -186,6 +186,12 @@ vi.mock('@/lib/auth', () => ({
   useAuth: () => authState,
 }));
 
+// The offer's own behaviour is covered with a real query client in
+// media-creation-screen.test.tsx; here only where the dashboard places it.
+vi.mock('@/components/push-offer-card', () => ({
+  PushOfferCard: (props: Record<string, unknown>) => React.createElement('push-offer-card', props),
+}));
+
 // react-query mock
 vi.mock('@tanstack/react-query', () => ({
   useQuery: ({ queryKey }: { queryKey: string[] }) => {
@@ -1338,5 +1344,37 @@ describe('ProfileDashboard media tiles routing', () => {
     });
 
     expect(tree!.root.findByProps({ children: 'Could not load profile' })).toBeTruthy();
+  });
+
+  describe('notifications offer after a publish', () => {
+    const offers = (tree: renderer.ReactTestRenderer) => tree.root.findAll((node) => String(node.type) === 'push-offer-card');
+
+    it('offers notifications above the grid for the post just published', () => {
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<ProfileDashboard initialTab="Posts" highlightedPostId="post-1" justPublishedPostId="post-1" />);
+      });
+
+      expect(offers(tree!)).toHaveLength(1);
+      expect(offers(tree!)[0].props).toMatchObject({ moment: 'post', occasion: 'post:post-1' });
+    });
+
+    it('does not offer on an ordinary visit to a post', () => {
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<ProfileDashboard initialTab="Posts" highlightedPostId="post-1" />);
+      });
+
+      expect(offers(tree!)).toHaveLength(0);
+    });
+
+    it('offers only on the Posts tab', () => {
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<ProfileDashboard initialTab="Creations" justPublishedPostId="post-1" />);
+      });
+
+      expect(offers(tree!)).toHaveLength(0);
+    });
   });
 });

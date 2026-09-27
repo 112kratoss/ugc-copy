@@ -23,6 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { MediaPreview, StableMediaImage } from '@/components/media-preview';
+import { PushOfferCard } from '@/components/push-offer-card';
 import {
   AppText,
   ChoiceChip,
@@ -570,7 +571,6 @@ function IdentityCreationScreen({
   // first load, null while there was no identity to load them for.
   const hydratedScopeRef = useRef<string | null | undefined>(undefined);
 
-  const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [promptMessage, setPromptMessage] = useState<string | null>(null);
   const [referenceNotice, setReferenceNotice] = useState<string | null>(null);
@@ -1339,10 +1339,7 @@ function IdentityCreationScreen({
     setMessage(null);
     haptic.success();
     if (draftScope) void clearPersistedCreationDrafts(draftScope).catch(() => undefined);
-    if (guided) {
-      setShowNotificationPrompt(true);
-      void trackOnboardingEvent(api, 'first_generation_succeeded', { goal: tool, step: 'creator' });
-    }
+    if (guided) void trackOnboardingEvent(api, 'first_generation_succeeded', { goal: tool, step: 'creator' });
   };
 
   const resumeGenerationPolling = async () => {
@@ -1849,14 +1846,6 @@ function IdentityCreationScreen({
           attemptUnconfirmed={Boolean(pendingAttempt) && !isGenerating && pendingAttempt?.tool === activeTool}
           onCheckAttempt={() => void checkPendingAttempt()}
           onStartNewRun={() => void startNewRun()}
-          showNotificationPrompt={showNotificationPrompt}
-          onEnableNotifications={() => {
-            void import('@/lib/notifications').then(({ registerForMobilePushNotifications }) => (
-              registerForMobilePushNotifications(api, { requestPermission: true })
-            ));
-            setShowNotificationPrompt(false);
-          }}
-          onDismissNotifications={() => setShowNotificationPrompt(false)}
           onMinimize={() => setWorkspaceVisible(false)}
           onOpenAlerts={() => {
             setWorkspaceVisible(false);
@@ -2115,14 +2104,6 @@ function IdentityCreationScreen({
           attemptUnconfirmed={Boolean(pendingAttempt) && !isGenerating && pendingAttempt?.tool === 'image'}
           onCheckAttempt={() => void checkPendingAttempt()}
           onStartNewRun={() => void startNewRun()}
-          showNotificationPrompt={showNotificationPrompt}
-          onEnableNotifications={() => {
-            void import('@/lib/notifications').then(({ registerForMobilePushNotifications }) => (
-              registerForMobilePushNotifications(api, { requestPermission: true })
-            ));
-            setShowNotificationPrompt(false);
-          }}
-          onDismissNotifications={() => setShowNotificationPrompt(false)}
           onMinimize={() => setWorkspaceVisible(false)}
           onOpenAlerts={() => {
             setWorkspaceVisible(false);
@@ -4046,9 +4027,6 @@ function GenerationWorkspace({
   attemptUnconfirmed,
   onCheckAttempt,
   onStartNewRun,
-  showNotificationPrompt,
-  onEnableNotifications,
-  onDismissNotifications,
   onMinimize,
   onOpenAlerts,
   onRetry,
@@ -4074,9 +4052,6 @@ function GenerationWorkspace({
   attemptUnconfirmed: boolean;
   onCheckAttempt: () => void;
   onStartNewRun: () => void;
-  showNotificationPrompt: boolean;
-  onEnableNotifications: () => void;
-  onDismissNotifications: () => void;
   onMinimize: () => void;
   onOpenAlerts: () => void;
   onRetry: () => void;
@@ -4118,18 +4093,6 @@ function GenerationWorkspace({
             <>
               <MediaPreview url={outputUrl} kind={previewKind} height={480} radius={26} nativeControls={previewKind === 'video'} />
               <View style={{ gap: 10 }}>
-                {showNotificationPrompt ? (
-                  <View style={{ borderRadius: 18, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.primary, 0.28), backgroundColor: theme.colors.surfaceStrong, padding: 13, gap: 10 }}>
-                    <View style={{ gap: 3 }}>
-                      <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: '800' }}>Know when longer creations finish</Text>
-                      <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 16 }}>Notifications are only requested after you choose Enable.</Text>
-                    </View>
-                    <View style={{ flexDirection: 'row', gap: 8 }}>
-                      <View style={{ flex: 1 }}><SecondaryButton label="Not now" onPress={onDismissNotifications} /></View>
-                      <View style={{ flex: 1 }}><PrimaryButton label="Enable" onPress={onEnableNotifications} /></View>
-                    </View>
-                  </View>
-                ) : null}
                 {generationId ? <PrimaryButton label="Post to feed" onPress={onPost} /> : null}
                 {/* Generative AI asks for controls like Edit, Undo, Retry or
                     Adjust *near* generated content — the result had none, so
@@ -4201,6 +4164,13 @@ function GenerationWorkspace({
                 <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.muted, fontSize: 12, textAlign: 'center', paddingHorizontal: 40, lineHeight: 18 }}>{waitDetail}</Text>
                 <Text style={{ color: theme.colors.faint, fontSize: 12, textAlign: 'center', paddingHorizontal: 40 }}>You can minimize this view. Generation will continue in the background.</Text>
               </View>
+              {/* Offered while the wait is happening, the one moment a
+                  notification plainly helps: most creations take about a
+                  minute. Keyed by the run, so a minimized and reopened
+                  workspace shows the same offer rather than a new one. */}
+              {startedAt !== null ? (
+                <PushOfferCard key={`creation:${startedAt}`} moment="creation" occasion={`creation:${startedAt}`} />
+              ) : null}
               <View style={{ flexDirection: 'row', gap: 10 }}>
                 <View style={{ flex: 1 }}><SecondaryButton label="Minimize" onPress={onMinimize} /></View>
                 <View style={{ flex: 1 }}><SecondaryButton label="Open Alerts" onPress={onOpenAlerts} /></View>
