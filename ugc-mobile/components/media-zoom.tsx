@@ -38,6 +38,7 @@ import {
   clearHiddenZoomSources,
   clearPendingZoomOrigin,
   computeZoomFrame,
+  createZoomUncovering,
   endTileOpen,
   getHeldZoomPicture,
   getHeldZoomPictureToken,
@@ -54,6 +55,7 @@ import {
   setZoomSourceHidden,
   subscribeToHeldZoomPicture,
   subscribeToZoomFlights,
+  UNCOVERED,
   type ZoomFlight,
   type ZoomGeometry,
   type ZoomOrigin,
@@ -61,6 +63,7 @@ import {
   type ZoomRect,
   type ZoomSize,
   type ZoomStill,
+  type ZoomUncovering,
   type ZoomVideo,
 } from '@/lib/media-zoom-transition';
 import {
@@ -180,6 +183,16 @@ const CHROME_FROM = 0.995;
 const CLOSE_CHROME_HOLD = 0.95;
 const CLOSE_CHROME_GONE = 0.3;
 /**
+ * Where on the close's clock a video the tile will not take back starts to
+ * dissolve into the tile. Such a tile — a long clip's, which plays a teaser, or
+ * one that never lent its player — shows its poster, the clip's first frame,
+ * and starts its own clip over. A reel left standing over it until it let go
+ * ended on a cut from wherever the reader had got to, which on a moving clip
+ * read as the picture jumping, or growing. From here the window is within a
+ * tenth of the tile (0.45³), so the two pictures barely part as they cross.
+ */
+const CLOSE_DISSOLVE_FROM = 0.45;
+/**
  * How far the picture has grown before the reel is pushed: all the way. Mounting
  * the reel is the heaviest thing the app does, and the UI thread is held for a
  * stretch of it. Pushed at the tap, it would hold the flight's first frames;
@@ -234,6 +247,12 @@ const DISMISS_SAFETY_MS = CLOSE_MS + 220;
  * a frame or two of a video. A tile that never says so is uncovered after this.
  */
 const RETURN_DRAWN_DEADLINE_MS = 250;
+/**
+ * How many frames a close asks again for a tile that measured at nothing. The
+ * screen beneath a reel at rest is out of layout (lib/zoom-underlay.ts), and it
+ * comes back a frame after a close asks for it, on the UI thread.
+ */
+const TILE_REMEASURE_FRAMES = 4;
 /**
  * How long a lent video goes on being drawn twice after UIKit reports its zoom
  * into the reel over (`MediaZoomLentVideo.landing`). The frame the second view
@@ -307,6 +326,21 @@ const stillCarriesVideo = makeMutable(false);
 
 /** Starts and stops the layer's frame callback; set while the layer is mounted. */
 let tickerControl: ((active: boolean) => void) | null = null;
+/**
+ * What the app shell fetches for a post the moment a finger lands on its tile,
+ * so the window the post grows in and the reel it opens can draw it from their
+ * first frame: whom the reader follows (`ZoomPostPreparer`). The shell owns what
+ * a post's chrome reads, as it does for `MediaZoomFlightLayer`'s `renderPost`.
+ */
+let postPreparer: ((post: ImmersivePreviewItem) => void) | null = null;
+
+export function setZoomPostPreparer(preparer: (post: ImmersivePreviewItem) => void) {
+  postPreparer = preparer;
+  return () => {
+    if (postPreparer === preparer) postPreparer = null;
+  };
+}
+
 /** The layer's size and page position — the space every tile is measured in. */
 let layerScreen: ZoomSize = { width: 0, height: 0 };
 let layerOrigin = { x: 0, y: 0 };
@@ -632,6 +666,16 @@ export function useMediaZoomLanded() {
   return useContext(MediaZoomLandedContext);
 }
 
+const MediaZoomUncoveringContext = createContext<ZoomUncovering>(UNCOVERED);
+
+/**
+ * When the reel starts to be uncovered (`ZoomUncovering`): a slide that plays
+ * its own player waits for this, not for `useMediaZoomOpened`.
+ */
+export function useMediaZoomUncovering() {
+  return useContext(MediaZoomUncoveringContext);
+}
+
 /** A video the tile lent the reel, and whether the reel's own view may take its player yet. */
 export interface MediaZoomLentVideo {
   video: ZoomVideo;
@@ -801,7 +845,9 @@ export function useMediaZoomSource({
   }, [active, aspectRatio, hidden, itemId, measure, previewCacheKey, previewThumbhash, previewUrl, radius, surfaceId]);
 
   const prepare = useCallback(() => {
-    if (LAYER_FLIGHT && active && preview) prepareZoomPicture(preview, aspectRatio, false, post);
+    if (!active) return;
+    if (post) postPreparer?.(post);
+    if (LAYER_FLIGHT && preview) prepareZoomPicture(preview, aspectRatio, false, post);
   }, [active, aspectRatio, post, preview]);
 
   // A ref, not state: the offer changes as players come and go while the feed
@@ -998,6 +1044,8 @@ export interface MediaZoomStageValue {
    * and its video has started moving.
    */
   landed: boolean;
+  /** The moment the reel starts to be uncovered; see `ZoomUncovering`. */
+  uncovering: ZoomUncovering;
   /**
    * Latches once the reel has drawn its picture, or stopped waiting for it. The
    * reel is pushed as the flight lands, and what it mounts after its picture —
@@ -1109,6 +1157,8 @@ export function useMediaZoomStage({
   const following = useSharedValue(zooming ? 1 : 0);
   const localGeometry = useSharedValue<ZoomGeometry>({ screen, tile: null, tileRadius: 0, aspectRatio: null });
   const stageOpacity = useSharedValue(zooming || reducedMotion || !PLAIN_DISSOLVE ? 1 : 0);
+  // Whether the close under way dissolves the reel into its tile (`CLOSE_DISSOLVE_FROM`).
+  const closeDissolves = useSharedValue(false);
 
   // A lent video is drawn by the reel's own slide from the moment it is
   // adopted, so there is no copy of the tile's poster to carry over it — a
@@ -1139,9 +1189,10 @@ export function useMediaZoomStage({
   const [drawn, setDrawn] = useState(!zooming);
   const settledRef = useRef(!zooming || !WAIT_FOR_TRANSITION);
   const handoffRef = useRef(!zooming);
+  const [uncovering] = useState(() => createZoomUncovering(!zooming));
   const dismissingRef = useRef(false);
   const leftRef = useRef(false);
-  const closeRef = useRef<{ id: number; live: boolean } | null>(null);
+  const closeRef = useRef<{ id: number; live: boolean; dissolves: boolean } | null>(null);
   /** The flight this reel follows and may reshape: its open, then its close. */
   const ownFlightRef = useRef<number | null>(origin?.flightId ?? null);
   const hiddenItemRef = useRef<string | null>(null);
@@ -1424,6 +1475,7 @@ export function useMediaZoomStage({
     if (!chromeDrawnRef.current) return;
     if (!neighboursDrawnRef.current && expectsNeighboursRef.current) return;
     handoffRef.current = true;
+    uncovering.mark();
     // A lent video: the reel adopts the player and its slide's view takes it,
     // and the layer's view lets go once that view has had a frame to draw. A
     // loan that has already ended — the reel took too long — leaves the slide
@@ -1436,7 +1488,7 @@ export function useMediaZoomStage({
     }
     if (lentVideo) setVideoHandoff('failed');
     fadeOutZoomStill(finishOpen);
-  }, [finishOpen, lentVideo, nativeZoom]);
+  }, [finishOpen, lentVideo, nativeZoom, uncovering]);
 
   useEffect(() => {
     if (ready) handoff();
@@ -1497,8 +1549,17 @@ export function useMediaZoomStage({
     return subscribeToZoomFlights((event) => {
       const close = closeRef.current;
       if (close && event.flight.id === close.id) {
-        // The reel itself has landed in the tile.
-        if (event.type === 'landed' && close.live) leaveIntoTile();
+        // The reel itself has landed in the tile: dissolved into it, or over it,
+        // handing it the video it lent. Out of sight either way from here, even
+        // should another flight move the clock before the pop has gone through.
+        if (event.type === 'landed' && close.live) {
+          if (close.dissolves) {
+            stageOpacity.set(0);
+            leave();
+          } else {
+            leaveIntoTile();
+          }
+        }
         return;
       }
       if (event.flight.id !== origin.flightId || event.type !== 'landed') return;
@@ -1507,7 +1568,7 @@ export function useMediaZoomStage({
       if (openedRef.current) following.set(0);
       else handoff();
     });
-  }, [following, handoff, leaveIntoTile, nativeZoom, origin]);
+  }, [following, handoff, leave, leaveIntoTile, nativeZoom, origin, stageOpacity]);
 
   // The navigator's own transition. Its length differs by platform and
   // direction; the event is the honest signal, the timer the safety net.
@@ -1638,9 +1699,18 @@ export function useMediaZoomStage({
       plainLeave();
       return;
     }
-    handle.measure((rect) => {
+    // The screen beneath comes back into layout on the UI thread, a frame after
+    // `setZoomUnderlayHidden(false)` asks for it. Measured in that same moment
+    // a tile on it had no size, and every reel that had been up long enough to
+    // take that screen out of layout closed with a plain fade instead of
+    // shrinking. A tile that measures at nothing is asked again, a frame later.
+    const measureTile = (framesLeft: number) => handle.measure((rect) => {
       // Recovery may already have popped this viewer while measurement waited.
       if (leftRef.current) return;
+      if (!rect && framesLeft > 0) {
+        requestAnimationFrame(() => measureTile(framesLeft - 1));
+        return;
+      }
       if (!isReturnableRect(rect, screenRef.current)) {
         plainLeave();
         return;
@@ -1671,6 +1741,11 @@ export function useMediaZoomStage({
       // picture and fades them out as the window comes down. A live close has
       // the reel's own chrome to fade instead (`chromeStyle`).
       const post = live ? null : postRef.current;
+      // A video the tile will not take back is not what the tile goes on to
+      // show, so the reel dissolves into the tile as it lands rather than
+      // standing over it until it lets go.
+      const dissolves = live && Boolean(activeVideoUrlRef.current) && !returnableVideo();
+      closeDissolves.set(dissolves);
       const flight = startZoomFlight({ direction: 'close', geometry, preview, video, post, still: !live }, live ? {} : {
         whenDisplayed: () => {
           // A video's window waited out of sight for its first frame.
@@ -1682,12 +1757,13 @@ export function useMediaZoomStage({
           });
         },
       });
-      closeRef.current = { id: flight.id, live };
+      closeRef.current = { id: flight.id, live, dissolves };
       ownFlightRef.current = flight.id;
       // With no layer to step it the flight has already landed.
       if (live && !getZoomFlight()) leave();
     });
-  }, [following, interactive, leave, lentVideo, nativeZoom, origin, plainLeave, reducedMotion, returnableVideo, stageOpacity]);
+    measureTile(TILE_REMEASURE_FRAMES);
+  }, [closeDissolves, following, interactive, leave, lentVideo, nativeZoom, origin, plainLeave, reducedMotion, returnableVideo, stageOpacity]);
 
   const stageProps = useAnimatedProps(() => ({
     pointerEvents: interactive.value ? ('box-none' as const) : ('auto' as const),
@@ -1703,7 +1779,11 @@ export function useMediaZoomStage({
       : computeZoomFrame(localGeometry.value, 1)
   ));
 
-  const stageStyle = useAnimatedStyle(() => ({ opacity: stageOpacity.value }));
+  const stageStyle = useAnimatedStyle(() => ({
+    opacity: closeDissolves.value
+      ? stageOpacity.value * interpolate(flightTime.value, [0, CLOSE_DISSOLVE_FROM], [0, 1], Extrapolation.CLAMP)
+      : stageOpacity.value,
+  }));
 
   const groundStyle = useAnimatedStyle(() => ({
     opacity: following.value
@@ -1752,6 +1832,7 @@ export function useMediaZoomStage({
     zooming,
     opened,
     landed,
+    uncovering: uncovering.signal,
     drawn,
     reportNeighbourDrawn,
     reportChromeDrawn,
@@ -1793,6 +1874,11 @@ export function MediaZoomStage({
     <Animated.View
       collapsable={false}
       animatedProps={stage.stageProps}
+      // Faded as one surface — a close dissolving into its tile, a plain fade.
+      // Android's per-child alpha otherwise draws the window's black ground and
+      // letterbox at the same alpha under the picture, and the reel darkened as
+      // it went. Offscreen only while translucent, as the layer's window is.
+      needsOffscreenAlphaCompositing
       style={[{ flex: 1 }, stage.stageStyle]}
     >
       <Animated.View
@@ -1813,7 +1899,9 @@ export function MediaZoomStage({
               <MediaZoomOpenedContext.Provider value={stage.opened}>
                 <MediaZoomLandedContext.Provider value={stage.landed && stage.drawn}>
                   <MediaZoomLentVideoContext.Provider value={stage.lentVideo}>
-                    {children}
+                    <MediaZoomUncoveringContext.Provider value={stage.uncovering}>
+                      {children}
+                    </MediaZoomUncoveringContext.Provider>
                   </MediaZoomLentVideoContext.Provider>
                 </MediaZoomLandedContext.Provider>
               </MediaZoomOpenedContext.Provider>

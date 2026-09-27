@@ -1,6 +1,8 @@
 # Backend Section 2 — table and view ownership
 
-Status: first fix batch validated locally; production release pending.
+Status: workflow ownership batch deployed in PR #216 and verified (24 live checks).
+Save/audit/marketplace batch deployed in PR #218 and verified (29 live checks); evidence is in backend-section-02-social-marketplace-release-2026-09-27.md.
+Notification table batch deployed in PR #219 and verified (36 live checks); evidence is in backend-section-02-notifications-release-2026-09-27.md.
 Scope: public table/view Data API privileges and row ownership. RPCs, Storage,
 Realtime, and the rest of the backend remain separate review batches.
 
@@ -15,15 +17,16 @@ column projection, and the policies inspected for this batch.
 | Surface | Evidence and current status |
 | --- | --- |
 | All public tables/views | Catalog inventory complete; behavioral certification remains in progress |
-| Workflow history, runs, assistant proposals/messages | Self-owned children could reference foreign canvases; reproduced and fixed locally |
-| Workflow run steps | Could reference another user's generation; reproduced and fixed locally |
-| Message-to-proposal association | Could reference another user's proposal or another canvas; reproduced and fixed locally |
+| Workflow history, runs, assistant proposals/messages | Self-owned children could reference foreign canvases; fixed and verified in production (PR #216) |
+| Workflow run steps | Could reference another user's generation; fixed and verified in production (PR #216) |
+| Message-to-proposal association | Could reference another user's proposal or another canvas; fixed and verified in production (PR #216) |
 | Private views | admin_user_account_state and playback_metrics_daily have no client grants; latter is security-invoker |
 | Profiles, generations, transactions | Existing row/column tests retained; full database regression suite passes |
-| Save tables and deletion audit | Direct writes need separate reproduction against intended service-only paths |
-| Marketplace content | Policy dependencies reference parent tables without client grants; investigate real API compatibility before changing anything |
-| Notifications, push tokens, preferences | Owner policies inventoried; dedicated cross-account behavioral matrix still pending |
-| Public follows, source tools/models, template projections | Grants inventoried; public-versus-private data contract review still pending |
+| Save tables and deletion audit | Direct-write bypass fixed and verified in production (PR #218) |
+| Marketplace content | Production draft-create HTTP 500 fixed; own edits work and foreign edits/direct content access rejected (PR #218) |
+| Notifications, push tokens, preferences | Guest-boundary fix deployed in PR #219; 40 database assertions and 36 live checks passed; fixtures removed |
+| Public follows, source tools/models, template projections | 52-case local matrix and 61 live checks passed across this group and private generation data; clean-replay compatibility fix pending release (see projection batch report) |
+| Generation-input media and AI usage | Owner, parent ownership, guest, ban/revocation and direct-write behavior verified in projection batch; Storage and RPC access remain separate |
 | Service-only tables | Client grants absent in inventory; RPC/trigger access and business invariants are not certified by that fact |
 
 ## First fix batch: workflow parent ownership
@@ -70,7 +73,7 @@ categories before the fix. No existing customer rows need repair.
   credentials. It creates two disposable identities with empty workflows and
   inert media rows, performs real authenticated Data API calls, revokes one
   fixture's session, and removes only its own fixtures. No provider work or
-  purchases are initiated. Pending release before execution.
+  purchases are initiated. All 24 live checks passed after PR #216 deployed; fixtures removed (see workflow release evidence).
 
 The Supabase security advisory baseline has no ERROR findings. Its warnings
 include guest-access policies (the product intentionally supports guests) and

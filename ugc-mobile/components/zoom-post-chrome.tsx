@@ -1,8 +1,10 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { skipToken, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Volume2, VolumeX } from 'lucide-react-native';
+import { useEffect } from 'react';
 import { View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { setZoomPostPreparer } from '@/components/media-zoom';
 import { IconShadow, ReelSlideChrome } from '@/components/reel-chrome';
 import { TopScrim } from '@/components/top-scrim';
 import { useAuth } from '@/lib/auth';
@@ -11,11 +13,31 @@ import { BackGlyph } from '@/lib/platform-glyphs';
 import { drawsPreparedFollowPill, getReelFollowTarget } from '@/lib/reel-overlay-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
-import { creatorFollowStateQueryKey } from '@/lib/use-creator-follow';
+import { creatorFollowStateQueryKey, prefetchCreatorFollowState } from '@/lib/use-creator-follow';
 import { useViewerAudioMuted } from '@/lib/viewer-audio';
 import { viewerTopControlTop, VIEWER_TOP_CONTROL_SIZE } from '@/lib/viewer-chrome';
 
 const ignore = () => {};
+
+/**
+ * Asks, as a finger lands on a post's tile, whom the signed-in reader follows,
+ * so the Follow pill can be drawn with the post from the window's first frames
+ * and the reel's: asked only once the reel was up, the answer took a round trip
+ * after it and the pill appeared a second or more into the post.
+ */
+export function ZoomPostPreparer() {
+  const { api, user } = useAuth();
+  const queryClient = useQueryClient();
+  const viewerId = user?.id ?? null;
+  useEffect(() => {
+    if (!viewerId) return undefined;
+    return setZoomPostPreparer((post) => {
+      const target = getReelFollowTarget(post, viewerId);
+      if (target) void prefetchCreatorFollowState(queryClient, api, target.creatorId);
+    });
+  }, [api, queryClient, viewerId]);
+  return null;
+}
 
 /**
  * A post as the reel draws it, for the window the post grows in out of its tile
@@ -36,16 +58,19 @@ export function ZoomPostChrome({ post, controls = true }: {
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const { user } = useAuth();
-  const queryClient = useQueryClient();
   const audioMuted = useViewerAudioMuted();
 
-  // The reel asks whom the reader follows once it is up, and draws no pill until
-  // it knows (`ImmersiveSlide`). Ahead of it, only an answer already cached is
-  // drawn, so the pill never appears here to vanish at the hand-off.
+  // The reel draws no pill until it knows whom the reader follows
+  // (`ImmersiveSlide`), and neither does this window: only an answer in the
+  // cache is drawn, so the pill never appears here to vanish at the hand-off.
+  // It is asked for as the finger lands on the tile (`ZoomPostPreparer`), and
+  // drawn here the moment it arrives, while the window is still growing,
+  // rather than once the reel under it has asked again.
   const followTarget = getReelFollowTarget(post, user?.id ?? null);
-  const followState = followTarget
-    ? queryClient.getQueryData<{ following: boolean }>(creatorFollowStateQueryKey(followTarget.creatorId))
-    : undefined;
+  const followState = useQuery<{ following: boolean }>({
+    queryKey: creatorFollowStateQueryKey(followTarget?.creatorId ?? null),
+    queryFn: skipToken,
+  }).data;
   const follow = drawsPreparedFollowPill({ followTarget, signedIn: Boolean(user), followKnown: followState !== undefined })
     ? { following: Boolean(user) && Boolean(followState?.following), pending: false, onPress: ignore }
     : null;

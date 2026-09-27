@@ -41,7 +41,9 @@ vi.mock('@/lib/auth', () => ({
   }),
 }));
 
-import { useCreatorFollow } from '@/lib/use-creator-follow';
+import type { QueryClient } from '@tanstack/react-query';
+
+import { creatorFollowStateQueryKey, prefetchCreatorFollowState, useCreatorFollow } from '@/lib/use-creator-follow';
 
 let latest: ReturnType<typeof useCreatorFollow> | null = null;
 
@@ -105,5 +107,22 @@ describe('useCreatorFollow', () => {
     });
     expect(state.mutate).toHaveBeenCalledWith(true);
     expect(state.cache.get(JSON.stringify(['creator-follow-state', 'creator-1']))).toEqual({ following: true });
+  });
+});
+
+describe('prefetchCreatorFollowState', () => {
+  it('asks ahead into the cache the reel reads, as fresh as the reel keeps it', async () => {
+    const prefetchQuery = vi.fn(async (_args: { queryKey: unknown; queryFn: () => unknown; staleTime: number }) => undefined);
+    const api = { getCreatorFollowState: vi.fn(async () => ({ following: true })) };
+
+    await prefetchCreatorFollowState({ prefetchQuery } as unknown as QueryClient, api, 'creator-9');
+    render({ creatorId: 'creator-9', enabled: true });
+
+    const args = prefetchQuery.mock.calls[0][0];
+    expect(args.queryKey).toEqual(creatorFollowStateQueryKey('creator-9'));
+    expect(args.queryKey).toEqual(state.queryArgs?.queryKey);
+    expect(args.staleTime).toBe(state.queryArgs?.staleTime);
+    await args.queryFn();
+    expect(api.getCreatorFollowState).toHaveBeenCalledWith('creator-9');
   });
 });

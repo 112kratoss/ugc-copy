@@ -28,13 +28,44 @@ describe('a video post closing into its tile', () => {
 
   it('lands a live close in the tile and pops only once the reel is out of sight', () => {
     const zoom = read('components/media-zoom.tsx');
-    expect(zoom).toContain("if (event.type === 'landed' && close.live) leaveIntoTile();");
+    expect(zoom).toMatch(
+      /if \(event\.type === 'landed' && close\.live\) \{\s*if \(close\.dissolves\) \{\s*stageOpacity\.set\(0\);\s*leave\(\);\s*\} else \{\s*leaveIntoTile\(\);/
+    );
     // Reanimated holds its commits while React commits: a hide set together with
     // the pop reached the screen with the pop, ~50 ms after the tile had drawn.
     const leaveIntoTile = zoom.slice(zoom.indexOf('const leaveIntoTile = useCallback('));
     const letGo = leaveIntoTile.slice(0, leaveIntoTile.indexOf('}, [leave, returnableVideo, stageOpacity]);'));
     expect(letGo).toContain('stageOpacity.set(withTiming(0, { duration: 0 }, () => {');
     expect(letGo).toContain('runOnJS(leave)();');
+  });
+
+  it('dissolves a video the tile will not take back into the tile as the close lands', () => {
+    // A long clip's tile plays a teaser, and a tile that never lent its player
+    // builds a new one: either shows its poster, the clip's first frame, and
+    // starts over. Filmed on the emulator (a Seedance teaser on Home), the reel
+    // stood frozen over that tile for 0.3–0.4 s and then cut to the first frame,
+    // which on a moving clip read as the picture jumping.
+    const zoom = read('components/media-zoom.tsx');
+    expect(zoom).toContain('const dissolves = live && Boolean(activeVideoUrlRef.current) && !returnableVideo();');
+    expect(zoom).toContain(
+      'stageOpacity.value * interpolate(flightTime.value, [0, CLOSE_DISSOLVE_FROM], [0, 1], Extrapolation.CLAMP)'
+    );
+    // Only over the stretch where the window has all but reached the tile, so
+    // the two pictures barely part as they cross.
+    const from = Number(zoom.match(/const CLOSE_DISSOLVE_FROM = ([\d.]+);/)?.[1]);
+    const power = Number(zoom.match(/const ZOOM_EASE_POWER = ([\d.]+);/)?.[1]);
+    expect(from ** power).toBeLessThan(0.1);
+  });
+
+  it('fades the reel as one surface', () => {
+    // Android's per-child alpha drew the window's black ground and letterbox at
+    // the dissolve's alpha under the picture: a landscape clip darkened to near
+    // black before the tile showed through.
+    const zoom = read('components/media-zoom.tsx');
+    const stage = zoom.slice(zoom.indexOf('export function MediaZoomStage('));
+    expect(stage.slice(0, stage.indexOf('style={[{ flex: 1 }, stage.stageStyle]}'))).toContain(
+      'needsOffscreenAlphaCompositing'
+    );
   });
 
   it('never hides the tile once a close has begun', () => {

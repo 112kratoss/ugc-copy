@@ -3,7 +3,9 @@ import { memo } from 'react';
 import { Text, View } from 'react-native';
 
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
+import { ViewerActionsMenu } from '@/components/viewer-actions-menu';
 import { MediaZoomSourceView, useMediaZoomSource } from '@/components/media-zoom';
+import { feedCardMediaWidth } from '@/lib/feed-card-geometry';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
 import { PostTextBlock } from '@/components/post-text-block';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
@@ -45,7 +47,9 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
 }) {
   const theme = useAppTheme();
   const accent = accentColor(card.accent, theme.colors);
-  const mediaHeight = getProfileFeedMediaHeight(card, contentWidth);
+  // Inside the card's border: the rectangle the reel grows out of and shrinks back into.
+  const mediaWidth = feedCardMediaWidth(contentWidth);
+  const mediaHeight = getProfileFeedMediaHeight(card, mediaWidth);
   const item = card.item;
   // The media is what opens: the reel grows out of this rectangle and shrinks
   // back into it.
@@ -73,6 +77,15 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
       creatorName={card.creatorName}
       onMorePress={onActionsOpen}
       moreAccessibilityLabel={`More options for ${card.title}`}
+      renderMoreMenu={({ trigger, renderButton }) => (
+        <ViewerActionsMenu
+          item={item}
+          accessibilityLabel={`More options for ${card.title}`}
+          trigger={trigger}
+          onFallbackPress={onActionsOpen}
+          renderButton={renderButton}
+        />
+      )}
       onOpen={() => zoomSource.capture(onOpen)}
       onOpenTouchStart={zoomSource.prepare}
       openAccessibilityLabel={`Open ${card.title}`}
@@ -93,7 +106,7 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
           <ShowcaseMediaPreview
             accent={accent}
             mediaItems={item.mediaItems}
-            width={contentWidth}
+            width={mediaWidth}
             height={mediaHeight}
             radius={0}
             recyclingKey={`profile-feed:${card.id}`}

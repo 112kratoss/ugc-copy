@@ -10,6 +10,7 @@ import { PostResourceBundleContent } from '@/components/post-resource-bundle-con
 import { ResourceAction } from '@/components/resource-action';
 import { CreatorAvatar, Pill } from '@/components/ui';
 import { SaveHeart } from '@/components/save-heart';
+import { ViewerActionsMenu } from '@/components/viewer-actions-menu';
 import { useAuth } from '@/lib/auth';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
 import { formatCompactCount } from '@/lib/home-view-model';
@@ -186,6 +187,7 @@ export function PostDetailsPage({
     <View style={{ width, height, backgroundColor: theme.colors.app }}>
       <DetailsHeader
         backLabel={getDetailsBackLabel(item)}
+        item={item}
         onActionsOpen={onActionsOpen}
         onBack={onBack}
         title={getDetailsTitle(item)}
@@ -398,12 +400,18 @@ export function PostDetailsPage({
  */
 function DetailsHeader({
   backLabel,
+  item,
   onActionsOpen,
   onBack,
   title,
   topInset,
 }: {
   backLabel: string;
+  item: ImmersivePreviewItem;
+  /**
+   * Opens the actions sheet where native menus are missing; elsewhere the ⋮
+   * opens the item's native menu (`components/viewer-actions-menu.tsx`).
+   */
   onActionsOpen?: () => void;
   onBack?: () => void;
   title: string;
@@ -433,9 +441,26 @@ function DetailsHeader({
         {title}
       </Text>
       {onActionsOpen ? (
-        <HeaderButton accessibilityLabel="More options" onPress={onActionsOpen}>
-          <MoreVertical size={appTheme.icon.feature} color={theme.colors.text} />
-        </HeaderButton>
+        <ViewerActionsMenu
+          item={item}
+          excludeActions={['view-details']}
+          accessibilityLabel="More options"
+          trigger={{
+            width: 48,
+            height: 48,
+            iconSize: appTheme.icon.feature,
+            iconColor: theme.colors.text,
+            vertical: true,
+            circle: { fill: theme.colors.surfaceStrong },
+            hitSlop: 6,
+          }}
+          onFallbackPress={onActionsOpen}
+          renderButton={(onPress) => (
+            <HeaderButton accessibilityLabel="More options" onPress={onPress}>
+              <MoreVertical size={appTheme.icon.feature} color={theme.colors.text} />
+            </HeaderButton>
+          )}
+        />
       ) : (
         <View style={{ width: 48, height: 48 }} />
       )}

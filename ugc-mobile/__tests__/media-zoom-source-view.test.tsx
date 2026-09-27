@@ -38,8 +38,16 @@ vi.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 59, bottom: 34, left: 0, right: 0 }),
 }));
 
-import { MediaZoomSourceView, useMediaZoomStage, type MediaZoomSource } from '../components/media-zoom';
-import { registerZoomSource, setPendingZoomOrigin, clearPendingZoomOrigin } from '../lib/media-zoom-transition';
+import {
+  MediaZoomSourceView,
+  MediaZoomSurface,
+  setZoomPostPreparer,
+  useMediaZoomSource,
+  useMediaZoomStage,
+  type MediaZoomSource,
+} from '../components/media-zoom';
+import type { ImmersivePreviewItem } from '../lib/immersive-preview-view-model';
+import { registerZoomSource, setPendingZoomOrigin, clearPendingZoomOrigin, resetMediaZoomTransitions, subscribeToZoomFlights } from '../lib/media-zoom-transition';
 import { useMediaZoomTileKey } from '../lib/media-zoom-video-offer';
 
 /** Stands in for whatever a tile draws; the wrappers around it are the subject. */
@@ -75,6 +83,57 @@ function wrapperStyles(element: React.ReactElement) {
 }
 
 describe('the view a tile hands to the reel', () => {
+  // The screen beneath a reel at rest is out of layout (lib/zoom-underlay.ts)
+  // and comes back a frame after a close asks for it, so its tile can measure at
+  // nothing on the first ask. Found on the emulator: every reel open longer than
+  // ~0.5 s closed with a plain fade instead of shrinking into its tile.
+  function closeWithAnswers(answers: ({ x: number; y: number; width: number; height: number } | null)[]) {
+    vi.useFakeTimers();
+    vi.stubGlobal('requestAnimationFrame', (run: () => void) => setTimeout(run, 16));
+    let asked = 0;
+    const unregister = registerZoomSource('measure-surface', 'measure-post', {
+      radius: 12, aspectRatio: 1, preview: null, setHidden: vi.fn(),
+      measure: (callback) => { callback(answers[Math.min(asked++, answers.length - 1)]); },
+    });
+    setPendingZoomOrigin({ surfaceId: 'measure-surface', itemId: 'measure-post',
+      rect: { x: 10, y: 100, width: 100, height: 100 }, radius: 12,
+      aspectRatio: 1, preview: null, flightId: -1, recordedAt: Date.now() });
+    let stage!: ReturnType<typeof useMediaZoomStage>;
+    function Reader() {
+      stage = useMediaZoomStage({ screen: { width: 402, height: 874 },
+        initialItemId: 'measure-post', activeItemId: 'measure-post', aspectRatio: 1,
+        reducedMotion: false, ready: false, expectsNeighbours: false, onExit: () => {} });
+      return null;
+    }
+    const closes: unknown[] = [];
+    const unsubscribe = subscribeToZoomFlights((event) => {
+      if (event.type === 'begin' && event.flight.direction === 'close') closes.push(event.flight.geometry.tile);
+    });
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(<Reader />); });
+    renderer.act(() => stage.dismiss());
+    renderer.act(() => { vi.advanceTimersByTime(100); });
+    const result = { closes, asked };
+    renderer.act(() => tree.unmount());
+    unsubscribe(); unregister(); clearPendingZoomOrigin(); resetMediaZoomTransitions();
+    vi.unstubAllGlobals(); vi.useRealTimers();
+    return result;
+  }
+
+  it('asks again for a tile that measures at nothing, and shrinks into it once it answers', () => {
+    const result = closeWithAnswers([null, { x: 10, y: 100, width: 100, height: 100 }]);
+
+    expect(result.asked).toBe(2);
+    expect(result.closes).toEqual([{ x: 10, y: 100, width: 100, height: 100 }]);
+  });
+
+  it('closes the plain way when the tile still measures at nothing after a few frames', () => {
+    const result = closeWithAnswers([null]);
+
+    expect(result.asked).toBe(5);
+    expect(result.closes).toEqual([]);
+  });
+
   it('exits once when a detached source never answers measurement, and ignores its late callback', () => {
     vi.useFakeTimers();
     let answer: ((rect: { x: number; y: number; width: number; height: number } | null) => void) | undefined;
@@ -159,5 +218,31 @@ describe('the view a tile hands to the reel', () => {
     });
 
     expect(seen).toBe('surface\u0000post');
+  });
+
+  it('hands its post to the app shell as the finger lands, to ask ahead for what the post draws', () => {
+    const prepared: ImmersivePreviewItem[] = [];
+    const stop = setZoomPostPreparer((post) => {
+      prepared.push(post);
+    });
+    const post = { id: 'post' } as ImmersivePreviewItem;
+    let prepare: (() => void) | null = null;
+    const Tile = () => {
+      prepare = useMediaZoomSource({ itemId: 'post', aspectRatio: 0.5, post }).prepare;
+      return null;
+    };
+    renderer.act(() => {
+      renderer.create(
+        <MediaZoomSurface>
+          <Tile />
+        </MediaZoomSurface>
+      );
+    });
+
+    renderer.act(() => prepare?.());
+    stop();
+    renderer.act(() => prepare?.());
+
+    expect(prepared).toEqual([post]);
   });
 });

@@ -27,7 +27,12 @@ describe('comment authentication return integration', () => {
     expect(homeSource).toContain('openCard(card, { comments: true })');
     expect(profileFeedSource).toContain("item.previewKind === 'text' && item.sourceType !== 'generation'");
     expect(profileFeedSource).toContain('openItem(item, { comments: true })');
-    expect(profileFeedSource).toContain('openItem(activeItem, { comments: true })');
+    // The sheet and each card's native menu take one set of callbacks, and its
+    // Comments routes a text card to the thread too.
+    expect(profileFeedSource).toMatch(
+      /const actionCallbacksFor = \(item: ImmersivePreviewItem\)[\s\S]*?openItem\(item, \{ comments: true \}\)/
+    );
+    expect(profileFeedSource).toContain('{...actionCallbacksFor(activeItem)}');
     expect(homeSource).toContain('<CommentsSheet');
     expect(profileFeedSource).toContain('<CommentsSheet');
   });

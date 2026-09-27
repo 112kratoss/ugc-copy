@@ -1,6 +1,6 @@
 import { Image } from 'expo-image';
 import { FileText, Globe, Heart, Images, LockKeyhole, MessageCircle, MoreHorizontal, Repeat2, Wand2 } from 'lucide-react-native';
-import { cloneElement, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { cloneElement, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { ActivityIndicator, Animated, Easing, Pressable, Text, View } from 'react-native';
 
 import { verticalHitSlop } from '@/lib/hit-target';
@@ -9,7 +9,7 @@ import { hasImmersiveDetailsPage, type ImmersivePreviewItem } from '@/lib/immers
 import { useReducedMotion } from '@/lib/motion';
 import { ShareGlyph } from '@/lib/platform-glyphs';
 import { buildReelCaption, getRailCountLabel } from '@/lib/reel-overlay-view-model';
-import { appTheme, type AppTheme } from '@/lib/theme';
+import { appTheme, mediaColors, type AppTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import {
   getRailActionOpacity,
@@ -22,6 +22,7 @@ import {
 } from '@/lib/viewer-actions';
 import { viewerTopBadgeTop } from '@/lib/viewer-chrome';
 import { renderReelIcon } from '@/components/reel-icon';
+import { ViewerActionsMenu } from '@/components/viewer-actions-menu';
 
 /**
  * A reel slide's chrome — the right rail, the creator and caption block, the
@@ -79,6 +80,11 @@ export interface ReelSlideChromeProps {
   onRecreate: (item: ImmersivePreviewItem) => void;
   onOwnerAction?: (action: string) => void;
   onActionsOpen: () => void;
+  /**
+   * Whether the ••• mounts its native menu (`components/viewer-actions-menu.tsx`):
+   * the slide on screen only. A neighbour draws the plain button.
+   */
+  actionsMenuEnabled?: boolean;
   onCreatorOpen: (item: ImmersivePreviewItem) => void;
 }
 
@@ -102,9 +108,13 @@ export function ReelSlideChrome({
   onRecreate,
   onOwnerAction,
   onActionsOpen,
+  actionsMenuEnabled = false,
   onCreatorOpen,
 }: ReelSlideChromeProps) {
   const theme = useAppTheme();
+  // Built in the lower-priority render after a swipe lands, like the details
+  // page, rather than in the frame the slide arrives in.
+  const deferredActionsMenuEnabled = useDeferredValue(actionsMenuEnabled);
   // The bottom scrim is sized to the text it protects, so it is measured.
   const [captionBlockHeight, setCaptionBlockHeight] = useState(0);
   const reelCaption = useMemo(() => buildReelCaption(item), [item]);
@@ -266,12 +276,27 @@ export function ReelSlideChrome({
             />
           );
         })}
-        <RailActionButton
+        <ViewerActionsMenu
+          item={item}
+          enabled={deferredActionsMenuEnabled}
           accessibilityLabel="More options"
-          icon={<MoreHorizontal size={28} color="#ffffff" />}
-          label={null}
-          onPress={onActionsOpen}
-          variant="bare"
+          trigger={{
+            width: 64,
+            height: 48,
+            iconSize: 28,
+            iconColor: mediaColors.onMedia,
+            shadowColor: mediaColors.mediaScrimStrong,
+          }}
+          onFallbackPress={onActionsOpen}
+          renderButton={(onPress) => (
+            <RailActionButton
+              accessibilityLabel="More options"
+              icon={<MoreHorizontal size={28} color="#ffffff" />}
+              label={null}
+              onPress={onPress}
+              variant="bare"
+            />
+          )}
         />
       </View>
 

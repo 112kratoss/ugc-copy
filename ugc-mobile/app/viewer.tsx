@@ -14,7 +14,7 @@ import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'reac
 
 import { DoubleTapPressable } from '@/components/double-tap-pressable';
 import { AppleZoomTarget, useAppleZoomRetarget, useAppleZoomSourceId } from '@/components/apple-zoom';
-import { MediaZoomChrome, MediaZoomStage, peekOpeningPost, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage, type MediaZoomLentVideo } from '@/components/media-zoom';
+import { MediaZoomChrome, MediaZoomStage, peekOpeningPost, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage, useMediaZoomUncovering, type MediaZoomLentVideo } from '@/components/media-zoom';
 import { mediaItemAspectRatio, mediaRectInScreen, showcaseViewerMediaPicture, type ZoomPreview } from '@/lib/media-zoom-transition';
 import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
@@ -38,6 +38,8 @@ import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
 import { AppSchemeScope } from '@/components/app-scheme-scope';
 import { CommentsSheet } from '@/components/comments-sheet';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
+import { ViewerActionsMenuProvider } from '@/components/viewer-actions-menu';
+import type { ViewerActionCallbacks } from '@/lib/use-viewer-action-handlers';
 import { useAuth } from '@/lib/auth';
 import { applyCommentCountToSourceData } from '@/lib/comments-view-model';
 import { env } from '@/lib/env';
@@ -1052,9 +1054,52 @@ function ImmersivePreviewViewer() {
     );
   }
 
+  // The screen's side of an item's actions: the rail's native menu asks for it
+  // per slide (`components/viewer-actions-menu.tsx`), and the sheet below — the
+  // fallback where native menus are missing — takes it for the open item.
+  const actionCallbacksFor = (item: ImmersivePreviewItem): ViewerActionCallbacks => ({
+    onComments: item.canComment ? () => {
+      setActionsOpenItemId(null);
+      setCommentsReplyToId(null);
+      setCommentsOpenItemId(item.id);
+    } : undefined,
+    onDetails: () => {
+      setActionsOpenItemId(null);
+      activeSlideRef.current?.openDetails();
+    },
+    onRecreate: () => void recreateItem(item),
+    onNotInterested: source === 'showcase-feed' && item.sourceType === 'showcase'
+      ? () => dismissRecommendation(item, 'not_interested')
+      : undefined,
+    onHideCreator: source === 'showcase-feed'
+      && item.sourceType === 'showcase'
+      && Boolean(item.creatorId)
+      && item.creatorId !== user?.id
+      ? () => dismissRecommendation(item, 'hide_creator')
+      : undefined,
+    onShare: () => void shareItem(item),
+    onUnlockRemix: () => {
+      setActionsOpenItemId(null);
+      setUnlockRemixOpenItemId(item.id);
+    },
+    onDeleted: () => {
+      setActionsOpenItemId(null);
+      router.replace({
+        pathname: '/(tabs)/profile',
+        params: { tab: 'posts' },
+      } as never);
+    },
+    onBlocked: () => zoom.dismiss(),
+    onSourceRefresh: () => {
+      setManualRefreshes((count) => count + 1);
+      void sourceQuery.refetch();
+    },
+  });
+
   return (
     <ViewerPlaybackContext.Provider value={playbackHandoff}>
     <ViewerLeavingContext.Provider value={leaving}>
+    <ViewerActionsMenuProvider callbacksFor={actionCallbacksFor}>
     {/* The reel is drawn inside a window that grows out of the tapped tile and
         shrinks back into it, so opening a post reads as that post getting
         bigger rather than as another screen arriving. */}
@@ -1252,42 +1297,7 @@ function ImmersivePreviewViewer() {
         <ViewerActionSheet
           item={activeItem}
           onClose={() => setActionsOpenItemId(null)}
-          onComments={activeItem.canComment ? () => {
-            setActionsOpenItemId(null);
-            setCommentsReplyToId(null);
-            setCommentsOpenItemId(activeItem.id);
-          } : undefined}
-          onDetails={() => {
-            setActionsOpenItemId(null);
-            activeSlideRef.current?.openDetails();
-          }}
-          onRecreate={() => void recreateItem(activeItem)}
-          onNotInterested={source === 'showcase-feed' && activeItem.sourceType === 'showcase'
-            ? () => dismissRecommendation(activeItem, 'not_interested')
-            : undefined}
-          onHideCreator={source === 'showcase-feed'
-            && activeItem.sourceType === 'showcase'
-            && Boolean(activeItem.creatorId)
-            && activeItem.creatorId !== user?.id
-            ? () => dismissRecommendation(activeItem, 'hide_creator')
-            : undefined}
-          onShare={() => void shareItem(activeItem)}
-          onUnlockRemix={() => {
-            setActionsOpenItemId(null);
-            setUnlockRemixOpenItemId(activeItem.id);
-          }}
-          onDeleted={() => {
-            setActionsOpenItemId(null);
-            router.replace({
-              pathname: '/(tabs)/profile',
-              params: { tab: 'posts' },
-            } as never);
-          }}
-          onBlocked={() => zoom.dismiss()}
-          onSourceRefresh={() => {
-            setManualRefreshes((count) => count + 1);
-            void sourceQuery.refetch();
-          }}
+          {...actionCallbacksFor(activeItem)}
           visible={actionsOpenItemId === activeItem.id}
         />
       ) : null}
@@ -1350,6 +1360,7 @@ function ImmersivePreviewViewer() {
       ) : null}
     </View>
     </MediaZoomStage>
+    </ViewerActionsMenuProvider>
     </ViewerLeavingContext.Provider>
     </ViewerPlaybackContext.Provider>
   );
@@ -1669,6 +1680,7 @@ function ImmersiveSlide({
           onRecreate={onRecreate}
           onOwnerAction={onOwnerAction}
           onActionsOpen={onActionsOpen}
+          actionsMenuEnabled={active}
           onCreatorOpen={onCreatorOpen}
         />
       </MediaZoomChrome>
@@ -2085,27 +2097,32 @@ function ImmersiveMedia({
   // carries on.
   const playbackUrl = getShowcasePlaybackUrl(mediaItem);
   const lentVideo = useMediaZoomLentVideo(playbackUrl);
-  // Nor does it start on the render that opens the reel: that render mounts the
-  // neighbouring slides and their players, which holds the UI thread (833 ms on
-  // the emulator), and a clip started into it stalls on its first frames. It
-  // starts two frames later, once that work has been drawn, so the wait is spent
-  // on a still picture rather than a frozen one. A slide mounted after the reel
-  // opened has nothing to wait for.
-  const [openingDrawn, setOpeningDrawn] = useState(zoomOpened);
+  // It starts a frame after the reel begins to be uncovered. By then what the
+  // landing mounts — the rail, the caption, the neighbouring slides and their
+  // players, which hold the UI thread — has been laid out, so the clip does not
+  // stall on its first frames. Waiting until the reel had opened also held the
+  // first frame through the uncovering fade, which shows that same frame, and a
+  // player's next frame takes about the fade's length to arrive anyway. A slide
+  // mounted once the reel is uncovered has nothing to wait for.
+  const zoomUncovering = useMediaZoomUncovering();
+  const [openingDrawn, setOpeningDrawn] = useState(() => zoomOpened || zoomUncovering.uncovered());
   const holdsItsPlayer = mediaItem.mediaKind === 'video' && lentVideo === null;
   useEffect(() => {
     // Only a slide holding its own player waits: rendering every slide again
-    // two frames after the reel opens would land in the very stretch it avoids.
-    if (!holdsItsPlayer || !zoomOpened || openingDrawn) return undefined;
-    let second = 0;
-    const first = requestAnimationFrame(() => {
-      second = requestAnimationFrame(() => setOpeningDrawn(true));
-    });
-    return () => {
-      cancelAnimationFrame(first);
-      cancelAnimationFrame(second);
+    // as the reel is uncovered would land in the very stretch it avoids.
+    if (!holdsItsPlayer || openingDrawn) return undefined;
+    let frame = 0;
+    const start = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => setOpeningDrawn(true));
     };
-  }, [holdsItsPlayer, openingDrawn, zoomOpened]);
+    const unsubscribe = zoomUncovering.subscribe(start);
+    if (zoomOpened || zoomUncovering.uncovered()) start();
+    return () => {
+      unsubscribe();
+      cancelAnimationFrame(frame);
+    };
+  }, [holdsItsPlayer, openingDrawn, zoomOpened, zoomUncovering]);
   const videoActive = active && (openingDrawn || lentVideo !== null);
 
   // The bands around a picture that does not fill the slide are plain black

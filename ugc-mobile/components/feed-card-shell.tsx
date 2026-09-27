@@ -2,8 +2,10 @@ import { MoreVertical } from 'lucide-react-native';
 import type { ReactNode } from 'react';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
+import type { NativeMenuTrigger } from '@/components/native-menu';
 import { CreatorAvatar } from '@/components/ui';
 import { haptic } from '@/lib/haptics';
+import { FEED_CARD_BORDER_WIDTH } from '@/lib/feed-card-geometry';
 import { MotionView, usePressMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -45,6 +47,7 @@ export function FeedCardShell({
   onCreatorPress,
   onMorePress,
   moreAccessibilityLabel,
+  renderMoreMenu,
   media,
   onOpen,
   onOpenTouchStart,
@@ -64,6 +67,13 @@ export function FeedCardShell({
   onCreatorPress?: () => void;
   onMorePress: () => void;
   moreAccessibilityLabel: string;
+  /**
+   * Wraps the ⋮ in a native menu (`lib/native-menu.ts`): given the shell's own
+   * button, as a function of its press handler, and the iOS trigger drawn to
+   * match it, returns what to draw. The menu then runs `onMorePress` only where
+   * native menus are missing. Without it, the ⋮ runs `onMorePress`.
+   */
+  renderMoreMenu?: (more: { trigger: NativeMenuTrigger; renderButton: (onPress: () => void) => ReactNode }) => ReactNode;
   media?: ReactNode;
   onOpen?: () => void;
   /**
@@ -79,6 +89,18 @@ export function FeedCardShell({
   title: string;
 }) {
   const theme = useAppTheme();
+  const moreButton = (onPress: () => void) => (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={moreAccessibilityLabel}
+      hitSlop={10}
+      onPress={onPress}
+      style={({ pressed }) => ({ width: 28, height: 32, alignItems: 'flex-end', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+    >
+      <MoreVertical size={appTheme.icon.compact} color={theme.colors.faint} />
+    </Pressable>
+  );
+
   // The whole card presses down, not just the tapped region: the header and
   // action rows are separate targets, but the object under the thumb is the
   // card, and that is what should move.
@@ -114,7 +136,7 @@ export function FeedCardShell({
         {
           borderRadius: appTheme.radii.lg,
           borderCurve: 'continuous',
-          borderWidth: 1,
+          borderWidth: FEED_CARD_BORDER_WIDTH,
           borderColor: theme.colors.borderSubtle,
           backgroundColor: theme.colors.panel,
           // No `overflow: 'hidden'`. Every child is inset from the corners (the
@@ -174,15 +196,18 @@ export function FeedCardShell({
             {categoryLabel}
           </Text>
         </View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={moreAccessibilityLabel}
-          hitSlop={10}
-          onPress={onMorePress}
-          style={({ pressed }) => ({ width: 28, height: 32, alignItems: 'flex-end', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
-        >
-          <MoreVertical size={appTheme.icon.compact} color={theme.colors.faint} />
-        </Pressable>
+        {renderMoreMenu ? renderMoreMenu({
+          trigger: {
+            width: 28,
+            height: 32,
+            iconSize: appTheme.icon.compact,
+            iconColor: theme.colors.faint,
+            vertical: true,
+            alignment: 'trailing',
+            hitSlop: 10,
+          },
+          renderButton: moreButton,
+        }) : moreButton(onMorePress)}
       </View>
 
       <Pressable
