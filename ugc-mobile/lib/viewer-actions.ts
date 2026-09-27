@@ -1,4 +1,6 @@
+import { hexWithAlpha } from './eased-fade';
 import type { ImmersivePreviewItem, PreviewViewerSource } from './immersive-preview-view-model';
+import { appTheme, type ThemeColors } from './theme';
 import type { CreatorToolId, GenerationShareSourceSurface } from './types';
 
 /**
@@ -178,6 +180,10 @@ export function buildShareUrl(
   return `${siteUrl.replace(/\/$/, '')}${path}?s=${encodeURIComponent(sourceSurface)}`;
 }
 
+/**
+ * The reel's save heart: white over video in both schemes. The rail's
+ * pre-drawn icons are keyed by these exact colours (`reel-icon-assets.ts`).
+ */
 export function getSaveHeartIconProps({
   isSaved,
   enabled = true,
@@ -190,6 +196,29 @@ export function getSaveHeartIconProps({
   return {
     color: activeColor,
     fill: isSaved ? SAVE_HEART_COLOR : 'transparent',
+  };
+}
+
+/**
+ * The save heart on app UI — a feed card, the post page — which follows the
+ * scheme. Unsaved, it is outlined in the scheme's ink: black on a light card,
+ * where the reel's white vanished, and ivory on a dark one. Saved, it fills
+ * with the reel's red.
+ */
+export function getThemedSaveHeartIconProps({
+  isSaved,
+  enabled = true,
+  colors,
+}: {
+  isSaved: boolean;
+  enabled?: boolean;
+  colors: ThemeColors;
+}) {
+  if (isSaved) return { color: SAVE_HEART_COLOR, fill: SAVE_HEART_COLOR };
+
+  return {
+    color: enabled ? colors.text : hexWithAlpha(colors.text, appTheme.opacity.disabled),
+    fill: 'transparent',
   };
 }
 

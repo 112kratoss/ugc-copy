@@ -10,6 +10,7 @@ import {
   getNativeRemixCreateHref,
   getSaveHeartIconProps,
   getSaveHeartTapAnimationSpec,
+  getThemedSaveHeartIconProps,
   getViewerActionGroupLabel,
   getViewerActionLabel,
   getViewerActionSlots,
@@ -17,8 +18,12 @@ import {
   getViewerShareSourceSurface,
   getViewerStateChip,
   isDestructiveViewerAction,
+  SAVE_HEART_COLOR,
 } from '../lib/viewer-actions';
+import { contrastRatio } from '../lib/color-contrast';
+import { hexWithAlpha } from '../lib/eased-fade';
 import type { ImmersivePreviewItem, PreviewViewerSource } from '../lib/immersive-preview-view-model';
+import { appTheme, themes } from '../lib/theme';
 
 function railItem(overrides: Partial<ImmersivePreviewItem> = {}): ImmersivePreviewItem {
   return {
@@ -211,6 +216,32 @@ describe('immersive viewer actions', () => {
       color: '#ffffff',
       fill: 'transparent',
     });
+  });
+
+  it('outlines the save heart on a card in ink that shows on every panel, in both schemes', () => {
+    // The reel's white outline measured 1.16:1 on a light card. WCAG asks 3:1
+    // of the parts of a control (1.4.11).
+    const faint = (['light', 'dark'] as const).flatMap((scheme) => {
+      const { colors } = themes[scheme];
+      const { color } = getThemedSaveHeartIconProps({ isSaved: false, colors });
+      return [colors.background, colors.panel, colors.panelSoft, colors.surfaceInset]
+        .map((surface) => ({ surface, ratio: contrastRatio(color, surface) }))
+        .filter(({ ratio }) => ratio < 3)
+        .map(({ surface, ratio }) => `${scheme}: ${color} on ${surface} is ${ratio.toFixed(2)}:1`);
+    });
+
+    expect(faint).toEqual([]);
+  });
+
+  it('fills a saved heart on a card with the reel red, and fades one that cannot save', () => {
+    for (const { colors } of Object.values(themes)) {
+      const outline = getThemedSaveHeartIconProps({ isSaved: false, colors });
+      expect(getThemedSaveHeartIconProps({ isSaved: true, colors })).toEqual({ color: SAVE_HEART_COLOR, fill: SAVE_HEART_COLOR });
+      expect(getThemedSaveHeartIconProps({ isSaved: false, enabled: false, colors })).toEqual({
+        color: hexWithAlpha(outline.color, appTheme.opacity.disabled),
+        fill: 'transparent',
+      });
+    }
   });
 
   it('keeps non-toggleable saved status rail actions visually active', () => {
