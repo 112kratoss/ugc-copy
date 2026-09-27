@@ -587,6 +587,30 @@ describe('ProfileDashboard media tiles routing', () => {
     expect(routerState.push).toHaveBeenCalledWith('/pricing');
   });
 
+  it('draws a dash, never 0, while the balance is unknown', () => {
+    const creditsValue = (root: renderer.ReactTestInstance) => findPressableByText(root, 'Credits')
+      .findAll((node) => node.type === 'text' && typeof node.props.children === 'string')
+      .map((node) => node.props.children as string);
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard />);
+    });
+    expect(creditsValue(tree!.root)).toContain('100');
+
+    const knownCredits = authState.credits;
+    (authState as { credits: number | null }).credits = null;
+    try {
+      renderer.act(() => {
+        tree = renderer.create(<ProfileDashboard />);
+      });
+      expect(creditsValue(tree!.root)).toContain('–');
+      expect(creditsValue(tree!.root)).not.toContain('0');
+    } finally {
+      authState.credits = knownCredits;
+    }
+  });
+
   it('opens Your Sales from the Wallet card', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {

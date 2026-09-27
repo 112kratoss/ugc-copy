@@ -102,7 +102,7 @@ import {
   isPersistedHomeFeedData,
   schedulePersistHomeFeed,
 } from '@/lib/persisted-home-feed';
-import { formatCreditAmount } from '@/lib/pricing';
+import { formatCreditBalance } from '@/lib/pricing';
 import { reportStartupMilestone } from '@/lib/startup-interactive';
 import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
@@ -965,7 +965,7 @@ export function HomeDashboard() {
         onClose={() => setMenuVisible(false)}
         user={user}
         profile={profileQuery.data}
-        credits={credits ?? 0}
+        credits={credits}
         totalSalesUsdCents={salesSummary.earningsUsdCents}
         totalSalesLoading={Boolean(user) && sellerPostsQuery.isLoading}
         onSignOut={signOut}
@@ -1012,7 +1012,7 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number | null; onMenuPr
             <Crown size={appTheme.icon.sm} color={theme.colors.commerce} fill={`${theme.colors.commerce}33`} />
             {/* A dash until the balance has loaded: a 0 there reads as an empty
                 balance to someone who has credits. */}
-            <Text style={{ color: credits === null ? theme.colors.muted : theme.colors.text, fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{credits === null ? '–' : formatCreditAmount(credits)}</Text>
+            <Text style={{ color: credits === null ? theme.colors.muted : theme.colors.text, fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatCreditBalance(credits)}</Text>
             <Plus size={14} color={theme.colors.primary} />
           </View>
         </TopBarControl>

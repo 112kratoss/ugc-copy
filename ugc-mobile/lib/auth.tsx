@@ -45,6 +45,11 @@ import {
   subscribeToMobilePushTokenChanges,
   unregisterMobilePushNotifications,
 } from './notifications';
+import {
+  clearPersistedAccountState,
+  persistAccountStateOnChange,
+  restorePersistedAccountState,
+} from './persisted-account-state';
 import { clearPersistedHomeFeed } from './persisted-home-feed';
 import { devicePushQueryKey } from './push-registration';
 import {
@@ -169,6 +174,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [mergeOutcome, setMergeOutcome] = useState<GuestAccountMergeStatus | null>(null);
   const authStateVersionRef = useRef(0);
   const profileRefreshRef = useRef<{ promise: Promise<void>; userId: string; version: number } | null>(null);
+  // The auth version whose balance has come from the server, or from a spend or
+  // purchase this app made. The copy saved on the device never overwrites that.
+  const creditsSettledVersionRef = useRef(-1);
+
+  // Puts the balance this account last showed back on screen while the profile
+  // refresh fetches a fresh one. The saved copy is read off the device at launch
+  // (see app/_layout.tsx), so this usually resolves at once.
+  const restoreAccountState = useCallback((userId: string, version: number) => {
+    void restorePersistedAccountState(queryClient, { userId })
+      .then((restored) => {
+        if (!restored) return;
+        // The server, or a spend, answered first: what it said stands.
+        if (authStateVersionRef.current !== version || creditsSettledVersionRef.current === version) return;
+        setCredits(restored.credits);
+      });
+  }, [queryClient]);
 
   const applySessionState = useCallback((nextSession: Session | null) => {
     const nextUserId = nextSession?.user?.id ?? null;
@@ -181,10 +202,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     sessionRef.current = nextSession;
     setSession(nextSession);
     if (userChanged || !nextUserId) setCredits(null);
+    // A launch or a sign-in: the numbers this account last showed go back on
+    // screen while the profile refresh fetches fresh ones.
+    if (userChanged && nextUserId) restoreAccountState(nextUserId, authStateVersionRef.current);
     // Navigation can continue from the persisted local session. Profile and
     // credit data refresh independently in the background.
     setIsLoading(false);
-  }, []);
+  }, [restoreAccountState]);
 
   const resetAuthState = useCallback(() => {
     applySessionState(null);
@@ -308,6 +332,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })
       .then((profile) => {
         if (sessionUserIdRef.current === userId && authStateVersionRef.current === version) {
+          creditsSettledVersionRef.current = version;
           setCredits(profile.credits ?? null);
         }
       })
@@ -497,6 +522,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       appStateSubscription.remove();
     };
   }, [api, queryClient, registeredUser]);
+
+  // A balance this app moved itself, after a generation or a purchase. It is as
+  // settled as a server answer, and the saved copy must not overwrite it either.
+  const updateCredits = useCallback((nextCredits: number | null) => {
+    creditsSettledVersionRef.current = authStateVersionRef.current;
+    setCredits(nextCredits);
+  }, []);
+
+  // Saves what the account shows — balance, profile, sales total, unread count —
+  // whenever one of them settles, so the next launch can draw them before the
+  // network answers. Cleared wherever the session leaves the device.
+  useEffect(() => {
+    if (!identityUserId) return;
+    return persistAccountStateOnChange(queryClient, { userId: identityUserId, credits });
+  }, [credits, identityUserId, queryClient]);
 
   const acknowledgeMergeOutcome = useCallback(() => setMergeOutcome(null), []);
 
@@ -720,8 +760,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       feedIdentityTransition?.commit();
       if (isSupabaseConfigured) await clearPersistedSupabaseAuthSession();
-      // The home feed saved for the next launch was ranked for this person.
+      // The home feed and the account numbers saved for the next launch are
+      // this person's.
       await clearPersistedHomeFeed();
+      await clearPersistedAccountState();
       resetAuthState();
       // Signing out drops back to a guest identity rather than to nothing, so
       // browsing and buying keep working. The bootstrap latch is cleared because
@@ -775,6 +817,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await clearPersistedSupabaseAuthSession().catch(() => undefined);
     }
     await clearPersistedHomeFeed();
+    await clearPersistedAccountState();
     feedIdentityTransition?.commit();
     resetAuthState();
     // Same convention as signOut: drop back to a guest rather than to nothing,
@@ -845,6 +888,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
     await clearPersistedSupabaseAuthSession().catch(() => undefined);
     await clearPersistedHomeFeed();
+    await clearPersistedAccountState();
     // Guests never register for push, so only a registered session has any.
     if (!wasGuest) await clearLocalMobilePushRegistration().catch(() => undefined);
     feedIdentityTransition?.commit();
@@ -891,6 +935,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           feedIdentityTransition?.commit();
           await clearPersistedSupabaseAuthSession();
           await clearPersistedHomeFeed();
+          await clearPersistedAccountState();
           resetAuthState();
           router.replace('/auth');
         } else {
@@ -918,6 +963,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.warn('Could not clear the guest merge ticket after account deletion', error);
       }),
       clearPersistedHomeFeed(),
+      clearPersistedAccountState(),
     ]);
     queryClient.clear();
     resetAuthState();
@@ -949,7 +995,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         accountReauthenticationMethods,
         deleteAccount,
         refreshProfile,
-        updateCredits: setCredits,
+        updateCredits,
       }}
     >
       {children}
@@ -964,6 +1010,7 @@ async function recoverInvalidAuthSession(error: unknown) {
 
   await clearPersistedSupabaseAuthSession();
   await clearPersistedHomeFeed();
+  await clearPersistedAccountState();
   return true;
 }
 

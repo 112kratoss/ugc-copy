@@ -71,7 +71,7 @@ import { useProfileMediaRevalidation } from '@/lib/use-profile-media-revalidatio
 import { flattenShowcaseFeedPages } from '@/lib/showcase-feed-query';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
-import { formatCreditAmount } from '@/lib/pricing';
+import { formatCreditBalance } from '@/lib/pricing';
 import { SHOWCASE_PLAYBACK_VIEWABILITY } from '@/lib/showcase-feed-events';
 import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
 import { hexWithAlpha } from '@/lib/eased-fade';
@@ -414,7 +414,7 @@ export function ProfileDashboard({
             <BalanceCard
               icon={<Crown size={appTheme.icon.default} color={theme.colors.commerce} />}
               label="Credits"
-              value={formatCreditAmount(credits ?? profile?.credits)}
+              value={formatCreditBalance(credits ?? profile?.credits)}
               onPress={() => router.push('/pricing' as never)}
             />
             <BalanceCard

@@ -40,7 +40,7 @@ import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { formatUsdCents } from '@/lib/home-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
-import { formatCreditAmount } from '@/lib/pricing';
+import { CREDIT_BALANCE_LOADING_LABEL, formatCreditAmount } from '@/lib/pricing';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -62,7 +62,8 @@ interface HomeSideMenuProps {
   onClose: () => void;
   user: User | null;
   profile: ProfileResponse | null | undefined;
-  credits: number;
+  /** Null until the balance is known; never drawn as 0, which reads as an empty balance. */
+  credits: number | null;
   totalSalesUsdCents: number;
   totalSalesLoading: boolean;
   onSignOut: () => Promise<void>;
@@ -93,6 +94,8 @@ export function HomeSideMenu({
     ? `@${profile.username}`
     : user?.email ?? 'Sign in to save and sync your work';
   const initial = displayName.trim().charAt(0).toUpperCase() || 'A';
+  // Unknown until the profile request answers: a 0 would read as an empty balance.
+  const balanceKnown = credits !== null;
   const reduceMotionEnabled = useReducedMotion();
   const [rendered, setRendered] = useState(visible);
   const progress = useRef(createAnimatedValue(visible ? 1 : 0)).current;
@@ -339,7 +342,7 @@ export function HomeSideMenu({
 
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`${formatCreditAmount(credits)} credits. Open credits`}
+              accessibilityLabel={balanceKnown ? `${formatCreditAmount(credits)} credits. Open credits` : 'Credits, balance loading. Open credits'}
               onPress={() => navigateAndClose('/pricing')}
               style={({ pressed }) => ({
                 minHeight: 68,
@@ -361,8 +364,8 @@ export function HomeSideMenu({
                   <Crown size={21} color={theme.colors.amber} />
                 </View>
                 <View style={{ gap: 1, minWidth: 0, flex: 1 }}>
-                  <Text style={{ color: theme.colors.text, fontSize: 18, lineHeight: 23, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatCreditAmount(credits)} Credits</Text>
-                  <Text style={{ color: theme.colors.muted, fontSize: 12, lineHeight: 16, fontWeight: '600' }}>View balance and packs</Text>
+                  <Text style={{ color: theme.colors.text, fontSize: 18, lineHeight: 23, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{balanceKnown ? `${formatCreditAmount(credits)} Credits` : 'Credits'}</Text>
+                  <Text style={{ color: theme.colors.muted, fontSize: 12, lineHeight: 16, fontWeight: '600' }}>{balanceKnown ? 'View balance and packs' : CREDIT_BALANCE_LOADING_LABEL}</Text>
                 </View>
               </View>
               <ChevronRight size={19} color={theme.colors.muted} />

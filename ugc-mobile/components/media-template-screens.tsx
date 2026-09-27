@@ -59,7 +59,7 @@ import {
   loadActiveTemplateRunId,
   rememberActiveTemplateRun,
 } from '@/lib/template-run-resume';
-import { formatCreditAmount } from '@/lib/pricing';
+import { CREDIT_BALANCE_LOADING_LABEL, formatCreditAmount } from '@/lib/pricing';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { appTheme, mediaColors, themes } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -703,7 +703,7 @@ function InputStage({
             <AppText variant="label">Estimated workflow total</AppText>
             <AppText variant="caption" color="muted">{creditLabel(estimatedTotalCredits)}</AppText>
           </View>
-          <AppText variant="caption" color="muted">{credits === null ? 'Balance loading…' : `${formatCreditAmount(credits)} available`}</AppText>
+          <AppText variant="caption" color="muted">{credits === null ? CREDIT_BALANCE_LOADING_LABEL : `${formatCreditAmount(credits)} available`}</AppText>
         </View>
       </Card>
       {!canAfford ? (
