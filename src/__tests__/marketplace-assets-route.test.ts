@@ -78,6 +78,61 @@ describe('/api/marketplace/assets route', () => {
     createServiceClientMock.mockReturnValue({
       rpc: serviceRpcMock,
       from(table: string) {
+        if (table === 'marketplace_assets') {
+          return {
+            select() {
+              const filters: Record<string, unknown> = {};
+
+              return {
+                eq(column: string, value: unknown) {
+                  filters[column] = value;
+                  return this;
+                },
+                async maybeSingle() {
+                  const row = marketplaceAssetsState.find((asset) =>
+                    Object.entries(filters).every(([key, value]) => asset[key as keyof MarketplaceAssetRow] === value)
+                  ) ?? null;
+                  return {
+                    data: row,
+                    error: null,
+                  };
+                },
+              };
+            },
+            upsert(payload: Record<string, unknown>) {
+              assetUpserts.push(payload);
+
+              return {
+                select() {
+                  return {
+                    async single() {
+                      return {
+                        data: {
+                          id: (payload.id as string | undefined) ?? 'asset-new',
+                          post_id: (payload.post_id as string | null | undefined) ?? null,
+                          status: payload.status,
+                        },
+                        error: null,
+                      };
+                    },
+                  };
+                },
+              };
+            },
+          };
+        }
+
+        if (table === 'marketplace_asset_content') {
+          return {
+            async upsert(payload: Record<string, unknown>) {
+              contentUpserts.push(payload);
+              return {
+                error: null,
+              };
+            },
+          };
+        }
+
         if (table !== 'posts') {
           throw new Error(`Unexpected service table access: ${table}`);
         }
@@ -149,61 +204,6 @@ describe('/api/marketplace/assets route', () => {
                     error: null,
                   };
                 },
-              };
-            },
-          };
-        }
-
-        if (table === 'marketplace_assets') {
-          return {
-            select() {
-              const filters: Record<string, unknown> = {};
-
-              return {
-                eq(column: string, value: unknown) {
-                  filters[column] = value;
-                  return this;
-                },
-                async maybeSingle() {
-                  const row = marketplaceAssetsState.find((asset) =>
-                    Object.entries(filters).every(([key, value]) => asset[key as keyof MarketplaceAssetRow] === value)
-                  ) ?? null;
-                  return {
-                    data: row,
-                    error: null,
-                  };
-                },
-              };
-            },
-            upsert(payload: Record<string, unknown>) {
-              assetUpserts.push(payload);
-
-              return {
-                select() {
-                  return {
-                    async single() {
-                      return {
-                        data: {
-                          id: (payload.id as string | undefined) ?? 'asset-new',
-                          post_id: (payload.post_id as string | null | undefined) ?? null,
-                          status: payload.status,
-                        },
-                        error: null,
-                      };
-                    },
-                  };
-                },
-              };
-            },
-          };
-        }
-
-        if (table === 'marketplace_asset_content') {
-          return {
-            async upsert(payload: Record<string, unknown>) {
-              contentUpserts.push(payload);
-              return {
-                error: null,
               };
             },
           };

@@ -327,12 +327,12 @@ select ok(
   'authenticated can select owner-scoped saves'
 );
 select ok(
-  has_table_privilege('authenticated', 'public.showcase_saves', 'INSERT'),
-  'authenticated can insert owner-scoped saves'
+  not has_table_privilege('authenticated', 'public.showcase_saves', 'INSERT'),
+  'save insertion is restricted to the service layer'
 );
 select ok(
-  has_table_privilege('authenticated', 'public.showcase_saves', 'DELETE'),
-  'authenticated can delete owner-scoped saves'
+  not has_table_privilege('authenticated', 'public.showcase_saves', 'DELETE'),
+  'save deletion is restricted to the service layer'
 );
 select ok(
   not has_table_privilege('authenticated', 'public.showcase_saves', 'UPDATE'),
