@@ -972,7 +972,8 @@ describe('mobile external post composer', () => {
     await renderScreen();
     renderer.act(() => mutationState.options?.onSuccess?.({ postId: 'post-123' }));
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(routerState.replace).toHaveBeenCalledWith({ pathname: '/(tabs)/profile', params: { tab: 'posts', postId: 'post-123' } });
+    // `published` is what earns the notifications offer on the profile.
+    expect(routerState.replace).toHaveBeenCalledWith({ pathname: '/(tabs)/profile', params: { tab: 'posts', postId: 'post-123', published: '1' } });
   });
 
   describe('publish then share', () => {
@@ -996,7 +997,7 @@ describe('mobile external post composer', () => {
       expect(authState.api.shareShowcasePost).toHaveBeenCalledWith('post-123', { sourceSurface: 'my-creations' });
       expect(routerState.replace).toHaveBeenCalledWith({
         pathname: '/(tabs)/profile',
-        params: { tab: 'posts', postId: 'post-123' },
+        params: { tab: 'posts', postId: 'post-123', published: '1' },
       });
     });
 
@@ -1023,7 +1024,7 @@ describe('mobile external post composer', () => {
 
       expect(routerState.replace).toHaveBeenCalledWith({
         pathname: '/(tabs)/profile',
-        params: { tab: 'posts', postId: 'post-126' },
+        params: { tab: 'posts', postId: 'post-126', published: '1' },
       });
     });
 

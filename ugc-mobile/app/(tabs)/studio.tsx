@@ -26,10 +26,10 @@ import { publishUnreadCount } from '@/lib/notification-badge';
 import {
   deepLinkTargetsAlertsScreen,
   navigateToNotificationDeepLink,
-  registerForMobilePushNotifications,
   setAlertsScreenFocused,
   type MobilePushRegistrationResult,
 } from '@/lib/notifications';
+import { useDevicePushRegistration } from '@/lib/push-registration';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { hexWithAlpha } from '@/lib/eased-fade';
@@ -82,7 +82,6 @@ export default function StudioScreen() {
   const horizontalPadding = isCompact ? 16 : 18;
   const queryKey = ['mobile-notifications', user?.id] as const;
   const preferencesQueryKey = ['mobile-notification-preferences', user?.id] as const;
-  const devicePushQueryKey = ['mobile-push-registration', user?.id] as const;
 
   const notificationsQuery = useQuery({
     queryKey,
@@ -115,19 +114,7 @@ export default function StudioScreen() {
     },
   });
 
-  const devicePushQuery = useQuery({
-    queryKey: devicePushQueryKey,
-    enabled: Boolean(user),
-    queryFn: () => registerForMobilePushNotifications(api, { requestPermission: false }),
-    staleTime: 1000 * 30,
-  });
-
-  const enablePushMutation = useMutation({
-    mutationFn: () => registerForMobilePushNotifications(api, { requestPermission: true }),
-    onSuccess: (result) => {
-      queryClient.setQueryData(devicePushQueryKey, result);
-    },
-  });
+  const devicePush = useDevicePushRegistration({ api, userId: user?.id });
 
   // While this list is on screen, an arriving alert is announced by the list
   // itself — a banner over it would repeat what the reader is already looking
@@ -150,7 +137,7 @@ export default function StudioScreen() {
   const actionError = markReadMutation.error
     ?? markAllReadMutation.error
     ?? updatePreferenceMutation.error
-    ?? enablePushMutation.error;
+    ?? devicePush.enableError;
 
   const handlePressNotification = (notification: MobileNotification) => {
     if (!notification.isRead) {
@@ -207,18 +194,18 @@ export default function StudioScreen() {
         ) : (
           <>
             <PushControlCard
-              result={enablePushMutation.data ?? devicePushQuery.data ?? null}
+              result={devicePush.result}
               preferences={preferencesQuery.data?.preferences ?? null}
-              isLoading={devicePushQuery.isLoading}
-              isPending={enablePushMutation.isPending}
+              isLoading={devicePush.isLoading}
+              isPending={devicePush.isEnabling}
               preferencesDisabled={preferencesQuery.isLoading || updatePreferenceMutation.isPending}
-              onEnable={() => enablePushMutation.mutate()}
+              onEnable={devicePush.enable}
               onTogglePush={(value) => updatePreferenceMutation.mutate({ pushEnabled: value })}
             />
-            {devicePushQuery.isError ? (
+            {devicePush.checkFailed ? (
               <View style={{ gap: appTheme.spacing.gap }}>
                 <StatusBlock tone="danger" title="Could not check push alerts" body="In-app history still works. Check your connection, then retry push setup." />
-                <SecondaryButton label="Retry push setup" onPress={() => void devicePushQuery.refetch()} />
+                <SecondaryButton label="Retry push setup" onPress={devicePush.recheck} />
               </View>
             ) : null}
             {actionError ? (

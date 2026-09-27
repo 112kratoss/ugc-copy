@@ -2183,6 +2183,9 @@ export default function NewPostScreen() {
             params: {
               tab: 'posts',
               postId: targetPostId,
+              // Profile offers notifications once, right after a publish:
+              // every social push is about the person's own posts.
+              published: '1',
             },
           } as never);
         };

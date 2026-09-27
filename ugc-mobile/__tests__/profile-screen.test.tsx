@@ -8,7 +8,7 @@ const authState = vi.hoisted(() => ({
 }));
 
 const paramsState = vi.hoisted(() => ({
-  params: {} as { tab?: string; postId?: string },
+  params: {} as { tab?: string; postId?: string; published?: string },
 }));
 
 const dashboardPropsState = vi.hoisted(() => ({
@@ -84,6 +84,21 @@ describe('profile screen', () => {
     expect(dashboardPropsState.props).toMatchObject({
       initialTab: 'Posts',
       highlightedPostId: 'post-123',
+      justPublishedPostId: null,
+    });
+  });
+
+  it('marks the highlighted post as just published only when the composer says so', () => {
+    authState.user = { id: 'user-1', email: 'user@example.com' };
+    paramsState.params = { tab: 'posts', postId: 'post-123', published: '1' };
+
+    renderer.act(() => {
+      renderer.create(<ProfileScreen />);
+    });
+
+    expect(dashboardPropsState.props).toMatchObject({
+      highlightedPostId: 'post-123',
+      justPublishedPostId: 'post-123',
     });
   });
 

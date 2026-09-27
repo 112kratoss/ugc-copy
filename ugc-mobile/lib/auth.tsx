@@ -46,6 +46,7 @@ import {
   unregisterMobilePushNotifications,
 } from './notifications';
 import { clearPersistedHomeFeed } from './persisted-home-feed';
+import { devicePushQueryKey } from './push-registration';
 import {
   clearPersistedSupabaseAuthSession,
   duringSignOut,
@@ -476,7 +477,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const userId = registeredUser.id;
     const syncPushRegistration = () => queryClient.fetchQuery({
-      queryKey: ['mobile-push-registration', userId],
+      queryKey: devicePushQueryKey(userId),
       queryFn: () => registerForMobilePushNotifications(api, { requestPermission: false }),
       staleTime: 1000 * 30,
     }).catch((error) => {
