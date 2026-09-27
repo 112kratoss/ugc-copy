@@ -1,7 +1,7 @@
 # Backend Section 2 — table and view ownership
 
 Status: workflow ownership batch deployed in PR #216 and verified (24 live checks).
-Save/audit/marketplace batch is tracked in backend-section-02-social-marketplace-2026-09-27.md.
+Save/audit/marketplace batch deployed in PR #218 and verified (29 live checks); evidence is in backend-section-02-social-marketplace-release-2026-09-27.md.
 Scope: public table/view Data API privileges and row ownership. RPCs, Storage,
 Realtime, and the rest of the backend remain separate review batches.
 
@@ -21,9 +21,9 @@ column projection, and the policies inspected for this batch.
 | Message-to-proposal association | Could reference another user's proposal or another canvas; fixed and verified in production (PR #216) |
 | Private views | admin_user_account_state and playback_metrics_daily have no client grants; latter is security-invoker |
 | Profiles, generations, transactions | Existing row/column tests retained; full database regression suite passes |
-| Save tables and deletion audit | Direct-write bypass reproduced; fix tracked in the social/marketplace batch |
-| Marketplace content | Production draft-create HTTP 500 reproduced; fix tracked in the social/marketplace batch |
-| Notifications, push tokens, preferences | Owner policies inventoried; dedicated cross-account behavioral matrix still pending |
+| Save tables and deletion audit | Direct-write bypass fixed and verified in production (PR #218) |
+| Marketplace content | Production draft-create HTTP 500 fixed; own edits work and foreign edits/direct content access rejected (PR #218) |
+| Notifications, push tokens, preferences | 40-case database matrix passes; guest-boundary fix awaiting release (see notification batch report) |
 | Public follows, source tools/models, template projections | Grants inventoried; public-versus-private data contract review still pending |
 | Service-only tables | Client grants absent in inventory; RPC/trigger access and business invariants are not certified by that fact |
 
@@ -71,7 +71,7 @@ categories before the fix. No existing customer rows need repair.
   credentials. It creates two disposable identities with empty workflows and
   inert media rows, performs real authenticated Data API calls, revokes one
   fixture's session, and removes only its own fixtures. No provider work or
-  purchases are initiated. Pending release before execution.
+  purchases are initiated. All 24 live checks passed after PR #216 deployed; fixtures removed (see workflow release evidence).
 
 The Supabase security advisory baseline has no ERROR findings. Its warnings
 include guest-access policies (the product intentionally supports guests) and
