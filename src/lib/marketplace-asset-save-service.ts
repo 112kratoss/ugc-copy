@@ -227,10 +227,11 @@ export async function saveMarketplaceAssetForRoute({
       };
     }
 
-    const { data: existingPostAsset, error: existingPostAssetError } = await userSupabase
+    const { data: existingPostAsset, error: existingPostAssetError } = await adminSupabase
       .from('marketplace_assets')
       .select('id')
       .eq('post_id', postId)
+      .eq('seller_user_id', userId)
       .maybeSingle();
 
     if (existingPostAssetError) {
@@ -272,10 +273,11 @@ export async function saveMarketplaceAssetForRoute({
   }
 
   if (assetId) {
-    const { data: existingAsset, error: assetError } = await userSupabase
+    const { data: existingAsset, error: assetError } = await adminSupabase
       .from('marketplace_assets')
       .select('id, seller_user_id')
       .eq('id', assetId)
+      .eq('seller_user_id', userId)
       .maybeSingle();
 
     const typedExistingAsset = (existingAsset as ExistingAssetRow | null) ?? null;
@@ -284,7 +286,9 @@ export async function saveMarketplaceAssetForRoute({
     }
   }
 
-  const { data: asset, error: assetUpsertError } = await userSupabase
+  // Marketplace tables are service-only. Ownership was checked above before
+  // accepting an existing asset ID; every write binds the verified caller.
+  const { data: asset, error: assetUpsertError } = await adminSupabase
     .from('marketplace_assets')
     .upsert({
       id: assetId ?? undefined,
@@ -305,7 +309,7 @@ export async function saveMarketplaceAssetForRoute({
     return { ok: false, status: 500, body: { error: 'Failed to save listing.' } };
   }
 
-  const { error: contentError } = await userSupabase
+  const { error: contentError } = await adminSupabase
     .from('marketplace_asset_content')
     .upsert({
       asset_id: asset.id,

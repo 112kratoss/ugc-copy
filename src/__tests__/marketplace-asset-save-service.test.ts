@@ -42,7 +42,9 @@ const POSTS: PostRow[] = [
 
 function createAdminSupabaseMock(options?: {
   rateLimited?: boolean;
+  assets?: MarketplaceAssetRow[];
 }) {
+  const tables = createUserSupabaseMock({ trusted: true, assets: options?.assets });
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
   const client = {
     async rpc(fn: string, args: Record<string, unknown>) {
@@ -59,9 +61,7 @@ function createAdminSupabaseMock(options?: {
       };
     },
     from(table: string) {
-      if (table !== 'posts') {
-        throw new Error(`Unexpected admin table: ${table}`);
-      }
+      if (table !== 'posts') return tables.client.from(table);
 
       return {
         select() {
@@ -86,11 +86,13 @@ function createAdminSupabaseMock(options?: {
   return {
     client: client as unknown as SupabaseClient,
     rpcCalls,
+    assetUpserts: tables.assetUpserts,
+    contentUpserts: tables.contentUpserts,
   };
 }
 
-function createUserSupabaseMock(options?: { sellerReady?: boolean }) {
-  const marketplaceAssets: MarketplaceAssetRow[] = [];
+function createUserSupabaseMock(options?: { sellerReady?: boolean; trusted?: boolean; assets?: MarketplaceAssetRow[] }) {
+  const marketplaceAssets: MarketplaceAssetRow[] = options?.assets ?? [];
   const workflowCanvases: WorkflowCanvasRow[] = [
     {
       id: 'canvas-1',
@@ -109,6 +111,15 @@ function createUserSupabaseMock(options?: { sellerReady?: boolean }) {
 
   const client = {
     from(table: string) {
+      if (table.startsWith('marketplace_') && !options?.trusted) {
+        // Actual production grants: marketplace parents are service-only.
+        const denied = { data: null, error: { code: '42501', message: 'permission denied' } };
+        return {
+          select() { return this; }, eq() { return this; }, upsert() { return this; },
+          async maybeSingle() { return denied; }, async single() { return denied; },
+        };
+      }
+
       if (table === 'profiles') {
         return {
           select() {
@@ -225,6 +236,57 @@ function createUserSupabaseMock(options?: { sellerReady?: boolean }) {
 }
 
 describe('saveMarketplaceAssetForRoute', () => {
+  it('creates a draft with the service role while client marketplace grants are absent', async () => {
+    const admin = createAdminSupabaseMock();
+    const user = createUserSupabaseMock();
+    const result = await saveMarketplaceAssetForRoute({
+      adminSupabase: admin.client, userSupabase: user.client, userId: 'user-1',
+      readBody: async () => ({ type: 'guide', status: 'draft', title: 'Draft',
+        priceUsdCents: 0, guideMarkdown: '# Draft' }),
+    });
+    expect(result).toMatchObject({ ok: true, body: { assetId: 'asset-new' } });
+    expect(admin.assetUpserts[0]).toMatchObject({ seller_user_id: 'user-1', status: 'draft' });
+    expect(admin.contentUpserts).toHaveLength(1);
+    expect(user.assetUpserts).toHaveLength(0);
+    expect(user.contentUpserts).toHaveLength(0);
+  });
+
+  it.each(['user-2', null])('rejects edits to a foreign or missing listing (%s)', async (seller) => {
+    const admin = createAdminSupabaseMock({ assets: seller
+      ? [{ id: 'asset-existing', seller_user_id: seller, post_id: null }] : [] });
+    const result = await saveMarketplaceAssetForRoute({
+      adminSupabase: admin.client, userSupabase: createUserSupabaseMock().client, userId: 'user-1',
+      readBody: async () => ({ assetId: 'asset-existing', type: 'guide', status: 'draft',
+        title: 'Forged edit', priceUsdCents: 0, guideMarkdown: '# Forged' }),
+    });
+    expect(result).toMatchObject({ ok: false, status: 404 });
+    expect(admin.assetUpserts).toHaveLength(0);
+    expect(admin.contentUpserts).toHaveLength(0);
+  });
+
+  it('allows the verified owner to edit an existing listing', async () => {
+    const admin = createAdminSupabaseMock({ assets:
+      [{ id: 'asset-existing', seller_user_id: 'user-1', post_id: null }] });
+    const result = await saveMarketplaceAssetForRoute({
+      adminSupabase: admin.client, userSupabase: createUserSupabaseMock().client, userId: 'user-1',
+      readBody: async () => ({ assetId: 'asset-existing', type: 'guide', status: 'draft',
+        title: 'Updated', priceUsdCents: 0, guideMarkdown: '# Updated' }),
+    });
+    expect(result).toMatchObject({ ok: true, body: { assetId: 'asset-existing' } });
+    expect(admin.assetUpserts[0]).toMatchObject({ id: 'asset-existing', seller_user_id: 'user-1' });
+  });
+
+  it('rejects an inaccessible linked post before privileged writes', async () => {
+    const admin = createAdminSupabaseMock();
+    const result = await saveMarketplaceAssetForRoute({
+      adminSupabase: admin.client, userSupabase: createUserSupabaseMock().client, userId: 'user-2',
+      readBody: async () => ({ postId: 'post-public', type: 'guide', status: 'draft',
+        title: 'Foreign post', priceUsdCents: 0, guideMarkdown: '# Forged' }),
+    });
+    expect(result).toMatchObject({ ok: false, status: 400 });
+    expect(admin.assetUpserts).toHaveLength(0);
+  });
+
   it('rate limits before parsing the request body or touching marketplace tables', async () => {
     const admin = createAdminSupabaseMock({ rateLimited: true });
     const userSupabase = createUserSupabaseMock();
@@ -261,8 +323,8 @@ describe('saveMarketplaceAssetForRoute', () => {
       },
     });
     expect(readBody).not.toHaveBeenCalled();
-    expect(userSupabase.assetUpserts).toHaveLength(0);
-    expect(userSupabase.contentUpserts).toHaveLength(0);
+    expect(admin.assetUpserts).toHaveLength(0);
+    expect(admin.contentUpserts).toHaveLength(0);
   });
 
   it('validates ownership and saves linked marketplace content after rate limiting', async () => {
@@ -294,15 +356,15 @@ describe('saveMarketplaceAssetForRoute', () => {
         status: 'active',
       },
     });
-    expect(userSupabase.assetUpserts).toHaveLength(1);
-    expect(userSupabase.assetUpserts[0]).toMatchObject({
+    expect(admin.assetUpserts).toHaveLength(1);
+    expect(admin.assetUpserts[0]).toMatchObject({
       seller_user_id: 'user-1',
       post_id: 'post-public',
       type: 'guide',
       status: 'active',
       price_usd_cents: 1900,
     });
-    expect(userSupabase.contentUpserts).toEqual([
+    expect(admin.contentUpserts).toEqual([
       {
         asset_id: 'asset-new',
         workflow_graph: null,
@@ -338,7 +400,7 @@ describe('saveMarketplaceAssetForRoute', () => {
         actionHref: '/profile',
       },
     });
-    expect(userSupabase.assetUpserts).toHaveLength(0);
+    expect(admin.assetUpserts).toHaveLength(0);
   });
 
   it('keeps directly accessible unlisted listings behind seller readiness too', async () => {
@@ -363,6 +425,6 @@ describe('saveMarketplaceAssetForRoute', () => {
       status: 400,
       body: { field: 'profile' },
     });
-    expect(userSupabase.assetUpserts).toHaveLength(0);
+    expect(admin.assetUpserts).toHaveLength(0);
   });
 });
