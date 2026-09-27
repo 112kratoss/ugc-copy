@@ -1,6 +1,7 @@
 # Section 2 — public projections and private generation data
 
-Status: production behavior verified; clean-replay compatibility fix pending release.
+Status: deployed in PR #221; all 61 post-release checks passed and fixtures removed.
+Evidence: `backend-section-02-projections-release-2026-09-27.md`.
 
 ## Scope and result
 
