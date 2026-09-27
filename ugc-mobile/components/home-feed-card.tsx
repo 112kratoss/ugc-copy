@@ -5,6 +5,7 @@ import { Text, View } from 'react-native';
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
 import { NativeMenu } from '@/components/native-menu';
 import { MediaZoomSourceView, useMediaZoomSource } from '@/components/media-zoom';
+import { feedCardMediaWidth } from '@/lib/feed-card-geometry';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
 import { FeedVideoActivationContext, useFeedVideoActivation } from '@/lib/feed-video-activation';
 import { PostTextBlock } from '@/components/post-text-block';
@@ -57,7 +58,9 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   const theme = useAppTheme();
   const accent = accentColor(card.accent, theme.colors);
   const hasMedia = card.previewKind !== 'text' && Boolean(card.mediaUrl);
-  const mediaHeight = hasMedia ? getHomeFeedMediaHeight(card, contentWidth) : 0;
+  // Inside the card's border: the rectangle the reel grows out of and shrinks back into.
+  const mediaWidth = feedCardMediaWidth(contentWidth);
+  const mediaHeight = hasMedia ? getHomeFeedMediaHeight(card, mediaWidth) : 0;
   const bodyWidth = contentWidth - appTheme.spacing.card * 2;
   // Subscribed per card, so an election re-renders this card and no other,
   // and the list never re-renders for playback (lib/feed-video-activation.ts).
@@ -118,7 +121,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
           <ShowcaseMediaPreview
             accent={accent}
             mediaItems={mediaItems}
-            width={contentWidth}
+            width={mediaWidth}
             height={mediaHeight}
             radius={0}
             recyclingKey={`home-feed:${card.id}`}

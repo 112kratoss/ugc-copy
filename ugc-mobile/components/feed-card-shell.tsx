@@ -5,6 +5,7 @@ import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import type { NativeMenuTrigger } from '@/components/native-menu';
 import { CreatorAvatar } from '@/components/ui';
 import { haptic } from '@/lib/haptics';
+import { FEED_CARD_BORDER_WIDTH } from '@/lib/feed-card-geometry';
 import { MotionView, usePressMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -135,7 +136,7 @@ export function FeedCardShell({
         {
           borderRadius: appTheme.radii.lg,
           borderCurve: 'continuous',
-          borderWidth: 1,
+          borderWidth: FEED_CARD_BORDER_WIDTH,
           borderColor: theme.colors.borderSubtle,
           backgroundColor: theme.colors.panel,
           // No `overflow: 'hidden'`. Every child is inset from the corners (the

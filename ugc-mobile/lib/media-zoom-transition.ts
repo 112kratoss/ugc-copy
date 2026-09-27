@@ -457,6 +457,55 @@ export function resetMediaZoomTransitions() {
 }
 
 // ---------------------------------------------------------------------------
+// The reel uncovered
+// ---------------------------------------------------------------------------
+
+/**
+ * The moment a reel that grew out of a tile starts to be uncovered: it has
+ * landed, drawn its picture and laid out what it mounts on landing, and the
+ * layer's copy of the picture fades from here. The slide that plays its own
+ * player starts it then, not once that fade is over.
+ *
+ * A subscription rather than state: marking it renders nothing, so only a
+ * slide that is waiting hears it.
+ */
+export interface ZoomUncovering {
+  uncovered: () => boolean;
+  /** Called once, when it is marked. A listener added after that is not called. */
+  subscribe: (listener: () => void) => () => void;
+}
+
+/** For a reel that did not grow out of a tile: it was never covered. */
+export const UNCOVERED: ZoomUncovering = {
+  uncovered: () => true,
+  subscribe: () => () => {},
+};
+
+export function createZoomUncovering(uncoveredAtStart: boolean) {
+  let uncovered = uncoveredAtStart;
+  const listeners = new Set<() => void>();
+  const signal: ZoomUncovering = {
+    uncovered: () => uncovered,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+  return {
+    signal,
+    mark() {
+      if (uncovered) return;
+      uncovered = true;
+      const heard = [...listeners];
+      listeners.clear();
+      heard.forEach((listener) => listener());
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Pictures
 // ---------------------------------------------------------------------------
 
