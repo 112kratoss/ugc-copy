@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import type { NativeMenuProps } from '@/components/native-menu-types';
+import { toAndroidColor } from '@/lib/android-color';
 import { useResolvedColorScheme } from '@/lib/appearance';
 import { hasNativeMenuItems, nativeMenuRows, type NativeMenuAction } from '@/lib/native-menu';
 import { isNativeMenuAvailable } from '@/lib/native-menu-available';
@@ -77,7 +78,8 @@ export function NativeMenu(props: NativeMenuProps) {
 
 function MaterialDropdown({ open, props, onDismiss }: { open: boolean; props: NativeMenuProps; onDismiss: () => void }) {
   // A menu is app UI: it follows the app's scheme even from the reel, which
-  // stays dark (see `AppSchemeScope`).
+  // stays dark (see `AppSchemeScope`). Android parses each colour itself, so
+  // every one goes through `toAndroidColor`.
   const { colors } = themes[useResolvedColorScheme()];
   const { ui, modifiers } = loadCompose();
   const { Column, DropdownMenu, DropdownMenuItem, Host, HorizontalDivider, Text } = ui;
@@ -96,12 +98,12 @@ function MaterialDropdown({ open, props, onDismiss }: { open: boolean; props: Na
         <DropdownMenu
           expanded={open}
           onDismissRequest={onDismiss}
-          color={colors.panel}
+          color={toAndroidColor(colors.panel)}
           modifiers={[modifiers.fillMaxSize()]}
         >
           <DropdownMenu.Items>
             {nativeMenuRows(props.model).map((row) => {
-              if (row.kind === 'divider') return <HorizontalDivider key={row.id} color={colors.border} />;
+              if (row.kind === 'divider') return <HorizontalDivider key={row.id} color={toAndroidColor(colors.border)} />;
               const { action } = row;
               const labelColor = action.disabled
                 ? colors.faint
@@ -116,11 +118,11 @@ function MaterialDropdown({ open, props, onDismiss }: { open: boolean; props: Na
                 >
                   <DropdownMenuItem.Text>
                     <Column>
-                      <Text color={labelColor} style={{ fontSize: appTheme.type.body.fontSize }}>
+                      <Text color={toAndroidColor(labelColor)} style={{ fontSize: appTheme.type.body.fontSize }}>
                         {action.checked ? `✓  ${action.label}` : action.label}
                       </Text>
                       {action.subtitle ? (
-                        <Text color={colors.muted} style={{ fontSize: appTheme.type.caption.fontSize }}>
+                        <Text color={toAndroidColor(colors.muted)} style={{ fontSize: appTheme.type.caption.fontSize }}>
                           {action.subtitle}
                         </Text>
                       ) : null}
