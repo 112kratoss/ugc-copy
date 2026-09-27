@@ -18,7 +18,7 @@ import {
   RazorpayPaymentError,
   type RazorpayPaymentResponse,
 } from '@/lib/razorpay-orders';
-import { reconcileRazorpayCreditPurchaseAdjustment } from '@/lib/referral-reward-service';
+import { reconcileRazorpayCreditSource } from '@/lib/referral-reward-service';
 
 type CreditTransactionRow = {
   id: string;
@@ -312,34 +312,13 @@ export async function processRazorpayWebhookForRoute({
     return null;
   }
 
-  async function applyCreditPurchaseAdjustment({
-    action,
-    cumulativeReversedSubunits,
-    paymentId,
-    providerEventId,
-    reason,
-    transaction,
-  }: {
-    action: 'reverse' | 'restore';
-    cumulativeReversedSubunits: number;
-    paymentId: string;
-    providerEventId: string;
-    reason: string;
-    transaction: CreditTransactionRow;
-  }): Promise<HandlerResult> {
+  async function applyCreditPurchaseAdjustment(input: Parameters<typeof reconcileRazorpayCreditSource>[1]): Promise<HandlerResult> {
     try {
-      const settlement = await reconcileRazorpayCreditPurchaseAdjustment(getSupabaseAdmin(), {
-        transactionId: transaction.id,
-        providerEventId,
-        paymentId,
-        cumulativeReversedSubunits,
-        action,
-        reason,
-      });
+      const settlement = await reconcileRazorpayCreditSource(getSupabaseAdmin(), input);
       await notifyReferralRewardSettlement(getSupabaseAdmin(), settlement);
       return { handled: true, shouldRetry: false };
     } catch (error) {
-      logBackendError('razorpay_webhook_credit_adjustment_failed', { providerEventId, error });
+      logBackendError('razorpay_webhook_credit_adjustment_failed', { sourceId: input.sourceId, error });
       return { handled: true, shouldRetry: true };
     }
   }
@@ -455,12 +434,12 @@ export async function processRazorpayWebhookForRoute({
     }
 
     return applyCreditPurchaseAdjustment({
-      action: 'reverse',
-      cumulativeReversedSubunits: cumulativeRefunded,
+      kind: 'refund',
+      refundedAmountSubunits: cumulativeRefunded,
+      disputeAmountSubunits: 0,
       paymentId,
-      providerEventId: `refund:${refundId}`,
-      reason: 'razorpay_refund_processed',
-      transaction,
+      sourceId: refundId,
+      transactionId: transaction.id,
     });
   }
 
@@ -515,29 +494,14 @@ export async function processRazorpayWebhookForRoute({
       return { handled: true, shouldRetry: false };
     }
 
-    const currentReversed = Math.max(0, transaction.credit_reversed_amount_subunits ?? 0);
-    if (eventName === 'payment.dispute.won') {
+    if (eventName === 'payment.dispute.won' || isReverseEvent) {
       return applyCreditPurchaseAdjustment({
-        action: 'restore',
-        cumulativeReversedSubunits: Math.max(paymentRefunded, currentReversed - disputeAmount),
+        kind: eventName === 'payment.dispute.won' ? 'dispute_won' : 'dispute_open',
+        refundedAmountSubunits: paymentRefunded,
+        disputeAmountSubunits: disputeAmount,
         paymentId,
-        providerEventId: `dispute:${disputeId}:won`,
-        reason: 'razorpay_dispute_won',
-        transaction,
-      });
-    }
-
-    if (isReverseEvent) {
-      return applyCreditPurchaseAdjustment({
-        action: 'reverse',
-        cumulativeReversedSubunits: Math.min(
-          amount,
-          Math.max(currentReversed, paymentRefunded) + disputeAmount,
-        ),
-        paymentId,
-        providerEventId: `dispute:${disputeId}:reverse`,
-        reason: 'razorpay_dispute_opened',
-        transaction,
+        sourceId: disputeId,
+        transactionId: transaction.id,
       });
     }
 

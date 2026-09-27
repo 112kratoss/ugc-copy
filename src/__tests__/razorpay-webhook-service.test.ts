@@ -35,6 +35,7 @@ function createAdminSupabaseMock(state: {
   marketplaceAdjustmentStatus?: string;
   resourceAdjustmentStatus?: string;
   adjustmentError?: boolean;
+  creditAdjustmentStatus?: string;
 }) {
   const tableReads: string[] = [];
   const rpcCalls: Array<{ name: string; payload: Record<string, unknown> }> = [];
@@ -145,8 +146,8 @@ function createAdminSupabaseMock(state: {
         return { data: { status: 'not_referred', rewards: [] }, error: null };
       }
 
-      if (name === 'reconcile_razorpay_credit_purchase_adjustment') {
-        return { data: { status: 'partially_reversed', rewards: [] }, error: null };
+      if (name === 'reconcile_razorpay_credit_source') {
+        return { data: { status: state.creditAdjustmentStatus ?? 'partially_reversed', rewards: [] }, error: null };
       }
 
       if (name === 'reconcile_marketplace_cash_adjustment') {
@@ -565,6 +566,16 @@ describe('processRazorpayWebhookForRoute', () => {
     }));
   });
 
+  it.each(['payment_conflict', 'source_conflict', 'legacy_adjustment_requires_review', 'invalid_request'])('retries and records unresolved credit adjustment: %s', async (creditAdjustmentStatus) => {
+    const admin = createAdminSupabaseMock({ creditAdjustmentStatus, creditTransaction: {
+      id: 'txn-1', user_id: 'user-1', credits: 100, amount: 10_000,
+      razorpay_payment_id: 'pay_123', status: 'success',
+    } });
+    expect(await processRazorpayWebhookForRoute({ createAdminSupabase: () => admin.client, rawBody: refundProcessedBody() }))
+      .toEqual({ status: 500, body: 'Failed to reconcile payment refund' });
+    expect(admin.providerDependencyInserts).toEqual([expect.objectContaining({ error_name: 'payment_refund_reconciliation_failed' })]);
+  });
+
   it('reconciles a processed partial refund from the provider cumulative amount', async () => {
     const admin = createAdminSupabaseMock({
       creditTransaction: {
@@ -585,14 +596,14 @@ describe('processRazorpayWebhookForRoute', () => {
 
     expect(result).toEqual({ status: 200, body: 'OK' });
     expect(admin.rpcCalls).toContainEqual({
-      name: 'reconcile_razorpay_credit_purchase_adjustment',
+      name: 'reconcile_razorpay_credit_source',
       payload: {
         p_transaction_id: 'txn-1',
-        p_provider_event_id: 'refund:rfnd_123',
+        p_source_id: 'rfnd_123',
         p_payment_id: 'pay_123',
-        p_cumulative_reversed_subunits: 5_000,
-        p_action: 'reverse',
-        p_reason: 'razorpay_refund_processed',
+        p_refunded_amount_subunits: 5_000,
+        p_dispute_amount_subunits: 0,
+        p_kind: 'refund',
       },
     });
   });
@@ -644,14 +655,14 @@ describe('processRazorpayWebhookForRoute', () => {
 
     expect(admin.tableReads).toEqual(['transactions', 'transactions']);
     expect(admin.rpcCalls).toContainEqual({
-      name: 'reconcile_razorpay_credit_purchase_adjustment',
+      name: 'reconcile_razorpay_credit_source',
       payload: {
         p_transaction_id: 'txn-1',
-        p_provider_event_id: 'refund:rfnd_123',
+        p_source_id: 'rfnd_123',
         p_payment_id: 'pay_123',
-        p_cumulative_reversed_subunits: 5_000,
-        p_action: 'reverse',
-        p_reason: 'razorpay_refund_processed',
+        p_refunded_amount_subunits: 5_000,
+        p_dispute_amount_subunits: 0,
+        p_kind: 'refund',
       },
     });
     expect(admin.rpcCalls).not.toContainEqual(expect.objectContaining({
@@ -684,19 +695,21 @@ describe('processRazorpayWebhookForRoute', () => {
 
     expect(admin.rpcCalls).toEqual(expect.arrayContaining([
       {
-        name: 'reconcile_razorpay_credit_purchase_adjustment',
+        name: 'reconcile_razorpay_credit_source',
         payload: expect.objectContaining({
-          p_provider_event_id: 'dispute:disp_123:reverse',
-          p_cumulative_reversed_subunits: 3_000,
-          p_action: 'reverse',
+          p_source_id: 'disp_123',
+          p_refunded_amount_subunits: 0,
+          p_dispute_amount_subunits: 3_000,
+          p_kind: 'dispute_open',
         }),
       },
       {
-        name: 'reconcile_razorpay_credit_purchase_adjustment',
+        name: 'reconcile_razorpay_credit_source',
         payload: expect.objectContaining({
-          p_provider_event_id: 'dispute:disp_123:won',
-          p_cumulative_reversed_subunits: 0,
-          p_action: 'restore',
+          p_source_id: 'disp_123',
+          p_refunded_amount_subunits: 0,
+          p_dispute_amount_subunits: 3_000,
+          p_kind: 'dispute_won',
         }),
       },
     ]));
