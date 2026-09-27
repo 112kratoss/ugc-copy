@@ -5,9 +5,14 @@
  */
 import type { ReactNode } from 'react';
 
-import type { ZoomRect } from '@/lib/media-zoom-transition';
+import type { ZoomRect, ZoomSize } from '@/lib/media-zoom-transition';
 
-export function AppleZoomSource({ children }: { identifier: string | null; children: ReactNode }) {
+export function AppleZoomSource({ children }: {
+  identifier: string | null;
+  aspectRatio: number | null;
+  tile: ZoomSize | null;
+  children: ReactNode;
+}) {
   return children;
 }
 

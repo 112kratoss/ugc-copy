@@ -121,7 +121,9 @@ describe('S6 — the viewer top strip is laid out from the safe area', () => {
       expect(source).not.toContain('top: topInset + 24');
       expect(source).not.toContain('top: topInset + 10');
     }
-    expect(viewer.match(/<ViewerTopControl\b/g)?.length).toBe(3);
+    // Back and sound on the reel, and the same two on its loading shell, which
+    // draws the post's chrome while a first load runs (`ViewerShell`).
+    expect(viewer.match(/<ViewerTopControl\b/g)?.length).toBe(4);
     expect(topControl).toContain('top: viewerTopControlTop(topInset)');
     expect(topControl).toContain('width: VIEWER_TOP_CONTROL_SIZE');
     expect(topControl).toContain('height: VIEWER_TOP_CONTROL_SIZE');

@@ -14,7 +14,7 @@ import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'reac
 
 import { DoubleTapPressable } from '@/components/double-tap-pressable';
 import { AppleZoomTarget, useAppleZoomRetarget, useAppleZoomSourceId } from '@/components/apple-zoom';
-import { MediaZoomChrome, MediaZoomStage, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage, type MediaZoomLentVideo } from '@/components/media-zoom';
+import { MediaZoomChrome, MediaZoomStage, peekOpeningPost, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage, type MediaZoomLentVideo } from '@/components/media-zoom';
 import { mediaItemAspectRatio, mediaRectInScreen, showcaseViewerMediaPicture, type ZoomPreview } from '@/lib/media-zoom-transition';
 import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
@@ -44,6 +44,7 @@ import { env } from '@/lib/env';
 import { TopScrim } from '@/components/top-scrim';
 import { ViewerTopControl } from '@/components/viewer-top-control';
 import { IconShadow, ReelSlideChrome } from '@/components/reel-chrome';
+import { ZoomPostChrome } from '@/components/zoom-post-chrome';
 import {
   getImmersiveInitialIndex,
   getImmersiveStatusSlide,
@@ -205,6 +206,9 @@ function ImmersivePreviewViewer() {
   const mediaOnly = normalizeParam(params.mediaOnly) === '1';
   const initialId = normalizeParam(params.initialId);
   const [openingPreview] = useState(() => peekOpeningPreview(initialId, Date.now()));
+  // The post as the tapped tile listed it: the shell below draws its rail and
+  // caption from this while the window's first load runs (`ViewerShell`).
+  const [openingPost] = useState(() => peekOpeningPost(initialId, Date.now()));
   // iOS 18: pushed out of a tile by UIKit's zoom (lib/apple-zoom.ts), which the pop reverses.
   const nativeZoomSourceId = useAppleZoomSourceId();
   const creatorUsername = normalizeParam(params.creatorUsername) || null;
@@ -1015,7 +1019,7 @@ function ImmersivePreviewViewer() {
 
   if (!items.length && sourceQuery.isLoading) {
     return (
-      <ViewerShell topInset={topInset} bottomInset={bottomInset} preview={openingPreview} video={zoom.lentVideo}>
+      <ViewerShell topInset={topInset} bottomInset={bottomInset} preview={openingPreview} video={zoom.lentVideo} post={openingPost}>
         <ActivityIndicator accessibilityLabel="Loading preview" color={theme.colors.primary} />
       </ViewerShell>
     );
@@ -1361,7 +1365,10 @@ function ImmersivePreviewViewer() {
  * lands a second view lies under the first, as on the slide, so the frame the
  * first misses does not show the tile's picture (`MediaZoomLentVideo.landing`).
  */
-function ViewerShell({ topInset, bottomInset, preview = null, video = null, children }: { topInset: number; bottomInset: number; preview?: ZoomPreview | null; video?: MediaZoomLentVideo | null; children: React.ReactNode }) {
+function ViewerShell({ topInset, bottomInset, preview = null, video = null, post = null, children }: { topInset: number; bottomInset: number; preview?: ZoomPreview | null; video?: MediaZoomLentVideo | null; post?: ImmersivePreviewItem | null; children: React.ReactNode }) {
+  const audioMuted = useViewerAudioMuted();
+  // Only over the tile's own picture: the post is drawn as the reel draws it.
+  const chromePost = preview ? post : null;
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#000', paddingTop: topInset, paddingBottom: bottomInset, paddingHorizontal: 24 }}>
       {preview ? <Image
@@ -1394,9 +1401,38 @@ function ViewerShell({ topInset, bottomInset, preview = null, video = null, chil
           style={{ position: 'absolute', inset: 0 }}
         />
       ) : null}
+      {/* The rail, caption and top shade the reel will draw, drawn now from the
+          post the tile handed over, so a first load that outlives the zoom does
+          not land the reader on a bare picture with the menus arriving after it
+          (filmed 2026-09-27: 0.58 s after the open began). They take no touches;
+          the slide that replaces the shell answers them. The Back and sound
+          controls over them are the reel's own, and work. */}
+      {chromePost ? (
+        <View pointerEvents="none" style={{ position: 'absolute', inset: 0 }}>
+          <ZoomPostChrome post={chromePost} controls={false} />
+        </View>
+      ) : null}
       <ViewerTopControl label="Go back" onPress={leaveViewer} topInset={topInset} side="left">
         <IconShadow><BackGlyph size={appTheme.icon.feature} color="#ffffff" /></IconShadow>
       </ViewerTopControl>
+      {chromePost && hasImmersiveAudibleMedia(chromePost) ? (
+        <ViewerTopControl
+          label={audioMuted ? 'Unmute video' : 'Mute video'}
+          selected={audioMuted}
+          onPress={() => {
+            haptic.select();
+            toggleViewerAudioMuted();
+          }}
+          topInset={topInset}
+          side="right"
+        >
+          <IconShadow>
+            {audioMuted
+              ? <VolumeX size={appTheme.icon.feature} color="#ffffff" />
+              : <Volume2 size={appTheme.icon.feature} color="#ffffff" />}
+          </IconShadow>
+        </ViewerTopControl>
+      ) : null}
       {children}
     </View>
   );
@@ -2398,6 +2434,15 @@ function ActiveVideoAttempt({
     revealedPlayerRef.current = lentPlayer;
     surfaceOpacity.setValue(1);
   }, [lentAttached, lentPlayer, surfaceOpacity]);
+  // Taken back from its tile after a dismissal was let go of
+  // (`MediaZoomLentVideo.reclaimed`): the tile had made it a preview of its own
+  // again, silent and reporting no progress.
+  const lentReclaimed = lentVideo?.reclaimed ?? 0;
+  useEffect(() => {
+    if (!lentReclaimed || !lentAttached || !lentPlayer) return;
+    lentPlayer.volume = 1.0;
+    lentPlayer.timeUpdateEventInterval = 0.25;
+  }, [lentAttached, lentPlayer, lentReclaimed]);
   // While UIKit's zoom lands, a second view of the lent player lies under the
   // surface: the frame the surface's own view misses as the transition
   // completes shows the clip there, not the poster (`MediaZoomLentVideo.landing`).
@@ -2467,7 +2512,10 @@ function ActiveVideoAttempt({
   }, [active, player]);
 
   const togglePlayback = () => {
-    if (!active) return;
+    // A tap that lands while the reel is leaving — a dismissal gesture has
+    // begun, or Back was pressed — must not pause the clip the tile is about
+    // to carry on with, nor start one that is going away.
+    if (!active || leaving) return;
     if (player.playing) {
       playbackAllowed.current = false;
       player.pause();

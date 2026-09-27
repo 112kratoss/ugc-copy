@@ -41,9 +41,13 @@ export const VIDEO_LOAN_TIMEOUT_MS = 4000;
 export const RELEASED_LOAN_GRACE_MS = 100;
 
 /**
- * A player handed back that its tile never takes is released after this. The
- * tile takes it within a frame or two of the hand-back; the wait only has to
- * outlast a close that is still drawing the player on its way down.
+ * A player handed back that its tile never takes is released this long after
+ * the reel that handed it back has gone. The tile takes it within a frame or
+ * two of the hand-back; the wait only has to outlast a close that is still
+ * drawing the player on its way down. Counted from the reel's going rather than
+ * from the hand-back: a dismissal begun with a gesture hands the player back as
+ * the gesture begins, and a finger can hold the reel half-shrunk for longer
+ * than any timeout.
  */
 export const VIDEO_RETURN_TIMEOUT_MS = 2000;
 
@@ -250,7 +254,8 @@ interface VideoReturn {
   /** The reel that handed it back has gone. */
   reelGone: boolean;
   drawnListeners: Set<() => void>;
-  timeout: ReturnType<typeof setTimeout>;
+  /** Armed once the reel has gone: a hand-back still unsettled by then is dropped. */
+  timeout: ReturnType<typeof setTimeout> | null;
 }
 
 const acceptors = new Map<string, number>();
@@ -286,7 +291,7 @@ function finishReturnIfSettled(pending: VideoReturn) {
 
 function dropReturn(pending: VideoReturn) {
   if (pendingReturn !== pending) return;
-  clearTimeout(pending.timeout);
+  if (pending.timeout) clearTimeout(pending.timeout);
   pendingReturn = null;
   if (!pending.claimed) {
     loans.delete(pending.player);
@@ -313,7 +318,10 @@ export function handBackVideoPlayer(player: VideoPlayer, tileKey: string, url: s
     drawn: false,
     reelGone: false,
     drawnListeners: new Set(),
-    timeout: setTimeout(() => dropReturn(pending), VIDEO_RETURN_TIMEOUT_MS),
+    // No clock runs while the reel is up: a dismissal begun with a gesture hands
+    // the player back as the gesture begins, and the finger decides how long
+    // the reel stays half-shrunk over a tile that is drawing the clip for it.
+    timeout: null,
   };
   pendingReturn = pending;
   notifyReturnListeners();
@@ -371,17 +379,42 @@ export function whenReturnedVideoDrawn(player: VideoPlayer, listener: () => void
 /**
  * The reel that handed `player` back has gone. The hand-back ends once the tile
  * has taken the player and drawn it — a close may still be waiting on that — and
- * one never taken is left to the timeout, as a close may still be drawing it.
+ * one still unsettled after `VIDEO_RETURN_TIMEOUT_MS` is dropped: released if
+ * no tile took it, as a close may still have been drawing it until now.
  */
 export function endVideoReturn(player: VideoPlayer) {
   const pending = pendingReturn;
   if (!pending || pending.player !== player) return;
   pending.reelGone = true;
   finishReturnIfSettled(pending);
+  if (pendingReturn !== pending) return;
+  if (pending.timeout) clearTimeout(pending.timeout);
+  pending.timeout = setTimeout(() => dropReturn(pending), VIDEO_RETURN_TIMEOUT_MS);
 }
 
 export function isVideoPlayerHandedBack(player: VideoPlayer) {
   return handedBack.has(player);
+}
+
+/**
+ * The reel takes back a player it handed to its tile, because the close that
+ * began has been cancelled: a drag, pinch or edge swipe let go of before it
+ * committed. The hand-back went out as the gesture began, so that the tile —
+ * the view UIKit shrinks the reel into — would be drawing the clip carrying on
+ * when UIKit crossfades to it. Undone here: the player is the reel's adopted
+ * one again, and a tile that took it lets it go without pausing or releasing
+ * it, the way a tile whose player is out on loan does. False when nothing was
+ * handed back.
+ */
+export function reclaimVideoPlayer(player: VideoPlayer): boolean {
+  const pending = pendingReturn;
+  if (!pending || pending.player !== player) return false;
+  if (pending.timeout) clearTimeout(pending.timeout);
+  pendingReturn = null;
+  handedBack.delete(player);
+  loans.set(player, { stage: 'adopted', lenderMounted: false, giveBack: null, timeout: null });
+  notifyReturnListeners();
+  return true;
 }
 
 /** Test support: forgets every loan without touching the players. */
@@ -392,7 +425,7 @@ export function resetVideoPlayerLoans() {
   loans.clear();
   holds.forEach((hold) => clearTimeout(hold.timeout));
   holds.clear();
-  if (pendingReturn) clearTimeout(pendingReturn.timeout);
+  if (pendingReturn?.timeout) clearTimeout(pendingReturn.timeout);
   pendingReturn = null;
   acceptors.clear();
 }

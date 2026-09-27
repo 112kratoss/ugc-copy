@@ -15,7 +15,7 @@ import {
 import { Image } from 'expo-image';
 import { useNavigation } from 'expo-router';
 import { VideoView, type VideoPlayer } from 'expo-video';
-import { Platform, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Platform, StyleSheet, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, {
   Extrapolation,
   interpolate,
@@ -76,6 +76,7 @@ import {
   holdVideoLoan,
   isVideoPlayerHandedBack,
   lendVideoPlayer,
+  reclaimVideoPlayer,
   releaseAdoptedVideoPlayer,
   releaseVideoLoanHold,
   returnVideoPlayer,
@@ -86,6 +87,8 @@ import {
 import { FEED_VIDEO_VIEW_PROPS } from '@/lib/feed-video-view-props';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { setZoomUnderlayHidden } from '@/lib/zoom-underlay';
+import { claimZoomVeil, clearZoomVeil, closeZoomVeilHole, dropZoomVeil, holdZoomVeil, liftZoomVeil } from '@/lib/zoom-veil';
+import { useReducedMotion } from '@/lib/motion';
 import { appleZoomSourceId, type AppleZoomOpen } from '@/lib/apple-zoom';
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
 import { AppleZoomSource } from '@/components/apple-zoom';
@@ -319,11 +322,18 @@ let displayedPreview: ZoomPreview | null = null;
 let displayedVideo: VideoPlayer | null = null;
 
 /** The exact tile picture to show if the viewer's first data load outlives
- * the zoom flight. A deep link cannot inherit an old tap after two seconds. */
-let openingPreview: { itemId: string; preview: ZoomPreview; recordedAt: number } | null = null;
+ * the zoom flight, and the post as the tile listed it, so the viewer can draw
+ * the reel's rail and caption over that picture while the load runs. A deep
+ * link cannot inherit an old tap after two seconds. */
+let openingPreview: { itemId: string; preview: ZoomPreview; post: ImmersivePreviewItem | null; recordedAt: number } | null = null;
 export function peekOpeningPreview(itemId: string, now: number): ZoomPreview | null {
   return openingPreview?.itemId === itemId && now - openingPreview.recordedAt < 2000
     ? openingPreview.preview : null;
+}
+/** The post the tapped tile handed over (`useMediaZoomSource`'s `post`), on the same terms. */
+export function peekOpeningPost(itemId: string, now: number): ImmersivePreviewItem | null {
+  return openingPreview?.itemId === itemId && now - openingPreview.recordedAt < 2000
+    ? openingPreview.post : null;
 }
 
 /**
@@ -646,6 +656,14 @@ export interface MediaZoomLentVideo {
    * shows: 0 of 73 opens.
    */
   landing: boolean;
+  /**
+   * Counts the times the reel has taken the player back from its tile after a
+   * dismissal that was let go of (iOS). A dismissal begun with a gesture hands
+   * the player to the tile as the gesture begins; the tile then holds it the
+   * way it holds any player of its own, silent and reporting no progress, so a
+   * slide that gets it back sets it up again.
+   */
+  reclaimed: number;
 }
 
 const MediaZoomLentVideoContext = createContext<MediaZoomLentVideo | null>(null);
@@ -700,6 +718,8 @@ export interface MediaZoomSource {
   tileKey: string | null;
   /** The identifier this tile's view is registered with UIKit's zoom under (iOS 18); null elsewhere. */
   appleZoomId: string | null;
+  /** width / height of the media as the reel draws it, as the tile was given it. */
+  aspectRatio: number | null;
 }
 
 /**
@@ -736,6 +756,7 @@ export function useMediaZoomSource({
   enabled?: boolean;
 }): MediaZoomSource {
   const surfaceId = useContext(MediaZoomSurfaceContext);
+  const reducedMotion = useReducedMotion();
   const ref = useRef<View | null>(null);
   const hidden = useSharedValue(0);
   const hiddenStyle = useAnimatedStyle(() => ({ opacity: 1 - hidden.value }));
@@ -801,7 +822,7 @@ export function useMediaZoomSource({
     // touched; one without a zoom until its screen has covered this one.
     const openSerial = beginTileOpen(Date.now());
     if (openSerial === null) return;
-    openingPreview = active && preview ? { itemId, preview, recordedAt: Date.now() } : null;
+    openingPreview = active && preview ? { itemId, preview, post: post ?? null, recordedAt: Date.now() } : null;
     const openPlainly = () => {
       clearPendingZoomOrigin();
       open(null);
@@ -840,6 +861,16 @@ export function useMediaZoomSource({
         native: true,
         recordedAt: Date.now(),
       });
+      // The screen goes black around this tile, under the transition that
+      // follows (lib/zoom-veil.ts); with Reduce Motion there is none, and the
+      // reel simply appears. Fabric answers `measureInWindow` before it returns.
+      if (!reducedMotion) {
+        let hole: ZoomRect | null = null;
+        ref.current?.measureInWindow((x, y, width, height) => {
+          if (width > 0 && height > 0) hole = { x, y, width, height };
+        });
+        dropZoomVeil(hole);
+      }
       open({ sourceId: appleZoomId });
       endTileOpenWhenSettled(openSerial);
       return;
@@ -897,11 +928,11 @@ export function useMediaZoomSource({
     // Fabric answers `measureInWindow` before it returns. A host that does not
     // must never swallow the tap, so the plain open runs instead.
     start(null);
-  }, [active, appleZoomId, aspectRatio, itemId, measure, post, preview, radius, surfaceId]);
+  }, [active, appleZoomId, aspectRatio, itemId, measure, post, preview, radius, reducedMotion, surfaceId]);
 
   const tileKey = active && surfaceId ? zoomTileKey(surfaceId, itemId) : null;
 
-  return { ref, hiddenStyle, prepare, capture, offerVideo, tileKey, appleZoomId };
+  return { ref, hiddenStyle, prepare, capture, offerVideo, tileKey, appleZoomId, aspectRatio };
 }
 
 /**
@@ -917,6 +948,15 @@ export function MediaZoomSourceView({
   style?: StyleProp<ViewStyle>;
   children: ReactNode;
 }) {
+  // Under UIKit's zoom the tile works out where on the reel's screen it lines
+  // up (`AppleZoomSource`), from its size. Listened for from the first mount
+  // wherever the zoom runs: a view given `onLayout` later hears nothing until
+  // its size next changes.
+  const [appleZoomTile, setAppleZoomTile] = useState<ZoomSize | null>(null);
+  const measureAppleZoomTile = useCallback((event: LayoutChangeEvent) => {
+    const { width, height } = event.nativeEvent.layout;
+    setAppleZoomTile((current) => (current?.width === width && current.height === height ? current : { width, height }));
+  }, []);
   return (
     // Both wrappers stay out of the layout's way: `flexBasis: 'auto'` keeps a
     // tile that sizes itself from its media (a feed card) at its own height,
@@ -925,8 +965,13 @@ export function MediaZoomSourceView({
     // grow those tiles collapse to nothing.
     <Animated.View collapsable={false} style={[ZOOM_SOURCE_FILL, style, source.hiddenStyle]}>
       {/* On iOS 18 the measured view is also the one UIKit's zoom grows into the reel. */}
-      <AppleZoomSource identifier={source.appleZoomId}>
-        <View ref={source.ref} collapsable={false} style={ZOOM_SOURCE_FILL}>
+      <AppleZoomSource identifier={source.appleZoomId} aspectRatio={source.aspectRatio} tile={appleZoomTile}>
+        <View
+          ref={source.ref}
+          collapsable={false}
+          onLayout={isAppleZoomAvailable() ? measureAppleZoomTile : undefined}
+          style={ZOOM_SOURCE_FILL}
+        >
           <MediaZoomVideoOfferContext.Provider value={source.offerVideo}>
             <MediaZoomTileKeyContext.Provider value={source.tileKey}>
               {children}
@@ -1237,7 +1282,69 @@ export function useMediaZoomStage({
   }, [returnableVideo]);
   useEffect(() => {
     if (!nativeZoom) return;
-    return navigation.addListener('beforeRemove', handBackForNativeClose);
+    return navigation.addListener('beforeRemove', () => {
+      // The feed comes back behind the shrinking reel (lib/zoom-veil.ts).
+      liftZoomVeil();
+      handBackForNativeClose();
+    });
+  }, [handBackForNativeClose, nativeZoom, navigation]);
+  // The reel that was pushed under the veil is up: the veil is its to lift.
+  useEffect(() => {
+    if (nativeZoom) claimZoomVeil();
+  }, [nativeZoom]);
+  // A dismissal the reader begins with a gesture — the edge swipe, a drag, a
+  // pinch — removes the reel only once its transition is over, which UIKit
+  // reports up to a second after the reel has visibly landed in its tile (the
+  // spring's sub-pixel tail). Handed back only then, the player left the tile
+  // on its poster — the clip's first frame — from the landing until then, and
+  // the tile jumped ahead when it took the player up. So the player goes to the
+  // tile as the gesture begins: the tile, the view UIKit shrinks the reel into,
+  // draws the clip carrying on under the shrinking reel and is showing it when
+  // UIKit crossfades to it. It comes back to the reel should the gesture be let
+  // go of. The same `transitionStart` announces a screen pushed on top, when
+  // this reel is no longer the focused route; that one keeps its player. Back
+  // hands the player over before its transition starts (`beforeRemove`), and
+  // is left alone here.
+  const [reclaimed, setReclaimed] = useState(0);
+  useEffect(() => {
+    if (!nativeZoom) return;
+    const listen = navigation.addListener as unknown as (
+      type: 'transitionStart' | 'transitionEnd' | 'gestureCancel',
+      listener: (event: { data?: { closing?: boolean } }) => void
+    ) => () => void;
+    let gestureClose = false;
+    const letGoOf = () => {
+      if (!gestureClose) return;
+      gestureClose = false;
+      holdZoomVeil();
+      const player = handedBackRef.current;
+      if (player && reclaimVideoPlayer(player)) {
+        handedBackRef.current = null;
+        setReclaimed((count) => count + 1);
+      }
+    };
+    const unsubscribers = [
+      listen('transitionStart', (event) => {
+        if (event.data?.closing !== true) {
+          if (event.data?.closing === false) {
+            // The push has begun — UIKit draws the tile's picture above the
+            // veil from here — or a close has been let go of.
+            closeZoomVeilHole();
+            letGoOf();
+          }
+          return;
+        }
+        if (!navigation.isFocused() || handedBackRef.current) return;
+        gestureClose = true;
+        liftZoomVeil();
+        handBackForNativeClose();
+      }),
+      listen('transitionEnd', (event) => {
+        if (event.data?.closing === false) letGoOf();
+      }),
+      listen('gestureCancel', letGoOf),
+    ];
+    return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
   }, [handBackForNativeClose, nativeZoom, navigation]);
 
   /**
@@ -1477,6 +1584,7 @@ export function useMediaZoomStage({
   // the layer to finish its own.
   useEffect(() => () => {
     clearHiddenZoomSources();
+    clearZoomVeil();
     const close = closeRef.current;
     const stillClosing = Boolean(close) && !close!.live;
     // Taken along: a picture not yet handed over, or one drawn for a close that never came.
@@ -1636,9 +1744,9 @@ export function useMediaZoomStage({
 
   const lentVideoValue = useMemo<MediaZoomLentVideo | null>(() => (
     lentVideo && videoHandoff !== 'failed'
-      ? { video: lentVideo, attached: videoHandoff === 'attached', landing: videoLanding }
+      ? { video: lentVideo, attached: videoHandoff === 'attached', landing: videoLanding, reclaimed }
       : null
-  ), [lentVideo, videoHandoff, videoLanding]);
+  ), [lentVideo, reclaimed, videoHandoff, videoLanding]);
 
   return {
     zooming,

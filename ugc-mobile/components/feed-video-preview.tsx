@@ -313,6 +313,7 @@ export function FeedVideoPreview({
           source={streamSource}
           lendableUrl={lendableStreamUrl}
           returnKey={tileKey}
+          returning={returning}
           contentFit={videoContentFit}
           playing={canPlay}
           onFirstFrame={handleFirstFrame}
@@ -395,6 +396,7 @@ function FeedVideoPlayerLayer({
   source,
   lendableUrl,
   returnKey,
+  returning,
   contentFit,
   playing,
   onFirstFrame,
@@ -405,6 +407,8 @@ function FeedVideoPlayerLayer({
   lendableUrl: string | null;
   /** The zoom tile this is (`zoomTileKey`), for taking back a reel's player; null outside one. */
   returnKey: string | null;
+  /** A reel is handing this tile its player back and has not gone yet. */
+  returning: boolean;
   contentFit: 'cover' | 'contain';
   playing: boolean;
   onFirstFrame: () => void;
@@ -502,8 +506,13 @@ function FeedVideoPlayerLayer({
 
   // One player serves both states, prepared and playing, and a handoff between
   // them only resumes or pauses it: nothing else about the player changes.
+  // A player taken back while the reel that handed it back is still on screen
+  // — a dismissal begun with a gesture hands it back as the gesture begins, and
+  // a gesture let go of brings the reel back — plays or pauses as that reel
+  // says until the reel has gone; only then does this tile's own decision apply.
   useEffect(() => {
     playingRef.current = playing;
+    if (returning) return;
     if (playing) {
       // Asked to move: a player that has drawn is a warm start, one that has not is cold.
       beginPlaybackStart(metricsKey, { surface: 'feed', kind: hasFrameRef.current ? 'warm' : 'cold' });
@@ -513,7 +522,7 @@ function FeedVideoPlayerLayer({
       endPlaybackStall(metricsKey);
       player.pause();
     }
-  }, [metricsKey, player, playing]);
+  }, [metricsKey, player, playing, returning]);
 
   useEffect(() => {
     const subscription = player.addListener('playingChange', (event) => {

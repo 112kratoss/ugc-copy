@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   advanceZoomFlight,
+  appleZoomAlignmentRect,
   beginTileOpen,
   beginZoomFlight,
   canOpenFromTile,
@@ -100,6 +101,49 @@ describe('media rectangles', () => {
 
   it('covers a tile the way a tile crops its media', () => {
     expect(coverScale({ width: 100, height: 100 }, { width: 200, height: 400 })).toBe(0.5);
+  });
+});
+
+/**
+ * UIKit's zoom lines the tile up with a rectangle of the reel's screen
+ * (lib/apple-zoom.ts). These are the rectangles Expo Router's
+ * `calculateAdjustedRect` makes of the reel's own mark for a source that
+ * animates its aspect ratio, which the tile hands over for the transitions that
+ * begin while that mark is not mounted: the push, and Back.
+ */
+describe('where UIKit lines a tile up with the reel', () => {
+  it("takes the middle of a tall picture that a feed card crops to 4:5 — the Holi clip's Home card", () => {
+    const screen = { width: 402, height: 874 };
+    const rect = appleZoomAlignmentRect(screen, 610 / 1280, { width: 360.67, height: 453.8 })!;
+
+    // Full width, centred on the picture, in the card's shape: the part of the
+    // picture the card shows. Pinned to the top instead, the card's crop and
+    // the reel's picture slid across each other as the reel shrank into it.
+    expect(rect.x).toBe(0);
+    expect(rect.width).toBe(402);
+    expect(rect.y + rect.height / 2).toBeCloseTo(874 / 2, 6);
+    expect(rect.width / rect.height).toBeCloseTo(360.67 / 453.8, 6);
+    expect(rect.y).toBeCloseTo(184.1, 1);
+  });
+
+  it('takes the middle of a wide picture that a square tile crops', () => {
+    // A 2:1 picture on a 400×800 screen sits at y 300, 400×200.
+    expect(appleZoomAlignmentRect({ width: 400, height: 800 }, 2, { width: 100, height: 100 }))
+      .toEqual({ x: 100, y: 300, width: 200, height: 200 });
+  });
+
+  it('is the picture itself when the tile has its shape', () => {
+    const screen = { width: 400, height: 800 };
+    expect(appleZoomAlignmentRect(screen, 0.8, { width: 200, height: 250 })).toEqual(mediaRectInScreen(screen, 0.8));
+  });
+
+  it('crops the whole screen when the tile cannot know the shape, as the reel then marks it', () => {
+    expect(appleZoomAlignmentRect({ width: 400, height: 800 }, null, { width: 100, height: 100 }))
+      .toEqual({ x: 0, y: 200, width: 400, height: 400 });
+  });
+
+  it('has nothing to say before the tile has been laid out', () => {
+    expect(appleZoomAlignmentRect({ width: 400, height: 800 }, 0.5, { width: 0, height: 0 })).toBeNull();
   });
 });
 

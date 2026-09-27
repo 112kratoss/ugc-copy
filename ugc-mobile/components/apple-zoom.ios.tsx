@@ -10,8 +10,8 @@
  */
 import { Link, useLocalSearchParams, useNavigation } from 'expo-router';
 import { LinkZoomTransitionSource } from 'expo-router/build/link/preview/native';
-import { useEffect, type ReactNode } from 'react';
-import { View } from 'react-native';
+import { useEffect, useMemo, type ReactNode } from 'react';
+import { useWindowDimensions, View } from 'react-native';
 
 import {
   APPLE_ZOOM_SOURCE_PARAM,
@@ -19,17 +19,48 @@ import {
   parseAppleZoomSourceId,
 } from '@/lib/apple-zoom';
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
-import type { ZoomRect } from '@/lib/media-zoom-transition';
+import { appleZoomAlignmentRect, type ZoomRect, type ZoomSize } from '@/lib/media-zoom-transition';
 
-/** Registers the tile view inside as the zoom's source under `identifier`. */
-export function AppleZoomSource({ identifier, children }: { identifier: string | null; children: ReactNode }) {
+/**
+ * Registers the tile view inside as the zoom's source under `identifier`, with
+ * the part of the reel's screen it lines up with.
+ */
+export function AppleZoomSource({
+  identifier,
+  aspectRatio,
+  tile,
+  children,
+}: {
+  identifier: string | null;
+  /** width / height of the media as the reel draws it; null when the tile cannot know it. */
+  aspectRatio: number | null;
+  /** The tile view's size once laid out. */
+  tile: ZoomSize | null;
+  children: ReactNode;
+}) {
+  const { width, height } = useWindowDimensions();
+  const alignment = useMemo(
+    () => (tile ? appleZoomAlignmentRect({ width, height }, aspectRatio, tile) : null),
+    [aspectRatio, height, tile, width]
+  );
   if (!identifier || !isAppleZoomAvailable()) return children;
   return (
     // `animateAspectRatioChange`: a tile cropped to a shape other than its
     // media's (a profile grid cell) zooms into the part of the reel's picture
     // that has the tile's shape, and the rest of the picture is uncovered as
     // the window grows — Photos opening a square thumbnail.
-    <LinkZoomTransitionSource identifier={identifier} animateAspectRatioChange>
+    //
+    // `alignment` is that part of the picture, worked out by the tile. UIKit
+    // asks where to line the tile up as each transition begins; Expo Router
+    // answers from the reel's `AppleZoomTarget` when it finds one, and from
+    // this otherwise. The push begins before the reel's slide has mounted its
+    // mark, and Back takes the reel out of React before the pop begins
+    // (react-native-screens draws a snapshot of it instead). With no alignment
+    // at those moments UIKit pinned the tile's crop to the top of the reel's
+    // screen: closing a Holi clip into its Home card, the card's picture sat at
+    // the top of the shrinking window with the reel's below it, two copies of
+    // her waist sliding into each other as though the reel were scrolling in.
+    <LinkZoomTransitionSource identifier={identifier} alignment={alignment ?? undefined} animateAspectRatioChange>
       {children}
     </LinkZoomTransitionSource>
   );
@@ -38,9 +69,12 @@ export function AppleZoomSource({ identifier, children }: { identifier: string |
 /**
  * Marks where the reel draws the media of the post on screen, so the zoom
  * grows the tile into that rectangle and shrinks it back out of it, rather
- * than out of the whole screen with its bands and chrome. Keyed on the
- * identifier: Expo Router's detector registers once, under the identifier it
- * mounted with, so a re-pointed reel mounts a fresh one.
+ * than out of the whole screen with its bands and chrome. UIKit finds it only
+ * for a pop the reel is still mounted for — a drag down, a pinch, the edge
+ * swipe — which is where it tracks the page on screen; the push and Back line
+ * up by the tile's own alignment (`AppleZoomSource`). Keyed on the identifier:
+ * Expo Router's detector registers once, under the identifier it mounted with,
+ * so a re-pointed reel mounts a fresh one.
  */
 export function AppleZoomTarget({ rect }: { rect: ZoomRect }) {
   const identifier = useAppleZoomSourceId();

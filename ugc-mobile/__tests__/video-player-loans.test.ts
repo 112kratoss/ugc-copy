@@ -14,6 +14,7 @@ import {
   isVideoReturnPending,
   lenderUnmounting,
   lendVideoPlayer,
+  reclaimVideoPlayer,
   RELEASED_LOAN_GRACE_MS,
   releaseAdoptedVideoPlayer,
   releaseVideoLoanHold,
@@ -264,9 +265,75 @@ describe('a player the reel hands back to the tile it came from', () => {
     handBackVideoPlayer(player, TILE, STREAM);
     claimReturnedVideoPlayer(TILE, STREAM);
 
+    // No clock runs while the reel is up: a gesture may hold it half-shrunk
+    // over the tile for as long as the finger likes.
+    vi.advanceTimersByTime(VIDEO_RETURN_TIMEOUT_MS * 10);
+    expect(isVideoReturnPending(TILE, STREAM)).toBe(true);
+
+    endVideoReturn(player);
     vi.advanceTimersByTime(VIDEO_RETURN_TIMEOUT_MS + RELEASED_LOAN_GRACE_MS);
     expect(player.release).not.toHaveBeenCalled();
     expect(isVideoReturnPending(TILE, STREAM)).toBe(false);
+  });
+
+  it('waits on a tile that has not taken it for as long as the reel is up', () => {
+    const player = adoptedPlayer();
+    handBackVideoPlayer(player, TILE, STREAM);
+
+    vi.advanceTimersByTime(VIDEO_RETURN_TIMEOUT_MS * 10);
+    expect(player.pause).not.toHaveBeenCalled();
+    expect(isVideoReturnPending(TILE, STREAM)).toBe(true);
+    // Its tile can still take it.
+    expect(claimReturnedVideoPlayer(TILE, STREAM)).toBe(player);
+  });
+
+  it('goes back to the reel when the dismissal that handed it over is let go of', () => {
+    const player = adoptedPlayer();
+    const listener = vi.fn();
+    subscribeToVideoReturns(listener);
+    handBackVideoPlayer(player, TILE, STREAM);
+    // The tile has taken it and drawn it under the shrinking reel.
+    claimReturnedVideoPlayer(TILE, STREAM);
+    reportReturnedVideoDrawn(player);
+    listener.mockClear();
+
+    expect(reclaimVideoPlayer(player)).toBe(true);
+
+    // The reel's adopted player again, which the reel alone pauses and ends.
+    expect(isVideoReturnPending(TILE, STREAM)).toBe(false);
+    expect(isVideoPlayerHandedBack(player)).toBe(false);
+    expect(isVideoPlayerOnLoan(player)).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(1);
+    // The tile lets go of it without a pause or a release, as it does a player out on loan.
+    expect(lenderUnmounting(player)).toBe(true);
+    expect(player.pause).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(VIDEO_RETURN_TIMEOUT_MS + RELEASED_LOAN_GRACE_MS);
+    expect(player.release).not.toHaveBeenCalled();
+    // And a later close hands it back again.
+    expect(handBackVideoPlayer(player, TILE, STREAM)).toBe(true);
+    expect(isVideoReturnPending(TILE, STREAM)).toBe(true);
+  });
+
+  it('goes back to the reel before the tile has taken it, without a release', () => {
+    const player = adoptedPlayer();
+    handBackVideoPlayer(player, TILE, STREAM);
+
+    expect(reclaimVideoPlayer(player)).toBe(true);
+
+    expect(claimReturnedVideoPlayer(TILE, STREAM)).toBeNull();
+    vi.advanceTimersByTime(VIDEO_RETURN_TIMEOUT_MS + RELEASED_LOAN_GRACE_MS);
+    expect(player.pause).not.toHaveBeenCalled();
+    expect(player.release).not.toHaveBeenCalled();
+    releaseAdoptedVideoPlayer(player);
+    expect(player.pause).toHaveBeenCalledTimes(1);
+  });
+
+  it('cannot be reclaimed unless it is the one handed back', () => {
+    const player = adoptedPlayer();
+    expect(reclaimVideoPlayer(player)).toBe(false);
+    handBackVideoPlayer(player, TILE, STREAM);
+    expect(reclaimVideoPlayer(fakePlayer())).toBe(false);
+    expect(isVideoReturnPending(TILE, STREAM)).toBe(true);
   });
 
   it('can only be a player the reel adopted', () => {

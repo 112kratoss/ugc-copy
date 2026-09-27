@@ -29,12 +29,14 @@ vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ t
 // the pop beginning can be fired from the test.
 const listeners = new Map<string, Set<(event?: unknown) => void>>();
 // One object for the reel's lifetime, as the navigator's own is.
+let reelFocused = true;
 const navigation = {
   addListener: (type: string, listener: (event?: unknown) => void) => {
     if (!listeners.has(type)) listeners.set(type, new Set());
     listeners.get(type)!.add(listener);
     return () => listeners.get(type)?.delete(listener);
   },
+  isFocused: () => reelFocused,
 };
 vi.mock('expo-router', () => ({ useNavigation: () => navigation }));
 function fire(type: string, event?: unknown) {
@@ -44,16 +46,20 @@ function fire(type: string, event?: unknown) {
 // The zoom is available: iOS 18 on the bridgeless runtime.
 vi.mock('../lib/apple-zoom-available', () => ({ isAppleZoomAvailable: () => true }));
 
-import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource, useMediaZoomStage } from '../components/media-zoom';
+import { MediaZoomSourceView, MediaZoomSurface, peekOpeningPost, peekOpeningPreview, useMediaZoomSource, useMediaZoomStage } from '../components/media-zoom';
+import type { ImmersivePreviewItem } from '../lib/immersive-preview-view-model';
 import { getZoomFlight, peekPendingZoomOrigin, resetMediaZoomTransitions } from '../lib/media-zoom-transition';
 import { useMediaZoomVideoOffer } from '../lib/media-zoom-video-offer';
 import {
   acceptVideoReturn,
+  claimReturnedVideoPlayer,
   isVideoLoanHeld,
+  isVideoPlayerHandedBack,
   isVideoPlayerOnLoan,
   isVideoReturnPending,
   resetVideoPlayerLoans,
 } from '../lib/video-player-loans';
+import { resetZoomVeil, zoomVeil } from '../lib/zoom-veil';
 
 const PREVIEW = { url: 'https://example.test/tile.webp', cacheKey: 'tile', thumbhash: null };
 const STREAM = 'https://example.test/clip.mp4';
@@ -65,12 +71,14 @@ function fakePlayer() {
 afterEach(() => {
   resetMediaZoomTransitions();
   resetVideoPlayerLoans();
+  resetZoomVeil();
   listeners.clear();
+  reelFocused = true;
   vi.useRealTimers();
 });
 
-function Tile({ report, player }: { report: (source: ReturnType<typeof useMediaZoomSource>) => void; player?: VideoPlayer }) {
-  const source = useMediaZoomSource({ itemId: 'post-1', aspectRatio: 9 / 16, preview: PREVIEW });
+function Tile({ report, player, post = null }: { report: (source: ReturnType<typeof useMediaZoomSource>) => void; player?: VideoPlayer; post?: ImmersivePreviewItem | null }) {
+  const source = useMediaZoomSource({ itemId: 'post-1', aspectRatio: 9 / 16, preview: PREVIEW, post });
   report(source);
   return (
     <MediaZoomSourceView source={source}>
@@ -155,6 +163,81 @@ describe('a tile opening under the native zoom', () => {
     stopAccepting();
   });
 
+  it('covers the feed in black from the tap, and lifts it as the pop begins', () => {
+    const { source } = mountTile();
+    expect(zoomVeil.get()).toBe(0);
+    renderer.act(() => source.capture(() => {}));
+    expect(zoomVeil.get()).toBe(1);
+
+    renderer.act(() => {
+      renderer.create(<Reel onExit={() => {}} />);
+    });
+    expect(zoomVeil.get()).toBe(1);
+    renderer.act(() => { fire('beforeRemove'); });
+    // The test double resolves the delayed fade at once.
+    expect(zoomVeil.get()).toBe(0);
+  });
+
+  it('hands the player to the tile as a dismissal gesture begins, and takes it back when the gesture is let go of', () => {
+    const player = fakePlayer();
+    const { source } = mountTile(player);
+    const tileKey = source.tileKey!;
+    renderer.act(() => source.capture(() => {}));
+    let stage!: ReturnType<typeof useMediaZoomStage>;
+    renderer.act(() => {
+      renderer.create(<Reel onExit={() => {}} playerFor={() => player} report={(value) => { stage = value; }} />);
+    });
+    renderer.act(() => { fire('transitionEnd', { data: { closing: false } }); });
+    const stopAccepting = acceptVideoReturn(tileKey, STREAM);
+
+    // The edge swipe, a drag or a pinch: the reel is still the focused route.
+    renderer.act(() => { fire('transitionStart', { data: { closing: true } }); });
+    expect(isVideoReturnPending(tileKey, STREAM)).toBe(true);
+    expect(isVideoPlayerHandedBack(player)).toBe(true);
+    expect(zoomVeil.get()).toBe(0);
+    expect(stage.lentVideo?.reclaimed).toBe(0);
+    // The tile takes it and draws the clip under the shrinking reel.
+    expect(claimReturnedVideoPlayer(tileKey, STREAM)).toBe(player);
+
+    renderer.act(() => { fire('gestureCancel'); });
+    expect(isVideoReturnPending(tileKey, STREAM)).toBe(false);
+    expect(isVideoPlayerHandedBack(player)).toBe(false);
+    expect(isVideoPlayerOnLoan(player)).toBe(true);
+    expect(zoomVeil.get()).toBe(1);
+    expect(stage.lentVideo?.reclaimed).toBe(1);
+
+    // Let go of once more, then closed for good: handed back again, exactly once.
+    renderer.act(() => { fire('transitionStart', { data: { closing: true } }); });
+    renderer.act(() => { fire('transitionStart', { data: { closing: false } }); });
+    expect(stage.lentVideo?.reclaimed).toBe(2);
+    renderer.act(() => { fire('transitionStart', { data: { closing: true } }); });
+    expect(isVideoReturnPending(tileKey, STREAM)).toBe(true);
+    renderer.act(() => { fire('transitionEnd', { data: { closing: true } }); });
+    renderer.act(() => { fire('beforeRemove'); });
+    expect(isVideoReturnPending(tileKey, STREAM)).toBe(true);
+    expect(stage.lentVideo?.reclaimed).toBe(2);
+    stopAccepting();
+  });
+
+  it('keeps the player when a screen is pushed on top of it', () => {
+    const player = fakePlayer();
+    const { source } = mountTile(player);
+    const tileKey = source.tileKey!;
+    renderer.act(() => source.capture(() => {}));
+    renderer.act(() => {
+      renderer.create(<Reel onExit={() => {}} playerFor={() => player} />);
+    });
+    const stopAccepting = acceptVideoReturn(tileKey, STREAM);
+
+    // A creator profile pushed from the reel: the same event, but the reel is no longer focused.
+    reelFocused = false;
+    renderer.act(() => { fire('transitionStart', { data: { closing: true } }); });
+    expect(isVideoReturnPending(tileKey, STREAM)).toBe(false);
+    expect(isVideoPlayerOnLoan(player)).toBe(true);
+    expect(zoomVeil.get()).toBe(1);
+    stopAccepting();
+  });
+
   it('dismisses by popping alone: UIKit shrinks the reel into the registered tile', () => {
     const { source } = mountTile();
     renderer.act(() => source.capture(() => {}));
@@ -197,3 +280,40 @@ function Reel({
   report?.(stage);
   return null;
 }
+
+describe('what the tapped tile hands the reel for its first load', () => {
+  const POST = { id: 'post-1', previewKind: 'video', creatorUsername: 'fluffy' } as unknown as ImmersivePreviewItem;
+
+  it('records the post beside the picture at the tap, for two seconds, for that post only', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-27T10:00:00Z'));
+    let source!: ReturnType<typeof useMediaZoomSource>;
+    renderer.act(() => {
+      renderer.create(
+        <MediaZoomSurface>
+          <Tile report={(value) => { source = value; }} post={POST} />
+        </MediaZoomSurface>
+      );
+    });
+    renderer.act(() => source.capture(() => {}));
+    const now = Date.now();
+    expect(peekOpeningPreview('post-1', now)).toEqual(PREVIEW);
+    expect(peekOpeningPost('post-1', now)).toBe(POST);
+    expect(peekOpeningPost('post-2', now)).toBeNull();
+    expect(peekOpeningPost('post-1', now + 2001)).toBeNull();
+  });
+
+  it('hands over no post when the tile listed none', () => {
+    let source!: ReturnType<typeof useMediaZoomSource>;
+    renderer.act(() => {
+      renderer.create(
+        <MediaZoomSurface>
+          <Tile report={(value) => { source = value; }} />
+        </MediaZoomSurface>
+      );
+    });
+    renderer.act(() => source.capture(() => {}));
+    expect(peekOpeningPreview('post-1', Date.now())).toEqual(PREVIEW);
+    expect(peekOpeningPost('post-1', Date.now())).toBeNull();
+  });
+});

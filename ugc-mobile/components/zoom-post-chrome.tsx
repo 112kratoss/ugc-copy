@@ -24,7 +24,14 @@ const ignore = () => {};
  * geometry, so that when the reel is uncovered underneath nothing on screen
  * moves. The window takes no touches, so nothing here answers one.
  */
-export function ZoomPostChrome({ post }: { post: ImmersivePreviewItem }) {
+export function ZoomPostChrome({ post, controls = true }: {
+  post: ImmersivePreviewItem;
+  /**
+   * The reel's Back and sound controls, drawn inert. False where the screen
+   * draws working ones of its own over the post (`ViewerShell`).
+   */
+  controls?: boolean;
+}) {
   const insets = useSafeAreaInsets();
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
@@ -67,10 +74,12 @@ export function ZoomPostChrome({ post }: { post: ImmersivePreviewItem }) {
         onCreatorOpen={ignore}
       />
       <TopScrim topInset={topInset} over="media" />
-      <View style={[topControlStyle(topInset), { left: 16 }]}>
-        <IconShadow><BackGlyph size={appTheme.icon.feature} color="#ffffff" /></IconShadow>
-      </View>
-      {hasImmersiveAudibleMedia(post) ? (
+      {controls ? (
+        <View style={[topControlStyle(topInset), { left: 16 }]}>
+          <IconShadow><BackGlyph size={appTheme.icon.feature} color="#ffffff" /></IconShadow>
+        </View>
+      ) : null}
+      {controls && hasImmersiveAudibleMedia(post) ? (
         <View style={[topControlStyle(topInset), { right: 16 }]}>
           <IconShadow>
             {audioMuted
