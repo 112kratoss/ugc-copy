@@ -1,0 +1,3066 @@
+{
+  "project": "ildfmhozpibwiopeavfg",
+  "date": "2026-09-27",
+  "functions": [
+    {
+      "signature": "abandon_razorpay_checkout_intent(uuid,uuid,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "abort_upload_byte_reservation_before_issue(uuid,uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "abort_upload_byte_reservation_consumption(uuid,uuid,uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "activate_template_version(uuid,uuid,uuid,uuid,integer,jsonb,text,text,text,text,jsonb,integer,text,text,timestamp with time zone)",
+      "definer": false,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "add_credits(uuid,integer,uuid,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "admin_user_population_counts(timestamp with time zone)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "admit_provider_submission(text,text,numeric,numeric,numeric,numeric,integer,integer,integer,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "anonymize_post_comments_before_auth_user_delete()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "apply_admin_credit_adjustment(uuid,uuid,integer,integer,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "apply_admin_generation_moderation(uuid,uuid,text,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "apply_admin_post_moderation(uuid,uuid,text,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "apply_admin_user_sanction(uuid,uuid,text,text,integer,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, auth, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "apply_feed_delivery_outcome()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "apply_marketplace_wallet_purchase_change()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "apply_post_resource_bundle_mutation_unlocked_20260806(uuid,uuid,text,text,jsonb)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "apply_post_resource_bundle_mutation(uuid,uuid,text,text,jsonb)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "apply_post_resource_wallet_purchase_change()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "apply_workflow_canvas_assistant_proposal(uuid,uuid,jsonb)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": true,
+      "authenticated": true,
+      "service": true
+    },
+    {
+      "signature": "attach_generation_provider_task(uuid,text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "bind_legacy_mobile_store_transaction_product(text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "build_post_resource_items_from_legacy_bundle(text,text,text,jsonb,jsonb,boolean)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "build_workflow_canvas_library_summary(jsonb)",
+      "definer": false,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "can_read_private_post_media(text,uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "cancel_workflow_run_step_jobs(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "canonical_account_id(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "capture_post_resource_bundle_revision()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "capture_post_resource_purchase_context()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "capture_post_resource_purchase_media()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "check_backend_rate_limit(text,text,integer,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "claim_account_deletion_initial(text,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "claim_account_deletion_resweep(text,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "claim_credit_grant_program(uuid,text,text,text[])",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "claim_generation_completion_jobs(integer,text,integer,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "claim_generation_output_import_jobs(integer,text,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "claim_generation_playback_rendition(text,bigint)",
+      "definer": false,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "claim_generation_preview_repairs(integer,text,integer,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "claim_generation_start_request(uuid,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_catalog"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "claim_media_rendition_repairs(integer,bigint,text,integer,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, storage, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "claim_post_media_preview_repairs(integer,text,integer,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "claim_post_media_teaser_repair(text,bigint)",
+      "definer": false,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "claim_razorpay_checkout_intent(uuid,text,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "claim_referral_visit(uuid,uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "claim_template_run_jobs(integer,text,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "claim_upload_byte_reservation_consumption(uuid,uuid,uuid,integer,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "claim_workflow_run_step_jobs(integer,text,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "clear_post_resource_bundle_retirement()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "clone_generation_model_catalog(text,text,text,text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "commit_uploaded_media_private_copy(text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "complete_account_deletion_job_after_auth_delete()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "complete_marketplace_purchase(text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "complete_mobile_marketplace_purchase(uuid,uuid,text,text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "complete_mobile_post_resource_purchase(uuid,uuid,text,text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "complete_mobile_purchase(uuid,uuid,text,text,text,text,text,numeric,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "complete_post_resource_bundle_purchase(text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "complete_razorpay_checkout_intent(uuid,uuid,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "complete_upload_byte_reservation_consumption(uuid,uuid,uuid,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "consume_upload_byte_reservation(uuid,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "create_mobile_purchase_intent(uuid,text,uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "create_post_comment(uuid,uuid,uuid,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "create_referral_visit(text,text,text,uuid,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "current_identity_admission()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": true,
+      "service": true
+    },
+    {
+      "signature": "current_identity_is_active()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": true,
+      "service": true
+    },
+    {
+      "signature": "current_identity_is_registered()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": true,
+      "service": true
+    },
+    {
+      "signature": "current_identity_state()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": true,
+      "service": true
+    },
+    {
+      "signature": "defer_template_run_job(uuid,text,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "defer_workflow_run_step_job(uuid,text,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "delete_feed_events_before_auth_user_delete()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "delete_feed_events_before_post_delete()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "detach_feed_events_before_session_delete()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "enforce_mobile_post_resources_credit_only()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "enforce_profile_identity_state_transition()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "enforce_upload_byte_reservation_lifecycle()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "enqueue_detached_merged_identity_deletion()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "enqueue_generation_completion_job(text,jsonb)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "enqueue_generation_output_import_job(uuid,jsonb,timestamp with time zone)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "enqueue_private_post_media_cleanup()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "enqueue_template_run_after_generation_terminal()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "enqueue_template_run_after_state_change()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "enqueue_template_run_job(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "enqueue_workflow_run_step_job(uuid,text,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "ensure_referral_code(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, extensions, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "finalize_account_deletion_resweep(uuid,uuid,boolean,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "finish_generation_completion_job(uuid,text,boolean,text,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "finish_generation_output_import_job(uuid,text,boolean,text,integer,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "finish_template_run_job(uuid,text,boolean,text,integer,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "finish_workflow_run_step_job(uuid,text,boolean,text,integer,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "forget_completed_post_remix()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "forward_linked_account_credit_change()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "generation_model_catalog_entry_guard()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "generation_model_catalog_has_negative_number(jsonb)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "generation_model_catalog_release_guard()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "generation_model_identity_guard()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "get_backend_cost_aggregates(timestamp with time zone,text[],integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "get_creator_profile_stats(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "get_feed_retention_lag()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "get_operational_table_growth()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_catalog, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "get_owner_post_bundle_summaries(uuid[])",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "get_owner_post_sales_summary(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "get_post_resource_bundle_cash_quote(uuid,uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "get_public_post_resource_bundle_summaries(uuid[])",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "get_purchased_post_resource_bundle_revision(uuid,uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "get_ranked_feed_candidates_v2(uuid,text,text,integer,integer,integer,integer,integer,integer,double precision,double precision,timestamp with time zone)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "get_ranked_feed_candidates(uuid,text,integer,timestamp with time zone)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "get_referral_dashboard(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "get_upload_reclaim_health(timestamp with time zone,boolean)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "get_user_ai_usage_cost_total(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "get_viewer_post_resource_unlock(uuid,uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "guard_upload_reservation_delete()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "guard_upload_storage_object_write()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "handle_new_user()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "has_due_generation_output_import_jobs(integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "has_due_template_run_jobs(integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "has_pending_generation_playback_rendition()",
+      "definer": false,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "heartbeat_template_run_job(uuid,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "heartbeat_workflow_run_step_job(uuid,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "hook_block_password_signups_until_smtp(jsonb)",
+      "definer": false,
+      "proconfig": [
+        "search_path=pg_catalog"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "increment_post_remix_count(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "increment_post_report_count()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "increment_remix_count(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "initialize_workflow_canvas_run(uuid,uuid,text,text,text,jsonb,text,jsonb)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": true,
+      "service": true
+    },
+    {
+      "signature": "is_account_deletion_requested(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "is_meaningful_feed_engagement(text,double precision,bigint,timestamp with time zone,timestamp with time zone,timestamp with time zone,timestamp with time zone)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "is_upload_owner_active(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "linked_account_ids(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "list_creator_purchased_revisions_for_retention(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "list_generations_missing_durable_input_media(integer,integer,timestamp with time zone)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "list_marketplace_resource_bundles(text,text,text,text,text,integer,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "list_media_rendition_repair_candidates(integer,bigint,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, storage, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "list_mobile_store_product_provisioning_gaps()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "list_referenced_post_resource_storage_paths()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "list_showcase_top_sales_post_ids(text,text,integer,integer,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "list_stalled_workflow_runs_without_live_jobs(timestamp with time zone,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "list_unsettled_referral_purchase_transactions(integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "list_viewer_post_resource_unlocks(uuid,integer,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "lock_upload_owner(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "lock_upload_storage_path(text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "mark_account_deleted_upload_reservations(uuid[])",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "mark_account_deletion_stage(uuid,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "mark_generation_submission_unknown(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "mark_upload_byte_reservation_issued(uuid,uuid,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "marketplace_resource_bundle_quality_issue(text,text,text,text,text,text,jsonb,jsonb,boolean,integer,text,text,text,text,timestamp with time zone,text,boolean,text,text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "marketplace_text_is_placeholder(text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": true,
+      "authenticated": true,
+      "service": true
+    },
+    {
+      "signature": "match_post_content_embeddings(vector,text,double precision,integer)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "merge_guest_account(uuid,uuid,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "normalize_feed_interest_category(text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "normalize_post_resource_items(jsonb)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": true,
+      "service": true
+    },
+    {
+      "signature": "normalize_post_resource_legacy_earnings()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "persist_ranked_feed_session(jsonb,jsonb,jsonb,integer,integer)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "pin_post_resource_bundle_purchase_revision()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "post_resource_bundle_content_fingerprint(post_resource_bundles)",
+      "definer": false,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "post_resource_bundle_quality_issue_for(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "post_resource_bundle_revision_content_matches(post_resource_bundle_revisions,post_resource_bundle_revisions)",
+      "definer": false,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "prepare_account_deletion(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "prevent_hidden_generation_republish()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "prevent_referral_audit_mutation()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": true,
+      "authenticated": true,
+      "service": true
+    },
+    {
+      "signature": "prevent_referral_identity_mutation()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": true,
+      "authenticated": true,
+      "service": true
+    },
+    {
+      "signature": "private_post_media_is_referenced(text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "protect_mobile_purchase_intent_authority()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "protect_mobile_store_product_authority()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "protect_mobile_store_transaction_identity()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "protect_post_resource_bundle_order_quote()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "protect_sold_post_resource_bundle_content()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "provision_mobile_store_product(text,text,integer,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "prune_abandoned_free_unlock_orders(interval)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "prune_account_merge_tickets(integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "prune_backend_job_runs(integer,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "prune_feed_personalization_data(timestamp with time zone,integer,integer,integer,integer)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "prune_generation_completion_jobs(integer,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "prune_mobile_notification_retention(timestamp with time zone,timestamp with time zone,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "prune_operational_backend_data(timestamp with time zone,integer,integer,integer,integer,integer,integer,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "prune_post_share_events(interval)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "prune_profile_share_events(interval)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "prune_template_run_jobs(integer,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "prune_upload_byte_reservations(integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "prune_workflow_run_step_jobs(integer,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "publish_generation_model_catalog(uuid,text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "publish_generation_post_with_resource_bundle(uuid,uuid,jsonb,jsonb,jsonb,boolean)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "read_model_catalog_v1_current(text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "read_model_catalog_v1_details(text,text[],text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "read_model_catalog_v1_page(text,text,numeric,text,integer,text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "reconcile_credit_purchase_adjustment(uuid,text,text,bigint,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "reconcile_marketplace_cash_adjustment(text,text,text,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "reconcile_mobile_credit_purchase_adjustment(text,uuid,text,text,bigint,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "reconcile_mobile_credit_refund(text,uuid,text,text,bigint,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "reconcile_mobile_purchase_adjustment(text,uuid,text,text,bigint,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "reconcile_post_resource_cash_adjustment(text,text,text,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "reconcile_razorpay_credit_purchase_adjustment(uuid,text,text,bigint,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "reconcile_referral_purchase_reward_adjustment(uuid,text,integer,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "reconcile_upload_byte_admission_counters(boolean)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "record_completed_post_remix()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "record_credit_purchase_success_timestamp()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "record_feed_media_progress_event(text,uuid,bigint,uuid,text,uuid,uuid,text,integer,integer,double precision,jsonb,timestamp with time zone)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "record_generation_share_event(uuid,text,text,text,uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "record_generation_spend_audit()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "record_post_resource_bundle_cash_order(uuid,uuid,uuid,text,integer,text,integer,uuid,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "record_post_share_event(uuid,text,text,text,uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "record_profile_share_event(uuid,text,text,text,uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "record_provider_fetch_attempt(text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "record_provider_submission_outcome(text,boolean,integer,integer,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "record_provider_submission_reconciliation(uuid,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "record_showcase_feed_events(uuid,text,jsonb)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "record_template_run_success(uuid,text,integer,uuid)",
+      "definer": false,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "record_template_run_success(uuid,text,integer)",
+      "definer": false,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "redeem_account_merge_ticket(text,uuid,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "refresh_creator_feed_stats(timestamp with time zone,integer)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "refresh_creator_search_documents(uuid[])",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "refresh_feed_delivery_fact_daily(timestamp with time zone,integer,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "refresh_marketplace_bundle_listings(uuid[])",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "refresh_marketplace_bundle_search_documents(uuid[])",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "refresh_post_feed_engagement_stats(timestamp with time zone,integer)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "refresh_post_feed_stats(timestamp with time zone,integer)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "refresh_post_search_documents(uuid[])",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "refresh_user_interest_weights(timestamp with time zone,integer,integer,integer)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "refresh_workflow_canvas_library_summary()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "refund_ai_usage_event(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "refund_creation_credit_reservation(uuid,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "reject_blocked_user_follow()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "reject_post_resource_bundle_revision_rewrite()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "reject_post_resource_bundle_write_during_account_deletion()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "reject_post_write_during_account_deletion()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "reject_sold_post_delete()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "reject_template_version_mutation()",
+      "definer": false,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": true,
+      "authenticated": true,
+      "service": true
+    },
+    {
+      "signature": "release_backend_job_lock(text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "release_upload_byte_reservation(text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "relink_legacy_generation_media(uuid,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "remove_follows_for_user_block()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "replace_post_media(uuid,uuid,jsonb)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "request_creator_payout(uuid,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "reserve_ai_usage_promotional_credits()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "reserve_creation_credits(uuid,integer,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "reserve_generation_promotional_credits()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "reserve_provider_submission(uuid,text,text,numeric,numeric,numeric,numeric,integer,integer,integer,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "reserve_upload_bytes_v2(uuid,uuid,text,text,bigint,bigint,text,bigint,bigint,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "reserve_upload_bytes(uuid,text,text,bigint,bigint,bigint,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "resolve_creator_payout_request(uuid,uuid,text,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "resolve_post_media_read(text,uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "resolve_post_report_for_ops(uuid,uuid,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "resolve_subject_report_for_ops(uuid,uuid,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "restore_ai_usage_promotional_credits()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "restore_generation_promotional_credits()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "restore_referral_purchase_rewards(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "retain_creator_payout_identity()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "retire_sold_post_resource_bundle_instead_of_delete()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "reverse_marketplace_wallet_on_refund()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "reverse_post_resource_wallet_on_refund()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "reverse_referral_purchase_rewards(uuid,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "rollback_generation_model_catalog(text,text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "save_post_source_tools_with_catalog(uuid,uuid,text,jsonb)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "search_public_creators(text,uuid,double precision,uuid,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "search_public_posts(text,uuid,double precision,uuid,integer)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "seed_user_interest_from_onboarding_goal(uuid,text,double precision,timestamp with time zone)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "set_contact_message_handled(uuid,uuid,boolean,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "set_feed_creator_feedback(uuid,uuid,boolean,text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "set_feed_post_feedback(uuid,uuid,boolean,text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "set_mobile_store_product_active(text,boolean)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "set_post_comment_status(uuid,uuid,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "set_post_save_state(uuid,uuid,boolean)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "settle_ai_usage_event(uuid,text,text,jsonb,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "settle_generation_failed(text,timestamp with time zone,text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "settle_generation_start_failed(uuid,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "settle_generation_succeeded(text,text,timestamp with time zone,text,text,text,integer,text,timestamp with time zone,jsonb)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "settle_referral_purchase_rewards(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "settle_template_generation_start_failed(uuid,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "snapshot_post_resource_proof_media(uuid)",
+      "definer": false,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "stage_generation_model_catalog(jsonb,text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "start_ai_usage_event(uuid,integer,text,text,text,text,text,text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "start_generation(uuid,integer,text,text,text,integer,text,uuid,jsonb,text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "start_template_generation(uuid,uuid,uuid,integer,text,text,integer,text,uuid,text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "start_workflow_canvas_run(uuid,uuid,text,text,text,jsonb,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": true,
+      "service": true
+    },
+    {
+      "signature": "sync_generation_exposure_with_post()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "sync_post_resource_bundle_exposure()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "sync_post_resource_purchase_moderation()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "sync_upload_byte_admission_counters()",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "toggle_post_save(uuid,uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "toggle_showcase_save(uuid,uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "tombstone_upload_path(text,text,uuid,uuid,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "touch_updated_at_column()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": true,
+      "authenticated": true,
+      "service": true
+    },
+    {
+      "signature": "touch_workflow_canvas_updated_at()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": true,
+      "authenticated": true,
+      "service": true
+    },
+    {
+      "signature": "transition_account_deletion_initial(uuid,uuid,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "trg_refresh_creator_search_for_post()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "trg_refresh_creator_search_profile()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "trg_refresh_marketplace_listing_for_bundle()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "trg_refresh_marketplace_listing_for_post()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "trg_refresh_marketplace_listing_for_profile()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "trg_refresh_marketplace_search_for_bundle()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "trg_refresh_marketplace_search_for_post()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "trg_refresh_marketplace_search_for_profile()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "trg_refresh_post_search_document()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "try_acquire_backend_job_lock(text,integer,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "unlock_free_marketplace_asset(uuid,uuid,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "unlock_free_post_resource_bundle(uuid,uuid,text,text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "unlock_marketplace_asset_with_credits(uuid,uuid)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "unlock_post_resource_bundle_with_credits(uuid,uuid)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "update_post_with_resource_bundle_and_media(uuid,uuid,jsonb,boolean,jsonb,jsonb)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "update_post_with_resource_bundle(uuid,uuid,jsonb,boolean,jsonb)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "upload_byte_reservation_charge(upload_byte_reservations)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "upload_reservation_intent_held(text,uuid,text,text,text,timestamp with time zone,timestamp with time zone,timestamp with time zone,boolean)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "upload_surface_max_bytes(text)",
+      "definer": true,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    },
+    {
+      "signature": "upsert_mobile_notification(uuid,uuid,text,text,text,text,text,text,text,text,text)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "upsert_post_with_resource_bundle(jsonb,jsonb,boolean)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "validate_feed_event_context()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "validate_generation_model_catalog_release(uuid)",
+      "definer": false,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "validate_post_report_bundle_match()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "validate_post_resource_bundle_write()",
+      "definer": false,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": true,
+      "authenticated": true,
+      "service": true
+    },
+    {
+      "signature": "wake_workflow_run_step_job(uuid)",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": true
+    },
+    {
+      "signature": "wake_workflow_runs_after_generation_terminal()",
+      "definer": true,
+      "proconfig": [
+        "search_path=public, pg_temp"
+      ],
+      "anon": false,
+      "authenticated": false,
+      "service": false
+    }
+  ]
+}
