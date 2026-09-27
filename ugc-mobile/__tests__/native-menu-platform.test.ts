@@ -76,3 +76,15 @@ describe('the iOS menu', () => {
     expect(read('components/native-menu.android.tsx')).not.toMatch(/^import .*'@expo\/ui/m);
   });
 });
+
+describe('the Android menu', () => {
+  const android = read('components/native-menu.android.tsx');
+
+  // Compose parses a colour prop with Android's parser, which rejects the
+  // palettes' rgba() tokens: the divider once failed its prop on every open.
+  it('hands Compose every colour through toAndroidColor', () => {
+    const colourProps = android.match(/\bcolor=\{[^}]*\}/g) ?? [];
+    expect(colourProps.length).toBeGreaterThan(0);
+    for (const prop of colourProps) expect(prop).toMatch(/^color=\{toAndroidColor\(/);
+  });
+});
