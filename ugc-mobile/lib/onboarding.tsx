@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Crypto from 'expo-crypto';
 import { Platform } from 'react-native';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -108,10 +109,10 @@ export async function trackOnboardingEvent(
   options: { goal?: OnboardingGoal | null; step?: string | null } = {},
 ) {
   if (Platform.OS !== 'ios' && Platform.OS !== 'android') return;
-  const clientEventId = globalThis.crypto?.randomUUID?.()
-    ?? await import('expo-crypto').then((crypto) => crypto.randomUUID());
   await api.recordOnboardingEvent({
-    clientEventId,
+    // A static import, not import(): in a dev build import() fetches a bundle
+    // from Metro, and these fire-and-forget calls leave its rejection uncaught.
+    clientEventId: Crypto.randomUUID(),
     eventName,
     platform: Platform.OS,
     goal: options.goal,
