@@ -2,6 +2,7 @@
 
 Status: workflow ownership batch deployed in PR #216 and verified (24 live checks).
 Save/audit/marketplace batch deployed in PR #218 and verified (29 live checks); evidence is in backend-section-02-social-marketplace-release-2026-09-27.md.
+Notification table batch deployed in PR #219 and verified (36 live checks); evidence is in backend-section-02-notifications-release-2026-09-27.md.
 Scope: public table/view Data API privileges and row ownership. RPCs, Storage,
 Realtime, and the rest of the backend remain separate review batches.
 
@@ -23,8 +24,9 @@ column projection, and the policies inspected for this batch.
 | Profiles, generations, transactions | Existing row/column tests retained; full database regression suite passes |
 | Save tables and deletion audit | Direct-write bypass fixed and verified in production (PR #218) |
 | Marketplace content | Production draft-create HTTP 500 fixed; own edits work and foreign edits/direct content access rejected (PR #218) |
-| Notifications, push tokens, preferences | 40-case database matrix passes; guest-boundary fix awaiting release (see notification batch report) |
-| Public follows, source tools/models, template projections | Grants inventoried; public-versus-private data contract review still pending |
+| Notifications, push tokens, preferences | Guest-boundary fix deployed in PR #219; 40 database assertions and 36 live checks passed; fixtures removed |
+| Public follows, source tools/models, template projections | 52-case local matrix and 61 live checks passed across this group and private generation data; clean-replay compatibility fix pending release (see projection batch report) |
+| Generation-input media and AI usage | Owner, parent ownership, guest, ban/revocation and direct-write behavior verified in projection batch; Storage and RPC access remain separate |
 | Service-only tables | Client grants absent in inventory; RPC/trigger access and business invariants are not certified by that fact |
 
 ## First fix batch: workflow parent ownership
