@@ -11,6 +11,7 @@ import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '@/components/media-zoom';
 import { showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
 import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
+import { NativeMenu } from '@/components/native-menu';
 import { ExploreSearchOverlay } from '@/components/explore-search-overlay';
 import { FeedMediaPlate } from '@/components/feed-media-plate';
 import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
@@ -24,8 +25,10 @@ import {
 } from '@/components/workspace-side-menu-gesture-layer';
 import { useAuth } from '@/lib/auth';
 import { createFeedVideoActivationStore, FeedVideoActivationContext, useFeedVideoActivation } from '@/lib/feed-video-activation';
+import { buildFeedFeedbackMenu } from '@/lib/feed-feedback-menu';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { buildImmersiveShowcaseItems, showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
+import type { NativeMenuModel } from '@/lib/native-menu';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
 import { isShowcaseCoverVideoStreaming, isShowcaseVideoPreviewCandidate } from '@/lib/showcase-display';
@@ -526,8 +529,7 @@ export default function ShowcaseScreen() {
     }) as never);
   }, [queryClient, user?.id, recordFeedEvent, feedSession.feedSessionId, feedSession.algorithmVersion]);
 
-  const applyFeedFeedback = (eventType: 'not_interested' | 'hide_creator') => {
-    const item = feedbackItem;
+  const applyFeedFeedback = (item: ShowcaseFeedItem | null, eventType: 'not_interested' | 'hide_creator') => {
     if (!item) return;
     if (eventType === 'hide_creator' && (!item.creator.id || item.creator.id === user?.id)) {
       return;
@@ -589,8 +591,7 @@ export default function ShowcaseScreen() {
     return false;
   };
 
-  const reportFeedbackContent = () => {
-    const item = feedbackItem;
+  const reportFeedbackContent = (item: ShowcaseFeedItem | null) => {
     if (!item || !requireModerationSignIn()) return;
     setFeedbackItem(null);
     void showConfirmDialog({
@@ -617,8 +618,7 @@ export default function ShowcaseScreen() {
     });
   };
 
-  const reportFeedbackUser = () => {
-    const item = feedbackItem;
+  const reportFeedbackUser = (item: ShowcaseFeedItem | null) => {
     if (!item?.creator.id || item.creator.id === user?.id || !requireModerationSignIn()) return;
     setFeedbackItem(null);
     void showConfirmDialog({
@@ -642,8 +642,7 @@ export default function ShowcaseScreen() {
     });
   };
 
-  const blockFeedbackUser = () => {
-    const item = feedbackItem;
+  const blockFeedbackUser = (item: ShowcaseFeedItem | null) => {
     if (!item?.creator.id || item.creator.id === user?.id || !requireModerationSignIn()) return;
     setFeedbackItem(null);
     const creatorId = item.creator.id;
@@ -676,6 +675,20 @@ export default function ShowcaseScreen() {
     });
   };
 
+  // The menu each pin's ⋮ opens (`lib/native-menu.ts`), acting on that pin's
+  // post. `FeedFeedbackSheet` below is the fallback for a build without native
+  // menus, and acts on the post whose ⋮ opened it.
+  const feedbackMenu = (item: ShowcaseFeedItem): NativeMenuModel => buildFeedFeedbackMenu({
+    creatorLabel: formatCreatorLabel(item.creator.username || item.creator.name),
+    hideCreatorDisabled: !item.creator.id || item.creator.id === user?.id,
+    sessionOnly: !user,
+    onNotInterested: () => applyFeedFeedback(item, 'not_interested'),
+    onHideCreator: () => applyFeedFeedback(item, 'hide_creator'),
+    onReportContent: () => reportFeedbackContent(item),
+    onReportUser: item.creator.id ? () => reportFeedbackUser(item) : undefined,
+    onBlockUser: item.creator.id ? () => blockFeedbackUser(item) : undefined,
+  });
+
   const openCreator = useCallback((item: ShowcaseFeedItem) => {
     const username = item.creator.username?.trim();
     if (!username) return;
@@ -702,12 +715,13 @@ export default function ShowcaseScreen() {
           onAspectRatio={queueAspectRatio}
           onOpenCreator={openCreator}
           onFeedbackOpen={setFeedbackItem}
+          feedbackMenu={feedbackMenu}
           onOpenPost={openPost}
           onScrollToggle={handleMediaScrollToggle}
         />
       </MasonryCardCell>
     );
-  }, [gridLayout, resolvedAspectRatios, openCreator, openPost, handleMediaScrollToggle]);
+  }, [gridLayout, resolvedAspectRatios, openCreator, feedbackMenu, openPost, handleMediaScrollToggle]);
 
   return (
     // Pins on this grid are what the reel grows out of and returns to.
@@ -871,11 +885,11 @@ export default function ShowcaseScreen() {
             feedbackItem && (!feedbackItem.creator.id || feedbackItem.creator.id === user?.id)
           )}
           onClose={() => setFeedbackItem(null)}
-          onHideCreator={() => applyFeedFeedback('hide_creator')}
-          onNotInterested={() => applyFeedFeedback('not_interested')}
-          onBlockUser={feedbackItem?.creator.id ? blockFeedbackUser : undefined}
-          onReportContent={reportFeedbackContent}
-          onReportUser={feedbackItem?.creator.id ? reportFeedbackUser : undefined}
+          onHideCreator={() => applyFeedFeedback(feedbackItem, 'hide_creator')}
+          onNotInterested={() => applyFeedFeedback(feedbackItem, 'not_interested')}
+          onBlockUser={feedbackItem?.creator.id ? () => blockFeedbackUser(feedbackItem) : undefined}
+          onReportContent={() => reportFeedbackContent(feedbackItem)}
+          onReportUser={feedbackItem?.creator.id ? () => reportFeedbackUser(feedbackItem) : undefined}
           postTitle={feedbackItem?.title || feedbackItem?.prompt || 'This post'}
           sessionOnly={!user}
           visible={Boolean(feedbackItem)}
@@ -1043,6 +1057,7 @@ const MasonryPin = memo(function MasonryPin({
   resolvedAspectRatio,
   onAspectRatio,
   onFeedbackOpen,
+  feedbackMenu,
   onOpenPost,
   onOpenCreator,
   onScrollToggle,
@@ -1054,6 +1069,8 @@ const MasonryPin = memo(function MasonryPin({
   resolvedAspectRatio?: number;
   onAspectRatio: (cardId: string, ratio: number) => void;
   onFeedbackOpen: (item: ShowcaseFeedItem) => void;
+  /** The ⋮ menu for a post; `onFeedbackOpen` opens the sheet where native menus are missing. */
+  feedbackMenu: (item: ShowcaseFeedItem) => NativeMenuModel;
   onOpenCreator: (item: ShowcaseFeedItem) => void;
   onOpenPost: (item: ShowcaseFeedItem, zoom: AppleZoomOpen | null) => void;
   onScrollToggle?: (scrolling: boolean) => void;
@@ -1167,25 +1184,34 @@ const MasonryPin = memo(function MasonryPin({
             {creatorLabel}
           </Text>
         </Pressable>
-        <Pressable
-          accessibilityRole="button"
+        <NativeMenu
+          model={feedbackMenu(card.item)}
           accessibilityLabel={`Explore controls for ${card.title}`}
           accessibilityHint="Hide this post or this creator from recommendations"
-          hitSlop={4}
-          onPress={() => onFeedbackOpen(card.item)}
-          style={({ pressed }) => ({
-            width: 40,
-            height: 40,
-            marginRight: -7,
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderRadius: appTheme.radii.pill,
-            backgroundColor: pressed ? theme.colors.surfaceStrong : 'transparent',
-            opacity: pressed ? appTheme.opacity.pressed : 1,
-          })}
-        >
-          <MoreVertical size={18} color={theme.colors.muted} />
-        </Pressable>
+          trigger={{ width: 40, height: 40, iconSize: 18, iconColor: theme.colors.muted, vertical: true, hitSlop: 4 }}
+          style={{ marginRight: -7 }}
+          onFallbackPress={() => onFeedbackOpen(card.item)}
+          renderButton={(onPress) => (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Explore controls for ${card.title}`}
+              accessibilityHint="Hide this post or this creator from recommendations"
+              hitSlop={4}
+              onPress={onPress}
+              style={({ pressed }) => ({
+                width: 40,
+                height: 40,
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: appTheme.radii.pill,
+                backgroundColor: pressed ? theme.colors.surfaceStrong : 'transparent',
+                opacity: pressed ? appTheme.opacity.pressed : 1,
+              })}
+            >
+              <MoreVertical size={18} color={theme.colors.muted} />
+            </Pressable>
+          )}
+        />
       </View>
     </View>
   );

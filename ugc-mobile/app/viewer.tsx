@@ -38,6 +38,8 @@ import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
 import { AppSchemeScope } from '@/components/app-scheme-scope';
 import { CommentsSheet } from '@/components/comments-sheet';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
+import { ViewerActionsMenuProvider } from '@/components/viewer-actions-menu';
+import type { ViewerActionCallbacks } from '@/lib/use-viewer-action-handlers';
 import { useAuth } from '@/lib/auth';
 import { applyCommentCountToSourceData } from '@/lib/comments-view-model';
 import { env } from '@/lib/env';
@@ -1048,9 +1050,52 @@ function ImmersivePreviewViewer() {
     );
   }
 
+  // The screen's side of an item's actions: the rail's native menu asks for it
+  // per slide (`components/viewer-actions-menu.tsx`), and the sheet below — the
+  // fallback where native menus are missing — takes it for the open item.
+  const actionCallbacksFor = (item: ImmersivePreviewItem): ViewerActionCallbacks => ({
+    onComments: item.canComment ? () => {
+      setActionsOpenItemId(null);
+      setCommentsReplyToId(null);
+      setCommentsOpenItemId(item.id);
+    } : undefined,
+    onDetails: () => {
+      setActionsOpenItemId(null);
+      activeSlideRef.current?.openDetails();
+    },
+    onRecreate: () => void recreateItem(item),
+    onNotInterested: source === 'showcase-feed' && item.sourceType === 'showcase'
+      ? () => dismissRecommendation(item, 'not_interested')
+      : undefined,
+    onHideCreator: source === 'showcase-feed'
+      && item.sourceType === 'showcase'
+      && Boolean(item.creatorId)
+      && item.creatorId !== user?.id
+      ? () => dismissRecommendation(item, 'hide_creator')
+      : undefined,
+    onShare: () => void shareItem(item),
+    onUnlockRemix: () => {
+      setActionsOpenItemId(null);
+      setUnlockRemixOpenItemId(item.id);
+    },
+    onDeleted: () => {
+      setActionsOpenItemId(null);
+      router.replace({
+        pathname: '/(tabs)/profile',
+        params: { tab: 'posts' },
+      } as never);
+    },
+    onBlocked: () => zoom.dismiss(),
+    onSourceRefresh: () => {
+      setManualRefreshes((count) => count + 1);
+      void sourceQuery.refetch();
+    },
+  });
+
   return (
     <ViewerPlaybackContext.Provider value={playbackHandoff}>
     <ViewerLeavingContext.Provider value={leaving}>
+    <ViewerActionsMenuProvider callbacksFor={actionCallbacksFor}>
     {/* The reel is drawn inside a window that grows out of the tapped tile and
         shrinks back into it, so opening a post reads as that post getting
         bigger rather than as another screen arriving. */}
@@ -1248,42 +1293,7 @@ function ImmersivePreviewViewer() {
         <ViewerActionSheet
           item={activeItem}
           onClose={() => setActionsOpenItemId(null)}
-          onComments={activeItem.canComment ? () => {
-            setActionsOpenItemId(null);
-            setCommentsReplyToId(null);
-            setCommentsOpenItemId(activeItem.id);
-          } : undefined}
-          onDetails={() => {
-            setActionsOpenItemId(null);
-            activeSlideRef.current?.openDetails();
-          }}
-          onRecreate={() => void recreateItem(activeItem)}
-          onNotInterested={source === 'showcase-feed' && activeItem.sourceType === 'showcase'
-            ? () => dismissRecommendation(activeItem, 'not_interested')
-            : undefined}
-          onHideCreator={source === 'showcase-feed'
-            && activeItem.sourceType === 'showcase'
-            && Boolean(activeItem.creatorId)
-            && activeItem.creatorId !== user?.id
-            ? () => dismissRecommendation(activeItem, 'hide_creator')
-            : undefined}
-          onShare={() => void shareItem(activeItem)}
-          onUnlockRemix={() => {
-            setActionsOpenItemId(null);
-            setUnlockRemixOpenItemId(activeItem.id);
-          }}
-          onDeleted={() => {
-            setActionsOpenItemId(null);
-            router.replace({
-              pathname: '/(tabs)/profile',
-              params: { tab: 'posts' },
-            } as never);
-          }}
-          onBlocked={() => zoom.dismiss()}
-          onSourceRefresh={() => {
-            setManualRefreshes((count) => count + 1);
-            void sourceQuery.refetch();
-          }}
+          {...actionCallbacksFor(activeItem)}
           visible={actionsOpenItemId === activeItem.id}
         />
       ) : null}
@@ -1346,6 +1356,7 @@ function ImmersivePreviewViewer() {
       ) : null}
     </View>
     </MediaZoomStage>
+    </ViewerActionsMenuProvider>
     </ViewerLeavingContext.Provider>
     </ViewerPlaybackContext.Provider>
   );
@@ -1633,6 +1644,7 @@ function ImmersiveSlide({
           onRecreate={onRecreate}
           onOwnerAction={onOwnerAction}
           onActionsOpen={onActionsOpen}
+          actionsMenuEnabled={active}
           onCreatorOpen={onCreatorOpen}
         />
       </MediaZoomChrome>

@@ -19,6 +19,7 @@ import { CreatorAvatar } from '@/components/ui';
 import { FeedCardAction } from '@/components/feed-card-shell';
 import { PostDetailsPage } from '@/components/post-details-page';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
+import { ViewerActionsMenu, ViewerActionsMenuProvider } from '@/components/viewer-actions-menu';
 import { env } from '@/lib/env';
 import { useAuth } from '@/lib/auth';
 import {
@@ -279,7 +280,20 @@ export default function PostScreen() {
         : undefined,
   });
 
+  // The screen's side of the post's actions, for the native menu on its ⋮
+  // (`components/viewer-actions-menu.tsx`) and for the sheet below, which
+  // stands in for it where native menus are missing.
+  const actionCallbacks = {
+    onComments: openComments,
+    onDetails: () => goToPage(1),
+    onRecreate: () => undefined,
+    onShare: () => void shareItem(),
+    onSourceRefresh: () => void refetchPost(),
+    onDeleted: leavePost,
+  };
+
   return (
+    <ViewerActionsMenuProvider callbacksFor={() => actionCallbacks}>
     <View style={{ flex: 1, backgroundColor: theme.colors.app }}>
       {/* First in the tree, on top by z-order. VoiceOver reads a screen in
           hierarchy order, and behind the pager this arrow — the only visible
@@ -381,14 +395,10 @@ export default function PostScreen() {
         item={resolvedItem}
         visible={actionsVisible}
         onClose={() => setActionsVisible(false)}
-        onComments={openComments}
-        onDetails={() => goToPage(1)}
-        onRecreate={() => undefined}
-        onShare={() => void shareItem()}
-        onSourceRefresh={() => void refetchPost()}
-        onDeleted={leavePost}
+        {...actionCallbacks}
       />
     </View>
+    </ViewerActionsMenuProvider>
   );
 }
 
@@ -492,21 +502,37 @@ function TextPostContent({
             </Text>
           ) : null}
         </Pressable>
-        <Pressable
-          accessibilityRole="button"
+        <ViewerActionsMenu
+          item={item}
           accessibilityLabel={`More options for ${content.title}`}
-          hitSlop={10}
-          onPress={onActionsOpen}
-          style={({ pressed }) => ({
-            height: 32,
+          trigger={{
             width: 28,
-            alignItems: 'flex-end',
-            justifyContent: 'center',
-            opacity: pressed ? appTheme.opacity.pressed : 1,
-          })}
-        >
-          <MoreVertical size={appTheme.icon.compact} color={theme.colors.faint} />
-        </Pressable>
+            height: 32,
+            iconSize: appTheme.icon.compact,
+            iconColor: theme.colors.faint,
+            vertical: true,
+            alignment: 'trailing',
+            hitSlop: 10,
+          }}
+          onFallbackPress={onActionsOpen}
+          renderButton={(onPress) => (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`More options for ${content.title}`}
+              hitSlop={10}
+              onPress={onPress}
+              style={({ pressed }) => ({
+                height: 32,
+                width: 28,
+                alignItems: 'flex-end',
+                justifyContent: 'center',
+                opacity: pressed ? appTheme.opacity.pressed : 1,
+              })}
+            >
+              <MoreVertical size={appTheme.icon.compact} color={theme.colors.faint} />
+            </Pressable>
+          )}
+        />
       </View>
 
       {/* The same size the details page gives the same post's title: 25/31 was

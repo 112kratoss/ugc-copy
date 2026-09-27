@@ -23,6 +23,7 @@ import { OnboardingServerSync } from '@/components/onboarding-server-sync';
 import { MediaZoomFlightLayer } from '@/components/media-zoom';
 import { ZoomPostChrome } from '@/components/zoom-post-chrome';
 import { OverlayHost } from '@/components/overlay-host';
+import { nativeMenuTouchGuardProps } from '@/lib/native-menu-shield';
 import { SignOutOverlay } from '@/components/sign-out-overlay';
 import { CriticalUpdateSheet } from '@/components/critical-update-sheet';
 import { useOtaUpdateGate } from '@/lib/use-ota-update-gate';
@@ -198,7 +199,9 @@ function RootLayoutNav() {
           <SafeAreaProvider>
             <ThemeProvider value={navigationThemeFor(theme)}>
               <GestureHandlerRootView style={{ flex: 1 }}>
-              <View style={{ flex: 1, backgroundColor: theme.colors.app }}>
+              {/* Claims the touch that closes a native menu, so it closes the
+                  menu and nothing else (`lib/native-menu-shield.ts`). */}
+              <View style={{ flex: 1, backgroundColor: theme.colors.app }} {...nativeMenuTouchGuardProps}>
                 {/* Light icons on the dark scheme, dark icons on paper. The reel
                     mounts its own light-content bar above this one while it is
                     open, because it stays dark in both schemes. */}

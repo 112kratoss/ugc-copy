@@ -355,6 +355,11 @@ Every pushed screen has a real way back, including its loading and error states.
 
 ## Overlays
 
+- **Menus** (`components/native-menu.tsx`, described in `lib/native-menu.ts`): a ••• opens a native menu anchored to it. On iOS it is a SwiftUI `Menu`, which from iOS 26 grows out of the button and back into it; on Android it is Material 3's dropdown.
+  - A menu is what a ••• reveals. An action sheet is for a choice that follows an action, such as leaving unsaved work or confirming an unlock.
+  - Destructive rows are red and still confirm through `showConfirmDialog` after they are chosen.
+  - An iOS menu row has no second line, so a choice that needs one to be understood (who can see a post, in the composer) stays a sheet.
+  - Rows the screen already shows go in the icon row at the top (Save, Comments, Share on the reel), three at most.
 - **Action sheets** (`showActionSheet`, `components/action-sheet.tsx`) draw in-window through `OverlayHost`, so a sheet opened from another sheet draws above it.
 - **Dialogs** (`showConfirmDialog`, `showMessageDialog`, `components/dialog.tsx`) use a `Modal`. A dialog has no text field and has to sit above everything.
 - **Sheets with a text field** (comments, editors) render through `components/overlay-host.tsx`, never a React Native `Modal`, for the keyboard reason above.

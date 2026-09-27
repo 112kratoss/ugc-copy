@@ -6,9 +6,10 @@ import type React from 'react';
 import { ActivityIndicator, Animated, Easing, FlatList, type LayoutChangeEvent, Platform, Pressable, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { NativeMenu } from '@/components/native-menu';
 import { CommentListSkeleton } from '@/components/skeleton';
 import { CreatorAvatar, StatusBlock } from '@/components/ui';
-import { showActionSheet, type ActionSheetAction } from '@/lib/action-sheet';
+import { showActionSheet } from '@/lib/action-sheet';
 import { useAuth } from '@/lib/auth';
 import {
   POST_COMMENTS_PAGE_SIZE,
@@ -35,7 +36,9 @@ import {
   suspendCommentPagination,
   type PostCommentSort,
 } from '@/lib/comments-view-model';
+import { buildCommentMenu } from '@/lib/comment-menu';
 import { useReducedMotion } from '@/lib/motion';
+import { actionSheetFromMenu, hasNativeMenuItems, type NativeMenuModel } from '@/lib/native-menu';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
@@ -63,6 +66,7 @@ const REPORT_REASONS: Array<{ label: string; value: CommentReportReason }> = [
 ];
 
 type CommentActionHandler = (comment: PostComment) => void;
+type CommentMenuBuilder = (comment: PostComment) => NativeMenuModel;
 
 export type PostCommentsHandle = {
   focusComposer: () => void;
@@ -440,32 +444,32 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     });
   }, [reporting, requireSignIn, submitReport]);
 
+  // What a comment's ••• offers: a native menu on the ••• itself
+  // (`lib/native-menu.ts`), and the same rows as an action sheet in a build
+  // without native menus.
+  const commentMenu = useCallback((comment: PostComment) => buildCommentMenu({
+    canDelete: canDeleteComment(comment, user?.id),
+    canRemove: canRemoveComment(comment, resolvedPostCreatorId, user?.id),
+    canReport: canReportComment(comment, user?.id),
+    onDelete: () => removeComment(comment, false),
+    onRemove: () => removeComment(comment, true),
+    onReport: () => reportComment(comment),
+  }), [removeComment, reportComment, resolvedPostCreatorId, user?.id]);
+
   const openCommentActions = useCallback((comment: PostComment) => {
-    const options: ActionSheetAction[] = [];
-
-    if (canDeleteComment(comment, user?.id)) {
-      options.push({ label: 'Delete', destructive: true, onPress: () => removeComment(comment, false) });
-    }
-    if (canRemoveComment(comment, resolvedPostCreatorId, user?.id)) {
-      options.push({ label: 'Remove from post', destructive: true, onPress: () => removeComment(comment, true) });
-    }
-    if (canReportComment(comment, user?.id)) {
-      options.push({ label: 'Report', destructive: true, onPress: () => reportComment(comment) });
-    }
-    if (!options.length) return;
-
+    const menu = commentMenu(comment);
+    if (!hasNativeMenuItems(menu)) return;
     // Alerts caps at three buttons and is for problems, not choices; this list
     // can reach four and follows straight from tapping the comment's own
     // control (Alerts: "Use an action sheet — not an alert — to offer choices
     // related to an intentional action").
-    showActionSheet({ title: 'Comment options', actions: options });
-  }, [removeComment, reportComment, resolvedPostCreatorId, user?.id]);
+    showActionSheet(actionSheetFromMenu('Comment options', menu));
+  }, [commentMenu]);
 
-  const hasCommentActions = useCallback((comment: PostComment) => (
-    canDeleteComment(comment, user?.id)
-    || canRemoveComment(comment, resolvedPostCreatorId, user?.id)
-    || canReportComment(comment, user?.id)
-  ), [resolvedPostCreatorId, user?.id]);
+  const hasCommentActions = useCallback(
+    (comment: PostComment) => hasNativeMenuItems(commentMenu(comment)),
+    [commentMenu]
+  );
 
   const renderTopLevelComment = useCallback(({ item: comment }: { item: PostComment }) => {
     const expanded = expandedIds.has(comment.id);
@@ -473,6 +477,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
       <View>
         <CommentRowView
           comment={comment}
+          actionsMenu={commentMenu}
           onActions={hasCommentActions(comment) ? openCommentActions : undefined}
           onReply={(nextComment) => {
             if (requireSignIn(nextComment)) setReplyTo(nextComment);
@@ -484,6 +489,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
             pendingReplies={pendingRepliesByParent[comment.id] ?? []}
             postId={postId}
             hasActions={hasCommentActions}
+            actionsMenu={commentMenu}
             onActions={openCommentActions}
           />
         ) : null}
@@ -509,7 +515,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
         ) : null}
       </View>
     );
-  }, [expandedIds, hasCommentActions, openCommentActions, pendingRepliesByParent, postId, requireSignIn, toggleReplies]);
+  }, [expandedIds, commentMenu, hasCommentActions, openCommentActions, pendingRepliesByParent, postId, requireSignIn, toggleReplies]);
 
   const canSubmit = draft.trim().length > 0 && !submitting && !commentsUnavailable;
 
@@ -819,12 +825,14 @@ function RepliesList({
   pendingReplies,
   postId,
   hasActions,
+  actionsMenu,
   onActions,
 }: {
   parentId: string;
   pendingReplies: PostComment[];
   postId: string;
   hasActions: (comment: PostComment) => boolean;
+  actionsMenu: CommentMenuBuilder;
   onActions: CommentActionHandler;
 }) {
   const theme = useAppTheme();
@@ -865,6 +873,7 @@ function RepliesList({
           key={reply.id}
           comment={reply}
           isReply
+          actionsMenu={actionsMenu}
           onActions={hasActions(reply) ? onActions : undefined}
         />
       ))}
@@ -928,11 +937,14 @@ function RepliesList({
 function CommentRowView({
   comment,
   isReply = false,
+  actionsMenu,
   onActions,
   onReply,
 }: {
   comment: PostComment;
   isReply?: boolean;
+  /** The ••• menu; `onActions` opens the action sheet where native menus are missing. */
+  actionsMenu?: CommentMenuBuilder;
   onActions?: CommentActionHandler;
   onReply?: CommentActionHandler;
 }) {
@@ -978,14 +990,22 @@ function CommentRowView({
         ) : null}
       </View>
       {!display.isDeleted && onActions ? (
-        <Pressable
-          accessibilityRole="button"
+        <NativeMenu
+          model={actionsMenu ? actionsMenu(comment) : { quickActions: [], sections: [] }}
           accessibilityLabel={`Options for ${display.authorLabel}'s comment`}
-          onPress={() => onActions(comment)}
-          style={({ pressed }) => ({ width: 48, height: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
-        >
-          <MoreHorizontal size={16} color={theme.colors.faint} />
-        </Pressable>
+          trigger={{ width: 48, height: 48, iconSize: 16, iconColor: theme.colors.faint }}
+          onFallbackPress={() => onActions(comment)}
+          renderButton={(onPress) => (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Options for ${display.authorLabel}'s comment`}
+              onPress={onPress}
+              style={({ pressed }) => ({ width: 48, height: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+            >
+              <MoreHorizontal size={16} color={theme.colors.faint} />
+            </Pressable>
+          )}
+        />
       ) : null}
     </View>
   );

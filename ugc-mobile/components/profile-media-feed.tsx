@@ -22,6 +22,8 @@ import { MediaZoomSurface } from '@/components/media-zoom';
 import { ProfileFeedCardView } from '@/components/profile-feed-card';
 import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
+import { ViewerActionsMenuProvider } from '@/components/viewer-actions-menu';
+import type { ViewerActionCallbacks } from '@/lib/use-viewer-action-handlers';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
@@ -447,7 +449,30 @@ export function ProfileMediaFeedScreen() {
 
   const showEnrichmentNotice = library.enrichmentFailed && items.some((item) => Boolean(item.linkedPostId));
 
+  // The screen's side of a card's actions: each card's ⋮ asks for it for its
+  // own item (`components/viewer-actions-menu.tsx`), and the sheet below — the
+  // fallback where native menus are missing — takes it for the open item.
+  const actionCallbacksFor = (item: ImmersivePreviewItem): ViewerActionCallbacks => ({
+    onComments: item.canComment ? () => {
+      setActionsOpenItemId(null);
+      if (item.previewKind === 'text' && item.sourceType !== 'generation') {
+        openItem(item, { comments: true });
+        return;
+      }
+      setCommentsOpenItemId(item.id);
+    } : undefined,
+    onDetails: () => {
+      setActionsOpenItemId(null);
+      openItem(item);
+    },
+    onRecreate: () => recreateItem(item),
+    onShare: () => void shareItem(item),
+    onDeleted: () => setActionsOpenItemId(null),
+    onSourceRefresh: () => void library.refetch(),
+  });
+
   return (
+    <ViewerActionsMenuProvider callbacksFor={actionCallbacksFor}>
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <FeedTopBar title={libraryName} topInset={topInset} />
       {landing.phase === 'failed' ? (
@@ -552,22 +577,7 @@ export function ProfileMediaFeedScreen() {
         <ViewerActionSheet
           item={activeItem}
           onClose={() => setActionsOpenItemId(null)}
-          onComments={activeItem.canComment ? () => {
-            setActionsOpenItemId(null);
-            if (activeItem.previewKind === 'text' && activeItem.sourceType !== 'generation') {
-              openItem(activeItem, { comments: true });
-              return;
-            }
-            setCommentsOpenItemId(activeItem.id);
-          } : undefined}
-          onDetails={() => {
-            setActionsOpenItemId(null);
-            openItem(activeItem);
-          }}
-          onRecreate={() => recreateItem(activeItem)}
-          onShare={() => void shareItem(activeItem)}
-          onDeleted={() => setActionsOpenItemId(null)}
-          onSourceRefresh={() => void library.refetch()}
+          {...actionCallbacksFor(activeItem)}
           visible={actionsOpenItemId === activeItem.id}
         />
       ) : null}
@@ -582,6 +592,7 @@ export function ProfileMediaFeedScreen() {
         />
       ) : null}
     </View>
+    </ViewerActionsMenuProvider>
   );
 }
 
