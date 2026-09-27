@@ -156,6 +156,9 @@ vi.mock('@/components/media-preview', () => ({
 // resolve under vitest — stub them so importOriginal below can load the module.
 vi.mock('expo-document-picker', () => ({ getDocumentAsync: vi.fn() }));
 vi.mock('expo-image-picker', () => ({ launchImageLibraryAsync: vi.fn() }));
+// The real @/lib/onboarding takes its event ids from expo-crypto, which has the
+// same native core.
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'onboarding-event-id' }));
 
 vi.mock('@/lib/media', async (importOriginal) => ({
   // Pure helpers (assetDurationSeconds, duration-limit predicates) stay real;
