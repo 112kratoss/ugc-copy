@@ -1,6 +1,7 @@
 # Section 2 — notification table ownership
 
-Status: reproduced and fixed locally; production release pending.
+Status: deployed in PR #219 and verified with 36 live checks; fixtures removed.
+Release evidence: `backend-section-02-notifications-release-2026-09-27.md`.
 
 Scope: `mobile_notifications`, `mobile_notification_preferences` and
 `mobile_push_tokens`. This does not certify Expo delivery/retry behavior,
