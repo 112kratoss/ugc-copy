@@ -180,6 +180,16 @@ const CHROME_FROM = 0.995;
 const CLOSE_CHROME_HOLD = 0.95;
 const CLOSE_CHROME_GONE = 0.3;
 /**
+ * Where on the close's clock a video the tile will not take back starts to
+ * dissolve into the tile. Such a tile — a long clip's, which plays a teaser, or
+ * one that never lent its player — shows its poster, the clip's first frame,
+ * and starts its own clip over. A reel left standing over it until it let go
+ * ended on a cut from wherever the reader had got to, which on a moving clip
+ * read as the picture jumping, or growing. From here the window is within a
+ * tenth of the tile (0.45³), so the two pictures barely part as they cross.
+ */
+const CLOSE_DISSOLVE_FROM = 0.45;
+/**
  * How far the picture has grown before the reel is pushed: all the way. Mounting
  * the reel is the heaviest thing the app does, and the UI thread is held for a
  * stretch of it. Pushed at the tap, it would hold the flight's first frames;
@@ -1102,6 +1112,8 @@ export function useMediaZoomStage({
   const following = useSharedValue(zooming ? 1 : 0);
   const localGeometry = useSharedValue<ZoomGeometry>({ screen, tile: null, tileRadius: 0, aspectRatio: null });
   const stageOpacity = useSharedValue(zooming || reducedMotion || !PLAIN_DISSOLVE ? 1 : 0);
+  // Whether the close under way dissolves the reel into its tile (`CLOSE_DISSOLVE_FROM`).
+  const closeDissolves = useSharedValue(false);
 
   // A lent video is drawn by the reel's own slide from the moment it is
   // adopted, so there is no copy of the tile's poster to carry over it — a
@@ -1135,7 +1147,7 @@ export function useMediaZoomStage({
   const [uncovering] = useState(() => createZoomUncovering(!zooming));
   const dismissingRef = useRef(false);
   const leftRef = useRef(false);
-  const closeRef = useRef<{ id: number; live: boolean } | null>(null);
+  const closeRef = useRef<{ id: number; live: boolean; dissolves: boolean } | null>(null);
   /** The flight this reel follows and may reshape: its open, then its close. */
   const ownFlightRef = useRef<number | null>(origin?.flightId ?? null);
   const hiddenItemRef = useRef<string | null>(null);
@@ -1430,8 +1442,17 @@ export function useMediaZoomStage({
     return subscribeToZoomFlights((event) => {
       const close = closeRef.current;
       if (close && event.flight.id === close.id) {
-        // The reel itself has landed in the tile.
-        if (event.type === 'landed' && close.live) leaveIntoTile();
+        // The reel itself has landed in the tile: dissolved into it, or over it,
+        // handing it the video it lent. Out of sight either way from here, even
+        // should another flight move the clock before the pop has gone through.
+        if (event.type === 'landed' && close.live) {
+          if (close.dissolves) {
+            stageOpacity.set(0);
+            leave();
+          } else {
+            leaveIntoTile();
+          }
+        }
         return;
       }
       if (event.flight.id !== origin.flightId || event.type !== 'landed') return;
@@ -1440,7 +1461,7 @@ export function useMediaZoomStage({
       if (openedRef.current) following.set(0);
       else handoff();
     });
-  }, [following, handoff, leaveIntoTile, nativeZoom, origin]);
+  }, [following, handoff, leave, leaveIntoTile, nativeZoom, origin, stageOpacity]);
 
   // The navigator's own transition. Its length differs by platform and
   // direction; the event is the honest signal, the timer the safety net.
@@ -1612,6 +1633,11 @@ export function useMediaZoomStage({
       // picture and fades them out as the window comes down. A live close has
       // the reel's own chrome to fade instead (`chromeStyle`).
       const post = live ? null : postRef.current;
+      // A video the tile will not take back is not what the tile goes on to
+      // show, so the reel dissolves into the tile as it lands rather than
+      // standing over it until it lets go.
+      const dissolves = live && Boolean(activeVideoUrlRef.current) && !returnableVideo();
+      closeDissolves.set(dissolves);
       const flight = startZoomFlight({ direction: 'close', geometry, preview, video, post, still: !live }, live ? {} : {
         whenDisplayed: () => {
           // A video's window waited out of sight for its first frame.
@@ -1623,13 +1649,13 @@ export function useMediaZoomStage({
           });
         },
       });
-      closeRef.current = { id: flight.id, live };
+      closeRef.current = { id: flight.id, live, dissolves };
       ownFlightRef.current = flight.id;
       // With no layer to step it the flight has already landed.
       if (live && !getZoomFlight()) leave();
     });
     measureTile(TILE_REMEASURE_FRAMES);
-  }, [following, interactive, leave, lentVideo, nativeZoom, origin, plainLeave, reducedMotion, returnableVideo, stageOpacity]);
+  }, [closeDissolves, following, interactive, leave, lentVideo, nativeZoom, origin, plainLeave, reducedMotion, returnableVideo, stageOpacity]);
 
   const stageProps = useAnimatedProps(() => ({
     pointerEvents: interactive.value ? ('box-none' as const) : ('auto' as const),
@@ -1645,7 +1671,11 @@ export function useMediaZoomStage({
       : computeZoomFrame(localGeometry.value, 1)
   ));
 
-  const stageStyle = useAnimatedStyle(() => ({ opacity: stageOpacity.value }));
+  const stageStyle = useAnimatedStyle(() => ({
+    opacity: closeDissolves.value
+      ? stageOpacity.value * interpolate(flightTime.value, [0, CLOSE_DISSOLVE_FROM], [0, 1], Extrapolation.CLAMP)
+      : stageOpacity.value,
+  }));
 
   const groundStyle = useAnimatedStyle(() => ({
     opacity: following.value
@@ -1736,6 +1766,11 @@ export function MediaZoomStage({
     <Animated.View
       collapsable={false}
       animatedProps={stage.stageProps}
+      // Faded as one surface — a close dissolving into its tile, a plain fade.
+      // Android's per-child alpha otherwise draws the window's black ground and
+      // letterbox at the same alpha under the picture, and the reel darkened as
+      // it went. Offscreen only while translucent, as the layer's window is.
+      needsOffscreenAlphaCompositing
       style={[{ flex: 1 }, stage.stageStyle]}
     >
       <Animated.View
