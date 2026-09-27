@@ -31,6 +31,7 @@ import {
 import { env } from '@/lib/env';
 import { formatCompactCount } from '@/lib/home-view-model';
 import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '@/components/media-zoom';
+import { ZoomVeil } from '@/components/zoom-veil';
 import { mediaItemAspectRatio, showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
 import { buildImmersiveShowcaseItems, showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
 import { ShareGlyph } from '@/lib/platform-glyphs';
@@ -468,6 +469,8 @@ export function CreatorProfileScreen({
         }
       />
     </View>
+    {/* Black over this screen while a reel grows out of a tile or shrinks back (lib/zoom-veil.ts). */}
+    <ZoomVeil />
     </MediaZoomSurface>
   );
 }

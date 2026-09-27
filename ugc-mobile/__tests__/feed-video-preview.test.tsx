@@ -882,9 +882,11 @@ describe('FeedVideoPreview taking back the player of a reel closing into it', ()
     expect(video.props.player).toBe(player);
     // Its clip is under way: the poster, the clip's first frame, stays down.
     expect(posterOpacity(tree)).toBe(0);
-    // A silent, looping feed preview again, still playing.
+    // A silent, looping feed preview again. Whether it plays is still the
+    // reel's say while the reel is up: a dismissal begun with a gesture hands
+    // the player over as the gesture begins, and may yet be let go of.
     expect(player).toMatchObject({ muted: true, volume: 0, loop: true, timeUpdateEventInterval: 0 });
-    expect(player.play).toHaveBeenCalled();
+    expect(player.play).not.toHaveBeenCalled();
     expect(player.pause).not.toHaveBeenCalled();
 
     // The closing reel lets go once the tile's own view has drawn it.
@@ -892,7 +894,8 @@ describe('FeedVideoPreview taking back the player of a reel closing into it', ()
     renderer.act(() => video.props.onFirstFrameRender());
     expect(drawn).toHaveBeenCalledTimes(1);
 
-    // The reel pops: the screen has focus again and keeps the very same player.
+    // The reel pops: the screen has focus again and keeps the very same
+    // player, which is now the tile's to play.
     focusState.focused = true;
     renderer.act(() => {
       endVideoReturn(asPlayer);
@@ -902,21 +905,34 @@ describe('FeedVideoPreview taking back the player of a reel closing into it', ()
     const [after] = tree.root.findAll((node) => String(node.type) === 'video-view');
     expect(after.props.player).toBe(player);
     expect(videoState.createVideoPlayer).not.toHaveBeenCalled();
+    expect(player.play).toHaveBeenCalled();
     expect(player.pause).not.toHaveBeenCalled();
     expect(player.release).not.toHaveBeenCalled();
   });
 
-  it('pauses a handed-back player in a tile that is only preparing', () => {
+  it('pauses a handed-back player in a tile that is only preparing, once the reel has gone', () => {
     focusState.focused = false;
-    renderTile({ active: false, prepared: true });
+    const tree = renderTile({ active: false, prepared: true });
     const { player, asPlayer } = reelPlayer();
     renderer.act(() => {
       handBackVideoPlayer(asPlayer, TILE, stream);
     });
 
-    expect(player.pause).toHaveBeenCalled();
+    // Under the reel it carries on as the reel left it.
+    expect(player.pause).not.toHaveBeenCalled();
     expect(player.play).not.toHaveBeenCalled();
     expect(videoState.createVideoPlayer).not.toHaveBeenCalled();
+
+    const [video] = tree.root.findAll((node) => String(node.type) === 'video-view');
+    renderer.act(() => video.props.onFirstFrameRender());
+    focusState.focused = true;
+    renderer.act(() => {
+      endVideoReturn(asPlayer);
+    });
+    renderer.act(() => tree.update(tile({ active: false, prepared: true })));
+    expect(player.pause).toHaveBeenCalled();
+    expect(player.play).not.toHaveBeenCalled();
+    expect(player.release).not.toHaveBeenCalled();
   });
 
   it('leaves a tile that does not lend this stream to build its own player', () => {

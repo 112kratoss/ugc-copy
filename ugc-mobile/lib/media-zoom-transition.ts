@@ -590,6 +590,35 @@ export function coverScale(tile: ZoomSize, media: ZoomSize): number {
   return Math.max(tile.width / media.width, tile.height / media.height);
 }
 
+/**
+ * The part of the reel's screen UIKit's zoom lines a tile up with
+ * (lib/apple-zoom.ts): the reel's picture (`mediaRectInScreen`) cropped about
+ * its centre to the tile's shape, which is the part of it a `cover` tile shows.
+ * Expo Router makes the same rectangle out of the reel's own `AppleZoomTarget`
+ * for a source that animates its aspect ratio (`calculateAdjustedRect` in
+ * expo-router's `LinkZoomTransition.swift`); worked out here as well, it is
+ * what the tile hands over as its own alignment, for the transitions that
+ * begin while the reel's mark is not there. Null until the tile has a size.
+ */
+export function appleZoomAlignmentRect(
+  screen: ZoomSize,
+  aspectRatio: number | null | undefined,
+  tile: ZoomSize
+): ZoomRect | null {
+  if (!(tile.width > 0 && tile.height > 0 && screen.width > 0 && screen.height > 0)) return null;
+  const media = mediaRectInScreen(screen, aspectRatio);
+  const tileAspect = tile.width / tile.height;
+  const mediaAspect = media.width / media.height;
+  // Expo Router's own tolerance for shapes that already agree.
+  if (Math.abs(tileAspect - mediaAspect) < 0.001) return media;
+  if (mediaAspect > tileAspect) {
+    const width = media.height * tileAspect;
+    return { x: media.x + (media.width - width) / 2, y: media.y, width, height: media.height };
+  }
+  const height = media.width / tileAspect;
+  return { x: media.x, y: media.y + (media.height - height) / 2, width: media.width, height };
+}
+
 export interface ZoomGeometry {
   screen: ZoomSize;
   /** The tile to grow from or return to; null when the reel has none. */

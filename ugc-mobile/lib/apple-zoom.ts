@@ -15,7 +15,10 @@
  * view is registered under the identifier when it begins, so the reel points
  * the param at the tile of the post the reader has moved to
  * (`useAppleZoomRetarget`), and marks where its media sits so the zoom aligns
- * with the picture rather than the whole screen (`AppleZoomTarget`).
+ * with the picture rather than the whole screen (`AppleZoomTarget`). That mark
+ * is not mounted when the push begins, nor once Back has taken the reel out of
+ * React, so each tile also hands over the same rectangle itself
+ * (`AppleZoomSource`, `appleZoomAlignmentRect`).
  *
  * Only some of Expo Router's pieces are public — `Link.AppleZoom` needs a
  * `Link`, and the tiles open imperatively — so `components/apple-zoom.ios.tsx`

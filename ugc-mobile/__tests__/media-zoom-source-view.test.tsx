@@ -61,6 +61,7 @@ const source: MediaZoomSource = {
   offerVideo: () => () => {},
   tileKey: 'surface\u0000post',
   appleZoomId: null,
+  aspectRatio: null,
 };
 
 function flatten(style: unknown): Record<string, unknown> {
