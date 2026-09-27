@@ -41,7 +41,10 @@ tables inherited authenticated CRUD permissions from historical Supabase
 platform defaults. Their only permissive policies allow SELECT, so direct
 mutations remain denied by RLS. The historical active-identity installer
 selected tables by existing ACLs, so new databases could miss those policies
-as well as authenticated reads.
+as well as authenticated reads. CI exposed the same missing SELECT grant
+and identity policy on `generation_input_media`; revoking that local grant
+reproduced the exact CI error. Its contract is SELECT-only, unlike the three
+older tables.
 
 Removing those ambient ACLs/policies on the isolated database reproduced
 `permission denied for table ai_usage_events` in the behavioral matrix. The
