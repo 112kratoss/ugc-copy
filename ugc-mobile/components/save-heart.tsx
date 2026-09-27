@@ -4,7 +4,8 @@ import { Animated } from 'react-native';
 
 import { MotionView, useReducedMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
-import { getSaveHeartIconProps } from '@/lib/viewer-actions';
+import { useAppTheme } from '@/lib/theme-context';
+import { getThemedSaveHeartIconProps } from '@/lib/viewer-actions';
 
 function optionalNativeExport<T>(read: () => T) {
   try {
@@ -29,6 +30,7 @@ export function SaveHeart({
   size: number;
   enabled?: boolean;
 }) {
+  const theme = useAppTheme();
   const reducedMotion = useReducedMotion();
   const [scale] = useState<Animated.Value | null>(() => optionalNativeExport(() => new Animated.Value(1)) ?? null);
   const previousSaved = useRef(saved);
@@ -55,7 +57,7 @@ export function SaveHeart({
 
   return (
     <MotionView style={scale ? { transform: [{ scale }] } : undefined}>
-      <Heart size={size} {...getSaveHeartIconProps({ isSaved: saved, enabled })} />
+      <Heart size={size} {...getThemedSaveHeartIconProps({ isSaved: saved, enabled, colors: theme.colors })} />
     </MotionView>
   );
 }

@@ -41,7 +41,7 @@ import { useAppTheme } from '@/lib/theme-context';
 import type { ShowcasePostResponse } from '@/lib/types';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
-import { getSaveHeartIconProps, getViewerActionSlots, getViewerShareIntent, getViewerStateChip } from '@/lib/viewer-actions';
+import { getThemedSaveHeartIconProps, getViewerActionSlots, getViewerShareIntent, getViewerStateChip } from '@/lib/viewer-actions';
 import { verticalHitSlop } from '@/lib/hit-target';
 
 /** The creator byline reads as a single line of text; its reach is widened rather than its height. */
@@ -586,7 +586,7 @@ function TextPostContent({
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' }}>
         {slots.map((slot) => {
           if (slot.id === 'save') {
-            const heart = getSaveHeartIconProps({ isSaved: item.isSaved, enabled: item.canSave });
+            const heart = getThemedSaveHeartIconProps({ isSaved: item.isSaved, enabled: item.canSave, colors: theme.colors });
             return (
               <FeedCardAction
                 key={slot.id}

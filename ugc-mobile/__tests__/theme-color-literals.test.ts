@@ -245,3 +245,32 @@ describe('light mode — ink sits on the bright coral, never the deep one', () =
     expect(offenders).toEqual([]);
   });
 });
+
+/**
+ * The reel's save heart is white over video in both schemes
+ * (`getSaveHeartIconProps`), and its colours pass the literal ratchet because
+ * `lib/viewer-actions.ts` is exempt as the reel. The feed card and the post
+ * page borrowed it, so their unsaved heart drew white on a light card and
+ * vanished (reported 2026-09-27). App UI takes `getThemedSaveHeartIconProps`.
+ */
+export function borrowsReelHeart(source: string) {
+  return /\bgetSaveHeartIconProps\b/.test(stripComments(source));
+}
+
+describe("light mode — app UI draws its own heart, not the reel's white one", () => {
+  it("flags the reel's heart and passes the themed one", () => {
+    expect(borrowsReelHeart('<Heart size={18} {...getSaveHeartIconProps({ isSaved })} />')).toBe(true);
+    expect(borrowsReelHeart('<Heart size={18} {...getThemedSaveHeartIconProps({ isSaved, colors: theme.colors })} />')).toBe(false);
+    expect(borrowsReelHeart('// the reel keeps getSaveHeartIconProps')).toBe(false);
+  });
+
+  it('finds none in the app', () => {
+    const borrowers = files.flatMap((filePath) => {
+      const relativePath = path.relative(mobileRoot, filePath).replaceAll(path.sep, '/');
+      if (relativePath in EXEMPT) return [];
+      return borrowsReelHeart(readFileSync(filePath, 'utf8')) ? [relativePath] : [];
+    });
+
+    expect(borrowers).toEqual([]);
+  });
+});
