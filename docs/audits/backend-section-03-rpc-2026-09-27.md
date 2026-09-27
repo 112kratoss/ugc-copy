@@ -1,6 +1,8 @@
 # Section 3 — client-callable privileged functions
 
-Status: one confirmed admission bypass fixed locally; release verification pending.
+Status: confirmed admission bypass fixed and deployed in PR #228. Production
+verification passed 41 SQL checks and 42 real-session HTTP checks. See
+backend-section-03-rpc-release-2026-09-27.md for exact-build release evidence.
 Scope: public function grants and the six client-callable SECURITY DEFINER
 functions. This does not certify every privileged business operation or trigger.
 
