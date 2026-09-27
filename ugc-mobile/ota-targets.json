@@ -18,25 +18,25 @@
   ],
   "targets": {
     "android": {
-      "fingerprint": "a5da54690048abe955aaac5d29d0fbeb8beee45e",
-      "appVersion": "0.1.7",
-      "buildNumber": 75,
-      "shipped": "2026-09-25",
+      "fingerprint": "02b8fe85566eac2e3f61a8ed82fa350c3ee03865",
+      "appVersion": "0.1.8",
+      "buildNumber": 76,
+      "shipped": "2026-09-27",
       "tracks": [
         "production",
         "alpha"
       ],
-      "$note": "Built from main e0f28361 (#212; EAS build e23bae27, workflow run 36109403959), submitted to the Play closed alpha 2026-09-25 (EAS submission c1185002) and promoted to production the same day (full rollout; Google published it at 09:44 UTC; managed publishing is off). It drops react-native-url-polyfill and its dependencies (#212), and it is the first binary to embed #205's trimmed fonts, which Play measured as 3.5 MB off a new install. The fingerprint equals a clean npm ci of e0f28361, computed before the build. Now the binary in every Play user's hands, so an update published against this fingerprint reaches production; 0.1.6 (74) at caae1cc09c42590610679de5bfd8a035f2bf9021 is only whatever has not updated yet."
+      "$note": "Built from main 5837720a (#225; EAS build 2f2d81bf, workflow run 36322017759), submitted to the Play closed alpha 2026-09-27 and sent to production review the same evening (full rollout; managed publishing is off, so Google's approval published it, and the public listing read 0.1.8 on 2026-09-28). It is the first binary with the native menus (#217, @expo/ui). EAS recorded this runtime for the build, and a clean npm ci of main 015fd701 fingerprints the same. Now the binary in every Play user's hands, so an update published against this fingerprint reaches production; 0.1.7 (75) at a5da54690048abe955aaac5d29d0fbeb8beee45e is only whatever has not updated yet."
     },
     "ios": {
-      "fingerprint": "ec1a340c5580b559ef4a6ab0b933561ed8d1838e",
-      "appVersion": "0.1.7",
-      "buildNumber": 57,
-      "shipped": "2026-09-25",
+      "fingerprint": "4babc8b439ba5309615abbbe59baf79a23014d6c",
+      "appVersion": "0.1.8",
+      "buildNumber": 58,
+      "shipped": "2026-09-27",
       "tracks": [
         "testflight"
       ],
-      "$note": "Built from main e0f28361 (#212; EAS build dbcdbb19, workflow run 36109403959) and uploaded to TestFlight for the internal group 2026-09-25. It carries everything 0.1.6 (55 and 56) did, including the AI data-sharing consent (#209), and drops react-native-url-polyfill (#212). The fingerprint equals a clean npm ci of e0f28361, computed before the build. Submitted to App Review as version 0.1.7 on 2026-09-25 in place of 0.1.6 (56), and waiting for review again after a resubmission on 2026-09-26 (automatic release on approval). Hold iOS updates while it is in review, so the reviewer sees the build as submitted. Until Apple approves it, the App Store still serves 0.1.5 (54) at 835877cfddddf3644cf2e03bc8da01d7aec206d0, which no update from main can reach, so an update published against this fingerprint reaches TestFlight only."
+      "$note": "Built from main 5837720a (#225; EAS build 07f8b038, workflow run 36322017759) and uploaded to TestFlight for the internal group 2026-09-27. It is the first binary with the native menus (#217, @expo/ui). EAS recorded this runtime for the build, and a clean npm ci of main 015fd701 fingerprints the same. Submitted to App Review as version 0.1.8 on 2026-09-27 (automatic release on approval), in place of 0.1.7 (57), which was withdrawn from review and never released. Hold iOS updates while it is in review, so the reviewer sees the build as submitted. Until Apple approves it, the App Store still serves 0.1.5 (54) at 835877cfddddf3644cf2e03bc8da01d7aec206d0, which no update from main can reach, so an update published against this fingerprint reaches TestFlight only."
     }
   }
 }
