@@ -36,6 +36,9 @@ function createAdminSupabaseMock(options?: {
   purchases?: MarketplacePurchaseRow[];
   rateLimited?: boolean;
   freeUnlockResult?: Record<string, unknown>;
+  replay?: boolean;
+  orderInsertConflict?: boolean;
+  orders?: Record<string, unknown>[];
 }) {
   const assets = options?.assets ?? [{
     id: 'asset-1',
@@ -93,10 +96,10 @@ function createAdminSupabaseMock(options?: {
       if (fn === 'claim_razorpay_checkout_intent') {
         return {
           data: {
-            status: 'claimed',
+            status: options?.replay ? 'replay' : 'claimed',
             intent_id: '20000000-0000-4000-8000-000000000002',
             provider_receipt: 'mb_20000000000040008000000000000002',
-            provider_order_id: null,
+            provider_order_id: options?.replay ? 'order_market_123' : null,
           },
           error: null,
         };
@@ -125,9 +128,10 @@ function createAdminSupabaseMock(options?: {
       if (table === 'marketplace_purchases') return createQuery(table, purchases);
       if (table === 'marketplace_orders') {
         return {
+          ...createQuery(table, options?.orders ?? []),
           async insert(payload: Record<string, unknown>) {
             inserts.push({ table, payload });
-            return { error: null };
+            return { error: options?.orderInsertConflict ? { code: '23505' } : null };
           },
         };
       }
@@ -230,6 +234,7 @@ describe('createMarketplaceOrderForRoute', () => {
         asset_id: 'asset-1',
         buyer_user_id: 'buyer-1',
         purchase_kind: 'marketplace',
+        quoted_price_usd_cents: '500',
       },
     });
     expect(admin.inserts).toEqual([
@@ -240,11 +245,33 @@ describe('createMarketplaceOrderForRoute', () => {
           buyer_user_id: 'buyer-1',
           razorpay_order_id: 'order_market_123',
           amount_subunits: 41500,
+          quoted_price_usd_cents: 500,
           currency: 'INR',
           status: 'created',
         },
       },
     ]);
+  });
+
+
+  it.each([
+    { replay: true, quotedPrice: 500, expected: true },
+    { replay: true, quotedPrice: 600, expected: false },
+    { replay: false, quotedPrice: 500, expected: true },
+    { replay: false, quotedPrice: 600, expected: false },
+  ])('checks the stored quote on replay and insert races: %j', async ({ replay, quotedPrice, expected }) => {
+    const admin = createAdminSupabaseMock({
+      replay,
+      orderInsertConflict: !replay,
+      orders: [{ asset_id: 'asset-1', buyer_user_id: 'buyer-1', razorpay_order_id: 'order_market_123',
+        amount_subunits: 41500, currency: 'INR', quoted_price_usd_cents: quotedPrice }],
+    });
+    const result = await createMarketplaceOrderForRoute({
+      adminSupabase: admin.client, assetId: 'asset-1', buyerUserId: 'buyer-1', countryCode: 'IN',
+      getMarketplacePriceQuote: vi.fn(async () => ({ amountSubunits: 41500, currency: 'INR' as const, formatted: '₹415', note: '' })),
+      createRazorpayOrder: vi.fn(async () => ({ id: 'order_market_123' })),
+    });
+    expect(result.ok).toBe(expected);
   });
 
   it('unlocks free listings through the atomic RPC with consistent references', async () => {

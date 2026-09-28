@@ -222,6 +222,7 @@ export async function createMarketplaceOrderForRoute({
       requestPayload: {
         amount: priceQuote.amountSubunits,
         assetId: asset.id,
+        quotedPriceUsdCents: asset.price_usd_cents,
         currency: priceQuote.currency,
       },
     });
@@ -244,6 +245,7 @@ export async function createMarketplaceOrderForRoute({
           asset_id: asset.id,
           buyer_user_id: buyerUserId,
           purchase_kind: 'marketplace',
+          quoted_price_usd_cents: String(asset.price_usd_cents),
         },
       }),
     });
@@ -265,7 +267,7 @@ export async function createMarketplaceOrderForRoute({
   if (checkoutIntent.status === 'replay') {
     const { data: existingOrder, error: existingOrderError } = await adminSupabase
       .from('marketplace_orders')
-      .select('asset_id, buyer_user_id, amount_subunits, currency')
+      .select('asset_id, buyer_user_id, amount_subunits, currency, quoted_price_usd_cents')
       .eq('razorpay_order_id', razorpayOrder.id)
       .maybeSingle();
     if (existingOrderError) {
@@ -278,6 +280,7 @@ export async function createMarketplaceOrderForRoute({
         || existingOrder.buyer_user_id !== buyerUserId
         || existingOrder.amount_subunits !== priceQuote.amountSubunits
         || existingOrder.currency !== priceQuote.currency
+        || existingOrder.quoted_price_usd_cents !== asset.price_usd_cents
       ) {
         return { ok: false, status: 409, body: { error: 'Checkout details conflict with the recorded order.' } };
       }
@@ -304,6 +307,7 @@ export async function createMarketplaceOrderForRoute({
       buyer_user_id: buyerUserId,
       razorpay_order_id: razorpayOrder.id,
       amount_subunits: priceQuote.amountSubunits,
+      quoted_price_usd_cents: asset.price_usd_cents,
       currency: priceQuote.currency,
       status: 'created',
     });
@@ -312,7 +316,7 @@ export async function createMarketplaceOrderForRoute({
     if (orderInsertError.code === '23505') {
       const { data: existingOrder } = await adminSupabase
         .from('marketplace_orders')
-        .select('asset_id, buyer_user_id, amount_subunits, currency')
+        .select('asset_id, buyer_user_id, amount_subunits, currency, quoted_price_usd_cents')
         .eq('razorpay_order_id', razorpayOrder.id)
         .maybeSingle();
       if (
@@ -320,6 +324,7 @@ export async function createMarketplaceOrderForRoute({
         && existingOrder.buyer_user_id === buyerUserId
         && existingOrder.amount_subunits === priceQuote.amountSubunits
         && existingOrder.currency === priceQuote.currency
+        && existingOrder.quoted_price_usd_cents === asset.price_usd_cents
       ) {
         return {
           ok: true,
