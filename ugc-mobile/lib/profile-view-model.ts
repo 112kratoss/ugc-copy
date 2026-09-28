@@ -208,7 +208,7 @@ export type ProfilePostsScope = 'active' | 'archived';
 
 export function getProfileMediaEmptyTitle(tab: ProfileMediaTab, postsScope: ProfilePostsScope = 'active') {
   if (tab === 'Saved') return 'No saved media yet';
-  if (tab === 'Creations') return 'No creations yet';
+  if (tab === 'Creations') return postsScope === 'archived' ? 'No archived creations' : 'No creations yet';
   return postsScope === 'archived' ? 'No archived posts' : 'No posts yet';
 }
 
@@ -253,7 +253,7 @@ export function generationToProfileMediaCard(item: GenerationListItem): ProfileM
   const sourceUnavailable = Boolean(item.source_unavailable_at);
   // The library rule the card feed and the reel apply as well, so a tile can
   // only ever open onto a list that contains it.
-  const isGridReady = isCreationLibraryMember(item);
+  const isGridReady = isCreationLibraryMember(item, isArchived ? 'archived' : 'active');
   const label = getGenerationLabel(kind);
 
   return {

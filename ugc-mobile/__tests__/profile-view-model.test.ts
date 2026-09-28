@@ -201,7 +201,7 @@ describe('profile view model media cards', () => {
     });
   });
 
-  it('keeps failed, processing, archived, and missing-media generations out of the grid', () => {
+  it('keeps unfinished and missing-media generations out while allowing archived tiles', () => {
     const base: GenerationListItem = {
       id: 'gen-base',
       output_url: 'https://cdn.example.com/image.jpg',
@@ -216,7 +216,7 @@ describe('profile view model media cards', () => {
 
     expect(generationToProfileMediaCard({ ...base, id: 'failed', status: 'failed' }).isGridReady).toBe(false);
     expect(generationToProfileMediaCard({ ...base, id: 'processing', status: 'processing' }).isGridReady).toBe(false);
-    expect(generationToProfileMediaCard({ ...base, id: 'archived', archived_at: '2026-06-11T00:00:00.000Z' }).isGridReady).toBe(false);
+    expect(generationToProfileMediaCard({ ...base, id: 'archived', archived_at: '2026-06-11T00:00:00.000Z' }).isGridReady).toBe(true);
     expect(generationToProfileMediaCard({ ...base, id: 'missing', output_url: null }).isGridReady).toBe(false);
   });
 

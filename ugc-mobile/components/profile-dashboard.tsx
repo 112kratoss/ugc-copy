@@ -114,6 +114,7 @@ export function ProfileDashboard({
   // Archived posts live under their own scope of the Posts tab: the archive
   // dialog promises they can be restored from the profile, so they have to be
   // reachable here.
+  const [creationsScope, setCreationsScope] = useState<ProfilePostsScope>('active');
   const [postsScope, setPostsScope] = useState<ProfilePostsScope>('active');
   const [backgroundMediaReady, setBackgroundMediaReady] = useState(false);
   const queryClient = useQueryClient();
@@ -207,12 +208,15 @@ export function ProfileDashboard({
     () => savedShowcaseToProfileMediaCards(flattenShowcaseFeedPages(savedQuery.data?.pages)),
     [savedQuery.data]
   );
-  const creationCards = useMemo(
+  const allCreationCards = useMemo(
     () => flattenProfileGenerationPages(generationsQuery.data?.pages)
       .map(generationToProfileMediaCard)
       .filter((card) => card.isGridReady),
     [generationsQuery.data]
   );
+  const activeCreationCards = useMemo(() => allCreationCards.filter((card) => !card.isArchived), [allCreationCards]);
+  const archivedCreationCards = useMemo(() => allCreationCards.filter((card) => card.isArchived), [allCreationCards]);
+  const creationCards = creationsScope === 'archived' ? archivedCreationCards : activeCreationCards;
   const ownerPosts = useMemo(
     () => flattenProfileOwnerPostPages(postsQuery.data?.pages),
     [postsQuery.data]
@@ -237,7 +241,7 @@ export function ProfileDashboard({
   // server without them is live; a dash for a library that has not answered.
   const stats = getProfileStats({
     totals: profile?.stats ?? null,
-    generationsCount: creationCards.length,
+    generationsCount: activeCreationCards.length,
     generationsHasMore: generationsQuery.hasNextPage,
     generationsLoaded: Boolean(generationsQuery.data),
     postsCount: activePostCards.length,
@@ -396,12 +400,14 @@ export function ProfileDashboard({
       activeTab={activeTab}
       cards={tabCards}
       contentBottomPadding={tabBarMetrics.contentBottomOverlapPadding}
-      emptyTitle={getProfileMediaEmptyTitle(activeTab, postsScope)}
+      emptyTitle={getProfileMediaEmptyTitle(activeTab, activeTab === 'Creations' ? creationsScope : postsScope)}
       fallbackAvatarInitials={initials}
       fallbackAvatarUrl={profile?.avatarUrl}
-      postsScope={postsScope}
-      postsScopeCounts={{ active: activePostCards.length, archived: archivedPostCards.length }}
-      onPostsScopeChange={setPostsScope}
+      postsScope={activeTab === 'Creations' ? creationsScope : postsScope}
+      postsScopeCounts={activeTab === 'Creations'
+        ? { active: activeCreationCards.length, archived: archivedCreationCards.length }
+        : { active: activePostCards.length, archived: archivedPostCards.length }}
+      onPostsScopeChange={activeTab === 'Creations' ? setCreationsScope : setPostsScope}
       header={(
         <>
           <ProfileTitle />
@@ -580,8 +586,9 @@ function ProfileMediaList({
               onRefresh={onRefresh}
               onTabChange={onTabChange}
             />
-            {activeTab === 'Posts' && onPostsScopeChange ? (
-              <ProfilePostsScopeControl
+            {activeTab !== 'Saved' && onPostsScopeChange ? (
+              <ProfileMediaScopeControl
+                label={`Filter ${activeTab.toLowerCase()}`}
                 value={postsScope}
                 counts={postsScopeCounts}
                 onChange={onPostsScopeChange}
@@ -1076,11 +1083,13 @@ function ProfileSegment({ value, onChange }: { value: ProfileMediaTab; onChange:
   );
 }
 
-function ProfilePostsScopeControl({
+function ProfileMediaScopeControl({
+  label,
   value,
   counts,
   onChange,
 }: {
+  label: string;
   value: ProfilePostsScope;
   counts?: Record<ProfilePostsScope, number>;
   onChange: (scope: ProfilePostsScope) => void;
@@ -1091,7 +1100,7 @@ function ProfilePostsScopeControl({
     { value: 'archived', label: counts ? `Archived (${counts.archived})` : 'Archived' },
   ];
   return (
-    <View accessibilityRole="radiogroup" accessibilityLabel="Filter posts" style={{ flexDirection: 'row', gap: 8 }}>
+    <View accessibilityRole="radiogroup" accessibilityLabel={label} style={{ flexDirection: 'row', gap: 8 }}>
       {options.map((option) => {
         const active = option.value === value;
         return (
@@ -1208,7 +1217,7 @@ function ProfileMediaTile({
                 source: item.viewerSource,
                 initialId: item.sourceId,
                 // The feed holds the scope the tile was drawn in; active is its default.
-                scope: item.label === 'Post' && item.isArchived ? 'archived' : undefined,
+                scope: item.isArchived ? 'archived' : undefined,
               }));
         // Every way a tile opens goes through `capture`, zoomed or not, so a tap
         // repeated while the first is still opening opens nothing a second time.

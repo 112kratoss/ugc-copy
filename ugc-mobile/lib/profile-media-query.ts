@@ -38,7 +38,7 @@ export function profileGenerationsQueryOptions(
   return {
     queryKey: ['profile-generations', userId] as const,
     initialPageParam: null as string | null,
-    queryFn: ({ pageParam }: { pageParam: string | null }) => api.listGenerations(false, {
+    queryFn: ({ pageParam }: { pageParam: string | null }) => api.listGenerations(true, {
       cursor: pageParam ?? undefined,
       limit: PROFILE_MEDIA_PAGE_SIZE,
     }),

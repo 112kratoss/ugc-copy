@@ -129,7 +129,7 @@ export function useProfileLibrarySource({
         ? generations.find((item) => item.id === initialId) ?? (selectionQuery.data as GenerationListItem | null | undefined) ?? null
         : null;
       const ordered = pinned ? [pinned, ...generations.filter((item) => item.id !== initialId)] : generations;
-      return buildImmersiveGenerationItems(source, selectCreationLibraryItems(ordered, initialId), owner, ownerPosts);
+      return buildImmersiveGenerationItems(source, selectCreationLibraryItems(ordered, initialId, postsScope), owner, ownerPosts);
     }
     const pinned = selectionPinned
       ? ownerPosts.find((item) => item.id === initialId) ?? (selectionQuery.data as OwnerPostListItem | null | undefined) ?? null

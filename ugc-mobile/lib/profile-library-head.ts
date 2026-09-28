@@ -32,7 +32,7 @@ export async function refreshProfileLibraryHead({
   library: ProfileMediaTab;
 }) {
   if (library === 'Creations') {
-    const fresh = await api.listGenerations(false, { limit: PROFILE_MEDIA_PAGE_SIZE });
+    const fresh = await api.listGenerations(true, { limit: PROFILE_MEDIA_PAGE_SIZE });
     if (!fresh) return;
     queryClient.setQueryData<InfiniteData<GenerationListResponse, string | null>>(
       ['profile-generations', userId],

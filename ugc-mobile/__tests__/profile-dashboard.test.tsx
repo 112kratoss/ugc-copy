@@ -713,12 +713,12 @@ describe('ProfileDashboard media tiles routing', () => {
     });
   });
 
-  it('requests active non-archived generations for the Profile Creations grid', () => {
+  it('requests generations including archived ones for the Profile Creations grid', () => {
     renderer.act(() => {
       renderer.create(<ProfileDashboard initialTab="Creations" />);
     });
 
-    expect(authState.api.listGenerations).toHaveBeenCalledWith(false, { limit: 24 });
+    expect(authState.api.listGenerations).toHaveBeenCalledWith(true, { limit: 24 });
   });
 
   // Archived posts are fetched with the rest so the Posts tab can show them
@@ -771,7 +771,7 @@ describe('ProfileDashboard media tiles routing', () => {
       renderer.create(<ProfileDashboard initialTab="Creations" />);
     });
 
-    expect(authState.api.listGenerations).toHaveBeenCalledWith(false, { cursor: '24', limit: 24 });
+    expect(authState.api.listGenerations).toHaveBeenCalledWith(true, { cursor: '24', limit: 24 });
     expect(authState.api.listOwnerPosts).toHaveBeenCalledWith({
       includeArchived: true,
       includeSummary: false,
@@ -1138,6 +1138,15 @@ describe('ProfileDashboard media tiles routing', () => {
     expect(tree!.root.findAllByProps({ accessibilityLabel: 'Creation, Failed image, Not posted' })).toHaveLength(0);
     expect(tree!.root.findAllByProps({ accessibilityLabel: 'Creation, Archived image, Not posted' })).toHaveLength(0);
     expect(tree!.root.findAllByProps({ accessibilityLabel: 'Creation, Missing media, Not posted' })).toHaveLength(0);
+    renderer.act(() => { findPressableByText(tree!.root, 'Archived (1)').props.onPress(); });
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Creation, Ready image, Not posted' })).toHaveLength(0);
+    const archivedTile = tree!.root.findByProps({ accessibilityLabel: 'Creation, Archived image, Not posted' });
+    renderer.act(() => { archivedTile.props.onPress(); });
+    expect(routerState.push).toHaveBeenCalledWith({
+      pathname: '/profile-media-feed',
+      params: { source: 'profile-creations', initialId: 'archived-image', scope: 'archived' },
+    });
+
   });
 
   it('draws a play plate for a creation video with no poster, without streaming the clip', () => {

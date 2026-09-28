@@ -47,13 +47,12 @@ export function getCreationAvailability(item: CreationFields): CreationAvailabil
  * anything with media: an archived creation could turn up in a feed its grid
  * never showed, and an unavailable one vanished from it (audit C1, C3).
  *
- * In: finished, unarchived creations with a file, and finished creations whose
- * only file is gone, drawn as that state because hiding them reads as deletion.
- * Out: archived creations, which have their own restore path, and unfinished or
- * failed runs, whose notifications deep-link straight to them.
+ * In: finished creations with a file, or whose file is explicitly unavailable,
+ * in the requested Active or Archived scope. Unfinished and failed runs remain
+ * reachable through their notification deep links.
  */
-export function isCreationLibraryMember(item: CreationFields): boolean {
-  if (item.archived_at) return false;
+export function isCreationLibraryMember(item: CreationFields, scope: 'active' | 'archived' = 'active'): boolean {
+  if (Boolean(item.archived_at) !== (scope === 'archived')) return false;
   const availability = getCreationAvailability(item);
   return availability === 'available' || availability === 'source-unavailable';
 }
@@ -65,7 +64,8 @@ export function isCreationLibraryMember(item: CreationFields): boolean {
  */
 export function selectCreationLibraryItems<T extends CreationFields & { id: string }>(
   items: T[],
-  selectedId?: string | null
+  selectedId?: string | null,
+  scope: 'active' | 'archived' = 'active'
 ): T[] {
-  return items.filter((item) => (Boolean(selectedId) && item.id === selectedId) || isCreationLibraryMember(item));
+  return items.filter((item) => (Boolean(selectedId) && item.id === selectedId) || isCreationLibraryMember(item, scope));
 }

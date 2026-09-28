@@ -134,7 +134,7 @@ describe('useProfileLibrarySource', () => {
     const library = await renderLibrary({ api, source: 'profile-creations', initialId: 'tapped' });
     const ready = await library.until((result) => result.selection === 'found');
 
-    expect(api.listGenerations).toHaveBeenCalledWith(false, { cursor: undefined, limit: 24 });
+    expect(api.listGenerations).toHaveBeenCalledWith(true, { cursor: undefined, limit: 24 });
     expect(ready.items.map((item) => item.id)).toEqual(['newest', 'gone', 'tapped']);
 
     await renderer.act(async () => {
@@ -142,7 +142,7 @@ describe('useProfileLibrarySource', () => {
     });
     const paged = await library.until((result) => result.items.length === 4);
     expect(paged.items.map((item) => item.id)).toEqual(['newest', 'gone', 'tapped', 'older']);
-    expect(api.listGenerations).toHaveBeenCalledWith(false, { cursor: '24', limit: 24 });
+    expect(api.listGenerations).toHaveBeenCalledWith(true, { cursor: '24', limit: 24 });
   });
 
   it('looks up a selection outside the loaded pages once, and keeps it at the head for the visit', async () => {

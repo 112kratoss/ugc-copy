@@ -34,12 +34,14 @@ describe('creation library', () => {
     expect(generationToProfileMediaCard(item).isGridReady).toBe(member);
   });
 
-  it('keeps archived creations out, whatever else is true of them', () => {
+  it('keeps archived creations in their own scope', () => {
     const archived = generation('archived', { archived_at: '2026-09-10T00:00:00.000Z' });
 
     expect(getCreationAvailability(archived)).toBe('available');
     expect(isCreationLibraryMember(archived)).toBe(false);
-    expect(generationToProfileMediaCard(archived).isGridReady).toBe(false);
+    expect(generationToProfileMediaCard(archived).isGridReady).toBe(true);
+    expect(isCreationLibraryMember(archived, 'archived')).toBe(true);
+    expect(selectCreationLibraryItems([generation('active'), archived], undefined, 'archived').map((item) => item.id)).toEqual(['archived']);
   });
 
   it('counts a finished text creation as available without a file', () => {

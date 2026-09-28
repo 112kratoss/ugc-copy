@@ -529,6 +529,7 @@ Create is a prompt-first single page for Image, Video and Motion, not a wizard.
 
 - A signed-out profile invites sign-in without looking broken.
 - Each segment's empty state says what will appear there.
+- Creations and Posts each have independent Active / Archived filters with loaded-item counts. Archived creations open their scoped management feed for restoring. The filter reuses the existing accessible Pressable radio controls and theme tokens on both platforms; no new native module or gesture is needed.
 
 ### Alerts
 
