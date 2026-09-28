@@ -25,6 +25,9 @@ import { ActivityIndicator, PanResponder, Pressable, Text, useWindowDimensions, 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { StableMediaImage } from '@/components/media-preview';
+import { ReturnedVideoPreview } from '@/components/returned-video-preview';
+import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
+import { getShowcasePlaybackUrl } from '@/lib/showcase-media';
 import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { PushOfferCard } from '@/components/push-offer-card';
 import { Reveal } from '@/components/reveal';
@@ -521,10 +524,22 @@ function ProfileMediaList({
   // reporting stay in one component.
   const isFocused = useIsFocused();
   const reportAmbientMedia = useTabBarAmbientFeed(isFocused);
+  const visibleIds = useRef(new Set<string>());
+  const revealItem = useCallback((itemId: string) => {
+    if (visibleIds.current.has(itemId) || isLoading) return;
+    const index = cards.findIndex(card => card.sourceId === itemId);
+    if (index >= 0) void listRef.current?.scrollToIndex({ index, animated: false, viewPosition: 0.5 });
+  }, [cards, isLoading]);
   const viewabilityConfigCallbackPairs = useRef([
     {
       viewabilityConfig: SHOWCASE_PLAYBACK_VIEWABILITY,
       onViewableItemsChanged: reportAmbientMedia,
+    },
+    {
+      viewabilityConfig: { itemVisiblePercentThreshold: 50 },
+      onViewableItemsChanged: ({ viewableItems }: { viewableItems: { item: ProfileMediaCard }[] }) => {
+        visibleIds.current = new Set(viewableItems.map(({ item }) => item.sourceId));
+      },
     },
   ]).current;
 
@@ -540,7 +555,7 @@ function ProfileMediaList({
 
   return (
     // Saved tiles here are what the reel grows out of and returns to.
-    <MediaZoomSurface>
+    <MediaZoomSurface revealItem={revealItem}>
     <View {...swipeResponder.panHandlers} style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <FlashList
         ref={listRef}
@@ -1128,6 +1143,7 @@ function ProfileMediaTile({
   const countLabel = item.countLabel ?? '0';
   const isFallbackPreview = item.id.startsWith('preview-');
   const isSavedTile = item.label === 'Saved';
+  const nativeZoomTile = isSavedTile && !isFallbackPreview && item.previewKind !== 'text' && isAppleZoomAvailable();
   // A Post tile said only "Post, <title>" -- the badge in its corner reported
   // Public or Private and the label reported neither, so the state was
   // available to sighted users alone. Both tiles now read out the state their
@@ -1135,7 +1151,9 @@ function ProfileMediaTile({
   const accessibilityLabel = isSavedTile
     ? `${item.label}, ${item.title}, ${countLabel} likes`
     : `${item.label}, ${item.title}, ${getProfileTileState(item).label}`;
-  const motion = usePressMotion(false, { scale: appTheme.motion.scale.pressed });
+  // UIKit captures this view at its laid-out size. A simultaneous press scale
+  // exposes the light grid inside the opening veil and shifts the zoom source.
+  const motion = usePressMotion(nativeZoomTile, { scale: appTheme.motion.scale.pressed });
   // Saved tiles open the reel, and the reel grows out of this tile. Creations
   // and Posts open the card feed, which is not a zoom.
   const previewUrl = item.previewUrl ?? item.mediaUrl;
@@ -1199,7 +1217,8 @@ function ProfileMediaTile({
           overflow: 'hidden',
           borderRadius: 12,
           borderCurve: 'continuous',
-          borderWidth: highlighted ? 2 : 1,
+          // A light outline becomes a bright frame when UIKit enlarges it.
+          borderWidth: highlighted ? 2 : nativeZoomTile ? 0 : 1,
           borderColor: highlighted ? theme.colors.primary : theme.colors.border,
           backgroundColor: theme.colors.panel,
         }}
@@ -1436,6 +1455,9 @@ function ProfileGalleryPreview({
           diagnosticsSurface="profile-grid"
           style={{ position: 'absolute', inset: 0 }}
         />
+        {item.label === 'Saved' && item.post?.mediaItems[0]?.mediaKind === 'video' && isAppleZoomAvailable() ? (
+          <ReturnedVideoPreview key={item.sourceId} url={getShowcasePlaybackUrl(item.post.mediaItems[0])} />
+        ) : null}
       </View>
     );
   }

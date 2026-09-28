@@ -3,6 +3,8 @@ import type { VideoPlayer } from 'expo-video';
 
 import {
   acceptVideoReturn,
+  ownViewerVideoPlayer,
+  peekReturnedVideoPlayer,
   adoptVideoPlayer,
   claimReturnedVideoPlayer,
   endVideoReturn,
@@ -442,5 +444,34 @@ describe('a player leaving the reel', () => {
 
     expect(player.muted).toBe(true);
     expect(player.pause).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe('a viewer-created player returning to a poster tile', () => {
+  it('survives viewer teardown until its receiving tile owns it', () => {
+    const player = fakePlayer();
+    ownViewerVideoPlayer(player);
+    expect(handBackVideoPlayer(player, 'saved', 'clip')).toBe(true);
+    expect(peekReturnedVideoPlayer('saved', 'clip')).toBe(player);
+    releaseAdoptedVideoPlayer(player);
+    expect(claimReturnedVideoPlayer('saved', 'clip')).toBe(player);
+    reportReturnedVideoDrawn(player);
+    endVideoReturn(player);
+    vi.runAllTimers();
+    expect(player.release).not.toHaveBeenCalled();
+  });
+
+  it('returns ownership to the viewer when a close is cancelled', () => {
+    const player = fakePlayer();
+    ownViewerVideoPlayer(player);
+    handBackVideoPlayer(player, 'saved', 'clip');
+    claimReturnedVideoPlayer('saved', 'clip');
+    expect(reclaimVideoPlayer(player)).toBe(true);
+    expect(lenderUnmounting(player)).toBe(true);
+    expect(peekReturnedVideoPlayer('saved', 'clip')).toBeNull();
+    releaseAdoptedVideoPlayer(player);
+    vi.runAllTimers();
+    expect(player.release).toHaveBeenCalledTimes(1);
   });
 });

@@ -104,6 +104,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
       )}
       onOpen={() => zoomSource.capture(onOpen)}
       onOpenTouchStart={zoomSource.prepare}
+      nativeZoom={Boolean(zoomSource.appleZoomId)}
       openAccessibilityLabel={`Open ${card.title}`}
       timeLabel={card.timeLabel}
       title={card.title}

@@ -203,6 +203,11 @@ export function adoptVideoPlayer(player: VideoPlayer): boolean {
   return true;
 }
 
+/** A viewer-created player can also leave with a receiving tile on iOS. */
+export function ownViewerVideoPlayer(player: VideoPlayer) {
+  loans.set(player, { stage: 'adopted', lenderMounted: false, giveBack: null, timeout: null });
+}
+
 /** A loan that was never adopted ends: back to the tile, or released if the tile is gone. */
 export function returnVideoPlayer(player: VideoPlayer) {
   const loan = loans.get(player);
@@ -338,6 +343,15 @@ export function subscribeToVideoReturns(listener: () => void) {
 /** A hand-back to this tile and stream is under way, taken up or not. */
 export function isVideoReturnPending(tileKey: string, url: string) {
   return pendingReturn?.key === returnKey(tileKey, url);
+}
+
+/** Stable identity for a receiving tile's external-store subscription. */
+export function peekReturnedVideoPlayer(tileKey: string, url: string): VideoPlayer | null {
+  return pendingReturn?.key === returnKey(tileKey, url) ? pendingReturn.player : null;
+}
+
+export function getReturningVideoPlayer(): VideoPlayer | null {
+  return pendingReturn?.player ?? null;
 }
 
 /** The tile takes its player back: from here on it is the tile's, as before it was lent. */

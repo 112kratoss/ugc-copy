@@ -19,6 +19,7 @@ import {
   parseAppleZoomSourceId,
 } from '@/lib/apple-zoom';
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
+import { clearAppleZoomReturn, prepareAppleZoomReturn } from '@/lib/apple-zoom-surface';
 import { appleZoomAlignmentRect, type ZoomRect, type ZoomSize } from '@/lib/media-zoom-transition';
 
 /**
@@ -109,7 +110,11 @@ export function useAppleZoomRetarget(activeItemId: string | null) {
   useEffect(() => {
     if (!sourceId || !activeItemId) return;
     const current = parseAppleZoomSourceId(sourceId);
-    if (!current || current.itemId === activeItemId) return;
-    navigation.setParams({ [APPLE_ZOOM_SOURCE_PARAM]: appleZoomSourceId(current.surfaceId, activeItemId) } as never);
+    if (!current) return;
+    prepareAppleZoomReturn(current.surfaceId, activeItemId);
+    if (current.itemId !== activeItemId) {
+      navigation.setParams({ [APPLE_ZOOM_SOURCE_PARAM]: appleZoomSourceId(current.surfaceId, activeItemId) } as never);
+    }
+    return () => clearAppleZoomReturn(current.surfaceId, activeItemId);
   }, [activeItemId, navigation, sourceId]);
 }

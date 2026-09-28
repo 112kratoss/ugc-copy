@@ -94,7 +94,9 @@ import { claimZoomVeil, clearZoomVeil, closeZoomVeilHole, dropZoomVeil, holdZoom
 import { useReducedMotion } from '@/lib/motion';
 import { appleZoomSourceId, type AppleZoomOpen } from '@/lib/apple-zoom';
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
+import { mediaColors } from '@/lib/theme';
 import { AppleZoomSource } from '@/components/apple-zoom';
+import { forgetAppleZoomSurface, registerAppleZoomSurface } from '@/lib/apple-zoom-surface';
 import { LetterboxBands } from '@/components/letterbox-bands';
 import { TopScrim } from '@/components/top-scrim';
 import { resolvedTopInset } from '@/lib/safe-area';
@@ -737,8 +739,10 @@ export function useMediaZoomPaintReport() {
  * per mounted screen, so two surfaces showing the same post (Home and Explore,
  * or two creator profiles) never return a reel to the wrong one.
  */
-export function MediaZoomSurface({ children }: { children: ReactNode }) {
+export function MediaZoomSurface({ children, revealItem }: { children: ReactNode; revealItem?: (itemId: string) => void }) {
   const surfaceId = useId();
+  useEffect(() => revealItem ? registerAppleZoomSurface(surfaceId, revealItem) : undefined, [revealItem, surfaceId]);
+  useEffect(() => () => forgetAppleZoomSurface(surfaceId), [surfaceId]);
   return <MediaZoomSurfaceContext.Provider value={surfaceId}>{children}</MediaZoomSurfaceContext.Provider>;
 }
 
@@ -762,6 +766,8 @@ export interface MediaZoomSource {
   tileKey: string | null;
   /** The identifier this tile's view is registered with UIKit's zoom under (iOS 18); null elsewhere. */
   appleZoomId: string | null;
+  /** Rounded edge of the native source snapshot. */
+  radius?: number;
   /** width / height of the media as the reel draws it, as the tile was given it. */
   aspectRatio: number | null;
 }
@@ -911,9 +917,9 @@ export function useMediaZoomSource({
       // follows (lib/zoom-veil.ts); with Reduce Motion there is none, and the
       // reel simply appears. Fabric answers `measureInWindow` before it returns.
       if (!reducedMotion) {
-        let hole: ZoomRect | null = null;
+        let hole: (ZoomRect & { radius: number }) | null = null;
         ref.current?.measureInWindow((x, y, width, height) => {
-          if (width > 0 && height > 0) hole = { x, y, width, height };
+          if (width > 0 && height > 0) hole = { x, y, width, height, radius };
         });
         dropZoomVeil(hole);
       }
@@ -978,7 +984,7 @@ export function useMediaZoomSource({
 
   const tileKey = active && surfaceId ? zoomTileKey(surfaceId, itemId) : null;
 
-  return { ref, hiddenStyle, prepare, capture, offerVideo, tileKey, appleZoomId, aspectRatio };
+  return { ref, hiddenStyle, prepare, capture, offerVideo, tileKey, appleZoomId, aspectRatio, radius };
 }
 
 /**
@@ -1016,7 +1022,15 @@ export function MediaZoomSourceView({
           ref={source.ref}
           collapsable={false}
           onLayout={isAppleZoomAvailable() ? measureAppleZoomTile : undefined}
-          style={ZOOM_SOURCE_FILL}
+          // UIKit snapshots this registered view, including its transparent
+          // corners. Keep the snapshot opaque and clipped to the media shape
+          // so the light grid cannot become part of the growing picture.
+          style={[ZOOM_SOURCE_FILL, source.appleZoomId ? {
+            backgroundColor: mediaColors.mediaGround,
+            borderRadius: source.radius ?? 0,
+            borderCurve: 'continuous',
+            overflow: 'hidden',
+          } : null]}
         >
           <MediaZoomVideoOfferContext.Provider value={source.offerVideo}>
             <MediaZoomTileKeyContext.Provider value={source.tileKey}>
@@ -1274,19 +1288,27 @@ export function useMediaZoomStage({
   useEffect(() => () => setZoomUnderlayHidden(false), []);
 
   /**
-   * The player to hand back to the tile a close lands in: the one that tile
-   * lent, when the reel is still showing it — the same post, the same stream,
-   * not a replacement a retry built — and the tile would take it.
+   * The player to hand back to the tile a close lands in. On iOS this can be a
+   * viewer-created player if the tile accepts that exact stream. Android keeps
+   * returning only the player that the opening tile lent.
    */
   const returnableVideo = useCallback((): (ZoomVideo & { tileKey: string }) | null => {
     const adopted = adoptedVideoRef.current;
+    // iOS can also return a player created in the reel to a poster-only tile.
+    if (nativeZoom && origin && activeVideoUrlRef.current) {
+      const itemId = activeItemRef.current;
+      const url = activeVideoUrlRef.current;
+      const tileKey = zoomTileKey(origin.surfaceId, itemId);
+      const player = playerForRef.current?.(itemId, url);
+      if (player && tileAcceptsVideoReturn(tileKey, url)) return { player, url, tileKey };
+    }
     if (!origin || !lentVideo || adopted !== lentVideo.player) return null;
     if (activeItemRef.current !== origin.itemId || activeVideoUrlRef.current !== lentVideo.url) return null;
     if (playerForRef.current?.(origin.itemId, lentVideo.url) !== adopted) return null;
     const tileKey = zoomTileKey(origin.surfaceId, origin.itemId);
     if (!tileAcceptsVideoReturn(tileKey, lentVideo.url)) return null;
     return { player: adopted, url: lentVideo.url, tileKey };
-  }, [lentVideo, origin]);
+  }, [lentVideo, nativeZoom, origin]);
 
   // Under iOS's own zoom the reel is the thing on screen from its first frame,
   // so a lent player is taken at once: the reel's slide draws it while the
@@ -1387,7 +1409,7 @@ export function useMediaZoomStage({
         }
         if (!navigation.isFocused() || handedBackRef.current) return;
         gestureClose = true;
-        liftZoomVeil();
+        liftZoomVeil(true);
         handBackForNativeClose();
       }),
       listen('transitionEnd', (event) => {

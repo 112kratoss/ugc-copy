@@ -88,6 +88,7 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
       )}
       onOpen={() => zoomSource.capture(onOpen)}
       onOpenTouchStart={zoomSource.prepare}
+      nativeZoom={Boolean(zoomSource.appleZoomId)}
       openAccessibilityLabel={`Open ${card.title}`}
       statusChip={card.state ? <ProfileStateChip label={card.state.label} tone={card.state.tone} /> : null}
       timeLabel={card.timeLabel}

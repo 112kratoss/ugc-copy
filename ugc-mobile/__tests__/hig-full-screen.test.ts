@@ -216,13 +216,15 @@ describe('S6 — no player holds the audio session while it is silent', () => {
   // `auto`. Declaring it makes both platforms behave the same way.
   const playerFiles = [
     'app/viewer.tsx',
+    'lib/use-viewer-video-player.ts',
+    'lib/use-viewer-video-player.ios.ts',
     'components/feed-video-preview.tsx',
     'components/recoverable-video-preview.tsx',
   ];
 
   it.each(playerFiles)('%s declares a mixing mode for every player it creates', (name) => {
     const source = read(name);
-    const created = source.match(/use VideoPlayer|useVideoPlayer\(|createVideoPlayer\(/g)?.length ?? 0;
+    const created = source.match(/use VideoPlayer|useVideoPlayer\(|(?<!function )useViewerVideoPlayer\(|createVideoPlayer\(/g)?.length ?? 0;
     const declared = source.match(/audioMixingMode = 'auto'/g)?.length ?? 0;
     expect(created).toBeGreaterThan(0);
     expect(declared).toBe(created);
@@ -240,7 +242,7 @@ describe('S6 — no player holds the audio session while it is silent', () => {
         }
         if (!/\.tsx?$/.test(entry)) continue;
         const source = read(relative);
-        if (!/useVideoPlayer\(|createVideoPlayer\(/.test(source)) continue;
+        if (!/useVideoPlayer\(|(?<!function )useViewerVideoPlayer\(|createVideoPlayer\(/.test(source)) continue;
         if (!playerFiles.includes(relative)) offenders.push(relative);
       }
     };

@@ -51,6 +51,7 @@ export function FeedCardShell({
   media,
   onOpen,
   onOpenTouchStart,
+  nativeZoom = false,
   openAccessibilityLabel,
   statusChip,
   timeLabel,
@@ -82,6 +83,8 @@ export function FeedCardShell({
    * until most taps have already been released.
    */
   onOpenTouchStart?: () => void;
+  /** Keep the measured source still while UIKit takes over its opening. */
+  nativeZoom?: boolean;
   openAccessibilityLabel: string;
   /** Publish/visibility state for owned media. Home passes nothing. */
   statusChip?: ReactNode;
@@ -103,8 +106,9 @@ export function FeedCardShell({
 
   // The whole card presses down, not just the tapped region: the header and
   // action rows are separate targets, but the object under the thumb is the
-  // card, and that is what should move.
-  const openMotion = usePressMotion(!onOpen, { scale: appTheme.motion.scale.pressedCard });
+  // card, and that is what should move. Native zoom needs that source to stay
+  // at its measured size; UIKit supplies the motion for those media opens.
+  const openMotion = usePressMotion(!onOpen || nativeZoom, { scale: appTheme.motion.scale.pressedCard });
   const open = onOpen ? () => {
     haptic.light();
     onOpen();

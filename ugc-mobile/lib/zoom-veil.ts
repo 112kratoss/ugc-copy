@@ -2,6 +2,7 @@ import { makeMutable, withDelay, withTiming } from 'react-native-reanimated';
 
 import { isAppleZoomAvailable } from './apple-zoom-available';
 import type { ZoomRect } from './media-zoom-transition';
+import { activateNativeZoomVeil, getNativeZoomVeilOpacity, resetNativeZoomVeil } from './native-zoom-veil';
 
 /**
  * How much of the screen a reel grew out of is covered in black while UIKit's
@@ -20,7 +21,9 @@ import type { ZoomRect } from './media-zoom-transition';
  * transition, the way Photos darkens its grid, and the pictures cross over
  * black instead. The veil lifts as a close begins — after the crossfade, over
  * the rest of the shrink — so the feed comes back behind the shrinking
- * picture; a close let go of puts it back.
+ * picture. Interactive closes follow react-native-screens' native transition
+ * progress instead of the elapsed-time fade, so holding or reversing a gesture
+ * does not let the background finish independently of the zoom.
  *
  * The tile itself stays clear of the veil until the transition begins
  * (`zoomVeilHole`): UIKit takes the tile's picture into its own view only as
@@ -34,7 +37,7 @@ import type { ZoomRect } from './media-zoom-transition';
  */
 export const zoomVeil = makeMutable(0);
 /** The tapped tile's rectangle on screen, left clear until the transition begins; null for none. */
-export const zoomVeilHole = makeMutable<ZoomRect | null>(null);
+export const zoomVeilHole = makeMutable<(ZoomRect & { radius?: number }) | null>(null);
 
 /** Over which the feed goes black at the tap: within the push, which follows a few frames later. */
 export const ZOOM_VEIL_DROP_MS = 100;
@@ -62,9 +65,10 @@ function clearDeadline() {
  * The tap that opens a reel: the feed goes black around the tapped tile, under
  * the transition that follows. `hole` is the tile's rectangle on screen.
  */
-export function dropZoomVeil(hole: ZoomRect | null) {
+export function dropZoomVeil(hole: (ZoomRect & { radius?: number }) | null) {
   if (!isAppleZoomAvailable()) return;
   claimed = false;
+  resetNativeZoomVeil();
   zoomVeilHole.set(hole);
   zoomVeil.set(withTiming(1, { duration: ZOOM_VEIL_DROP_MS }));
   clearDeadline();
@@ -86,10 +90,17 @@ export function closeZoomVeilHole() {
 }
 
 /** A close has begun: the feed comes back behind the shrinking reel. */
-export function liftZoomVeil() {
+export function liftZoomVeil(interactive = false) {
   if (!isAppleZoomAvailable()) return;
   clearDeadline();
   zoomVeilHole.set(null);
+  // A gesture can be held or reversed indefinitely. Follow UIKit instead of
+  // completing a timer while the reader's finger is still on the screen.
+  if (interactive && activateNativeZoomVeil()) {
+    zoomVeil.set(1);
+    return;
+  }
+  if (getNativeZoomVeilOpacity()) return;
   zoomVeil.set(withDelay(ZOOM_VEIL_LIFT_DELAY_MS, withTiming(0, { duration: ZOOM_VEIL_LIFT_MS })));
 }
 
@@ -97,12 +108,14 @@ export function liftZoomVeil() {
 export function holdZoomVeil() {
   if (!isAppleZoomAvailable()) return;
   clearDeadline();
+  resetNativeZoomVeil();
   zoomVeilHole.set(null);
   zoomVeil.set(1);
 }
 
 /** The reel has gone, however it went: nothing is left to veil. */
 export function clearZoomVeil() {
+  resetNativeZoomVeil();
   claimed = false;
   clearDeadline();
   zoomVeilHole.set(null);

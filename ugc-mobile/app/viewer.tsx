@@ -3,8 +3,8 @@ import * as Clipboard from 'expo-clipboard';
 import { Image } from 'expo-image';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useVideoPlayer, type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
-import { MEDIA_PLAYER_OPTIONS } from '@/lib/video-player-options';
+import { type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
+import { useViewerVideoPlayer } from '@/lib/use-viewer-video-player';
 import { Copy, ImageOff, Lock, Play, Volume2, VolumeX } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { createContext, useContext, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
 import { DoubleTapPressable } from '@/components/double-tap-pressable';
+import { AppleZoomProgress } from '@/components/apple-zoom-progress';
 import { AppleZoomTarget, useAppleZoomRetarget, useAppleZoomSourceId } from '@/components/apple-zoom';
 import { MediaZoomChrome, MediaZoomStage, peekOpeningPost, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage, useMediaZoomUncovering, type MediaZoomLentVideo } from '@/components/media-zoom';
 import { mediaItemAspectRatio, mediaRectInScreen, showcaseViewerMediaPicture, type ZoomPreview } from '@/lib/media-zoom-transition';
@@ -1110,6 +1111,7 @@ function ImmersivePreviewViewer() {
           zoom back into the tile (lib/apple-zoom.ts); its dismissal gestures go
           with `gestureEnabled`. One pushed any other way fades out as it faded
           in — set once the reel is up, so it is not folded into the push. */}
+      {nativeZoomSourceId ? <AppleZoomProgress /> : null}
       <Stack.Screen
         options={{
           gestureEnabled: !detailsOpenForActive,
@@ -2310,7 +2312,7 @@ function ActiveVideoAttempt({
   const lentPlayer = attempt === 0 ? lentVideo?.video.player ?? null : null;
   const lentPlayerRef = useRef<VideoPlayer | null>(null);
   if (lentPlayer) lentPlayerRef.current = lentPlayer;
-  const ownPlayer = useVideoPlayer(lentPlayer ? null : { ...source, useCaching: true }, (instance) => {
+  const ownPlayer = useViewerVideoPlayer(lentPlayer ? null : { ...source, useCaching: true }, (instance) => {
     instance.loop = true;
     instance.muted = !active || isViewerAudioMuted();
     instance.volume = 1.0;
@@ -2330,7 +2332,7 @@ function ActiveVideoAttempt({
     const previous = previousPlayer.current === lentPlayerRef.current ? null : previousPlayer.current;
     playbackRequested.current = restoreVideoPlayback(instance, previous, active && !reducedMotion,
       active && playbackAllowed.current && !reducedMotion && (!AppState.currentState || AppState.currentState === 'active'));
-  }, MEDIA_PLAYER_OPTIONS);
+  });
   const player = lentPlayer ?? ownPlayer;
   previousPlayer.current = player;
   const [status, setStatus] = useState<VideoPlayerStatus>(player.status);
