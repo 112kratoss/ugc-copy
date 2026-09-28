@@ -22,7 +22,6 @@ import {
   registerScreenVeil,
   releaseZoomVeil,
   resetZoomVeil,
-  settleZoomVeil,
   subscribeToZoomVeilOpacity,
   ZOOM_VEIL_DEADLINE_MS,
   ZOOM_VEIL_LIFT_DELAY_MS,
@@ -75,29 +74,32 @@ describe('the veil under the zoom', () => {
     expect(getZoomVeilOpacity('feed')).toBeNull();
   });
 
-  it('rests at full cover once the reel has landed, whatever the reel\'s own screen does later', () => {
-    const drop = dropZoomVeil('feed', TILE)!;
-    claimZoomVeil(drop);
-    followZoomVeilTransition(drop, transition('reel'));
-    settleZoomVeil(drop);
-    // A screen pushed over the reel moves the reel's transition, not this veil.
-    expect(getZoomVeilOpacity('feed')).toBeNull();
-    expect(feed.cover.get()).toBe(1);
-  });
-
-  it('follows a dismissal gesture, and goes back up, whole, when the gesture is let go of', () => {
+  it('follows the reel\'s transition, and a dismissal gesture on it, and keeps it when the gesture is let go of', () => {
     const drop = dropZoomVeil('feed', TILE)!;
     claimZoomVeil(drop);
     const reel = transition('reel');
     followZoomVeilTransition(drop, reel);
-    settleZoomVeil(drop);
     liftZoomVeil(drop, true);
     expect(getZoomVeilOpacity('feed')).toBe(reel);
     expect(feed.cover.get()).toBe(1);
+    // The transition returns to full cover as UIKit puts the reel back; the
+    // veil stays on it for the next gesture (see lib/zoom-veil.ts).
     holdZoomVeil(drop);
-    expect(getZoomVeilOpacity('feed')).toBeNull();
+    expect(getZoomVeilOpacity('feed')).toBe(reel);
     expect(feed.cover.get()).toBe(1);
     expect(feed.hole.get()).toBeNull();
+    liftZoomVeil(drop, true);
+    expect(getZoomVeilOpacity('feed')).toBe(reel);
+  });
+
+  it('leaves the transition for a timed fade only on Back, which the reel does not outlive', () => {
+    const drop = dropZoomVeil('feed', TILE)!;
+    claimZoomVeil(drop);
+    followZoomVeilTransition(drop, transition('reel'));
+    liftZoomVeil(drop);
+    expect(getZoomVeilOpacity('feed')).toBeNull();
+    // The test double resolves the delayed fade at once.
+    expect(feed.cover.get()).toBe(0);
   });
 
   it('fades out over the shrink on Back, even once the reel has left React', () => {
@@ -163,14 +165,14 @@ describe('a veil per screen', () => {
     // Explore → a reel → the creator page pushed from it → a second reel from that page.
     const first = dropZoomVeil('feed', TILE)!;
     claimZoomVeil(first);
-    followZoomVeilTransition(first, transition('first reel'));
-    settleZoomVeil(first);
+    const firstReel = transition('first reel');
+    followZoomVeilTransition(first, firstReel);
 
     const second = dropZoomVeil('creator', TILE)!;
     claimZoomVeil(second);
     const unfollowSecond = followZoomVeilTransition(second, transition('second reel'));
     expect(creator.cover.get()).toBe(1);
-    expect(getZoomVeilOpacity('feed')).toBeNull();
+    expect(getZoomVeilOpacity('feed')).toBe(firstReel);
 
     // Back on the second reel: the creator page comes back behind it.
     liftZoomVeil(second);
@@ -181,7 +183,7 @@ describe('a veil per screen', () => {
 
     // The page is popped, and the first reel closes over black, not the lit feed.
     expect(feed.cover.get()).toBe(1);
-    expect(getZoomVeilOpacity('feed')).toBeNull();
+    expect(getZoomVeilOpacity('feed')).toBe(firstReel);
     liftZoomVeil(first);
     expect(feed.cover.get()).toBe(0);
   });

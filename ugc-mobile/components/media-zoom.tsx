@@ -97,7 +97,6 @@ import {
   holdZoomVeil,
   liftZoomVeil,
   releaseZoomVeil,
-  settleZoomVeil,
   ZoomVeilOwnerContext,
   type ZoomVeilDrop,
   type ZoomVeilHole,
@@ -1437,10 +1436,7 @@ export function useMediaZoomStage({
         handBackForNativeClose();
       }),
       listen('transitionEnd', (event) => {
-        if (event.data?.closing !== false) return;
-        letGoOf();
-        // Landed, or on top again: the veil rests at full cover from here.
-        settleZoomVeil(veil);
+        if (event.data?.closing === false) letGoOf();
       }),
       listen('gestureCancel', letGoOf),
     ];

@@ -77,12 +77,16 @@ import {
 } from '../lib/video-player-loans';
 import {
   createScreenVeil,
+  followZoomVeilTransition,
+  getZoomVeilOpacity,
   registerScreenVeil,
   resetZoomVeil,
+  subscribeToZoomVeilOpacity,
   ZOOM_VEIL_LIFT_DELAY_MS,
   ZOOM_VEIL_LIFT_MS,
   ZoomVeilOwnerContext,
   type ScreenVeil,
+  type ZoomVeilTransition,
 } from '../lib/zoom-veil';
 
 const PREVIEW = { url: 'https://example.test/tile.webp', cacheKey: 'tile', thumbhash: null };
@@ -212,6 +216,39 @@ describe('a tile opening under the native zoom', () => {
     renderer.act(() => { fire('beforeRemove'); });
     // The test double resolves the delayed fade at once.
     expect(feedVeil.cover.get()).toBe(0);
+  });
+
+  it('keeps the veil on the reel\'s own transition for the reel\'s whole life, so a gesture close can follow the finger', () => {
+    // Swapping the transition for a plain number detaches its Animated graph,
+    // and React Native then drops the native nodes of the transition's values:
+    // re-attached later they are fresh nodes react-native-screens no longer
+    // drives, frozen at "open", and a dismissal gesture ran over solid black.
+    const { source } = mountTile();
+    renderer.act(() => source.capture(() => {}));
+    let stage!: ReturnType<typeof useMediaZoomStage>;
+    renderer.act(() => {
+      renderer.create(<Reel onExit={() => {}} report={(value) => { stage = value; }} />);
+    });
+    const transition = { name: 'reel' } as unknown as ZoomVeilTransition;
+    followZoomVeilTransition(stage.veil!, transition);
+    const seen: unknown[] = [];
+    subscribeToZoomVeilOpacity('feed', () => seen.push(getZoomVeilOpacity('feed')));
+
+    // Landed; a page pushed over the reel and popped off it; a dismissal
+    // gesture let go of; then one carried through.
+    renderer.act(() => { fire('transitionEnd', { data: { closing: false } }); });
+    reelFocused = false;
+    renderer.act(() => { fire('transitionStart', { data: { closing: true } }); });
+    reelFocused = true;
+    renderer.act(() => { fire('transitionStart', { data: { closing: false } }); });
+    renderer.act(() => { fire('transitionEnd', { data: { closing: false } }); });
+    renderer.act(() => { fire('transitionStart', { data: { closing: true } }); });
+    renderer.act(() => { fire('gestureCancel'); });
+    renderer.act(() => { fire('transitionStart', { data: { closing: true } }); });
+
+    expect(getZoomVeilOpacity('feed')).toBe(transition);
+    expect(seen.every((value) => value === transition)).toBe(true);
+    expect(feedVeil.cover.get()).toBe(1);
   });
 
   it('drops no veil for a tile on a screen without one', () => {

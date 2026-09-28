@@ -23,13 +23,19 @@ import type { ZoomRect } from './media-zoom-transition';
  * black instead. The veil lifts as a close begins — after the crossfade, over
  * the rest of the shrink — so the feed comes back behind the shrinking picture.
  *
- * The veil darkens with the growing picture: from the tap until the reel has
- * landed its opacity follows the reel's own transition, which react-native-
- * screens drives on the native thread (`followZoomVeilTransition`), so the feed
- * does not go black while the reel's route is still being built. Landed, it
- * rests at full cover (`settleZoomVeil`). A close the reader drives with a
- * gesture follows the transition again, since a gesture can be held or
- * reversed indefinitely; Back fades out on a timer.
+ * The veil darkens with the growing picture: its opacity follows the reel's own
+ * transition, which react-native-screens drives on the native thread
+ * (`followZoomVeilTransition`), so the feed does not go black while the reel's
+ * route is still being built. It keeps following that transition for as long
+ * as the reel is up — the transition rests at full cover once the reel has
+ * landed, and comes back to it when a dismissal gesture is let go of — so a
+ * close the reader drives with a gesture, which can be held or reversed
+ * indefinitely, lightens the feed with the finger. It is never swapped for a
+ * plain number while the reel lives: that detaches the transition's Animated
+ * graph, React Native then drops the native nodes of the transition's values,
+ * and the graph attached again is a new one react-native-screens no longer
+ * drives, frozen at "open" — a gesture close then ran over solid black. Back,
+ * which the reel does not outlive, fades the veil out on a timer instead.
  *
  * Every screen a reel can grow out of has a veil of its own (`ZoomVeilScope` in
  * components/zoom-veil.tsx), and a tap drops the veil of the screen its tile is
@@ -233,22 +239,10 @@ export function followZoomVeilTransition(drop: ZoomVeilDrop, transition: ZoomVei
 }
 
 /**
- * The reel has landed, or is on top again: its screen's veil rests at full
- * cover. What the reel's own screen does beneath a screen pushed over it — a
- * creator page slides over it, and back off it — is no business of the veil,
- * which is under the reel all that time.
- */
-export function settleZoomVeil(drop: ZoomVeilDrop | null) {
-  const state = screenOf(drop);
-  if (!state || state.closing) return;
-  setFollowing(state, false);
-  state.veil.cover.set(1);
-}
-
-/**
  * A close has begun: the screen comes back behind the shrinking reel. One the
  * reader drives with a gesture follows the reel's transition, which a finger
- * can hold or reverse; Back fades the veil out on a timer.
+ * can hold or reverse; Back, which the reel does not outlive, fades the veil
+ * out on a timer.
  */
 export function liftZoomVeil(drop: ZoomVeilDrop | null, interactive = false) {
   const state = screenOf(drop);
@@ -268,13 +262,16 @@ export function liftZoomVeil(drop: ZoomVeilDrop | null, interactive = false) {
   state.deadline = setTimeout(() => clearZoomVeil(drop), ZOOM_VEIL_LIFT_DELAY_MS + ZOOM_VEIL_LIFT_MS);
 }
 
-/** A close let go of before it committed: the reel is back, and so is the veil. */
+/**
+ * A close let go of before it committed: the reel is back, and so is the veil —
+ * its transition returns to full cover as UIKit puts the reel back, and stays
+ * the veil's for the next gesture.
+ */
 export function holdZoomVeil(drop: ZoomVeilDrop | null) {
   const state = screenOf(drop);
   if (!state) return;
   clearDeadline(state);
   state.closing = null;
-  setFollowing(state, false);
   state.veil.hole.set(null);
   state.veil.cover.set(1);
 }
