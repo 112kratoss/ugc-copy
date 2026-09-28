@@ -55,7 +55,6 @@ import {
   type HomeFeedSlide,
   type HomeLoopedSlide,
 } from '@/lib/home-feed-view-model';
-import { getOwnerPostSalesSummary } from '@/lib/home-view-model';
 import { createHomeFeedPlaybackController } from '@/lib/home-feed-playback';
 import { createFeedVideoActivationStore, FeedVideoActivationContext } from '@/lib/feed-video-activation';
 import { useAppForeground } from '@/lib/app-foreground';
@@ -244,22 +243,11 @@ export function HomeDashboard() {
     staleTime: 1000 * 60 * 5,
   });
 
-  const sellerPostsQuery = useQuery({
-    queryKey: ['owner-posts-sales-summary', user?.id],
-    enabled: Boolean(user && menuVisible),
-    queryFn: () => api.listOwnerPosts({ includeArchived: true, includeSummary: true, limit: 1, visibility: 'all' }),
-    staleTime: 1000 * 60 * 2,
-  });
-
   useEffect(() => {
     if (!isFocused || !identityUserId || generationsQuery.isFetching || !generationsQuery.isStale) return;
     void generationsQuery.refetch();
   }, [generationsQuery.isFetching, generationsQuery.isStale, isFocused, identityUserId]);
 
-  useEffect(() => {
-    if (!isFocused || !user || !menuVisible || sellerPostsQuery.isFetching || !sellerPostsQuery.isStale) return;
-    void sellerPostsQuery.refetch();
-  }, [isFocused, menuVisible, sellerPostsQuery.isFetching, sellerPostsQuery.isStale, user?.id]);
 
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
@@ -468,10 +456,8 @@ export function HomeDashboard() {
   const activeGenerationCount = rawGenerations
     .filter((item) => ['waiting', 'processing', 'starting'].includes(item.status)).length;
 
-  const salesSummary = useMemo(
-    () => sellerPostsQuery.data?.summary ?? getOwnerPostSalesSummary(sellerPostsQuery.data?.posts),
-    [sellerPostsQuery.data]
-  );
+  // The seller total rides on the profile; unknown until the profile has answered.
+  const totalSalesUsdCents = profileQuery.data?.sales?.earningsUsdCents ?? null;
 
   const displayName =
     profileQuery.data?.displayName?.trim() ||
@@ -966,8 +952,7 @@ export function HomeDashboard() {
         user={user}
         profile={profileQuery.data}
         credits={credits}
-        totalSalesUsdCents={salesSummary.earningsUsdCents}
-        totalSalesLoading={Boolean(user) && sellerPostsQuery.isLoading}
+        totalSalesUsdCents={totalSalesUsdCents}
         onSignOut={signOut}
       />
     </View>

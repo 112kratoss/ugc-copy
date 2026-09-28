@@ -20,6 +20,8 @@ import {
   type ProfileFieldErrors,
   type ProfileUpdatePayload,
 } from '@/lib/profile';
+import { parseOwnerPostSalesSummary } from '@/lib/owner-post-sales-summary';
+import { parseOwnerProfileCounts } from '@/lib/owner-profile-counts';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { normalizeStoredProfileImage } from '@/lib/profile-image-normalization';
 import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
@@ -114,11 +116,17 @@ export async function getProfileForRoute({
   client: ProfileRouteClientInput;
 }): Promise<ProfileRouteResult> {
   const resolvedClient = resolveClient(client);
-  const { data: profile, error } = await resolvedClient
-    .from('profiles')
-    .select(PROFILE_SELECT_FIELDS)
-    .eq('id', user.id)
-    .maybeSingle();
+  // The header counts and the seller totals ride along with the profile, so
+  // every screen reads one number and the app's saved copy of the profile
+  // carries them across launches. They run beside the select, never after it.
+  const [{ data: profile, error }, totals] = await Promise.all([
+    resolvedClient
+      .from('profiles')
+      .select(PROFILE_SELECT_FIELDS)
+      .eq('id', user.id)
+      .maybeSingle(),
+    loadOwnerProfileTotals(resolvedClient, user.id),
+  ]);
 
   if (error) {
     logBackendError('failed_to_fetch_profile', { error: error });
@@ -132,14 +140,42 @@ export async function getProfileForRoute({
   if (!profile) {
     return {
       ok: true,
-      response: buildStarterProfileApiResponse(user),
+      response: { ...buildStarterProfileApiResponse(user), ...totals },
     };
   }
 
   return {
     ok: true,
-    response: buildProfileApiResponse(profile as ProfileRow, user.id),
+    response: { ...buildProfileApiResponse(profile as ProfileRow, user.id), ...totals },
   };
+}
+
+/**
+ * The totals `/api/profile` carries: the library counts and the seller
+ * summary, each from its own service-role RPC. A count that fails is logged
+ * and left out — the profile never fails over a number, and a missing field
+ * makes the app draw its unknown placeholder rather than a 0.
+ */
+async function loadOwnerProfileTotals(
+  client: ProfileRouteClient,
+  userId: string,
+): Promise<Pick<ProfileApiResponse, 'stats' | 'sales'>> {
+  const [counts, sales] = await Promise.all([
+    client.rpc('owner_profile_counts', { p_user_id: userId }),
+    client.rpc('get_owner_post_sales_summary', { p_owner_id: userId }),
+  ]);
+  const totals: Pick<ProfileApiResponse, 'stats' | 'sales'> = {};
+  if (counts.error) {
+    logBackendError('failed_to_count_owner_profile_libraries', { error: counts.error });
+  } else {
+    totals.stats = parseOwnerProfileCounts(counts.data);
+  }
+  if (sales.error) {
+    logBackendError('failed_to_load_owner_profile_sales', { error: sales.error });
+  } else {
+    totals.sales = parseOwnerPostSalesSummary(sales.data);
+  }
+  return totals;
 }
 
 export async function updateProfileForRoute({

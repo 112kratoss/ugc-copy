@@ -18,6 +18,7 @@ import {
   type PostLifecyclePost,
 } from '@/lib/post-lifecycle';
 import type { OwnerPostsResponse } from '@/lib/types';
+import { adjustProfileStats } from '@/lib/profile-stats';
 import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
 
 /**
@@ -80,7 +81,6 @@ export function useViewerActionHandlers({
   const removeDeletedPostFromCaches = (postId: string) => {
     const removeFromOwnerPosts = (data: OwnerPostsResponse | undefined): OwnerPostsResponse | undefined =>
       data ? { ...data, posts: data.posts.filter((post) => post.id !== postId) } : data;
-    // The profile grid pages its posts; the sales summary is still a single response.
     const removeFromOwnerPostPages = (
       data: InfiniteData<OwnerPostsResponse> | undefined
     ): InfiniteData<OwnerPostsResponse> | undefined => (
@@ -94,7 +94,6 @@ export function useViewerActionHandlers({
         : data;
 
     queryClient.setQueryData<InfiniteData<OwnerPostsResponse>>(['profile-owner-posts', user?.id], removeFromOwnerPostPages);
-    queryClient.setQueryData<OwnerPostsResponse>(['owner-posts-sales-summary', user?.id], removeFromOwnerPosts);
     queryClient.setQueriesData<ImmersiveSourceData>({ queryKey: ['immersive-preview-source'] }, removeFromSource);
   };
 
@@ -110,6 +109,7 @@ export function useViewerActionHandlers({
     const outcome = await runDeletePost({ api, post: lifecyclePost });
     if (outcome !== 'done') return;
     removeDeletedPostFromCaches(item.id);
+    adjustProfileStats(queryClient, user?.id, item.archivedAt ? { archivedPosts: -1 } : { posts: -1 });
     await refreshMedia();
     onDeleted?.(item.id);
   };
@@ -171,7 +171,9 @@ export function useViewerActionHandlers({
     if (action === 'archive') {
       if (item.sourceType === 'owner-post') {
         void runArchivePost({ api, post: lifecyclePost }).then(async (outcome) => {
-          if (outcome === 'done') await refreshMedia();
+          if (outcome !== 'done') return;
+          adjustProfileStats(queryClient, user?.id, { posts: -1, archivedPosts: 1 });
+          await refreshMedia();
         });
         return;
       }
@@ -179,7 +181,10 @@ export function useViewerActionHandlers({
         'Archive creation',
         'You can restore it later from your profile.',
         'Archive',
-        () => api.archiveGeneration(item.id),
+        () => api.archiveGeneration(item.id).then((result) => {
+          adjustProfileStats(queryClient, user?.id, { creations: -1 });
+          return result;
+        }),
         true
       );
       return;
@@ -187,7 +192,9 @@ export function useViewerActionHandlers({
     if (action === 'restore') {
       if (item.sourceType === 'owner-post') {
         void runRestorePost({ api, post: lifecyclePost }).then(async (outcome) => {
-          if (outcome === 'done') await refreshMedia();
+          if (outcome !== 'done') return;
+          adjustProfileStats(queryClient, user?.id, { posts: 1, archivedPosts: -1 });
+          await refreshMedia();
         });
         return;
       }
@@ -195,7 +202,10 @@ export function useViewerActionHandlers({
         'Restore creation',
         'Return this item to your active media?',
         'Restore',
-        () => api.restoreGeneration(item.id)
+        () => api.restoreGeneration(item.id).then((result) => {
+          adjustProfileStats(queryClient, user?.id, { creations: 1 });
+          return result;
+        })
       );
       return;
     }

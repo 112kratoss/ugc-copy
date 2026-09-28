@@ -1,11 +1,11 @@
-import type { GenerationListItem, OwnerPostListItem, ProfileResponse, ShowcaseFeedItem } from '@/lib/types';
+import type { GenerationListItem, OwnerPostListItem, ProfileResponse, ProfileStatsResponse, ShowcaseFeedItem } from '@/lib/types';
 import { buildImmersiveShowcaseItems, type ImmersivePreviewItem, type PreviewViewerSource } from './immersive-preview-view-model';
 
 import { isCreationLibraryMember } from './creation-library';
 import { getGenerationKind, getGenerationLabel, getGenerationRenderableMediaKind } from './generation-media';
 import { formatCompactCount, formatRelativeTime } from './home-view-model';
 import { mediaItemAspectRatio } from './media-zoom-transition';
-import { formatUnlockCreditPrice } from './pricing';
+import { UNKNOWN_AMOUNT_LABEL, formatUnlockCreditPrice } from './pricing';
 
 export type ProfilePreviewState = 'image' | 'videoPoster' | 'videoFallback' | 'text' | 'artFallback';
 
@@ -155,34 +155,52 @@ export function getProfileInitials(profile: ProfileResponse | null | undefined, 
   return words.slice(0, 2).map((word) => word[0]?.toUpperCase()).join('') || 'C';
 }
 
+/** Drawn in a stat slot until its number is known: a 0 there reads as an empty library. */
+export const UNKNOWN_PROFILE_STAT_VALUE = UNKNOWN_AMOUNT_LABEL;
+
 /**
- * Counts reflect what has been paged in so far, so a tab with more pages waiting reads as `24+`
- * rather than claiming a total the server never gave us.
+ * The server's total when the profile carries one (`stats` on /api/profile,
+ * counted with the rules the library lists apply). Until a server without it
+ * is gone, a loaded library falls back to what has been paged in so far, with
+ * a `+` when more pages wait, rather than claiming a total nobody gave us. A
+ * library that has not answered yet is unknown, never 0.
  */
-function profileStatValue(count: number, hasMore?: boolean) {
+function profileStatValue(total: number | null | undefined, count: number, hasMore: boolean | undefined, loaded: boolean) {
+  if (typeof total === 'number' && Number.isFinite(total)) return formatCompactCount(total);
+  if (!loaded) return UNKNOWN_PROFILE_STAT_VALUE;
   const value = formatCompactCount(count);
   return hasMore ? `${value}+` : value;
 }
 
 export function getProfileStats({
+  totals,
   generationsCount,
   generationsHasMore,
+  generationsLoaded = true,
   postsCount,
   postsHasMore,
+  postsLoaded = true,
   savedCount,
   savedHasMore,
+  savedLoaded = true,
 }: {
+  /** The profile's server-counted totals, when it has them. */
+  totals?: Pick<ProfileStatsResponse, 'creations' | 'posts' | 'saved'> | null;
   generationsCount: number;
   generationsHasMore?: boolean;
+  /** False until the library's first page has answered. */
+  generationsLoaded?: boolean;
   postsCount: number;
   postsHasMore?: boolean;
+  postsLoaded?: boolean;
   savedCount: number;
   savedHasMore?: boolean;
+  savedLoaded?: boolean;
 }): ProfileStat[] {
   return [
-    { label: 'Creations', value: profileStatValue(generationsCount, generationsHasMore) },
-    { label: 'Posts', value: profileStatValue(postsCount, postsHasMore) },
-    { label: 'Saved', value: profileStatValue(savedCount, savedHasMore) },
+    { label: 'Creations', value: profileStatValue(totals?.creations, generationsCount, generationsHasMore, generationsLoaded) },
+    { label: 'Posts', value: profileStatValue(totals?.posts, postsCount, postsHasMore, postsLoaded) },
+    { label: 'Saved', value: profileStatValue(totals?.saved, savedCount, savedHasMore, savedLoaded) },
   ];
 }
 

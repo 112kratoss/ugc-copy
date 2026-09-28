@@ -5,6 +5,7 @@ import { mediaItemAspectRatio } from '../lib/media-zoom-transition';
 import {
   generationToProfileMediaCard,
   getProfileStats,
+  UNKNOWN_PROFILE_STAT_VALUE,
   ownerPostToProfileMediaCard,
   showcaseToSavedProfileMediaCard,
 } from '../lib/profile-view-model';
@@ -384,6 +385,39 @@ describe('profile hero stats', () => {
       { label: 'Creations', value: '24+' },
       { label: 'Posts', value: '2' },
       { label: 'Saved', value: '48+' },
+    ]);
+  });
+});
+
+describe('profile stats from server totals', () => {
+  it('draws the server total over whatever has been paged in, with no plus sign', () => {
+    expect(getProfileStats({
+      totals: { creations: 142, posts: 19, saved: 0 },
+      generationsCount: 24,
+      generationsHasMore: true,
+      postsCount: 2,
+      savedCount: 0,
+      savedLoaded: false,
+    })).toEqual([
+      { label: 'Creations', value: '142' },
+      { label: 'Posts', value: '19' },
+      { label: 'Saved', value: '0' },
+    ]);
+  });
+
+  it('draws a dash, never 0, for a library that has not answered and has no total', () => {
+    expect(getProfileStats({
+      totals: null,
+      generationsCount: 0,
+      generationsLoaded: false,
+      postsCount: 0,
+      postsLoaded: false,
+      savedCount: 3,
+      savedLoaded: true,
+    })).toEqual([
+      { label: 'Creations', value: UNKNOWN_PROFILE_STAT_VALUE },
+      { label: 'Posts', value: UNKNOWN_PROFILE_STAT_VALUE },
+      { label: 'Saved', value: '3' },
     ]);
   });
 });

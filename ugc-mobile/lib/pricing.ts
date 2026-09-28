@@ -68,6 +68,8 @@ export function formatCreditAmount(value: number | null | undefined) {
  * has not answered yet.
  */
 export const UNKNOWN_CREDIT_BALANCE_LABEL = '–';
+/** The same dash for any other amount or count not known yet: one glyph app-wide. */
+export const UNKNOWN_AMOUNT_LABEL = UNKNOWN_CREDIT_BALANCE_LABEL;
 /** The same unknown balance where a sentence is expected rather than a number. */
 export const CREDIT_BALANCE_LOADING_LABEL = 'Balance loading…';
 

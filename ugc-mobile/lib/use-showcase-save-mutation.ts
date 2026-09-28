@@ -4,6 +4,7 @@ import { useCallback } from 'react';
 import { AccessibilityInfo } from 'react-native';
 
 import { useAuth } from '@/lib/auth';
+import { adjustProfileStats } from '@/lib/profile-stats';
 import { haptic } from '@/lib/haptics';
 import {
   applyShowcaseSaveStateToInfiniteFeed,
@@ -59,6 +60,9 @@ export function useShowcaseSaveMutation({
         isSaved: variables.shouldSave,
         saveCount: Math.max(0, variables.previousSaveCount + (variables.shouldSave ? 1 : -1)),
       });
+      // The profile header's Saved count moves with the tap; the profile
+      // refetch scheduled on success confirms it.
+      adjustProfileStats(queryClient, user?.id, { saved: variables.shouldSave ? 1 : -1 });
     },
     onError: (_error, variables) => {
       if (hasBeenOvertaken(variables)) return;
@@ -67,6 +71,7 @@ export function useShowcaseSaveMutation({
         isSaved: !variables.shouldSave,
         saveCount: variables.previousSaveCount,
       });
+      adjustProfileStats(queryClient, user?.id, { saved: variables.shouldSave ? -1 : 1 });
       haptic.error();
       void AccessibilityInfo.announceForAccessibility(
         variables.shouldSave

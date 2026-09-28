@@ -3,19 +3,21 @@ import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import Constants from 'expo-constants';
 
 import { NOTIFICATION_BADGE_QUERY_KEY, notificationBadgeQueryKey } from './notification-badge';
-import type { OwnerPostsResponse, ProfileResponse } from './types';
+import type { ProfileResponse } from './types';
 
 // The account's own numbers, carried from one launch to the next.
 //
 // The balance in the top bar, the side menu's balance and sales total, the
-// profile header and the Alerts badge all come from requests that wait on
-// auth-js and then on the network, so every cold start drew a dash, "0 Credits",
-// "Loading…" and no badge for as long as those took. The auth provider now
-// saves what the account last showed whenever one of those values settles, and
-// puts it back the moment the stored session names the same account, so a
-// returning launch draws the last known numbers while the same requests refresh
-// them behind it. Each query keeps the age it was fetched at: its own staleTime
-// decides whether a refetch follows, just as on a return from the background.
+// profile header's counts and the Alerts badge all come from requests that
+// wait on auth-js and then on the network, so every cold start drew a dash,
+// "0 Credits", "Loading…" and no badge for as long as those took. The auth
+// provider now saves what the account last showed whenever one of those values
+// settles, and puts it back the moment the stored session names the same
+// account, so a returning launch draws the last known numbers while the same
+// requests refresh them behind it. Each query keeps the age it was fetched at:
+// its own staleTime decides whether a refetch follows, just as on a return from
+// the background. The profile carries the header counts and the seller total
+// (`stats`, `sales`), so saving it saves them.
 //
 // Avatar and cover images are public profile-media URLs, so nothing saved here
 // expires. Nothing here is a secret either: it is what the account's own
@@ -27,7 +29,6 @@ export const PERSISTED_ACCOUNT_STATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 /** Folds a fetch and the updates right after it (the balance, the badge) into one write. */
 export const PERSIST_ACCOUNT_STATE_DEBOUNCE_MS = 1_000;
 export const PROFILE_QUERY_KEY = 'profile';
-export const SALES_SUMMARY_QUERY_KEY = 'owner-posts-sales-summary';
 
 const PERSISTED_ACCOUNT_STATE_FORMAT = 1;
 const CLOCK_SKEW_ALLOWANCE_MS = 60_000;
@@ -55,8 +56,6 @@ export interface PersistedAccountState {
   /** The auth provider's balance, which a spend or a purchase may have moved past the profile's copy. */
   credits: number | null;
   profile: PersistedQueryEntry<ProfileResponse> | null;
-  /** The seller summary request, with its one post left out: the menu reads only the summary. */
-  salesSummary: PersistedQueryEntry<OwnerPostsResponse> | null;
   unreadCount: PersistedQueryEntry<number> | null;
 }
 
@@ -83,15 +82,11 @@ export function profileQueryKey(userId: string | undefined) {
   return [PROFILE_QUERY_KEY, userId] as const;
 }
 
-export function salesSummaryQueryKey(userId: string | undefined) {
-  return [SALES_SUMMARY_QUERY_KEY, userId] as const;
-}
-
 /** Whether a cache entry is one of the account's saved queries, under this user's key. */
 export function isPersistedAccountQueryKey(queryKey: QueryKey, userId: string) {
   if (!Array.isArray(queryKey) || queryKey.length !== 2 || queryKey[1] !== userId) return false;
   const scope = queryKey[0];
-  return scope === PROFILE_QUERY_KEY || scope === SALES_SUMMARY_QUERY_KEY || scope === NOTIFICATION_BADGE_QUERY_KEY;
+  return scope === PROFILE_QUERY_KEY || scope === NOTIFICATION_BADGE_QUERY_KEY;
 }
 
 // Storage calls run one at a time, in the order they were asked for, so the
@@ -152,7 +147,6 @@ export async function restorePersistedAccountState(
   restoredUserId = persisted.userId;
   try {
     seedQuery(queryClient, profileQueryKey(persisted.userId), persisted.profile);
-    seedQuery(queryClient, salesSummaryQueryKey(persisted.userId), persisted.salesSummary);
     seedQuery(queryClient, notificationBadgeQueryKey(persisted.userId), persisted.unreadCount);
   } catch (error) {
     console.warn('Could not restore the saved account state', error);
@@ -187,7 +181,6 @@ export function persistAccountState(
     const { userId, credits } = snapshot;
     const profile = readEntry<ProfileResponse>(queryClient, profileQueryKey(userId));
     if (credits === null && !profile) return;
-    const salesSummary = readSalesSummaryEntry(queryClient, userId);
     const unreadCount = readEntry<number>(queryClient, notificationBadgeQueryKey(userId));
 
     const persisted: PersistedAccountState = {
@@ -197,7 +190,6 @@ export function persistAccountState(
       savedAt: environment.now(),
       credits,
       profile,
-      salesSummary,
       unreadCount,
     };
     const version = [
@@ -205,7 +197,6 @@ export function persistAccountState(
       userId,
       credits,
       profile?.updatedAt,
-      salesSummary?.updatedAt,
       unreadCount?.updatedAt,
     ].join(':');
     if (version === lastPersistedVersion) return;
@@ -223,21 +214,6 @@ function readEntry<T>(
   const state = queryClient.getQueryState<T>(queryKey);
   if (!state || state.status !== 'success' || state.data === undefined) return null;
   return { data: state.data, updatedAt: state.dataUpdatedAt };
-}
-
-// The one post the seller summary request pages through is media the menu
-// never draws; only the summary goes to disk. A response without one is not
-// saved: restored with no summary, the menu would total an empty list to $0.
-function readSalesSummaryEntry(
-  queryClient: Pick<QueryClient, 'getQueryState'>,
-  userId: string,
-): PersistedQueryEntry<OwnerPostsResponse> | null {
-  const entry = readEntry<OwnerPostsResponse>(queryClient, salesSummaryQueryKey(userId));
-  if (!entry?.data.summary) return null;
-  return {
-    data: { success: entry.data.success, posts: [], summary: entry.data.summary },
-    updatedAt: entry.updatedAt,
-  };
 }
 
 export function schedulePersistAccountState(
@@ -330,10 +306,11 @@ function parsePersistedAccountState(
   if (age > PERSISTED_ACCOUNT_STATE_MAX_AGE_MS || age < -CLOCK_SKEW_ALLOWANCE_MS) return null;
   if (credits !== null && !(isFiniteNumber(credits) && credits >= 0)) return null;
 
+  // A copy from before the profile carried the seller total also held a
+  // `salesSummary` entry; it is simply not read.
   const profile = parseEntry(value.profile, currentTime, (data): data is ProfileResponse => isDrawableProfile(data, userId));
-  const salesSummary = parseEntry(value.salesSummary, currentTime, isDrawableSalesSummary);
   const unreadCount = parseEntry(value.unreadCount, currentTime, (data): data is number => isFiniteNumber(data) && data >= 0);
-  if (profile === undefined || salesSummary === undefined || unreadCount === undefined) return null;
+  if (profile === undefined || unreadCount === undefined) return null;
 
   return {
     format: PERSISTED_ACCOUNT_STATE_FORMAT,
@@ -342,7 +319,6 @@ function parsePersistedAccountState(
     savedAt,
     credits,
     profile,
-    salesSummary,
     unreadCount,
   };
 }
@@ -371,16 +347,6 @@ function isDrawableProfile(value: unknown, userId: string): value is ProfileResp
     && isStringOrNull(value.avatarUrl)
     && isStringOrNull(value.coverUrl)
     && (value.credits === null || isFiniteNumber(value.credits));
-}
-
-function isDrawableSalesSummary(value: unknown): value is OwnerPostsResponse {
-  return isRecord(value)
-    && typeof value.success === 'boolean'
-    && Array.isArray(value.posts)
-    && isRecord(value.summary)
-    && isFiniteNumber(value.summary.earningsUsdCents)
-    && isFiniteNumber(value.summary.listingCount)
-    && isFiniteNumber(value.summary.salesCount);
 }
 
 function isStringOrNull(value: unknown): value is string | null {

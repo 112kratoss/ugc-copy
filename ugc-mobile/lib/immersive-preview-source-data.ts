@@ -338,11 +338,11 @@ function cachedGenerations(queryClient: QueryClient, userId: string | undefined)
   );
 }
 
-/** `profile-owner-posts` is paginated; `owner-posts-sales-summary` stays single-page. */
+/** `profile-owner-posts` is paginated. */
 function cachedOwnerPosts(queryClient: QueryClient, userId: string | undefined): ImmersiveSourceSnapshot | undefined {
   return mergeCachedEntities(
     queryClient,
-    [['profile-owner-posts', userId], ['owner-posts-sales-summary', userId]],
+    [['profile-owner-posts', userId]],
     (data) => readCachedPages(data as CachedPages<OwnerPostsResponse> | undefined)
       .flatMap((page) => page.posts ?? []),
     (ownerPosts) => ({ ownerPosts })

@@ -314,10 +314,6 @@ describe('immersive preview source data', () => {
       ],
       pageParams: [0, 24],
     });
-    queryClient.setQueryData(['owner-posts-sales-summary', 'user-1'], {
-      success: true,
-      posts: [{ id: 'post-b', mediaUrl: 'b.png', mediaKind: 'image' }],
-    });
 
     const data = readCachedImmersiveSourceData(queryClient, 'profile-posts', 'user-1', 'post-b');
     expect(data?.ownerPosts?.map((item) => item.id)).toEqual(['post-a', 'post-b']);

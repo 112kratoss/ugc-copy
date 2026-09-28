@@ -23,11 +23,10 @@ import {
   profileQueryKey,
   resetPersistedAccountStateForTests,
   restorePersistedAccountState,
-  salesSummaryQueryKey,
   schedulePersistAccountState,
   type PersistedAccountStateEnvironment,
 } from '@/lib/persisted-account-state';
-import type { OwnerPostsResponse, ProfileResponse } from '@/lib/types';
+import type { ProfileResponse } from '@/lib/types';
 
 const FETCHED_AT = Date.parse('2026-09-27T08:00:00.000Z');
 const APP_VERSION = '0.1.8';
@@ -71,28 +70,15 @@ function profile(overrides: Partial<ProfileResponse> = {}): ProfileResponse {
   };
 }
 
-function salesResponse(overrides: Partial<OwnerPostsResponse> = {}): OwnerPostsResponse {
-  return {
-    success: true,
-    posts: [{ id: 'post-1' } as OwnerPostsResponse['posts'][number]],
-    pageInfo: { hasMore: true, nextCursor: 'after-post-1', limit: 1, nextOffset: 1, offset: 0 },
-    summary: { earningsUsdCents: 1_250, listingCount: 3, salesCount: 4 },
-    ...overrides,
-  };
-}
-
 /** A client holding what the account's screens fetched, each at its own time. */
 function clientWithAccount({
   profileData = profile(),
   profileAt = FETCHED_AT,
-  sales = salesResponse() as OwnerPostsResponse | null,
-  salesAt = FETCHED_AT - 30_000,
   unread = 2 as number | null,
   unreadAt = FETCHED_AT - 10_000,
 } = {}) {
   const client = new QueryClient();
   client.setQueryData(profileQueryKey(USER_ID), profileData, { updatedAt: profileAt });
-  if (sales) client.setQueryData(salesSummaryQueryKey(USER_ID), sales, { updatedAt: salesAt });
   if (unread !== null) client.setQueryData(notificationBadgeQueryKey(USER_ID), unread, { updatedAt: unreadAt });
   return client;
 }
@@ -133,9 +119,10 @@ afterEach(() => {
 });
 
 describe('the saved queries', () => {
-  it("are the profile, the seller summary and the unread count, under the account's own key", () => {
+  it("are the profile and the unread count, under the account's own key", () => {
     expect(isPersistedAccountQueryKey(profileQueryKey(USER_ID), USER_ID)).toBe(true);
-    expect(isPersistedAccountQueryKey(salesSummaryQueryKey(USER_ID), USER_ID)).toBe(true);
+    // The seller total rides on the profile; the old menu query is not one of them.
+    expect(isPersistedAccountQueryKey(['owner-posts-sales-summary', USER_ID], USER_ID)).toBe(false);
     expect(isPersistedAccountQueryKey(notificationBadgeQueryKey(USER_ID), USER_ID)).toBe(true);
 
     expect(isPersistedAccountQueryKey(profileQueryKey('user-2'), USER_ID)).toBe(false);
@@ -146,7 +133,7 @@ describe('the saved queries', () => {
 });
 
 describe('persistAccountState', () => {
-  it('saves the balance with the profile, the seller summary and the unread count, each as old as it was fetched', async () => {
+  it('saves the balance with the profile and the unread count, each as old as it was fetched', async () => {
     const storage = memoryStorage();
 
     await persistAccountState(clientWithAccount(), { userId: USER_ID, credits: 26_800 }, environment(storage));
@@ -158,14 +145,9 @@ describe('persistAccountState', () => {
       savedAt: FETCHED_AT + 60_000,
       credits: 26_800,
       profile: { data: { id: USER_ID, username: 'luna_dreams', credits: 26_700 }, updatedAt: FETCHED_AT },
-      salesSummary: {
-        data: { success: true, posts: [], summary: { earningsUsdCents: 1_250, listingCount: 3, salesCount: 4 } },
-        updatedAt: FETCHED_AT - 30_000,
-      },
       unreadCount: { data: 2, updatedAt: FETCHED_AT - 10_000 },
     });
-    // The one post the summary request pages through never goes to disk.
-    expect(saved(storage).salesSummary.data.pageInfo).toBeUndefined();
+    expect(saved(storage)).not.toHaveProperty('salesSummary');
   });
 
   it('saves nothing until the balance or the profile has loaded', async () => {
@@ -175,16 +157,7 @@ describe('persistAccountState', () => {
     expect(storage.setItem).not.toHaveBeenCalled();
 
     await persistAccountState(new QueryClient(), { userId: USER_ID, credits: 40 }, environment(storage));
-    expect(saved(storage)).toMatchObject({ credits: 40, profile: null, salesSummary: null, unreadCount: null });
-  });
-
-  it('leaves the seller summary out when the response carries none', async () => {
-    const storage = memoryStorage();
-    const client = clientWithAccount({ sales: salesResponse({ summary: undefined }) });
-
-    await persistAccountState(client, { userId: USER_ID, credits: 26_800 }, environment(storage));
-
-    expect(saved(storage).salesSummary).toBeNull();
+    expect(saved(storage)).toMatchObject({ credits: 40, profile: null, unreadCount: null });
   });
 
   it('skips the write when nothing has changed since the last one', async () => {
@@ -217,9 +190,6 @@ describe('restorePersistedAccountState', () => {
     const profileState = client.getQueryState<ProfileResponse>(profileQueryKey(USER_ID));
     expect(profileState?.data?.displayName).toBe('Luna Dreams');
     expect(profileState?.dataUpdatedAt).toBe(FETCHED_AT);
-    const salesState = client.getQueryState<OwnerPostsResponse>(salesSummaryQueryKey(USER_ID));
-    expect(salesState?.data?.summary?.earningsUsdCents).toBe(1_250);
-    expect(salesState?.dataUpdatedAt).toBe(FETCHED_AT - 30_000);
     const badgeState = client.getQueryState<number>(notificationBadgeQueryKey(USER_ID));
     expect(badgeState?.data).toBe(2);
     expect(badgeState?.dataUpdatedAt).toBe(FETCHED_AT - 10_000);
@@ -259,7 +229,6 @@ describe('restorePersistedAccountState', () => {
     const client = clientWithAccount({
       profileData: profile({ displayName: 'Fresh name' }),
       profileAt: FETCHED_AT + 30_000,
-      sales: null,
       unread: null,
     });
 
@@ -318,7 +287,6 @@ describe('restorePersistedAccountState', () => {
     ["a profile that is not this account's", storedCopy({ profile: { data: profile({ id: 'user-2' }), updatedAt: FETCHED_AT } }), FETCHED_AT + 60_000],
     ['a profile with a field missing', storedCopy({ profile: { data: { id: USER_ID, username: 'luna_dreams' }, updatedAt: FETCHED_AT } }), FETCHED_AT + 60_000],
     ['a query fetched in the future', storedCopy({ profile: { data: profile(), updatedAt: FETCHED_AT + 10 * 60_000 } }), FETCHED_AT],
-    ['a seller summary with no totals', storedCopy({ salesSummary: { data: { success: true, posts: [] }, updatedAt: FETCHED_AT } }), FETCHED_AT + 60_000],
     ['an unread count that is not a count', storedCopy({ unreadCount: { data: 'two', updatedAt: FETCHED_AT } }), FETCHED_AT + 60_000],
     ['something that is not a copy at all', '{"format":', FETCHED_AT + 60_000],
   ])('ignores %s and leaves the launch to fetch', async (_label, stored, now) => {
@@ -330,6 +298,19 @@ describe('restorePersistedAccountState', () => {
 
     expect(client.getQueryCache().getAll()).toHaveLength(0);
     expect(storage.values.has(PERSISTED_ACCOUNT_STATE_STORAGE_KEY)).toBe(false);
+  });
+
+  it('ignores the seller summary an older copy carried, and restores the rest', async () => {
+    const storage = memoryStorage();
+    storage.values.set(PERSISTED_ACCOUNT_STATE_STORAGE_KEY, storedCopy({
+      salesSummary: { data: { success: true, posts: [], summary: { earningsUsdCents: 1, listingCount: 1, salesCount: 1 } }, updatedAt: FETCHED_AT },
+    }));
+    const client = new QueryClient();
+
+    await expect(restorePersistedAccountState(client, { userId: USER_ID }, environment(storage)))
+      .resolves.toMatchObject({ credits: 26_800 });
+
+    expect(client.getQueryCache().getAll().map((query) => query.queryKey[0])).toEqual(['profile']);
   });
 
   it('counts a balance of nothing as known, unlike no copy at all', async () => {

@@ -1,6 +1,7 @@
 import type { InfiniteData, QueryClient, QueryKey } from '@tanstack/react-query';
 
 import { truncateInfiniteDataToFirstPage } from '@/lib/profile-media-query';
+import { invalidateProfileStats } from '@/lib/profile-stats';
 import type { GenerationListResponse, OwnerPostsResponse } from '@/lib/types';
 
 /**
@@ -43,7 +44,8 @@ export async function applyPostVisibilityToCaches(
     queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] }),
     queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
     queryClient.invalidateQueries({ queryKey: ['home-generations', userId] }),
-    queryClient.invalidateQueries({ queryKey: ['owner-posts-sales-summary', userId] }),
+    // The header counts and the seller total ride on the profile.
+    invalidateProfileStats(queryClient, userId),
   ]);
 }
 
@@ -69,6 +71,7 @@ export async function refreshViewerMediaCaches(
     queryClient.invalidateQueries({ queryKey: ['profile-generations', userId] }),
     queryClient.invalidateQueries({ queryKey: ['profile-owner-posts', userId] }),
     queryClient.invalidateQueries({ queryKey: ['home-generations', userId] }),
-    queryClient.invalidateQueries({ queryKey: ['owner-posts-sales-summary', userId] }),
+    // The header counts and the seller total ride on the profile.
+    invalidateProfileStats(queryClient, userId),
   ]);
 }
