@@ -23,7 +23,7 @@ describe.skipIf(!connectionString)('mobile credit settlement concurrency', () =>
     if (admin) await admin.query('delete from auth.users where id=any($1::uuid[])', [buyers]);
     await Promise.all(clients.splice(0).map(client => client.end()));
   });
-  it.each([false, true])('grants once under parallel delivery (competing owner: %s)', async (competingOwner) => {
+  it.each(Array.from({ length: 24 }, (_, round): [number, boolean] => [round, round >= 12]))('grants once under parallel delivery (round %s, competing owner: %s)', async (_round, competingOwner) => {
     const callers = await Promise.all(Array.from({ length: 8 }, () => connect()));
     const storeId = `audit_mobile_${randomUUID()}`;
     const external = `mobile_app_store_${storeId}`;
