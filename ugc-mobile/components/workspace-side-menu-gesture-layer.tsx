@@ -125,7 +125,7 @@ export function WorkspaceSideMenuGestureLayer({
         onClose={() => setMenuVisible(false)}
         user={user}
         profile={profileQuery.data}
-        credits={credits ?? 0}
+        credits={credits}
         totalSalesUsdCents={salesSummary.earningsUsdCents}
         totalSalesLoading={Boolean(user) && sellerPostsQuery.isLoading}
         onSignOut={signOut}

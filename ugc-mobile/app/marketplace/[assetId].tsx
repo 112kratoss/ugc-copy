@@ -10,7 +10,7 @@ import { AppText, Card, Pill, PrimaryButton, Screen, SecondaryButton, SectionTit
 import { showActionSheet } from '@/lib/action-sheet';
 import { useAuth } from '@/lib/auth';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
-import { formatCreditAmount } from '@/lib/pricing';
+import { CREDIT_BALANCE_LOADING_LABEL, formatCreditAmount } from '@/lib/pricing';
 import { appTheme, type ToolAccent } from '@/lib/theme';
 import type { MarketplaceResource, PostResourceKind } from '@/lib/types';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
@@ -70,7 +70,11 @@ export default function MarketplaceAssetScreen() {
   const detail = detailQuery.data;
   const resources = detail?.resources;
   const unlockPrice = detail?.priceUsdCents ?? 0;
-  const creditShortfall = Math.max(0, unlockPrice - (credits ?? 0));
+  // An unknown balance is not an empty one. Until the profile request answers
+  // there is no shortfall to report, and the unlock itself is checked against
+  // the real balance on the server.
+  const balanceKnown = credits !== null;
+  const creditShortfall = balanceKnown ? Math.max(0, unlockPrice - credits) : 0;
 
   // A paid unlock spends the balance immediately and cannot be undone, so it
   // gets the confirmation step the system purchase sheet gives real-money
@@ -229,8 +233,8 @@ export default function MarketplaceAssetScreen() {
                   <AppText variant="bodySm" color="muted">
                     Paid mobile unlocks use your Magicbooklet credit balance instead of a separate store checkout.
                   </AppText>
-                  <AppText variant="label" color={creditShortfall > 0 ? 'warning' : 'success'}>
-                    Costs {formatUnlockPrice(unlockPrice)} · Balance {formatCreditAmount(credits)}
+                  <AppText variant="label" color={!balanceKnown ? 'muted' : creditShortfall > 0 ? 'warning' : 'success'}>
+                    Costs {formatUnlockPrice(unlockPrice)} · {balanceKnown ? `Balance ${formatCreditAmount(credits)}` : CREDIT_BALANCE_LOADING_LABEL}
                   </AppText>
                   {creditShortfall > 0 ? (
                     <AppText variant="bodySm" color="muted">
