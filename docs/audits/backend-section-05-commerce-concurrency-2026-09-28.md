@@ -23,7 +23,7 @@ The tests require an explicit localhost `SUPABASE_TEST_DB_URL`, fail on connecti
 ## Validation
 
 - Original concurrency case failed before fix with `40P01`, then passed.
-- Clean replay of 261 migrations; all 84 pgTAP files / 1,781 assertions passed.
+- Clean replay of 262 migrations; all 85 pgTAP files / 1,812 assertions passed.
 - Three concurrency tests, four existing actual-handler/database tests and the migration boundary guard passed.
 - Test typecheck and targeted lint passed.
 - `scripts/ops/verify-bundle-cash-refunds.sql`: 22 assertions passed locally using service-role operations inside a rollback transaction. Covers capture, duplicate checkout, refunds, creator wallet reversal, duplicate events, manual restoration, refund-before-capture and API grants.
@@ -36,3 +36,5 @@ This repair covers one demonstrated bundle-lock cycle. It does not establish tha
 Event identity conflicts across commerce rails, RevenueCat receipt/transaction ownership, restore/refund ordering, mobile/web double-counting and provider-backed sandbox delivery remain follow-up work. RevenueCat intentionally accepts real Apple/Google sandbox receipts for App Review; this is distinct from client-declared sandbox bypass, which remains disabled on production. No change to that policy is proposed here.
 
 The previous pricing batch is deployed; its complete [production evidence](backend-section-05-commerce-release-2026-09-28.md) is carried in this batch.
+
+A reproduced mobile grant regression was found during the subsequent RevenueCat review and is included in the same release; see [mobile grant evidence](backend-section-05-mobile-credit-grant-2026-09-28.md).
