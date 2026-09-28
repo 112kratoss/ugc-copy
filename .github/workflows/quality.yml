@@ -229,6 +229,16 @@ jobs:
         env:
           SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
 
+      - name: Test cash commerce concurrency
+        run: npx vitest run src/__tests__/commerce-cash-concurrency.test.ts src/__tests__/mobile-credit-concurrency.test.ts
+        env:
+          SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+
+      - name: Test Razorpay handler with real settlement SQL
+        run: npx vitest run src/__tests__/razorpay-adjustment-database.test.ts
+        env:
+          SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+
       - name: Stop isolated Supabase database
         if: always()
         continue-on-error: true

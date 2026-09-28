@@ -35,7 +35,7 @@ import {
   resolvePurchaseGate,
   resolveSelectedPricingPlan,
 } from '@/lib/pricing-view-model';
-import { MOBILE_PRICING_PLANS, formatCreditAmount, type MobilePricingPlan, type PricingPlanId } from '@/lib/pricing';
+import { CREDIT_BALANCE_LOADING_LABEL, MOBILE_PRICING_PLANS, formatCreditAmount, type MobilePricingPlan, type PricingPlanId } from '@/lib/pricing';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
@@ -359,7 +359,7 @@ export default function PricingScreen() {
           <View style={{ flex: 1, gap: 4 }}>
             <Kicker color="commerce">Available balance</Kicker>
             <AppText variant="sectionTitle" style={{ fontVariant: ['tabular-nums'] }}>
-              {formatCreditAmount(credits)} credits
+              {credits === null ? CREDIT_BALANCE_LOADING_LABEL : `${formatCreditAmount(credits)} credits`}
             </AppText>
           </View>
           <Pill

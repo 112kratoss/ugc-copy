@@ -9,14 +9,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({
   authCallback: null as null | ((event: string, session: unknown) => void),
   clearLocalPush: vi.fn(),
+  clearPersistedAccountState: vi.fn(),
   clearPersistedHomeFeed: vi.fn(),
   clearPersistedSession: vi.fn(),
   deleteAccount: vi.fn(),
   duringSignOut: vi.fn(),
   getSession: vi.fn(),
+  persistAccountStateOnChange: vi.fn(),
   profileResolve: null as null | ((profile: { credits: number }) => void),
   queryClient: { clear: vi.fn(), fetchQuery: vi.fn() },
   readPersistedSession: vi.fn(),
+  restoreAccountState: vi.fn(),
   routerReplace: vi.fn(),
   sessionResolve: null as null | ((result: unknown) => void),
   signOut: vi.fn(),
@@ -72,6 +75,11 @@ vi.mock('../lib/guest-merge-ticket-storage', () => ({
   clearGuestMergeTicket: vi.fn(async () => undefined),
 }));
 vi.mock('../lib/persisted-home-feed', () => ({ clearPersistedHomeFeed: state.clearPersistedHomeFeed }));
+vi.mock('../lib/persisted-account-state', () => ({
+  clearPersistedAccountState: state.clearPersistedAccountState,
+  persistAccountStateOnChange: state.persistAccountStateOnChange,
+  restorePersistedAccountState: state.restoreAccountState,
+}));
 vi.mock('../lib/generation-model-catalog', () => ({ GENERATION_MODEL_CATALOG_SCHEMA_VERSION: 1 }));
 vi.mock('../lib/apple-auth', () => ({ signInWithNativeApple: vi.fn() }));
 vi.mock('../lib/google-auth', () => ({ signInWithGoogleOAuth: vi.fn() }));
@@ -137,6 +145,9 @@ describe('AuthProvider startup performance', () => {
     state.clearLocalPush.mockReset().mockResolvedValue(undefined);
     state.clearPersistedSession.mockReset().mockResolvedValue(undefined);
     state.clearPersistedHomeFeed.mockReset().mockResolvedValue(undefined);
+    state.clearPersistedAccountState.mockReset().mockResolvedValue(undefined);
+    state.persistAccountStateOnChange.mockReset().mockReturnValue(() => undefined);
+    state.restoreAccountState.mockReset().mockResolvedValue(null);
     state.readPersistedSession.mockReset().mockResolvedValue(null);
     state.deleteAccount.mockReset();
     state.queryClient.clear.mockReset();
@@ -459,5 +470,92 @@ describe('AuthProvider startup performance', () => {
     expect(state.queryClient.clear).toHaveBeenCalledOnce();
 
     renderer.act(() => tree?.unmount());
+  });
+
+  it("draws the balance saved for the stored session's account before the profile refresh answers", async () => {
+    state.readPersistedSession.mockResolvedValue(session);
+    state.restoreAccountState.mockResolvedValue({ credits: 26_800, savedAt: Date.now() - 60_000 });
+
+    const { latest, unmount } = renderProvider();
+    await settle();
+
+    // Nothing has come back from the network, and the balance is already on screen.
+    expect(state.restoreAccountState).toHaveBeenCalledWith(state.queryClient, { userId: 'user-1' });
+    expect(state.queryClient.fetchQuery).not.toHaveBeenCalled();
+    expect(latest.current?.credits).toBe(26_800);
+    // Saved again from here, so a launch that never reaches the network keeps its copy.
+    expect(state.persistAccountStateOnChange).toHaveBeenLastCalledWith(state.queryClient, { userId: 'user-1', credits: 26_800 });
+
+    await renderer.act(async () => {
+      state.sessionResolve?.({ data: { session }, error: null });
+    });
+    await settle();
+    expect(state.queryClient.fetchQuery).toHaveBeenCalledTimes(1);
+    expect(latest.current?.credits).toBe(26_800);
+
+    await renderer.act(async () => {
+      state.profileResolve?.({ credits: 26_500 });
+    });
+    await settle();
+    expect(latest.current?.credits).toBe(26_500);
+    expect(state.persistAccountStateOnChange).toHaveBeenLastCalledWith(state.queryClient, { userId: 'user-1', credits: 26_500 });
+    unmount();
+  });
+
+  it('never lets a slow read of the saved copy replace what the server, or a spend, has said since', async () => {
+    let finishRead: (value: unknown) => void = () => undefined;
+    state.restoreAccountState.mockImplementation(() => new Promise((resolve) => {
+      finishRead = resolve;
+    }));
+    state.readPersistedSession.mockResolvedValue(session);
+
+    const { latest, unmount } = renderProvider();
+    await settle();
+    expect(latest.current?.credits).toBeNull();
+
+    await renderer.act(async () => {
+      state.sessionResolve?.({ data: { session }, error: null });
+    });
+    await settle();
+    await renderer.act(async () => {
+      state.profileResolve?.({ credits: 37 });
+    });
+    await settle();
+    expect(latest.current?.credits).toBe(37);
+
+    renderer.act(() => {
+      latest.current?.updateCredits(30);
+    });
+    expect(latest.current?.credits).toBe(30);
+
+    await renderer.act(async () => {
+      finishRead({ credits: 26_800, savedAt: Date.now() - 60_000 });
+    });
+    await settle();
+    expect(latest.current?.credits).toBe(30);
+    unmount();
+  });
+
+  it('stops saving, and forgets the saved copy, when the person signs out', async () => {
+    const stopSaving = vi.fn();
+    state.persistAccountStateOnChange.mockReturnValue(stopSaving);
+    state.readPersistedSession.mockResolvedValue(session);
+
+    const { latest, unmount } = renderProvider();
+    await settle();
+    await renderer.act(async () => {
+      state.sessionResolve?.({ data: { session }, error: null });
+    });
+    await settle();
+    expect(state.persistAccountStateOnChange).toHaveBeenCalled();
+
+    await renderer.act(async () => {
+      await latest.current?.signOut();
+    });
+
+    expect(state.clearPersistedAccountState).toHaveBeenCalledOnce();
+    expect(stopSaving).toHaveBeenCalled();
+    expect(latest.current?.user).toBeNull();
+    unmount();
   });
 });

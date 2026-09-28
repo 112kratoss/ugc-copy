@@ -62,6 +62,25 @@ export function formatCreditAmount(value: number | null | undefined) {
 }
 
 /**
+ * Drawn in a number slot until the balance is known. A 0 there reads as an
+ * empty balance to someone who has credits, and the balance is unknown for a
+ * moment on a first launch, after a sign-out, or whenever the profile request
+ * has not answered yet.
+ */
+export const UNKNOWN_CREDIT_BALANCE_LABEL = '–';
+/** The same dash for any other amount or count not known yet: one glyph app-wide. */
+export const UNKNOWN_AMOUNT_LABEL = UNKNOWN_CREDIT_BALANCE_LABEL;
+/** The same unknown balance where a sentence is expected rather than a number. */
+export const CREDIT_BALANCE_LOADING_LABEL = 'Balance loading…';
+
+/** A balance for a number slot: formatted when known, the placeholder dash when not. */
+export function formatCreditBalance(value: number | null | undefined) {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? formatCreditAmount(value)
+    : UNKNOWN_CREDIT_BALANCE_LABEL;
+}
+
+/**
  * A creator's price for an unlock, as a buyer pays it in the app: in credits.
  * Bundle prices are kept in US cents, and an unlock costs one credit per cent
  * (the server's `credit_cost` is `price_usd_cents`), so the number carries over

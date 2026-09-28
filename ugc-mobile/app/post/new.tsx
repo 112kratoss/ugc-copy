@@ -17,6 +17,7 @@ import { StableMediaImage } from '@/components/media-preview';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import { truncateInfiniteDataToFirstPage } from '@/lib/profile-media-query';
+import { adjustProfileStats, invalidateProfileStats } from '@/lib/profile-stats';
 import {
   POST_VIDEO_DURATION_LIMIT_MESSAGE,
   assetDurationSeconds,
@@ -2162,6 +2163,8 @@ export default function NewPostScreen() {
       });
       const targetPostId = response.postId || postId;
       if (!isEditMode) {
+        // The header's Posts count moves now; the profile refetch confirms it.
+        adjustProfileStats(queryClient, user?.id, { posts: 1 });
         const optimisticPost = buildOptimisticOwnerPostListItem(targetPostId, context?.submittedDraft ?? draft);
         if (optimisticPost) {
           queryClient.setQueryData<InfiniteData<OwnerPostsResponse>>(
@@ -5397,7 +5400,8 @@ async function invalidatePostCaches(queryClient: QueryClient, userId: string | u
     queryClient.invalidateQueries({ queryKey: ['profile-generations', userId] }),
     queryClient.invalidateQueries({ queryKey: ['profile-owner-posts', userId] }),
     queryClient.invalidateQueries({ queryKey: ['home-generations', userId] }),
-    queryClient.invalidateQueries({ queryKey: ['owner-posts-sales-summary', userId] }),
+    // The header's post count and the seller total ride on the profile.
+    invalidateProfileStats(queryClient, userId),
     queryClient.invalidateQueries({ queryKey: ['generations', userId] }),
     queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
   ]);

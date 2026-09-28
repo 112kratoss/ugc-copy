@@ -72,7 +72,9 @@ describe('credit balance formatting coverage', () => {
         .map((line, index) => ({ filePath, line: withoutStringLiterals(line), number: index + 1 }))
         .filter(({ line }) => RENDERS_BALANCE.test(line))
         .filter(({ line }) => !NOT_RENDERED.some((pattern) => pattern.test(line)))
-        .filter(({ line }) => !line.includes('formatCreditAmount')))
+        // formatCreditBalance is the same formatter with the unknown-balance
+        // placeholder in front of it (lib/pricing.ts).
+        .filter(({ line }) => !/\bformatCredit(?:Amount|Balance)\(/.test(line)))
       .map(({ filePath, number }) => `${path.relative(mobileRoot, filePath).replaceAll(path.sep, '/')}:${number}`);
 
     expect(raw).toEqual([]);

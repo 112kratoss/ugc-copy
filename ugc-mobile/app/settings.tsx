@@ -23,7 +23,7 @@ import {
   summarizeMediaDiagnostics,
 } from '@/lib/media-diagnostics';
 import { haptic } from '@/lib/haptics';
-import { formatCreditAmount } from '@/lib/pricing';
+import { CREDIT_BALANCE_LOADING_LABEL, formatCreditAmount } from '@/lib/pricing';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { appTheme } from '@/lib/theme';
@@ -61,7 +61,7 @@ export default function SettingsScreen() {
       <SettingsCard
         icon={<CreditCard size={appTheme.icon.feature} color={theme.colors.amber} />}
         title="Credits"
-        body={`${formatCreditAmount(credits)} credits available on this account.`}
+        body={credits === null ? CREDIT_BALANCE_LOADING_LABEL : `${formatCreditAmount(credits)} credits available on this account.`}
         onPress={() => router.push('/pricing' as never)}
       />
 

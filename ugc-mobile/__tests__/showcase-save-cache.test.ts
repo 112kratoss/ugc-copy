@@ -119,6 +119,7 @@ describe('showcase save cache helpers', () => {
     expect(invalidatedKeys).toEqual([
       ['showcase-post', 'post-1'],
       ['profile-saved-media', 'user-1'],
+      ['profile', 'user-1'],
     ]);
   });
 

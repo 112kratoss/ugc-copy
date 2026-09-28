@@ -1,6 +1,8 @@
 # Section 4 — payout state transitions
 
-Status: confirmed null-action defect fixed locally; production release pending.
+Status: null-action defect fixed and deployed in PR #229. Production verification
+passed 36 SQL assertions and 17 HTTP checks; see
+backend-section-04-payouts-release-2026-09-27.md for exact-build evidence.
 This batch covers payout requests, holds, resolution/replay and detached records.
 Purchase settlement, provider signatures and broader refund/ledger workflows
 remain separate batches.

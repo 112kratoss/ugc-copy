@@ -306,6 +306,7 @@ describe('/api/marketplace/order route', () => {
       buyer_user_id: 'buyer-1',
       razorpay_order_id: 'order_market_123',
       amount_subunits: 41500,
+      quoted_price_usd_cents: 500,
       currency: 'INR',
       status: 'created',
     });

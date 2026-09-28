@@ -227,3 +227,26 @@ export async function reconcileMobileCreditPurchaseAdjustment(
     input.action === 'refund' ? 'referral_reward_reversed' : 'referral_reward_earned',
   );
 }
+
+export async function reconcileRazorpayCreditSource(
+  adminSupabase: ReferralRewardRpcClient,
+  input: { transactionId: string; paymentId: string; sourceId: string;
+    kind: 'refund' | 'dispute_open' | 'dispute_won'; refundedAmountSubunits: number; disputeAmountSubunits: number },
+): Promise<ReferralRewardSettlement> {
+  const settlement = await callRewardRpc(adminSupabase, 'reconcile_razorpay_credit_source', {
+    p_transaction_id: input.transactionId,
+    p_payment_id: input.paymentId,
+    p_source_id: input.sourceId,
+    p_kind: input.kind,
+    p_refunded_amount_subunits: input.refundedAmountSubunits,
+    p_dispute_amount_subunits: input.disputeAmountSubunits,
+  }, input.kind === 'dispute_won' ? 'referral_reward_earned' : 'referral_reward_reversed');
+  if (!['no_change', 'duplicate_event', 'reversed', 'partially_reversed', 'restored', 'partially_restored'].includes(settlement.status)) {
+    throw new Error(`Razorpay credit source unresolved: ${settlement.status}`);
+  }
+  // The combined target can increase even on a won event carrying a newer refund.
+  return { ...settlement, rewards: settlement.rewards.map(reward => ({
+    ...reward, notificationType: settlement.status === 'restored' || settlement.status === 'partially_restored'
+      ? 'referral_reward_earned' : 'referral_reward_reversed',
+  })) };
+}

@@ -44,6 +44,7 @@ import { useReducedMotion } from '@/lib/motion';
 import { navigateToNotificationDeepLink, subscribeToNotificationResponses, subscribeToNotificationsReceived } from '@/lib/notifications';
 import { OnboardingProvider, useOnboarding } from '@/lib/onboarding';
 import { installMediaQueryRetention, pruneInactiveMediaQueries } from '@/lib/media-query-retention';
+import { preloadPersistedAccountState } from '@/lib/persisted-account-state';
 import { restorePersistedHomeFeed } from '@/lib/persisted-home-feed';
 import { reportStartupMilestone } from '@/lib/startup-interactive';
 import { STARTUP_VERSION_CHECK_FALLBACK_MS, type StartupVersionCheckStatus } from '@/lib/startup-readiness';
@@ -109,6 +110,10 @@ AppState.addEventListener('memoryWarning', () => pruneInactiveMediaQueries(query
 // rest of the app starts, so a returning launch draws posts rather than
 // skeletons once the session is restored. See lib/persisted-home-feed.
 void restorePersistedHomeFeed(queryClient);
+// The account's last known balance, profile and counts are read off the device
+// now too, so they are in hand by the time the stored session names the account
+// they belong to. See lib/persisted-account-state.
+void preloadPersistedAccountState();
 
 // Progress indicators: "perform automatic updates periodically — don't make
 // people manually refresh". React Query's focus refetch is inert on native

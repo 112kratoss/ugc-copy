@@ -36,7 +36,7 @@ import { TopScrim } from '@/components/top-scrim';
 import { AppText, IconButton, SecondaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
-import { formatUsdCents, getOwnerPostSalesSummary } from '@/lib/home-view-model';
+import { formatUsdCents } from '@/lib/home-view-model';
 import { haptic } from '@/lib/haptics';
 import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '@/components/media-zoom';
 import { immersiveViewerHref, profileMediaFeedHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
@@ -74,7 +74,7 @@ import { useProfileMediaRevalidation } from '@/lib/use-profile-media-revalidatio
 import { flattenShowcaseFeedPages } from '@/lib/showcase-feed-query';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
-import { formatCreditAmount } from '@/lib/pricing';
+import { UNKNOWN_AMOUNT_LABEL, formatCreditBalance } from '@/lib/pricing';
 import { SHOWCASE_PLAYBACK_VIEWABILITY } from '@/lib/showcase-feed-events';
 import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
 import { hexWithAlpha } from '@/lib/eased-fade';
@@ -224,21 +224,28 @@ export function ProfileDashboard({
   const activePostCards = useMemo(() => allPostCards.filter((card) => !card.isArchived), [allPostCards]);
   const archivedPostCards = useMemo(() => allPostCards.filter((card) => card.isArchived), [allPostCards]);
   const postCards = postsScope === 'archived' ? archivedPostCards : activePostCards;
-  const salesSummary = useMemo(
-    () => postsQuery.data?.pages[0]?.summary ?? getOwnerPostSalesSummary(ownerPosts),
-    [ownerPosts, postsQuery.data]
-  );
   const profile = profileQuery.data;
+  // The seller total the server put on the profile, or the one the Posts page
+  // carried while a server without it is live. Unknown until either answers.
+  const earningsUsdCents = profile?.sales?.earningsUsdCents
+    ?? postsQuery.data?.pages[0]?.summary?.earningsUsdCents
+    ?? null;
   const displayName = getProfileName(profile, user?.email);
   const handle = getProfileHandle(profile, user?.email);
   const initials = getProfileInitials(profile, user?.email);
+  // Server totals first; a loaded library's paged count with a `+` while a
+  // server without them is live; a dash for a library that has not answered.
   const stats = getProfileStats({
+    totals: profile?.stats ?? null,
     generationsCount: creationCards.length,
     generationsHasMore: generationsQuery.hasNextPage,
+    generationsLoaded: Boolean(generationsQuery.data),
     postsCount: activePostCards.length,
     postsHasMore: postsQuery.hasNextPage,
+    postsLoaded: Boolean(postsQuery.data),
     savedCount: savedCards.length,
     savedHasMore: savedQuery.hasNextPage,
+    savedLoaded: Boolean(savedQuery.data),
   });
   const tabCards = activeTab === 'Saved' ? savedCards : activeTab === 'Creations' ? creationCards : postCards;
   const signedOutPreviewCards = FALLBACK_PROFILE_MEDIA.filter((card) => (
@@ -417,13 +424,13 @@ export function ProfileDashboard({
             <BalanceCard
               icon={<Crown size={appTheme.icon.default} color={theme.colors.commerce} />}
               label="Credits"
-              value={formatCreditAmount(credits ?? profile?.credits)}
+              value={formatCreditBalance(credits ?? profile?.credits)}
               onPress={() => router.push('/pricing' as never)}
             />
             <BalanceCard
               icon={<Wallet size={appTheme.icon.default} color={theme.colors.primary} />}
               label="Wallet"
-              value={formatUsdCents(salesSummary.earningsUsdCents)}
+              value={earningsUsdCents === null ? UNKNOWN_AMOUNT_LABEL : formatUsdCents(earningsUsdCents)}
               onPress={() => router.push('/seller-dashboard' as never)}
             />
           </View>

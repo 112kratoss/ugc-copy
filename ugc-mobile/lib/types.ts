@@ -71,6 +71,27 @@ export interface ProfileResponse {
   credits: number | null;
   promotionalCredits?: number | null;
   marketplaceSpendableCredits?: number | null;
+  /**
+   * Server-counted totals for the profile libraries, with the rules the lists
+   * apply. Missing from a server that predates them or when a count failed;
+   * the header then draws a dash, never a 0.
+   */
+  stats?: ProfileStatsResponse | null;
+  /** The seller totals behind the Wallet card and the side menu. */
+  sales?: ProfileSalesResponse | null;
+}
+
+export interface ProfileStatsResponse {
+  creations: number;
+  posts: number;
+  archivedPosts: number;
+  saved: number;
+}
+
+export interface ProfileSalesResponse {
+  earningsUsdCents: number;
+  listingCount: number;
+  salesCount: number;
 }
 
 export type OnboardingGoal = 'image' | 'video' | 'motion';

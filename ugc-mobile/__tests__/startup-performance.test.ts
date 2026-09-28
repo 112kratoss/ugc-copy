@@ -45,13 +45,15 @@ describe('mobile startup performance contracts', () => {
     expect(authSource).toContain('existing?.userId === userId && existing.version === version');
   });
 
-  it('does not fetch seller history until a hidden side menu is opened', () => {
+  it('never fetches seller history for the side menu: the total rides on the profile', () => {
     const homeSource = readProjectFile('components/home-dashboard.tsx');
     const workspaceMenuSource = readProjectFile('components/workspace-side-menu-gesture-layer.tsx');
 
-    expect(homeSource).toContain("queryKey: ['owner-posts-sales-summary', user?.id]");
-    expect(homeSource).toContain('enabled: Boolean(user && menuVisible)');
-    expect(workspaceMenuSource).toContain("queryKey: ['owner-posts-sales-summary', user?.id]");
-    expect(workspaceMenuSource).toContain('enabled: Boolean(user && menuVisible)');
+    expect(homeSource).not.toContain('owner-posts-sales-summary');
+    expect(homeSource).not.toContain('listOwnerPosts(');
+    expect(workspaceMenuSource).not.toContain('owner-posts-sales-summary');
+    expect(workspaceMenuSource).not.toContain('listOwnerPosts(');
+    expect(homeSource).toContain('profileQuery.data?.sales?.earningsUsdCents ?? null');
+    expect(workspaceMenuSource).toContain('profileQuery.data?.sales?.earningsUsdCents ?? null');
   });
 });

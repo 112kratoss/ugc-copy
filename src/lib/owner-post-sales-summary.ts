@@ -15,6 +15,11 @@ export async function getOwnerPostSalesSummary(userId: string): Promise<OwnerPos
 
   if (error) throw error;
 
+  return parseOwnerPostSalesSummary(data);
+}
+
+/** The RPC's jsonb as the summary the app draws; anything missing counts as 0. */
+export function parseOwnerPostSalesSummary(data: unknown): OwnerPostSalesSummary {
   const record = data && typeof data === 'object' && !Array.isArray(data)
     ? data as Record<string, unknown>
     : {};

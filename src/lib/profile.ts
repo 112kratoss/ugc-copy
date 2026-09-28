@@ -32,6 +32,28 @@ export interface ProfileApiResponse {
   credits: number | null;
   promotionalCredits?: number | null;
   marketplaceSpendableCredits?: number | null;
+  /**
+   * What the owner's profile libraries hold, counted by the server with the
+   * same rules the library lists apply (`owner_profile_counts`). Absent when
+   * the count could not be read; a screen then draws its unknown placeholder,
+   * never a 0.
+   */
+  stats?: OwnerProfileStats;
+  /** The seller totals the Wallet card and the side menu draw. Absent on a read failure. */
+  sales?: OwnerProfileSales;
+}
+
+export interface OwnerProfileStats {
+  creations: number;
+  posts: number;
+  archivedPosts: number;
+  saved: number;
+}
+
+export interface OwnerProfileSales {
+  earningsUsdCents: number;
+  listingCount: number;
+  salesCount: number;
 }
 
 export interface EditableCreatorProfile {

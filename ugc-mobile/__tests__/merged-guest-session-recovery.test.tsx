@@ -64,6 +64,11 @@ vi.mock('../lib/guest-merge-ticket-storage', () => ({
   clearGuestMergeTicket: state.clearGuestMergeTicket,
 }));
 vi.mock('../lib/generation-model-catalog', () => ({ GENERATION_MODEL_CATALOG_SCHEMA_VERSION: 1 }));
+vi.mock('../lib/persisted-account-state', () => ({
+  clearPersistedAccountState: vi.fn(async () => undefined),
+  persistAccountStateOnChange: vi.fn(() => () => undefined),
+  restorePersistedAccountState: vi.fn(async () => null),
+}));
 vi.mock('../lib/apple-auth', () => ({ signInWithNativeApple: vi.fn() }));
 vi.mock('../lib/google-auth', () => ({ signInWithGoogleOAuth: vi.fn() }));
 vi.mock('../lib/referral-attribution', () => ({ claimPendingReferral: vi.fn(async () => undefined) }));
