@@ -9,6 +9,12 @@ import {
 
 const projectRoot = process.cwd();
 
+// Defining a refund RPC does not execute its UPDATE statements during migration.
+// Keep DO blocks visible: unlike function definitions, those run immediately.
+function migrationExecutionSql(sql: string) {
+  return sql.replace(/CREATE(?:\s+OR\s+REPLACE)?\s+FUNCTION\b[\s\S]*?\bAS\s+(\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$)[\s\S]*?\1\s*;/gi, '');
+}
+
 function section(overrides: Record<string, unknown>) {
   return { id: 'creation-prompt', title: 'Exact generation prompt', resourceType: 'prompt', ...overrides };
 }
@@ -74,14 +80,22 @@ describe('composer prompt boilerplate', () => {
     expect(liveBundle.slice(0, liveBundle.indexOf('\n}'))).toContain('normalizePostResourceSections');
   });
 
-  it('ships no migration that rewrites bundles or their revisions', () => {
+  it('ships no migration that directly rewrites bundles or their revisions', () => {
     const migrations = fs.readdirSync(path.join(projectRoot, 'supabase/migrations'))
       .filter((name) => name >= '20260830000000' && name.endsWith('.sql'));
     for (const name of migrations) {
       const sql = fs.readFileSync(path.join(projectRoot, 'supabase/migrations', name), 'utf8');
-      expect(sql, `${name} must not rewrite bundle rows`).not.toMatch(
+      expect(migrationExecutionSql(sql), `${name} must not rewrite bundle rows`).not.toMatch(
         /UPDATE\s+public\.post_resource_bundle/i,
       );
     }
   });
+  it('distinguishes deferred function definitions from immediate migration writes', () => {
+    const definition = 'CREATE OR REPLACE FUNCTION public.refund() RETURNS void LANGUAGE sql AS $fn$ UPDATE public.post_resource_bundles SET sales_count=0; $fn$;';
+    const write = 'UPDATE public.post_resource_bundles SET preview_text=null;';
+    expect(migrationExecutionSql(definition)).not.toMatch(/UPDATE\s+public\.post_resource_bundle/i);
+    expect(migrationExecutionSql(`${definition} ${write}`)).toContain(write);
+    expect(migrationExecutionSql(`DO $$ BEGIN ${write} END; $$;`)).toContain(write);
+  });
+
 });
