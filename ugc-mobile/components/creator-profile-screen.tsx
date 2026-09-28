@@ -1,12 +1,13 @@
 import { FlashList, type ViewToken } from '@shopify/flash-list';
 import { useIsFocused } from '@react-navigation/native';
 import { useInfiniteQuery, useMutation, useQueryClient, type InfiniteData } from '@tanstack/react-query';
+import { GlassView, isGlassEffectAPIAvailable, isLiquidGlassAvailable } from 'expo-glass-effect';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, router } from 'expo-router';
 import { ChevronRight, ExternalLink, FileText, Globe, Heart, ImageIcon, Layers3, Lock, MapPin, MoreVertical, Pencil, Play, Repeat2, UserCheck, UserPlus } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Linking, Pressable, Share, Text, useWindowDimensions, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Linking, Pressable, Share, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
@@ -31,11 +32,12 @@ import {
 import { env } from '@/lib/env';
 import { formatCompactCount } from '@/lib/home-view-model';
 import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '@/components/media-zoom';
-import { ZoomVeil } from '@/components/zoom-veil';
+import { ZoomVeilScope } from '@/components/zoom-veil';
 import { mediaItemAspectRatio, showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
 import { buildImmersiveShowcaseItems, showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
-import { ShareGlyph } from '@/lib/platform-glyphs';
-import { resolvedBottomInset } from '@/lib/safe-area';
+import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
+import { BackGlyph, ShareGlyph } from '@/lib/platform-glyphs';
+import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getShowcasePreviewMediaItems, hasShowcasePreviewMedia, hasShowcaseVideoWithoutPreview } from '@/lib/showcase-media';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from '@/lib/showcase-display';
 import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
@@ -73,6 +75,9 @@ export function CreatorProfileScreen({
   const isFocused = useIsFocused();
   const previousFocusRef = useRef(isFocused);
   const insets = useSafeAreaInsets();
+  const topInset = resolvedTopInset(insets.top);
+  // Where UIKit's zoom runs, the page draws its own bar; see `CreatorTopBar`.
+  const ownBar = isAppleZoomAvailable();
   const { width } = useWindowDimensions();
   const [activeTab, setActiveTab] = useState<CreatorProfileTab>(initialTab);
   const [activeVideoItemId, setActiveVideoItemId] = useState<string | null>(null);
@@ -339,6 +344,7 @@ export function CreatorProfileScreen({
     return (
       <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
         <Stack.Screen options={{ title: 'Creator' }} />
+        {ownBar ? <CreatorTopBar topInset={topInset} /> : null}
         <CreatorProfileSkeleton />
       </View>
     );
@@ -352,8 +358,10 @@ export function CreatorProfileScreen({
     // that moves them on: a missing creator is not retryable, so it offers
     // Explore instead of a Retry that would fail the same way.
     return (
-      <View style={{ flex: 1, backgroundColor: theme.colors.background, paddingTop: 16, paddingHorizontal: 16, gap: appTheme.spacing.gap }}>
+      <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
         <Stack.Screen options={{ title: 'Creator' }} />
+        {ownBar ? <CreatorTopBar topInset={topInset} /> : null}
+        <View style={{ flex: 1, paddingTop: 16, paddingHorizontal: 16, gap: appTheme.spacing.gap }}>
         <StatusBlock
           tone={notFound ? 'neutral' : 'danger'}
           title={notFound ? 'Creator not found' : 'Could not load creator'}
@@ -367,6 +375,7 @@ export function CreatorProfileScreen({
             ? () => router.replace('/(tabs)/showcase' as never)
             : () => void profileQuery.refetch()}
         />
+        </View>
       </View>
     );
   }
@@ -426,13 +435,16 @@ export function CreatorProfileScreen({
   };
 
   return (
-    // Tiles on this profile are what the reel grows out of and returns to.
+    // Tiles on this profile are what the reel grows out of and returns to; the
+    // black over this screen while one does (lib/zoom-veil.ts) is drawn last.
+    <ZoomVeilScope>
     <MediaZoomSurface>
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       {/* The bar says what the view is, not who it contains: a username has no
           length bound, the profile header already prints the display name, and a
           title that changes as the query lands flickers on every open. */}
       <Stack.Screen options={{ title: 'Creator' }} />
+      {ownBar ? <CreatorTopBar topInset={topInset} /> : null}
       <FlashList
         data={listItems}
         drawDistance={900}
@@ -469,9 +481,87 @@ export function CreatorProfileScreen({
         }
       />
     </View>
-    {/* Black over this screen while a reel grows out of a tile or shrinks back (lib/zoom-veil.ts). */}
-    <ZoomVeil />
     </MediaZoomSurface>
+    </ZoomVeilScope>
+  );
+}
+
+function leaveCreatorProfile() {
+  if (router.canGoBack()) {
+    router.back();
+    return;
+  }
+  router.replace('/(tabs)/showcase' as never);
+}
+
+/**
+ * The creator page draws its own bar where UIKit's zoom runs (iOS 18,
+ * lib/apple-zoom.ts), not the navigator's. The reel this page opens hides the
+ * navigator's bar, and UIKit re-lays out a page for a bar coming back only
+ * when the zoom's transition ends — up to a second after the close has landed
+ * (react-native-screens shows the bar with `setNavigationBarHidden:animated:`,
+ * and lays an opaque bar's page out beneath it through
+ * `edgesForExtendedLayout`). So the page came back 54 pt too high, under the
+ * bar, and dropped into place a second later. The navigator's bar is also
+ * drawn above the page, beyond the black the page is covered in while the zoom
+ * runs (components/zoom-veil.tsx): UIKit dimmed it grey over a black page. A
+ * bar of the page's own is laid out once and goes dark with the rest. Drawn as
+ * the navigator's is: the title centred, and Back a glass circle on the
+ * leading edge (a bare chevron where there is no Liquid Glass).
+ */
+function CreatorTopBar({ topInset }: { topInset: number }) {
+  const theme = useAppTheme();
+  const [glassAvailable] = useState(() => isLiquidGlassAvailable() && isGlassEffectAPIAvailable());
+  const [reduceTransparency, setReduceTransparency] = useState(false);
+  useEffect(() => {
+    if (!glassAvailable) return;
+    let mounted = true;
+    void AccessibilityInfo.isReduceTransparencyEnabled().then((enabled) => {
+      if (mounted) setReduceTransparency(enabled);
+    });
+    const subscription = AccessibilityInfo.addEventListener('reduceTransparencyChanged', setReduceTransparency);
+    return () => {
+      mounted = false;
+      subscription.remove();
+    };
+  }, [glassAvailable]);
+  const back = (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Go back"
+      onPress={leaveCreatorProfile}
+      style={({ pressed }) => ({
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        alignItems: 'center',
+        justifyContent: 'center',
+        opacity: pressed ? appTheme.opacity.pressed : 1,
+      })}
+    >
+      <BackGlyph size={appTheme.icon.feature} color={theme.colors.text} />
+    </Pressable>
+  );
+  return (
+    <View style={{ paddingTop: topInset, paddingBottom: 10, backgroundColor: theme.colors.background }}>
+      <View style={{ height: 44, justifyContent: 'center' }}>
+        <Text
+          accessibilityRole="header"
+          numberOfLines={1}
+          maxFontSizeMultiplier={appTheme.typeScale.title}
+          style={{ marginHorizontal: 72, textAlign: 'center', color: theme.colors.text, fontSize: 17, fontWeight: '700' }}
+        >
+          Creator
+        </Text>
+        <View style={{ position: 'absolute', left: 16, top: 0 }}>
+          {glassAvailable && !reduceTransparency ? (
+            <GlassView glassEffectStyle="regular" colorScheme={theme.scheme} isInteractive style={{ width: 44, height: 44, borderRadius: 22 }}>
+              {back}
+            </GlassView>
+          ) : back}
+        </View>
+      </View>
+    </View>
   );
 }
 

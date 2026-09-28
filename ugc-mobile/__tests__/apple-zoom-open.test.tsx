@@ -1,6 +1,6 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { VideoPlayer } from 'expo-video';
 
 /**
@@ -38,9 +38,25 @@ const navigation = {
   },
   isFocused: () => reelFocused,
 };
-vi.mock('expo-router', () => ({ useNavigation: () => navigation }));
+// A second reel, opened from a page pushed over the first, has a screen of its own.
+const ReelNavigation = React.createContext<unknown>(null);
+vi.mock('expo-router', () => ({ useNavigation: () => React.useContext(ReelNavigation) ?? navigation }));
 function fire(type: string, event?: unknown) {
   listeners.get(type)?.forEach((listener) => listener(event));
+}
+function createNavigation() {
+  const own = new Map<string, Set<(event?: unknown) => void>>();
+  return {
+    navigation: {
+      addListener: (type: string, listener: (event?: unknown) => void) => {
+        if (!own.has(type)) own.set(type, new Set());
+        own.get(type)!.add(listener);
+        return () => own.get(type)?.delete(listener);
+      },
+      isFocused: () => true,
+    },
+    fire: (type: string, event?: unknown) => own.get(type)?.forEach((listener) => listener(event)),
+  };
 }
 
 // The zoom is available: iOS 18 on the bridgeless runtime.
@@ -59,7 +75,15 @@ import {
   isVideoReturnPending,
   resetVideoPlayerLoans,
 } from '../lib/video-player-loans';
-import { resetZoomVeil, zoomVeil } from '../lib/zoom-veil';
+import {
+  createScreenVeil,
+  registerScreenVeil,
+  resetZoomVeil,
+  ZOOM_VEIL_LIFT_DELAY_MS,
+  ZOOM_VEIL_LIFT_MS,
+  ZoomVeilOwnerContext,
+  type ScreenVeil,
+} from '../lib/zoom-veil';
 
 const PREVIEW = { url: 'https://example.test/tile.webp', cacheKey: 'tile', thumbhash: null };
 const STREAM = 'https://example.test/clip.mp4';
@@ -67,6 +91,13 @@ const STREAM = 'https://example.test/clip.mp4';
 function fakePlayer() {
   return { pause: vi.fn(), release: vi.fn() } as unknown as VideoPlayer;
 }
+
+// The screen the tiles are on, and the black it is covered in (lib/zoom-veil.ts).
+let feedVeil: ScreenVeil;
+beforeEach(() => {
+  feedVeil = createScreenVeil();
+  registerScreenVeil('feed', feedVeil);
+});
 
 afterEach(() => {
   resetMediaZoomTransitions();
@@ -94,14 +125,16 @@ function VideoLayer({ player }: { player: VideoPlayer }) {
   return null;
 }
 
-function mountTile(player?: VideoPlayer) {
+function mountTile(player?: VideoPlayer, screen: string | null = 'feed') {
   let source!: ReturnType<typeof useMediaZoomSource>;
   let tree!: renderer.ReactTestRenderer;
   renderer.act(() => {
     tree = renderer.create(
-      <MediaZoomSurface>
-        <Tile report={(value) => { source = value; }} player={player} />
-      </MediaZoomSurface>
+      <ZoomVeilOwnerContext.Provider value={screen}>
+        <MediaZoomSurface>
+          <Tile report={(value) => { source = value; }} player={player} />
+        </MediaZoomSurface>
+      </ZoomVeilOwnerContext.Provider>
     );
   });
   return { source, tree };
@@ -165,17 +198,74 @@ describe('a tile opening under the native zoom', () => {
 
   it('covers the feed in black from the tap, and lifts it as the pop begins', () => {
     const { source } = mountTile();
-    expect(zoomVeil.get()).toBe(0);
+    expect(feedVeil.cover.get()).toBe(0);
     renderer.act(() => source.capture(() => {}));
-    expect(zoomVeil.get()).toBe(1);
+    expect(feedVeil.cover.get()).toBe(1);
+    expect(peekPendingZoomOrigin('post-1', Date.now())?.veil).toMatchObject({ owner: 'feed' });
 
+    let stage!: ReturnType<typeof useMediaZoomStage>;
+    renderer.act(() => {
+      renderer.create(<Reel onExit={() => {}} report={(value) => { stage = value; }} />);
+    });
+    expect(stage.veil).toMatchObject({ owner: 'feed' });
+    expect(feedVeil.cover.get()).toBe(1);
+    renderer.act(() => { fire('beforeRemove'); });
+    // The test double resolves the delayed fade at once.
+    expect(feedVeil.cover.get()).toBe(0);
+  });
+
+  it('drops no veil for a tile on a screen without one', () => {
+    const { source } = mountTile(undefined, null);
+    renderer.act(() => source.capture(() => {}));
+    expect(peekPendingZoomOrigin('post-1', Date.now())?.veil).toBeNull();
+    expect(feedVeil.cover.get()).toBe(0);
+  });
+
+  it('closes a reel opened from a page above another reel without taking the first reel\'s veil down', () => {
+    vi.useFakeTimers();
+    const creatorVeil = createScreenVeil();
+    registerScreenVeil('creator', creatorVeil);
+
+    // Explore → a reel, landed.
+    const { source: exploreTile } = mountTile();
+    renderer.act(() => exploreTile.capture(() => {}));
     renderer.act(() => {
       renderer.create(<Reel onExit={() => {}} />);
     });
-    expect(zoomVeil.get()).toBe(1);
+    renderer.act(() => { fire('transitionEnd', { data: { closing: false } }); });
+    // A second later the reel can be touched, and tiles open posts again.
+    vi.advanceTimersByTime(1000);
+    // The creator page pushed over it is not the reel's to cover.
+    reelFocused = false;
+    renderer.act(() => { fire('transitionStart', { data: { closing: true } }); });
+    expect(creatorVeil.cover.get()).toBe(0);
+
+    // A tile on the creator page opens a second reel, and Back closes it.
+    const { source: creatorTile } = mountTile(undefined, 'creator');
+    renderer.act(() => creatorTile.capture(() => {}));
+    const second = createNavigation();
+    let secondReel!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      secondReel = renderer.create(
+        <ReelNavigation.Provider value={second.navigation}>
+          <Reel onExit={() => {}} />
+        </ReelNavigation.Provider>
+      );
+    });
+    expect(creatorVeil.cover.get()).toBe(1);
+    renderer.act(() => { second.fire('transitionEnd', { data: { closing: false } }); });
+    renderer.act(() => { second.fire('beforeRemove'); });
+    renderer.act(() => secondReel.unmount());
+    vi.advanceTimersByTime(ZOOM_VEIL_LIFT_DELAY_MS + ZOOM_VEIL_LIFT_MS);
+    expect(creatorVeil.cover.get()).toBe(0);
+
+    // The page pops off the first reel, which then closes over black, not the lit feed.
+    reelFocused = true;
+    renderer.act(() => { fire('transitionStart', { data: { closing: false } }); });
+    renderer.act(() => { fire('transitionEnd', { data: { closing: false } }); });
+    expect(feedVeil.cover.get()).toBe(1);
     renderer.act(() => { fire('beforeRemove'); });
-    // The test double resolves the delayed fade at once.
-    expect(zoomVeil.get()).toBe(0);
+    expect(feedVeil.cover.get()).toBe(0);
   });
 
   it('hands the player to the tile as a dismissal gesture begins, and takes it back when the gesture is let go of', () => {
@@ -194,7 +284,7 @@ describe('a tile opening under the native zoom', () => {
     renderer.act(() => { fire('transitionStart', { data: { closing: true } }); });
     expect(isVideoReturnPending(tileKey, STREAM)).toBe(true);
     expect(isVideoPlayerHandedBack(player)).toBe(true);
-    expect(zoomVeil.get()).toBe(0);
+    expect(feedVeil.cover.get()).toBe(0);
     expect(stage.lentVideo?.reclaimed).toBe(0);
     // The tile takes it and draws the clip under the shrinking reel.
     expect(claimReturnedVideoPlayer(tileKey, STREAM)).toBe(player);
@@ -203,7 +293,7 @@ describe('a tile opening under the native zoom', () => {
     expect(isVideoReturnPending(tileKey, STREAM)).toBe(false);
     expect(isVideoPlayerHandedBack(player)).toBe(false);
     expect(isVideoPlayerOnLoan(player)).toBe(true);
-    expect(zoomVeil.get()).toBe(1);
+    expect(feedVeil.cover.get()).toBe(1);
     expect(stage.lentVideo?.reclaimed).toBe(1);
 
     // Let go of once more, then closed for good: handed back again, exactly once.
@@ -234,7 +324,7 @@ describe('a tile opening under the native zoom', () => {
     renderer.act(() => { fire('transitionStart', { data: { closing: true } }); });
     expect(isVideoReturnPending(tileKey, STREAM)).toBe(false);
     expect(isVideoPlayerOnLoan(player)).toBe(true);
-    expect(zoomVeil.get()).toBe(1);
+    expect(feedVeil.cover.get()).toBe(1);
     stopAccepting();
   });
 

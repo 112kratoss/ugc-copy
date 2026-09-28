@@ -18,6 +18,7 @@ import type { VideoPlayer } from 'expo-video';
 import type { ImmersivePreviewItem } from './immersive-preview-view-model';
 import { getShowcaseMediaPreviewUrl, resolveShowcaseViewerImageSource } from './showcase-media';
 import type { ShowcaseMediaItem } from './types';
+import type { ZoomVeilDrop } from './zoom-veil';
 
 export interface ZoomRect {
   x: number;
@@ -77,6 +78,8 @@ export interface ZoomOrigin {
    * UIKit carries the picture up and down, and the reel takes only a lent video.
    */
   native?: boolean;
+  /** The veil the tap dropped under a native zoom (lib/zoom-veil.ts); null for none. */
+  veil?: ZoomVeilDrop | null;
   recordedAt: number;
 }
 

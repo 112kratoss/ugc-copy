@@ -19,7 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CommentsSheet } from '@/components/comments-sheet';
 import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { MediaZoomSurface } from '@/components/media-zoom';
-import { ZoomVeil } from '@/components/zoom-veil';
+import { ZoomVeilScope } from '@/components/zoom-veil';
 import { ProfileFeedCardView } from '@/components/profile-feed-card';
 import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
@@ -491,6 +491,8 @@ export function ProfileMediaFeedScreen() {
       {/* FlashList rather than FlatList: cards are variable height (media aspect ratio
           and body length both differ), so FlatList could not implement getItemLayout and
           could not jump to the tapped card. */}
+      {/* Black over this screen while a reel grows out of a card or shrinks back (lib/zoom-veil.ts). */}
+      <ZoomVeilScope>
       <MediaZoomSurface>
       <View style={{ flex: 1, width: contentWidth, alignSelf: 'center' }}>
       <FlashList
@@ -573,9 +575,8 @@ export function ProfileMediaFeedScreen() {
         </View>
       ) : null}
       </View>
-      {/* Black over this screen while a reel grows out of a card or shrinks back (lib/zoom-veil.ts). */}
-      <ZoomVeil />
       </MediaZoomSurface>
+      </ZoomVeilScope>
       {activeItem ? (
         <ViewerActionSheet
           item={activeItem}

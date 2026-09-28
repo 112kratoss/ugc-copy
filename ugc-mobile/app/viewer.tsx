@@ -5,6 +5,7 @@ import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
 import { useViewerVideoPlayer } from '@/lib/use-viewer-video-player';
+import { useReelBackdrop } from '@/lib/reel-backdrop';
 import { Copy, ImageOff, Lock, Play, Volume2, VolumeX } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { createContext, useContext, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
@@ -214,6 +215,8 @@ function ImmersivePreviewViewer() {
   const [openingPost] = useState(() => peekOpeningPost(initialId, Date.now()));
   // iOS 18: pushed out of a tile by UIKit's zoom (lib/apple-zoom.ts), which the pop reverses.
   const nativeZoomSourceId = useAppleZoomSourceId();
+  // Black behind the navigator while this reel shows or a pop reveals it (lib/reel-backdrop.ts).
+  useReelBackdrop();
   const creatorUsername = normalizeParam(params.creatorUsername) || null;
   const routeFeedSessionId = normalizeParam(params.feedSessionId) || null;
   const routeAlgorithmVersion = normalizeParam(params.algorithmVersion) || null;
@@ -1111,7 +1114,7 @@ function ImmersivePreviewViewer() {
           zoom back into the tile (lib/apple-zoom.ts); its dismissal gestures go
           with `gestureEnabled`. One pushed any other way fades out as it faded
           in — set once the reel is up, so it is not folded into the push. */}
-      {nativeZoomSourceId ? <AppleZoomProgress /> : null}
+      {nativeZoomSourceId ? <AppleZoomProgress veil={zoom.veil} /> : null}
       <Stack.Screen
         options={{
           gestureEnabled: !detailsOpenForActive,

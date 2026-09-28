@@ -4,7 +4,7 @@ import { Platform, StyleSheet } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 
 import { MagicTabBar } from '@/components/magic-tab-bar';
-import { ZoomVeil } from '@/components/zoom-veil';
+import { ZoomVeilScope } from '@/components/zoom-veil';
 import { useReducedMotion } from '@/lib/motion';
 import { useAppTheme } from '@/lib/theme-context';
 import { zoomUnderlayDetached, zoomUnderlayHidden } from '@/lib/zoom-underlay';
@@ -34,6 +34,9 @@ export default function TabLayout() {
 
   return (
     <Animated.View style={[styles.fill, underlayStyle]}>
+      {/* Over the tabs and their dock while a reel grows out of one of them or
+          shrinks back into it under UIKit's zoom (lib/zoom-veil.ts). */}
+      <ZoomVeilScope>
       <Tabs
         backBehavior="history"
         tabBar={(props) => (
@@ -92,9 +95,7 @@ export default function TabLayout() {
           }}
         />
       </Tabs>
-      {/* Over the tabs and their dock while a reel grows out of one of them or
-          shrinks back into it under UIKit's zoom (lib/zoom-veil.ts). */}
-      <ZoomVeil />
+      </ZoomVeilScope>
     </Animated.View>
   );
 }

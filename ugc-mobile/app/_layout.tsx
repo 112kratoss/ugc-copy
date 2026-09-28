@@ -11,9 +11,9 @@ import { Stack, router, usePathname } from 'expo-router';
 import { LucideProvider } from 'lucide-react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import 'react-native-reanimated';
-import { AppState, Platform, View } from 'react-native';
+import { AppState, Platform, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -37,6 +37,8 @@ import { setMediaDiagnosticsReporter } from '@/lib/media-diagnostics';
 import { readPlaybackDevice, readPlaybackNetwork } from '@/lib/playback-device';
 import { setPlaybackMetricsReporter } from '@/lib/playback-metrics';
 import { hasAppleZoomParam } from '@/lib/apple-zoom';
+import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
+import { isReelBackdropShown, subscribeToReelBackdrop } from '@/lib/reel-backdrop';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
 import { navigateToNotificationDeepLink, subscribeToNotificationResponses, subscribeToNotificationsReceived } from '@/lib/notifications';
@@ -142,6 +144,19 @@ function navigationThemeFor(theme: AppTheme) {
   };
 }
 
+/**
+ * Black behind the navigator while a reel is on screen or being revealed, so
+ * the rounded corners iOS 26 draws a revealed screen with show black around
+ * the dark reel rather than the app's light ground (lib/reel-backdrop.ts).
+ * Android opens the reel as a transparent modal over a drawn screen, where
+ * the ground never shows.
+ */
+function ReelBackdrop() {
+  const shown = useSyncExternalStore(subscribeToReelBackdrop, isReelBackdropShown);
+  if (Platform.OS !== 'ios' || !shown) return null;
+  return <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: mediaColors.mediaGround }]} />;
+}
+
 function RootLayout() {
   return <RootLayoutNav />;
 }
@@ -202,6 +217,7 @@ function RootLayoutNav() {
               {/* Claims the touch that closes a native menu, so it closes the
                   menu and nothing else (`lib/native-menu-shield.ts`). */}
               <View style={{ flex: 1, backgroundColor: theme.colors.app }} {...nativeMenuTouchGuardProps}>
+                <ReelBackdrop />
                 {/* Light icons on the dark scheme, dark icons on paper. The reel
                     mounts its own light-content bar above this one while it is
                     open, because it stays dark in both schemes. */}
@@ -312,7 +328,10 @@ function RootLayoutNav() {
                     cards from the grid look stacked over feed cards. */}
                 <Stack.Screen name="profile-media-feed" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'simple_push' }} />
                 <Stack.Screen name="showcase" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
-                <Stack.Screen name="creators/[username]" options={{ title: 'Creator' }} />
+                {/* Where UIKit's zoom runs the page draws its own bar, which the
+                    zoom's veil covers and a close never re-lays out (see
+                    `CreatorTopBar` in components/creator-profile-screen.tsx). */}
+                <Stack.Screen name="creators/[username]" options={{ title: 'Creator', headerShown: !isAppleZoomAvailable() }} />
                 <Stack.Screen name="marketplace/[assetId]" options={{ title: 'Unlock' }} />
                 <Stack.Screen name="unlock/[unlockId]" options={{ title: 'Your Unlock' }} />
                 <Stack.Screen name="edit-profile" options={{ headerShown: false, presentation: 'modal', animation: reducedMotion ? 'none' : 'slide_from_bottom' }} />

@@ -90,7 +90,18 @@ import {
 import { FEED_VIDEO_VIEW_PROPS } from '@/lib/feed-video-view-props';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { setZoomUnderlayHidden } from '@/lib/zoom-underlay';
-import { claimZoomVeil, releaseZoomVeil, closeZoomVeilHole, dropZoomVeil, holdZoomVeil, liftZoomVeil } from '@/lib/zoom-veil';
+import {
+  claimZoomVeil,
+  closeZoomVeilHole,
+  dropZoomVeil,
+  holdZoomVeil,
+  liftZoomVeil,
+  releaseZoomVeil,
+  settleZoomVeil,
+  ZoomVeilOwnerContext,
+  type ZoomVeilDrop,
+  type ZoomVeilHole,
+} from '@/lib/zoom-veil';
 import { useReducedMotion } from '@/lib/motion';
 import { appleZoomSourceId, type AppleZoomOpen } from '@/lib/apple-zoom';
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
@@ -806,6 +817,8 @@ export function useMediaZoomSource({
   enabled?: boolean;
 }): MediaZoomSource {
   const surfaceId = useContext(MediaZoomSurfaceContext);
+  // The screen whose veil a tap drops (lib/zoom-veil.ts).
+  const veilOwner = useContext(ZoomVeilOwnerContext);
   const reducedMotion = useReducedMotion();
   const ref = useRef<View | null>(null);
   const hidden = useSharedValue(0);
@@ -901,6 +914,17 @@ export function useMediaZoomSource({
         ? { player: offer.player, url: offer.url }
         : null;
       if (video) holdVideoLoan(video.player, zoomTileKey(surfaceId, itemId), video.url);
+      // The screen goes black around this tile, under the transition that
+      // follows (lib/zoom-veil.ts); with Reduce Motion there is none, and the
+      // reel simply appears. Fabric answers `measureInWindow` before it returns.
+      let veil: ZoomVeilDrop | null = null;
+      if (!reducedMotion) {
+        let hole: ZoomVeilHole | null = null;
+        ref.current?.measureInWindow((x, y, width, height) => {
+          if (width > 0 && height > 0) hole = { x, y, width, height, radius };
+        });
+        veil = dropZoomVeil(veilOwner, hole);
+      }
       setPendingZoomOrigin({
         surfaceId,
         itemId,
@@ -911,18 +935,9 @@ export function useMediaZoomSource({
         video,
         flightId: null,
         native: true,
+        veil,
         recordedAt: Date.now(),
       });
-      // The screen goes black around this tile, under the transition that
-      // follows (lib/zoom-veil.ts); with Reduce Motion there is none, and the
-      // reel simply appears. Fabric answers `measureInWindow` before it returns.
-      if (!reducedMotion) {
-        let hole: (ZoomRect & { radius: number }) | null = null;
-        ref.current?.measureInWindow((x, y, width, height) => {
-          if (width > 0 && height > 0) hole = { x, y, width, height, radius };
-        });
-        dropZoomVeil(hole);
-      }
       open({ sourceId: appleZoomId });
       endTileOpenWhenSettled(openSerial);
       return;
@@ -980,7 +995,7 @@ export function useMediaZoomSource({
     // Fabric answers `measureInWindow` before it returns. A host that does not
     // must never swallow the tap, so the plain open runs instead.
     start(null);
-  }, [active, appleZoomId, aspectRatio, itemId, measure, post, preview, radius, reducedMotion, surfaceId]);
+  }, [active, appleZoomId, aspectRatio, itemId, measure, post, preview, radius, reducedMotion, surfaceId, veilOwner]);
 
   const tileKey = active && surfaceId ? zoomTileKey(surfaceId, itemId) : null;
 
@@ -1106,6 +1121,12 @@ export interface MediaZoomStageValue {
   reportPainted: () => void;
   /** Closes the reel: shrinks it back into the current post's tile, then leaves. */
   dismiss: () => void;
+  /**
+   * The veil this reel's tap dropped on the screen it grew out of, for the
+   * reel's own transition to drive (components/apple-zoom-progress.ios.tsx);
+   * null where none was dropped.
+   */
+  veil: ZoomVeilDrop | null;
 }
 
 /**
@@ -1164,6 +1185,9 @@ export function useMediaZoomStage({
   // The reel came up under UIKit's own zoom (lib/apple-zoom.ts): the picture
   // and its movement are UIKit's, and only a lent video is the stage's to take.
   const nativeZoom = Boolean(origin?.native);
+  // The veil the tap dropped on the screen this reel grew out of: this reel
+  // holds it up and lifts it, and no other reel's does.
+  const veil = origin?.veil ?? null;
   const zooming = Boolean(origin) && !nativeZoom;
   const navigation = useNavigation();
 
@@ -1357,14 +1381,14 @@ export function useMediaZoomStage({
     if (!nativeZoom) return;
     return navigation.addListener('beforeRemove', () => {
       // The feed comes back behind the shrinking reel (lib/zoom-veil.ts).
-      liftZoomVeil();
+      liftZoomVeil(veil);
       handBackForNativeClose();
     });
-  }, [handBackForNativeClose, nativeZoom, navigation]);
+  }, [handBackForNativeClose, nativeZoom, navigation, veil]);
   // The reel that was pushed under the veil is up: the veil is its to lift.
   useEffect(() => {
-    if (nativeZoom) claimZoomVeil();
-  }, [nativeZoom]);
+    if (nativeZoom) claimZoomVeil(veil);
+  }, [nativeZoom, veil]);
   // A dismissal the reader begins with a gesture — the edge swipe, a drag, a
   // pinch — removes the reel only once its transition is over, which UIKit
   // reports up to a second after the reel has visibly landed in its tile (the
@@ -1389,7 +1413,7 @@ export function useMediaZoomStage({
     const letGoOf = () => {
       if (!gestureClose) return;
       gestureClose = false;
-      holdZoomVeil();
+      holdZoomVeil(veil);
       const player = handedBackRef.current;
       if (player && reclaimVideoPlayer(player)) {
         handedBackRef.current = null;
@@ -1402,23 +1426,26 @@ export function useMediaZoomStage({
           if (event.data?.closing === false) {
             // The push has begun — UIKit draws the tile's picture above the
             // veil from here — or a close has been let go of.
-            closeZoomVeilHole();
+            closeZoomVeilHole(veil);
             letGoOf();
           }
           return;
         }
         if (!navigation.isFocused() || handedBackRef.current) return;
         gestureClose = true;
-        liftZoomVeil(true);
+        liftZoomVeil(veil, true);
         handBackForNativeClose();
       }),
       listen('transitionEnd', (event) => {
-        if (event.data?.closing === false) letGoOf();
+        if (event.data?.closing !== false) return;
+        letGoOf();
+        // Landed, or on top again: the veil rests at full cover from here.
+        settleZoomVeil(veil);
       }),
       listen('gestureCancel', letGoOf),
     ];
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
-  }, [handBackForNativeClose, nativeZoom, navigation]);
+  }, [handBackForNativeClose, nativeZoom, navigation, veil]);
 
   /**
    * A live close has landed: the reel's window lies exactly over its tile. Handed
@@ -1661,13 +1688,15 @@ export function useMediaZoomStage({
     if (openedRef.current && !dismissingRef.current) holdTile(activeItemId);
   }, [activeItemId, holdTile]);
 
+  // However the reel leaves, its screen's veil goes with it — unless Back's fade
+  // is still carrying it down over UIKit's shrink (lib/zoom-veil.ts).
+  useEffect(() => () => releaseZoomVeil(veil), [veil]);
   // However the reel leaves — a collapse, a plain pop, a screen replaced under
   // it — every tile it was holding comes back. A reel torn down before the
   // layer's picture was handed over takes that picture with it; a close leaves
   // the layer to finish its own.
   useEffect(() => () => {
     clearHiddenZoomSources();
-    releaseZoomVeil();
     const close = closeRef.current;
     const stillClosing = Boolean(close) && !close!.live;
     // Taken along: a picture not yet handed over, or one drawn for a close that never came.
@@ -1872,6 +1901,7 @@ export function useMediaZoomStage({
     reportCarriedDrawn,
     reportPainted,
     dismiss,
+    veil,
   };
 }
 
