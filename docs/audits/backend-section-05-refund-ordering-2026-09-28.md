@@ -1,6 +1,8 @@
 # Section 5B — credit refund and dispute ordering
 
-Status: four accounting defects reproduced and fixed locally; release pending.
+Status: four accounting defects fixed and deployed in PR #233. Production
+verification passed 52 SQL assertions and 18 HTTP checks; see
+[the release report](backend-section-05-refund-ordering-release-2026-09-28.md).
 Scope: Razorpay credit purchases. Marketplace/resource entitlements, mobile
 RevenueCat settlement, referral policy certification and real provider delivery
 remain separate batches.

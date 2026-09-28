@@ -184,12 +184,12 @@ select is(
 -- credit unlock above. Its load-bearing property is that a replayed webhook
 -- cannot grant a second entitlement for an order already marked paid.
 
-insert into public.marketplace_orders (asset_id, buyer_user_id, razorpay_order_id, amount_subunits, currency, status)
+insert into public.marketplace_orders (asset_id, buyer_user_id, razorpay_order_id, amount_subunits, currency, status, quoted_price_usd_cents)
 values
   ('90000000-0000-4000-8000-000000000002'::uuid, 'd1000000-0000-4000-8000-000000000001'::uuid,
-   'order_card_pending', 300, 'INR', 'created'),
+   'order_card_pending', 300, 'INR', 'created', 300),
   ('90000000-0000-4000-8000-000000000002'::uuid, 'd3000000-0000-4000-8000-000000000003'::uuid,
-   'order_card_already_paid', 300, 'INR', 'paid');
+   'order_card_already_paid', 300, 'INR', 'paid', 300);
 
 select is(
   public.complete_marketplace_purchase('order_does_not_exist', 'pay_x'),

@@ -260,6 +260,7 @@ insert into public.marketplace_orders (
   razorpay_order_id,
   amount_subunits,
   currency,
+  quoted_price_usd_cents,
   status
 )
 values (
@@ -269,6 +270,7 @@ values (
   'order_marketplace_cash_1',
   24900,
   'INR',
+  300,
   'created'
 );
 
@@ -298,6 +300,7 @@ insert into public.marketplace_orders (
   razorpay_order_id,
   amount_subunits,
   currency,
+  quoted_price_usd_cents,
   status
 )
 values (
@@ -307,6 +310,7 @@ values (
   'order_marketplace_duplicate_checkout',
   24900,
   'INR',
+  300,
   'created'
 );
 
@@ -431,6 +435,7 @@ insert into public.marketplace_orders (
   razorpay_order_id,
   amount_subunits,
   currency,
+  quoted_price_usd_cents,
   status
 )
 values (
@@ -440,6 +445,7 @@ values (
   'order_marketplace_refund_before_capture',
   24900,
   'INR',
+  300,
   'created'
 );
 
