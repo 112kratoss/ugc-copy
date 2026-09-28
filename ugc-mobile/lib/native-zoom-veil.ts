@@ -8,12 +8,20 @@ const notify = () => listeners.forEach(listener => listener());
 
 export function bindNativeZoomVeil(opacity: Opacity) {
   binding = opacity;
+  notify();
   return () => {
     if (binding !== opacity) return;
     binding = null;
     active = false;
     notify();
   };
+}
+
+/** No backdrop change until the new screen's native transition actually moves. */
+export function prepareNativeZoomVeil() {
+  binding = null;
+  active = true;
+  notify();
 }
 
 export function activateNativeZoomVeil() {
@@ -29,7 +37,7 @@ export function resetNativeZoomVeil() {
 }
 
 export function getNativeZoomVeilOpacity() {
-  return active ? binding : null;
+  return active ? binding ?? 0 : null;
 }
 
 export function subscribeToNativeZoomVeil(listener: () => void) {

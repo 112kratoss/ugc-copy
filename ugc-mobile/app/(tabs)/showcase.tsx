@@ -1091,7 +1091,6 @@ const MasonryPin = memo(function MasonryPin({
   const coverVideoStreaming = isShowcaseCoverVideoStreaming(card.item, showActiveVideo && !reducedMotion);
   const creatorLabel = formatCreatorLabel(card.creatorLabel);
   const signal = card.unlock;
-  const pressMotion = usePressMotion(false, { scale: appTheme.motion.scale.pressed });
   // The pin is the rectangle the reel grows out of, and empties into while the
   // reel is holding this post.
   const pinMediaItems = getShowcasePreviewMediaItems(card.item);
@@ -1104,6 +1103,7 @@ const MasonryPin = memo(function MasonryPin({
     // and caption from the first frame.
     post: buildImmersiveShowcaseItems('showcase-feed', [card.item])[0] ?? null,
   });
+  const pressMotion = usePressMotion(Boolean(zoomSource.appleZoomId), { scale: appTheme.motion.scale.pressed });
   const openPin = () => zoomSource.capture((zoom) => onOpenPost(card.item, zoom));
 
   return (

@@ -16,10 +16,12 @@ import {
   holdZoomVeil,
   liftZoomVeil,
   resetZoomVeil,
+  releaseZoomVeil,
   ZOOM_VEIL_DEADLINE_MS,
   zoomVeil,
   zoomVeilHole,
 } from '../lib/zoom-veil';
+import { bindNativeZoomVeil, getNativeZoomVeilOpacity } from '../lib/native-zoom-veil';
 
 const TILE = { x: 16, y: 300, width: 370, height: 460 };
 
@@ -30,6 +32,28 @@ afterEach(() => {
 });
 
 describe('the veil under the zoom', () => {
+  it('waits for native opening progress instead of blacking out the feed while the route mounts', () => {
+    dropZoomVeil(TILE);
+    expect(getNativeZoomVeilOpacity()).toBe(0);
+    const opacity = {} as Parameters<typeof bindNativeZoomVeil>[0];
+    const unbind = bindNativeZoomVeil(opacity);
+    expect(getNativeZoomVeilOpacity()).toBe(opacity);
+    unbind();
+  });
+
+  it('lets the Back fade finish after React unmounts the viewer', () => {
+    vi.useFakeTimers();
+    dropZoomVeil(TILE);
+    claimZoomVeil();
+    liftZoomVeil();
+    const set = vi.spyOn(zoomVeil, 'set');
+    releaseZoomVeil();
+    expect(set).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(400);
+    expect(set).toHaveBeenCalledWith(0);
+    set.mockRestore();
+  });
+
   it('goes up around the tile at the tap, covers it once the push begins, and comes down as the close begins', () => {
     vi.useFakeTimers();
     dropZoomVeil(TILE);

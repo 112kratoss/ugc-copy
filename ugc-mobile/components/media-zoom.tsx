@@ -90,7 +90,7 @@ import {
 import { FEED_VIDEO_VIEW_PROPS } from '@/lib/feed-video-view-props';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { setZoomUnderlayHidden } from '@/lib/zoom-underlay';
-import { claimZoomVeil, clearZoomVeil, closeZoomVeilHole, dropZoomVeil, holdZoomVeil, liftZoomVeil } from '@/lib/zoom-veil';
+import { claimZoomVeil, releaseZoomVeil, closeZoomVeilHole, dropZoomVeil, holdZoomVeil, liftZoomVeil } from '@/lib/zoom-veil';
 import { useReducedMotion } from '@/lib/motion';
 import { appleZoomSourceId, type AppleZoomOpen } from '@/lib/apple-zoom';
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
@@ -1667,7 +1667,7 @@ export function useMediaZoomStage({
   // the layer to finish its own.
   useEffect(() => () => {
     clearHiddenZoomSources();
-    clearZoomVeil();
+    releaseZoomVeil();
     const close = closeRef.current;
     const stillClosing = Boolean(close) && !close!.live;
     // Taken along: a picture not yet handed over, or one drawn for a close that never came.
