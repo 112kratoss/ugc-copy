@@ -1,6 +1,7 @@
 # Section 5A — credit purchase settlement evidence
 
-Status: reproduced database defect fixed locally; production release pending.
+Status: fixed and deployed in PR #231; production verification passed 37 SQL
+assertions and 18 HTTP checks. See [the release report](backend-section-05-credit-grants-release-2026-09-28.md).
 This batch covers Razorpay credit grants and their immediate refund/replay
 boundary. It does not close all of payment settlement, disputes, referrals,
 marketplace purchases or RevenueCat reconciliation.
