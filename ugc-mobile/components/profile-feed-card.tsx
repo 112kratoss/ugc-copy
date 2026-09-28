@@ -5,7 +5,7 @@ import { Text, View } from 'react-native';
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
 import { ViewerActionsMenu } from '@/components/viewer-actions-menu';
 import { MediaZoomSourceView, useMediaZoomSource } from '@/components/media-zoom';
-import { feedCardMediaWidth } from '@/lib/feed-card-geometry';
+import { FEED_CARD_MEDIA_RADIUS, feedCardMediaWidth } from '@/lib/feed-card-geometry';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
 import { PostTextBlock } from '@/components/post-text-block';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
@@ -47,13 +47,14 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
 }) {
   const theme = useAppTheme();
   const accent = accentColor(card.accent, theme.colors);
-  // Inside the card's border: the rectangle the reel grows out of and shrinks back into.
+  // The inset media and measured zoom source keep exactly the same width.
   const mediaWidth = feedCardMediaWidth(contentWidth);
   const mediaHeight = getProfileFeedMediaHeight(card, mediaWidth);
   const item = card.item;
   // The media is what opens: the reel grows out of this rectangle and shrinks
   // back into it.
   const zoomSource = useMediaZoomSource({
+    radius: FEED_CARD_MEDIA_RADIUS,
     itemId: item.id,
     // The media's shape as the reel reads it — not the card's, which caps tall
     // media at 4:5 and crops the rest.
@@ -70,7 +71,6 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
 
   return (
     <FeedCardShell
-      accent={accent}
       categoryLabel={card.categoryLabel}
       creatorAvatar={card.creatorAvatar}
       creatorLabel={card.creatorLabel}
@@ -97,7 +97,7 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
         <PostTextBlock
           text={card.bodyText}
           clampLines={card.bodyLines}
-          canExpand={canExpandProfileFeedBody(card, contentWidth - appTheme.spacing.card * 2)}
+          canExpand={canExpandProfileFeedBody(card, mediaWidth)}
           expanded={bodyExpanded}
           onToggle={onToggleBody}
         />
@@ -109,7 +109,7 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
             mediaItems={item.mediaItems}
             width={mediaWidth}
             height={mediaHeight}
-            radius={0}
+            radius={FEED_CARD_MEDIA_RADIUS}
             recyclingKey={`profile-feed:${card.id}`}
             videoActivation={showActiveVideo ? 'visible' : 'never'}
             watchdog={mediaWatchdog}
@@ -127,15 +127,8 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
             flexDirection: 'row',
             alignItems: 'center',
             gap: appTheme.spacing.compact,
-            marginHorizontal: appTheme.spacing.card,
             marginTop: appTheme.spacing.gap,
-            paddingHorizontal: appTheme.spacing.gap,
             paddingVertical: appTheme.spacing.compact,
-            borderRadius: appTheme.radii.sm,
-            borderCurve: 'continuous',
-            borderWidth: 1,
-            borderColor: `${theme.colors.commerce}55`,
-            backgroundColor: `${theme.colors.commerce}1f`,
           }}
         >
           <Text style={{ color: theme.colors.commerce, ...appTheme.type.caption, fontWeight: '800' }}>

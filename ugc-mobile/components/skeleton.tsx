@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Animated, Easing, View, type DimensionValue, type StyleProp, type ViewStyle } from 'react-native';
 
+import { FEED_CARD_MEDIA_INSET, FEED_CARD_MEDIA_RADIUS } from '@/lib/feed-card-geometry';
 import { useReducedMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -115,32 +116,29 @@ export function HomeFeedSkeleton({ width, cards = 2 }: { width: number; cards?: 
   const mediaHeight = Math.round(width * 0.95);
 
   return (
-    <View accessibilityRole="progressbar" accessibilityLabel="Loading posts" style={{ gap: 14 }}>
+    <View accessibilityRole="progressbar" accessibilityLabel="Loading posts" style={{ gap: 0 }}>
       {Array.from({ length: cards }, (_, index) => (
         <View
           key={index}
           style={{
             width,
-            borderRadius: appTheme.radii.lg,
-            borderCurve: 'continuous',
-            borderWidth: 1,
+            paddingHorizontal: FEED_CARD_MEDIA_INSET,
+            borderBottomWidth: 1,
             borderColor: theme.colors.borderSubtle,
-            backgroundColor: theme.colors.panel,
-            overflow: 'hidden',
           }}
         >
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: appTheme.spacing.card, paddingTop: appTheme.spacing.gap }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: appTheme.spacing.gap }}>
             <SkeletonBone width={22} height={22} radius={11} strong />
             <SkeletonBone width={92} height={11} radius={6} />
             <View style={{ flex: 1 }} />
             <SkeletonBone width={54} height={20} radius={10} />
           </View>
-          <View style={{ gap: 8, paddingHorizontal: appTheme.spacing.card, paddingTop: appTheme.spacing.gap, paddingBottom: appTheme.spacing.gap }}>
+          <View style={{ gap: 8, paddingTop: appTheme.spacing.gap, paddingBottom: appTheme.spacing.gap }}>
             <SkeletonBone width="84%" height={17} radius={6} strong />
             <SkeletonBone width="58%" height={17} radius={6} strong />
           </View>
-          <SkeletonBone width="100%" height={mediaHeight} radius={0} />
-          <View style={{ flexDirection: 'row', gap: 18, paddingHorizontal: appTheme.spacing.card, paddingVertical: 15 }}>
+          <SkeletonBone width="100%" height={mediaHeight} radius={FEED_CARD_MEDIA_RADIUS} />
+          <View style={{ flexDirection: 'row', gap: 18, paddingVertical: 15 }}>
             <SkeletonBone width={46} height={14} radius={7} />
             <SkeletonBone width={46} height={14} radius={7} />
             <SkeletonBone width={46} height={14} radius={7} />

@@ -71,7 +71,6 @@ type ProfileMediaFeedParams = {
   scope?: string | string[];
 };
 
-const CARD_GAP = 12;
 /** How often a landing checks its budget and retries after layout has advanced. */
 const LANDING_TICK_MS = 250;
 
@@ -540,7 +539,6 @@ export function ProfileMediaFeedScreen() {
           : isFetchNextPageError
             ? <FeedLoadMoreErrorFooter onRetry={retryNextPage} />
             : null}
-        ItemSeparatorComponent={() => <View style={{ height: CARD_GAP }} />}
         contentContainerStyle={{
           paddingHorizontal: horizontalPadding,
           paddingBottom: bottomInset + 28,

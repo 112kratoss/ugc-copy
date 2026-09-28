@@ -21,10 +21,12 @@ const source = (path: string) => readFileSync(join(__dirname, '..', path), 'utf8
  * edit cannot quietly bring them back.
  */
 describe('feed render cost on iOS', () => {
-  it('draws feed cards rounded without clipping them', () => {
+  it('separates feed rows without clipping or shadowing them', () => {
     const shell = source('components/feed-card-shell.tsx');
     const container = shell.slice(shell.indexOf('<MotionView'), shell.indexOf('openMotion.animatedStyle'));
-    expect(container).toContain('borderRadius: appTheme.radii.lg');
+    expect(container).toContain('borderBottomWidth: StyleSheet.hairlineWidth');
+    expect(container).not.toContain('borderRadius');
+    expect(container).not.toContain('boxShadow');
     expect(container).not.toMatch(/overflow:\s*'hidden'/);
   });
 

@@ -2,13 +2,13 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { FEED_CARD_BORDER_WIDTH, feedCardMediaWidth } from '../lib/feed-card-geometry';
+import { FEED_CARD_MEDIA_INSET, feedCardMediaWidth } from '../lib/feed-card-geometry';
 
 const root = path.resolve(__dirname, '..');
 
 describe('the media inside a feed card', () => {
-  it('is as wide as the card less its border on both sides', () => {
-    expect(feedCardMediaWidth(375)).toBe(375 - FEED_CARD_BORDER_WIDTH * 2);
+  it('is as wide as the card less its inset on both sides', () => {
+    expect(feedCardMediaWidth(375)).toBe(375 - FEED_CARD_MEDIA_INSET * 2);
   });
 
   it('is sized by that width in every card built on the shell', () => {

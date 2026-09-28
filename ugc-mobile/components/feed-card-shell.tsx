@@ -1,11 +1,11 @@
 import { MoreVertical } from 'lucide-react-native';
 import type { ReactNode } from 'react';
-import { ActivityIndicator, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { NativeMenuTrigger } from '@/components/native-menu';
 import { CreatorAvatar } from '@/components/ui';
 import { haptic } from '@/lib/haptics';
-import { FEED_CARD_BORDER_WIDTH } from '@/lib/feed-card-geometry';
+import { FEED_CARD_MEDIA_INSET } from '@/lib/feed-card-geometry';
 import { MotionView, usePressMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -26,17 +26,15 @@ import { verticalHitSlop } from '@/lib/hit-target';
 
 /**
  * The card chrome shared by the Home feed and the Profile media feed: a thin
- * attribution line, then the media as the loudest thing on the card, the
- * action row, and the title and body as a caption beneath — the prompt is
- * context for the picture, not a headline above it. A post with no media
- * keeps its title up front, because there the words are the content.
+ * attribution line, title and body, rounded media, and quiet actions. Posts
+ * sit on the page itself and are separated by a hairline, without an outer
+ * card or clipping layer. A text post uses the same reading order.
  *
  * Both surfaces compose this rather than owning their own copy — the Profile
  * tabs previously rendered a separately-authored card that drifted into a
  * different visual language, which is exactly what this prevents.
  */
 export function FeedCardShell({
-  accent,
   actions,
   banner,
   body,
@@ -57,7 +55,6 @@ export function FeedCardShell({
   timeLabel,
   title,
 }: {
-  accent: string;
   actions: ReactNode;
   banner?: ReactNode;
   body?: ReactNode;
@@ -116,17 +113,14 @@ export function FeedCardShell({
   const caption = (
     <View
       style={{
-        paddingHorizontal: appTheme.spacing.card,
-        paddingTop: media ? 0 : appTheme.spacing.compact,
-        paddingBottom: body || media ? appTheme.spacing.gap : appTheme.spacing.compact,
+        paddingTop: appTheme.spacing.compact,
+        paddingBottom: appTheme.spacing.gap,
         gap: appTheme.spacing.compact,
       }}
     >
       <Text
         numberOfLines={media ? 2 : 3}
-        style={media
-          ? { color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '600' }
-          : { color: theme.colors.text, ...appTheme.type.sectionTitle, fontSize: 19, lineHeight: 25 }}
+        style={{ color: theme.colors.text, ...appTheme.type.body, fontWeight: '700' }}
       >
         {title}
       </Text>
@@ -138,17 +132,11 @@ export function FeedCardShell({
     <MotionView
       style={[
         {
-          borderRadius: appTheme.radii.lg,
-          borderCurve: 'continuous',
-          borderWidth: FEED_CARD_BORDER_WIDTH,
-          borderColor: theme.colors.borderSubtle,
-          backgroundColor: theme.colors.panel,
-          // No `overflow: 'hidden'`. Every child is inset from the corners (the
-          // media sits between the header and the actions), so the clip drew
-          // nothing, but it made iOS render each visible card's rounded corners
-          // offscreen on every frame of a scroll — the "offscreen passes" the
-          // Instruments hitch reports named (docs/archive/home-scroll-hitches-2026-09-22.md).
-          // The rounded background and border need no clip.
+          paddingHorizontal: FEED_CARD_MEDIA_INSET,
+          paddingBottom: appTheme.spacing.gap,
+          borderBottomWidth: StyleSheet.hairlineWidth,
+          borderColor: theme.colors.border,
+          // Only media has rounded corners; the scrolling post has no clip or shadow.
         },
         openMotion.animatedStyle,
       ]}
@@ -158,7 +146,6 @@ export function FeedCardShell({
           flexDirection: 'row',
           alignItems: 'center',
           gap: appTheme.spacing.compact,
-          paddingHorizontal: appTheme.spacing.card,
           paddingTop: appTheme.spacing.gap,
         }}
       >
@@ -186,17 +173,8 @@ export function FeedCardShell({
           </Text>
         </Pressable>
         {statusChip}
-        <View
-          style={{
-            paddingHorizontal: 8,
-            paddingVertical: 2,
-            borderRadius: appTheme.radii.pill,
-            borderWidth: 1,
-            borderColor: `${accent}44`,
-            backgroundColor: `${accent}1a`,
-          }}
-        >
-          <Text style={{ color: accent, ...appTheme.type.caption, fontSize: 11, fontWeight: '800' }}>
+        <View>
+          <Text style={{ color: theme.colors.faint, ...appTheme.type.caption }}>
             {categoryLabel}
           </Text>
         </View>
@@ -214,6 +192,12 @@ export function FeedCardShell({
         }) : moreButton(onMorePress)}
       </View>
 
+      {media ? (
+        <Pressable accessible={false} disabled={!onOpen} onPress={open}>
+          {caption}
+        </Pressable>
+      ) : null}
+
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={openAccessibilityLabel}
@@ -223,9 +207,8 @@ export function FeedCardShell({
         onPressOut={openMotion.onPressOut}
         onTouchStart={onOpenTouchStart}
         unstable_pressDelay={CARD_PRESS_DELAY_MS}
-        style={{ paddingTop: media ? appTheme.spacing.gap : 0 }}
       >
-        {media ? media : caption}
+        {media ?? caption}
       </Pressable>
 
       <View
@@ -233,20 +216,14 @@ export function FeedCardShell({
           flexDirection: 'row',
           alignItems: 'center',
           flexWrap: 'wrap',
-          paddingHorizontal: appTheme.spacing.compact,
-          paddingVertical: media ? 2 : appTheme.spacing.compact,
+          gap: 6,
+          paddingTop: appTheme.spacing.compact,
         }}
       >
         {actions}
       </View>
 
-      {media ? (
-        <Pressable accessible={false} disabled={!onOpen} onPress={open}>
-          {caption}
-        </Pressable>
-      ) : null}
-
-      {banner ? <View style={{ paddingBottom: appTheme.spacing.gap }}>{banner}</View> : null}
+      {banner}
     </MotionView>
   );
 }
@@ -291,7 +268,10 @@ export function FeedCardAction({
         onPressOut={motion.onPressOut}
         style={{
           minHeight: 44,
-          minWidth: 56,
+          minWidth: label ? 56 : 44,
+          borderRadius: appTheme.radii.pill,
+          borderWidth: 1,
+          borderColor: theme.colors.border,
           flexDirection: 'row',
           alignItems: 'center',
           justifyContent: 'center',

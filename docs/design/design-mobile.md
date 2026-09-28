@@ -409,7 +409,7 @@ Beyond `ui.tsx`:
 - `top-scrim.tsx`: the fade under the status bar on scrolling tab roots.
 - `double-tap-pressable.tsx`: a double-tap on media.
 
-Card hierarchy: media or icon, then title, then a short body or metadata, then one clear action. Avoid cards inside decorative cards, mixed radii in one list, and more than one primary action per card.
+Feed hierarchy: creator attribution, title and optional body, media, actions, and optional resource metadata. Other cards lead with media or an icon, then title, a short body, and one clear action. Avoid cards inside decorative cards, mixed radii in one list, and more than one primary action per card.
 
 Button copy uses verbs ("Generate image", "Publish post", "Save", "Remix"). A bare "Open" is fine only when the destination is obvious.
 
@@ -427,7 +427,7 @@ These describe the app as of 0.1.6; each screen's `hig-*` test pins the details.
    - The title slot is deliberately empty.
 2. **Header rail.** Swipeable slides: continue in the creator workspace, the Image, Video and Motion tools, and promos. It turns every few seconds, but only while Home is at rest and on screen.
 3. **Lanes:** For You, Notes (posts with writing), Recent, Unlocks. A lane is a new feed, so switching remounts the list at its top.
-4. **The feed.** A FlashList of cards:
+4. **The feed.** A FlashList of posts on the page background, separated by hairlines:
    - media cards open the reel;
    - written posts open the post page;
    - the comment control opens comments directly.
@@ -559,7 +559,7 @@ Buying and restoring show loading, success and error states.
 
 What scrolls and swipes has a frame budget, and every rule here came from a measured regression on the phones. `feed-render-cost.test.ts` pins them.
 
-- **Round feed cards without clipping them.** `overflow: 'hidden'` on a card costs iOS an offscreen pass per card per frame.
+- **Keep feed rows flat and unclipped.** Home and Profile share a byline → title/body → rounded media → outlined actions layout. Only the media is rounded; its preview and zoom source use `FEED_CARD_MEDIA_RADIUS`, and `feedCardMediaWidth` subtracts the shared inset so the image and measured source have the same width. `overflow: 'hidden'` on a card costs iOS an offscreen pass per card per frame.
 - **No box shadows on scrolled content.** The create disc uses a path shadow over its opaque fill.
 - **Gradients use React Native's own** on anything that mounts while scrolling or swiping: `experimental_backgroundImage` with `linearGradient()` from `lib/eased-fade.ts`, drawn by the render server. expo-linear-gradient paints on the main thread each time its view appears, which cost 16–27 ms per rail switch and per reel open on the iPhone.
 - **Pause what nobody sees.**

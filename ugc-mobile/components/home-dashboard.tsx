@@ -790,7 +790,7 @@ export function HomeDashboard() {
   // calling an old `remixItem` (and the `user` inside it) until a listed value
   // happened to change.
   const renderCard: ListRenderItem<HomeFeedCard> = ({ item: card, index }) => (
-    <Reveal index={index} enabled={index < FEED_REVEAL_COUNT} style={{ paddingHorizontal: horizontalPadding, paddingBottom: 14 }}>
+    <Reveal index={index} enabled={index < FEED_REVEAL_COUNT} style={{ paddingHorizontal: horizontalPadding }}>
       <HomeFeedCardView
         card={card}
         contentWidth={contentWidth}

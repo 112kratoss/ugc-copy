@@ -5,7 +5,7 @@ import { Text, View } from 'react-native';
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
 import { NativeMenu } from '@/components/native-menu';
 import { MediaZoomSourceView, useMediaZoomSource } from '@/components/media-zoom';
-import { feedCardMediaWidth } from '@/lib/feed-card-geometry';
+import { FEED_CARD_MEDIA_RADIUS, feedCardMediaWidth } from '@/lib/feed-card-geometry';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
 import { FeedVideoActivationContext, useFeedVideoActivation } from '@/lib/feed-video-activation';
 import { PostTextBlock } from '@/components/post-text-block';
@@ -58,10 +58,10 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   const theme = useAppTheme();
   const accent = accentColor(card.accent, theme.colors);
   const hasMedia = card.previewKind !== 'text' && Boolean(card.mediaUrl);
-  // Inside the card's border: the rectangle the reel grows out of and shrinks back into.
+  // The inset media and measured zoom source keep exactly the same width.
   const mediaWidth = feedCardMediaWidth(contentWidth);
   const mediaHeight = hasMedia ? getHomeFeedMediaHeight(card, mediaWidth) : 0;
-  const bodyWidth = contentWidth - appTheme.spacing.card * 2;
+  const bodyWidth = mediaWidth;
   // Subscribed per card, so an election re-renders this card and no other,
   // and the list never re-renders for playback (lib/feed-video-activation.ts).
   const activationStore = useContext(FeedVideoActivationContext);
@@ -74,6 +74,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   // this picture, and shrinks back into it when the reader comes back.
   const mediaItems = getShowcasePreviewMediaItems(card.item);
   const zoomSource = useMediaZoomSource({
+    radius: FEED_CARD_MEDIA_RADIUS,
     itemId: card.item.id,
     aspectRatio: card.aspectRatio ?? null,
     preview: showcaseMediaZoomPreview(mediaItems[0]),
@@ -85,7 +86,6 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
 
   return (
     <FeedCardShell
-      accent={accent}
       categoryLabel={card.categoryLabel}
       creatorAvatar={card.creatorAvatar}
       creatorLabel={card.creatorLabel}
@@ -124,7 +124,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
             mediaItems={mediaItems}
             width={mediaWidth}
             height={mediaHeight}
-            radius={0}
+            radius={FEED_CARD_MEDIA_RADIUS}
             recyclingKey={`home-feed:${card.id}`}
             videoActivation={videoActivation}
             onVideoReadyChange={reportVideoReady}
@@ -139,15 +139,8 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
             flexDirection: 'row',
             alignItems: 'center',
             gap: appTheme.spacing.compact,
-            marginHorizontal: appTheme.spacing.card,
             marginTop: appTheme.spacing.gap,
-            paddingHorizontal: appTheme.spacing.gap,
             paddingVertical: appTheme.spacing.compact,
-            borderRadius: appTheme.radii.sm,
-            borderCurve: 'continuous',
-            borderWidth: 1,
-            borderColor: `${accentColor(card.unlock.accent, theme.colors)}55`,
-            backgroundColor: `${accentColor(card.unlock.accent, theme.colors)}1f`,
           }}
         >
           <Text style={{ color: accentColor(card.unlock.accent, theme.colors), ...appTheme.type.caption, fontWeight: '800' }}>
