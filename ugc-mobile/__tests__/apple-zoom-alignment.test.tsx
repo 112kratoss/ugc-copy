@@ -42,6 +42,7 @@ vi.mock('@/components/apple-zoom', () => import('../components/apple-zoom.ios'))
 
 import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '../components/media-zoom';
 import { appleZoomAlignmentRect, resetMediaZoomTransitions } from '../lib/media-zoom-transition';
+import { rememberDecodedImageAspectRatio } from '../lib/decoded-image-aspect-ratio';
 
 const SCREEN = { width: 402, height: 874 };
 const PREVIEW = { url: 'https://example.test/tile.webp', cacheKey: 'tile', thumbhash: null };
@@ -82,6 +83,13 @@ function mountTile(aspectRatio: number | null) {
 }
 
 describe('a tile under UIKit’s zoom', () => {
+  it('aligns a creation with missing metadata as soon as its preview decodes', () => {
+    const { nativeSource, layOut } = mountTile(null);
+    layOut(HOME_CARD);
+    renderer.act(() => rememberDecodedImageAspectRatio(PREVIEW.url, 1024, 1024));
+    expect(nativeSource().props.alignment).toEqual(appleZoomAlignmentRect(SCREEN, 1, HOME_CARD));
+  });
+
   it('hands the zoom the middle of the picture in its own shape once it has been laid out', () => {
     const { nativeSource, layOut } = mountTile(HOLI);
     expect(nativeSource().props.identifier).toMatch(/^zoom\|.+\|post-1$/);

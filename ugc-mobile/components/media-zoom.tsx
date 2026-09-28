@@ -1,3 +1,4 @@
+import { useDecodedImageAspectRatio } from '@/lib/use-decoded-image-aspect-ratio';
 import {
   createContext,
   useCallback,
@@ -789,7 +790,7 @@ export interface MediaZoomSource {
 export function useMediaZoomSource({
   itemId,
   radius = 0,
-  aspectRatio,
+  aspectRatio: declaredAspectRatio,
   preview = null,
   post = null,
   enabled = true,
@@ -815,6 +816,7 @@ export function useMediaZoomSource({
   post?: ImmersivePreviewItem | null;
   enabled?: boolean;
 }): MediaZoomSource {
+  const aspectRatio = useDecodedImageAspectRatio(declaredAspectRatio, preview?.url);
   const surfaceId = useContext(MediaZoomSurfaceContext);
   // The screen whose veil a tap drops (lib/zoom-veil.ts).
   const veilOwner = useContext(ZoomVeilOwnerContext);

@@ -1,3 +1,4 @@
+import { useDecodedImageAspectRatio } from '@/lib/use-decoded-image-aspect-ratio';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import * as Clipboard from 'expo-clipboard';
 import { Image } from 'expo-image';
@@ -17,7 +18,7 @@ import { DoubleTapPressable } from '@/components/double-tap-pressable';
 import { AppleZoomProgress } from '@/components/apple-zoom-progress';
 import { AppleZoomTarget, useAppleZoomRetarget, useAppleZoomSourceId } from '@/components/apple-zoom';
 import { MediaZoomChrome, MediaZoomStage, peekOpeningPost, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage, useMediaZoomUncovering, type MediaZoomLentVideo } from '@/components/media-zoom';
-import { mediaItemAspectRatio, mediaRectInScreen, showcaseViewerMediaPicture, type ZoomPreview } from '@/lib/media-zoom-transition';
+import { mediaItemAspectRatio, mediaRectInScreen, showcaseMediaZoomPreview, showcaseViewerMediaPicture, type ZoomPreview } from '@/lib/media-zoom-transition';
 import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
 import { restoreVideoPlayback } from '@/lib/video-playback-continuity';
@@ -2133,7 +2134,11 @@ function ImmersiveMedia({
   // The bands around a picture that does not fill the slide are plain black
   // (components/letterbox-bands.tsx). They take the frame's backdrop slot, under
   // the picture. A picture of unknown shape gets the frame's own black backdrop.
-  const mediaAspectRatio = mediaItemAspectRatio(mediaItem);
+  const mediaAspectRatio = useDecodedImageAspectRatio(
+    mediaItemAspectRatio(mediaItem),
+    showcaseMediaZoomPreview(mediaItem)?.url,
+    mediaItem.mediaKind === 'image' ? resolveShowcaseViewerImageSource(mediaItem, failedDisplayUrl).url : null,
+  );
   const letterboxBands = mediaAspectRatio ? (
     <LetterboxBands frame={{ width, height }} aspectRatio={mediaAspectRatio} />
   ) : null;

@@ -262,7 +262,7 @@ Motion explains a change of state; it is never decoration. The tokens are in `ap
 - Use `usePressMotion`, `MotionView`, `useSpringState` and `useOverlayPresence` from `lib/motion.ts` rather than new animation code.
 - **Reduced motion** (`useReducedMotion()`) swaps travel for a fade or a cut. Tab switches drop their animation, and `SaveHeart` becomes a plain swap.
 - **List entrances:** `Reveal` fades a list's first page into place once, at mount. Recycled cells never replay it.
-- **Opening the reel:** a tile opens it with UIKit's zoom transition on iOS (`Link.AppleZoom`, `lib/apple-zoom.ts`) and with the zoom flight in `components/media-zoom.tsx` elsewhere. The reel's chrome draws inside the zoom window, so the hand-over changes no pixel.
+- **Opening the reel:** a tile opens it with UIKit's zoom transition on iOS (`Link.AppleZoom`, `lib/apple-zoom.ts`) and with the zoom flight in `components/media-zoom.tsx` elsewhere. The reel's chrome draws inside the zoom window, so the hand-over changes no pixel. The source and viewer must agree on the uncropped media aspect ratio. When descriptor dimensions are missing, `StableMediaImage` records the native decoded dimensions in a bounded URL-keyed cache; both ends use `useDecodedImageAspectRatio` as their fallback, without resizing the feed crop. This retains Expo Router’s installed native zoom binding. Verified on iOS 26.4 with the square “Have the woman wave” creation: before the fallback, its opening crossfade overlapped differently scaled pictures; after a fresh reload, frame-by-frame opening and Back recordings show aligned pictures. Android’s existing flight remains the fallback; this change was not device-verified on Android.
 
 ### Haptics
 

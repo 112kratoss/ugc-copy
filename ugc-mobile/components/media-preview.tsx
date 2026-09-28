@@ -1,3 +1,4 @@
+import { rememberDecodedImageAspectRatio } from '@/lib/decoded-image-aspect-ratio';
 import { Image, type ImageProps } from 'expo-image';
 import { RecoverableVideoPreview } from '@/components/recoverable-video-preview';
 import { ImageOff } from 'lucide-react-native';
@@ -343,10 +344,11 @@ function StableMediaImageSession({
       onProgress={watchdog ? () => {
         progress.current = { ...progressFor(attemptKey), progressed: true };
       } : undefined}
-      onLoad={watchdog ? (event) => {
-        progress.current = { ...progressFor(attemptKey), loaded: true };
+      onLoad={(event) => {
+        rememberDecodedImageAspectRatio(initialUrl, event.source.width, event.source.height);
+        if (watchdog) progress.current = { ...progressFor(attemptKey), loaded: true };
         onLoad?.(event);
-      } : onLoad}
+      }}
       onDisplay={() => {
         if (displayedAttemptKey !== attemptKey) setDisplayedAttemptKey(attemptKey);
         if (retryingBehindPlate) {

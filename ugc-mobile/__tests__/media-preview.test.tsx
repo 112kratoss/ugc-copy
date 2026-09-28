@@ -62,6 +62,7 @@ vi.mock('lucide-react-native', () => ({
 }));
 
 import { StableMediaImage } from '../components/media-preview';
+import { decodedImageAspectRatio } from '../lib/decoded-image-aspect-ratio';
 import { clearMediaDiagnosticsForTests, readMediaDiagnostics } from '../lib/media-diagnostics';
 import {
   MEDIA_AUTO_RETRY_BASE_DELAY_MS,
@@ -91,6 +92,18 @@ function exhaustImageLoad(tree: renderer.ReactTestRenderer) {
 }
 
 describe('StableMediaImage', () => {
+  it('makes native decoded dimensions available to the zoom without swallowing onLoad', () => {
+    const url = 'https://cdn/decoded-for-zoom.webp';
+    const onLoad = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(<StableMediaImage url={url} cacheKey="decoded-for-zoom" onLoad={onLoad} />); });
+    const event = { source: { width: 1024, height: 1024 } };
+    renderer.act(() => tree.root.findByType('image' as never).props.onLoad(event));
+    expect(decodedImageAspectRatio(url)).toBe(1);
+    expect(onLoad).toHaveBeenCalledWith(event);
+    renderer.act(() => tree.unmount());
+  });
+
   beforeEach(() => {
     imageState.prefetch.mockClear();
     vi.useFakeTimers();
