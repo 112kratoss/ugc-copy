@@ -1,8 +1,15 @@
 # Profile counts: one rule, one source, carried across launches
 
-Status: plan, written 2026-09-28 after #234 (the last-known balance, profile,
-sales total and badge now survive a cold start). Nothing below has started.
-Paths are relative to `ugc-app/`; mobile paths are under `ugc-mobile/`.
+Status: steps 1–3 implemented on 2026-09-28 in the PR stacked on #234 (branch
+`mobile/profile-counts`): the migration and its pgTAP test, `/api/profile`
+carrying `stats` and `sales`, and the mobile header, Wallet, side menu and
+count deltas. Left: step 4 (OTA after the web deploy), step 5 (web hub,
+optional) and step 6 (delete the `+` fallback, then archive this plan). Two
+rules moved while writing the SQL: the database allows no `text` category
+(`generations_category_check`: image, video, audio), so the app's text-kind
+branch has no row to count, and a legacy `completed` status is not counted
+because the app draws only `succeeded` as finished. Paths are relative to
+`ugc-app/`; mobile paths are under `ugc-mobile/`.
 
 Scope: the three numbers in the profile header (Creations, Posts, Saved), the
 Wallet card, the side menu's Total sales, `/api/profile`, one SQL function with
@@ -46,7 +53,7 @@ once in SQL and pinned by a pgTAP fixture set that mirrors the mobile
 
 | Number | Lists as | Rule |
 |---|---|---|
-| Creations | Profile ▸ Creations (`isCreationLibraryMember` in `lib/creation-library.ts`) | `generations` owned by the person **and their merged guest ids** (the list resolves `ownerUserIds` through `profiles.merged_into_user_id`, `lib/owner-generations-route-service.ts`), `archived_at IS NULL`, `status = 'succeeded'`, the studio rule `(template_run_id IS NULL AND template_run_step_id IS NULL) OR studio_visible`, and one of: `source_unavailable_at IS NOT NULL`, `category = 'text'`, `output_url IS NOT NULL`, `output_urls` non-empty. A succeeded run with no output stays out, as it does in the grid. |
+| Creations | Profile ▸ Creations (`isCreationLibraryMember` in `lib/creation-library.ts`) | `generations` owned by the person **and their merged guest ids** (the list resolves `ownerUserIds` through `profiles.merged_into_user_id`, `lib/owner-generations-route-service.ts`), `archived_at IS NULL`, `status = 'succeeded'`, the studio rule `(template_run_id IS NULL AND template_run_step_id IS NULL) OR studio_visible`, and one of: `source_unavailable_at IS NOT NULL`, `output_url IS NOT NULL`. A succeeded run with no output stays out, as it does in the grid. (The app's text-kind branch has no row in the database, see Status.) |
 | Posts | Profile ▸ Posts, active scope | `posts` with `user_id = me`, `archived_at IS NULL`, any visibility, any `review_status` (the owner list in `lib/owner-posts.ts` filters neither). |
 | Archived posts | Profile ▸ Posts, archived scope | same, `archived_at IS NOT NULL`. Free once the function exists; the scope switch can show it. |
 | Saved | Profile ▸ Saved | `post_saves` for me joined to `posts` with `visibility IN ('public','unlisted')`, `review_status = 'visible'`, `archived_at IS NULL`, minus posts whose creator is blocked in either direction (`loadBlockedCreatorIds` in `lib/moderation-service.ts` checks both). When the person has no `post_saves` rows at all, count `showcase_saves` joined on `posts.generation_id` under the same post filters, which is the legacy branch in `lib/showcase-saved-media-service.ts`. |

@@ -7,7 +7,6 @@ import { type GestureResponderEvent, useWindowDimensions, View } from 'react-nat
 import { HomeSideMenu } from '@/components/home-side-menu';
 import { useAuth } from '@/lib/auth';
 import { EDGE_SWIPE_START_WIDTH } from '@/lib/edge-swipe-menu';
-import { getOwnerPostSalesSummary } from '@/lib/home-view-model';
 import {
   shouldOpenWorkspaceSideMenu,
   shouldTrackWorkspaceSideMenuTouchStart,
@@ -64,17 +63,8 @@ export function WorkspaceSideMenuGestureLayer({
     staleTime: 1000 * 60 * 5,
   });
 
-  const sellerPostsQuery = useQuery({
-    queryKey: ['owner-posts-sales-summary', user?.id],
-    enabled: Boolean(user && menuVisible),
-    queryFn: () => api.listOwnerPosts({ includeArchived: true, includeSummary: true, limit: 1, visibility: 'all' }),
-    staleTime: 1000 * 60 * 2,
-  });
-
-  const salesSummary = useMemo(
-    () => sellerPostsQuery.data?.summary ?? getOwnerPostSalesSummary(sellerPostsQuery.data?.posts),
-    [sellerPostsQuery.data]
-  );
+  // The seller total rides on the profile; unknown until the profile has answered.
+  const totalSalesUsdCents = profileQuery.data?.sales?.earningsUsdCents ?? null;
 
   const handleTouchStart = (event: GestureResponderEvent) => {
     const touch = event.nativeEvent.touches[0];
@@ -126,8 +116,7 @@ export function WorkspaceSideMenuGestureLayer({
         user={user}
         profile={profileQuery.data}
         credits={credits}
-        totalSalesUsdCents={salesSummary.earningsUsdCents}
-        totalSalesLoading={Boolean(user) && sellerPostsQuery.isLoading}
+        totalSalesUsdCents={totalSalesUsdCents}
         onSignOut={signOut}
       />
     </WorkspaceSideMenuContext.Provider>

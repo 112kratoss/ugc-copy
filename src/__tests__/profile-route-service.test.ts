@@ -28,22 +28,33 @@ const user: ProfileRouteUser = {
   user_metadata: { full_name: 'Creator Metadata', avatar_url: 'https://example.test/avatar.png' },
 };
 
+const COUNTS = { creations: 6, posts: 3, archivedPosts: 1, saved: 2 };
+const SALES = { earningsUsdCents: 1250, listingCount: 3, salesCount: 4 };
+
 function createClient({
   profiles = [] as ProfileRow[],
   rateLimitAllowed = true,
   upsertError = null as { code?: string; message?: string } | null,
+  counts = COUNTS as unknown,
+  countsError = null as { message: string } | null,
+  sales = SALES as unknown,
+  salesError = null as { message: string } | null,
 } = {}) {
   const rows = [...profiles];
-  const rpc = vi.fn(async () => ({
-    data: {
-      allowed: rateLimitAllowed,
-      limit: 30,
-      remaining: rateLimitAllowed ? 29 : 0,
-      retryAfterSeconds: rateLimitAllowed ? 0 : 40,
-      resetAt: '2026-06-22T06:30:00.000Z',
-    },
-    error: null,
-  }));
+  const rpc = vi.fn(async (name: string) => {
+    if (name === 'owner_profile_counts') return { data: countsError ? null : counts, error: countsError };
+    if (name === 'get_owner_post_sales_summary') return { data: salesError ? null : sales, error: salesError };
+    return {
+      data: {
+        allowed: rateLimitAllowed,
+        limit: 30,
+        remaining: rateLimitAllowed ? 29 : 0,
+        retryAfterSeconds: rateLimitAllowed ? 0 : 40,
+        resetAt: '2026-06-22T06:30:00.000Z',
+      },
+      error: null,
+    };
+  });
   const upserts: Record<string, unknown>[] = [];
 
   const from = vi.fn((table: string) => {
@@ -128,6 +139,23 @@ function createClient({
   };
 }
 
+function storedProfile(): ProfileRow {
+  return {
+    id: user.id,
+    username: 'luna',
+    display_name: 'Luna Dreams',
+    bio: null,
+    avatar_url: null,
+    cover_url: null,
+    website_url: null,
+    twitter_handle: null,
+    instagram_handle: null,
+    tiktok_handle: null,
+    location: null,
+    credits: 12,
+  };
+}
+
 describe('profile route service', () => {
   it('returns a starter profile payload when no profile row exists', async () => {
     const client = createClient();
@@ -148,6 +176,51 @@ describe('profile route service', () => {
         tiktokHandle: null,
         location: null,
         credits: null,
+        stats: COUNTS,
+        sales: SALES,
+      },
+    });
+  });
+
+  it('says the library totals and the seller summary beside a stored profile, from the service-role RPCs', async () => {
+    const client = createClient({ profiles: [storedProfile()] });
+
+    const result = await getProfileForRoute({ user, client: client.client });
+
+    expect(result).toMatchObject({
+      ok: true,
+      response: { id: user.id, username: 'luna', credits: 12, stats: COUNTS, sales: SALES },
+    });
+    expect(client.rpc).toHaveBeenCalledWith('owner_profile_counts', { p_user_id: user.id });
+    expect(client.rpc).toHaveBeenCalledWith('get_owner_post_sales_summary', { p_owner_id: user.id });
+  });
+
+  it('leaves a total out when its read fails, and still returns the profile', async () => {
+    const client = createClient({ profiles: [storedProfile()], countsError: { message: 'count timed out' } });
+
+    const result = await getProfileForRoute({ user, client: client.client });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.response.username).toBe('luna');
+    expect(result.response).not.toHaveProperty('stats');
+    expect(result.response.sales).toEqual(SALES);
+  });
+
+  it('keeps every total a whole, non-negative number whatever the database sends', async () => {
+    const client = createClient({
+      profiles: [storedProfile()],
+      counts: { creations: '7', posts: -2, archivedPosts: 1.6, saved: null },
+      sales: { earningsUsdCents: '90', listingCount: undefined },
+    });
+
+    const result = await getProfileForRoute({ user, client: client.client });
+
+    expect(result).toMatchObject({
+      ok: true,
+      response: {
+        stats: { creations: 7, posts: 0, archivedPosts: 2, saved: 0 },
+        sales: { earningsUsdCents: 90, listingCount: 0, salesCount: 0 },
       },
     });
   });

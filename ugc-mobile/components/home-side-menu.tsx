@@ -40,7 +40,7 @@ import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { formatUsdCents } from '@/lib/home-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
-import { CREDIT_BALANCE_LOADING_LABEL, formatCreditAmount } from '@/lib/pricing';
+import { CREDIT_BALANCE_LOADING_LABEL, UNKNOWN_AMOUNT_LABEL, formatCreditAmount } from '@/lib/pricing';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -64,8 +64,8 @@ interface HomeSideMenuProps {
   profile: ProfileResponse | null | undefined;
   /** Null until the balance is known; never drawn as 0, which reads as an empty balance. */
   credits: number | null;
-  totalSalesUsdCents: number;
-  totalSalesLoading: boolean;
+  /** Null until the profile has answered; drawn as a dash, never as $0. */
+  totalSalesUsdCents: number | null;
   onSignOut: () => Promise<void>;
 }
 
@@ -76,7 +76,6 @@ export function HomeSideMenu({
   profile,
   credits,
   totalSalesUsdCents,
-  totalSalesLoading,
   onSignOut,
 }: HomeSideMenuProps) {
   const theme = useAppTheme();
@@ -372,7 +371,7 @@ export function HomeSideMenu({
             </Pressable>
 
             <View
-              accessibilityLabel={totalSalesLoading ? 'Total sales loading' : `Total sales ${formatUsdCents(totalSalesUsdCents)}`}
+              accessibilityLabel={totalSalesUsdCents === null ? 'Total sales loading' : `Total sales ${formatUsdCents(totalSalesUsdCents)}`}
               style={{
                 minHeight: 72,
                 borderRadius: 20,
@@ -389,8 +388,8 @@ export function HomeSideMenu({
                 </View>
                 <View style={{ gap: 1, minWidth: 0, flex: 1 }}>
                   <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 15, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6 }}>Total sales</Text>
-                  <Text style={{ color: theme.colors.text, fontSize: 22, lineHeight: 28, fontWeight: '800', fontVariant: ['tabular-nums'] }}>
-                    {totalSalesLoading ? 'Loading…' : formatUsdCents(totalSalesUsdCents)}
+                  <Text style={{ color: totalSalesUsdCents === null ? theme.colors.muted : theme.colors.text, fontSize: 22, lineHeight: 28, fontWeight: '800', fontVariant: ['tabular-nums'] }}>
+                    {totalSalesUsdCents === null ? UNKNOWN_AMOUNT_LABEL : formatUsdCents(totalSalesUsdCents)}
                   </Text>
                 </View>
               </View>

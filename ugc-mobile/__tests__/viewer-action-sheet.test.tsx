@@ -223,17 +223,10 @@ describe('ViewerActionSheet permanent delete', () => {
       result.pages[0].posts.every((post) => post.id !== 'post-123')
     ))).toBe(true);
 
-    // The sales summary is not paginated and keeps the flat updater.
-    const summaryCall = queryClientState.setQueryData.mock.calls.find(([queryKey]) =>
+    // The seller total rides on the profile now; no summary cache is patched.
+    expect(queryClientState.setQueryData.mock.calls.some(([queryKey]) =>
       Array.isArray(queryKey) && queryKey[0] === 'owner-posts-sales-summary'
-    );
-    const updateSummary = summaryCall?.[1] as
-      | ((current: { success: boolean; posts: Array<{ id: string }> }) => { posts: Array<{ id: string }> })
-      | undefined;
-    expect(updateSummary?.({
-      success: true,
-      posts: [{ id: 'post-123' }, { id: 'keep-post' }],
-    }).posts).toEqual([{ id: 'keep-post' }]);
+    )).toBe(false);
     expect(onSourceRefresh).toHaveBeenCalled();
     expect(onDeleted).toHaveBeenCalledWith('post-123');
   });

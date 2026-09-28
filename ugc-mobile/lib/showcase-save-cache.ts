@@ -82,6 +82,8 @@ export function scheduleShowcaseSaveCompletionEffects({
   for (const queryKey of [
     ['showcase-post', postId],
     ['profile-saved-media', userId],
+    // The profile header's Saved count rides on the profile.
+    ['profile', userId],
   ] as const) {
     ignoreRejectedBackgroundWork(invalidateQueries({ queryKey }));
   }

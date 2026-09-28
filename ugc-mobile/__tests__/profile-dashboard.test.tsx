@@ -611,6 +611,47 @@ describe('ProfileDashboard media tiles routing', () => {
     }
   });
 
+  it('draws the server totals in the header and the seller total on the Wallet card', () => {
+    const baseProfile = queryState.profileData;
+    (queryState as { profileData: unknown }).profileData = {
+      ...baseProfile,
+      stats: { creations: 142, posts: 19, archivedPosts: 1, saved: 11 },
+      sales: { earningsUsdCents: 1250, listingCount: 3, salesCount: 4 },
+    };
+    try {
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<ProfileDashboard />);
+      });
+      const texts = tree!.root
+        .findAll((node) => node.type === 'text' && typeof node.props.children === 'string')
+        .map((node) => node.props.children as string);
+      // Totals, not the empty libraries the mock pages in, and no plus sign.
+      expect(texts).toEqual(expect.arrayContaining(['142', '19', '11']));
+      expect(texts.some((text) => text.endsWith('+'))).toBe(false);
+      expect(findPressableByText(tree!.root, 'Wallet')
+        .findAll((node) => node.type === 'text' && node.props.children === '$12.50')).toHaveLength(1);
+    } finally {
+      queryState.profileData = baseProfile;
+    }
+  });
+
+  it('falls back to the paged counts without totals, and draws a dash for a Wallet total nobody sent', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard />);
+    });
+    const texts = tree!.root
+      .findAll((node) => node.type === 'text' && typeof node.props.children === 'string')
+      .map((node) => node.props.children as string);
+    // Each library here has paged in one card and has no more, so the header
+    // says 1 · 1 · 1 the old way; the unknown-library dash is pinned in
+    // profile-view-model.test.ts, since this mock always answers.
+    expect(texts.filter((text) => text === '1')).toHaveLength(3);
+    expect(findPressableByText(tree!.root, 'Wallet')
+      .findAll((node) => node.type === 'text' && node.props.children === '–')).toHaveLength(1);
+  });
+
   it('opens Your Sales from the Wallet card', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
