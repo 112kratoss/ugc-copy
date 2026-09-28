@@ -1,6 +1,6 @@
 # Backend audit section 5C — marketplace quotes and paid access
 
-Date: 2026-09-28. Status: verified locally; production release pending.
+Date: 2026-09-28. Status: deployed and production-verified through PR #236, live commit `bd0f983e18b13990b0fbd9355ab6b89b259119c4`. See [release evidence](backend-section-05-commerce-release-2026-09-28.md).
 
 ## Reproduced defect and repair
 
@@ -32,7 +32,9 @@ The bundle completion function already uses its immutable quoted revision and pr
 - All 61 focused marketplace, post-resource and webhook test files passed: 411 tests.
 - The production probe `scripts/ops/verify-marketplace-cash-quotes.sql` passed locally under service-role permissions. It runs fixture-only transitions inside a rollback transaction, with temporary invoker assertions and bounded lock/statement timeouts.
 - App/test typechecks and targeted lint passed.
-- PR Quality, exact-main Quality and production release: pending.
+- PR Quality [36379261246](https://github.com/112kratoss/ugc-copy/actions/runs/36379261246): all four jobs passed. Web: 6,012 tests; mobile: 2,738; browser: 18; database: 1,781 assertions plus 2 credit concurrency tests and 4 real-handler/database tests.
+- Production pre-release financial ownership probe passed 48 rollback-only assertions, with zero remaining fixtures; eight commerce endpoints passed 16 invalid-auth/no-store HTTP checks.
+- Exact-main Quality [36379991804](https://github.com/112kratoss/ugc-copy/actions/runs/36379991804) passed; production release [36380693661](https://github.com/112kratoss/ugc-copy/actions/runs/36380693661) succeeded.
 
 ## Limits and remaining work
 
