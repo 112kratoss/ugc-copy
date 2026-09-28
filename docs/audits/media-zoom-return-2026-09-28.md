@@ -32,3 +32,23 @@ The user subsequently reported a white background/overlay while opening. Simulat
 The veil now uses a rounded cutout with the source tile's radius. Native Saved zooms keep the source at its laid-out size instead of running a competing press-scale animation. The registered native source has an opaque black background and clips to its rounded bounds. Saved tiles also omit their ordinary light border on this path, preventing UIKit from enlarging it into a bright outline. Apple still owns the zoom animation; dismissal progress and player handoff are unchanged.
 
 Frame-by-frame simulator review confirmed removal of the rectangular white rim and the bright snapshot edge. Both video and image opening/Back cycles were exercised during the follow-up. This remains local simulator verification, not a physical-device or release certification.
+
+## Nested zoom follow-up
+
+A second simulator pass (same device, production data) found four more defects. Each was reproduced and then fixed.
+
+- **A reel opened from a page above another reel took the first reel's veil down.** Path: Explore → reel → @creator → a post → Back → Back → close. The veil and its native progress binding were single global values, so the second reel's close cleared them while the first reel was still up. The first reel then shrank into Explore over the lit feed, with its black bands showing. Each screen now owns its veil (`ZoomVeilScope`). The tap records its drop in the zoom origin, and only the reel it opened can drive that veil.
+- **Light corners when popping a page back to a reel.** iOS 26 draws the revealed reel with the display's rounded corners over the app's light ground. A black backdrop now sits behind the navigator while a reel shows or a pop reveals it (`lib/reel-backdrop.ts`).
+- **A light frame when a reel closes into a pushed page.** UIKit scales the page up from about 92% during the close. The backdrop outlasts a reel that Back removed until its close has landed.
+- **The creator page's navigator bar sat above the veil.** Where the zoom runs, the page now draws its own bar, which the veil covers and a close never re-lays out.
+
+The veil follows the reel's transition progress for as long as the reel is up. An intermediate version switched it to a plain number once the reel had landed. That detaches the Animated graph, and React Native then drops the native nodes of the transition's values. When the graph was attached again at the next dismissal gesture, react-native-screens no longer drove it, so gesture closes ran over solid black. `apple-zoom-open.test.tsx` now fails if the veil's opacity source changes during the reel's life.
+
+Verified frame by frame on the simulator:
+
+- Saved: Back, edge swipe and drag-down.
+- Home: Back and drag-down.
+- Explore: Back and edge swipe.
+- The nested chain above, ending in an edge swipe that follows the finger over Explore.
+
+The mobile suite passes (2,714 tests) and the typecheck is clean. As before, this is local simulator verification, not device or release certification.
