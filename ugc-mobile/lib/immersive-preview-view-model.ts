@@ -138,6 +138,8 @@ export function immersiveViewerHref({
   mediaOnly,
   source,
   initialId,
+  initialPage,
+  initialSection,
   zoom = null,
 }: {
   algorithmVersion?: string | null;
@@ -146,6 +148,9 @@ export function immersiveViewerHref({
   mediaOnly?: boolean;
   source: PreviewViewerSource;
   initialId: string;
+  /** Read more opens the previewed text on the existing Details page. */
+  initialPage?: 'details';
+  initialSection?: 'story' | 'prompt';
   /** The zoom the tapped tile hands the push on iOS 18 (lib/apple-zoom.ts). */
   zoom?: AppleZoomOpen | null;
 }) {
@@ -154,6 +159,8 @@ export function immersiveViewerHref({
     params: {
       source,
       initialId,
+      ...(initialPage ? { initialPage } : {}),
+      ...(initialSection ? { initialSection } : {}),
       ...(mediaOnly ? { mediaOnly: '1' } : {}),
       ...(feedSessionId ? { feedSessionId } : {}),
       ...(algorithmVersion ? { algorithmVersion } : {}),
@@ -185,7 +192,7 @@ export function textPostViewerHref({
 
 export function immersivePreviewOpenHref(
   item: ImmersivePreviewItem,
-  options: { comments?: boolean; zoom?: AppleZoomOpen | null } = {}
+  options: { comments?: boolean; initialPage?: 'details'; initialSection?: 'story' | 'prompt'; zoom?: AppleZoomOpen | null } = {}
 ) {
   if (item.previewKind === 'text' && item.sourceType !== 'generation') {
     return textPostViewerHref({
@@ -199,7 +206,7 @@ export function immersivePreviewOpenHref(
     });
   }
 
-  return immersiveViewerHref({ source: item.source, initialId: item.id, zoom: options.zoom });
+  return immersiveViewerHref({ source: item.source, initialId: item.id, initialPage: options.initialPage, initialSection: options.initialSection, zoom: options.zoom });
 }
 
 /**

@@ -23,6 +23,15 @@ it('copies the full prompt from its collapsed preview and expands selectable tex
   renderer.act(() => tree.unmount());
 });
 
+it('shows the complete prompt immediately when Read more targeted it', async () => {
+  const text = 'A long source prompt with details. '.repeat(25);
+  let tree!: renderer.ReactTestRenderer;
+  await renderer.act(async () => { tree = renderer.create(<ResourcePrompt text={text} initiallyExpanded />); });
+  expect(tree.root.findAllByProps({ selectable: true })[0].props.numberOfLines).toBeUndefined();
+  expect(tree.root.findAllByProps({ accessibilityLabel: 'Collapse prompt' }).length).toBeGreaterThan(0);
+  renderer.act(() => tree.unmount());
+});
+
 // The reader swipes to the next post's prompt; the previous one's expansion
 // must not carry over onto it.
 it('collapses again when a different prompt takes its place', async () => {

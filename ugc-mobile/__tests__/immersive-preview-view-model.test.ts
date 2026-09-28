@@ -211,6 +211,11 @@ describe('immersive preview view model', () => {
     expect(immersivePreviewOpenHref(savedText!, { comments: true }))
       .toBe('/post/saved-text?source=profile-saved&comments=saved-text');
     expect(immersivePreviewOpenHref(ownerText!)).toBe('/post/owner-text?source=profile-posts');
+    expect(immersivePreviewOpenHref(savedImage!, { initialPage: 'details', initialSection: 'story' })).toMatchObject({
+      pathname: '/viewer', params: { initialId: savedImage!.id, initialPage: 'details', initialSection: 'story' },
+    });
+    expect(immersivePreviewOpenHref(savedText!, { initialPage: 'details' }))
+      .toBe('/post/saved-text?source=profile-saved');
     expect(immersivePreviewOpenHref(savedImage!)).toEqual({
       pathname: '/viewer',
       params: { source: 'profile-saved', initialId: 'saved-image' },

@@ -7,18 +7,20 @@ export function slidePageKey(page: ImmersiveSlidePage) {
   return page.type === 'media' ? `media:${page.mediaItem.id}` : page.type;
 }
 
-export function initialViewerPosition(item: ImmersivePreviewItem): ViewerPosition {
-  const pageKey = buildImmersiveSlidePages(item).map(slidePageKey)[0] ?? 'text';
-  return { itemId: item.id, pageKey, mediaPageKey: pageKey };
+export function initialViewerPosition(item: ImmersivePreviewItem, initialPage?: 'details'): ViewerPosition {
+  const pages = buildImmersiveSlidePages(item);
+  const pageKey = pages.map(slidePageKey)[0] ?? 'text';
+  const opensDetails = initialPage === 'details' && pages.some((page) => page.type === 'details');
+  return { itemId: item.id, pageKey: opensDetails ? 'details' : pageKey, mediaPageKey: pageKey };
 }
 
 /** Keep identity through refetch/reordering; only missing content needs a fallback. */
-export function resolveViewerPosition(items: ImmersivePreviewItem[], saved: ViewerPosition | null, initialId: string) {
+export function resolveViewerPosition(items: ImmersivePreviewItem[], saved: ViewerPosition | null, initialId: string, initialPage?: 'details') {
   const item = items.find((candidate) => candidate.id === saved?.itemId)
     ?? items.find((candidate) => candidate.id === initialId)
     ?? items[0];
   if (!item) return null;
-  if (!saved || item.id !== saved.itemId) return initialViewerPosition(item);
+  if (!saved || item.id !== saved.itemId) return initialViewerPosition(item, !saved && item.id === initialId ? initialPage : undefined);
   const keys = buildImmersiveSlidePages(item).map(slidePageKey);
   const first = keys[0] ?? 'text';
   return {

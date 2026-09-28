@@ -48,7 +48,7 @@ const CREATOR_ROW_HEIGHT = 36;
 const DETAILS_TITLE_MAX_LINES = 6;
 
 /**
- * The details behind a post: who made it, the prompt, the caption, and the
+ * The details behind a post: who made it, the prompt, the story, and the
  * creator's unlockable resources. One surface, two hosts — the reel's
  * swipe-left page and the text post screen's second page — so it carries its
  * own header and its own way back.
@@ -58,6 +58,7 @@ export function PostDetailsPage({
   bottomInset,
   height,
   hostRendersPostText = false,
+  initialSection,
   item,
   onActionsOpen,
   onBack,
@@ -80,6 +81,8 @@ export function PostDetailsPage({
    * place the post is named without truncation, it does not.
    */
   hostRendersPostText?: boolean;
+  /** The card's Read more opens the section containing its previewed text. */
+  initialSection?: 'story' | 'prompt';
   item: ImmersivePreviewItem;
   onActionsOpen?: () => void;
   onBack?: () => void;
@@ -300,14 +303,20 @@ export function PostDetailsPage({
           </View>
         </View>
 
+        {initialSection === 'story' && captionText ? (
+          <DetailSection title="Story">
+            <CopyableText text={captionText} onCopy={copyText} />
+          </DetailSection>
+        ) : null}
+
         <DetailSection title="Prompt">
           {details.prompt ? (
-            <ResourcePrompt text={details.prompt} onCopy={copyText} />
+            <ResourcePrompt text={details.prompt} onCopy={copyText} initiallyExpanded={initialSection === 'prompt'} />
           ) : null}
         </DetailSection>
 
-        <DetailSection title="Caption">
-          {captionText ? (
+        <DetailSection title="Story">
+          {initialSection !== 'story' && captionText ? (
             <CopyableText text={captionText} onCopy={copyText} />
           ) : null}
         </DetailSection>

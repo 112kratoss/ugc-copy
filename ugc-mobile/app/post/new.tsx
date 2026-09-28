@@ -3991,11 +3991,11 @@ function StorySection({
         />
       )}
     >
-      <FieldBlock label={draft.proofMode === 'text' ? 'Post body' : 'Caption'}>
+      <FieldBlock label={draft.proofMode === 'text' ? 'Post body' : 'Story'}>
         <ComposerInput
           value={draft.proofMode === 'text' ? draft.contentText : draft.caption}
           onChangeText={(value) => onChange(draft.proofMode === 'text' ? { contentText: value } : { caption: value })}
-          placeholder={draft.proofMode === 'text' ? 'Write the post content…' : 'Write an optional caption…'}
+          placeholder={draft.proofMode === 'text' ? 'Write the post content…' : 'Write an optional story…'}
           multiline
           minHeight={130}
           editable={!disabled}

@@ -409,7 +409,10 @@ Beyond `ui.tsx`:
 - `top-scrim.tsx`: the fade under the status bar on scrolling tab roots.
 - `double-tap-pressable.tsx`: a double-tap on media.
 
-Feed hierarchy: creator attribution, title and optional body, media, actions, and optional resource metadata. Other cards lead with media or an icon, then title, a short body, and one clear action. Avoid cards inside decorative cards, mixed radii in one list, and more than one primary action per card.
+Feed hierarchy: creator attribution, title, media, optional story preview, actions, and optional resource metadata. Text-only posts keep their body directly below the title. Other cards lead with media or an icon, then title, a short body, and one clear action. Avoid cards inside decorative cards, mixed radii in one list, and more than one primary action per card.
+
+The public writing on a media post is labelled **Story** in the composer and Details. **Read more** in Home and Profile has its own compact tap target and opens the existing Details page directly, with the previewed Story first or the full Prompt expanded when that is what the card showed; tapping the title, media, or preview text opens the media or post normally. Text-only posts open their dedicated post screen. Feed previews stay clamped. Media taps retain their normal opening transition. Read-more navigation uses Expo Router’s existing native stack and the horizontal list’s native `contentOffset` for the first frame, with no new animation or native module. Back from Details returns to the remembered media page.
+
 
 Button copy uses verbs ("Generate image", "Publish post", "Save", "Remix"). A bare "Open" is fine only when the destination is obvious.
 
@@ -430,7 +433,8 @@ These describe the app as of 0.1.6; each screen's `hig-*` test pins the details.
 4. **The feed.** A FlashList of posts on the page background, separated by hairlines:
    - media cards open the reel;
    - written posts open the post page;
-   - the comment control opens comments directly.
+   - the comment control opens comments directly;
+   - the unused space within a card opens that card's post, while its labelled controls keep their own actions. There is no footer beneath the action row: remix descriptions, resource summaries, and unlock labels belong in the post details.
 
 Rules:
 
@@ -559,7 +563,7 @@ Buying and restoring show loading, success and error states.
 
 What scrolls and swipes has a frame budget, and every rule here came from a measured regression on the phones. `feed-render-cost.test.ts` pins them.
 
-- **Keep feed rows flat and unclipped.** Home and Profile share a byline → title/body → rounded media → outlined actions layout. Only the media is rounded; its preview and zoom source use `FEED_CARD_MEDIA_RADIUS`, and `feedCardMediaWidth` subtracts the shared inset so the image and measured source have the same width. `overflow: 'hidden'` on a card costs iOS an offscreen pass per card per frame.
+- **Keep feed rows flat and unclipped.** Home and Profile share a byline → title → rounded media → story preview → outlined actions layout; text-only posts show the body below the title. Only the media is rounded; its preview and zoom source use `FEED_CARD_MEDIA_RADIUS`, and `feedCardMediaWidth` subtracts the shared inset so the image and measured source have the same width. `overflow: 'hidden'` on a card costs iOS an offscreen pass per card per frame.
 - **No box shadows on scrolled content.** The create disc uses a path shadow over its opaque fill.
 - **Gradients use React Native's own** on anything that mounts while scrolling or swiping: `experimental_backgroundImage` with `linearGradient()` from `lib/eased-fade.ts`, drawn by the render server. expo-linear-gradient paints on the main thread each time its view appears, which cost 16–27 ms per rail switch and per reel open on the iPhone.
 - **Pause what nobody sees.**

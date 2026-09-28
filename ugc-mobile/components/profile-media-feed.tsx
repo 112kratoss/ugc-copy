@@ -28,6 +28,7 @@ import type { ViewerActionCallbacks } from '@/lib/use-viewer-action-handlers';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
+import { feedReadMoreSection } from '@/lib/feed-read-more';
 import {
   normalizeParam,
   normalizeViewerSource,
@@ -103,7 +104,6 @@ export function ProfileMediaFeedScreen() {
   const listRef = useRef<FlashListRef<ProfileFeedCard>>(null);
   const [actionsOpenItemId, setActionsOpenItemId] = useState<string | null>(null);
   const [commentsOpenItemId, setCommentsOpenItemId] = useState<string | null>(null);
-  const [expandedBodyIds, setExpandedBodyIds] = useState<Record<string, boolean>>({});
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
 
@@ -268,7 +268,7 @@ export function ProfileMediaFeedScreen() {
 
   const openItem = useCallback((
     item: ImmersivePreviewItem,
-    options: { comments?: boolean; zoom?: AppleZoomOpen | null } = {}
+    options: { comments?: boolean; initialPage?: 'details'; initialSection?: 'story' | 'prompt'; zoom?: AppleZoomOpen | null } = {}
   ) => {
     router.push(immersivePreviewOpenHref(item, options) as never);
   }, []);
@@ -507,7 +507,7 @@ export function ProfileMediaFeedScreen() {
           : card.sourceUnavailable
             ? 'unavailable'
             : card.item.mediaKind ?? 'image'}
-        extraData={{ activeVideoId, expandedBodyIds, isFocused, pendingAction }}
+        extraData={{ activeVideoId, isFocused, pendingAction }}
         maintainVisibleContentPosition={{ disabled: true }}
         onLoad={() => {
           setListReady(true);
@@ -552,13 +552,12 @@ export function ProfileMediaFeedScreen() {
             contentWidth={cardWidth}
             showActiveVideo={isFocused && activeVideoId === card.id}
             mediaWatchdog={isFocused}
-            bodyExpanded={Boolean(expandedBodyIds[card.id])}
             pendingAction={pendingAction}
             onOpen={(zoom) => openItem(card.item, { zoom })}
-            onToggleBody={() => setExpandedBodyIds((current) => ({
-              ...current,
-              [card.id]: !current[card.id],
-            }))}
+            onReadMore={() => openItem(card.item, {
+              initialPage: 'details',
+              initialSection: feedReadMoreSection(card.bodyText, card.item.details ?? {}),
+            })}
             onActionsOpen={() => setActionsOpenItemId(card.id)}
             onAction={(action) => runCardAction(action, card.item)}
           />

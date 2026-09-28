@@ -26,9 +26,9 @@ import { verticalHitSlop } from '@/lib/hit-target';
 
 /**
  * The card chrome shared by the Home feed and the Profile media feed: a thin
- * attribution line, title and body, rounded media, and quiet actions. Posts
+ * attribution line, title, rounded media, caption, and quiet actions. Posts
  * sit on the page itself and are separated by a hairline, without an outer
- * card or clipping layer. A text post uses the same reading order.
+ * card or clipping layer. A text post keeps its body below the title.
  *
  * Both surfaces compose this rather than owning their own copy — the Profile
  * tabs previously rendered a separately-authored card that drifted into a
@@ -36,7 +36,6 @@ import { verticalHitSlop } from '@/lib/hit-target';
  */
 export function FeedCardShell({
   actions,
-  banner,
   body,
   categoryLabel,
   creatorAvatar,
@@ -47,6 +46,7 @@ export function FeedCardShell({
   moreAccessibilityLabel,
   renderMoreMenu,
   media,
+  readMore,
   onOpen,
   onOpenTouchStart,
   nativeZoom = false,
@@ -56,7 +56,6 @@ export function FeedCardShell({
   title,
 }: {
   actions: ReactNode;
-  banner?: ReactNode;
   body?: ReactNode;
   categoryLabel: string;
   creatorAvatar: string | null;
@@ -73,6 +72,8 @@ export function FeedCardShell({
    */
   renderMoreMenu?: (more: { trigger: NativeMenuTrigger; renderButton: (onPress: () => void) => ReactNode }) => ReactNode;
   media?: ReactNode;
+  /** Its own tap target, beside the preview's ordinary post-open target. */
+  readMore?: ReactNode;
   onOpen?: () => void;
   /**
    * The finger has gone down on the media: a chance to get its opening ready.
@@ -110,21 +111,24 @@ export function FeedCardShell({
     haptic.light();
     onOpen();
   } : undefined;
-  const caption = (
+  const headline = (
+    <Text
+      numberOfLines={media ? 2 : 3}
+      style={{ color: theme.colors.text, ...appTheme.type.body, fontWeight: '700' }}
+    >
+      {title}
+    </Text>
+  );
+  const heading = (
     <View
       style={{
         paddingTop: appTheme.spacing.compact,
         paddingBottom: appTheme.spacing.gap,
-        gap: appTheme.spacing.compact,
+        gap: media ? 0 : appTheme.spacing.compact,
       }}
     >
-      <Text
-        numberOfLines={media ? 2 : 3}
-        style={{ color: theme.colors.text, ...appTheme.type.body, fontWeight: '700' }}
-      >
-        {title}
-      </Text>
-      {body}
+      {headline}
+      {media ? null : body}
     </View>
   );
 
@@ -132,6 +136,7 @@ export function FeedCardShell({
     <MotionView
       style={[
         {
+          position: 'relative',
           paddingHorizontal: FEED_CARD_MEDIA_INSET,
           paddingBottom: appTheme.spacing.gap,
           borderBottomWidth: StyleSheet.hairlineWidth,
@@ -141,6 +146,15 @@ export function FeedCardShell({
         openMotion.animatedStyle,
       ]}
     >
+      {/* Empty space between the card's controls shares the ordinary open
+          action. This sits behind the controls so their own taps still win. */}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={openAccessibilityLabel}
+        disabled={!onOpen}
+        onPress={open}
+        style={StyleSheet.absoluteFillObject}
+      />
       <View
         style={{
           flexDirection: 'row',
@@ -194,7 +208,7 @@ export function FeedCardShell({
 
       {media ? (
         <Pressable accessible={false} disabled={!onOpen} onPress={open}>
-          {caption}
+          {heading}
         </Pressable>
       ) : null}
 
@@ -208,8 +222,21 @@ export function FeedCardShell({
         onTouchStart={onOpenTouchStart}
         unstable_pressDelay={CARD_PRESS_DELAY_MS}
       >
-        {media ?? caption}
+        {media ?? heading}
       </Pressable>
+
+      {media && body ? (
+        <Pressable
+          accessible={false}
+          disabled={!onOpen}
+          onPress={open}
+          style={{ paddingTop: appTheme.spacing.compact }}
+        >
+          {body}
+        </Pressable>
+      ) : null}
+
+      {readMore}
 
       <View
         style={{
@@ -223,7 +250,6 @@ export function FeedCardShell({
         {actions}
       </View>
 
-      {banner}
     </MotionView>
   );
 }

@@ -4,9 +4,7 @@ import type { PreviewViewerSource } from './immersive-preview-view-model';
 import { HOME_TOOL_SHORTCUTS, formatCompactCount, formatRelativeTime, type HomeToolShortcut } from './home-view-model';
 import type { ShowcaseFeedFilters } from './showcase-feed-query';
 import {
-  cardUnlock,
   canRecreateShowcaseItem,
-  type ShowcaseMasonryUnlock,
 } from './showcase-feed-view-model';
 
 export type HomeFeedChipId = 'for-you' | 'recent' | 'unlocks' | 'notes';
@@ -59,7 +57,6 @@ export interface HomeFeedCard {
   previewThumbhash: string | null;
   previewCacheKey: string;
   aspectRatio: number | null;
-  unlock: ShowcaseMasonryUnlock | null;
   canRemix: boolean;
   saveLabel: string;
   commentLabel: string;
@@ -327,7 +324,6 @@ export function showcaseToHomeFeedCard(item: ShowcaseFeedItem): HomeFeedCard {
     previewThumbhash: preview?.thumbhash ?? cover?.previewThumbhash ?? null,
     previewCacheKey: preview?.cacheKey ?? cover?.previewCacheKey ?? cover?.id ?? item.id,
     aspectRatio: getHomeCardAspectRatio(item),
-    unlock: cardUnlock(item),
     canRemix: canRecreateShowcaseItem(item),
     saveLabel: formatFeedActionLabel(item.saveCount, 'Save'),
     commentLabel: formatFeedActionLabel(item.commentCount, 'Comment'),

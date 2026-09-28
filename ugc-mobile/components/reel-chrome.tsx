@@ -375,7 +375,7 @@ export function ReelSlideChrome({
         {reelCaption.title || reelCaption.caption ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={captionExpanded ? 'Collapse caption' : 'Expand caption'}
+            accessibilityLabel={captionExpanded ? 'Collapse story' : 'Expand story'}
             onPress={onToggleCaption}
             style={({ pressed }) => ({ gap: 3, opacity: pressed ? appTheme.opacity.pressed : 1 })}
           >

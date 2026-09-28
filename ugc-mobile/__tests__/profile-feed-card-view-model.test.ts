@@ -95,36 +95,6 @@ describe('profile feed card view model', () => {
     }), NOW).state).toEqual({ label: 'Public post', tone: 'success' });
   });
 
-  it('surfaces a paid unlock as a banner', () => {
-    const card = toProfileFeedCard(item({
-      sourceType: 'owner-post',
-      details: {
-        title: 'Post',
-        prompt: '',
-        body: '',
-        categoryLabel: 'Image',
-        sourceLabel: 'Post',
-        creatorLabel: '@batman',
-        creatorAvatar: null,
-        saveCount: 0,
-        remixCount: 0,
-        unlock: {
-          resourceId: 'res-1',
-          postId: 'post-1',
-          title: 'Post',
-          accessMode: 'paid',
-          priceLabel: '$4.00',
-          previewText: 'Prompt plus the workflow file.',
-          resourceKinds: ['prompt', 'workflow'],
-          allowRemix: false,
-        },
-      },
-    }), NOW);
-
-    expect(card.unlockLabel).toBe('$4.00');
-    expect(card.unlockSummary).toBe('Prompt plus the workflow file.');
-  });
-
   it('picks an accent from the media kind', () => {
     expect(toProfileFeedCard(item(), NOW).accent).toBe('image');
     expect(toProfileFeedCard(item({ mediaKind: 'video' }), NOW).accent).toBe('video');

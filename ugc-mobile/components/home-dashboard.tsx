@@ -60,6 +60,7 @@ import { createFeedVideoActivationStore, FeedVideoActivationContext } from '@/li
 import { useAppForeground } from '@/lib/app-foreground';
 import { buildFeedFeedbackMenu } from '@/lib/feed-feedback-menu';
 import { immersiveViewerHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
+import { feedReadMoreSection, type FeedReadMoreSection } from '@/lib/feed-read-more';
 import type { NativeMenuModel } from '@/lib/native-menu';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
 import { SHOWCASE_DRAW_DISTANCE } from '@/lib/media-performance';
@@ -218,9 +219,6 @@ export function HomeDashboard() {
   // The remix request runs before we know where it lands, so the tapped card
   // owns the spinner until navigation takes over.
   const [remixingItemId, setRemixingItemId] = useState<string | null>(null);
-  // Held by the list, not the card: FlashList recycles card views, and local
-  // expansion state would follow a recycled view onto an unrelated post.
-  const [expandedBodyIds, setExpandedBodyIds] = useState<string[]>([]);
 
   const activeChip = HOME_FEED_CHIPS.find((chip) => chip.id === activeChipId) ?? HOME_FEED_CHIPS[0];
   const queryKey = useMemo(
@@ -523,7 +521,7 @@ export function HomeDashboard() {
     setActiveChipId(chipId);
   };
 
-  const openPost = (item: ShowcaseFeedItem, zoom: AppleZoomOpen | null = null) => {
+  const openPost = (item: ShowcaseFeedItem, zoom: AppleZoomOpen | null = null, initialPage?: 'details', initialSection?: FeedReadMoreSection) => {
     recordFeedEvent(item, 'open');
     queryClient.setQueryData<ShowcasePostResponse>(createShowcasePostQueryKey(item.id, user?.id), {
       success: true,
@@ -532,6 +530,8 @@ export function HomeDashboard() {
     router.push(immersiveViewerHref({
       source: 'showcase-feed',
       initialId: item.id,
+      initialPage,
+      initialSection,
       feedSessionId: feedSession.feedSessionId,
       algorithmVersion: item.recommendation?.algorithmVersion ?? feedSession.algorithmVersion,
       zoom,
@@ -543,7 +543,7 @@ export function HomeDashboard() {
    * through other showcase posts — so a written post opens its own screen
    * rather than being dropped into a reel of other people's media.
    */
-  const openCard = (card: HomeFeedCard, options: { comments?: boolean; zoom?: AppleZoomOpen | null } = {}) => {
+  const openCard = (card: HomeFeedCard, options: { comments?: boolean; initialPage?: 'details'; initialSection?: FeedReadMoreSection; zoom?: AppleZoomOpen | null } = {}) => {
     if (getHomeFeedCardOpenTarget(card) === 'post') {
       recordFeedEvent(card.item, 'open');
       // Seeded so the post screen paints from cache instead of refetching.
@@ -557,13 +557,7 @@ export function HomeDashboard() {
       }) as never);
       return;
     }
-    openPost(card.item, options.zoom ?? null);
-  };
-
-  const toggleBodyExpanded = (postId: string) => {
-    setExpandedBodyIds((current) => (current.includes(postId)
-      ? current.filter((id) => id !== postId)
-      : [...current, postId]));
+    openPost(card.item, options.zoom ?? null, options.initialPage, options.initialSection);
   };
 
   const openCreator = (item: ShowcaseFeedItem) => {
@@ -780,9 +774,11 @@ export function HomeDashboard() {
       <HomeFeedCardView
         card={card}
         contentWidth={contentWidth}
-        bodyExpanded={expandedBodyIds.includes(card.id)}
         onOpen={(zoom) => openCard(card, { zoom })}
-        onToggleBody={() => toggleBodyExpanded(card.id)}
+        onReadMore={() => openCard(card, {
+          initialPage: 'details',
+          initialSection: feedReadMoreSection(card.bodyText, card.item),
+        })}
         onFeedbackOpen={() => setFeedbackItem(card.item)}
         feedbackMenu={feedbackMenu(card.item)}
         onCreatorOpen={() => openCreator(card.item)}

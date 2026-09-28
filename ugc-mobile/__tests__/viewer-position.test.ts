@@ -7,6 +7,21 @@ function post(id: string) {
 }
 
 describe('viewer navigation ownership', () => {
+  it('opens Read more on Details while remembering the first media page for Back', () => {
+    const item = post('one');
+    const position = resolveViewerPosition([item], null, 'one', 'details')!;
+    expect(position).toEqual({ itemId: 'one', pageKey: 'details', mediaPageKey: 'media:one-1' });
+    const back = changeViewerPage(position, item.id, position.mediaPageKey);
+    expect(resolveViewerPosition([item], back, 'one', 'details')).toEqual(back);
+    expect(settleViewerItem(position, post('two')).pageKey).toBe('media:two-1');
+  });
+
+  it('ignores the initial Details request for another post or a post without Details', () => {
+    expect(resolveViewerPosition([post('two')], null, 'one', 'details')?.pageKey).toBe('media:two-1');
+    const item = { ...post('one'), details: undefined, availableActions: [] };
+    expect(resolveViewerPosition([item], null, 'one', 'details')?.pageKey).toBe('media:one-1');
+  });
+
   it('keeps Details through ten editor returns and unchanged vertical settles', () => {
     const items = [post('one'), post('two')];
     let position = resolveViewerPosition(items, null, 'one')!;

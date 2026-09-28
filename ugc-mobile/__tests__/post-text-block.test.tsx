@@ -1,5 +1,6 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
+import { Pressable, View } from 'react-native';
 import { describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
@@ -14,7 +15,7 @@ vi.mock('react-native', () => ({
   ),
 }));
 
-import { PostTextBlock } from '@/components/post-text-block';
+import { PostReadMore, PostTextBlock } from '@/components/post-text-block';
 
 function render(props: Partial<React.ComponentProps<typeof PostTextBlock>> = {}) {
   let tree: renderer.ReactTestRenderer | undefined;
@@ -23,9 +24,6 @@ function render(props: Partial<React.ComponentProps<typeof PostTextBlock>> = {})
       <PostTextBlock
         text="Open with tension."
         clampLines={6}
-        canExpand={false}
-        expanded={false}
-        onToggle={() => undefined}
         {...props}
       />
     );
@@ -44,34 +42,40 @@ describe('PostTextBlock', () => {
     expect(root.findAllByType('pressable' as never)).toHaveLength(0);
   });
 
-  it('clamps to the requested line count while collapsed', () => {
+  it('clamps the feed preview', () => {
     const body = render().findAllByType('text' as never)[0];
 
     expect(body.props.numberOfLines).toBe(6);
   });
 
-  it('only unclamps when the toggle is actually on offer', () => {
-    // A restored expanded id for a card that no longer offers the toggle must
-    // not strand the body open with no way to collapse it.
-    const stale = render({ expanded: true, canExpand: false });
-    expect(stale.findAllByType('text' as never)[0].props.numberOfLines).toBe(6);
-
-    const expanded = render({ expanded: true, canExpand: true });
-    expect(expanded.findAllByType('text' as never)[0].props.numberOfLines).toBeUndefined();
-  });
-
-  it('offers Read more only when it can expand', () => {
-    const root = render({ canExpand: true });
-
-    expect(root.findAllByType('pressable' as never)).toHaveLength(1);
-    expect(root.findAllByType('text' as never).map((node) => node.props.children)).toContain('Read more');
+  it('keeps Read more separate from the preview’s ordinary post-open target', () => {
+    const onOpen = vi.fn();
+    const onReadMore = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(
+        <View>
+          <Pressable onPress={onOpen}><PostTextBlock text="A long story" clampLines={2} /></Pressable>
+          <PostReadMore onPress={onReadMore} />
+        </View>
+      );
+    });
+    const targets = tree.root.findAllByType('pressable' as never);
+    expect(targets).toHaveLength(2);
+    renderer.act(() => targets[0].props.onPress());
+    expect(onOpen).toHaveBeenCalledOnce();
+    expect(onReadMore).not.toHaveBeenCalled();
+    renderer.act(() => targets[1].props.onPress());
+    expect(onReadMore).toHaveBeenCalledOnce();
+    expect(onOpen).toHaveBeenCalledOnce();
+    expect(targets[1].props.accessibilityLabel).toBe('Read more');
   });
 
   it('renders nothing without text', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(
-        <PostTextBlock text="" clampLines={6} canExpand={false} expanded={false} onToggle={() => undefined} />
+        <PostTextBlock text="" clampLines={6} />
       );
     });
 

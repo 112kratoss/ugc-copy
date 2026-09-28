@@ -7,7 +7,7 @@ import { ViewerActionsMenu } from '@/components/viewer-actions-menu';
 import { MediaZoomSourceView, useMediaZoomSource } from '@/components/media-zoom';
 import { FEED_CARD_MEDIA_RADIUS, feedCardMediaWidth } from '@/lib/feed-card-geometry';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
-import { PostTextBlock } from '@/components/post-text-block';
+import { PostReadMore, PostTextBlock } from '@/components/post-text-block';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import {
   canExpandProfileFeedBody,
@@ -25,10 +25,9 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
   contentWidth,
   mediaWatchdog = false,
   showActiveVideo,
-  bodyExpanded,
   pendingAction,
   onOpen,
-  onToggleBody,
+  onReadMore,
   onActionsOpen,
   onAction,
 }: {
@@ -37,11 +36,10 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
   /** Arms display deadlines for the card's media; only while the feed is focused. */
   mediaWatchdog?: boolean;
   showActiveVideo: boolean;
-  bodyExpanded: boolean;
   pendingAction: string | null;
   /** Opens the post, carrying the zoom the tile hands the push on iOS 18 (lib/apple-zoom.ts). */
   onOpen: (zoom: AppleZoomOpen | null) => void;
-  onToggleBody: () => void;
+  onReadMore: () => void;
   onActionsOpen: () => void;
   onAction: (action: string) => void;
 }) {
@@ -97,11 +95,11 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
         <PostTextBlock
           text={card.bodyText}
           clampLines={card.bodyLines}
-          canExpand={canExpandProfileFeedBody(card, mediaWidth)}
-          expanded={bodyExpanded}
-          onToggle={onToggleBody}
         />
       ) : null}
+      readMore={card.bodyText && canExpandProfileFeedBody(card, mediaWidth)
+        ? <PostReadMore onPress={onReadMore} />
+        : null}
       media={card.hasMedia ? (
         <MediaZoomSourceView source={zoomSource}>
           <ShowcaseMediaPreview
@@ -120,24 +118,6 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
         </MediaZoomSourceView>
       ) : card.sourceUnavailable ? (
         <UnavailableMediaPlate height={mediaHeight} />
-      ) : null}
-      banner={card.unlockLabel ? (
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: appTheme.spacing.compact,
-            marginTop: appTheme.spacing.gap,
-            paddingVertical: appTheme.spacing.compact,
-          }}
-        >
-          <Text style={{ color: theme.colors.commerce, ...appTheme.type.caption, fontWeight: '800' }}>
-            {card.unlockLabel}
-          </Text>
-          <Text numberOfLines={1} style={{ color: theme.colors.faint, ...appTheme.type.caption, flex: 1 }}>
-            {card.unlockSummary}
-          </Text>
-        </View>
       ) : null}
       actions={slots.map((slot) => (
         <FeedCardAction

@@ -1,6 +1,5 @@
 import { MessageCircle, Repeat2 } from 'lucide-react-native';
 import { memo, useCallback, useContext } from 'react';
-import { Text, View } from 'react-native';
 
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
 import { NativeMenu } from '@/components/native-menu';
@@ -8,7 +7,7 @@ import { MediaZoomSourceView, useMediaZoomSource } from '@/components/media-zoom
 import { FEED_CARD_MEDIA_RADIUS, feedCardMediaWidth } from '@/lib/feed-card-geometry';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
 import { FeedVideoActivationContext, useFeedVideoActivation } from '@/lib/feed-video-activation';
-import { PostTextBlock } from '@/components/post-text-block';
+import { PostReadMore, PostTextBlock } from '@/components/post-text-block';
 import { SaveHeart } from '@/components/save-heart';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import {
@@ -27,9 +26,8 @@ import { useAppTheme } from '@/lib/theme-context';
 export const HomeFeedCardView = memo(function HomeFeedCardView({
   card,
   contentWidth,
-  bodyExpanded,
   onOpen,
-  onToggleBody,
+  onReadMore,
   onFeedbackOpen,
   feedbackMenu,
   onCreatorOpen,
@@ -41,10 +39,9 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
 }: {
   card: HomeFeedCard;
   contentWidth: number;
-  bodyExpanded: boolean;
   /** Opens the post, carrying the zoom the tile hands the push on iOS 18 (lib/apple-zoom.ts). */
   onOpen: (zoom: AppleZoomOpen | null) => void;
-  onToggleBody: () => void;
+  onReadMore: () => void;
   onFeedbackOpen: () => void;
   /** The ⋮ menu; `onFeedbackOpen` opens the sheet where native menus are missing. */
   feedbackMenu: NativeMenuModel;
@@ -112,11 +109,11 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
         <PostTextBlock
           text={card.bodyText}
           clampLines={card.bodyLines}
-          canExpand={canExpandHomeFeedBody(card, bodyWidth)}
-          expanded={bodyExpanded}
-          onToggle={onToggleBody}
         />
       ) : null}
+      readMore={card.bodyText && canExpandHomeFeedBody(card, bodyWidth)
+        ? <PostReadMore onPress={onReadMore} />
+        : null}
       media={hasMedia ? (
         <MediaZoomSourceView source={zoomSource}>
           <ShowcaseMediaPreview
@@ -132,24 +129,6 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
             videoContentFit="cover"
           />
         </MediaZoomSourceView>
-      ) : null}
-      banner={card.unlock ? (
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: appTheme.spacing.compact,
-            marginTop: appTheme.spacing.gap,
-            paddingVertical: appTheme.spacing.compact,
-          }}
-        >
-          <Text style={{ color: accentColor(card.unlock.accent, theme.colors), ...appTheme.type.caption, fontWeight: '800' }}>
-            {card.unlock.label}
-          </Text>
-          <Text numberOfLines={1} style={{ color: theme.colors.faint, ...appTheme.type.caption, flex: 1 }}>
-            {card.unlock.summary}
-          </Text>
-        </View>
       ) : null}
       actions={(
         <>

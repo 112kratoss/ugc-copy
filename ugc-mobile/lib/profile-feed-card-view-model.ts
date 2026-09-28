@@ -125,8 +125,6 @@ export interface ProfileFeedCard {
   categoryLabel: string;
   accent: ToolAccent;
   aspectRatio: number | null;
-  unlockLabel: string | null;
-  unlockSummary: string | null;
   state: { label: string; tone: ViewerStateTone } | null;
 }
 
@@ -156,8 +154,6 @@ export function toProfileFeedCard(item: ImmersivePreviewItem, now?: Date): Profi
     categoryLabel: item.details?.categoryLabel ?? item.badge,
     accent: profileCardAccent(item),
     aspectRatio: profileCardAspectRatio(item),
-    unlockLabel: profileCardUnlockLabel(item),
-    unlockSummary: profileCardUnlockSummary(item),
     state: getViewerStateChip(item),
   };
 }
@@ -203,18 +199,6 @@ function profileCardAspectRatio(item: ImmersivePreviewItem) {
 function ratioFromDimensions(width?: number | null, height?: number | null) {
   if (!width || !height || width <= 0 || height <= 0) return null;
   return width / height;
-}
-
-function profileCardUnlockLabel(item: ImmersivePreviewItem) {
-  const unlock = item.details?.unlock ?? null;
-  if (!unlock) return null;
-  return unlock.accessMode === 'free' ? 'Free unlock' : unlock.priceLabel;
-}
-
-function profileCardUnlockSummary(item: ImmersivePreviewItem) {
-  const unlock = item.details?.unlock ?? null;
-  if (!unlock) return null;
-  return unlock.previewText?.trim() || 'Reusable resources are attached to this post.';
 }
 
 /** Height of the plate an unavailable creation draws in place of its media. */

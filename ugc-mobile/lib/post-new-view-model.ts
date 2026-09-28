@@ -1652,7 +1652,7 @@ function publicPostMissingMessage(
   skipGenerationSelection = false
 ) {
   if (isTextProof(draft) && !draft.contentText.trim() && !draft.caption.trim()) {
-    return 'Write the text post or add a caption.';
+    return 'Write the text post or add a story.';
   }
   if (draft.mode === 'upload' && draft.mediaItems.length === 0 && !draft.upload) {
     return 'Upload an image or video before publishing.';

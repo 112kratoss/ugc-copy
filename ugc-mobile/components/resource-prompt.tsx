@@ -7,16 +7,16 @@ import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
 /** The preview is short; copying always uses the complete source. */
-export function ResourcePrompt({ text, onCopy }: { text: string; onCopy?: (text: string) => Promise<void> | void }) {
+export function ResourcePrompt({ text, onCopy, initiallyExpanded = false }: { text: string; onCopy?: (text: string) => Promise<void> | void; initiallyExpanded?: boolean }) {
   const theme = useAppTheme();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(initiallyExpanded);
   // A different prompt starts collapsed again. Owning that here rather than
   // asking every caller for a `key` keeps a whole prompt out of the key, and
   // a caller who forgets one out of the wrong state.
   const [shownText, setShownText] = useState(text);
   if (shownText !== text) {
     setShownText(text);
-    setExpanded(false);
+    setExpanded(initiallyExpanded);
   }
   const canExpand = text.length > 220 || text.split('\n').length > 5;
   return (

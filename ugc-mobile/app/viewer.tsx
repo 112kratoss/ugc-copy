@@ -153,6 +153,8 @@ type ViewerParams = {
   feedSessionId?: string | string[];
   source?: string | string[];
   initialId?: string | string[];
+  initialPage?: string | string[];
+  initialSection?: string | string[];
   replyTo?: string | string[];
   mediaOnly?: string | string[];
 };
@@ -222,6 +224,10 @@ function ImmersivePreviewViewer() {
   const routeFeedSessionId = normalizeParam(params.feedSessionId) || null;
   const routeAlgorithmVersion = normalizeParam(params.algorithmVersion) || null;
   const requestedCommentsPostId = normalizeParam(params.comments) || null;
+  const initialPage = normalizeParam(params.initialPage) === 'details' ? 'details' : undefined;
+  const initialSectionParam = normalizeParam(params.initialSection);
+  const initialSection = initialPage && (initialSectionParam === 'story' || initialSectionParam === 'prompt')
+    ? initialSectionParam : undefined;
   const requestedReplyToId = normalizeParam(params.replyTo) || null;
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
@@ -409,8 +415,8 @@ function ImmersivePreviewViewer() {
     setInitialContentOffset({ x: 0, y: initialIndex * height });
   }
   const position = useMemo(
-    () => resolveViewerPosition(items, savedPosition, initialId),
-    [items, savedPosition, initialId]
+    () => resolveViewerPosition(items, savedPosition, initialId, initialPage),
+    [items, savedPosition, initialId, initialPage]
   );
   const activeIndex = Math.max(0, items.findIndex((item) => item.id === position?.itemId));
   // ExoPlayer creation can block Android's handoff commit for hundreds of ms.
@@ -421,18 +427,18 @@ function ImmersivePreviewViewer() {
   const detailsPageOpenItemId = isDetailsPageCovering(items[activeIndex], position) ? position?.itemId ?? null : null;
   const setActiveIndex = useCallback((next: number | ((current: number) => number)) => {
     setSavedPosition((saved) => {
-      const current = resolveViewerPosition(items, saved, initialId);
+      const current = resolveViewerPosition(items, saved, initialId, initialPage);
       const index = Math.max(0, items.findIndex((item) => item.id === current?.itemId));
       const target = items[typeof next === 'function' ? next(index) : next];
       return target ? settleViewerItem(current, target) : current;
     });
-  }, [items, initialId]);
+  }, [items, initialId, initialPage]);
   const changePage = useCallback((itemId: string, pageKey: string) => {
     setSavedPosition((saved) => {
-      const current = resolveViewerPosition(items, saved, initialId);
+      const current = resolveViewerPosition(items, saved, initialId, initialPage);
       return current ? changeViewerPage(current, itemId, pageKey) : current;
     });
-  }, [items, initialId]);
+  }, [items, initialId, initialPage]);
   // Returning from a pushed screen may refresh/reorder the feed. Follow the
   // post's identity, including its Details page, rather than the old row index.
   // Where the native list already sits, so a page the reader just landed on
@@ -1222,6 +1228,7 @@ function ImmersivePreviewViewer() {
             chromeHidden={actionsOpenItemId === item.id}
             height={height}
             item={item}
+            initialSection={item.id === initialId ? initialSection : undefined}
             onActionsOpen={() => setActionsOpenItemId(item.id)}
             onComments={item.canComment ? () => {
               setCommentsReplyToId(null);
@@ -1471,6 +1478,7 @@ interface ImmersiveSlideHandle {
 
 function ImmersiveSlide({
   active,
+  initialSection,
   prepareVideo,
   activeSlideRef,
   onLayoutAsNeighbour,
@@ -1500,6 +1508,7 @@ function ImmersiveSlide({
   onHorizontalScrollToggle,
 }: {
   active: boolean;
+  initialSection?: 'story' | 'prompt';
   prepareVideo: boolean;
   activeSlideRef: MutableRefObject<ImmersiveSlideHandle | null>;
   /**
@@ -1574,6 +1583,9 @@ function ImmersiveSlide({
 
   const pages = useMemo(() => buildImmersiveSlidePages(item), [item]);
   const currentHorizontalIndex = Math.max(0, pages.findIndex((page) => slidePageKey(page) === pageKey));
+  // Apply the requested page when the native scroll view is created, so Read
+  // more never flashes the media page before its first layout.
+  const [initialHorizontalOffset] = useState(() => ({ x: currentHorizontalIndex * width, y: 0 }));
   const currentPageIsDetails = isImmersiveDetailsSlidePageIndex(pages, currentHorizontalIndex);
   // Details pauses the remembered media page without discarding its frame.
   const preparedMediaIndex = currentPageIsDetails
@@ -1703,6 +1715,7 @@ function ImmersiveSlide({
           bottomInset={bottomInset}
           height={height}
           item={item}
+          initialSection={initialSection}
           onRecreate={onRecreate}
           onSave={onSave}
           onDoubleTapSave={saveFromDoubleTap}
@@ -1728,6 +1741,7 @@ function ImmersiveSlide({
         horizontal
         initialNumToRender={IMMERSIVE_HORIZONTAL_LIST_TUNING.initialNumToRender}
         initialScrollIndex={currentHorizontalIndex}
+        contentOffset={initialHorizontalOffset}
         keyExtractor={slidePageKey}
         maxToRenderPerBatch={IMMERSIVE_HORIZONTAL_LIST_TUNING.maxToRenderPerBatch}
         onScroll={(event) => {
@@ -1760,6 +1774,7 @@ function ImmersiveSlide({
             bottomInset={bottomInset}
             height={height}
             item={item}
+            initialSection={initialSection}
             onActionsOpen={onActionsOpen}
             onComments={onComments}
             onCreatorOpen={onCreatorOpen}
@@ -1941,6 +1956,7 @@ function DoubleTapSaveHeart({
 
 function MediaSlidePage({
   active,
+  initialSection,
   slideActive,
   zoomTarget = false,
   prepareVideo,
@@ -1962,6 +1978,7 @@ function MediaSlidePage({
   width,
 }: {
   active: boolean;
+  initialSection?: 'story' | 'prompt';
   /** The reader is on this slide, overlays included -- see ActiveVideo's rewind. */
   slideActive: boolean;
   /** This page is the one on screen: it marks where the zoom's close shrinks out of (iOS 18). */
@@ -1993,6 +2010,7 @@ function MediaSlidePage({
           bottomInset={bottomInset}
           height={height}
           item={item}
+          initialSection={initialSection}
           onActionsOpen={onActionsOpen}
           onBack={onShowMedia}
           onComments={onComments}
