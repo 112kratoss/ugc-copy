@@ -16,13 +16,21 @@ function createClient(rows: TableRows, filterLog: Record<string, string[]> = {})
   return {
     from(table: string) {
       filterLog[table] ??= [];
+      let selected = rows[table] ?? [];
       const builder = {
         select: () => builder,
         gte: () => builder,
         order: () => builder,
-        limit: () => Promise.resolve({ data: rows[table] ?? [], error: null }),
+        limit: () => Promise.resolve({ data: selected, error: null }),
         is: (column: string, value: unknown) => {
           filterLog[table].push(`is:${column}=${String(value)}`);
+          return builder;
+        },
+        not: (column: string, operator: string, value: string) => {
+          filterLog[table].push(`not:${column}:${operator}=${value}`);
+          // SQL LIKE with an escaped underscore: only the literal mobile_ prefix.
+          if (operator !== 'like' || value !== 'mobile\\_%') throw new Error('Unexpected test filter');
+          selected = selected.filter(row => !String(row[column] ?? '').startsWith('mobile_'));
           return builder;
         },
         neq: (column: string, value: unknown) => {
@@ -82,6 +90,28 @@ describe('admin revenue report', () => {
     ]);
     expect(report.recentOrders).toHaveLength(1);
   });
+
+  it.each(['marketplace_orders', 'post_resource_bundle_orders'] as const)(
+    'reports mobile %s purchases once and excludes their sandbox mirrors', async table => {
+      const filterLog: Record<string, string[]> = {};
+      const order = { status: 'paid', amount_subunits: 300, currency: 'USD', created_at: '2026-07-20T00:00:00.000Z' };
+      const report = await collectAdminRevenueReport(createClient({
+        mobile_store_transactions: [{ ...order, id: 'receipt', status: 'active', product_id: 'iap.unlock' }],
+        [table]: [
+          { ...order, id: 'mirror', razorpay_order_id: 'mobile_app_store_paid' },
+          { ...order, id: 'sandbox-mirror', razorpay_order_id: 'mobile_sandbox_test' },
+          { ...order, id: 'web', razorpay_order_id: 'order_web' },
+          // The underscore is literal, not SQL LIKE's single-character wildcard.
+          { ...order, id: 'similar-prefix', razorpay_order_id: 'mobileXweb' },
+        ],
+      }, filterLog), { now: NOW });
+      expect(report.recentOrders.map(row => row.id).sort()).toEqual(['receipt', 'similar-prefix', 'web']);
+      expect(report.orderTotal).toBe(3);
+      const rail = report.rails.find(row => row.key === (table === 'marketplace_orders' ? 'marketplace' : 'resource-bundles'));
+      expect(rail?.totalsByCurrency).toEqual([{ currency: 'USD', grossSubunits: 600, succeededCount: 2 }]);
+      expect(filterLog[table]).toContain('not:razorpay_order_id:like=mobile\\_%');
+    },
+  );
 
   it('counts only settled money toward gross', async () => {
     const client = createClient({

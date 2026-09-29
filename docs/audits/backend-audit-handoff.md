@@ -1,17 +1,36 @@
 # Backend audit — session handoff
 
-Updated 2026-09-29. Read this first when continuing the section-by-section Magicbooklet backend audit.
+Updated 2026-09-30 (Asia/Kolkata). Read this first when continuing the section-by-section Magicbooklet backend audit.
 
 ## Workspace and authorization
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current branch: `codex/mobile-adjustment-event-history`, based on deployed main `17e47edc303588abd4fd3ad18b780378e7b2ba1c`. Preserve local evidence.
+Current checkout: branch `codex/mobile-lifecycle-reporting-5k`, based on main `041ff8a5cf3280c7438285e6eb4fd33cc615490f`. Branch `codex/mobile-adjustment-event-history` preserves the merged fix. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-Section 5I is deployed and verified. No release is pending.
+Section 5K is locally fixed and under release validation. Read
+`docs/audits/backend-section-05-mobile-lifecycle-reporting-2026-09-30.md`.
+It fixes legacy bundle restore ownership, a reproduced marketplace
+restore/repurchase deadlock, and duplicate admin revenue reporting for mobile
+order copies. Evidence is in `.audit-evidence/backend-section-05k/`.
+The shared area-level coverage tracker is `docs/audits/backend-audit-coverage.md`;
+its detailed inventory-to-behavior mapping is still pending.
+
+Section 5J is deployed and verified; no release work remains pending.
+- PR #245 merged as `0c473693a270890c334ce6745e706e25a3e35ad3`; deployed main is `041ff8a5cf3280c7438285e6eb4fd33cc615490f` (one empty CI retry commit, identical tree).
+- Exact-main Quality: https://github.com/112kratoss/ugc-copy/actions/runs/36615600319 — all four jobs passed: 6,136 web tests, 2,783 mobile tests, 19 browser tests, 1,922 SQL assertions and 50 database integration/concurrency cases.
+- Standard production release: https://github.com/112kratoss/ugc-copy/actions/runs/36616927718 — succeeded 2026-09-29 19:10:56 UTC. Independent live build matches current main; feed 200 and unauthorized webhook 401.
+- Migration `20260929163206_retain_mobile_adjustment_event_identity.sql` maps to production ledger `20260929190728`.
+- Production rollback checks: 14/14 passed (7/14 baseline); separate cleanup found zero fixture users, receipts, products, credit adjustments and history rows. Deployed function digest matches local replay.
+- Schema changes match the new private history table and modified function. Advisors remain 1 INFO / 37 WARN / 0 ERROR grouped lints; only the expected policy-free private-table INFO finding was added, with no new warnings.
+- Authenticated TEST webhook was not run because its credential was unavailable locally. Real provider delivery remains unverified.
+- GitHub's delayed push triggers recovered without changing workflow gates. No mobile store release was active before either main update. Do not repeat empty retry commits or treat the historical trigger delay as a current blocker.
+- Full evidence: `docs/audits/backend-section-05-mobile-event-history-release-2026-09-29.md` and `.audit-evidence/backend-section-05j/`.
+
+Section 5I is the preceding verified release (historical checkpoint):
 - PR #244 binds shared credit events to the original transaction and reversal target. Mobile and Razorpay wrappers propagate unresolved results without consuming metadata or binding a payment; RevenueCat returns retryable 503 with durable telemetry.
 - Live build: `17e47edc303588abd4fd3ad18b780378e7b2ba1c`.
 - Production release: https://github.com/112kratoss/ugc-copy/actions/runs/36590989396 (success at 2026-09-29 15:35:45 UTC).
@@ -27,9 +46,9 @@ Section 5I is deployed and verified. No release is pending.
 ## Preserve these local files
 
 Carry the new release evidence in the next appropriate audit PR:
-- `docs/audits/backend-section-05-credit-event-binding-release-2026-09-29.md`.
-- Updated `docs/audits/backend-section-05-credit-event-binding-2026-09-29.md`.
-- This updated handoff file.
+- `docs/audits/backend-section-05-mobile-event-history-release-2026-09-29.md` (untracked, records successful deployment and verification).
+- This updated handoff file and the updated Section 5J finding report.
+- Section 5I release evidence was committed in PR #245.
 - `.audit-evidence/` contains logs and provider/schema snapshots. Preserve it; do not blindly commit it. Section 5G `ledger-private.json` contains private input and must not be published.
 - Existing untracked Section 1 release/follow-up files predate this work and remain untouched.
 
@@ -43,11 +62,11 @@ An initial restore fixture used ignored `UNCANCELLATION`; the corrected
 `REFUND_REVERSED` fixture was rerun against the original SQL and failed as expected.
 Production probe results are saved before and after deployment.
 
-Section 5J noncredit mobile event history is reproduced and fixed locally; release
-is pending. Read `docs/audits/backend-section-05-mobile-event-history-2026-09-29.md`
+Section 5J noncredit mobile event history is fixed, deployed and verified through PR #245. Read `docs/audits/backend-section-05-mobile-event-history-2026-09-29.md`
 and `.audit-evidence/backend-section-05j/`. Fifteen baseline identity checks failed;
 all 1,922 SQL assertions and three new concurrency cases pass. Production rollback
-probe reproduced seven incorrect outcomes and left no fixtures.
+probe reproduced seven incorrect outcomes before the fix; all 14 checks pass after
+deployment and no fixtures remain.
 
 Next investigate mobile marketplace concurrency/lifecycle, legacy bundle restore
 ownership, and reporting double-count prevention. Actual provider-backed

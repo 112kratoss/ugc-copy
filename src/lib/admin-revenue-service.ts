@@ -17,6 +17,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * `transactions.mobile_product_id` set on the credit ledger side. Counting
  * `transactions` wholesale therefore double-counts every mobile purchase, so
  * the web rail explicitly excludes rows carrying a `mobile_product_id`.
+ * Marketplace and legacy bundle IAPs likewise mirror their orders. Exclude
+ * their reserved literal `mobile_` order prefix before pagination, including
+ * sandbox mirrors whose receipts are excluded from the mobile rail entirely.
  */
 
 export type AdminRevenueWindow = 7 | 30 | 90;
@@ -194,12 +197,14 @@ export async function collectAdminRevenueReport(
     client
       .from('marketplace_orders')
       .select('id, buyer_user_id, status, amount_subunits, currency, created_at, razorpay_payment_id')
+      .not('razorpay_order_id', 'like', 'mobile\\_%')
       .gte('created_at', since)
       .order('created_at', { ascending: false })
       .limit(RAIL_FETCH_LIMIT),
     client
       .from('post_resource_bundle_orders')
       .select('id, buyer_user_id, status, amount_subunits, currency, created_at, razorpay_payment_id')
+      .not('razorpay_order_id', 'like', 'mobile\\_%')
       .gte('created_at', since)
       .order('created_at', { ascending: false })
       .limit(RAIL_FETCH_LIMIT),
