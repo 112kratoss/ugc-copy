@@ -104,13 +104,13 @@ describe.skipIf(!connectionString)('mobile marketplace lifecycle concurrency', (
     if (queueError) throw queueError;
     return settled.map(result => { if (result.status === 'rejected') throw result.reason; return result.value; });
   }
-  async function expectConsistentOwner() {
+  async function expectConsistentOwner(mobile = true) {
     const purchases = (await admin.query('select order_id from public.marketplace_purchases where buyer_user_id=$1', [buyer])).rows;
     expect(purchases).toHaveLength(1);
     const paid = (await admin.query("select id from public.marketplace_orders where buyer_user_id=$1 and status='paid'", [buyer])).rows;
     expect(paid).toEqual([{ id: purchases[0].order_id }]);
     const active = (await admin.query("select source_record_id from public.mobile_store_transactions where user_id=$1 and status='active'", [buyer])).rows;
-    expect(active).toEqual([{ source_record_id: purchases[0].order_id }]);
+    expect(active).toEqual(mobile ? [{ source_record_id: purchases[0].order_id }] : []);
     const counters = (await admin.query('select sales_count,earnings_usd_cents from public.marketplace_assets where id=$1', [asset])).rows[0];
     expect(counters).toEqual({ sales_count: 1, earnings_usd_cents: 373 });
     const wallet = (await admin.query('select available_token_subunits from public.creator_resource_wallets where user_id=$1', [seller])).rows[0];
@@ -144,4 +144,25 @@ describe.skipIf(!connectionString)('mobile marketplace lifecycle concurrency', (
     await expectConsistentOwner();
     expect((await admin.query('select count(*)::int as n from public.mobile_purchase_adjustment_events where provider_event_id=$1', [`${eventPrefix}:restore`])).rows[0].n).toBe(results[0] === 'restored' ? 1 : 0);
   });
+
+  it.each([[0, 1], [1, 0]])('keeps one owner across web checkout with restore/web lock order %s then %s', async (first, second) => {
+    expect(await adjust(admin, 'refund', 1000)).toBe('refunded');
+    const webOrder = `order_${randomUUID()}`;
+    await admin.query(`insert into public.marketplace_orders(asset_id,buyer_user_id,razorpay_order_id,
+      amount_subunits,currency,status,quoted_price_usd_cents) values($1,$2,$3,373,'USD','created',373)`, [asset, buyer, webOrder]);
+    const results = await raceAssetQueue([
+      async db => {
+        try { return await adjust(db, 'restore', 2000); }
+        catch (error) {
+          expect(error).toMatchObject({ code: 'P0001', message: 'Mobile restoration conflicts with another purchase' });
+          return 'conflict';
+        }
+      },
+      async db => String((await db.query('select public.complete_marketplace_purchase($1,$2) as result',
+        [webOrder, `pay_${randomUUID()}`])).rows[0].result),
+    ], [first, second]);
+    expect([['restored', 'false'], ['conflict', 'true']]).toContainEqual(results);
+    await expectConsistentOwner(results[0] === 'restored');
+  });
+
 });

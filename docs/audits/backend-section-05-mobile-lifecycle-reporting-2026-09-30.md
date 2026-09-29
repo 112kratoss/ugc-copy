@@ -16,8 +16,10 @@ Three findings were reproduced before their fixes:
    entitlement before updating the asset. A two-session test queued behind an
    asset row reproduced the lock cycle when repurchase acquired the asset first.
    Reconciliation now locks the asset before changing entitlements, matching
-   settlement. Both ordered arrival cases and concurrent distinct refund/restore
-   events pass, checking receipt, order, access, counters and creator wallet.
+   settlement. Cross-rail review reproduced the same lock cycle between a web
+   checkout and restoration; web settlement now takes the resource lock too.
+   Both arrival orders for mobile and web repurchases, plus concurrent distinct
+   refund/restore events, pass while checking access and financial consistency.
 3. **Admin revenue repeated noncredit mobile orders.** The mobile rail correctly
    excluded sandbox receipts, but marketplace and bundle rails included their
    mirrored orders. Both reporting regressions failed: real purchases appeared
@@ -28,13 +30,13 @@ Three findings were reproduced before their fixes:
 ## Evidence and boundaries
 
 - Migration: `20260929191934_reject_conflicting_legacy_bundle_restores.sql`.
-  Two guarded replacements alter only the existing reconciliation function;
+  Three guarded replacements alter existing reconciliation and web settlement;
   execution remains service-only. There is no customer-data backfill.
 - New legacy bundle lifecycle suite: 19 assertions, including conflict rollback,
   credit-funded entitlement ownership, balances, counters and same-event retry.
   Local legacy fixture setup briefly disables only the INSERT policy trigger,
   re-enabling it before reconciliation. New mobile bundle IAPs remain forbidden.
-- Three new real concurrency cases run in Quality's database job. The controlled
+- Five new real concurrency cases run in Quality's database job. The controlled
   ordering reproduces the deadlock without relying on timing luck. Fixtures use
   a distinct catalog tier from sibling tests; all calls settle before cleanup.
 - Two reporting regressions exercise returned totals, order count and recent

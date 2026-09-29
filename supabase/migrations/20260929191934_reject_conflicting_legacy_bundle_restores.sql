@@ -52,5 +52,25 @@ BEGIN
   EXECUTE replace(definition, old_block, new_block);
 END;
 $migration$;
+-- Web checkout competes for the same unique entitlement as mobile settlement
+-- and restoration, so it must acquire the resource before the entitlement too.
+DO $migration$
+DECLARE
+  definition text;
+  old_block text := $old$  FROM public.marketplace_assets
+  WHERE id = v_order.asset_id;$old$;
+  new_block text := $new$  FROM public.marketplace_assets
+  WHERE id = v_order.asset_id
+  FOR UPDATE;$new$;
+BEGIN
+  SELECT pg_get_functiondef('public.complete_marketplace_purchase(text,text)'::regprocedure) INTO definition;
+  IF (length(definition) - length(replace(definition, old_block, ''))) / length(old_block) <> 1 THEN
+    RAISE EXCEPTION 'Expected exactly one web marketplace resource lock block';
+  END IF;
+  EXECUTE replace(definition, old_block, new_block);
+END;
+$migration$;
+REVOKE ALL ON FUNCTION public.complete_marketplace_purchase(text,text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.complete_marketplace_purchase(text,text) TO service_role;
 REVOKE ALL ON FUNCTION public.reconcile_mobile_purchase_adjustment(text, uuid, text, text, bigint, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.reconcile_mobile_purchase_adjustment(text, uuid, text, text, bigint, text) TO service_role;
