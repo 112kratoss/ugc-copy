@@ -1,6 +1,6 @@
 # Section 5F — conflicting mobile marketplace restoration
 
-Status: reproduced and repaired locally; release pending.
+Status: deployed and verified in production; see [release evidence](backend-section-05-mobile-entitlement-restores-release-2026-09-29.md).
 
 ## Reproduction
 

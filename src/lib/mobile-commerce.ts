@@ -316,15 +316,14 @@ function revenueCatStoreProvider(purchase: RevenueCatPurchase): RestorableMobile
 }
 
 /**
- * Only the store's own transaction id (or RevenueCat's id for it) may key a
- * settlement. There used to be a synthetic `productId_purchaseDate` fallback
- * here; because this value becomes the settlement idempotency key, a purchase
- * first settled under the synthetic key would settle a second time once
- * RevenueCat began reporting the real id for it. Purchases without a real id
- * are now rejected (verify) or skipped (restore) instead.
+ * Settlement and refund webhooks must use the same store transaction id.
+ * RevenueCat's purchase `id` is a separate identity: falling back to it can
+ * grant twice if a later response includes the store id, and leaves store-id
+ * refunds unable to locate the earlier grant. Incomplete receipts are rejected
+ * (verify) or skipped (restore) until the store id is available.
  */
 function revenueCatPurchaseTransactionId(purchase: RevenueCatPurchase) {
-  const explicitId = String(purchase.store_transaction_id ?? purchase.id ?? '').trim();
+  const explicitId = String(purchase.store_transaction_id ?? '').trim();
   return explicitId || null;
 }
 
