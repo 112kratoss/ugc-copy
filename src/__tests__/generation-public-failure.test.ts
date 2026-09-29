@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  GENERATION_PROMPT_BLOCKED_MESSAGE,
   getHeldProviderSubmissionGenerationId,
   getPublicGenerationStartFailure,
   markHeldProviderSubmission,
@@ -28,6 +29,17 @@ describe('public generation failure classification', () => {
       .toBe('provider_unavailable');
     expect(getPublicGenerationStartFailure(new Error('Image generation timed out')).code)
       .toBe('provider_unavailable');
+  });
+
+  it('explains a refused prompt instead of blaming the provider', () => {
+    // Template and workflow runs map errors through here; a 422 would otherwise
+    // read as "the provider could not accept this request".
+    expect(getPublicGenerationStartFailure({
+      status: 422,
+      failureCode: 'prompt_blocked',
+      message: 'anything',
+    })).toEqual({ code: 'prompt_blocked', message: GENERATION_PROMPT_BLOCKED_MESSAGE });
+    expect(GENERATION_PROMPT_BLOCKED_MESSAGE).toContain('No credits were used');
   });
 
   it('keeps an explicit server setup failure distinct from provider downtime', () => {

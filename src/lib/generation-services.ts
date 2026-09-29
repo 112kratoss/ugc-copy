@@ -59,11 +59,16 @@ import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
 import { buildKieWebhookCallbackUrl } from '@/lib/kie-webhook';
 import type { GenerationStartResult } from '@/lib/generation-start-idempotency';
 import {
+  GENERATION_PROMPT_BLOCKED_MESSAGE,
   getPublicGenerationStartFailure,
   markHeldProviderSubmission,
   type GenerationStartFailureCode,
   type PublicGenerationStartFailure,
 } from '@/lib/generation-public-failure';
+import {
+  collectProviderPrompts,
+  getGenerationPromptSafetyViolation,
+} from '@/lib/generation-prompt-safety';
 export { getPublicGenerationStartFailure };
 export type { GenerationStartFailureCode, PublicGenerationStartFailure };
 import {
@@ -273,6 +278,10 @@ async function createKieTask(
   options: { generationId?: string | null; modelId?: string | null } = {},
 ) {
   requireKieGenerationConfiguration();
+  // Every start path checks its prompts before holding credits. This repeats
+  // the check on the exact payload, so a start path added later cannot send a
+  // refused prompt; its caller's catch refunds the hold like any other refusal.
+  assertGenerationPromptsAllowed(collectProviderPrompts(body), { model: options.modelId });
   const callbackUrl = typeof body.callBackUrl === 'string' && body.callBackUrl.trim()
     ? body.callBackUrl
     : buildKieWebhookCallbackUrl({ generationId: options.generationId });
@@ -751,6 +760,27 @@ function trimPrompt(prompt: string, errorMessage: string): string {
   }
 
   return trimmed;
+}
+
+/**
+ * Refuses prompts that ask for nudity, undressing, see-through clothing or
+ * anything sexual involving a minor (`generation-prompt-safety`). Start paths
+ * call it before any credit hold, so a refusal costs the user nothing.
+ */
+function assertGenerationPromptsAllowed(
+  prompts: ReadonlyArray<string | null | undefined>,
+  context: { userId?: string | null; model?: string | null },
+): void {
+  const category = getGenerationPromptSafetyViolation(prompts);
+  if (!category) return;
+  // Category and account only: the prompt itself may describe abuse and is
+  // not copied into logs.
+  logBackendWarning('generation_prompt_blocked', {
+    category,
+    userId: context.userId ?? null,
+    model: context.model ?? null,
+  });
+  throw new GenerationServiceError(GENERATION_PROMPT_BLOCKED_MESSAGE, 422, 'prompt_blocked');
 }
 
 function assertGenerationRequest(condition: unknown, message: string, status = 400): asserts condition {
@@ -1620,6 +1650,7 @@ export async function startImageGeneration(params: {
   }
 
   const trimmedPrompt = trimPrompt(prompt, 'A prompt is required to generate an image.');
+  assertGenerationPromptsAllowed([trimmedPrompt], { userId, model });
   const modelConfig = IMAGE_MODELS[model];
   if (!modelConfig) {
     throw new GenerationServiceError(`Unsupported image model: ${model}`, 400);
@@ -2164,6 +2195,10 @@ export async function startVideoGeneration(params: {
   } else {
     trimPrompt(prompt, 'A prompt is required to generate a video.');
   }
+  assertGenerationPromptsAllowed(
+    [prompt, ...normalizedMultiPrompts.map((shot) => shot.prompt)],
+    { userId, model },
+  );
 
   const videoElementSupport = getVideoElementSupport(model, { mode, isMultiShot });
   const isSeedance2Family = isSeedance2VideoModelId(model);
@@ -3111,6 +3146,7 @@ export async function startMotionGeneration(params: {
   if (!referenceVideoUrl || !characterImageUrl) {
     throw new Error('Motion generation requires both a reference video and a character image.');
   }
+  assertGenerationPromptsAllowed([prompt], { userId, model });
 
   // Motion inputs are forwarded to the provider as-is, so gate their sources
   // the same way as the resolved reference URLs elsewhere in this module.
@@ -3284,6 +3320,10 @@ export async function startCatalogGeneration(params: {
   if (!Number.isInteger(quotedCostCredits) || quotedCostCredits < 0) {
     throw new GenerationServiceError('Invalid quoted generation cost.', 500);
   }
+  assertGenerationPromptsAllowed(
+    [prompt, ...shots.map((shot) => (typeof shot.prompt === 'string' ? shot.prompt : null))],
+    { userId, model: operation.modelId },
+  );
 
   const durationSetting = settings.duration;
   const duration = typeof durationSetting === 'number' && Number.isFinite(durationSetting)

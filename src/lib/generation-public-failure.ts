@@ -5,7 +5,14 @@ export type GenerationStartFailureCode =
   | 'provider_busy'
   | 'provider_unavailable'
   | 'provider_rejected'
-  | 'submission_pending';
+  | 'submission_pending'
+  | 'prompt_blocked';
+
+/** Shown when `generation-prompt-safety` refuses a prompt; kept here so client
+ * code can reuse the copy without bundling the rules. */
+export const GENERATION_PROMPT_BLOCKED_MESSAGE =
+  'Magicbooklet can’t create this. We don’t make nude, undressed or see-through images of people, '
+  + 'or anything sexual involving minors. Edit your prompt and try again. No credits were used.';
 
 export type PublicGenerationStartFailure = Readonly<{
   code: GenerationStartFailureCode;
@@ -20,6 +27,7 @@ const GENERATION_START_FAILURE_CODES = new Set<GenerationStartFailureCode>([
   'provider_unavailable',
   'provider_rejected',
   'submission_pending',
+  'prompt_blocked',
 ]);
 
 /**
@@ -151,6 +159,10 @@ export function getPublicGenerationStartFailure(error: unknown): PublicGeneratio
   const message = normalizedSignal(errorMessage(error));
   const code = normalizedSignal(errorCode(error));
   const signal = `${code} ${message}`.trim();
+
+  if (code === 'prompt blocked') {
+    return { code: 'prompt_blocked', message: GENERATION_PROMPT_BLOCKED_MESSAGE };
+  }
 
   if (code === 'service misconfigured') {
     return {

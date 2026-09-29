@@ -107,6 +107,12 @@ complete the required manual safety action before resolving. Keep any material
 beyond a concise rationale — full investigation detail, personal data, external
 report identifiers — in the restricted incident system rather than in the note.
 
+## Generation-time refusals
+
+Every image, video, motion and catalog start checks its prompts with `src/lib/generation-prompt-safety.ts` before any credit hold, and `createKieTask` repeats the check on the exact provider payload. It refuses four things only: sexual content involving minors (`minor_sexualization`), undressing a person (`undressing`), see-through or x-ray views of clothing (`see_through_clothing`), and nudity (`nudity`). Adult swimwear, lingerie, fashion and dance prompts pass by the owner's decision (2026-09-29). The user gets HTTP 422 with failure code `prompt_blocked` and is not charged.
+
+Each refusal logs a `generation_prompt_blocked` warning carrying the category, account id and model, never the prompt. Repeated `minor_sexualization` refusals from one account are a child-safety matter: follow the escalation below and restrict the account rather than waiting for a report. The rules are text-only, so they cannot see what an uploaded reference image shows; the providers' own filters and user reports remain the backstop for that.
+
 ## Safety escalation and verification
 
 - For suspected child sexual abuse material or child exploitation, do not download or redistribute the material. Preserve only the minimum identifiers required, immediately restrict access, and follow the child-safety escalation and legally required reporting process for the applicable jurisdiction.

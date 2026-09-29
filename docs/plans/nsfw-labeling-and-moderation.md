@@ -1,6 +1,18 @@
 # Manual NSFW labels and covered posts
 
-Status: implemented locally, 2026-09-29; awaiting release. The user chose manual labels to avoid adding a paid moderation provider. No Sightengine account, API key, scanning job, or paid service is used.
+Status: web and API live since 899ba06d (production release 36519833260, 2026-09-29, migration applied); the mobile half ships with the next OTA or store build. Android keeps NSFW posts covered until the age screen below ships. The user chose manual labels to avoid adding a paid moderation provider. No Sightengine account, API key, scanning job, or paid service is used.
+
+## Google Play notice, 2026-09-28
+
+Play Console issued "Violation of Sexual Content and Profanity and AI-Generated Content policy" (issue 4986691725724419376, fix by 2026-10-05, "App may be suspended"). The evidence screenshot shows a generated woman in swimwear. Production data matches it to the reviewer's prompt "Show the woman with nothing on": nano-banana-2 refused it, then Seedream 5 Lite (2026-09-17) and Seedream 5 Pro (2026-09-28) generated it, both with `nsfw_checker: true`. Both creations were archived. The email quotes the policy's condition: apps must "prohibit and prevent the generation of Restricted Content" and offer in-app reporting. Labels and archiving act after an image exists, so they cannot answer this notice by themselves.
+
+The owner's decisions (2026-09-29):
+
+- **Narrow generation gate.** `src/lib/generation-prompt-safety.ts` refuses prompts that sexualize minors, undress a person, ask for see-through clothing, or ask for nudity, before any credit hold and again on the provider payload. Adult swimwear, lingerie, fashion and dance still pass. Operations: `docs/moderation-operations.md`, "Generation-time refusals".
+- **Android covers NSFW posts; age screen next.** Google allows mature user posts in an app only when the app screens children out with a neutral age screen. Until Magicbooklet has one, `ugc-mobile/lib/nsfw-reveal-policy.ts` keeps the Android post screen on the warning card, with no reveal request and no website link. iOS keeps the website opt-in reveal, which is Apple's rule for mature user content. Next: a neutral date-of-birth screen for every account, then flip Android in that one function.
+- **No reviewer-only behaviour.** Applying the gate to the review account alone was ruled out: it shows the reviewer a different app from the one users get, which Play treats as evading review.
+
+Current store declarations, for the age-screen work: IARC rating Everyone / PEGI 3 / 3+ (14+ in Brazil), certificate 1fde2a09 (2026-05-30); target audience 13–15, 16–17 and 18+.
 
 ## Shipped scope of this change
 
