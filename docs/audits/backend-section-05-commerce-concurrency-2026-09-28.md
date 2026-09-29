@@ -1,6 +1,6 @@
 # Section 5D — bundle capture/refund concurrency
 
-Status: local verification complete; release pending.
+Status: deployed and verified in production; see [release evidence](backend-section-05-commerce-mobile-release-2026-09-28.md).
 
 ## Reproduced defect
 

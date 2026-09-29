@@ -1,6 +1,6 @@
 # Section 5E — restore mobile credit settlement after shared-grant hardening
 
-Status: reproduced and repaired locally; release pending in PR #237.
+Status: deployed and verified in production; see [release evidence](backend-section-05-commerce-mobile-release-2026-09-28.md).
 
 ## Regression and evidence
 
