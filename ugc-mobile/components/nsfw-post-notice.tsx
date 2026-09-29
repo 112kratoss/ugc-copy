@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { AppState, Linking, ScrollView, View, useWindowDimensions } from 'react-native';
+import { AppState, Linking, Platform, ScrollView, View, useWindowDimensions } from 'react-native';
 import { AppText, Pill, PrimaryButton, SecondaryButton } from '@/components/ui';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { useAuth } from '@/lib/auth';
+import { canRevealNsfwInApp } from '@/lib/nsfw-reveal-policy';
 import { useAppTheme } from '@/lib/theme-context';
 import type { ShowcaseFeedItem } from '@/lib/types';
 
@@ -14,6 +15,7 @@ export function NsfwPostNotice({ postId }: { postId: string }) {
   const [item, setItem] = useState<ShowcaseFeedItem | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const revealAllowed = canRevealNsfwInApp(Platform.OS);
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => { if (state !== 'active') setItem(null); });
     return () => subscription.remove();
@@ -25,6 +27,7 @@ export function NsfwPostNotice({ postId }: { postId: string }) {
   }, [item]);
   useEffect(() => { setItem(null); }, [postId, user?.id]);
   async function reveal() {
+    if (!revealAllowed) return;
     setLoading(true); setError(null);
     try {
       const response = await api.revealNsfwPost(postId);
@@ -46,6 +49,8 @@ export function NsfwPostNotice({ postId }: { postId: string }) {
         recyclingKey={`revealed:${postId}`} videoActivation="visible"
       /></View> : null}
       <SecondaryButton label="Hide this post" onPress={() => setItem(null)} />
+    </> : !revealAllowed ? <>
+      <AppText variant="body">The creator marked this post NSFW. Mature posts stay covered in this app.</AppText>
     </> : <>
       <AppText variant="body">The creator marked this post NSFW. Its media and text stay hidden until you choose to reveal them.</AppText>
       <AppText variant="body" color="muted">Mature content is off by default. Adults can enable it on the Magicbooklet website, then return here to reveal individual posts.</AppText>
