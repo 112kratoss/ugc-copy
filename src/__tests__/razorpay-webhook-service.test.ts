@@ -777,9 +777,9 @@ describe('processRazorpayWebhookForRoute', () => {
     });
   });
 
-  it('asks Razorpay to retry when commerce refund reconciliation finds an ownership conflict', async () => {
+  it.each(['payment_conflict', 'order_conflict', 'event_conflict'])('asks Razorpay to retry when commerce refund reconciliation finds %s', async (status) => {
     const admin = createAdminSupabaseMock({
-      marketplaceAdjustmentStatus: 'payment_conflict',
+      marketplaceAdjustmentStatus: status,
     });
 
     await expect(processRazorpayWebhookForRoute({
@@ -795,6 +795,31 @@ describe('processRazorpayWebhookForRoute', () => {
         service_name: 'razorpay-webhook-processing',
         error_name: 'payment_refund_reconciliation_failed',
       }),
+    ]);
+  });
+
+  it.each(['event_conflict', 'order_conflict'])('retries a bundle replay conflict after marketplace falls through: %s', async (status) => {
+    const admin = createAdminSupabaseMock({
+      marketplaceAdjustmentStatus: 'not_found', resourceAdjustmentStatus: status,
+    });
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client, rawBody: refundProcessedBody(),
+    })).resolves.toEqual({ status: 500, body: 'Failed to reconcile payment refund' });
+    expect(admin.rpcCalls.map(call => call.name)).toEqual([
+      'reconcile_marketplace_cash_adjustment', 'reconcile_post_resource_cash_adjustment',
+    ]);
+    expect(admin.providerDependencyInserts).toHaveLength(1);
+  });
+
+  it('acknowledges a matching bundle replay after checking the bundle path', async () => {
+    const admin = createAdminSupabaseMock({
+      marketplaceAdjustmentStatus: 'not_found', resourceAdjustmentStatus: 'already_adjusted',
+    });
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client, rawBody: refundProcessedBody(),
+    })).resolves.toEqual({ status: 200, body: 'OK' });
+    expect(admin.rpcCalls.map(call => call.name)).toEqual([
+      'reconcile_marketplace_cash_adjustment', 'reconcile_post_resource_cash_adjustment',
     ]);
   });
 

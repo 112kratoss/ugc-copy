@@ -370,6 +370,7 @@ export async function processRazorpayWebhookForRoute({
       }
       if (
         status === 'entitlement_missing'
+        || status === 'event_conflict'
         || status === 'order_conflict'
         || status === 'payment_conflict'
         || !status
