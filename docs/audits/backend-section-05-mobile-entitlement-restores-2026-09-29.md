@@ -34,3 +34,11 @@ Evidence is saved in `.audit-evidence/backend-section-05f/`. The previous comple
 ## Remaining audit coverage
 
 This does not certify all receipt verification or provider delivery. Remaining work includes canonical store transaction identity, cross-rail event identity conflicts, mobile marketplace concurrency, and receipt-backed live provider delivery. Bundle IAP remains disabled. No store build or OTA is required for this database repair.
+
+## Release ordering correction
+
+PR #240 merged as `afe26d97`. PR Quality 36541256703 passed. Exact-main Quality 36543179700 passed after rerunning a browser-only failure (`Execution context was destroyed` during the composer drag test); the unchanged rerun passed all 19 browser cases.
+
+Production release 36544614587 stopped before applying any migration because the new filename sorted before the already-applied `20260929120000_manual_nsfw_content.sql`. The Management API assigns application-time versions, while the release planner correctly maps names back to repository order. The initial clean replay passed but did not establish incremental release ordering.
+
+Read-only production inspection confirmed no `reject_conflicting_mobile_entitlement_restores` ledger entry and the unchanged function digest `674860bee6b5b7f3a0577d49b7b1d3c0`. Rename this **unapplied** migration to `20260929120001_reject_conflicting_mobile_entitlement_restores.sql`, immediately after the existing repository history, and update its guard-test filename. No applied migration or SQL body is changed. All release gates remain required.
