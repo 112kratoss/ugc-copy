@@ -3,7 +3,7 @@ import { Image, type ImageProps } from 'expo-image';
 import { RecoverableVideoPreview } from '@/components/recoverable-video-preview';
 import { ImageOff } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Platform, Pressable, Text, View } from 'react-native';
 
 import { useAppForeground } from '@/lib/app-foreground';
 import { describeImageError, recordMediaDiagnostic } from '@/lib/media-diagnostics';
@@ -337,7 +337,10 @@ function StableMediaImageSession({
       contentFit={contentFit}
       cachePolicy="memory-disk"
       recyclingKey={cacheKey}
-      transition={transition}
+      // expo-image 55's Android fade can recycle a newer image after a covered
+      // screen resizes, leaving both native layers GONE when it returns. Use
+      // the synchronous swap until the native transition ownership fix ships.
+      transition={Platform.OS === 'android' ? 0 : transition}
       onLoadStart={watchdog ? () => {
         progress.current = { attemptKey, progressed: false, loaded: false };
       } : undefined}

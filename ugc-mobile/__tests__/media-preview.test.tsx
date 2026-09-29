@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 const imageState = vi.hoisted(() => ({ prefetch: vi.fn(async () => true) }));
+const platform = vi.hoisted(() => ({ OS: 'ios' }));
 const appState = vi.hoisted(() => ({
   currentState: 'active' as string,
   listeners: [] as Array<(state: string) => void>,
@@ -23,6 +24,7 @@ vi.mock('@/lib/use-media-source', () => ({
 }));
 
 vi.mock('react-native', () => ({
+  Platform: platform,
   AppState: {
     get currentState() {
       return appState.currentState;
@@ -105,12 +107,35 @@ describe('StableMediaImage', () => {
   });
 
   beforeEach(() => {
+    platform.OS = 'ios';
     imageState.prefetch.mockClear();
     vi.useFakeTimers();
   });
 
   afterEach(() => {
+    platform.OS = 'ios';
     vi.useRealTimers();
+  });
+
+  // Contract guard only: the native regression is reproduced by rotating a
+  // covered Explore screen, then returning (see the Android audit report).
+  it.each([undefined, 0, 120, 300])('disables Android fades even when a caller requests %s ms', (transition) => {
+    platform.OS = 'android';
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<StableMediaImage url="https://cdn/android.webp" cacheKey="android" transition={transition} />);
+    });
+    expect(tree.root.findByType('image').props.transition).toBe(0);
+    renderer.act(() => tree.unmount());
+  });
+
+  it.each([[undefined, 120], [0, 0], [300, 300]])('preserves the iOS fade request %s as %s ms', (transition, expected) => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<StableMediaImage url="https://cdn/ios.webp" cacheKey="ios" transition={transition} />);
+    });
+    expect(tree.root.findByType('image').props.transition).toBe(expected);
+    renderer.act(() => tree.unmount());
   });
 
   it('passes authentication to a private fallback image', () => {
