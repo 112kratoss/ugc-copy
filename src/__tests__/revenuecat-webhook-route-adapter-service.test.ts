@@ -332,6 +332,25 @@ describe('RevenueCat webhook route adapter service', () => {
     );
   });
 
+  it.each(['event_conflict', 'invalid_request', 'transaction_not_found', 'provider_mismatch', 'invalid_amount', 'unexpected_status'])(
+    'keeps unresolved %s adjustments retryable and records telemetry', async status => {
+      const rpc = vi.fn(async () => ({ data: { status, rewards: [] }, error: null }));
+      const recordPaymentWebhookProcessingFailure = vi.fn(async () => {});
+      const response = await postRevenueCatWebhookRouteResponse({
+        request: webhookRequest(refundPayload),
+        dependencies: {
+          createServiceClient: () => ({ rpc }) as never,
+          getExpectedAuthorization: () => 'Bearer revenuecat-webhook-secret',
+          logError: vi.fn(), recordPaymentWebhookProcessingFailure,
+        },
+      });
+      expect(response.status).toBe(503);
+      expect(recordPaymentWebhookProcessingFailure).toHaveBeenCalledWith({
+        serviceName: 'revenuecat-webhook-processing', failureCode: 'refund_reconciliation_unresolved', status: 503,
+      }, expect.objectContaining({ rpc }));
+    },
+  );
+
   it('acknowledges permanent reconciliation outcomes without asking for a retry', async () => {
     const recordPaymentWebhookProcessingFailure = vi.fn(async () => {});
 
