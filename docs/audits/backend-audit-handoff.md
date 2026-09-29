@@ -39,7 +39,7 @@ reproduced before the fix; production probe results are recorded before and afte
 
 Section 5I shared credit event binding and RevenueCat wrapper propagation are
 fixed locally; read `docs/audits/backend-section-05-credit-event-binding-2026-09-29.md`.
-Release is pending. Five SQL regressions, four real-database webhook regressions
+Release is pending. Six SQL regressions, four real-database webhook regressions
 and six adapter regressions reproduced before their fixes. The production rollback
 probe reproduced four incorrect outcomes and left no fixtures.
 

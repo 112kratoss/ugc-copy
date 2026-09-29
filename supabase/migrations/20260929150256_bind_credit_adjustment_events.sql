@@ -8,14 +8,34 @@ DECLARE
   new_block text;
 BEGIN
   SELECT pg_get_functiondef('public.reconcile_credit_purchase_adjustment(uuid,text,text,bigint,text,text)'::regprocedure) INTO definition;
-  old_block := $old$  IF EXISTS (
+  old_block := $old$  -- Refund/dispute snapshots are monotonic. A delayed smaller snapshot cannot
+  -- restore value; only an explicit provider-verified restore/won event may do
+  -- that. Conversely a restore event may not increase the reversed target.
+  IF (v_action = 'reverse'
+      AND p_cumulative_reversed_subunits < v_transaction.credit_reversed_amount_subunits)
+     OR (v_action = 'restore'
+      AND p_cumulative_reversed_subunits > v_transaction.credit_reversed_amount_subunits) THEN
+    RETURN jsonb_build_object('status', 'stale_event', 'rewards', '[]'::jsonb);
+  END IF;
+
+  IF (v_provider = 'razorpay' AND v_transaction.mobile_product_id IS NOT NULL)
+     OR (v_provider = 'revenuecat' AND v_transaction.mobile_product_id IS NULL) THEN
+    RETURN jsonb_build_object('status', 'provider_mismatch', 'rewards', '[]'::jsonb);
+  END IF;
+
+  IF EXISTS (
     SELECT 1 FROM public.credit_purchase_adjustments
     WHERE provider = v_provider
       AND provider_event_id = btrim(p_provider_event_id)
   ) THEN
     RETURN jsonb_build_object('status', 'duplicate_event', 'rewards', '[]'::jsonb);
   END IF;$old$;
-  new_block := $new$  IF EXISTS (
+  new_block := $new$  IF (v_provider = 'razorpay' AND v_transaction.mobile_product_id IS NOT NULL)
+     OR (v_provider = 'revenuecat' AND v_transaction.mobile_product_id IS NULL) THEN
+    RETURN jsonb_build_object('status', 'provider_mismatch', 'rewards', '[]'::jsonb);
+  END IF;
+
+  IF EXISTS (
     SELECT 1 FROM public.credit_purchase_adjustments
     WHERE provider = v_provider
       AND provider_event_id = btrim(p_provider_event_id)
@@ -30,6 +50,16 @@ BEGIN
       RETURN jsonb_build_object('status', 'event_conflict', 'rewards', '[]'::jsonb);
     END IF;
     RETURN jsonb_build_object('status', 'duplicate_event', 'rewards', '[]'::jsonb);
+  END IF;
+
+  -- Refund/dispute snapshots are monotonic. A delayed smaller snapshot cannot
+  -- restore value; only an explicit provider-verified restore/won event may do
+  -- that. Conversely a restore event may not increase the reversed target.
+  IF (v_action = 'reverse'
+      AND p_cumulative_reversed_subunits < v_transaction.credit_reversed_amount_subunits)
+     OR (v_action = 'restore'
+      AND p_cumulative_reversed_subunits > v_transaction.credit_reversed_amount_subunits) THEN
+    RETURN jsonb_build_object('status', 'stale_event', 'rewards', '[]'::jsonb);
   END IF;$new$;
   IF (length(definition) - length(replace(definition, old_block, ''))) / length(old_block) <> 1 THEN
     RAISE EXCEPTION 'Expected exactly one credit event identity block in reconcile_credit_purchase_adjustment(uuid,text,text,bigint,text,text)';

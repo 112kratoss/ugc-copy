@@ -25,7 +25,9 @@ No tables, customer balances or historical adjustments are repaired.
 
 ## Reproduction and validation
 
-- Five of twelve new real-Postgres assertions failed against the original SQL.
+- Five initial real-Postgres assertions failed against the original SQL.
+  A sixth regression reproduced conflicting input hiding behind stale snapshot
+  handling; event identity is now checked before cumulative-state ordering.
 - Four database-backed HTTP regression cases failed against the original SQL:
   reused receipt events and changed-action replays, for both Apple and Google.
   The corrected fixtures use the parser's `REFUND_REVERSED` event. An initial
@@ -36,7 +38,7 @@ No tables, customer balances or historical adjustments are repaired.
   checks. The conflicting receipt was marked revoked and consumed the event,
   confirming the source-level finding. Separate cleanup found no fixture user,
   transactions or receipts. No real customer data was changed.
-- Clean migration replay and all 1,884 pgTAP assertions in 88 files passed.
+- Clean migration replay and all 1,885 pgTAP assertions in 88 files passed.
 - All 34 focused adapter/migration/database cases passed, including valid
   duplicates, independent refunds, restores, and delayed stale events.
 - Full web suite: 6,135 passed, with 45 database cases skipped and exercised
