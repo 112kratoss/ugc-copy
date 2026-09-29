@@ -20,13 +20,13 @@
     "android": {
       "fingerprint": "02b8fe85566eac2e3f61a8ed82fa350c3ee03865",
       "appVersion": "0.1.8",
-      "buildNumber": 76,
-      "shipped": "2026-09-27",
+      "buildNumber": 77,
+      "shipped": "2026-09-29",
       "tracks": [
         "production",
         "alpha"
       ],
-      "$note": "Built from main 5837720a (#225; EAS build 2f2d81bf, workflow run 36322017759), submitted to the Play closed alpha 2026-09-27 and sent to production review the same evening (full rollout; managed publishing is off, so Google's approval published it, and the public listing read 0.1.8 on 2026-09-28). It is the first binary with the native menus (#217, @expo/ui). EAS recorded this runtime for the build, and a clean npm ci of main 015fd701 fingerprints the same. Now the binary in every Play user's hands, so an update published against this fingerprint reaches production; 0.1.7 (75) at a5da54690048abe955aaac5d29d0fbeb8beee45e is only whatever has not updated yet."
+      "$note": "Built from main 26c017bd (EAS build 010bc000, workflow run 36534158551) for the Google Play policy notice (Sexual Content / AI-Generated Content, fix by 2026-10-05): the server-side prompt gate from 0e903fde and Android's covered NSFW posts (26c017bd). Its runtime is the same 02b8fe85 as 0.1.8 (76), built from 5837720a, so every update published at this fingerprint reaches both builds and nothing about OTA reach changed. Closed alpha and production were both approved and published on 2026-09-29 with full rollout (managed publishing is off). 76 is only whatever has not updated yet."
     },
     "ios": {
       "fingerprint": "4babc8b439ba5309615abbbe59baf79a23014d6c",
