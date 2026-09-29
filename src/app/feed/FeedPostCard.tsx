@@ -178,7 +178,7 @@ function FeedPostCardView({
                 <span className="text-xs text-[var(--ui-text-faint)]">{`· ${card.timeLabel}`}</span>
                 {card.kind === 'text' ? (
                     <span className="ml-auto shrink-0 rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] px-2.5 py-0.5 text-[11px] font-bold text-[var(--ui-text-muted)]">
-                        {card.categoryLabel}
+                        {item.isNsfw ? 'NSFW · 18+' : card.categoryLabel}
                     </span>
                 ) : null}
             </div>

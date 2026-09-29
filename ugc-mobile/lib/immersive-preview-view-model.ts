@@ -65,6 +65,8 @@ export interface ImmersivePostDetails {
 }
 
 export interface ImmersivePreviewItem {
+  isNsfw?: boolean;
+  nsfwRevealed?: boolean;
   id: string;
   source: PreviewViewerSource;
   sourceType: ImmersivePreviewSourceType;
@@ -501,6 +503,8 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
     id: item.id,
     source,
     sourceType: 'showcase',
+    isNsfw: item.isNsfw,
+    nsfwRevealed: item.nsfwRevealed,
     title,
     displayText,
     mediaUrl: item.mediaUrl,

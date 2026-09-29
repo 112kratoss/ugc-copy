@@ -61,6 +61,7 @@ function getParam(value: string | string[] | undefined): string | undefined {
  * otherwise be served as a broken image.
  */
 function resolveShowcaseOgImage(detail: PublicPostDetail): MetadataImage | undefined {
+  if (detail.isNsfw) return undefined;
   const cover = detail.mediaItems?.[0];
   const dimensions = cover?.width && cover?.height
     ? { width: cover.width, height: cover.height }

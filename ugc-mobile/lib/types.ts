@@ -832,6 +832,8 @@ export interface ShowcaseFeedEventBatchResponse {
 }
 
 export interface ShowcaseFeedItem {
+  isNsfw?: boolean;
+  nsfwRevealed?: boolean;
   id: string;
   mediaUrl: string | null;
   mediaKind: 'image' | 'video' | null;
@@ -1310,6 +1312,7 @@ export interface OwnerPostBundleSummary {
 }
 
 export interface OwnerPostListItem {
+  isNsfw?: boolean;
   id: string;
   title: string;
   /**

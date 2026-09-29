@@ -147,8 +147,10 @@ vi.mock('@/lib/server-helpers', () => ({
 
       if (table === 'posts') {
         let postIds: string[] = [];
+        let ratingOnly = false;
         const query = {
-          select() {
+          select(columns: string) {
+            ratingOnly = columns === 'id, is_nsfw';
             return query;
           },
           in(_column: string, values: string[]) {
@@ -165,7 +167,7 @@ vi.mock('@/lib/server-helpers', () => ({
             return query;
           },
           then(resolve: (value: { data: ReturnType<typeof buildLinkedPost>[]; error: null }) => void) {
-            linkedPostHydrationCalls.push([...postIds]);
+            if (!ratingOnly) linkedPostHydrationCalls.push([...postIds]);
             resolve({
               data: postIds
                 .filter((postId) => !hiddenLinkedPostIds.has(postId))

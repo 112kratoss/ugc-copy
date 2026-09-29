@@ -684,7 +684,7 @@ describe('showcase feed', () => {
         // tool-filtered first pages. Bumping the version keeps entries written
         // under the old four-argument key from being read back against the new
         // five-argument one.
-        keyParts: ['marketplace-resource-list-base-v4'],
+        keyParts: ['marketplace-resource-list-base-v5'],
         options: {
           revalidate: 60,
           // SHOWCASE_FEED_CACHE_TAG stays: the moderation take-down path
@@ -694,11 +694,11 @@ describe('showcase feed', () => {
         },
       },
       {
-        keyParts: ['showcase-feed-base-v2'],
+        keyParts: ['showcase-feed-base-v3'],
         options: { revalidate: 60, tags: [SHOWCASE_FEED_CACHE_TAG] },
       },
       {
-        keyParts: ['showcase-for-you-bootstrap-v2'],
+        keyParts: ['showcase-for-you-bootstrap-v3'],
         options: { revalidate: 60, tags: [SHOWCASE_FEED_CACHE_TAG] },
       },
     ]);
@@ -846,7 +846,8 @@ describe('showcase feed', () => {
     });
 
     expect(page.items.map((item) => item.id)).toEqual(['post-1', 'post-2']);
-    expect(tableAccesses.filter((table) => table === 'posts')).toHaveLength(2);
+    // Two feed reads plus one batched current NSFW-label projection.
+    expect(tableAccesses.filter((table) => table === 'posts')).toHaveLength(3);
     expect(tableAccesses.filter((table) => table === 'profiles')).toHaveLength(1);
     expect(tableAccesses.filter((table) => table === 'post_media')).toHaveLength(1);
     expect(rpcAccesses.filter((name) => name === 'get_public_post_resource_bundle_summaries')).toHaveLength(1);

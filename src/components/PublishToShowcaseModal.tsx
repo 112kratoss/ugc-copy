@@ -191,6 +191,7 @@ export default function PublishToShowcaseModal({
   shareAfterPublish,
   onPublished,
 }: PublishToShowcaseModalProps) {
+  const [isNsfw, setIsNsfw] = useState(false);
   const [publishTitle, setPublishTitle] = useState(defaultTitle);
   const [publishDescription, setPublishDescription] = useState(() =>
     getDefaultPublishDescription(defaultDescription)
@@ -247,6 +248,7 @@ export default function PublishToShowcaseModal({
     }
 
     // Opening a generation starts a fresh publish draft from its supplied defaults.
+    setIsNsfw(false);
     setPublishTitle(defaultTitle);
     setPublishDescription(getDefaultPublishDescription(defaultDescription));
     // A fresh publish starts with no recipe attached; the creator opts in.
@@ -433,6 +435,7 @@ export default function PublishToShowcaseModal({
     try {
       const requestBody: {
         generationId: string;
+        isNsfw?: boolean;
         visibility: Extract<PostVisibility, 'public' | 'private'>;
         title?: string;
         description?: string;
@@ -441,6 +444,7 @@ export default function PublishToShowcaseModal({
         resourceBundle?: PostResourceBundleInput;
       } = {
         generationId,
+        ...(isNsfw ? { isNsfw: true } : {}),
         visibility: nextVisibility,
         title: normalizeOptionalText(publishTitle),
         description: normalizeOptionalText(publishDescription),
@@ -568,6 +572,7 @@ export default function PublishToShowcaseModal({
 
         <form onSubmit={handleFormSubmit} className="space-y-5">
           <div>
+            <label className="flex min-h-11 items-center gap-3 text-sm text-zinc-200"><input type="checkbox" checked={isNsfw} onChange={(event) => setIsNsfw(event.target.checked)} />Mark as NSFW / mature</label>
             <label htmlFor="publish-title-input" className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Title</label>
             <input
               ref={titleInputRef}

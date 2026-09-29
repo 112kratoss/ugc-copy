@@ -443,6 +443,7 @@ describe('post new view model', () => {
       ['sourceTool', 'Manual'],
       ['sourceToolSlug', 'manual'],
       ['visibility', 'public'],
+      ['isNsfw', 'false'],
       ['postFormat', 'text'],
       ['resourceBundle', JSON.stringify({ accessMode: 'none' })],
     ]);
@@ -1525,6 +1526,7 @@ describe('post new view model', () => {
       };
 
       expect(buildUpdatePostPayload(true, draft, { preserveSoldResourceBundle: true })).toEqual({
+        isNsfw: false,
         title: '',
         description: '',
         body: '',

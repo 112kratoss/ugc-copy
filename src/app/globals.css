@@ -47,6 +47,7 @@
 @source "../components/InlineMediaVideo.tsx";
 @source "../components/JsonLd.tsx";
 @source "../components/NavigationProgress.tsx";
+@source "../components/NsfwPostReveal.tsx";
 @source "../components/OptimizedPreviewImage.tsx";
 @source "../components/PostCommentAvatar.tsx";
 @source "../components/PostComments.tsx";

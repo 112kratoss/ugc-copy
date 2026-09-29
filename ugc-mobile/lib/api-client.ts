@@ -848,6 +848,9 @@ export function createApiClient({
     // feed page for the post, which cost a full feed fetch on every genuine
     // miss, only ever covered the newest page the server would return, and had
     // to forward auth by hand or it became a way around user blocks.
+    revealNsfwPost: (postId: string) =>
+      request<ShowcasePostResponse>(`/api/posts/${encodeURIComponent(postId)}/reveal`, { method: 'POST' }),
+    getContentPreferences: () => request<{ showMature: boolean }>('/api/content-preferences'),
     getShowcasePost: (postId: string) =>
       request<ShowcasePostResponse>(`/api/showcase/posts/${postId}`),
     listPostComments: (postId: string, params?: Record<string, QueryValue>) =>

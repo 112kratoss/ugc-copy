@@ -527,6 +527,16 @@
       "path": "/api/media",
       "auth": "optional",
       "transport": "native-media"
+    },
+    "getContentPreferences": {
+      "method": "GET",
+      "path": "/api/content-preferences",
+      "auth": "required"
+    },
+    "revealNsfwPost": {
+      "method": "POST",
+      "path": "/api/posts/:postId/reveal",
+      "auth": "required"
     }
   },
   "fallbackRoutes": [

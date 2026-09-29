@@ -1970,6 +1970,7 @@ export default function NewPostScreen() {
             })],
         category: post.category || 'image',
         visibility: (post.visibility as any) || 'public',
+        isNsfw: post.isNsfw === true,
         selectedGenerationId: post.generationId || null,
         upload: post.mediaUrl ? {
           uri: post.mediaUrl,
@@ -3238,6 +3239,12 @@ export default function NewPostScreen() {
           />
         ) : null}
 
+        <ToggleRow
+          label="Mark as NSFW / mature"
+          body="Cover this post until viewers choose to reveal it. Community rules still apply."
+          value={draft.isNsfw === true}
+          onValueChange={(isNsfw) => updateDraft({ isNsfw })}
+        />
         {composerStep === 'details' ? (
           <PostDetailsPage
             draft={draft}

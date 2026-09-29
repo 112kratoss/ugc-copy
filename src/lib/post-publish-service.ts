@@ -581,6 +581,7 @@ export async function publishPreparedPost({
         id: postId,
         user_id: ownerUserId,
         visibility: 'private',
+        is_nsfw: submission.isNsfw === true,
         category: submission.category,
         title: submission.title,
         description: submission.description,

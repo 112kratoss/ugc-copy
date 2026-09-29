@@ -9,6 +9,7 @@ import type {
 } from '@/lib/showcase';
 
 export interface EditablePostDraft {
+  isNsfw?: boolean;
   id: string;
   generationId: string | null;
   title: string;

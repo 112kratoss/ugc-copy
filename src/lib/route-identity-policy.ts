@@ -78,6 +78,8 @@ const GUEST_ROUTES = [
  * anonymous posting surface.
  */
 const REGISTERED_ROUTES = [
+  '/api/content-preferences',
+  '/api/posts/[postId]/reveal',
   // Identity of record. Profile mutation shares a path with the read above and
   // is gated inside the adapter by method.
   '/api/profile/validate',

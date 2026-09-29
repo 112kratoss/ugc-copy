@@ -15,6 +15,7 @@ type EditPostPageProps = {
 function toEditablePostDraft(post: NonNullable<Awaited<ReturnType<typeof getOwnerPostDetail>>>): EditablePostDraft {
   return {
     id: post.id,
+    isNsfw: post.isNsfw,
     generationId: post.generationId,
     title: post.title,
     rawTitle: post.rawTitle,

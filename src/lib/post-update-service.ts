@@ -1,5 +1,6 @@
 import { postMediaStorageBucket, removePostMediaObjects } from '@/lib/post-media-storage';
 import 'server-only';
+import { secureNsfwPostMedia } from '@/lib/nsfw-media-security';
 import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 
 import path from 'node:path';
@@ -139,6 +140,7 @@ type MutablePostRow = {
   showcase_asset_path: string | null;
   output_url: string | null;
   review_status: 'visible' | 'flagged' | 'hidden' | null;
+  is_nsfw?: boolean;
 };
 
 type BundleStatusRow = {
@@ -205,6 +207,7 @@ type SubmittedEditMediaItem =
     };
 
 export type PostUpdateRequestBody = {
+  isNsfw?: unknown;
   title?: unknown;
   description?: unknown;
   body?: unknown;
@@ -457,7 +460,7 @@ async function loadOwnedPost(
   const { data, error } = await adminSupabase
     .from('posts')
     .select(
-      'id, user_id, generation_id, visibility, title, description, prompt, body, category, post_format, source_tool, source_tool_slug, source_kind, archived_at, showcase_asset_path, output_url, review_status',
+      'id, user_id, generation_id, visibility, title, description, prompt, body, category, post_format, source_tool, source_tool_slug, source_kind, archived_at, showcase_asset_path, output_url, review_status, is_nsfw',
     )
     .eq('id', postId)
     .eq('user_id', ownerUserId)
@@ -1325,7 +1328,12 @@ export async function updateOwnerPostForRoute({
     }
     const sourceToolCatalog = await resolvedDependencies.listSourceToolsCatalog();
 
+    if (body.isNsfw !== undefined && typeof body.isNsfw !== 'boolean') {
+      return { ok: false, status: 400, body: { error: 'isNsfw must be a boolean.' } };
+    }
+    const nextIsNsfw = typeof body.isNsfw === 'boolean' ? body.isNsfw : post.is_nsfw === true;
     const updatePayload: Record<string, unknown> = {
+      is_nsfw: nextIsNsfw,
       visibility: nextVisibility,
       category: nextCategory,
     };
@@ -1456,7 +1464,7 @@ export async function updateOwnerPostForRoute({
         const isExposing = nextVisibility !== 'private';
         // A post that is public but lost its derivative (an older client's
         // private → public) is healed on its next update.
-        const needsDerivative = isExposing && (exposureChanged || !post.showcase_asset_path);
+        const needsDerivative = isExposing && (exposureChanged || !post.showcase_asset_path || nextIsNsfw !== (post.is_nsfw === true));
 
         if (needsDerivative) {
           const outputUrl = generation.output_url ?? post.output_url;
@@ -1473,6 +1481,7 @@ export async function updateOwnerPostForRoute({
               ownerUserId,
               outputUrl,
               category: showcaseCategory,
+              privateMedia: nextIsNsfw,
             });
             updatePayload.showcase_asset_path = showcaseAssetPath;
             coverMediaToRecord = { showcaseAssetPath, category: showcaseCategory };
@@ -1587,6 +1596,18 @@ export async function updateOwnerPostForRoute({
 
     let updatedPost: Awaited<ReturnType<typeof updatePostWithResourceBundleAtomically>>;
     try {
+      if (nextIsNsfw) {
+        const replacements = await secureNsfwPostMedia(adminSupabase, postId, ownerUserId);
+        // Retained gallery descriptors were prepared before the copy commit.
+        // Carry the new paths into the atomic replacement instead of restoring
+        // the now-revoked public paths from that earlier snapshot.
+        for (const media of preparedMedia?.mediaItems ?? []) {
+          for (const key of ['storagePath', 'previewStoragePath', 'displayStoragePath', 'renditionStoragePath', 'teaserStoragePath'] as const) {
+            const value = media[key];
+            if (value && replacements.has(value)) media[key] = replacements.get(value)!;
+          }
+        }
+      }
       updatedPost = await resolvedDependencies.updatePostWithResourceBundleAtomically({
         supabase: adminSupabase,
         postId,

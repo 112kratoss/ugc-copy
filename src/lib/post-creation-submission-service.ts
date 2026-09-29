@@ -1,3 +1,4 @@
+import { parseNsfwFlag } from '@/lib/nsfw-content';
 import path from 'node:path';
 
 import { TITLE_MAX_LENGTH } from '@/lib/posts-server';
@@ -61,6 +62,7 @@ export interface PostCreationSubmission {
   mediaMimeType: string;
   category: ShowcaseItemCategory;
   visibility: ShowcaseVisibility;
+  isNsfw?: boolean;
   title: string | null;
   description: string | null;
   sourceTools: SourceToolSelection[];
@@ -401,6 +403,9 @@ export async function preparePostCreationSubmission({
   userId: string;
   sourceToolCatalog: SourceToolOption[];
 }): Promise<PostCreationSubmissionResult> {
+  let isNsfw: boolean | undefined;
+  try { isNsfw = parseNsfwFlag(formData.get('isNsfw')); }
+  catch { return { ok: false, status: 400, body: { error: 'isNsfw must be a boolean.' } }; }
   const rawMediaFiles = formData
     .getAll('media')
     .filter((entry): entry is File => entry instanceof File && entry.size > 0);
@@ -544,6 +549,7 @@ export async function preparePostCreationSubmission({
   return {
     ok: true,
     submission: {
+      isNsfw: isNsfw ?? false,
       submittedMediaItems,
       hasSubmittedMedia,
       body,

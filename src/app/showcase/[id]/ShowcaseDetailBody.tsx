@@ -1,3 +1,4 @@
+import NsfwPostReveal from '@/components/NsfwPostReveal';
 import Link from 'next/link';
 import { BookText, ShoppingBag } from 'lucide-react';
 
@@ -86,6 +87,7 @@ export default function ShowcaseDetailBody({
   returnContext?: ShowcaseReturnContext;
   variant?: ShowcaseDetailVariant;
 }) {
+  if (detail.isNsfw && !detail.nsfwRevealed) return <div className="px-4 py-12"><NsfwPostReveal key={detail.id} postId={detail.id} /></div>;
   const isOverlay = variant === 'overlay';
   const bundle = detail.resourceBundle;
   const isPublicRecipeBundle = Boolean(bundle && isGenerationRecipeAssetId(bundle.id));

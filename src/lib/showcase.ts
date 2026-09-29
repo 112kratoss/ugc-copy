@@ -109,6 +109,8 @@ export interface ShowcaseMediaItem {
 }
 
 export interface ShowcaseFeedItem {
+    isNsfw?: boolean;
+    nsfwRevealed?: boolean;
     id: string;
     mediaUrl: string | null;
     mediaKind: ShowcaseMediaKind | null;

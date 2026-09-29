@@ -12,7 +12,7 @@ const pending = new Map<string, Promise<string>>();
 export function parsePrivatePostMediaPath(value: string | null): string | null {
   if (!value) return null;
   const path = parseCanonicalStorageObjectPath(value, { minimumSegments: 3 });
-  return path === value && (path.startsWith('private-posts/') || path.startsWith('posts/'))
+  return path === value && (path.startsWith('private-posts/') || path.startsWith('posts/') || path.startsWith('showcase/'))
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(path.split('/')[1])
     ? path : null;
 }

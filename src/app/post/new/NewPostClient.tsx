@@ -468,6 +468,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const router = useRouter();
   const searchParams = useSearchParams();
   const { session } = useAuth();
+  const [isNsfw, setIsNsfw] = useState(initialPost?.isNsfw === true);
   const generationId = initialPost?.generationId ?? searchParams.get('generationId');
   const isEditMode = Boolean(initialPost);
   const publishIntent = searchParams.get('publishIntent');
@@ -2020,6 +2021,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           body: JSON.stringify({
             generationId,
             visibility: effectiveVisibility,
+            isNsfw,
             title: title.trim() || undefined,
             description: description.trim() || undefined,
             body: trimmedBody || undefined,
@@ -2068,6 +2070,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
             body: trimmedBody || null,
             sourceTools: sourceToolsForSubmit.length > 0 ? sourceToolsForSubmit : undefined,
             visibility: effectiveVisibility,
+            isNsfw,
             category: inferredCategory ?? undefined,
             mediaItems: mediaItemsForSubmit,
             // A sold package is frozen, and the update path treats an absent
@@ -2113,6 +2116,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         formData.set('sourceTools', JSON.stringify(sourceToolsForSubmit));
       }
       formData.set('visibility', effectiveVisibility);
+      formData.set('isNsfw', String(isNsfw));
       formData.set('postFormat', postFormat);
       formData.set('resourceBundle', JSON.stringify(resourceBundle ?? { accessMode: 'none' }));
 
@@ -2955,6 +2959,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 ) : null}
               </div>
 
+              <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-2xl border border-white/10 p-4 text-sm text-zinc-200">
+                <input type="checkbox" checked={isNsfw} onChange={(event) => setIsNsfw(event.target.checked)} className="mt-1" />
+                <span><span className="block font-semibold">Mark as NSFW / mature</span><span className="mt-1 block text-zinc-400">Cover this post’s media and text until viewers choose to reveal them. Community rules still apply.</span></span>
+              </label>
               <div
                 id="recipe"
                 ref={resourceSectionRef}

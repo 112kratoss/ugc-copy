@@ -32,6 +32,10 @@ function createCanonicalTemplateAdminClientMock({
 
   const client = {
     from(table: string) {
+      if (table === 'posts') {
+        const query = { select: () => query, eq: () => query, maybeSingle: async () => ({ data: null, error: null }) };
+        return query;
+      }
       if (table === 'generations') {
         return {
           select() {

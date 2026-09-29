@@ -76,6 +76,7 @@ vi.mock('lucide-react-native', () => ({
 }));
 
 vi.mock('react-native', () => ({
+  Platform: { OS: 'ios' },
   AppState: {
     get currentState() {
       return appState.currentState;

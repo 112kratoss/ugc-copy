@@ -1,4 +1,5 @@
 import 'server-only';
+import { postMediaStorageBucket, removePostMediaObjects } from '@/lib/post-media-storage';
 import { logBackendWarning } from '@/lib/backend-logger';
 
 import path from 'node:path';
@@ -41,7 +42,7 @@ export function getCanonicalGenerationShowcaseAssetPath(
 ): string | null {
   if (!storagePath) return null;
   const canonicalPath = parseCanonicalStorageObjectPath(storagePath, { minimumSegments: 3 });
-  return canonicalPath?.startsWith(`showcase/${generationId}/`) ? canonicalPath : null;
+  return canonicalPath && (canonicalPath.startsWith(`showcase/${generationId}/`) || canonicalPath.startsWith(`private-posts/${generationId}/`)) ? canonicalPath : null;
 }
 
 function isExistingStorageObjectError(error: { message?: string; statusCode?: string } | null) {
@@ -111,6 +112,7 @@ export async function createGenerationShowcaseDerivative({
   ownerUserId,
   outputUrl,
   openRemoteMedia = openAllowlistedRemoteMedia,
+  privateMedia = false,
 }: {
   adminSupabase: SupabaseClient;
   category: GenerationShowcaseCategory;
@@ -118,6 +120,7 @@ export async function createGenerationShowcaseDerivative({
   ownerUserId: string;
   outputUrl: string;
   openRemoteMedia?: typeof openAllowlistedRemoteMedia;
+  privateMedia?: boolean;
 }): Promise<string> {
   const storedLocation = getUserOwnedStoredMediaLocation(outputUrl, ownerUserId);
   let fileBody: Blob | ReadableStream<Uint8Array>;
@@ -147,10 +150,10 @@ export async function createGenerationShowcaseDerivative({
 
   const baseName = path.basename(sourceName, path.extname(sourceName)) || generationId;
   const sourceVersion = createHash('sha256').update(outputUrl).digest('hex').slice(0, 12);
-  const showcaseAssetPath = `showcase/${generationId}/${baseName}.${sourceVersion}.${inferExtension(sourceName, category)}`;
+  const showcaseAssetPath = `${privateMedia ? 'private-posts' : 'showcase'}/${generationId}/${baseName}.${sourceVersion}.${inferExtension(sourceName, category)}`;
 
   const { error: uploadError } = await adminSupabase.storage
-    .from(SHOWCASE_MEDIA_BUCKET)
+    .from(postMediaStorageBucket(showcaseAssetPath))
     .upload(showcaseAssetPath, fileBody, {
       cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
       contentType: contentType || inferShowcaseContentType(sourceName, category),
@@ -262,7 +265,8 @@ export async function ensureGenerationPostCoverMedia({
     // than overwritten — and an insert is not attempted either, because it
     // would collide on (post_id, sort_order).
     const ownsCoverRow = !coverRow.storage_path
-      || Boolean(getCanonicalGenerationShowcaseAssetPath(coverRow.storage_path, generationId));
+      || Boolean(getCanonicalGenerationShowcaseAssetPath(coverRow.storage_path, generationId))
+      || coverRow.storage_path.startsWith(`private-posts/${postId}/`);
     if (!ownsCoverRow) {
       return { outcome: 'skipped', error: null };
     }
@@ -376,7 +380,7 @@ async function retireSupersededCoverObjects({
   if (superseded.size === 0) return;
 
   const paths = [...superseded];
-  const { error } = await adminSupabase.storage.from(SHOWCASE_MEDIA_BUCKET).remove(paths);
+  const { error } = await removePostMediaObjects(adminSupabase, paths);
   if (error) {
     logBackendWarning('generation_post_cover_superseded_objects_not_removed', {
       postId,
@@ -464,7 +468,7 @@ export async function removeGenerationShowcaseDerivative({
     return { removed: false, removedPaths: [], removedMediaRows, error: null };
   }
   const paths = [...removablePaths];
-  const result = await adminSupabase.storage.from(SHOWCASE_MEDIA_BUCKET).remove(paths);
+  const result = await removePostMediaObjects(adminSupabase, paths);
   return {
     removed: !result.error,
     removedPaths: result.error ? [] : paths,

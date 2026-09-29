@@ -1,4 +1,6 @@
+import { postMediaStorageBucket } from '@/lib/post-media-storage';
 import 'server-only';
+import { secureNsfwPostMedia } from '@/lib/nsfw-media-security';
 import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -32,7 +34,6 @@ import {
   getCanonicalGenerationShowcaseAssetPath,
   normalizeGenerationShowcaseCategory,
   removeGenerationShowcaseDerivative,
-  SHOWCASE_MEDIA_BUCKET,
   type GenerationShowcaseCategory,
 } from '@/lib/generation-post-media';
 import {
@@ -96,6 +97,7 @@ type StoredGenerationBundleRow = {
 };
 
 export type ShowcasePublishRequestBody = {
+  isNsfw?: boolean;
   generationId: string;
   isPublic?: boolean;
   visibility?: 'public' | 'unlisted' | 'private';
@@ -309,6 +311,7 @@ async function loadFrozenSoldGenerationBundleForQuality({
 }
 
 type ExistingGenerationPostContent = {
+  is_nsfw?: boolean;
   title: string | null;
   description: string | null;
   prompt: string | null;
@@ -336,7 +339,7 @@ async function loadExistingGenerationPostContent({
 }): Promise<ExistingGenerationPostContent | null> {
   const { data, error } = await supabase
     .from('posts')
-    .select('id, title, description, prompt, body, category')
+    .select('id, title, description, prompt, body, category, is_nsfw')
     .eq('generation_id', generationId)
     .eq('user_id', ownerUserId)
     .maybeSingle();
@@ -363,6 +366,7 @@ async function loadExistingGenerationPostContent({
   const bundleText = bundle as { prompt_text: string | null; notes_markdown: string | null } | null;
 
   return {
+    is_nsfw: post.is_nsfw,
     title: post.title,
     description: post.description,
     prompt: post.prompt,
@@ -701,8 +705,15 @@ export async function publishGenerationToShowcaseForRoute({
     };
   }
 
+  if (requestBody.isNsfw !== undefined && typeof requestBody.isNsfw !== 'boolean') {
+    return { ok: false, status: 400, body: { error: 'isNsfw must be a boolean.' } };
+  }
+  const existingRating = await adminSupabase.from('posts').select('id, is_nsfw').eq('generation_id', generationId).eq('user_id', userId).maybeSingle();
+  if (existingRating.error) throw existingRating.error;
+  const isNsfw = requestBody.isNsfw ?? existingRating.data?.is_nsfw ?? existingPost?.is_nsfw ?? false;
+  if (isNsfw && existingRating.data) await secureNsfwPostMedia(adminSupabase, existingRating.data.id, userId);
   const updatePayload: { is_public: boolean; [key: string]: unknown } = {
-    is_public: effectiveIsPublic,
+    is_public: effectiveIsPublic && !isNsfw,
     share_input_media_for_remix: effectiveShareInputMediaForRemix,
   };
 
@@ -723,6 +734,7 @@ export async function publishGenerationToShowcaseForRoute({
         outputUrl: generation.output_url,
         category: detectedCategory ?? 'image',
         openRemoteMedia: resolvedDependencies.openAllowlistedRemoteMedia,
+        privateMedia: isNsfw,
       });
       updatePayload.showcase_asset_path = nextShowcaseAssetPath;
     }
@@ -776,6 +788,7 @@ export async function publishGenerationToShowcaseForRoute({
     slug: 'magicbooklet',
   });
   const postPayload = {
+    is_nsfw: isNsfw,
     user_id: generation.user_id,
     visibility: effectiveVisibility,
     category: detectedCategory ?? 'image',
@@ -817,7 +830,7 @@ export async function publishGenerationToShowcaseForRoute({
       );
       if (removableDerivativePath) {
         void adminSupabase.storage
-          .from(SHOWCASE_MEDIA_BUCKET)
+          .from(postMediaStorageBucket(removableDerivativePath))
           .remove([removableDerivativePath])
           .catch((storageError) => {
             logBackendError('failed_to_delete_showcase_derivative_after_publish_failure', { error: storageError });

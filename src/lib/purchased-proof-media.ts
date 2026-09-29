@@ -89,7 +89,7 @@ export async function loadPurchasedProofMedia({
   if (rows.length === 0) return buildScopedMediaPlaceholders(resources);
 
   const publicUrl = (storagePath: string | null) => storagePath && includeStoredUrls
-    ? (storagePath.startsWith('posts/') ? `/api/media?${new URLSearchParams({ bucket: 'post_media', path: storagePath })}` : postMediaReadUrl(adminSupabase, storagePath))
+    ? ((storagePath.startsWith('posts/') || storagePath.startsWith('showcase/')) ? `/api/media?${new URLSearchParams({ bucket: 'post_media', path: storagePath })}` : postMediaReadUrl(adminSupabase, storagePath))
     : null;
 
   return rows.map((row) => {

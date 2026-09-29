@@ -25,7 +25,7 @@ export async function processUploadedMediaMaintenance(client: SupabaseClient) {
   if (copies.error) throw copies.error;
   for (const row of copies.data ?? []) {
     const path = parseCanonicalStorageObjectPath(row.public_path);
-    if (path !== row.public_path || row.private_path !== `private-${path}` || !path?.startsWith('posts/')) {
+    if (path !== row.public_path || parseCanonicalStorageObjectPath(row.private_path) !== row.private_path || !row.private_path.startsWith('private-posts/') || !(path?.startsWith('posts/') || path?.startsWith('showcase/'))) {
       throw new Error('Invalid private-copy revocation');
     }
     // The atomic commit verified the copy and rewrote live descriptors before

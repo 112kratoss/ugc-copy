@@ -21,7 +21,7 @@ import type { ShowcaseFeedResponse } from './types';
 
 /** The lane a cold start lands on, and the only one saved. */
 export const PERSISTED_HOME_FEED_CHIP_ID: HomeFeedChipId = 'for-you';
-export const PERSISTED_HOME_FEED_STORAGE_KEY = 'magicbooklet.homeFeed.forYou.v1';
+export const PERSISTED_HOME_FEED_STORAGE_KEY = 'magicbooklet.homeFeed.forYou.v2';
 /** Past this, a launch shows the skeleton rather than posts this old. */
 export const PERSISTED_HOME_FEED_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
 /** Folds a fetch and the edits right after it (a save, a hidden post) into one write. */

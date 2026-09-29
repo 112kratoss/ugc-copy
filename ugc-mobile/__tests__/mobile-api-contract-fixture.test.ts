@@ -234,6 +234,8 @@ const extendedOperationCases: Array<{
   key: RegisteredOperationKey;
   call: (api: MagicbookletApiClient) => Promise<unknown>;
 }> = [
+  { key: 'getContentPreferences', call: (api) => api.getContentPreferences() },
+  { key: 'revealNsfwPost', call: (api) => api.revealNsfwPost('post-1') },
   { key: 'getGenerationDetails', call: (api) => api.getGenerationDetails('generation-1') },
   {
     key: 'startGeneration',

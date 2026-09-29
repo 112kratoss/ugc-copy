@@ -175,6 +175,7 @@ export interface PostComposerCreationPackageDraft {
 }
 
 export interface PostComposerDraft {
+  isNsfw?: boolean;
   mode: PostComposerMode;
   proofMode: PostComposerProofMode;
   title: string;
@@ -856,6 +857,7 @@ export function buildPublishGenerationPostPayload(item: GenerationListItem, draf
   return {
     generationId: item.id,
     visibility: draft.visibility,
+    isNsfw: draft.isNsfw === true,
     title: trimOrUndefined(draft.title) ?? getPublishGenerationTitle(item),
     description: trimOrUndefined(draft.description),
     body: trimOrUndefined(draft.caption),
@@ -886,6 +888,7 @@ export function buildUpdatePostPayload(
       description: (draft.description || draft.caption).trim(),
       body: getCreatePostBody(draft),
       visibility: draft.visibility,
+    isNsfw: draft.isNsfw === true,
       ...resourceBundlePatch,
     };
   } else {
@@ -899,6 +902,7 @@ export function buildUpdatePostPayload(
       description: (draft.description || draft.caption).trim(),
       body,
       visibility: draft.visibility,
+    isNsfw: draft.isNsfw === true,
       category: draft.category,
       sourceTool: (primarySourceTool?.toolLabel ?? draft.sourceTool).trim(),
       sourceToolSlug: (primarySourceTool?.toolSlug ?? draft.sourceToolSlug).trim(),
@@ -1036,6 +1040,7 @@ export function buildCreatePostFormData(draft: PostComposerDraft) {
     formData.append('sourceTools', JSON.stringify(sourceTools));
   }
   formData.append('visibility', draft.visibility);
+  formData.append('isNsfw', String(draft.isNsfw === true));
   formData.append('postFormat', getCreatePostFormat(draft));
   formData.append('resourceBundle', JSON.stringify(buildPostResourceBundleInput(draft.resource) ?? { accessMode: 'none' }));
 
@@ -1105,6 +1110,7 @@ export function buildOptimisticOwnerPostListItem(
     title,
     createdAt,
     visibility: draft.visibility,
+    isNsfw: draft.isNsfw === true,
     mediaUrl: coverMedia?.url ?? null,
     mediaKind: isTextPost ? null : coverMedia?.mediaKind ?? inferMediaKindFromDraft(draft),
     commentCount: 0,

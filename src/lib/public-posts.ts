@@ -1,3 +1,5 @@
+import { coverNsfwContent } from '@/lib/nsfw-content';
+import { hasNsfwReveal } from '@/lib/nsfw-content-server';
 import 'server-only';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -61,6 +63,7 @@ type PublicPostRow = {
   source_kind: RawShowcaseSourceKind;
   source_tool: string | null;
   review_status?: string | null;
+  is_nsfw?: boolean;
   created_at: string;
   post_format: ShowcasePostFormat;
 };
@@ -73,6 +76,8 @@ type ProfileSummary = {
 };
 
 export interface PublicPostDetail {
+  isNsfw?: boolean;
+  nsfwRevealed?: boolean;
   id: string;
   generationId: string | null;
   visibility: 'public' | 'unlisted';
@@ -108,7 +113,7 @@ async function fetchPublicPostRow(
 
   const result = await adminSupabase
     .from('posts')
-    .select('id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, body, category, save_count, remix_count, share_count, share_visit_count, comment_count, source_kind, source_tool, review_status, created_at, post_format')
+    .select('id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, body, category, save_count, remix_count, share_count, share_visit_count, comment_count, source_kind, source_tool, review_status, is_nsfw, created_at, post_format')
     .eq('id', id)
     .is('archived_at', null)
     .in('visibility', ['public', 'unlisted'])
@@ -123,7 +128,7 @@ async function fetchPublicPostRow(
   if (isMissingPostTextColumnsError(result.error)) {
     const legacyResult = await adminSupabase
       .from('posts')
-      .select('id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, category, save_count, remix_count, share_count, share_visit_count, source_kind, source_tool, review_status, created_at')
+      .select('id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, category, save_count, remix_count, share_count, share_visit_count, source_kind, source_tool, review_status, is_nsfw, created_at')
       .eq('id', id)
       .is('archived_at', null)
       .in('visibility', ['public', 'unlisted'])
@@ -234,6 +239,7 @@ export async function getPublicPostDetail(
   options?: {
     viewerUserId?: string | null;
     countryCode?: string | null;
+    revealNsfw?: boolean;
   }
 ): Promise<PublicPostDetail | null> {
   const adminSupabase = createServiceClient();
@@ -425,7 +431,8 @@ export async function getPublicPostDetail(
       : null,
   });
 
-  return {
+  const detail: PublicPostDetail = {
+    isNsfw: row.is_nsfw === true,
     id: row.id,
     generationId: row.generation_id,
     visibility: row.visibility === 'unlisted' ? 'unlisted' : 'public',
@@ -453,6 +460,9 @@ export async function getPublicPostDetail(
     remixCapability: remix.capability,
     remixTarget: remix.target,
   };
+  if (!row.is_nsfw) return detail;
+  const revealed = options?.revealNsfw && await hasNsfwReveal(adminSupabase, row.id, viewerUserId);
+  return revealed ? { ...detail, nsfwRevealed: true } : coverNsfwContent(detail);
 }
 
 export function getPublicPostMetaDescription(detail: PublicPostDetail): string {

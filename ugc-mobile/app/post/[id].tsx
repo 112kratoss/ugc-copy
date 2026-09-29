@@ -1,3 +1,4 @@
+import { NsfwPostNotice } from '@/components/nsfw-post-notice';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
@@ -292,6 +293,12 @@ export default function PostScreen() {
     onDeleted: leavePost,
   };
 
+  if (resolvedItem.isNsfw && !resolvedItem.nsfwRevealed) return (
+    <View style={{ flex: 1, paddingTop: topInset + 48, backgroundColor: theme.colors.app }}>
+      <BackControl topInset={topInset} />
+      <NsfwPostNotice key={postId} postId={postId!} />
+    </View>
+  );
   return (
     <ViewerActionsMenuProvider callbacksFor={() => actionCallbacks}>
     <View style={{ flex: 1, backgroundColor: theme.colors.app }}>

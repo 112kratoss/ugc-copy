@@ -1,3 +1,5 @@
+import { coverNsfwContent } from '@/lib/nsfw-content';
+import { loadNsfwPostIds, hasNsfwReveal } from '@/lib/nsfw-content-server';
 import 'server-only';
 import { createShowcaseLoadTiming } from '@/lib/showcase-load-timing';
 import { logBackendError } from '@/lib/backend-logger';
@@ -518,6 +520,7 @@ export async function resolvePostRowsToFeedItems(
   adminSupabase: ReturnType<typeof createServiceClient>,
   hydrationCache?: ShowcaseFeedHydrationCache,
   onPhaseTiming?: (phase: string, durationMs: number) => void,
+  revealedNsfwIds: Set<string> = new Set(),
 ): Promise<ShowcaseFeedItem[]> {
   const timed = async <T>(phase: string, work: () => Promise<T>): Promise<T> => {
     const startedAt = performance.now();
@@ -635,6 +638,7 @@ export async function resolvePostRowsToFeedItems(
     timed('hydrate_generations', () => loadGenerationInfo(mediaItemsPromise)),
   ]);
 
+  const nsfwIds = await loadNsfwPostIds(adminSupabase, postIds);
   const resolvedItems = await Promise.all(
     rowsToHydrate.map(async (post): Promise<ShowcaseFeedItem | null> => {
       let mediaItems = mediaItemsMap.get(post.id) ?? await buildLegacyPostMediaItems({
@@ -681,7 +685,9 @@ export async function resolvePostRowsToFeedItems(
           : null,
       });
 
-      return {
+      const item: ShowcaseFeedItem = {
+        isNsfw: nsfwIds.has(post.id),
+        nsfwRevealed: revealedNsfwIds.has(post.id),
         id: post.id,
         mediaUrl,
         mediaKind,
@@ -716,6 +722,7 @@ export async function resolvePostRowsToFeedItems(
         remixCapability: remix.capability,
         remixTarget: remix.target,
       };
+      return nsfwIds.has(post.id) && !revealedNsfwIds.has(post.id) ? coverNsfwContent(item) : item;
     })
   );
 
@@ -1050,7 +1057,7 @@ async function getLegacyShowcaseFeedPageBase(
 
 const getCachedShowcaseFeedPageBase = unstable_cache(
   getShowcaseFeedPageBase,
-  ['showcase-feed-base-v2'],
+  ['showcase-feed-base-v3'],
   { revalidate: 60, tags: [SHOWCASE_FEED_CACHE_TAG] }
 );
 
@@ -1091,7 +1098,7 @@ async function getShowcaseForYouFeedPage(params: {
         if (!hydrationCache.has(postId)) hydrationCache.set(postId, null);
       }
       return items.filter((item) => (
-        (!params.toolSlug || item.sourceToolSlug === params.toolSlug)
+        !item.isNsfw && (!params.toolSlug || item.sourceToolSlug === params.toolSlug)
         && itemMatchesFeedFilters(
           item,
           params.category,
@@ -1111,7 +1118,7 @@ async function getShowcaseForYouFeedPage(params: {
         params.resourceFilter,
         hydrationCache,
       );
-      return page.items;
+      return page.items.filter((item) => !item.isNsfw);
     },
     limit: params.limit,
     offset: params.offset,
@@ -1146,7 +1153,7 @@ const getCachedIdentitylessShowcaseForYouBootstrap = unstable_cache(
       timing.finish();
     }
   },
-  ['showcase-for-you-bootstrap-v2'],
+  ['showcase-for-you-bootstrap-v3'],
   { revalidate: 60, tags: [SHOWCASE_FEED_CACHE_TAG] }
 );
 
@@ -1398,6 +1405,7 @@ async function attachViewerStateToFeed(
   return {
     ...feed,
     items: viewerSafeItems.map((item) => {
+      if (item.isNsfw && !item.nsfwRevealed) return { ...item, isSaved: savedIdSet.has(item.id) };
       const viewerCanAccessBundle = Boolean(
         item.asset && (
           isGenerationRecipeAssetId(item.asset.id)
@@ -1434,6 +1442,7 @@ export async function getShowcaseFeedItemById(options: {
   postId: string;
   viewerUserId?: string | null;
   countryCode?: string | null;
+  revealNsfw?: boolean;
 }): Promise<ShowcaseFeedItem | null> {
   const { postId, viewerUserId = null, countryCode = null } = options;
   const adminSupabase = createServiceClient();
@@ -1441,7 +1450,7 @@ export async function getShowcaseFeedItemById(options: {
     .from('posts')
     .select('id, output_url, showcase_asset_path, prompt, title, body, category, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id')
     .eq('id', postId)
-    .eq('visibility', 'public')
+    .in('visibility', options.revealNsfw ? ['public', 'unlisted'] : ['public'])
     .is('archived_at', null)
     .maybeSingle();
 
@@ -1450,7 +1459,7 @@ export async function getShowcaseFeedItemById(options: {
       .from('posts')
       .select('id, output_url, showcase_asset_path, prompt, title, category, save_count, remix_count, created_at, user_id, source_kind, source_tool, generation_id')
       .eq('id', postId)
-      .eq('visibility', 'public')
+      .in('visibility', options.revealNsfw ? ['public', 'unlisted'] : ['public'])
       .is('archived_at', null)
       .maybeSingle();
 
@@ -1483,7 +1492,8 @@ export async function getShowcaseFeedItemById(options: {
     return null;
   }
 
-  const [item] = await resolvePostRowsToFeedItems([row], adminSupabase);
+  const revealed = options.revealNsfw && await hasNsfwReveal(adminSupabase, postId, viewerUserId);
+  const [item] = await resolvePostRowsToFeedItems([row], adminSupabase, undefined, undefined, revealed ? new Set([postId]) : new Set());
   if (!item) {
     return null;
   }

@@ -255,6 +255,9 @@ function createServiceClientMock() {
           select(fields?: string) {
             const filters: Record<string, unknown> = {};
             return {
+              async in(column: string, values: unknown[]) {
+                return { data: postsState.filter((row) => values.includes((row as unknown as Record<string, unknown>)[column])), error: null };
+              },
               eq(column: string, value: unknown) {
                 filters[column] = value;
                 return this;

@@ -1,3 +1,4 @@
+import { loadNsfwPostIds, hasNsfwReveal } from '@/lib/nsfw-content-server';
 import 'server-only';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -1187,7 +1188,12 @@ async function hydrateBundleRows(
   // reading a delisted or tombstoned unlock needs the wider post lookup while
   // still getting the public presentation.
   postScope: LinkedPostScope = scope,
+  allowNsfw = false,
 ): Promise<MarketplaceResourceListItem[]> {
+  if (scope === 'public' && !allowNsfw) {
+    const nsfwIds = await loadNsfwPostIds(createServiceClient(), rows.map((row) => row.post_id));
+    rows = rows.filter((row) => !nsfwIds.has(row.post_id));
+  }
   const [profilesMap, postMap] = await Promise.all([
     loadProfileMap(rows.map((row) => row.owner_user_id)),
     loadLinkedPostMap(rows.map((row) => row.post_id), postScope, includeMediaPreviews),
@@ -1867,7 +1873,7 @@ const getCachedMarketplaceResourceListBase = unstable_cache(
     offset: 0,
     limit,
   }),
-  ['marketplace-resource-list-base-v4'],
+  ['marketplace-resource-list-base-v5'],
   {
     revalidate: 60,
     // SHOWCASE_FEED_CACHE_TAG is load-bearing, not incidental. The listing
@@ -2093,6 +2099,8 @@ export async function getPostResourceBundleDetailByPostId(
     return null;
   }
 
+  if (row.owner_user_id !== viewerUserId && (await loadNsfwPostIds(adminSupabase, [postId])).has(postId) && !await hasNsfwReveal(adminSupabase, postId, viewerUserId)) return null;
+
   // Entitlement is resolved before the publish gate, because a delisted or
   // retired bundle must still open for the people who bought it -- that is the
   // whole promise of a purchase surviving the creator removing the unlock.
@@ -2138,8 +2146,9 @@ export async function getPostResourceBundleDetailByPostId(
     viewerIsOwner ? 'owner' : 'public',
     false,
     postScope,
+    true, // The owner/reveal check above already authorized this single post.
   );
-  if (!viewerIsOwner && !hydrated.post) {
+  if (!hydrated || (!viewerIsOwner && !hydrated.post)) {
     return null;
   }
   const normalizedResources = normalizeResources(row);
