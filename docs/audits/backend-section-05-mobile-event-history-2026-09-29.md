@@ -1,6 +1,7 @@
 # Backend Section 5J — noncredit mobile event identity
 
-Status: reproduced and fixed locally; release pending.
+Status: deployed and verified on `041ff8a5cf3280c7438285e6eb4fd33cc615490f`.
+See [release evidence](backend-section-05-mobile-event-history-release-2026-09-29.md).
 
 The mobile adjustment RPC remembered only each receipt's most recent event.
 Reusing a marketplace or legacy bundle event for another receipt could revoke
@@ -26,7 +27,7 @@ anonymized receipt rather than storing a new user-identity link.
 The migration preserves existing latest-event snapshots. Duplicate legacy event
 IDs or incomplete timestamps fail migration rather than selecting an arbitrary
 owner. Earlier noncredit events were overwritten and cannot be reconstructed.
-Production inventory currently contains eight credit receipts and no noncredit
+Pre-release production inventory contained eight credit receipts and no noncredit
 receipts or processed-event snapshots, so no historical repair is needed.
 
 ## Evidence
@@ -50,7 +51,11 @@ receipts or processed-event snapshots, so no historical repair is needed.
   or credit adjustments. No customer balances or provider charges were changed.
 - Full web suite: 6,136 passed; 48 database cases skipped by that invocation
   and covered separately through the database workflow.
-- Production migration planner finds exactly one correctly ordered migration.
+- Production migration planner found exactly one correctly ordered migration.
+- Exact-main Quality and the standard production release passed. All 14
+  production rollback checks pass after deployment, with zero residual fixtures;
+  deployed function digest matches local replay. See the release report for
+  schema, advisor and live endpoint checks.
 
 Private evidence is under `.audit-evidence/backend-section-05j/`. This certifies
 synthetic RPC behavior, not real provider delivery. Marketplace lifecycle and
