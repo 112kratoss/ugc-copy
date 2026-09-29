@@ -191,6 +191,19 @@ async function handleRevenueCatWebhookPOST(
     return NextResponse.json({ error: 'Purchase is not synced yet.' }, { status: 503 });
   }
 
+  if (![
+    'refunded', 'already_refunded', 'restored', 'already_active',
+    'duplicate_event', 'stale_event', 'identity_mismatch',
+  ].includes(settlement.status)) {
+    dependencies.logError('RevenueCat purchase adjustment is unresolved:', settlement.status);
+    await dependencies.recordPaymentWebhookProcessingFailure({
+      serviceName: REVENUECAT_WEBHOOK_PROCESSING_SERVICE_NAME,
+      failureCode: 'refund_reconciliation_unresolved',
+      status: 503,
+    }, adminSupabase);
+    return NextResponse.json({ error: 'Refund reconciliation is unresolved.' }, { status: 503 });
+  }
+
   return NextResponse.json({ received: true, result: settlement.status });
 }
 

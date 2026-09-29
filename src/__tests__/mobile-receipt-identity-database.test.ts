@@ -101,14 +101,14 @@ describe.skipIf(!connectionString)('mobile receipt identity against real settlem
     return completeMobileCreditPurchase({ adminSupabase: client(), userId, productId, ...verified });
   }
 
-  async function webhook(store: 'app_store' | 'play_store', storeId: string, type: string, receiptStoreId: string | null = storeId) {
+  async function webhook(store: 'app_store' | 'play_store', storeId: string, type: string, receiptStoreId: string | null = storeId, eventId = `event-${type}`, eventTimestampMs = 1000) {
     return postRevenueCatWebhookRouteResponse({
       request: new Request('https://example.invalid/api/webhooks/revenuecat', {
         method: 'POST', headers: { authorization: 'audit-token' },
         body: JSON.stringify({ event: {
-          id: `event-${type}`, type, app_user_id: userId, product_id: productId,
+          id: eventId, type, app_user_id: userId, product_id: productId,
           transaction_id: storeId, original_transaction_id: storeId,
-          store: store.toUpperCase(), environment: 'SANDBOX', event_timestamp_ms: 1000,
+          store: store.toUpperCase(), environment: 'SANDBOX', event_timestamp_ms: eventTimestampMs,
         } }),
       }),
       dependencies: {
@@ -182,6 +182,39 @@ describe.skipIf(!connectionString)('mobile receipt identity against real settlem
       const duplicate = await webhook(store, storeId, 'CANCELLATION');
       expect(await duplicate.json()).toMatchObject({ result: 'duplicate_event' });
       expect(await state()).toEqual({ credits: 0, receipts: 1, transactions: 1 });
+    });
+
+    it('rejects a refund event reused for another receipt without consuming that receipt', async () => {
+      const otherStoreId = `${storeId}-other`;
+      await sync(store, storeId);
+      await sync(store, otherStoreId);
+      expect((await webhook(store, storeId, 'CANCELLATION')).status).toBe(200);
+      const before = (await db.query(`select status, provider_event_id, provider_event_timestamp_ms
+        from public.mobile_store_transactions where store_transaction_id=$1`, [otherStoreId])).rows;
+      const conflict = await webhook(store, otherStoreId, 'CANCELLATION');
+      expect(conflict.status).toBe(503);
+      expect((await db.query(`select status, provider_event_id, provider_event_timestamp_ms
+        from public.mobile_store_transactions where store_transaction_id=$1`, [otherStoreId])).rows).toEqual(before);
+      expect((await state()).credits).toBe(500);
+      const corrected = await webhook(store, otherStoreId, 'CANCELLATION', otherStoreId, 'distinct-refund-event');
+      expect(corrected.status).toBe(200);
+      expect(await corrected.json()).toMatchObject({ result: 'refunded' });
+      expect((await state()).credits).toBe(0);
+    });
+
+    it('rejects the same credit event with a changed action and accepts a distinct restore', async () => {
+      await sync(store, storeId);
+      await webhook(store, storeId, 'CANCELLATION');
+      const conflict = await webhook(store, storeId, 'REFUND_REVERSED', storeId, 'event-CANCELLATION');
+      expect(conflict.status).toBe(503);
+      expect((await state()).credits).toBe(0);
+      const restored = await webhook(store, storeId, 'REFUND_REVERSED', storeId, 'distinct-restore', 2000);
+      expect(restored.status).toBe(200);
+      expect(await restored.json()).toMatchObject({ result: 'restored' });
+      expect((await state()).credits).toBe(500);
+      const replay = await webhook(store, storeId, 'CANCELLATION', storeId, 'event-CANCELLATION', 1000);
+      expect(await replay.json()).toMatchObject({ result: 'stale_event' });
+      expect((await state()).credits).toBe(500);
     });
 
     it('retries a store webhook with no matching store ID in REST without granting credits', async () => {
