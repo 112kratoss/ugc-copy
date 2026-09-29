@@ -1,6 +1,7 @@
 # Backend Section 5I — shared credit event binding
 
-Status: reproduced and fixed locally; release verification pending.
+Status: deployed and verified via PR #244 at `17e47edc303588abd4fd3ad18b780378e7b2ba1c`.
+See `backend-section-05-credit-event-binding-release-2026-09-29.md` for production evidence.
 
 A RevenueCat refund event reused for another credit receipt was acknowledged as
 `already_refunded`: the second receipt became revoked and its transaction consumed
