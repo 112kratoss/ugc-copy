@@ -5,7 +5,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(56);
+select plan(68);
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
 values
@@ -866,6 +866,21 @@ select ok(
   ),
   'authenticated cannot query the cash adjustment ledger'
 );
+
+
+-- Event identity must be checked before returning a duplicate acknowledgment.
+select is(public.reconcile_marketplace_cash_adjustment('event_marketplace_refund_1','pay_wrong','refund','identity test',NULL)->>'status','event_conflict','marketplace: reused event with another payment');
+select is(public.reconcile_marketplace_cash_adjustment('event_marketplace_refund_1','pay_marketplace_cash_1','restore','identity test',NULL)->>'status','event_conflict','marketplace: reused event with another action');
+select is(public.reconcile_marketplace_cash_adjustment('event_marketplace_refund_1','pay_marketplace_cash_1','refund','identity test','order_wrong')->>'status','order_conflict','marketplace: reused event with another order');
+select is(public.reconcile_marketplace_cash_adjustment('new_event_wrong_order_marketplace','pay_marketplace_cash_1','refund','identity test','order_wrong')->>'status','order_conflict','marketplace: semantic duplicate with another order');
+select is(public.reconcile_marketplace_cash_adjustment('event_marketplace_refund_1','pay_marketplace_cash_1','refund','identity test','order_marketplace_cash_1')->>'status','already_adjusted','marketplace: matching duplicate with bound order');
+select is(public.reconcile_post_resource_cash_adjustment('event_resource_refund_1','pay_wrong','refund','identity test',NULL)->>'status','event_conflict','post_resource: reused event with another payment');
+select is(public.reconcile_post_resource_cash_adjustment('event_resource_refund_1','pay_resource_cash_1','restore','identity test',NULL)->>'status','event_conflict','post_resource: reused event with another action');
+select is(public.reconcile_post_resource_cash_adjustment('event_resource_refund_1','pay_resource_cash_1','refund','identity test','order_wrong')->>'status','order_conflict','post_resource: reused event with another order');
+select is(public.reconcile_post_resource_cash_adjustment('new_event_wrong_order_post_resource','pay_resource_cash_1','refund','identity test','order_wrong')->>'status','order_conflict','post_resource: semantic duplicate with another order');
+select is(public.reconcile_post_resource_cash_adjustment('event_resource_refund_1','pay_resource_cash_1','refund','identity test','order_resource_cash_1')->>'status','already_adjusted','post_resource: matching duplicate with bound order');
+select is(public.reconcile_marketplace_cash_adjustment('event_resource_refund_1','pay_resource_cash_1','refund')->>'status','not_found','marketplace: matching event on other purchase kind falls through');
+select is(public.reconcile_post_resource_cash_adjustment('event_marketplace_refund_1','pay_marketplace_cash_1','refund')->>'status','not_found','post_resource: matching event on other purchase kind falls through');
 
 select * from finish();
 rollback;
