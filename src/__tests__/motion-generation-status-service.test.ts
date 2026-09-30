@@ -111,7 +111,7 @@ describe('getMotionGenerationStatusForRoute', () => {
       status: 'processing', output_url: null, completed_at: null,
       ...(shape === 'veo-empty' ? { model: 'veo3', workflow_settings: { model: 'veo-3.1' } } : {}),
     });
-    const settle = vi.fn().mockResolvedValue('succeeded');
+    const enqueue = vi.fn().mockResolvedValue('import-job');
     const notify = vi.fn();
     const result = await getMotionGenerationStatusForRoute({
       request: new Request('http://localhost/api/status'), predictionId: 'task-motion-1', userId: 'user-1',
@@ -126,12 +126,12 @@ describe('getMotionGenerationStatusForRoute', () => {
             ? { successFlag: 1, response: { resultUrls: [] } }
             : { state: 'success', resultJson: shape === 'malformed' ? '{broken' : '{"resultUrls":[]}' },
         }), { status: 200 })),
-        settleGenerationSucceeded: settle,
+        enqueueGenerationOutputImportJob: enqueue,
         notifyGenerationStatus: notify,
       },
     });
     expect(result).toMatchObject({ ok: true, body: mobileApiContract.endpoints.getMotionGeneration.responseVariants.outputPending });
-    expect(settle).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
     expect(notify).not.toHaveBeenCalled();
   });
   it('returns cached succeeded output without polling the provider', async () => {

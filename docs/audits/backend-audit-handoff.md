@@ -6,12 +6,22 @@ Updated 2026-09-30 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/generation-empty-result-recovery-6b`, based on main `65890e3146309b5e62fac155f72983de4475a7a1`; branch `codex/payout-detached-reporting-5l` preserves PR #247; branch `codex/mobile-lifecycle-reporting-5k` preserves the merged fix. Branch `codex/mobile-adjustment-event-history` preserves the merged fix. Preserve local evidence.
+Current checkout: `codex/generation-durable-polling-6c`, based on main `3db9a9c7e5becec035fe131208ffeb8286e55101`; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-Section 6B is fixed locally; release is pending. An actual signed local callback
+Section 6B is deployed and verified. PR #248 merged as `999e09c4d1e14a1e8112148c2f57ea19e70a21a6`.
+PR Quality `36675212554` passed all four jobs: 6,150 web tests, 2,786 mobile tests,
+19 browser tests, 1,941 SQL assertions and 65 DB integration/concurrency cases.
+The first PR run `36674721423` passed runtime tests but caught an overly broad
+upload-mock type in the new test; commit `4f9e25c5` fixes its declaration.
+No mobile store release was active before merge. Exact-main Quality `36676000337`
+passed all four jobs on its first run. Standard production release `36676774311`
+succeeded at 2026-09-30 06:12:42 UTC, including exact live SHA and protected health.
+Independent verification on resumption found newer live main `3db9a9c7`, containing
+6B unchanged plus community-policy changes. Live SHA/feed 200, admin redirect 307
+and unauthorized webhook 401 passed. An actual signed local callback
 with empty success output prematurely settled the generation and ignored later
 valid output. Six real-DB regressions and seven polling regressions reproduced
 before implementation. The fix retries incomplete worker results and keeps
@@ -20,7 +30,15 @@ After-fix signed HTTP recovery and import-retry checks pass. No migration or
 mobile runtime change. Read `docs/audits/backend-section-06-empty-output-recovery-2026-09-30.md`
 and `.audit-evidence/backend-section-06b/`. Production inventory: 88 succeeded,
 one missing output already marked source-unavailable; no attributed incident or
-customer repair. Preserve all Section 5L/6A evidence in the next audit PR.
+customer repair. Section 5L/6A evidence is committed in PR #248.
+
+Section 6C is fixed locally; CI/release pending. Video/motion/Veo polling now
+queues durable imports instead of settling with temporary output after a storage
+failure. Six real-DB recovery regressions pass, including the response adapter,
+retry settlement and delayed success notification. Read
+`docs/audits/backend-section-06-durable-polling-2026-09-30.md` and private evidence
+in `.audit-evidence/backend-section-06c/`. No migration/mobile runtime change.
+
 
 
 Section 5L merged in PR #247 as `65890e3146309b5e62fac155f72983de4475a7a1`.
@@ -97,7 +115,8 @@ Section 5I is the preceding verified release (historical checkpoint):
 
 Carry the new release evidence in the next appropriate audit PR:
 - Section 5K release evidence is committed in PR #247.
-- Section 5L release evidence and Section 6A initial concurrency report remain local; preserve them for the next audit PR.
+- Section 5L release evidence and Section 6A initial concurrency report are committed in PR #248.
+- Preserve Section 6B release evidence and Section 6C reproduction evidence for the next audit batch.
 - This handoff, the updated Section 5K finding report and coverage tracker.
 - Section 5J release evidence was committed in PR #246; Section 5I evidence in #245.
 - `.audit-evidence/` contains logs and provider/schema snapshots. Preserve it; do not blindly commit it. Section 5G `ledger-private.json` contains private input and must not be published.

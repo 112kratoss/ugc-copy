@@ -5,12 +5,15 @@ const mocks = vi.hoisted(() => ({
   finish: vi.fn(),
   persistOne: vi.fn(),
   persistList: vi.fn(),
+  notify: vi.fn(),
 }));
 
 vi.mock('@/lib/generation-output-import-jobs', () => ({
   claimGenerationOutputImportJobs: (...args: unknown[]) => mocks.claim(...args),
   finishGenerationOutputImportJob: (...args: unknown[]) => mocks.finish(...args),
 }));
+
+vi.mock('@/lib/mobile-notifications', () => ({ notifyGenerationStatus: (...args: unknown[]) => mocks.notify(...args) }));
 
 vi.mock('@/lib/generation-services', () => ({
   persistGeneratedOutput: (...args: unknown[]) => mocks.persistOne(...args),
@@ -106,6 +109,7 @@ describe('generation output import processor', () => {
       'https://provider.invalid/output.mp4',
       '2026-08-10T00:01:00.000Z',
     );
+    expect(mocks.notify).toHaveBeenCalledWith(client, expect.objectContaining({ id: 'generation-1' }), 'succeeded');
     expect(mocks.finish).toHaveBeenCalledWith(expect.objectContaining({ succeeded: true }));
     expect(summary).toEqual({ claimed: 1, completed: 1, retried: 0, exhausted: 0 });
   });
@@ -127,6 +131,7 @@ describe('generation output import processor', () => {
       retryDelaySeconds: 60,
     }));
     expect(summary.retried).toBe(1);
+    expect(mocks.notify).not.toHaveBeenCalled();
   });
 
   it('uses the list importer for multi-output provider results', async () => {

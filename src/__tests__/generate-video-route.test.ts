@@ -1,3 +1,4 @@
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The media-source guard parses storage locations for real; keep the genuine
@@ -93,6 +94,7 @@ function createSupabaseMock(
       };
     }
 
+    if (fn === 'enqueue_generation_output_import_job') return { data: 'import-job-1', error: null };
     if (fn === 'settle_generation_succeeded') {
       if (!localGeneration) {
         return {
@@ -1111,12 +1113,10 @@ describe('/api/generate-video route', () => {
     });
   });
 
-  it('settles live provider video success with the atomic backend RPC', async () => {
+  it('queues live provider video output without downloading or settling in the route', async () => {
     const statusSignal = AbortSignal.abort();
-    const mediaSignal = AbortSignal.abort();
     const timeoutSpy = vi.spyOn(AbortSignal, 'timeout')
-      .mockReturnValueOnce(statusSignal)
-      .mockReturnValueOnce(mediaSignal);
+      .mockReturnValueOnce(statusSignal);
     let statusInit: RequestInit | undefined;
     let mediaInit: RequestInit | undefined;
     currentSupabaseMock = createSupabaseMock(null, {
@@ -1165,19 +1165,17 @@ describe('/api/generate-video route', () => {
       }) as never
     );
 
-    await expect(response.json()).resolves.toMatchObject({
-      status: 'succeeded',
-      output: 'signed:generated_videos/user-1/generated_task-video-live-success-1.mp4',
+    await expect(response.json()).resolves.toMatchObject(mobileApiContract.endpoints.getVideoGeneration.responseVariants.importPending);
+    expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('enqueue_generation_output_import_job', {
+      p_generation_id: 'gen-video-live-success-1',
+      p_output_urls: ['https://provider.example.com/video.mp4'],
+      p_provider_completed_at: '2026-04-15T10:01:00.000Z',
     });
-    expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('settle_generation_succeeded', expect.objectContaining({
-      p_prediction_id: 'task-video-live-success-1',
-      p_output_url: 'generated_videos/user-1/generated_task-video-live-success-1.mp4',
-      p_completed_at: '2026-04-15T10:01:00.000Z',
-    }));
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith('settle_generation_succeeded', expect.anything());
     expect(timeoutSpy).toHaveBeenNthCalledWith(1, 10_000);
-    expect(timeoutSpy).toHaveBeenNthCalledWith(2, 60_000);
+    expect(timeoutSpy).toHaveBeenCalledTimes(1);
     expect(statusInit?.signal).toBe(statusSignal);
-    expect(mediaInit?.signal).toBe(mediaSignal);
+    expect(mediaInit).toBeUndefined();
     expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 

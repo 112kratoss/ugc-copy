@@ -1,6 +1,7 @@
 import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 
 import {
   claimGenerationOutputImportJobs,
@@ -36,7 +37,7 @@ async function loadGeneration(client: SupabaseClient, id: string): Promise<Gener
 
 async function importOne(client: SupabaseClient, job: GenerationOutputImportJob) {
   const generation = await loadGeneration(client, job.generation_id);
-  if (generation.status === 'succeeded' && generation.output_url) return;
+  if (generation.status === 'succeeded' && generation.output_url) return generation;
   if (generation.status === 'failed') {
     throw new Error('Generation settled as failed before its provider output could be imported.');
   }
@@ -52,7 +53,7 @@ async function importOne(client: SupabaseClient, job: GenerationOutputImportJob)
     if (result.outputs.length === 0 || result.status !== 'succeeded') {
       throw new Error('No provider output was persisted.');
     }
-    return;
+    return generation;
   }
 
   const status = await persistGeneratedOutput(
@@ -65,6 +66,7 @@ async function importOne(client: SupabaseClient, job: GenerationOutputImportJob)
   if (status !== 'succeeded') {
     throw new Error(`Output persistence settled as ${status}.`);
   }
+  return generation;
 }
 
 export async function processGenerationOutputImportJobs(params: {
@@ -90,7 +92,10 @@ export async function processGenerationOutputImportJobs(params: {
     if (!job) break;
     summary.claimed += 1;
     try {
-      await importOne(params.client, job);
+      const generation = await importOne(params.client, job);
+      // The import now owns the success transition formerly handled by status
+      // polling. The notification's generation/status dedupe key covers retries.
+      await notifyGenerationStatus(params.client, generation, 'succeeded');
       await finishGenerationOutputImportJob({
         client: params.client,
         id: job.id,

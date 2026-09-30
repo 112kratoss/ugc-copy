@@ -529,3 +529,19 @@ it.each(['getImageGeneration', 'getVideoGeneration', 'getMotionGeneration'] as c
     expect(result.output).toBeNull();
   },
 );
+
+it.each(['getVideoGeneration', 'getMotionGeneration'] as const)(
+  '%s keeps polling while the durable import is pending', async (operation) => {
+    const response = mobileApiContract.endpoints[operation].responseVariants.importPending;
+    const api = createApiClient({
+      baseUrl: 'https://example.test',
+      getAccessToken: async () => 'test-token',
+      fetcher: vi.fn(async () => jsonResponse(response)),
+    });
+    const result = await api[operation]('prediction-importing');
+    expect(result).toEqual(response);
+    expect(result.status).toBe('processing');
+    expect(result.output).toBeNull();
+    expect(result.timing).toMatchObject({ appStatus: 'processing' });
+  },
+);

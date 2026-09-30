@@ -27,14 +27,12 @@ import {
 import { VIDEO_MODELS, type VideoModelId } from '@/lib/models';
 import {
   settleGenerationFailed,
-  settleGenerationSucceeded,
 } from '@/lib/generation-services';
-import { createGenerationOutputPreview } from '@/lib/generation-output-preview';
+import { enqueueGenerationOutputImportJob } from '@/lib/generation-output-import-jobs';
 import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import {
   fetchStatusPollWithRetry,
   fetchWithProviderTimeout,
-  PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
   PROVIDER_STATUS_POLL_TIMEOUT_MS,
   withProviderModel,
 } from '@/lib/provider-fetch';
@@ -62,9 +60,8 @@ type VideoStatusGenerationRow = {
 export type VideoGenerationStatusDependencies = {
   resolveStoredMediaUrl: typeof resolveOwnedStoredMediaUrl;
   fetchWithProviderTimeout: typeof fetchWithProviderTimeout;
-  settleGenerationSucceeded: typeof settleGenerationSucceeded;
+  enqueueGenerationOutputImportJob: typeof enqueueGenerationOutputImportJob;
   settleGenerationFailed: typeof settleGenerationFailed;
-  createGenerationOutputPreview: typeof createGenerationOutputPreview;
   notifyGenerationStatus: typeof notifyGenerationStatus;
   withBackendJobLock: typeof withBackendJobLock;
   tryAcquireGenerationProviderStatusThrottle: typeof tryAcquireGenerationProviderStatusThrottle;
@@ -91,9 +88,8 @@ function resolveDependencies(
   return {
     resolveStoredMediaUrl: dependencies?.resolveStoredMediaUrl ?? resolveOwnedStoredMediaUrl,
     fetchWithProviderTimeout: dependencies?.fetchWithProviderTimeout ?? fetchStatusPollWithRetry,
-    settleGenerationSucceeded: dependencies?.settleGenerationSucceeded ?? settleGenerationSucceeded,
+    enqueueGenerationOutputImportJob: dependencies?.enqueueGenerationOutputImportJob ?? enqueueGenerationOutputImportJob,
     settleGenerationFailed: dependencies?.settleGenerationFailed ?? settleGenerationFailed,
-    createGenerationOutputPreview: dependencies?.createGenerationOutputPreview ?? createGenerationOutputPreview,
     notifyGenerationStatus: dependencies?.notifyGenerationStatus ?? notifyGenerationStatus,
     withBackendJobLock: dependencies?.withBackendJobLock ?? withBackendJobLock,
     tryAcquireGenerationProviderStatusThrottle:
@@ -154,112 +150,6 @@ function getFirstResultUrl(value: unknown): string | null {
   return null;
 }
 
-async function persistVideoOutput({
-  supabase,
-  settlementSupabase,
-  predictionId,
-  userId,
-  tempUrl,
-  completedAt,
-  dependencies,
-}: {
-  supabase: SupabaseClient;
-  settlementSupabase: SupabaseClient;
-  predictionId: string;
-  userId: string | undefined;
-  tempUrl: string;
-  completedAt?: string | null;
-  dependencies: VideoGenerationStatusDependencies;
-}): Promise<{ status: 'succeeded' | 'failed'; output: string | null }> {
-  const settledAt = completedAt ?? new Date().toISOString();
-
-  try {
-    const videoRes = await dependencies.fetchWithProviderTimeout(
-      tempUrl,
-      {},
-      PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
-      fetch,
-      'KIE video media download',
-    );
-    if (!videoRes.ok) {
-      throw new Error('Failed to download video from Kie');
-    }
-
-    const videoBlob = await videoRes.blob();
-    const fileName = `${userId}/generated_${predictionId}.mp4`;
-
-    // Service-role: generated_videos grants `authenticated` SELECT only, so an
-    // upload on the user client fails with "new row violates row-level security
-    // policy". Reads below stay on the user client, which the SELECT policy allows.
-    const { error: uploadError } = await settlementSupabase.storage
-      .from('generated_videos')
-      .upload(fileName, videoBlob, {
-        contentType: 'video/mp4',
-        upsert: true,
-      });
-
-    if (uploadError) {
-      logBackendError('upload_to_supabase_storage_failed', { error: uploadError });
-      const status = await dependencies.settleGenerationSucceeded(settlementSupabase, {
-        predictionId,
-        outputUrl: tempUrl,
-        completedAt: settledAt,
-      });
-      return {
-        status,
-        output: status === 'succeeded' ? tempUrl : null,
-      };
-    }
-
-    const storagePath = `generated_videos/${fileName}`;
-    let preview: Awaited<ReturnType<typeof createGenerationOutputPreview>> = null;
-    let previewError: string | null = null;
-    try {
-      preview = await dependencies.createGenerationOutputPreview({
-        body: videoBlob,
-        category: 'video',
-        contentType: videoBlob.type || 'video/mp4',
-        storagePath,
-        supabase,
-      });
-    } catch (posterError) {
-      logBackendError('failed_to_create_video_generation_preview_poster', { error: posterError });
-      previewError = posterError instanceof Error ? posterError.message.slice(0, 500) : 'Preview generation failed.';
-    }
-    const { data: signedData } = await supabase.storage
-      .from('generated_videos')
-      .createSignedUrl(fileName, 3600);
-
-    const status = await dependencies.settleGenerationSucceeded(settlementSupabase, {
-      predictionId,
-      outputUrl: storagePath,
-      previewUrl: preview?.previewStoragePath ?? null,
-      previewThumbhash: preview?.previewThumbhash ?? null,
-      previewStatus: preview ? 'ready' : 'failed',
-      previewAttemptCount: 1,
-      previewError,
-      previewGeneratedAt: preview ? new Date().toISOString() : null,
-      completedAt: settledAt,
-    });
-
-    return {
-      status,
-      output: status === 'succeeded' ? signedData?.signedUrl || tempUrl : null,
-    };
-  } catch (error) {
-    logBackendError('error_persisting_video_to_storage', { error: error });
-    const status = await dependencies.settleGenerationSucceeded(settlementSupabase, {
-      predictionId,
-      outputUrl: tempUrl,
-      completedAt: settledAt,
-    });
-    return {
-      status,
-      output: status === 'succeeded' ? tempUrl : null,
-    };
-  }
-}
-
 function estimateVideoTotalMs(localGeneration: VideoStatusGenerationRow, selectedModel: VideoModelId): number | null {
   const workflowSettings =
     localGeneration.workflow_settings && typeof localGeneration.workflow_settings === 'object'
@@ -298,7 +188,6 @@ export async function getVideoGenerationStatusForRoute({
   request,
   predictionId,
   userId,
-  supabase,
   createAdminSupabase,
   kieApiKey,
   dependencies,
@@ -383,7 +272,7 @@ export async function getVideoGenerationStatusForRoute({
   const selectedModel = getWorkflowModelId(localGeneration);
   const estimatedTotalMs = estimateVideoTotalMs(localGeneration, selectedModel);
   let status: 'processing' | 'waiting' | 'succeeded' | 'failed' = 'processing';
-  let output: string | null = null;
+  const output: string | null = null;
   let error: string | null = null;
   let timing = normalizeStoredGenerationTiming({
     kind: getGenerationKind({
@@ -439,20 +328,18 @@ export async function getVideoGenerationStatusForRoute({
         const tempUrl = getFirstResultUrl(responseData?.resultUrls) || getFirstResultUrl(responseData?.originUrls);
 
         if (tempUrl) {
-          const persisted = await persistVideoOutput({
-            supabase,
-            settlementSupabase: admin,
-            predictionId,
-            userId: userId || localGeneration.user_id,
-            tempUrl,
-            completedAt: toIsoTimestamp(timing.completedAtMs),
-            dependencies: resolvedDependencies,
+          // Keep settlement behind the durable import, including storage retries.
+          await resolvedDependencies.enqueueGenerationOutputImportJob({
+            client: admin,
+            generationId: localGeneration.id,
+            outputUrls: [tempUrl],
+            providerCompletedAt: toIsoTimestamp(timing.completedAtMs),
           });
-          status = persisted.status;
-          output = persisted.output;
-          if (status === 'failed') {
-            error = 'Generation was already settled as failed.';
-          }
+          return buildLockedGenerationStatusPayload(
+            { ...localGeneration, status: 'processing', completed_at: null },
+            estimatedTotalMs,
+            GENERATION_PROVIDER_STATUS_RETRY_AFTER_MS,
+          );
         } else {
           return buildLockedGenerationStatusPayload(
             { ...localGeneration, status: 'processing', completed_at: null },
@@ -496,20 +383,18 @@ export async function getVideoGenerationStatusForRoute({
           const tempUrl = getFirstResultUrl(result.resultUrls);
 
           if (tempUrl) {
-            const persisted = await persistVideoOutput({
-              supabase,
-              settlementSupabase: admin,
-              predictionId,
-              userId: userId || localGeneration.user_id,
-              tempUrl,
-              completedAt: toIsoTimestamp(timing.completedAtMs),
-              dependencies: resolvedDependencies,
+            // Keep settlement behind the durable import, including storage retries.
+            await resolvedDependencies.enqueueGenerationOutputImportJob({
+              client: admin,
+              generationId: localGeneration.id,
+              outputUrls: [tempUrl],
+              providerCompletedAt: toIsoTimestamp(timing.completedAtMs),
             });
-            status = persisted.status;
-            output = persisted.output;
-            if (status === 'failed') {
-              error = 'Generation was already settled as failed.';
-            }
+            return buildLockedGenerationStatusPayload(
+              { ...localGeneration, status: 'processing', completed_at: null },
+              estimatedTotalMs,
+              GENERATION_PROVIDER_STATUS_RETRY_AFTER_MS,
+            );
           } else {
             return buildLockedGenerationStatusPayload(
               { ...localGeneration, status: 'processing', completed_at: null },

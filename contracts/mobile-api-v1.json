@@ -303,6 +303,16 @@
             "appStatus": "processing",
             "completedAtMs": null
           }
+        },
+        "importPending": {
+          "status": "processing",
+          "output": null,
+          "error": null,
+          "retryAfterMs": 15000,
+          "timing": {
+            "appStatus": "processing",
+            "completedAtMs": null
+          }
         }
       }
     },
@@ -338,6 +348,16 @@
       },
       "responseVariants": {
         "outputPending": {
+          "status": "processing",
+          "output": null,
+          "error": null,
+          "retryAfterMs": 15000,
+          "timing": {
+            "appStatus": "processing",
+            "completedAtMs": null
+          }
+        },
+        "importPending": {
           "status": "processing",
           "output": null,
           "error": null,
