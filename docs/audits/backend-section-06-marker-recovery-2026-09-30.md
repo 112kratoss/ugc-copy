@@ -1,6 +1,7 @@
 # Section 6F — ambiguity-marker write recovery
 
-Status: locally verified; PR, exact-main Quality and production release pending.
+Status: deployed and independently verified on `1eb94f13` through PR #252; see
+the [release evidence](backend-section-06-marker-recovery-release-2026-10-01.md).
 
 ## Reproduced defects
 
