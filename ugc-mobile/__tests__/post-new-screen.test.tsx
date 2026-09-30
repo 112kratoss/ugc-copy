@@ -80,6 +80,12 @@ const generationItem = {
   linked_post_id: null,
 };
 
+// The community-rules gate has its own tests (content-policy-gate.test.tsx);
+// here it passes straight through to the screen under test.
+vi.mock('@/components/content-policy-gate', () => ({
+  ContentPolicyGate: ({ children }: { children: unknown }) => children,
+}));
+
 vi.mock('expo-router', () => ({
   Redirect: (props: MockProps) => React.createElement('redirect', props),
   Stack: { Screen: (props: MockProps) => React.createElement('stack-screen', props) },

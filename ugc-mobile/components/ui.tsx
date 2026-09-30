@@ -86,11 +86,17 @@ export function Screen({
   children,
   scroll = true,
   insideTab = false,
+  safeTop = false,
   keyboardAware = false,
 }: {
   children: React.ReactNode;
   scroll?: boolean;
   insideTab?: boolean;
+  /**
+   * Clears the status bar on a stack screen shown without a header, which
+   * `insideTab` also does but alongside the tab bar's bottom padding.
+   */
+  safeTop?: boolean;
   /**
    * Shrinks the scroll area with the keyboard so the focused field is scrolled
    * into view instead of being covered. Opt-in: it adds a wrapper view, and
@@ -101,7 +107,7 @@ export function Screen({
   const theme = useAppTheme();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
-  const topPadding = appTheme.spacing.screen + (insideTab ? resolvedTopInset(insets.top) : 0);
+  const topPadding = appTheme.spacing.screen + (insideTab || safeTop ? resolvedTopInset(insets.top) : 0);
   // `contentBottomPadding` clears the raised centre button as well as the bar;
   // the overlap variant only clears the bar, which leaves the last control
   // under the Create button — it is opaque and takes the tap regardless of the

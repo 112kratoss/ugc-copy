@@ -16,6 +16,12 @@ const mediaCreationState = vi.hoisted(() => ({
   props: null as Record<string, unknown> | null,
 }));
 
+// The community-rules gate has its own tests (content-policy-gate.test.tsx);
+// here it passes straight through to the screen under test.
+vi.mock('@/components/content-policy-gate', () => ({
+  ContentPolicyGate: ({ children }: { children: unknown }) => children,
+}));
+
 vi.mock('expo-router', () => ({
   useLocalSearchParams: () => routeState.params,
   router: {

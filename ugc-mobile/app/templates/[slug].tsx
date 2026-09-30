@@ -1,5 +1,6 @@
 import { useLocalSearchParams } from 'expo-router';
 
+import { ContentPolicyGate } from '@/components/content-policy-gate';
 import { MediaTemplateDetailScreen } from '@/components/media-template-screens';
 
 function firstParam(value: string | string[] | undefined) {
@@ -8,5 +9,9 @@ function firstParam(value: string | string[] | undefined) {
 
 export default function TemplateDetailRoute() {
   const { slug } = useLocalSearchParams<{ slug?: string | string[] }>();
-  return <MediaTemplateDetailScreen slug={firstParam(slug) ?? ''} />;
+  return (
+    <ContentPolicyGate>
+      <MediaTemplateDetailScreen slug={firstParam(slug) ?? ''} />
+    </ContentPolicyGate>
+  );
 }

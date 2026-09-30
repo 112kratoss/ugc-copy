@@ -17,6 +17,12 @@ const mediaCreationState = vi.hoisted(() => ({
 }));
 
 const navigationState = vi.hoisted(() => ({ dispatch: vi.fn(), prevent: vi.fn() }));
+// The community-rules gate has its own tests (content-policy-gate.test.tsx);
+// here it passes straight through to the screen under test.
+vi.mock('@/components/content-policy-gate', () => ({
+  ContentPolicyGate: ({ children }: { children: unknown }) => children,
+}));
+
 vi.mock('@react-navigation/native', () => ({ useNavigation: () => ({ dispatch: navigationState.dispatch }), usePreventRemove: navigationState.prevent }));
 
 const stackState = vi.hoisted(() => ({ options: null as Record<string, unknown> | null }));

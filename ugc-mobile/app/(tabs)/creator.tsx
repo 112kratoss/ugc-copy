@@ -1,5 +1,6 @@
 import { router, useLocalSearchParams } from 'expo-router';
 
+import { ContentPolicyGate } from '@/components/content-policy-gate';
 import { MediaCreationScreen } from '@/components/media-creation-screen';
 import type { CreatorToolId } from '@/lib/types';
 
@@ -21,15 +22,17 @@ export default function CreateTabScreen() {
   const guided = firstParam(params.guided) === '1';
 
   return (
-    <MediaCreationScreen
-      key={`${initialTool}:${guided ? 'guided' : 'standard'}`}
-      initialTool={initialTool}
-      insideTab
-      guided={guided}
-      onClose={() => {
-        if (router.canGoBack()) router.back();
-        else router.replace('/(tabs)' as never);
-      }}
-    />
+    <ContentPolicyGate chrome="tab">
+      <MediaCreationScreen
+        key={`${initialTool}:${guided ? 'guided' : 'standard'}`}
+        initialTool={initialTool}
+        insideTab
+        guided={guided}
+        onClose={() => {
+          if (router.canGoBack()) router.back();
+          else router.replace('/(tabs)' as never);
+        }}
+      />
+    </ContentPolicyGate>
   );
 }

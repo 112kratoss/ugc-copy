@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 
+import { ContentPolicyGate } from '@/components/content-policy-gate';
 import { MediaCreationScreen } from '@/components/media-creation-screen';
 import { PrimaryButton, Screen, SecondaryButton, SectionTitle } from '@/components/ui';
 import type { CreatorToolId } from '@/lib/types';
@@ -70,19 +71,21 @@ export default function CreateToolScreen() {
           this withdraws the edge swipe too, for exactly as long as there is an
           edit to lose. An untouched session keeps it, and ✕ always works. */}
       <Stack.Screen options={{ gestureEnabled: !dirty }} />
-      <MediaCreationScreen
-        key={`${initialTool}:${remixId ?? ''}:${remixPostId ?? ''}:${initialPrompt ?? ''}`}
-        initialTool={initialTool}
-        initialPrompt={initialPrompt}
-        remixSource={remixSource}
-        guided={guided}
-        registerBeforeClose={registerBeforeClose}
-        onDirtyChange={setDirty}
-        onClose={() => {
-          if (router.canGoBack()) router.back();
-          else router.replace('/(tabs)' as never);
-        }}
-      />
+      <ContentPolicyGate chrome="headerless">
+        <MediaCreationScreen
+          key={`${initialTool}:${remixId ?? ''}:${remixPostId ?? ''}:${initialPrompt ?? ''}`}
+          initialTool={initialTool}
+          initialPrompt={initialPrompt}
+          remixSource={remixSource}
+          guided={guided}
+          registerBeforeClose={registerBeforeClose}
+          onDirtyChange={setDirty}
+          onClose={() => {
+            if (router.canGoBack()) router.back();
+            else router.replace('/(tabs)' as never);
+          }}
+        />
+      </ContentPolicyGate>
     </>
   );
 }

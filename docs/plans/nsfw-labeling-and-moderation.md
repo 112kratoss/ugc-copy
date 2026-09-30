@@ -12,6 +12,13 @@ The owner's decisions (2026-09-29):
 - **Android covers NSFW posts; age screen next.** Google allows mature user posts in an app only when the app screens children out with a neutral age screen. Until Magicbooklet has one, `ugc-mobile/lib/nsfw-reveal-policy.ts` keeps the Android post screen on the warning card, with no reveal request and no website link. iOS keeps the website opt-in reveal, which is Apple's rule for mature user content. Next: a neutral date-of-birth screen for every account, then flip Android in that one function.
 - **No reviewer-only behaviour.** Applying the gate to the review account alone was ruled out: it shows the reviewer a different app from the one users get, which Play treats as evading review.
 
+Follow-up decisions (2026-09-30):
+
+- **Ages.** The minimum age is 13 (Terms §1, Privacy §9), with a parent's or guardian's permission under 18, and mature posts only for users who confirm they are 18 or older. The owner asked for a 12+ rating, the same setup as Reddit.
+- **Posts follow Reddit's model.** Nudity is allowed only in posts marked mature. The Terms ban nudity in unmarked posts, intimate images of a real person without consent (including AI edits), and real-world gore.
+- **No further prompt limits.** Instead, the mobile app shows the community rules once, before any creation surface: the Create tab, a creation tool, a template, or the post composer (`ugc-mobile/components/content-policy-gate.tsx`, `ugc-mobile/lib/content-policy.ts`, stored per phone and versioned). This also meets Play's rule that users accept the terms before creating or uploading.
+- **Play content rating re-submitted with honest answers.** AI content can include gore, suggestive material, strong language and drugs; nudity and pornographic output are stopped by the prompt gate and the providers' filters. The ratings came out as: rest of world (including India) 12+, Russia and Korea 12+, PEGI Parental guidance, ESRB Mature 17+, USK and Brazil 18+. These are identical to Reddit's Play ratings. On the App Store Reddit is 17+, and ours is still 13+: review it now that mature posts allow nudity.
+
 Current store declarations, for the age-screen work: IARC rating Everyone / PEGI 3 / 3+ (14+ in Brazil), certificate 1fde2a09 (2026-05-30); target audience 13–15, 16–17 and 18+.
 
 ## Shipped scope of this change

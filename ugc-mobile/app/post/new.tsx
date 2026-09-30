@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import { AccessibilityInfo, ActivityIndicator, findNodeHandle, Keyboard, KeyboardAvoidingView, Modal, PanResponder, Platform, Pressable, ScrollView, Share, Text, TextInput, useWindowDimensions, View, type GestureResponderEvent, type TextInputProps } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { ContentPolicyGate } from '@/components/content-policy-gate';
 import { AppText, ChoiceChip, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
 import { ComposerMediaLightbox, getComposerMediaLabel } from '@/components/composer-media-lightbox';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
@@ -1747,7 +1748,17 @@ function getResourceCardSignature(card: PostComposerResourceCardDraft) {
 
 
 
+// Posting is creating: the community rules come first (`ContentPolicyGate`),
+// and the composer's drafts and uploads start only once they are accepted.
 export default function NewPostScreen() {
+  return (
+    <ContentPolicyGate chrome="headerless">
+      <NewPostComposer />
+    </ContentPolicyGate>
+  );
+}
+
+function NewPostComposer() {
   const theme = useAppTheme();
   const { user, isLoading: authLoading, api } = useAuth();
   const queryClient = useQueryClient();
