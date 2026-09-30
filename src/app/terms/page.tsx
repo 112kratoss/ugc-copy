@@ -90,6 +90,9 @@ export default function TermsOfService() {
                             <li>Create content that is illegal, harmful, or infringes on others&apos; rights</li>
                             <li>Generate deepfakes or content intended to deceive or defraud</li>
                             <li>Create content depicting minors in any inappropriate context</li>
+                            <li>Share nudity or sexual content in a post that is not marked mature (NSFW)</li>
+                            <li>Share sexual or intimate images of a real person without their consent, including images that are AI-generated or edited</li>
+                            <li>Share real-world graphic violence or gore outside a newsworthy context</li>
                             <li>Violate any applicable laws or regulations</li>
                             <li>Attempt to reverse-engineer or exploit the Service</li>
                             <li>Use automated systems to abuse the Service</li>
