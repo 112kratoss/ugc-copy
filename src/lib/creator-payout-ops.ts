@@ -9,7 +9,8 @@ import { formatTokenSubunitsAsUsd } from '@/lib/creator-payouts';
 
 export interface OpenCreatorPayoutRequest {
   id: string;
-  userId: string;
+  userId: string | null;
+  detachedUserId: string | null;
   username: string | null;
   displayName: string | null;
   amountTokenSubunits: number;
@@ -18,12 +19,13 @@ export interface OpenCreatorPayoutRequest {
   payoutDetails: string;
   requestedAt: string;
   /** Lifetime earnings give the operator context for an unusual request. */
-  lifetimeEarnedTokenSubunits: number;
+  lifetimeEarnedTokenSubunits: number | null;
 }
 
 type PayoutQueueRow = {
   id: string;
-  user_id: string;
+  user_id: string | null;
+  detached_user_id: string | null;
   amount_token_subunits: number;
   payout_method: string;
   payout_details: string;
@@ -40,7 +42,7 @@ export async function listOpenCreatorPayoutRequests(
 ): Promise<OpenCreatorPayoutRequest[]> {
   const { data, error } = await adminSupabase
     .from('creator_payout_requests')
-    .select('id, user_id, amount_token_subunits, payout_method, payout_details, requested_at')
+    .select('id, user_id, detached_user_id, amount_token_subunits, payout_method, payout_details, requested_at')
     .eq('status', 'requested')
     .order('requested_at', { ascending: true })
     .limit(200);
@@ -55,13 +57,20 @@ export async function listOpenCreatorPayoutRequests(
     return [];
   }
 
-  const userIds = Array.from(new Set(rows.map((row) => row.user_id)));
+  // Payouts survive account deletion. Passing null to a UUID IN filter makes
+  // PostgREST reject the entire lookup, including the surviving creators.
+  const userIds = Array.from(new Set(rows.map((row) => row.user_id)
+    .filter((id): id is string => id !== null)));
   const [profilesResult, walletsResult] = await Promise.all([
-    adminSupabase.from('profiles').select('id, username, display_name').in('id', userIds),
-    adminSupabase
-      .from('creator_resource_wallets')
-      .select('user_id, lifetime_earned_token_subunits')
-      .in('user_id', userIds),
+    userIds.length > 0
+      ? adminSupabase.from('profiles').select('id, username, display_name').in('id', userIds)
+      : Promise.resolve({ data: [] }),
+    userIds.length > 0
+      ? adminSupabase
+        .from('creator_resource_wallets')
+        .select('user_id, lifetime_earned_token_subunits')
+        .in('user_id', userIds)
+      : Promise.resolve({ data: [] }),
   ]);
 
   const profiles = new Map(
@@ -76,20 +85,22 @@ export async function listOpenCreatorPayoutRequests(
   return rows.map((row) => ({
     id: row.id,
     userId: row.user_id,
-    username: profiles.get(row.user_id)?.username ?? null,
-    displayName: profiles.get(row.user_id)?.display_name ?? null,
+    detachedUserId: row.detached_user_id ?? null,
+    username: profiles.get(row.user_id ?? '')?.username ?? null,
+    displayName: profiles.get(row.user_id ?? '')?.display_name ?? null,
     amountTokenSubunits: row.amount_token_subunits,
     amountUsd: formatTokenSubunitsAsUsd(row.amount_token_subunits),
     payoutMethod: row.payout_method,
     payoutDetails: readPayoutDetails(row),
     requestedAt: row.requested_at,
-    lifetimeEarnedTokenSubunits: wallets.get(row.user_id) ?? 0,
+    lifetimeEarnedTokenSubunits: row.user_id === null ? null : wallets.get(row.user_id) ?? 0,
   }));
 }
 
 export interface ResolvedCreatorPayoutRequest {
   id: string;
-  userId: string;
+  userId: string | null;
+  detachedUserId: string | null;
   username: string | null;
   displayName: string | null;
   amountTokenSubunits: number;
@@ -129,7 +140,7 @@ export async function listResolvedCreatorPayoutRequests(
     (from, to) => adminSupabase
       .from('creator_payout_requests')
       .select(
-        'id, user_id, amount_token_subunits, payout_method, status, requested_at, resolved_at, resolved_by, resolution_note, external_reference',
+        'id, user_id, detached_user_id, amount_token_subunits, payout_method, status, requested_at, resolved_at, resolved_by, resolution_note, external_reference',
         { count: 'exact' },
       )
       .in('status', RESOLVED_PAYOUT_STATUSES)
@@ -147,11 +158,14 @@ export async function listResolvedCreatorPayoutRequests(
     return { requests: [], total: page.total, offset: page.offset };
   }
 
-  const userIds = Array.from(new Set(rows.map((row) => String(row.user_id))));
-  const profilesResult = await adminSupabase
-    .from('profiles')
-    .select('id, username, display_name')
-    .in('id', userIds);
+  const userIds = Array.from(new Set(rows.map((row) => row.user_id)
+    .filter((id): id is string => typeof id === 'string')));
+  const profilesResult = userIds.length > 0
+    ? await adminSupabase
+      .from('profiles')
+      .select('id, username, display_name')
+      .in('id', userIds)
+    : { data: [] };
 
   const profiles = new Map(
     ((profilesResult.data ?? []) as Array<{ id: string; username: string | null; display_name: string | null }>)
@@ -160,13 +174,14 @@ export async function listResolvedCreatorPayoutRequests(
 
   return {
     requests: rows.map((row) => {
-      const userId = String(row.user_id);
+      const userId = typeof row.user_id === 'string' ? row.user_id : null;
       const amountTokenSubunits = Number(row.amount_token_subunits ?? 0);
       return {
         id: String(row.id),
         userId,
-        username: profiles.get(userId)?.username ?? null,
-        displayName: profiles.get(userId)?.display_name ?? null,
+        detachedUserId: (row.detached_user_id as string | null) ?? null,
+        username: profiles.get(userId ?? '')?.username ?? null,
+        displayName: profiles.get(userId ?? '')?.display_name ?? null,
         amountTokenSubunits,
         amountUsd: formatTokenSubunitsAsUsd(amountTokenSubunits),
         payoutMethod: String(row.payout_method ?? ''),

@@ -198,6 +198,23 @@ describe('admin payouts page — settled history', () => {
     expect(visibleText(html)).toContain('4 Aug 2026');
   });
 
+  it('labels a deleted creator without linking to a nonexistent account', async () => {
+    const detachedUserId = '51000000-0000-4000-8000-000000000001';
+    listOpenCreatorPayoutRequestsMock.mockResolvedValue([]);
+    listResolvedCreatorPayoutRequestsMock.mockResolvedValue({
+      ...settled,
+      requests: [{ ...settled.requests[0], userId: null, detachedUserId, username: null, displayName: null }],
+    });
+
+    const html = await renderPageToHtml(
+      await AdminPayoutsPage({ searchParams: Promise.resolve({}) }),
+    );
+
+    expect(html).toContain('Deleted creator');
+    expect(html).toContain(detachedUserId);
+    expect(html).not.toContain('/admin/users/');
+  });
+
   /**
    * The open queue decrypts and shows the destination because the operator
    * needs it to send the money. Once settled that need is gone, so the history

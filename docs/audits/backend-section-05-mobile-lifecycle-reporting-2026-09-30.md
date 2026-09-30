@@ -1,6 +1,7 @@
 # Backend Section 5K — mobile entitlement lifecycle and reporting
 
-Status: reproduced and fixed locally; release pending.
+Status: deployed and verified on `b04ccb46cfecb042b8215e521e0633bc44b9cdf9`.
+See [release evidence](backend-section-05-mobile-lifecycle-reporting-release-2026-09-30.md).
 
 Three findings were reproduced before their fixes:
 
@@ -47,7 +48,9 @@ Three findings were reproduced before their fixes:
 - Clean replay and all 1,941 SQL assertions in 90 files passed on the final migration. Patch context was narrowed to avoid embedding
   unrelated counter-update statements; no existing migration guard was weakened. App/test typechecks and targeted
   lint passed. Focused tests passed. Full web suite: 6,139 passed, with 51 database-dependent cases skipped
-  by that invocation and covered separately. Exact-main CI/release remain pending.
+  by that invocation and covered separately. Exact-main Quality and the standard release passed; all 20 sequential
+  production controls pass, cleanup is empty and both deployed function digests
+  match clean local replay.
 - Production inventory before release contains eight credit receipts and no
   marketplace or legacy bundle receipts. No customer repair is indicated. No
   production contention test, legacy-policy bypass or real provider charge was
