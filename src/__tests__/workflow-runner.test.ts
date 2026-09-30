@@ -577,11 +577,11 @@ describe('workflow-runner recovery', () => {
     expect(state.run.status).toBe('processing');
   });
 
-  it('links an ambiguous held submission instead of starting a duplicate provider task', async () => {
+  it.each([true, false])('links an ambiguous submission without duplicating work (marker confirmed: %s)', async (confirmed) => {
     const state = createQueuedWorkflowState();
     const supabase = createSupabaseMock(state);
     const ambiguous = new Error('provider response timed out');
-    markHeldProviderSubmission(ambiguous, 'gen-held-video');
+    markHeldProviderSubmission(ambiguous, 'gen-held-video', { confirmed });
     startVideoGenerationMock.mockRejectedValueOnce(ambiguous);
 
     const { advanceWorkflowRunOnce } = await import('@/lib/workflow-runner');
@@ -596,7 +596,7 @@ describe('workflow-runner recovery', () => {
       status: 'processing',
       generation_id: 'gen-held-video',
       output_snapshot: { submissionPending: true },
-      error_message: expect.stringContaining('credits stay reserved'),
+      error_message: expect.stringContaining(confirmed ? 'credits stay reserved' : 'current status'),
     });
     expect(startVideoGenerationMock).toHaveBeenCalledTimes(1);
   });

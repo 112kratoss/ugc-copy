@@ -548,8 +548,8 @@ it.each(['getVideoGeneration', 'getMotionGeneration'] as const)(
 );
 
 // An unreadable provider creation receipt uses the existing held-start contract.
-it('retains the shared submission-pending error for same-key recovery', async () => {
-  const pending = mobileApiContract.endpoints.startImageGeneration.errors.submissionPending;
+it.each(['submissionPending', 'submissionUnconfirmed'] as const)('retains %s for same-key recovery', async (variant) => {
+  const pending = mobileApiContract.endpoints.startImageGeneration.errors[variant];
   const api = createApiClient({
     baseUrl: 'https://example.test',
     getAccessToken: async () => 'test-token',

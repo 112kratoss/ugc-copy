@@ -20,6 +20,8 @@ describe.skipIf(!connectionString)(
     let client: SupabaseClient;
     let now: number;
     let beforeSettlement: (() => Promise<void>) | undefined;
+    let markerUnavailable = false;
+    let beforeMarker: (() => Promise<void>) | undefined;
     let reconciliationFault:
       | 'error'
       | 'throw'
@@ -46,6 +48,8 @@ describe.skipIf(!connectionString)(
       scheduled = vi.fn();
       beforeSettlement = undefined;
       reconciliationFault = undefined;
+      markerUnavailable = false;
+      beforeMarker = undefined;
       await db.query(
         "insert into auth.users(id,email,aud,role,created_at) values($1,$2,'authenticated','authenticated',now())",
         [userId, `${userId}@example.invalid`],
@@ -115,6 +119,7 @@ describe.skipIf(!connectionString)(
         async rpc(name: string, args: Record<string, unknown>) {
           if (
             ![
+              'mark_generation_submission_unknown',
               'attach_generation_provider_task',
               'enqueue_generation_completion_job',
               'settle_generation_start_failed',
@@ -122,6 +127,18 @@ describe.skipIf(!connectionString)(
             ].includes(name)
           )
             throw new Error(`Unexpected RPC ${name}`);
+          if (name === 'mark_generation_submission_unknown') {
+            if (beforeMarker) {
+              const hook = beforeMarker;
+              beforeMarker = undefined;
+              await hook();
+            }
+            if (markerUnavailable)
+              return {
+                data: null,
+                error: new Error('synthetic marker unavailable'),
+              };
+          }
           if (name === 'settle_generation_start_failed' && beforeSettlement) {
             const hook = beforeSettlement;
             beforeSettlement = undefined;
@@ -274,6 +291,62 @@ describe.skipIf(!connectionString)(
       });
       expect(scheduled).not.toHaveBeenCalled();
     });
+    it('restores an absent ambiguity marker before refund so a late callback is reconciled', async () => {
+      await db.query(
+        'update public.generations set submission_unknown_at=null where id=$1',
+        [generationId],
+      );
+      expect((await reap()).startFailures.settled).toBe(1);
+      expect((await callback()).status).toBe(200);
+      expect(await state()).toMatchObject({
+        status: 'failed',
+        credits: 620,
+        refunded: true,
+        reconciliations: 1,
+      });
+    });
+    it('defers an unmarked refund while its marker cannot be persisted, then recovers', async () => {
+      await db.query(
+        'update public.generations set submission_unknown_at=null where id=$1',
+        [generationId],
+      );
+      markerUnavailable = true;
+      expect((await reap()).startFailures.settled).toBe(0);
+      expect(await state()).toMatchObject({
+        status: 'pending',
+        credits: 500,
+        refunded: false,
+      });
+      markerUnavailable = false;
+      expect((await reap()).startFailures.settled).toBe(1);
+      expect((await callback()).status).toBe(200);
+      expect(await state()).toMatchObject({
+        status: 'failed',
+        credits: 620,
+        refunded: true,
+        reconciliations: 1,
+      });
+    });
+    it('a callback before the reaper marker prevents refund', async () => {
+      await db.query(
+        'update public.generations set submission_unknown_at=null where id=$1',
+        [generationId],
+      );
+      beforeMarker = async () => {
+        expect((await callback()).status).toBe(200);
+      };
+      expect((await reap()).startFailures).toMatchObject({
+        settled: 0,
+        skipped: 1,
+      });
+      expect(await state()).toMatchObject({
+        status: 'processing',
+        credits: 500,
+        refunded: false,
+        jobs: 1,
+      });
+    });
+
     it.each(['error', 'throw', 'empty', 'unknown', 'lost-response'] as const)(
       'retries a late callback when reconciliation returns %s',
       async (fault) => {

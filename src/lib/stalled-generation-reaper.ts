@@ -285,6 +285,27 @@ export async function reapStalledGenerations(params: {
     }
 
     try {
+      let submissionUnknown = Boolean(row.submission_unknown_at);
+      if (!submissionUnknown) {
+        // A start may lose its marker write or die after dispatch. Preserve
+        // evidence before releasing the hold so a later callback can still
+        // record the provider-cost discrepancy. No task ID means we cannot
+        // distinguish that case from a request that never reached the provider.
+        const marker = await params.creditSupabase.rpc('mark_generation_submission_unknown', {
+          p_generation_id: row.id,
+        });
+        if (marker.error) throw marker.error;
+        const markerStatus = marker.data && typeof marker.data === 'object' && 'status' in marker.data
+          ? (marker.data as { status?: unknown }).status : null;
+        if (markerStatus === 'provider_task_attached' || markerStatus === 'already_settled' || markerStatus === 'missing') {
+          summary.startFailures.skipped += 1;
+          continue;
+        }
+        if (markerStatus !== 'held' && markerStatus !== 'already_marked') {
+          throw new Error('Unable to confirm stalled generation ambiguity marker.');
+        }
+        submissionUnknown = true;
+      }
       const { data, error } = await params.creditSupabase.rpc(startFailureSettlementRpc(row), {
         p_generation_id: row.id,
         p_error_message: failureMessage,
@@ -297,11 +318,9 @@ export async function reapStalledGenerations(params: {
 
       if (status === 'failed' || status === 'already_failed') {
         summary.startFailures.settled += 1;
-        // An ambiguous submission that expired is materially different from a
-        // generation that never reached the provider: Kie may have run and
-        // billed for this task, so the settlement is a candidate discrepancy
-        // rather than a clean refund.
-        const submissionUnknown = Boolean(row.submission_unknown_at);
+        // An expired taskless start may have reached the provider, including
+        // when its initial marker was lost. Count uncertainty conservatively;
+        // a late callback is the evidence that creates a reconciliation row.
         if (submissionUnknown) {
           summary.startFailures.submissionUnknown += 1;
         }

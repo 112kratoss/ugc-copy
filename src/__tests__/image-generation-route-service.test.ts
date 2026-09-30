@@ -65,9 +65,9 @@ describe('image generation route service', () => {
     createUserSupabase = vi.fn(() => createUserSupabaseMock());
   });
 
-  it('returns submission_pending with the held generation id after an ambiguous provider accept', async () => {
+  it.each(['submissionPending', 'submissionUnconfirmed'] as const)('returns the recovery contract for %s', async (variant) => {
     const ambiguous = new TypeError('fetch failed');
-    markHeldProviderSubmission(ambiguous, 'generation-held-image-1');
+    markHeldProviderSubmission(ambiguous, 'generation-held-image-1', { confirmed: variant === 'submissionPending' });
     mocks.startImageGenerationForRoute.mockRejectedValueOnce(ambiguous);
     const { postImageGenerationForRoute } = await import('@/lib/image-generation-route-service');
 
@@ -81,8 +81,8 @@ describe('image generation route service', () => {
 
     expect(result).toMatchObject({
       ok: false,
-      status: mobileApiContract.endpoints.startImageGeneration.errors.submissionPending.status,
-      body: mobileApiContract.endpoints.startImageGeneration.errors.submissionPending.response,
+      status: mobileApiContract.endpoints.startImageGeneration.errors[variant].status,
+      body: mobileApiContract.endpoints.startImageGeneration.errors[variant].response,
     });
   });
 

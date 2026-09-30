@@ -563,10 +563,10 @@ async function settleTemplateGenerationStartFailureQuietly(params: {
       userId: params.userId,
       cost: params.cost,
     });
-    if (hold !== 'unrecorded') {
-      if (hold === 'reserved') markHeldProviderSubmission(params.error, params.generationId);
-      return;
+    if (hold !== 'settled') {
+      markHeldProviderSubmission(params.error, params.generationId, { confirmed: hold === 'reserved' });
     }
+    return;
   }
 
   const failure = getPublicGenerationStartFailure(params.error);
@@ -637,7 +637,7 @@ type AmbiguousSubmissionHold =
   | 'reserved'
   /** Something else already settled this row: skip the refund, but say nothing about reserved credits. */
   | 'settled'
-  /** The hold could not be recorded; fall back to the pre-existing refund. */
+  /** The marker is unconfirmed; preserve the existing reservation for recovery. */
   | 'unrecorded';
 
 async function holdAmbiguousGenerationSubmission(params: {
@@ -646,55 +646,50 @@ async function holdAmbiguousGenerationSubmission(params: {
   userId: string;
   cost: number;
 }): Promise<AmbiguousSubmissionHold> {
-  try {
-    const { data, error } = await params.creditSupabase.rpc('mark_generation_submission_unknown', {
-      p_generation_id: params.generationId,
-    });
-    const status = data && typeof data === 'object' && 'status' in data
-      ? String((data as { status?: unknown }).status)
-      : null;
-
-    // `provider_task_attached` means the callback beat this write -- the
-    // provider had 30 seconds to accept and call back while we were still
-    // waiting. That generation is running, so its credits are genuinely spent
-    // on live work, which is what the reserved-credits copy describes.
-    if (!error && (status === 'held' || status === 'already_marked' || status === 'provider_task_attached')) {
-      logBackendWarning('generation_submission_unknown_held', {
-        generationId: params.generationId,
-        userId: params.userId,
-        cost: params.cost,
-        mark: status,
+  // Marking is idempotent. A lost response may follow a committed write, so
+  // retry it before deciding how much state we can confirm to the caller.
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const { data, error } = await params.creditSupabase.rpc('mark_generation_submission_unknown', {
+        p_generation_id: params.generationId,
       });
-      return 'reserved';
-    }
+      if (error) throw error;
+      const status = isRecord(data) && typeof data.status === 'string' ? data.status : null;
 
-    // Already settled by some other path. Refunding again would be wrong, but
-    // so would telling the user their credits are reserved -- they may have
-    // just been returned.
-    if (!error && status === 'already_settled') {
-      logBackendWarning('generation_submission_unknown_superseded', {
+      if (status === 'held' || status === 'already_marked' || status === 'provider_task_attached') {
+        logBackendWarning('generation_submission_unknown_held', {
+          generationId: params.generationId,
+          userId: params.userId,
+          cost: params.cost,
+          mark: status,
+        });
+        return 'reserved';
+      }
+
+      // A callback/reaper may already have settled or removed the generation.
+      // Do not claim a hold or initiate another refund from this stale request.
+      if (status === 'already_settled' || status === 'missing') {
+        logBackendWarning('generation_submission_unknown_superseded', {
+          generationId: params.generationId,
+          mark: status,
+        });
+        return 'settled';
+      }
+      throw new Error(`Unexpected submission-unknown mark status: ${String(status)}`);
+    } catch (markError) {
+      if (attempt < 3) continue;
+      logBackendError('generation_submission_unknown_mark_failed', {
         generationId: params.generationId,
-        mark: status,
+        attempts: attempt,
+        error: supabaseErrorMessage(markError, 'Failed to mark an ambiguous provider submission.'),
       });
-      return 'settled';
     }
-
-    // Fall through to the refund only when the hold could not be recorded at
-    // all. An unmarked held row is invisible to reconciliation, so the
-    // pre-existing behaviour is the safer residual.
-    logBackendError('generation_submission_unknown_mark_failed', {
-      generationId: params.generationId,
-      markStatus: status,
-      error: supabaseErrorMessage(error, 'Unexpected submission-unknown mark status.'),
-    });
-    return 'unrecorded';
-  } catch (markError) {
-    logBackendError('generation_submission_unknown_mark_failed', {
-      generationId: params.generationId,
-      error: supabaseErrorMessage(markError, 'Failed to mark an ambiguous provider submission.'),
-    });
-    return 'unrecorded';
   }
+  // Reservation already succeeded before the provider request. An unavailable
+  // marker cannot prove rejection or justify a refund. Keep callback admission
+  // and the request key intact; the existing grace reaper also sees unmarked
+  // pending rows. The public response must not assert a confirmed credit state.
+  return 'unrecorded';
 }
 
 async function settleGenerationStartFailureQuietly(params: {
@@ -704,9 +699,8 @@ async function settleGenerationStartFailureQuietly(params: {
   userId: string;
   cost: number;
 }) {
-  // Only the ambiguous class is held. A provider that answered -- with an HTTP
-  // error or a non-200 body code -- has definitively rejected the request, and
-  // refunding it immediately stays correct.
+  // Preserve ambiguous submissions; explicit rejection follows the existing
+  // immediate-refund path below.
   if (
     params.error instanceof AmbiguousProviderSubmissionError
     || isExternalServiceTimeoutError(params.error)
@@ -719,13 +713,10 @@ async function settleGenerationStartFailureQuietly(params: {
       cost: params.cost,
     });
 
-    if (hold !== 'unrecorded') {
-      // Tagged only when the credits really are still reserved, so the copy the
-      // caller renders can say so without the risk of promising it to someone
-      // who has already been refunded.
-      if (hold === 'reserved') markHeldProviderSubmission(params.error, params.generationId);
-      return;
+    if (hold !== 'settled') {
+      markHeldProviderSubmission(params.error, params.generationId, { confirmed: hold === 'reserved' });
     }
+    return;
   }
 
   const failure = getPublicGenerationStartFailure(params.error);

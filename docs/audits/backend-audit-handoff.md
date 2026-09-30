@@ -6,12 +6,36 @@ Updated 2026-09-30 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/generation-start-recovery-6e`, based on main `8a9eda28810066815efafeb5c0feff93dcd48b5f`; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/generation-marker-recovery-6f`, based on main `d5d71fba5f367af836e52454a0a549f79ff87dbd`; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-Section 6E is locally verified; CI/release gates are next. A successful HTTP
+Section 6F marker-write recovery is locally verified; PR/CI/release remain pending.
+Read `docs/audits/backend-section-06-marker-recovery-2026-09-30.md`.
+Twelve start and three reaper DB regressions reproduced before implementation;
+actual HTTP reproduced refund/ignored callback. The fix retries marker writes,
+preserves unconfirmed holds and request keys, and restores missing markers before
+expiry refund. Persistent outages use cautious public copy and defer reaper
+settlement. All 183 focused web/DB and 120 mobile contract cases pass; app/test/
+mobile typing and lint pass. HTTP transient/persistent retests preserve one hold
+and one provider call through callback and same-key replay. No migration or OTA.
+Private evidence: `.audit-evidence/backend-section-06f/`. Production read-only
+counts remain unchanged; no customer repair. Next: finish this release, then
+actual worker termination. The preceding live checkpoint follows.
+
+Section 6E merged in PR #251 as `d5d71fba5f367af836e52454a0a549f79ff87dbd`.
+PR Quality `36719881177` passed all four jobs first attempt: 6,150 web tests,
+2,801 mobile tests, 19 browser tests, 1,941 SQL assertions and 95 DB checks
+(40 generation recovery). No mobile store release was active before merge.
+Exact-main Quality `36720852933` passed all four jobs on its first attempt.
+Standard production release `36721626640` succeeded at 2026-09-30 13:29:34 UTC.
+Independent live SHA `d5d71fba`, feed 200, admin redirect 307 and unsigned webhook
+401 passed. Protected staged/live health passed in the workflow. Section 6E is
+deployed and verified; no release work remains pending. Read
+`docs/audits/backend-section-06-start-recovery-release-2026-09-30.md`.
+Preserve local release docs for the next audit PR.
+A successful HTTP
 creation response without a usable task receipt now enters the existing
 ambiguous-submission hold rather than refunding and discarding a later callback.
 Six failures reproduced against actual local SQL before implementation. Signed
@@ -24,7 +48,7 @@ Read `docs/audits/backend-section-06-start-recovery-2026-09-30.md`; preserve
 `.audit-evidence/backend-section-06e/`. No migration or mobile runtime change.
 Production aggregate has seven unmarked refunded starts without tasks, zero
 marked ambiguous and zero active taskless rows; no attribution or repair.
-Next after release: ambiguity-marker write failure/lost response, then worker
+Next: ambiguity-marker write failure/lost response, then worker
 termination. The following is the preceding deployed checkpoint.
 
 Section 6D is merged in PR #250 as `8a9eda28810066815efafeb5c0feff93dcd48b5f`.

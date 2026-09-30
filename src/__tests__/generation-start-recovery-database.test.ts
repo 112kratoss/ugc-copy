@@ -23,6 +23,15 @@ describe.skipIf(!connectionString)(
     let idempotent: typeof import('@/lib/generation-start-idempotency').withGenerationStartIdempotency;
     let publicFailure: typeof import('@/lib/generation-services').getPublicGenerationStartFailure;
     let releaseProvider: (() => void) | undefined;
+    let markerFault:
+      | 'error'
+      | 'throw'
+      | 'empty'
+      | 'unknown'
+      | 'lost-response'
+      | undefined;
+    let persistentMarkerFault = false;
+    let markerCalls = 0;
 
     beforeEach(async () => {
       expect(['localhost', '127.0.0.1']).toContain(
@@ -41,19 +50,20 @@ describe.skipIf(!connectionString)(
       ({ withGenerationStartIdempotency: idempotent } = await import(
         '@/lib/generation-start-idempotency'
       ));
-      provider = vi
-        .fn<typeof fetch>()
-        .mockImplementation(async () =>
-          Response.json({
-            code: 200,
-            data: { taskId: `audit-start-${userId}` },
-          }),
-        );
+      provider = vi.fn<typeof fetch>().mockImplementation(async () =>
+        Response.json({
+          code: 200,
+          data: { taskId: `audit-start-${userId}` },
+        }),
+      );
       vi.stubGlobal('fetch', provider);
       pool = new Pool({ connectionString, max: 20, statement_timeout: 10_000 });
       userId = randomUUID();
       templateId = undefined;
       releaseProvider = undefined;
+      markerFault = undefined;
+      persistentMarkerFault = false;
+      markerCalls = 0;
       await pool.query(
         "insert into auth.users(id,email,aud,role,created_at) values($1,$2,'authenticated','authenticated',now())",
         [userId, `${userId}@example.invalid`],
@@ -107,6 +117,22 @@ describe.skipIf(!connectionString)(
             ].includes(name)
           )
             throw new Error(`Unexpected RPC ${name}`);
+          const fault =
+            name === 'mark_generation_submission_unknown'
+              ? markerFault
+              : undefined;
+          if (name === 'mark_generation_submission_unknown') markerCalls++;
+          if (fault && !persistentMarkerFault) markerFault = undefined;
+          if (fault === 'error')
+            return {
+              data: null,
+              error: new Error('synthetic marker write failure'),
+            };
+          if (fault === 'throw')
+            throw new Error('synthetic marker transport failure');
+          if (fault === 'empty') return { data: null, error: null };
+          if (fault === 'unknown')
+            return { data: { status: 'unexpected' }, error: null };
           const keys = Object.keys(args);
           if (!keys.every((key) => /^p_[a-z_]+$/.test(key)))
             throw new Error('Unexpected argument');
@@ -123,6 +149,11 @@ describe.skipIf(!connectionString)(
               ),
             );
             await db.query('commit');
+            if (fault === 'lost-response')
+              return {
+                data: null,
+                error: new Error('synthetic response lost after marker commit'),
+              };
             return { data: rows[0].result, error: null };
           } catch (error) {
             await db.query('rollback');
@@ -372,37 +403,41 @@ describe.skipIf(!connectionString)(
       expect(provider).toHaveBeenCalledTimes(1);
     });
 
+    async function templateInput() {
+      templateId = randomUUID();
+      const runId = randomUUID(),
+        stepId = randomUUID();
+      await pool.query(
+        "insert into public.templates(id,name,creator_user_id,status,is_active) values($1,'Start recovery fixture',$2,'draft',true)",
+        [templateId, userId],
+      );
+      await pool.query(
+        `insert into public.template_runs(id,template_id,user_id,graph_snapshot,graph_hash,input_manifest,input_storage_paths,output_node_id,output_kind,status,estimated_total_credits,estimated_remaining_credits)
+      values($1,$2,$3,'{"version":1,"nodes":[],"edges":[]}',repeat('a',64),'[]','{}','output','image','collecting_inputs',120,120)`,
+        [runId, templateId, userId],
+      );
+      await pool.query(
+        "insert into public.template_run_steps(id,run_id,node_id,kind,media_kind,label,status,estimated_credits) values($1,$2,'image','generation','image','Image','queued',120)",
+        [stepId, runId],
+      );
+      return {
+        supabase: client,
+        creditSupabase: client,
+        userId,
+        model: 'nano-banana-2' as const,
+        prompt: 'A ceramic bowl.',
+        quotedCostCredits: 120,
+        persistInputMedia: false,
+        privateRecipe: true,
+        templateContext: { runId, stepId },
+        clientRequestKeyHash: 'd'.repeat(64),
+      };
+    }
+
     it.each([false, true])(
       'template reservations recover incomplete receipts (explicit rejection: %s)',
       async (rejected) => {
-        templateId = randomUUID();
-        const runId = randomUUID(),
-          stepId = randomUUID();
-        await pool.query(
-          "insert into public.templates(id,name,creator_user_id,status,is_active) values($1,'Start recovery fixture',$2,'draft',true)",
-          [templateId, userId],
-        );
-        await pool.query(
-          `insert into public.template_runs(id,template_id,user_id,graph_snapshot,graph_hash,input_manifest,input_storage_paths,output_node_id,output_kind,status,estimated_total_credits,estimated_remaining_credits)
-      values($1,$2,$3,'{"version":1,"nodes":[],"edges":[]}',repeat('a',64),'[]','{}','output','image','collecting_inputs',120,120)`,
-          [runId, templateId, userId],
-        );
-        await pool.query(
-          "insert into public.template_run_steps(id,run_id,node_id,kind,media_kind,label,status,estimated_credits) values($1,$2,'image','generation','image','Image','queued',120)",
-          [stepId, runId],
-        );
-        const input = {
-          supabase: client,
-          creditSupabase: client,
-          userId,
-          model: 'nano-banana-2' as const,
-          prompt: 'A ceramic bowl.',
-          quotedCostCredits: 120,
-          persistInputMedia: false,
-          privateRecipe: true,
-          templateContext: { runId, stepId },
-          clientRequestKeyHash: 'd'.repeat(64),
-        };
+        const input = await templateInput();
         provider.mockImplementation(async () =>
           rejected
             ? Response.json({ code: 422, msg: 'Invalid request' })
@@ -432,6 +467,65 @@ describe.skipIf(!connectionString)(
         expect(provider).toHaveBeenCalledTimes(1);
       },
     );
+
+    for (const template of [false, true]) {
+      it.each(['error', 'throw', 'empty', 'unknown', 'lost-response'] as const)(
+        `retries a transient marker %s without refunding (template: ${template})`,
+        async (fault) => {
+          const input = template ? await templateInput() : undefined;
+          markerFault = fault;
+          provider.mockRejectedValue(new TypeError('fetch failed'));
+          const error = await (input ? start(input) : submit()).catch(
+            (error: unknown) => error,
+          );
+          const [generation] = await rows();
+          expect(generation).toMatchObject({
+            status: 'pending',
+            refunded: false,
+            prediction_id: null,
+          });
+          expect(generation.submission_unknown_at).not.toBeNull();
+          expect(markerCalls).toBe(2);
+          expect(publicFailure(error).code).toBe('submission_pending');
+          expect(await credits()).toBe(380);
+          expect((await callback(generation.id)).status).toBe(200);
+          await expect(input ? start(input) : submit()).resolves.toMatchObject({
+            idempotentReplay: true,
+          });
+          expect(await credits()).toBe(380);
+          expect(provider).toHaveBeenCalledTimes(1);
+        },
+      );
+      it(`preserves callback recovery through persistent marker outage (template: ${template})`, async () => {
+        const input = template ? await templateInput() : undefined;
+        markerFault = 'error';
+        persistentMarkerFault = true;
+        provider.mockRejectedValue(new TypeError('fetch failed'));
+        const error = await (input ? start(input) : submit()).catch(
+          (error: unknown) => error,
+        );
+        const [generation] = await rows();
+        expect(generation).toMatchObject({
+          status: 'pending',
+          refunded: false,
+          prediction_id: null,
+          submission_unknown_at: null,
+        });
+        expect(generation.client_request_key_hash).not.toBeNull();
+        expect(markerCalls).toBe(3);
+        expect(publicFailure(error).code).toBe('submission_pending');
+        expect(publicFailure(error).message).not.toContain(
+          'credits stay reserved',
+        );
+        expect(await credits()).toBe(380);
+        expect((await callback(generation.id)).status).toBe(200);
+        await expect(input ? start(input) : submit()).resolves.toMatchObject({
+          idempotentReplay: true,
+        });
+        expect(await credits()).toBe(380);
+        expect(provider).toHaveBeenCalledTimes(1);
+      });
+    }
 
     it('still refunds an explicit provider body rejection', async () => {
       provider.mockImplementation(async () =>
