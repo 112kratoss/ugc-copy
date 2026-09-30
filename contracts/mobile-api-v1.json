@@ -249,6 +249,18 @@
         "timing": {
           "completedAt": "2026-06-22T06:01:00.000Z"
         }
+      },
+      "responseVariants": {
+        "outputPending": {
+          "status": "processing",
+          "output": null,
+          "error": null,
+          "retryAfterMs": 15000,
+          "timing": {
+            "appStatus": "processing",
+            "completedAtMs": null
+          }
+        }
       }
     },
     "startVideoGeneration": {
@@ -280,6 +292,18 @@
         "timing": {
           "completedAt": "2026-06-22T06:03:00.000Z"
         }
+      },
+      "responseVariants": {
+        "outputPending": {
+          "status": "processing",
+          "output": null,
+          "error": null,
+          "retryAfterMs": 15000,
+          "timing": {
+            "appStatus": "processing",
+            "completedAtMs": null
+          }
+        }
       }
     },
     "startMotionGeneration": {
@@ -310,6 +334,18 @@
         "error": null,
         "timing": {
           "completedAt": "2026-06-22T06:05:00.000Z"
+        }
+      },
+      "responseVariants": {
+        "outputPending": {
+          "status": "processing",
+          "output": null,
+          "error": null,
+          "retryAfterMs": 15000,
+          "timing": {
+            "appStatus": "processing",
+            "completedAtMs": null
+          }
         }
       }
     },

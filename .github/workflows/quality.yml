@@ -239,6 +239,11 @@ jobs:
         env:
           SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
 
+      - name: Test generation recovery with real settlement SQL
+        run: npx vitest run src/__tests__/generation-output-recovery-database.test.ts
+        env:
+          SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+
       - name: Stop isolated Supabase database
         if: always()
         continue-on-error: true

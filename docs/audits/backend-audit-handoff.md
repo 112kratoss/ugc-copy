@@ -6,12 +6,35 @@ Updated 2026-09-30 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/payout-detached-reporting-5l`, based on main `b04ccb46cfecb042b8215e521e0633bc44b9cdf9`; branch `codex/mobile-lifecycle-reporting-5k` preserves the merged fix. Branch `codex/mobile-adjustment-event-history` preserves the merged fix. Preserve local evidence.
+Current checkout: `codex/generation-empty-result-recovery-6b`, based on main `65890e3146309b5e62fac155f72983de4475a7a1`; branch `codex/payout-detached-reporting-5l` preserves PR #247; branch `codex/mobile-lifecycle-reporting-5k` preserves the merged fix. Branch `codex/mobile-adjustment-event-history` preserves the merged fix. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-Section 5L is fixed and verified locally; its release remains pending. See
+Section 6B is fixed locally; release is pending. An actual signed local callback
+with empty success output prematurely settled the generation and ignored later
+valid output. Six real-DB regressions and seven polling regressions reproduced
+before implementation. The fix retries incomplete worker results and keeps
+image/video/motion status polling processing, with shared mobile contract tests.
+After-fix signed HTTP recovery and import-retry checks pass. No migration or
+mobile runtime change. Read `docs/audits/backend-section-06-empty-output-recovery-2026-09-30.md`
+and `.audit-evidence/backend-section-06b/`. Production inventory: 88 succeeded,
+one missing output already marked source-unavailable; no attributed incident or
+customer repair. Preserve all Section 5L/6A evidence in the next audit PR.
+
+
+Section 5L merged in PR #247 as `65890e3146309b5e62fac155f72983de4475a7a1`.
+PR Quality `36670834114` passed all four jobs: 6,143 web tests, 2,783 mobile tests,
+19 browser tests, 1,941 SQL assertions and 55 DB integration/concurrency cases.
+No active mobile store release existed before merge. Exact-main Quality
+`36671517379` passed all four jobs after an unchanged E2E-only rerun. The first
+E2E attempt passed 18/19, with the composer reorder test losing its execution
+context during navigation (same previously observed harness failure); attempt 2
+passed 19/19. Both logs are preserved. Standard production release `36672523382`
+succeeded at 2026-09-30 05:18:19 UTC. Independent live verification confirms
+`65890e31`, public feed HTTP 200, and unauthenticated payouts redirecting to admin
+login (307). Section 5L is deployed and verified; no release work remains pending.
+Release evidence: `docs/audits/backend-section-05-payout-detached-reporting-release-2026-09-30.md`. See
 `docs/audits/backend-section-05-payout-detached-reporting-2026-09-30.md`.
 Three service failures and a real browser reproduction confirmed deleted-account
 payout rows break mixed creator enrichment. The fix filters live IDs, retains
@@ -19,6 +42,14 @@ reconciliation identity, labels deleted creators and removes their dead links.
 15 focused tests, app/test typechecks, lint and before/after Chromium checks pass.
 No migration or customer repair is required; production payout inventory is empty.
 Private evidence: `.audit-evidence/backend-section-05l/`.
+
+While release CI runs, Section 6A initial local generation concurrency checks
+passed: completion queue duplicate/claim/takeover/retry invariants and 20-way
+failure, success and mixed settlement races. No new defect established; all
+local fixtures removed. Read `docs/audits/backend-section-06-generation-recovery-2026-09-30.md`
+and `.audit-evidence/backend-section-06a/`. Attachment SQL races also passed: task identity is exclusive and attachment
+versus start-failure refund stays consistent. Next: cross-layer callback/start
+handling and grace expiry, then import/worker crash recovery.
 
 The watchdog's degraded moderation signal was independently reproduced by the
 read-only production collectors: one open report is approximately 64 hours old,
@@ -65,7 +96,8 @@ Section 5I is the preceding verified release (historical checkpoint):
 ## Preserve these local files
 
 Carry the new release evidence in the next appropriate audit PR:
-- `docs/audits/backend-section-05-mobile-lifecycle-reporting-release-2026-09-30.md` (untracked, records successful Section 5K release).
+- Section 5K release evidence is committed in PR #247.
+- Section 5L release evidence and Section 6A initial concurrency report remain local; preserve them for the next audit PR.
 - This handoff, the updated Section 5K finding report and coverage tracker.
 - Section 5J release evidence was committed in PR #246; Section 5I evidence in #245.
 - `.audit-evidence/` contains logs and provider/schema snapshots. Preserve it; do not blindly commit it. Section 5G `ledger-private.json` contains private input and must not be published.
@@ -88,8 +120,8 @@ probe reproduced seven incorrect outcomes before the fix; all 14 checks pass aft
 deployment and no fixtures remain.
 
 Section 5K closed the reproduced legacy restore ownership, mobile/web
-restore-repurchase deadlocks and mirrored-order reporting bugs. Section 5L diagnoses the watchdog and fixes detached payout reporting. Finish its
-release, then continue the remaining commerce lifecycle/payout cases.
+restore-repurchase deadlocks and mirrored-order reporting bugs. Section 5L diagnoses the watchdog and fixes detached payout reporting. Its release is complete. Continue the remaining commerce lifecycle/payout gaps
+and the Section 6A generation recovery matrix.
 Use the coverage tracker to move next into generation/provider recovery. Actual provider-backed
 purchase/refund delivery remains a separate gap. Build a single coverage tracker
 before claiming an overall percentage.

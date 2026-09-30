@@ -417,16 +417,19 @@ export async function getMotionGenerationStatusForRoute({
           output = persisted.output;
           error = persisted.error;
         } else {
-          status = await resolvedDependencies.settleGenerationSucceeded(admin, {
-            predictionId,
-            completedAt: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-          });
-          if (status === 'failed') {
-            error = 'Generation was already settled as failed.';
-          }
+          return buildLockedGenerationStatusPayload(
+            { ...localGeneration, status: 'processing', completed_at: null },
+            estimatedTotalMs,
+            GENERATION_PROVIDER_STATUS_RETRY_AFTER_MS,
+          );
         }
       } catch (successError) {
         logBackendError('error_handling_success_status', { error: successError });
+        return buildLockedGenerationStatusPayload(
+          { ...localGeneration, status: 'processing', completed_at: null },
+          estimatedTotalMs,
+          GENERATION_PROVIDER_STATUS_RETRY_AFTER_MS,
+        );
       }
     } else if (status === 'failed') {
       const reason = readProviderFailureReason(data.data);

@@ -514,3 +514,18 @@ describe('mobile shared API v1 contract fixture', () => {
     path: '/api/media', auth: 'optional', status: 302, cacheControl: 'private, no-store',
   });
 });
+
+it.each(['getImageGeneration', 'getVideoGeneration', 'getMotionGeneration'] as const)(
+  '%s preserves the retryable output-pending response', async (operation) => {
+    const response = mobileApiContract.endpoints[operation].responseVariants.outputPending;
+    const api = createApiClient({
+      baseUrl: 'https://example.test',
+      getAccessToken: async () => 'test-token',
+      fetcher: vi.fn(async () => jsonResponse(response)),
+    });
+    const result = await api[operation]('prediction-pending');
+    expect(result).toEqual(response);
+    expect(result.status).toBe('processing');
+    expect(result.output).toBeNull();
+  },
+);
