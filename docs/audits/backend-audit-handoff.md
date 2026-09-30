@@ -1,17 +1,41 @@
 # Backend audit — session handoff
 
-Updated 2026-09-30 (Asia/Kolkata). Read this first when continuing the section-by-section Magicbooklet backend audit.
+Updated 2026-10-01 (Asia/Kolkata). Read this first when continuing the section-by-section Magicbooklet backend audit.
 
 ## Workspace and authorization
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/generation-marker-recovery-6f`, based on main `d5d71fba5f367af836e52454a0a549f79ff87dbd`; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/generation-worker-crash-6g`, based on main `1eb94f13a303d28f4071f1772efd7caf90378673`; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-Section 6F marker-write recovery is locally verified; PR/CI/release remain pending.
+Section 6G actual worker termination is locally verified; PR/CI remain pending.
+Read `docs/audits/backend-section-06-worker-crash-2026-10-01.md`.
+Nine actual SIGKILL cases pass with fresh-process recovery and real reservation,
+lease, settlement and notification SQL; all 64 generation DB checks pass together.
+Actual HTTP kill/restart probes cover before-dispatch refund and accepted-task
+callback/replay, preserving total/promotional credits with zero/one provider calls.
+No new runtime defect or production patch; add these regressions to DB CI.
+Test typing/lint pass. No migration/mobile runtime/OTA. Staging files left by
+SIGKILL are recorded as an open cleanup/disk-budget boundary, not silently fixed.
+Private evidence: `.audit-evidence/backend-section-06g/`. Finish CI/merge/release,
+then assess stale staging-file cleanup with active-file/ownership protections.
+The preceding live checkpoint follows.
+
+Section 6F merged in PR #252 as `1eb94f13a303d28f4071f1772efd7caf90378673`.
+PR Quality `36729025150` passed all four jobs first attempt: 6,153 web,
+2,802 mobile, 19 browser, 1,941 SQL assertions and 110 DB checks (55 generation).
+No mobile store release was active before merge. Exact-main Quality `36730702272`
+passed all four jobs first run. Browser results were 18 passed plus one flaky
+public-search empty-state check passing its automatic retry. Standard production
+release `36731984597` succeeded September 30 at 14:58:19 UTC. Independent live
+checks resumed October 1: SHA `1eb94f13`, feed 200, admin login redirect 307,
+unsigned Kie webhook 401. Section 6F is deployed and verified; no release work
+remains pending. Read
+`docs/audits/backend-section-06-marker-recovery-release-2026-10-01.md`.
+Preserve local release docs for the next audit PR.
 Read `docs/audits/backend-section-06-marker-recovery-2026-09-30.md`.
 Twelve start and three reaper DB regressions reproduced before implementation;
 actual HTTP reproduced refund/ignored callback. The fix retries marker writes,
@@ -21,8 +45,9 @@ settlement. All 183 focused web/DB and 120 mobile contract cases pass; app/test/
 mobile typing and lint pass. HTTP transient/persistent retests preserve one hold
 and one provider call through callback and same-key replay. No migration or OTA.
 Private evidence: `.audit-evidence/backend-section-06f/`. Production read-only
-counts remain unchanged; no customer repair. Next: finish this release, then
-actual worker termination. The preceding live checkpoint follows.
+counts remain unchanged; no customer repair. Next: actual worker termination;
+see private `next-worker-termination.md`.
+The preceding live checkpoint follows.
 
 Section 6E merged in PR #251 as `d5d71fba5f367af836e52454a0a549f79ff87dbd`.
 PR Quality `36719881177` passed all four jobs first attempt: 6,150 web tests,
