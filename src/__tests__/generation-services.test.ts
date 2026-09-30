@@ -1704,9 +1704,7 @@ describe('generation services', () => {
     expect(getPublicGenerationStartFailure(caught).code).toBe('provider_unavailable');
   });
 
-  it('refunds when the hold cannot be recorded, rather than losing track of the row', async () => {
-    // An unmarked held row is invisible to reconciliation and to the reaper's
-    // ambiguity reporting, so the pre-existing refund is the safer residual.
+  it('preserves an ambiguous reservation when all marker attempts fail', async () => {
     const { startImageGeneration } = await import('@/lib/generation-services');
     const { ExternalServiceTimeoutError } = await import('@/lib/provider-fetch');
     const fetchMock = vi.mocked(fetch);
@@ -1724,8 +1722,10 @@ describe('generation services', () => {
       model: 'nano-banana-2',
     })).rejects.toThrow('timed out');
 
-    expect(rpcCalls.map((call) => call.fn)).toContain('settle_generation_start_failed');
-    expect(generations[0]).toMatchObject({ status: 'failed', refunded: true });
+    expect(rpcCalls.filter((call) => call.fn === 'mark_generation_submission_unknown')).toHaveLength(3);
+    expect(rpcCalls.map((call) => call.fn)).not.toContain('settle_generation_start_failed');
+    expect(generations[0].status).toBe('pending');
+    expect(generations[0].refunded).toBeFalsy();
   });
 
   it('uses the backend client to mark backend-reserved image starts failed when provider submission fails', async () => {

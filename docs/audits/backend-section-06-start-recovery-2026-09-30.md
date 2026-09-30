@@ -1,6 +1,7 @@
 # Section 6E — incomplete provider task receipts
 
-Status: local reproduction and fix verified; release gates pending.
+Status: deployed and verified on `d5d71fba` through PR #251; see the
+[release evidence](backend-section-06-start-recovery-release-2026-09-30.md).
 
 ## Finding
 

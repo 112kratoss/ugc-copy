@@ -33,19 +33,26 @@ const GENERATION_START_FAILURE_CODES = new Set<GenerationStartFailureCode>([
 /**
  * Marks an error whose generation was *held* rather than refunded (F14).
  *
- * The copy has to follow what actually happened to the money, not the shape of
- * the error. The same `ExternalServiceTimeoutError` is refunded on the template
- * path and held on every other one, so telling them apart by error type would
- * promise "your credits stay reserved" to a user who has already been refunded.
- * The start service tags the error only once the hold is recorded.
+ * The copy follows confirmed state, not the error shape. Both standalone and
+ * template starts retain ambiguous reservations. If the marker write cannot
+ * be confirmed, carry recovery metadata with cautious status-only copy rather
+ * than promising reserved credits from an unconfirmed database response.
  *
  * Non-enumerable so the flag never leaks into a serialized error payload.
  */
 const HELD_SUBMISSION_FLAG = '__magicbookletHeldSubmission';
 const HELD_SUBMISSION_GENERATION_ID = '__magicbookletHeldGenerationId';
+const UNCONFIRMED_SUBMISSION_FLAG = '__magicbookletUnconfirmedSubmission';
 
-export function markHeldProviderSubmission(error: unknown, generationId?: string | null): void {
+export function markHeldProviderSubmission(
+  error: unknown,
+  generationId?: string | null,
+  options: { confirmed?: boolean } = {},
+): void {
   if (!error || typeof error !== 'object') return;
+  Object.defineProperty(error, UNCONFIRMED_SUBMISSION_FLAG, {
+    value: options.confirmed === false, enumerable: false, configurable: true, writable: true,
+  });
   Object.defineProperty(error, HELD_SUBMISSION_FLAG, {
     value: true,
     enumerable: false,
@@ -149,6 +156,12 @@ export function getPublicGenerationStartFailure(error: unknown): PublicGeneratio
   // "retry": a retry here starts a second generation and places a second hold
   // while the first submission may still be accepted and billed.
   if (isHeldProviderSubmission(error)) {
+    if (recordValue(error, [UNCONFIRMED_SUBMISSION_FLAG]) === true) {
+      return {
+        code: 'submission_pending',
+        message: 'We could not confirm the current status of this request. It may still be running. Check Studio in a few minutes before starting it again.',
+      };
+    }
     return {
       code: 'submission_pending',
       message: 'We could not confirm this request with the generation provider in time. It may still be running — check Studio in a few minutes. Your credits stay reserved until it resolves, and are returned automatically if it does not.',

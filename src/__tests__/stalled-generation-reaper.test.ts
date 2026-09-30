@@ -182,9 +182,13 @@ describe('stalled generation reaper', () => {
         },
       ],
       [
+        { data: { status: 'held' }, error: null },
         { data: { status: 'failed', refunded: true }, error: null },
+        { data: { status: 'held' }, error: null },
         { data: { status: 'provider_task_attached' }, error: null },
+        { data: { status: 'held' }, error: null },
         { data: null, error: { message: 'rpc unavailable' } },
+        { data: { status: 'held' }, error: null },
         { data: { status: 'missing' }, error: null },
       ],
     );
@@ -195,14 +199,14 @@ describe('stalled generation reaper', () => {
       nowMs: NOW_MS,
     })).resolves.toEqual({
       providerSync: { eligible: 0, reconciled: 0, stillActive: 0, skipped: 0, failed: 0, deferred: 0 },
-      startFailures: { eligible: 4, settled: 1, skipped: 1, failed: 2, deferred: 0, submissionUnknown: 0 },
+      startFailures: { eligible: 4, settled: 1, skipped: 1, failed: 2, deferred: 0, submissionUnknown: 1 },
     });
 
     expect(client.lt).toHaveBeenNthCalledWith(2, 'created_at', '2026-06-21T09:15:00.000Z');
     expect(client.limit).toHaveBeenNthCalledWith(2, STALLED_GENERATION_START_FAILURE_BATCH_LIMIT);
     expect(getPublicGenerationStartFailure).toHaveBeenCalledWith(expect.objectContaining({ status: 504 }));
-    expect(client.rpc).toHaveBeenCalledTimes(4);
-    expect(client.rpc).toHaveBeenNthCalledWith(1, 'settle_generation_start_failed', {
+    expect(client.rpc).toHaveBeenCalledTimes(8);
+    expect(client.rpc).toHaveBeenNthCalledWith(2, 'settle_generation_start_failed', {
       p_generation_id: 'gen-a',
       p_error_message: 'The generation provider is temporarily unavailable. Please retry this step shortly.',
     });
@@ -240,11 +244,8 @@ describe('stalled generation reaper', () => {
     expect(client.rpc).not.toHaveBeenCalled();
   });
 
-  it('counts settled ambiguous submissions separately from clean start failures', async () => {
-    // A held submission that expired is a candidate money discrepancy: Kie may
-    // have run and billed for the task. A generation that never reached the
-    // provider is a clean refund. The reaper is where the two become
-    // indistinguishable unless the marker is carried through.
+  it('marks expired taskless starts conservatively before settlement', async () => {
+    // Missing markers can follow dispatch or write failure, not just rejection.
     const client = createGenerationsClient(
       [
         { data: [], error: null },
@@ -270,6 +271,7 @@ describe('stalled generation reaper', () => {
       ],
       [
         { data: { status: 'failed', refunded: true }, error: null },
+        { data: { status: 'held' }, error: null },
         { data: { status: 'failed', refunded: true }, error: null },
       ],
     );
@@ -279,7 +281,7 @@ describe('stalled generation reaper', () => {
       creditSupabase: client as never,
       nowMs: NOW_MS,
     })).resolves.toMatchObject({
-      startFailures: { eligible: 2, settled: 2, submissionUnknown: 1 },
+      startFailures: { eligible: 2, settled: 2, submissionUnknown: 2 },
     });
   });
 
@@ -315,7 +317,9 @@ describe('stalled generation reaper', () => {
         },
       ],
       [
+        { data: { status: 'held' }, error: null },
         { data: { status: 'failed', refunded: true }, error: null },
+        { data: { status: 'held' }, error: null },
         { data: { status: 'failed', refunded: true }, error: null },
       ],
     );
@@ -327,12 +331,12 @@ describe('stalled generation reaper', () => {
     });
 
     expect(client.rpc).toHaveBeenNthCalledWith(
-      1,
+      2,
       'settle_template_generation_start_failed',
       expect.objectContaining({ p_generation_id: 'gen-template' }),
     );
     expect(client.rpc).toHaveBeenNthCalledWith(
-      2,
+      4,
       'settle_generation_start_failed',
       expect.objectContaining({ p_generation_id: 'gen-direct' }),
     );

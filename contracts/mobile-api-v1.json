@@ -241,6 +241,14 @@
             "generationId": "generation-held-image-1",
             "error": "We could not confirm this request with the generation provider in time. It may still be running — check Studio in a few minutes. Your credits stay reserved until it resolves, and are returned automatically if it does not."
           }
+        },
+        "submissionUnconfirmed": {
+          "status": 409,
+          "response": {
+            "code": "submission_pending",
+            "generationId": "generation-held-image-1",
+            "error": "We could not confirm the current status of this request. It may still be running. Check Studio in a few minutes before starting it again."
+          }
         }
       }
     },

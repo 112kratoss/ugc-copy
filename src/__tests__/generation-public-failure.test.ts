@@ -114,6 +114,17 @@ describe('public generation failure classification', () => {
       expect(getHeldProviderSubmissionGenerationId(error)).toBe('generation-held-1');
     });
 
+    it('preserves recovery metadata without promising a confirmed credit state', () => {
+      const error = new Error('timed out');
+      markHeldProviderSubmission(error, 'generation-unconfirmed', { confirmed: false });
+      const failure = getPublicGenerationStartFailure(error);
+      expect(failure.code).toBe('submission_pending');
+      expect(failure.message).toContain('current status');
+      expect(failure.message).not.toMatch(/credits stay reserved|retry/i);
+      expect(getHeldProviderSubmissionGenerationId(error)).toBe('generation-unconfirmed');
+      expect(JSON.stringify(error)).toBe('{}');
+    });
+
     it('only exposes recovery metadata for errors that carry the held marker', () => {
       const error = new Error('timed out');
       Object.defineProperty(error, '__magicbookletHeldGenerationId', {
