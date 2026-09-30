@@ -93,9 +93,9 @@ async function attachCallbackGenerationId(
 async function recordLateCallbackAfterRefund(
   serviceClient: SupabaseClient,
   params: { generationId: string | null; predictionId: string },
-): Promise<void> {
+): Promise<boolean> {
   const generationId = params.generationId?.trim();
-  if (!generationId) return;
+  if (!generationId) return true;
 
   try {
     const { data, error } = await serviceClient.rpc('record_provider_submission_reconciliation', {
@@ -105,6 +105,9 @@ async function recordLateCallbackAfterRefund(
     if (error) throw error;
 
     const status = isRecord(data) && typeof data.status === 'string' ? data.status : null;
+    if (!status || !['recorded', 'already_recorded', 'not_applicable', 'missing'].includes(status)) {
+      throw new Error('Provider reconciliation returned an unconfirmed result.');
+    }
     if (status === 'recorded') {
       logBackendError('provider_submission_reconciliation_recorded', {
         generationId,
@@ -112,14 +115,16 @@ async function recordLateCallbackAfterRefund(
         refundedCredits: isRecord(data) ? data.refunded_credits : undefined,
       });
     }
+    return true;
   } catch (error) {
-    // Never fail the webhook over bookkeeping: the provider retries on a
-    // non-200 and the completion payload is already lost either way.
+    // The generation stays refunded, but the discrepancy still needs a durable
+    // record. Let delivery retry; the RPC deduplicates a lost response after insert.
     logBackendWarning('provider_submission_reconciliation_record_failed', {
       generationId,
       predictionId: params.predictionId,
       error,
     });
+    return false;
   }
 }
 
@@ -204,10 +209,16 @@ export async function handleKieWebhookForRoute(input: KieWebhookRouteInput): Pro
   });
 
   if (attachStatus === 'skipped') {
-    await recordLateCallbackAfterRefund(serviceClient, {
+    const recorded = await recordLateCallbackAfterRefund(serviceClient, {
       generationId: callbackGenerationId,
       predictionId,
     });
+    if (!recorded) {
+      return {
+        body: { error: 'Provider reconciliation is temporarily unavailable. Please retry.' },
+        status: 503,
+      };
+    }
     return {
       body: { received: true, predictionId },
       status: 200,

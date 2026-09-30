@@ -59,8 +59,8 @@ function createServiceClientMock() {
   const rpc = vi.fn(async (): Promise<{
     data: {
       status: string;
-      generation_id: string;
-      prediction_id: string | null;
+      generation_id?: string;
+      prediction_id?: string | null;
     };
     error: null;
   }> => ({
@@ -235,6 +235,10 @@ describe('/api/webhooks/kie route', () => {
         generation_id: 'gen-1',
         prediction_id: null,
       },
+      error: null,
+    });
+    serviceClientMock.rpc.mockResolvedValueOnce({
+      data: { status: 'not_applicable' },
       error: null,
     });
 

@@ -6,10 +6,49 @@ Updated 2026-09-30 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/generation-durable-polling-6c`, based on main `3db9a9c7e5becec035fe131208ffeb8286e55101`; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/generation-grace-recovery-6d`, based on main `5009ce0c858bffca7671d3a4c52f51118e6fbf6d`; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+Section 6D is locally verified and awaiting release gates. It fixes acknowledged
+loss of late-callback reconciliation when the database write fails or returns an
+unconfirmed result: the callback now returns 503 until a record or benign no-op
+is confirmed. Five failing real-DB cases and an actual signed local HTTP request
+reproduced the defect before implementation. All ten new DB cases now pass,
+including strict 45-minute selection and both callback/reaper orderings. Signed
+HTTP after-fix results are 503/200/200 with one reconciliation and no second
+refund. No migration or mobile runtime change. Read
+`docs/audits/backend-section-06-grace-recovery-2026-09-30.md` and preserve
+`.audit-evidence/backend-section-06d/`. Production read-only aggregate has zero
+marked/refunded ambiguous generations and zero reconciliation rows. No repair.
+Next after this release: start-route idempotency and lost provider creation
+response, then worker crash recovery. The following is the prior live checkpoint.
+
+Section 6C is deployed and verified. PR #249 merged as
+`5009ce0c858bffca7671d3a4c52f51118e6fbf6d`, now live. PR Quality `36706988869`
+and exact-main Quality `36708125072` passed all four jobs: 6,150 web tests,
+2,800 mobile tests, 19 browser tests, 1,941 SQL assertions and 71 DB integration
+checks (16 generation recovery). The initial PR run caught three outdated inline
+settlement assertions; `850e2433` updates the actual route-export tests and
+service-role boundary guard. No mobile store release was active before merge.
+Standard release `36709175421` succeeded at 2026-09-30 11:36:08 UTC; protected
+health and independent live SHA/feed 200/admin redirect 307/webhook 401 passed.
+
+Video, Veo and motion polling now queue durable output imports, stay processing
+through storage errors, and notify success after import settlement. No migration
+or mobile runtime change. Read the finding and release reports:
+`docs/audits/backend-section-06-durable-polling-2026-09-30.md` and
+`docs/audits/backend-section-06-durable-polling-release-2026-09-30.md`.
+Private evidence: `.audit-evidence/backend-section-06c/`. Production inventory:
+12 successful video rows, zero external output URLs, no active video rows;
+no repair performed. All synthetic local generation fixtures are removed.
+
+Next: ambiguous submission grace expiry and late callback/reaper races using
+real local PostgreSQL and actual service selection. Read the remaining obligation
+map in `.audit-evidence/backend-section-06c/remaining-generation-obligations.md`.
+Preserve local release evidence for the next audit PR. Section 6B evidence was
+committed in #249; the preceding checkpoint follows.
 
 Section 6B is deployed and verified. PR #248 merged as `999e09c4d1e14a1e8112148c2f57ea19e70a21a6`.
 PR Quality `36675212554` passed all four jobs: 6,150 web tests, 2,786 mobile tests,
@@ -32,12 +71,6 @@ and `.audit-evidence/backend-section-06b/`. Production inventory: 88 succeeded,
 one missing output already marked source-unavailable; no attributed incident or
 customer repair. Section 5L/6A evidence is committed in PR #248.
 
-Section 6C is fixed locally; CI/release pending. Video/motion/Veo polling now
-queues durable imports instead of settling with temporary output after a storage
-failure. Six real-DB recovery regressions pass, including the response adapter,
-retry settlement and delayed success notification. Read
-`docs/audits/backend-section-06-durable-polling-2026-09-30.md` and private evidence
-in `.audit-evidence/backend-section-06c/`. No migration/mobile runtime change.
 
 
 
@@ -116,7 +149,7 @@ Section 5I is the preceding verified release (historical checkpoint):
 Carry the new release evidence in the next appropriate audit PR:
 - Section 5K release evidence is committed in PR #247.
 - Section 5L release evidence and Section 6A initial concurrency report are committed in PR #248.
-- Preserve Section 6B release evidence and Section 6C reproduction evidence for the next audit batch.
+- Section 6B release evidence is committed in PR #249. Preserve Section 6C release evidence and private logs for the next audit batch.
 - This handoff, the updated Section 5K finding report and coverage tracker.
 - Section 5J release evidence was committed in PR #246; Section 5I evidence in #245.
 - `.audit-evidence/` contains logs and provider/schema snapshots. Preserve it; do not blindly commit it. Section 5G `ledger-private.json` contains private input and must not be published.
