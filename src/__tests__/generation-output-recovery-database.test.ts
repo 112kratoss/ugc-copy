@@ -23,7 +23,9 @@ describe.skipIf(!connectionString)('generation output recovery with real queue a
   let predictionId: string;
   let client: SupabaseClient;
   let temporaryDirectory: string;
-  let upload: ReturnType<typeof vi.fn>;
+  let upload: ReturnType<typeof vi.fn<
+    (path: string, stream: AsyncIterable<Uint8Array>) => Promise<{ error: Error | null }>
+  >>;
 
   beforeEach(async () => {
     expect(['127.0.0.1', 'localhost']).toContain(new URL(connectionString!).hostname);
