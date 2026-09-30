@@ -17,7 +17,7 @@ export default function PrivacyPolicy() {
             <div className="max-w-4xl mx-auto px-6 py-16">
 
                 <h1 className="text-4xl font-bold mb-4">Privacy Policy</h1>
-                <p className="text-zinc-400 mb-12">Last updated: September 25, 2026</p>
+                <p className="text-zinc-400 mb-12">Last updated: September 30, 2026</p>
 
                 <div className="space-y-8 text-zinc-300">
                     <section>
@@ -204,9 +204,12 @@ export default function PrivacyPolicy() {
                     <section>
                         <h2 className="text-2xl font-semibold text-white mb-4">9. Children&apos;s Privacy</h2>
                         <p>
-                            Our Service is not intended for users under 18 years of age. We do not
-                            knowingly collect personal information from children. If you believe a
-                            child has provided us with personal data, please contact us immediately.
+                            Our Service is not intended for children under 13, and we do not knowingly
+                            collect personal information from anyone under 13. If you are under 18, you
+                            may use the Service only with the permission of a parent or guardian. Posts
+                            marked mature (NSFW) are available only to users who confirm they are 18 or
+                            older. If you believe a child under 13 has provided us with personal data,
+                            please contact us immediately and we will take steps to delete it.
                         </p>
                     </section>
 

@@ -15,14 +15,19 @@ export default function TermsOfService() {
             <div className="max-w-4xl mx-auto px-6 py-16">
 
                 <h1 className="text-4xl font-bold mb-4">Terms of Service</h1>
-                <p className="text-zinc-400 mb-12">Last updated: July 12, 2026</p>
+                <p className="text-zinc-400 mb-12">Last updated: September 30, 2026</p>
 
                 <div className="space-y-8 text-zinc-300">
                     <section>
-                        <h2 className="text-2xl font-semibold text-white mb-4">1. Acceptance of Terms</h2>
-                        <p>
+                        <h2 className="text-2xl font-semibold text-white mb-4">1. Acceptance of Terms and Eligibility</h2>
+                        <p className="mb-4">
                             By accessing and using {siteConfig.name} (&ldquo;the Service&rdquo;), you accept and agree to be bound by
                             these Terms of Service. If you do not agree to these terms, please do not use our Service.
+                        </p>
+                        <p>
+                            You must be at least 13 years old to use the Service. If you are under 18, you may use the
+                            Service only with the permission of a parent or guardian, who agrees to these Terms on your
+                            behalf. Posts marked mature (NSFW) are available only to users who confirm they are 18 or older.
                         </p>
                     </section>
 
