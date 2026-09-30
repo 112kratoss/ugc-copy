@@ -357,16 +357,29 @@ async function createKieTask(
     throw new Error(data?.msg || 'Provider rejected the request');
   }
 
-  if (!data || data.code !== 200) {
+  if (isRecord(data) && typeof data.code === 'number' && data.code !== 200) {
     // HTTP 200 carrying a body-level rejection is how Kie reports a validation
     // failure. Deliberately not recorded as a breaker failure: one user's bad
     // input must never open the circuit for everybody.
-    throw new Error(data?.msg || 'Provider rejected the request');
+    throw new Error(typeof data.msg === 'string' && data.msg ? data.msg : 'Provider rejected the request');
+  }
+
+  const taskId = isRecord(data) && data.code === 200 && isRecord(data.data)
+    && typeof data.data.taskId === 'string' ? data.data.taskId.trim() : '';
+  if (!taskId) {
+    // A successful HTTP response without a usable creation receipt does not
+    // establish rejection. Keep the reservation and request key recoverable
+    // through the callback or grace reaper instead of funding another task.
+    await recordProviderSubmissionOutcome({ success: false });
+    throw new AmbiguousProviderSubmissionError(
+      'Provider submission returned an incomplete task receipt.',
+      response.status,
+    );
   }
 
   await recordProviderSubmissionOutcome({ success: true });
 
-  return data.data.taskId as string;
+  return taskId;
 }
 
 class AmbiguousProviderSubmissionError extends Error {

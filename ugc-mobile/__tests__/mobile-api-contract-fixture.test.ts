@@ -5,6 +5,7 @@ import mobileApiOperationsV1 from '../../contracts/mobile-api-operations-v1.json
 import { ApiError, createApiClient, type MagicbookletApiClient } from '../lib/api-client';
 import { buildImmersiveGenerationItems } from '../lib/immersive-preview-view-model';
 import { getShowcaseViewerImageUrl } from '../lib/showcase-media';
+import { isAmbiguousGenerationStartFailure } from '../lib/generation-attempts';
 
 type ContractEndpointKey = keyof typeof mobileApiContract.endpoints;
 type ContractEndpoint = {
@@ -545,3 +546,19 @@ it.each(['getVideoGeneration', 'getMotionGeneration'] as const)(
     expect(result.timing).toMatchObject({ appStatus: 'processing' });
   },
 );
+
+// An unreadable provider creation receipt uses the existing held-start contract.
+it('retains the shared submission-pending error for same-key recovery', async () => {
+  const pending = mobileApiContract.endpoints.startImageGeneration.errors.submissionPending;
+  const api = createApiClient({
+    baseUrl: 'https://example.test',
+    getAccessToken: async () => 'test-token',
+    fetcher: vi.fn(async () => new Response(JSON.stringify(pending.response), {
+      status: pending.status, headers: { 'Content-Type': 'application/json' },
+    })),
+  });
+  const error = await api.startImageGeneration({model:'nano-banana-2',prompt:'A ceramic bowl.'}).catch((error:unknown)=>error);
+  expect(error).toBeInstanceOf(ApiError);
+  expect(error).toMatchObject({status:409,details:pending.response});
+  expect(isAmbiguousGenerationStartFailure(error)).toBe(true);
+});

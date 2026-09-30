@@ -1,6 +1,7 @@
 # Section 6D — ambiguous-start grace and late callback recovery
 
-Status: local reproduction and fix verified; release gates pending.
+Status: deployed and independently verified on `8a9eda28` through PR #250;
+see the [release evidence](backend-section-06-grace-recovery-release-2026-09-30.md).
 
 ## Finding
 

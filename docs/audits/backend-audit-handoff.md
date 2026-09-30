@@ -6,12 +6,39 @@ Updated 2026-09-30 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/generation-grace-recovery-6d`, based on main `5009ce0c858bffca7671d3a4c52f51118e6fbf6d`; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/generation-start-recovery-6e`, based on main `8a9eda28810066815efafeb5c0feff93dcd48b5f`; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-Section 6D is locally verified and awaiting release gates. It fixes acknowledged
+Section 6E is locally verified; CI/release gates are next. A successful HTTP
+creation response without a usable task receipt now enters the existing
+ambiguous-submission hold rather than refunding and discarding a later callback.
+Six failures reproduced against actual local SQL before implementation. Signed
+local start/callback HTTP changed from 500/refunded/ignored callback to
+409 submission_pending, callback processing, and same-key 200 replay with one
+provider call and one hold. Fourteen DB cases include overlapping same-key
+starts, template recovery, lost response and early callback orderings. All 136
+focused web/DB checks, 133 mobile checks, app/test/mobile typing and lint pass.
+Read `docs/audits/backend-section-06-start-recovery-2026-09-30.md`; preserve
+`.audit-evidence/backend-section-06e/`. No migration or mobile runtime change.
+Production aggregate has seven unmarked refunded starts without tasks, zero
+marked ambiguous and zero active taskless rows; no attribution or repair.
+Next after release: ambiguity-marker write failure/lost response, then worker
+termination. The following is the preceding deployed checkpoint.
+
+Section 6D is merged in PR #250 as `8a9eda28810066815efafeb5c0feff93dcd48b5f`.
+PR Quality `36711122063` passed all four jobs on its first attempt: 6,150 web,
+2,800 mobile, 19 browser, 1,941 SQL assertions and 81 DB integration checks
+(26 generation recovery). No mobile store release was active before merge.
+Exact-main Quality `36712301682` passed all four jobs on its first attempt.
+Standard production release `36713364805` succeeded at 2026-09-30 12:16:38 UTC.
+Independent live SHA `8a9eda28`, feed 200, admin redirect 307 and unsigned webhook
+401 passed; protected staged/live health passed in the release workflow.
+Section 6D is deployed and verified. No release work remains pending. Read
+`docs/audits/backend-section-06-grace-recovery-release-2026-09-30.md`.
+Release docs remain local for the next audit PR; preserve them.
+It fixes acknowledged
 loss of late-callback reconciliation when the database write fails or returns an
 unconfirmed result: the callback now returns 503 until a record or benign no-op
 is confirmed. Five failing real-DB cases and an actual signed local HTTP request
@@ -22,11 +49,12 @@ refund. No migration or mobile runtime change. Read
 `docs/audits/backend-section-06-grace-recovery-2026-09-30.md` and preserve
 `.audit-evidence/backend-section-06d/`. Production read-only aggregate has zero
 marked/refunded ambiguous generations and zero reconciliation rows. No repair.
-Next after this release: start-route idempotency and lost provider creation
-response, then worker crash recovery. The following is the prior live checkpoint.
+Next: start-route idempotency and lost provider creation response, including
+failure to persist the ambiguity marker; then worker crash recovery. Read
+`.audit-evidence/backend-section-06d/next-start-recovery.md`. The following is the prior live checkpoint.
 
 Section 6C is deployed and verified. PR #249 merged as
-`5009ce0c858bffca7671d3a4c52f51118e6fbf6d`, now live. PR Quality `36706988869`
+`5009ce0c858bffca7671d3a4c52f51118e6fbf6d` (preceding live build). PR Quality `36706988869`
 and exact-main Quality `36708125072` passed all four jobs: 6,150 web tests,
 2,800 mobile tests, 19 browser tests, 1,941 SQL assertions and 71 DB integration
 checks (16 generation recovery). The initial PR run caught three outdated inline

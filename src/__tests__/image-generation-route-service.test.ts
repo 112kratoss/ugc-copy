@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import { CatalogError } from '@/lib/generation-model-catalog';
@@ -80,8 +81,8 @@ describe('image generation route service', () => {
 
     expect(result).toMatchObject({
       ok: false,
-      status: 409,
-      body: { code: 'submission_pending', generationId: 'generation-held-image-1' },
+      status: mobileApiContract.endpoints.startImageGeneration.errors.submissionPending.status,
+      body: mobileApiContract.endpoints.startImageGeneration.errors.submissionPending.response,
     });
   });
 
