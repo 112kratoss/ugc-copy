@@ -46,7 +46,7 @@ Shared mobile contract fixtures add import-pending variants. Two mobile tests
 verify clients retain the processing response. This does not change mobile
 runtime code or require a binary/OTA. No database migration is required.
 
-Local validation: 46 focused web/database checks across seven files (including
+Local validation: 84 focused web/database checks across ten files (including
 16 real-database recovery cases), 118 mobile contract checks, app/test/mobile
 type checks and targeted ESLint. A mobile assertion initially accessed an
 unknown timing type directly; it now uses a typed-safe object assertion.
@@ -55,3 +55,13 @@ Private evidence: `.audit-evidence/backend-section-06c/`. Supabase's changelog
 and current Storage upload documentation were checked; no SDK/schema/API change
 is introduced. Section 6B release evidence accompanies this batch. Historical
 provider-hosted outputs are not repaired without an attributed inventory.
+
+The first PR CI run passed database/mobile/browser jobs but found three legacy
+web assertions requiring inline settlement. The actual route-export tests now
+assert the import RPC, processing contract, no direct settlement and no media
+fetch; the privileged-client guard follows the service-role enqueue boundary.
+All 38 checks in those three files and test typechecking pass locally.
+
+A read-only production inventory found 12 succeeded video rows, zero HTTP(S)
+output URLs among them, and no active video rows. No historical repair is indicated
+by this inventory. It is not proof that the failure never occurred.
