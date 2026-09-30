@@ -23,21 +23,18 @@ import {
   toIsoTimestamp,
   withGenerationTimingEstimate,
 } from '@/lib/generation-timing';
-import { createGenerationOutputPreview } from '@/lib/generation-output-preview';
+import { enqueueGenerationOutputImportJob } from '@/lib/generation-output-import-jobs';
 import {
   settleGenerationFailed,
-  settleGenerationSucceeded,
 } from '@/lib/generation-services';
 import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import {
   fetchStatusPollWithRetry,
   fetchWithProviderTimeout,
-  PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
   PROVIDER_STATUS_POLL_TIMEOUT_MS,
   withProviderModel,
 } from '@/lib/provider-fetch';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
-import { summarizeMediaToolError } from '@/lib/media-tool-error';
 import { readProviderFailureReason, UNKNOWN_PROVIDER_FAILURE } from '@/lib/provider-failure-messages';
 
 const MOTION_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration, error_message';
@@ -61,9 +58,8 @@ type MotionStatusGenerationRow = {
 export type MotionGenerationStatusDependencies = {
   resolveStoredMediaUrl: typeof resolveOwnedStoredMediaUrl;
   fetchWithProviderTimeout: typeof fetchWithProviderTimeout;
-  settleGenerationSucceeded: typeof settleGenerationSucceeded;
+  enqueueGenerationOutputImportJob: typeof enqueueGenerationOutputImportJob;
   settleGenerationFailed: typeof settleGenerationFailed;
-  createGenerationOutputPreview: typeof createGenerationOutputPreview;
   notifyGenerationStatus: typeof notifyGenerationStatus;
   withBackendJobLock: typeof withBackendJobLock;
   tryAcquireGenerationProviderStatusThrottle: typeof tryAcquireGenerationProviderStatusThrottle;
@@ -90,9 +86,8 @@ function resolveDependencies(
   return {
     resolveStoredMediaUrl: dependencies?.resolveStoredMediaUrl ?? resolveOwnedStoredMediaUrl,
     fetchWithProviderTimeout: dependencies?.fetchWithProviderTimeout ?? fetchStatusPollWithRetry,
-    settleGenerationSucceeded: dependencies?.settleGenerationSucceeded ?? settleGenerationSucceeded,
+    enqueueGenerationOutputImportJob: dependencies?.enqueueGenerationOutputImportJob ?? enqueueGenerationOutputImportJob,
     settleGenerationFailed: dependencies?.settleGenerationFailed ?? settleGenerationFailed,
-    createGenerationOutputPreview: dependencies?.createGenerationOutputPreview ?? createGenerationOutputPreview,
     notifyGenerationStatus: dependencies?.notifyGenerationStatus ?? notifyGenerationStatus,
     withBackendJobLock: dependencies?.withBackendJobLock ?? withBackendJobLock,
     tryAcquireGenerationProviderStatusThrottle:
@@ -129,113 +124,6 @@ function getMotionResultUrl(resultJson: unknown): string | null {
   return Array.isArray(result.resultUrls) && typeof result.resultUrls[0] === 'string'
     ? result.resultUrls[0]
     : null;
-}
-
-async function persistMotionOutput({
-  supabase,
-  settlementSupabase,
-  predictionId,
-  userId,
-  tempUrl,
-  completedAt,
-  dependencies,
-}: {
-  supabase: SupabaseClient;
-  settlementSupabase: SupabaseClient;
-  predictionId: string;
-  userId: string;
-  tempUrl: string;
-  completedAt?: string | null;
-  dependencies: MotionGenerationStatusDependencies;
-}): Promise<{ status: 'succeeded' | 'failed'; output: string | null; error: string | null }> {
-  const settledAt = completedAt ?? new Date().toISOString();
-  let output: string | null = tempUrl;
-  let settlementOutputUrl: string | null = tempUrl;
-  let previewUrl: string | null = null;
-  let previewThumbhash: string | null = null;
-  let previewStatus: 'ready' | 'failed' | null = null;
-  let previewError: string | null = null;
-  let previewGeneratedAt: string | null = null;
-
-  try {
-    const videoRes = await dependencies.fetchWithProviderTimeout(
-      tempUrl,
-      {},
-      PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
-      fetch,
-      'KIE motion media download',
-    );
-    if (!videoRes.ok) {
-      throw new Error('Failed to download video from Kie');
-    }
-    const videoBlob = await videoRes.blob();
-
-    const fileName = `${userId}/generated_${predictionId}.mp4`;
-    // Service-role: generated_videos grants `authenticated` SELECT only, so an
-    // upload on the user client fails with "new row violates row-level security
-    // policy". Reads below stay on the user client, which the SELECT policy allows.
-    const { error: uploadError } = await settlementSupabase.storage
-      .from('generated_videos')
-      .upload(fileName, videoBlob, {
-        contentType: 'video/mp4',
-        upsert: true,
-      });
-
-    if (uploadError) {
-      logBackendError('upload_to_supabase_failed', { error: uploadError });
-      output = tempUrl;
-    } else {
-      const storagePath = `generated_videos/${fileName}`;
-      let preview: Awaited<ReturnType<typeof createGenerationOutputPreview>> = null;
-      try {
-        preview = await dependencies.createGenerationOutputPreview({
-          body: videoBlob,
-          category: 'video',
-          contentType: videoBlob.type || 'video/mp4',
-          storagePath,
-          supabase,
-        });
-      } catch (posterError) {
-        logBackendError('failed_to_create_motion_generation_preview_poster', { error: posterError });
-        previewError = summarizeMediaToolError(posterError, 'Preview generation failed.');
-      }
-      previewUrl = preview?.previewStoragePath ?? null;
-      previewThumbhash = preview?.previewThumbhash ?? null;
-      previewStatus = preview ? 'ready' : 'failed';
-      previewGeneratedAt = preview ? new Date().toISOString() : null;
-
-      const { data: signedData } = await supabase.storage
-        .from('generated_videos')
-        .createSignedUrl(fileName, 3600);
-      output = signedData?.signedUrl || tempUrl;
-      settlementOutputUrl = storagePath;
-    }
-  } catch (error) {
-    logBackendError('error_persisting_video_to_storage', { error: error });
-    output = tempUrl;
-  }
-
-  const status = await dependencies.settleGenerationSucceeded(settlementSupabase, {
-    predictionId,
-    outputUrl: settlementOutputUrl,
-    previewUrl,
-    previewThumbhash,
-    previewStatus,
-    previewAttemptCount: previewStatus ? 1 : null,
-    previewError,
-    previewGeneratedAt,
-    completedAt: settledAt,
-  });
-
-  if (status === 'failed') {
-    return {
-      status,
-      output: null,
-      error: 'Generation was already settled as failed.',
-    };
-  }
-
-  return { status, output, error: null };
 }
 
 async function notifyTerminalStatus({
@@ -276,7 +164,6 @@ export async function getMotionGenerationStatusForRoute({
   request,
   predictionId,
   userId,
-  supabase,
   createAdminSupabase,
   kieApiKey,
   dependencies,
@@ -396,7 +283,7 @@ export async function getMotionGenerationStatusForRoute({
       fallbackStartedAtMs: localGeneration.created_at ? Date.parse(localGeneration.created_at) : null,
     });
     let status = timing.appStatus;
-    let output: string | null = null;
+    const output: string | null = null;
     let error: string | null = null;
 
     if (status === 'succeeded') {
@@ -404,18 +291,18 @@ export async function getMotionGenerationStatusForRoute({
         const tempUrl = getMotionResultUrl(data.data?.resultJson);
 
         if (tempUrl) {
-          const persisted = await persistMotionOutput({
-            supabase,
-            settlementSupabase: admin,
-            predictionId,
-            userId: userId || localGeneration.user_id,
-            tempUrl,
-            completedAt: toIsoTimestamp(timing.completedAtMs),
-            dependencies: resolvedDependencies,
+          // Keep settlement behind the durable import, including storage retries.
+          await resolvedDependencies.enqueueGenerationOutputImportJob({
+            client: admin,
+            generationId: localGeneration.id,
+            outputUrls: [tempUrl],
+            providerCompletedAt: toIsoTimestamp(timing.completedAtMs),
           });
-          status = persisted.status;
-          output = persisted.output;
-          error = persisted.error;
+          return buildLockedGenerationStatusPayload(
+            { ...localGeneration, status: 'processing', completed_at: null },
+            estimatedTotalMs,
+            GENERATION_PROVIDER_STATUS_RETRY_AFTER_MS,
+          );
         } else {
           return buildLockedGenerationStatusPayload(
             { ...localGeneration, status: 'processing', completed_at: null },

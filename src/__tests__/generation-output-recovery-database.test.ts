@@ -1,3 +1,4 @@
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
@@ -6,8 +7,10 @@ import { join } from 'node:path';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const provider = vi.hoisted(() => ({ fetch: vi.fn(), stage: vi.fn() }));
+const provider = vi.hoisted(() => ({ fetch: vi.fn(), stage: vi.fn(), notify: vi.fn() }));
+vi.mock('@/lib/mobile-notifications', () => ({ notifyGenerationStatus: (...args: unknown[]) => provider.notify(...args) }));
 vi.mock('@/lib/staged-remote-media', () => ({ stageAllowlistedRemoteMedia: (...args: unknown[]) => provider.stage(...args) }));
+vi.mock('@/lib/generation-video-preview', () => ({ createGenerationVideoPosterFromFile: vi.fn().mockResolvedValue(null) }));
 vi.mock('@/lib/generation-media-preview', () => ({ createGenerationImagePreviewFromFile: vi.fn().mockResolvedValue(null) }));
 vi.mock('@/lib/provider-fetch', async (original) => ({
   ...await original<typeof import('@/lib/provider-fetch')>(),
@@ -32,6 +35,7 @@ describe.skipIf(!connectionString)('generation output recovery with real queue a
     vi.stubEnv('KIE_AI_API_KEY', 'local-test-key');
     vi.resetModules();
     provider.fetch.mockReset();
+    provider.notify.mockReset().mockResolvedValue(null);
     temporaryDirectory = await mkdtemp(join(tmpdir(), 'generation-import-audit-'));
     const path = join(temporaryDirectory, 'output.png');
     await writeFile(path, 'synthetic-media-bytes');
@@ -53,10 +57,12 @@ describe.skipIf(!connectionString)('generation output recovery with real queue a
     client = {
       storage: { from: () => ({ upload }) },
       from(table: string) {
+        if (table === 'profiles') return { select: () => ({ eq: async () => ({ data: [], error: null }) }) };
         if (table !== 'generations') throw new Error(`Unexpected table ${table}`);
         let key = ''; let value: unknown;
         const query = {
           select: () => query,
+          in: () => query,
           eq: (column: string, next: unknown) => { key = column; value = next; return query; },
           single: async () => {
             if (!['prediction_id', 'id'].includes(key)) throw new Error('Unexpected filter');
@@ -204,5 +210,62 @@ describe.skipIf(!connectionString)('generation output recovery with real queue a
     expect((await db.query('select status from public.generation_output_import_jobs where generation_id=$1', [generationId])).rows[0].status)
       .toBe('succeeded');
   });
+
+  for (const kind of ['video', 'motion', 'veo'] as const) {
+    for (const failure of ['download', 'upload'] as const) {
+      it(`${kind}: queues status output and recovers a ${failure} outage before settlement`, async () => {
+        await seed(true);
+        await db.query('update public.generations set model=$2,creation_mode=$3,workflow_settings=$4 where id=$1',
+          [generationId, kind === 'motion' ? 'kling-2.6/motion-control' : kind === 'veo' ? 'veo3' : 'kling-3.0-video',
+            kind === 'motion' ? 'motion' : null, kind === 'veo' ? { model: 'veo-3.1' } : null]);
+        const temporaryUrl = 'https://provider.invalid/temporary.mp4';
+        const fetch = vi.fn(async (url: unknown) => String(url).startsWith('https://api.kie.ai/')
+          ? new Response(JSON.stringify({ code: 200, ...payload(kind === 'veo', [temporaryUrl]) }))
+          : new Response('synthetic media outage', { status: 503 }));
+        const { getVideoGenerationStatusForRoute } = await import('@/lib/video-generation-status-service');
+        const { getMotionGenerationStatusForRoute } = await import('@/lib/motion-generation-status-service');
+        const run = kind === 'motion' ? getMotionGenerationStatusForRoute : getVideoGenerationStatusForRoute;
+        const notify = vi.fn();
+        const poll = () => run({ request: new Request('http://localhost/api/status'), predictionId, userId,
+          supabase: client, createAdminSupabase: () => client, kieApiKey: 'local-test-key',
+          dependencies: {
+            fetchWithProviderTimeout: fetch,
+            withBackendJobLock: async (_client, _options, task) => ({ acquired: true, value: await task() }),
+            tryAcquireGenerationProviderStatusThrottle: async () => true,
+            notifyGenerationStatus: notify,
+          },
+        });
+        const contract = kind === 'motion' ? mobileApiContract.endpoints.getMotionGeneration : mobileApiContract.endpoints.getVideoGeneration;
+        const { getGenerationRouteResponse } = await import('@/lib/generation-route-adapter-service');
+        const response = await getGenerationRouteResponse({
+          request: new Request('http://localhost/api/status'),
+          getGenerationForRoute: poll,
+        });
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject(contract.responseVariants.importPending);
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(upload).not.toHaveBeenCalled();
+        expect(notify).not.toHaveBeenCalled();
+        expect(await state()).toMatchObject({ status: 'processing', output_url: null, credits: 500, refunded: false, imports: 1 });
+        expect(provider.notify).not.toHaveBeenCalled();
+        const stage = async () => ({ filePath: join(temporaryDirectory, 'output.png'), sourceName: 'output.mp4', contentType: 'video/mp4', cleanup: async () => {} });
+        provider.stage.mockImplementation(stage);
+        const normalUpload = upload.getMockImplementation()!;
+        if (failure === 'download') provider.stage.mockRejectedValueOnce(new Error('synthetic download outage'));
+        else upload.mockImplementationOnce(async (path, stream) => { await normalUpload(path, stream); return { error: new Error('synthetic storage outage') }; });
+        const { processGenerationOutputImportJobs } = await import('@/lib/generation-output-import-jobs-processor');
+        expect(await processGenerationOutputImportJobs({ client, lockedBy: 'poll-import', limit: 1 })).toMatchObject({ retried: 1, completed: 0 });
+        expect(await state()).toMatchObject({ status: 'processing', output_url: null, credits: 500, refunded: false });
+        expect(provider.notify).not.toHaveBeenCalled();
+        const beforeReplay = (await db.query('select id,attempt_count from public.generation_output_import_jobs where generation_id=$1', [generationId])).rows[0];
+        expect(await poll()).toMatchObject({ ok: true, body: contract.responseVariants.importPending });
+        expect((await db.query('select id,attempt_count from public.generation_output_import_jobs where generation_id=$1', [generationId])).rows[0]).toEqual(beforeReplay);
+        await db.query('update public.generation_output_import_jobs set next_attempt_at=now() where generation_id=$1', [generationId]);
+        expect(await processGenerationOutputImportJobs({ client, lockedBy: 'poll-recovery', limit: 1 })).toMatchObject({ retried: 0, completed: 1 });
+        expect(await state()).toMatchObject({ status: 'succeeded', output_url: `generated_videos/${userId}/generated_${predictionId}.mp4`, credits: 500, refunded: false, imports: 1 });
+        expect(provider.notify).toHaveBeenCalledExactlyOnceWith(client, expect.objectContaining({ id: generationId, user_id: userId }), 'succeeded');
+      });
+    }
+  }
 
 });

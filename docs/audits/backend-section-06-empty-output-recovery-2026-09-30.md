@@ -1,7 +1,7 @@
 # Section 6B — retry incomplete provider success results
 
 Base: `65890e3146309b5e62fac155f72983de4475a7a1`. Date: 2026-09-30.
-Status: reproduced and fixed locally; CI/release pending.
+Status: deployed in PR #248; see the adjacent Section 6B release report for CI and live verification.
 
 ## Finding
 

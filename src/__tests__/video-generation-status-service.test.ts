@@ -104,7 +104,7 @@ describe('getVideoGenerationStatusForRoute', () => {
       status: 'processing', output_url: null, completed_at: null,
       ...(shape === 'veo-empty' ? { model: 'veo3', workflow_settings: { model: 'veo-3.1' } } : {}),
     });
-    const settle = vi.fn().mockResolvedValue('succeeded');
+    const enqueue = vi.fn().mockResolvedValue('import-job');
     const notify = vi.fn();
     const result = await getVideoGenerationStatusForRoute({
       request: new Request('http://localhost/api/status'), predictionId: 'task-video-1', userId: 'user-1',
@@ -119,12 +119,12 @@ describe('getVideoGenerationStatusForRoute', () => {
             ? { successFlag: 1, response: { resultUrls: [] } }
             : { state: 'success', resultJson: shape === 'malformed' ? '{broken' : '{"resultUrls":[]}' },
         }), { status: 200 })),
-        settleGenerationSucceeded: settle,
+        enqueueGenerationOutputImportJob: enqueue,
         notifyGenerationStatus: notify,
       },
     });
     expect(result).toMatchObject({ ok: true, body: mobileApiContract.endpoints.getVideoGeneration.responseVariants.outputPending });
-    expect(settle).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
     expect(notify).not.toHaveBeenCalled();
   });
   it('returns cached succeeded output from storage without polling the provider', async () => {
