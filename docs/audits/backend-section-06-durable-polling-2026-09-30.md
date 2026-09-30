@@ -1,7 +1,7 @@
 # Section 6C — durable imports from video and motion polling
 
 Base: `3db9a9c7e5becec035fe131208ffeb8286e55101`. Date: 2026-09-30.
-Status: reproduced and fixed locally; CI/release pending.
+Status: deployed and verified in PR #249; see the adjacent Section 6C release report.
 
 ## Finding and reproduction
 

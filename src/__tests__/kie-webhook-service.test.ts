@@ -243,12 +243,12 @@ describe('kie webhook service', () => {
       p_generation_id: 'gen-1',
       p_prediction_id: 'task-1',
     });
-    // Still a 200: the provider must not retry a payload we can no longer use.
+    // A confirmed durable record can be acknowledged without further retries.
     expect(result.status).toBe(200);
     expect(mocks.enqueueGenerationCompletionJob).not.toHaveBeenCalled();
   });
 
-  it('never fails the webhook when reconciliation bookkeeping errors', async () => {
+  it('requests redelivery when reconciliation cannot be recorded', async () => {
     mocks.attachGenerationProviderTask.mockResolvedValueOnce('already_settled');
     rpc.mockRejectedValueOnce(new Error('ledger unavailable') as never);
 
@@ -266,8 +266,8 @@ describe('kie webhook service', () => {
     });
 
     expect(result).toEqual({
-      body: { received: true, predictionId: 'task-1' },
-      status: 200,
+      body: { error: 'Provider reconciliation is temporarily unavailable. Please retry.' },
+      status: 503,
     });
   });
 
