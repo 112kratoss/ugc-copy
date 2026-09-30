@@ -72,7 +72,9 @@ export default async function AdminPayoutsPage({
           <Surface key={request.id} className="p-4">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <Text as="h3" variant="cardTitle">
-                {request.amountUsd} to {request.displayName ?? request.username ?? shortId(request.userId)}
+                {request.amountUsd} to {request.userId
+                  ? request.displayName ?? request.username ?? shortId(request.userId)
+                  : 'Deleted creator'}
               </Text>
               <Text as="span" variant="caption">
                 {formatRelative(request.requestedAt)} · {formatTimestamp(request.requestedAt)}
@@ -83,9 +85,17 @@ export default async function AdminPayoutsPage({
               <Field label="Method">{request.payoutMethod}</Field>
               <Field label="Destination">{request.payoutDetails}</Field>
               <Field label="Lifetime earned">
-                {formatTokenSubunitsAsUsd(request.lifetimeEarnedTokenSubunits)}
+                {request.lifetimeEarnedTokenSubunits === null
+                  ? 'Unavailable after account deletion'
+                  : formatTokenSubunitsAsUsd(request.lifetimeEarnedTokenSubunits)}
               </Field>
             </div>
+
+            {request.userId === null && request.detachedUserId ? (
+              <div className="mt-3 break-all">
+                <Field label="Retained creator ID">{request.detachedUserId}</Field>
+              </div>
+            ) : null}
 
             <PayoutActions requestId={request.id} amountUsd={request.amountUsd} />
           </Surface>
@@ -110,9 +120,18 @@ export default async function AdminPayoutsPage({
                 </Td>
                 <Td>{request.amountUsd}</Td>
                 <Td>
-                  <Link href={`/admin/users/${request.userId}`} className="underline">
-                    {request.displayName || (request.username ? `@${request.username}` : shortId(request.userId))}
-                  </Link>
+                  {request.userId ? (
+                    <Link href={`/admin/users/${request.userId}`} className="underline">
+                      {request.displayName || (request.username ? `@${request.username}` : shortId(request.userId))}
+                    </Link>
+                  ) : (
+                    <span>
+                      Deleted creator
+                      {request.detachedUserId ? (
+                        <span className="block break-all text-xs">{request.detachedUserId}</span>
+                      ) : null}
+                    </span>
+                  )}
                 </Td>
                 <Td>{request.payoutMethod}</Td>
                 <Td mono>{request.externalReference ?? '—'}</Td>
