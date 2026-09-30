@@ -302,6 +302,12 @@ export async function getImageGenerationStatusForRoute({
       } catch (handledError) {
         logBackendError('error_handling_success_status', { error: handledError });
       }
+      // Keep polling until the result is usable and its import is durable.
+      return buildLockedGenerationStatusPayload(
+        { ...localGeneration, status: 'processing', completed_at: null },
+        estimatedTotalMs,
+        GENERATION_PROVIDER_STATUS_RETRY_AFTER_MS,
+      );
     } else if (status === 'failed') {
       const reason = readProviderFailureReason(data.data);
       error = reason ?? UNKNOWN_PROVIDER_FAILURE;

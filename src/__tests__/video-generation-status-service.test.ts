@@ -1,3 +1,4 @@
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -97,6 +98,35 @@ function createStatusClientMock(
 }
 
 describe('getVideoGenerationStatusForRoute', () => {
+
+  it.each(['empty', 'malformed', 'veo-empty'])('keeps an incomplete %s provider success retryable', async (shape) => {
+    const admin = createStatusClientMock({
+      status: 'processing', output_url: null, completed_at: null,
+      ...(shape === 'veo-empty' ? { model: 'veo3', workflow_settings: { model: 'veo-3.1' } } : {}),
+    });
+    const settle = vi.fn().mockResolvedValue('succeeded');
+    const notify = vi.fn();
+    const result = await getVideoGenerationStatusForRoute({
+      request: new Request('http://localhost/api/status'), predictionId: 'task-video-1', userId: 'user-1',
+      supabase: admin.client,
+      createAdminSupabase: () => admin.client, kieApiKey: 'test-key',
+      dependencies: {
+        withBackendJobLock: async (_client, _options, task) => ({ acquired: true, value: await task() }),
+        tryAcquireGenerationProviderStatusThrottle: async () => true,
+        fetchWithProviderTimeout: vi.fn().mockResolvedValue(new Response(JSON.stringify({
+          code: 200,
+          data: shape === 'veo-empty'
+            ? { successFlag: 1, response: { resultUrls: [] } }
+            : { state: 'success', resultJson: shape === 'malformed' ? '{broken' : '{"resultUrls":[]}' },
+        }), { status: 200 })),
+        settleGenerationSucceeded: settle,
+        notifyGenerationStatus: notify,
+      },
+    });
+    expect(result).toMatchObject({ ok: true, body: mobileApiContract.endpoints.getVideoGeneration.responseVariants.outputPending });
+    expect(settle).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
   it('returns cached succeeded output from storage without polling the provider', async () => {
     const userClient = createStatusClientMock();
     const adminClient = createStatusClientMock();

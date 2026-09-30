@@ -11,10 +11,7 @@ import {
   KIE_API_KEY,
   requireApiKey,
 } from '@/lib/generation-service-core';
-import {
-  settleGenerationFailed,
-  settleGenerationSucceeded,
-} from '@/lib/generation-settlement';
+import { settleGenerationFailed } from '@/lib/generation-settlement';
 import { readProviderFailureReason } from '@/lib/provider-failure-messages';
 import { extractKieWebhookTaskId } from '@/lib/kie-webhook';
 import { enqueueGenerationOutputImportJob } from '@/lib/generation-output-import-jobs';
@@ -140,10 +137,9 @@ async function syncSingleGenerationStatusFromProviderPayload(
           toIsoTimestamp(timing.completedAtMs),
         );
       } else {
-        return settleGenerationSucceeded(creditSupabase, {
-          predictionId: generation.prediction_id,
-          completedAt: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-        });
+        // An incomplete callback is not a terminal result. Poll fresh provider
+        // state so replaying this saved payload can still recover its output.
+        return null;
       }
     }
 
@@ -196,10 +192,9 @@ async function syncSingleGenerationStatusFromProviderPayload(
         );
       }
     } else {
-      return settleGenerationSucceeded(creditSupabase, {
-        predictionId: generation.prediction_id,
-        completedAt: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-      });
+      // An incomplete callback is not a terminal result. Poll fresh provider
+      // state so replaying this saved payload can still recover its output.
+      return null;
     }
   }
 
@@ -263,10 +258,7 @@ async function syncSingleGenerationStatus(
           toIsoTimestamp(timing.completedAtMs),
         );
       } else {
-        return settleGenerationSucceeded(creditSupabase, {
-          predictionId: generation.prediction_id,
-          completedAt: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-        });
+        throw new Error('Provider reported success without a usable output URL; retrying status reconciliation.');
       }
     }
 
@@ -333,10 +325,7 @@ async function syncSingleGenerationStatus(
         );
       }
     } else {
-      return settleGenerationSucceeded(creditSupabase, {
-        predictionId: generation.prediction_id,
-        completedAt: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-      });
+      throw new Error('Provider reported success without a usable output URL; retrying status reconciliation.');
     }
   }
 

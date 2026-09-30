@@ -1,7 +1,9 @@
 # Section 5L — retained payout reporting and watchdog diagnosis
 
 Date: 2026-09-30. Base: `b04ccb46cfecb042b8215e521e0633bc44b9cdf9`.
-Status: reproduced and fixed locally; release verification pending.
+Status: deployed and verified in PR #247 on main `65890e3146309b5e62fac155f72983de4475a7a1`.
+Production release `36672523382` succeeded 2026-09-30 05:18:19 UTC. See the
+companion release report for exact-main CI and live checks.
 
 ## Retained payouts poison mixed creator lookups
 
