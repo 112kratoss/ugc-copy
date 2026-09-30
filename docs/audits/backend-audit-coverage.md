@@ -25,7 +25,7 @@ passed, failed, untested and externally blocked checks. That mapping is pending.
 | Database ownership/permissions | Section 2 ownership/grant/RLS work; subsequent money RPC permission regressions | Map every privileged RPC/table to callers and behavior; cover remaining noncommerce surfaces |
 | Credits/payments/refunds | Sections 3–5; atomic settlement, receipt identity, event identity, reversal binding, rollback and concurrency evidence | Actual provider-backed purchase/refund delivery; remaining ordering/recovery combinations |
 | Marketplace/creator earnings/payouts | Earlier Section 5 batches plus deployed 5J; 5K fixes legacy restore ownership, a restore/repurchase deadlock and duplicate revenue reporting (deployed in PR #246 on `b04ccb46`) | Complete web/mobile/credit lifecycle matrix, creator payout recovery and reporting edge cases (5L detached reporting deployed in PR #247); genuine provider events |
-| Generation/provider callbacks | Prior implementation tests; Section 6A local 20-way queue, lease, settlement and task-attachment races passed; Section 6B incomplete-output callback/polling bug deployed in PR #248; Section 6C durable video/motion polling deployed in PR #249 with real-DB recovery checks; Section 6D grace/callback ordering checks and reconciliation retry fix locally verified | Systematic start/callback/poll races, failures, refunds and recovery with provider evidence |
+| Generation/provider callbacks | Prior implementation tests; Section 6A local 20-way queue, lease, settlement and task-attachment races passed; Section 6B incomplete-output callback/polling bug deployed in PR #248; Section 6C durable video/motion polling deployed in PR #249 with real-DB recovery checks; Section 6D grace/callback ordering checks and reconciliation retry fix deployed in PR #250; Section 6E incomplete creation-receipt recovery locally verified | Systematic start/callback/poll races, failures, refunds and recovery with provider evidence |
 | Workflow/template execution | Prior implementation tests and partial ownership checks | Execution authorization, partial failure, retries, cancellation, recovery and billing invariants |
 | Media/storage/signing/retention | Prior implementation tests and partial ownership checks | Upload/import validation, signed access, lifecycle deletion and retention behavior |
 | Posts/feeds/moderation/community | Prior implementation tests and partial ownership checks | Behavioral authorization, visibility, moderation propagation, pagination and community mutations |
@@ -39,9 +39,10 @@ passed, failed, untested and externally blocked checks. That mapping is pending.
    was dismissed; the live authenticated ops HTTP response remains unavailable locally.
 2. Complete the remaining commerce lifecycle/payout matrix, separating synthetic
    database evidence from externally blocked provider delivery.
-3. Sections 6B/6C are deployed; live build `5009ce0c`. Section 6D grace expiry
-   and callback/reaper recovery is locally verified, awaiting release gates. Next:
-   start-route idempotency/lost provider response and worker termination, then workflow/template
+3. Sections 6B–6D are deployed; live build `8a9eda28`. Section 6D verifies grace
+   expiry/callback ordering and fixes reconciliation-write retry. Section 6E
+   incomplete receipt/start replay is locally verified, awaiting release. Next:
+   ambiguity-marker write failure and worker termination, then workflow/template
    execution; continue the other areas above without claiming them complete from
    code inventory alone.
 

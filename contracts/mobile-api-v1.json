@@ -232,6 +232,16 @@
         "status": "processing",
         "remainingCredits": 112,
         "cost": 8
+      },
+      "errors": {
+        "submissionPending": {
+          "status": 409,
+          "response": {
+            "code": "submission_pending",
+            "generationId": "generation-held-image-1",
+            "error": "We could not confirm this request with the generation provider in time. It may still be running — check Studio in a few minutes. Your credits stay reserved until it resolves, and are returned automatically if it does not."
+          }
+        }
       }
     },
     "getImageGeneration": {
