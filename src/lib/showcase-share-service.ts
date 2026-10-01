@@ -3,6 +3,7 @@ import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { sendDeferrableNotification, type RunAfterResponse } from '@/lib/deferrable-notification';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { notifyPostSocialActivity } from '@/lib/mobile-notifications';
 import { recordPostShareEvent } from '@/lib/post-share-events';
@@ -148,11 +149,18 @@ export async function shareShowcasePostForRoute({
   channel,
   dependencies,
   referenceId,
+  runAfterResponse,
   serviceClient,
   sourceSurface,
 }: ShowcaseSharePayload & {
   actorUserId: string | null;
   dependencies?: Partial<ShowcaseShareServiceDependencies>;
+  /**
+   * Runs a task once the caller has answered its request. The route passes one
+   * so the creator's notification stops holding the sharer's answer back;
+   * without it the notification is sent before this returns.
+   */
+  runAfterResponse?: RunAfterResponse;
   serviceClient: SupabaseClient;
 }): Promise<ShowcaseShareServiceResult> {
   const resolvedDependencies = resolveDependencies(dependencies);
@@ -190,12 +198,19 @@ export async function shareShowcasePostForRoute({
   }, serviceClient);
 
   if (actorUserId) {
-    await resolvedDependencies.notifyPostSocialActivity(serviceClient, {
-      type: 'post_shared',
-      recipientUserId: post.user_id,
-      actorUserId,
-      postId: post.id,
-    });
+    // The share is recorded; what is left is telling the creator. The first
+    // share of a post in a quarter-hour ends in a push request to Expo for
+    // their devices, and the web's "link copied" confirmation waits on this
+    // answer. So the answer goes first wherever it can.
+    await sendDeferrableNotification(
+      runAfterResponse,
+      () => resolvedDependencies.notifyPostSocialActivity(serviceClient, {
+        type: 'post_shared',
+        recipientUserId: post.user_id,
+        actorUserId,
+        postId: post.id,
+      }),
+    );
   }
 
   return {

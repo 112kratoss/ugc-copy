@@ -4,7 +4,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * Notification history the real notifier can run against.
  *
  * It answers the two tables `createMobileNotification` touches before it
- * pushes, records what was looked up and written, and can hold every
+ * pushes, and the one call a grouped notification makes in place of the
+ * first, records what was looked up and written, and can hold every
  * notification at its first step. Holding is how a test stands in for a push
  * fan-out that has not finished: push is switched off in the preferences it
  * returns, so nothing here reaches the network.
@@ -15,8 +16,22 @@ export function createMobileNotificationHistory() {
   let held: Promise<void> | null = null;
   let releaseHeld = () => {};
 
+  function storedRow(values: Record<string, unknown>) {
+    return {
+      id: `notification-${sent.length}`,
+      ...values,
+      event_count: 1,
+      is_read: false,
+      created_at: '2026-10-01T00:00:00.000Z',
+      updated_at: '2026-10-01T00:00:00.000Z',
+    };
+  }
+
   return {
-    /** Dedupe keys, in the order the notifier began work on them. */
+    /**
+     * Dedupe keys, or aggregation keys for grouped notifications, in the order
+     * the notifier began work on them.
+     */
     started,
     /** Notification rows, in the order they were written. */
     sent,
@@ -54,17 +69,7 @@ export function createMobileNotificationHistory() {
               select() {
                 return {
                   async single() {
-                    return {
-                      data: {
-                        id: `notification-${sent.length}`,
-                        ...values,
-                        event_count: 1,
-                        is_read: false,
-                        created_at: '2026-10-01T00:00:00.000Z',
-                        updated_at: '2026-10-01T00:00:00.000Z',
-                      },
-                      error: null,
-                    };
+                    return { data: storedRow(values), error: null };
                   },
                 };
               },
@@ -99,19 +104,53 @@ export function createMobileNotificationHistory() {
 
       throw new Error(`Unexpected notification table: ${table}`);
     },
+    handlesRpc(name: string) {
+      return name === 'upsert_mobile_notification';
+    },
+    /**
+     * A grouped notification (a save or a share) is written by one call that
+     * either starts a group or adds to one. Here it always starts one, which
+     * is the case that goes on to push.
+     */
+    async rpc(name: string, args: Record<string, unknown> = {}) {
+      if (name !== 'upsert_mobile_notification') {
+        throw new Error(`Unexpected notification call: ${name}`);
+      }
+
+      started.push(String(args.p_aggregation_key));
+      await held;
+
+      const values = {
+        user_id: args.p_user_id,
+        actor_user_id: args.p_actor_user_id,
+        type: args.p_type,
+        category: args.p_category,
+        title: args.p_title,
+        body: args.p_body,
+        deep_link: args.p_deep_link,
+        object_type: args.p_object_type,
+        object_id: args.p_object_id,
+        dedupe_key: args.p_dedupe_key,
+        aggregation_key: args.p_aggregation_key,
+      };
+      sent.push(values);
+      return { data: { notification: storedRow(values), wasCreated: true }, error: null };
+    },
   };
 }
 
 export type MobileNotificationHistory = ReturnType<typeof createMobileNotificationHistory>;
 
-/** The same client, with its notification tables served by `history`. */
+/** The same client, with its notification tables and its grouped-notification call served by `history`. */
 export function withMobileNotificationHistory(
   client: SupabaseClient,
   history: MobileNotificationHistory,
 ): SupabaseClient {
   return {
     from: (table: string) => (history.handles(table) ? history.from(table) : client.from(table)),
-    rpc: (name: string, args?: Record<string, unknown>) => client.rpc(name, args),
+    rpc: (name: string, args?: Record<string, unknown>) => (
+      history.handlesRpc(name) ? history.rpc(name, args) : client.rpc(name, args)
+    ),
   } as unknown as SupabaseClient;
 }
 

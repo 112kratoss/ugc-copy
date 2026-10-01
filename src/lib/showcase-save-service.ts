@@ -3,6 +3,7 @@ import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { sendDeferrableNotification, type RunAfterResponse } from '@/lib/deferrable-notification';
 import {
   findPublicPostReferenceByIdOrGenerationId,
   isMissingPostsSchemaError,
@@ -257,6 +258,7 @@ export async function saveShowcasePostForRoute({
   dependencies,
   referenceId,
   requestedSaveState,
+  runAfterResponse,
   serviceClient,
   sourceSurface,
 }: {
@@ -264,6 +266,12 @@ export async function saveShowcasePostForRoute({
   dependencies?: Partial<ShowcaseSaveServiceDependencies>;
   referenceId: string;
   requestedSaveState: boolean | null;
+  /**
+   * Runs a task once the caller has answered its request. The route passes one
+   * so the creator's notification stops holding the saver's answer back;
+   * without it the notification is sent before this returns.
+   */
+  runAfterResponse?: RunAfterResponse;
   serviceClient: SupabaseClient;
   sourceSurface: unknown;
 }): Promise<ShowcaseSaveServiceResult> {
@@ -358,12 +366,19 @@ export async function saveShowcasePostForRoute({
   }
 
   if (isSaved && (requestedSaveState === null || changed)) {
-    await resolvedDependencies.notifyPostSocialActivity(serviceClient, {
-      type: 'post_saved',
-      recipientUserId: post.user_id,
-      actorUserId,
-      postId: post.id,
-    });
+    // The save is recorded; what is left is telling the creator. The first
+    // save of a post in a quarter-hour ends in a push request to Expo for
+    // their devices, and the app holds its later saves behind this answer.
+    // So the answer goes first wherever it can.
+    await sendDeferrableNotification(
+      runAfterResponse,
+      () => resolvedDependencies.notifyPostSocialActivity(serviceClient, {
+        type: 'post_saved',
+        recipientUserId: post.user_id,
+        actorUserId,
+        postId: post.id,
+      }),
+    );
   }
 
   return {

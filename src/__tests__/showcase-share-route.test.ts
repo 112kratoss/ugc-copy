@@ -11,6 +11,18 @@ const findPublicPostReferenceByIdOrGenerationIdMock = vi.fn<(id?: string) => Pro
 const createUserClientMock = vi.fn();
 const rpcMock = vi.fn();
 const createServiceClientMock = vi.fn(() => ({ service: true, rpc: rpcMock }));
+// Stands in for Next's after(): it runs the task on the spot unless a test
+// holds it back to look at the answer first.
+const afterMock = vi.fn((task: () => Promise<unknown>): unknown => task());
+
+vi.mock('next/server', async () => {
+  const actual = await vi.importActual<typeof import('next/server')>('next/server');
+
+  return {
+    ...actual,
+    after: afterMock,
+  };
+});
 
 vi.mock('@/lib/post-share-events', () => ({
   recordPostShareEvent: (payload: unknown) => recordPostShareEventMock(payload),
@@ -44,6 +56,7 @@ describe('/api/showcase/share route', () => {
     vi.resetModules();
     recordPostShareEventMock.mockClear();
     notifyPostSocialActivityMock.mockClear();
+    afterMock.mockReset();
     findPublicPostReferenceByIdOrGenerationIdMock.mockReset();
     createUserClientMock.mockReset();
     createServiceClientMock.mockClear();
@@ -116,6 +129,55 @@ describe('/api/showcase/share route', () => {
       p_limit: 120,
       p_window_seconds: 600,
     });
+    expect(afterMock).toHaveBeenCalledTimes(1);
+    expect(notifyPostSocialActivityMock).toHaveBeenCalledWith({ service: true, rpc: rpcMock }, {
+      type: 'post_shared',
+      recipientUserId: 'creator-1',
+      actorUserId: 'user-1',
+      postId: 'post-1',
+    });
+  });
+
+  it('queues the share notification behind the response instead of sending it first', async () => {
+    findPublicPostReferenceByIdOrGenerationIdMock.mockResolvedValue({
+      id: 'post-1',
+      generation_id: 'gen-1',
+      user_id: 'creator-1',
+      visibility: 'public',
+      category: 'image',
+      prompt: 'Prompt',
+      source_kind: 'magicbooklet',
+    });
+    afterMock.mockImplementationOnce(() => undefined);
+
+    const { POST } = await import('@/app/api/showcase/share/route');
+    const response = await POST(
+      new Request('http://localhost/api/showcase/share', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+          'x-request-id': 'showcase-share-after-1',
+        },
+        body: JSON.stringify({
+          postId: 'post-1',
+          sourceSurface: 'showcase',
+          channel: 'copy-link',
+        }),
+      }) as never
+    );
+
+    // The route as deployed hands the task to Next's after(), which runs it
+    // once the response has gone out.
+    expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'showcase-share-after-1');
+    await expect(response.json()).resolves.toEqual({ success: true });
+    expect(recordPostShareEventMock).toHaveBeenCalledTimes(1);
+    expect(afterMock).toHaveBeenCalledTimes(1);
+    expect(notifyPostSocialActivityMock).not.toHaveBeenCalled();
+
+    await afterMock.mock.calls[0][0]();
+    expect(notifyPostSocialActivityMock).toHaveBeenCalledTimes(1);
     expect(notifyPostSocialActivityMock).toHaveBeenCalledWith({ service: true, rpc: rpcMock }, {
       type: 'post_shared',
       recipientUserId: 'creator-1',
@@ -148,6 +210,7 @@ describe('/api/showcase/share route', () => {
     expectPrivateNoStoreTraceHeaders(response, 'showcase-share-missing-1');
     expect(data.error).toContain('public creations');
     expect(recordPostShareEventMock).not.toHaveBeenCalled();
+    expect(afterMock).not.toHaveBeenCalled();
   });
 
   it('rate limits anonymous share tracking before public lookup or event recording', async () => {

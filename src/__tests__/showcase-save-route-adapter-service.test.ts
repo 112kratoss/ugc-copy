@@ -161,7 +161,57 @@ describe('showcase save route adapter service', () => {
       requestedSaveState: true,
       serviceClient,
       sourceSurface: 'showcase',
+      runAfterResponse: expect.any(Function),
     });
+  });
+
+  it('gives saves a way to tell the creator after the response', async () => {
+    const serviceClient = { kind: 'service' } as unknown as SupabaseClient;
+    const runAfterResponse = vi.fn();
+    const saveShowcasePostForRoute = vi.fn(async () => ({
+      ok: true as const,
+      body: {
+        success: true as const,
+        isSaved: true,
+        saveCount: 5,
+        changed: true,
+        message: 'Saved to bookmarks',
+      },
+    }));
+
+    const response = await postShowcaseSaveRouteResponse({
+      request: new Request('http://localhost/api/showcase/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ postId: 'post-1', shouldSave: true, sourceSurface: 'showcase' }),
+      }),
+      dependencies: {
+        createServiceClient: vi.fn(() => serviceClient),
+        createUserClient: () => createUserClient('user-1'),
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true,
+          limit: 120,
+          remaining: 119,
+          retryAfterSeconds: 0,
+          resetAt: '2026-06-23T10:10:00.000Z',
+        })),
+        runAfterResponse,
+        saveShowcasePostForRoute,
+      },
+    });
+
+    // Whoever saved is waiting on this answer, so the service is handed the
+    // scheduler; whether anything is queued is the service's call.
+    expect(response.status).toBe(200);
+    expect(saveShowcasePostForRoute).toHaveBeenCalledWith({
+      actorUserId: 'user-1',
+      referenceId: 'post-1',
+      requestedSaveState: true,
+      serviceClient,
+      sourceSurface: 'showcase',
+      runAfterResponse,
+    });
+    expect(runAfterResponse).not.toHaveBeenCalled();
   });
 
   it('returns stable validation errors for missing ids and invalid save state', async () => {

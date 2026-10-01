@@ -9,6 +9,7 @@ import {
   CREATOR_FOLLOW_NOTIFICATION_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { sendDeferrableNotification, type RunAfterResponse } from '@/lib/deferrable-notification';
 import { notifyCreatorFollowed } from '@/lib/mobile-notifications';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 
@@ -146,10 +147,17 @@ export async function updateCreatorFollowForRoute({
   adminSupabase,
   followerId,
   body,
+  runAfterResponse,
 }: {
   adminSupabase: ProfileFollowClientInput;
   followerId: string;
   body: unknown;
+  /**
+   * Runs a task once the caller has answered its request. The route passes one
+   * so the creator's notification stops holding the follower's answer back;
+   * without it the notification is sent before this returns.
+   */
+  runAfterResponse?: RunAfterResponse;
 }): Promise<ProfileFollowRouteResult> {
   const followingId = readFollowingId(body);
   const following = readFollowingIntent(body);
@@ -195,12 +203,16 @@ export async function updateCreatorFollowForRoute({
         return { ok: false, status: 500, body: { error: 'Failed to follow creator.' } };
       }
 
+      // The follow is recorded; what is left is telling the creator, which
+      // ends in a push request to Expo for their devices. The follower's
+      // button stays disabled until this answers, so the answer goes first
+      // wherever it can.
       const followerUsername = await loadFollowerUsername(resolvedClient, followerId);
-      await notifyCreatorFollowed(resolvedClient, {
+      await sendDeferrableNotification(runAfterResponse, () => notifyCreatorFollowed(resolvedClient, {
         followerUserId: followerId,
         followingUserId: followingId,
         followerUsername,
-      });
+      }));
     }
 
     return { ok: true, body: { following: true } };
@@ -223,10 +235,13 @@ export async function notifyCreatorFollowForRoute({
   adminSupabase,
   followerId,
   body,
+  runAfterResponse,
 }: {
   adminSupabase: ProfileFollowClientInput;
   followerId: string;
   body: unknown;
+  /** As for `updateCreatorFollowForRoute`: the route passes one, and the answer goes first. */
+  runAfterResponse?: RunAfterResponse;
 }): Promise<ProfileFollowRouteResult> {
   const followingId = readFollowingId(body);
   if (!followingId || followingId === followerId) {
@@ -266,11 +281,11 @@ export async function notifyCreatorFollowForRoute({
   }
 
   const followerUsername = await loadFollowerUsername(resolvedClient, followerId);
-  await notifyCreatorFollowed(resolvedClient, {
+  await sendDeferrableNotification(runAfterResponse, () => notifyCreatorFollowed(resolvedClient, {
     followerUserId: followerId,
     followingUserId: followingId,
     followerUsername,
-  });
+  }));
 
   return { ok: true, body: { success: true } };
 }

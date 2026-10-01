@@ -10,8 +10,20 @@ const notifyPostSocialActivityMock = vi.fn();
 const findPublicPostReferenceByIdOrGenerationIdMock = vi.fn();
 const isMissingPostsSchemaErrorMock = vi.fn<(error: unknown) => boolean>(() => false);
 const createServiceClientMock = vi.fn();
+// Stands in for Next's after(): it runs the task on the spot unless a test
+// holds it back to look at the answer first.
+const afterMock = vi.fn((task: () => Promise<unknown>): unknown => task());
 let rateLimitAllowed = true;
 let businessRpcResults: Array<{ data: unknown; error: unknown }> = [];
+
+vi.mock('next/server', async () => {
+  const actual = await vi.importActual<typeof import('next/server')>('next/server');
+
+  return {
+    ...actual,
+    after: afterMock,
+  };
+});
 
 vi.mock('@supabase/supabase-js', () => ({
   createClient: (...args: unknown[]) => rawCreateClientMock(...args),
@@ -169,6 +181,7 @@ describe('/api/showcase/save route', () => {
     });
     eventInsertMock.mockReset();
     notifyPostSocialActivityMock.mockReset();
+    afterMock.mockReset();
     findPublicPostReferenceByIdOrGenerationIdMock.mockReset();
     isMissingPostsSchemaErrorMock.mockReturnValue(false);
     createServiceClientMock.mockReset();
@@ -222,6 +235,42 @@ describe('/api/showcase/save route', () => {
       changed: true,
       source_surface: 'showcase',
     });
+    expect(afterMock).toHaveBeenCalledTimes(1);
+    expect(notifyPostSocialActivityMock).toHaveBeenCalledWith(expect.anything(), {
+      type: 'post_saved',
+      recipientUserId: 'creator-1',
+      actorUserId: 'user-1',
+      postId: 'post-1',
+    });
+  });
+
+  it('queues the save notification behind the response instead of sending it first', async () => {
+    queueBusinessRpcResult(saveRpcResult({ isSaved: true, saveCount: 5, changed: true }));
+    afterMock.mockImplementationOnce(() => undefined);
+
+    const response = await postSave({
+      postId: 'post-1',
+      shouldSave: true,
+      sourceSurface: 'showcase',
+    }, 'showcase-save-after-1');
+
+    // The route as deployed hands the task to Next's after(), which runs it
+    // once the response has gone out.
+    expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'showcase-save-after-1');
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      isSaved: true,
+      saveCount: 5,
+      changed: true,
+      message: 'Saved to bookmarks',
+    });
+    expect(eventInsertMock).toHaveBeenCalledTimes(1);
+    expect(afterMock).toHaveBeenCalledTimes(1);
+    expect(notifyPostSocialActivityMock).not.toHaveBeenCalled();
+
+    await afterMock.mock.calls[0][0]();
+    expect(notifyPostSocialActivityMock).toHaveBeenCalledTimes(1);
     expect(notifyPostSocialActivityMock).toHaveBeenCalledWith(expect.anything(), {
       type: 'post_saved',
       recipientUserId: 'creator-1',
@@ -281,6 +330,7 @@ describe('/api/showcase/save route', () => {
       changed: false,
       source_surface: 'mobile-viewer',
     }));
+    expect(afterMock).not.toHaveBeenCalled();
     expect(notifyPostSocialActivityMock).not.toHaveBeenCalled();
   });
 
@@ -306,6 +356,7 @@ describe('/api/showcase/save route', () => {
       changed: true,
       source_surface: 'showcase-reel',
     }));
+    expect(afterMock).not.toHaveBeenCalled();
     expect(notifyPostSocialActivityMock).not.toHaveBeenCalled();
   });
 
