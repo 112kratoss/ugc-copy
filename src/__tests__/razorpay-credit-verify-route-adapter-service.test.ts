@@ -49,8 +49,37 @@ describe('razorpay credit verify route adapter service', () => {
     await expect(serviceInput.readBody()).resolves.toEqual({ razorpay_order_id: 'order_123' });
     expect(serviceInput.createUserSupabase()).toBe(userSupabase);
     expect(serviceInput.createAdminSupabase()).toBe(adminSupabase);
+    expect(serviceInput.runAfterResponse).toEqual(expect.any(Function));
     expect(createUserClient).toHaveBeenCalledWith(request);
     expect(createServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives the verification a way to announce referral rewards after the response', async () => {
+    const runAfterResponse = vi.fn();
+    const verifyCreditRazorpayPaymentForRoute = vi.fn<typeof import('@/lib/razorpay-credit-verify-service').verifyCreditRazorpayPaymentForRoute>(async (): Promise<CreditRazorpayVerifyRouteResult> => ({
+      ok: true,
+      body: { success: true, referralBonusCredits: 5 },
+    }));
+
+    const response = await postRazorpayCreditVerifyRouteResponse({
+      request: new Request('http://localhost/api/razorpay/verify', {
+        method: 'POST',
+        body: JSON.stringify({ razorpay_order_id: 'order_123' }),
+      }),
+      dependencies: {
+        createServiceClient: vi.fn(),
+        createUserClient: vi.fn(),
+        runAfterResponse,
+        verifyCreditRazorpayPaymentForRoute,
+      },
+    });
+
+    // The buyer waits on this answer with the payment already taken, so the
+    // service is handed the scheduler; whether anything is queued is its call.
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ success: true, referralBonusCredits: 5 });
+    expect(verifyCreditRazorpayPaymentForRoute.mock.calls[0][0].runAfterResponse).toBe(runAfterResponse);
+    expect(runAfterResponse).not.toHaveBeenCalled();
   });
 
   it('preserves the authorized-but-uncaptured 202 contract', async () => {

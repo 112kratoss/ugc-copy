@@ -3,6 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
+  createMobileNotificationHistory,
+  hasAnswered,
+  withMobileNotificationHistory,
+} from '@/__tests__/fixtures/mobile-notification-history';
+import {
   verifyCreditRazorpayPaymentForRoute as verifyCreditRazorpayPaymentForRouteImpl,
 } from '@/lib/razorpay-credit-verify-service';
 
@@ -112,6 +117,7 @@ function createAdminSupabaseMock({
   addCreditsResult = true,
   addCreditsError = null as { message: string } | null,
   referralError = null as { message: string } | null,
+  referralSettlement = { status: 'not_referred', rewards: [] } as Record<string, unknown>,
   onAddCredits = undefined as (() => void) | undefined,
 } = {}) {
   const calls = {
@@ -144,7 +150,7 @@ function createAdminSupabaseMock({
 
       if (name === 'settle_referral_purchase_rewards') {
         return Promise.resolve({
-          data: referralError ? null : { status: 'not_referred', rewards: [] },
+          data: referralError ? null : referralSettlement,
           error: referralError,
         });
       }
@@ -467,5 +473,149 @@ describe('verifyCreditRazorpayPaymentForRoute', () => {
       body: { error: 'Payment details do not match the order.' },
     });
     expect(admin.calls.rpc.map((call) => call.name)).toEqual(['check_backend_rate_limit']);
+  });
+});
+
+describe('credit verify referral notifications', () => {
+  // The real notifier runs here against held notification history. A referred
+  // buyer's first top-up earns two rewards, and each person is told of theirs.
+  const referredFirstPurchase = {
+    status: 'settled',
+    rewards: [
+      {
+        id: 'reward-inviter',
+        user_id: 'inviter_123',
+        event_key: 'grant:inviter',
+        kind: 'inviter_purchase',
+        status: 'granted',
+        credits: 5,
+        active_credits: 5,
+      },
+      {
+        id: 'reward-invitee',
+        user_id: 'user_123',
+        event_key: 'grant:invitee',
+        kind: 'invitee_first_purchase',
+        status: 'granted',
+        credits: 5,
+        active_credits: 5,
+      },
+    ],
+  };
+  const rewardKeys = [
+    'referral-reward:reward-inviter:grant:inviter',
+    'referral-reward:reward-invitee:grant:invitee',
+  ];
+  const rewardNotifications = [
+    expect.objectContaining({ user_id: 'inviter_123', type: 'referral_reward_earned', dedupe_key: rewardKeys[0] }),
+    expect.objectContaining({ user_id: 'user_123', type: 'referral_reward_earned', dedupe_key: rewardKeys[1] }),
+  ];
+
+  // The three ways a verified top-up reaches the referral settlement. Each has
+  // the buyer waiting on the checkout's answer.
+  const referredVerifications = [
+    {
+      kind: 'a fresh payment',
+      setUp: () => ({
+        user: createUserSupabaseMock(),
+        admin: createAdminSupabaseMock({ referralSettlement: referredFirstPurchase }),
+      }),
+      body: { success: true, referralBonusCredits: 5 },
+    },
+    {
+      kind: 'a payment that was already settled',
+      setUp: () => ({
+        user: createUserSupabaseMock({ transaction: { id: 'txn_123', credits: 500, status: 'success' } }),
+        admin: createAdminSupabaseMock({ referralSettlement: referredFirstPurchase }),
+      }),
+      body: { success: true, alreadyProcessed: true, referralBonusCredits: 5 },
+    },
+    {
+      kind: 'a payment the webhook settles at the same moment',
+      setUp: () => {
+        const transaction: TransactionRow = { id: 'txn_123', credits: 500, status: 'created' };
+        return {
+          user: createUserSupabaseMock({ transaction }),
+          admin: createAdminSupabaseMock({
+            referralSettlement: referredFirstPurchase,
+            addCreditsResult: false,
+            onAddCredits: () => {
+              transaction.status = 'success';
+            },
+          }),
+        };
+      },
+      body: { success: true, alreadyProcessed: true, referralBonusCredits: 5 },
+    },
+  ];
+
+  it.each(referredVerifications)(
+    'answers $kind before the referral rewards are announced when the caller can run work after the response',
+    async ({ setUp, body }) => {
+      const { user, admin } = setUp();
+      const history = createMobileNotificationHistory();
+      history.hold();
+      const deferred: Array<() => Promise<unknown>> = [];
+
+      const verification = verifyCreditRazorpayPaymentForRoute({
+        keySecret: 'test-secret',
+        readBody: vi.fn(async () => validBody()),
+        createUserSupabase: vi.fn(() => user.client),
+        createAdminSupabase: vi.fn(() => withMobileNotificationHistory(admin.client, history)),
+        runAfterResponse: (task) => { deferred.push(task); },
+      });
+
+      // A notification that has not finished no longer holds the checkout's
+      // answer back, and the bonus that answer reports is the one it always was.
+      expect(await hasAnswered(verification)).toBe(true);
+      await expect(verification).resolves.toEqual({ ok: true, body });
+      expect(history.started).toEqual([]);
+      expect(deferred).toHaveLength(1);
+
+      history.release();
+      await deferred[0]();
+      expect(history.sent).toEqual(rewardNotifications);
+    },
+  );
+
+  it.each(referredVerifications)(
+    'announces the referral rewards before answering $kind when the caller has nowhere to run them afterwards',
+    async ({ setUp, body }) => {
+      const { user, admin } = setUp();
+      const history = createMobileNotificationHistory();
+      history.hold();
+
+      const verification = verifyCreditRazorpayPaymentForRoute({
+        keySecret: 'test-secret',
+        readBody: vi.fn(async () => validBody()),
+        createUserSupabase: vi.fn(() => user.client),
+        createAdminSupabase: vi.fn(() => withMobileNotificationHistory(admin.client, history)),
+      });
+
+      expect(await hasAnswered(verification)).toBe(false);
+      expect(history.started).toEqual(rewardKeys);
+
+      history.release();
+      await expect(verification).resolves.toEqual({ ok: true, body });
+      expect(history.sent).toEqual(rewardNotifications);
+    },
+  );
+
+  it('defers nothing for a buyer who was not referred', async () => {
+    const user = createUserSupabaseMock();
+    const admin = createAdminSupabaseMock();
+    const history = createMobileNotificationHistory();
+    const runAfterResponse = vi.fn();
+
+    await expect(verifyCreditRazorpayPaymentForRoute({
+      keySecret: 'test-secret',
+      readBody: vi.fn(async () => validBody()),
+      createUserSupabase: vi.fn(() => user.client),
+      createAdminSupabase: vi.fn(() => withMobileNotificationHistory(admin.client, history)),
+      runAfterResponse,
+    })).resolves.toEqual({ ok: true, body: { success: true } });
+
+    expect(runAfterResponse).not.toHaveBeenCalled();
+    expect(history.started).toEqual([]);
   });
 });

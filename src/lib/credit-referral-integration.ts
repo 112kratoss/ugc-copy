@@ -3,6 +3,7 @@ import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { sendDeferrableNotification, type RunAfterResponse } from '@/lib/deferrable-notification';
 import { notifyReferralReward } from '@/lib/mobile-notifications';
 import {
   getReferralRewardNotifications,
@@ -44,15 +45,31 @@ export async function settleCreditPurchaseReferralRewards({
   purchaserUserId,
   transactionId,
   source,
+  runAfterResponse,
 }: {
   adminSupabase: SupabaseClient;
   purchaserUserId: string;
   transactionId: string;
   source: 'razorpay_verify' | 'razorpay_webhook' | 'mobile_purchase';
+  /**
+   * Runs a task once the caller has answered its request. The checkout's
+   * verify route and the app's purchase sync and restore pass one: a buyer is
+   * waiting on them with the payment already taken. The webhooks pass none,
+   * so there the rewards are announced before this returns.
+   */
+  runAfterResponse?: RunAfterResponse;
 }) {
   try {
     const settlement = await settleReferralPurchaseRewards(adminSupabase, transactionId);
-    const rewards = await notifyReferralRewardSettlement(adminSupabase, settlement);
+    // What the caller is told comes from the settlement. Announcing the
+    // rewards changes none of it, so that part can go out behind the answer.
+    const rewards = getReferralRewardNotifications(settlement);
+    if (rewards.length > 0) {
+      await sendDeferrableNotification(
+        runAfterResponse,
+        () => notifyReferralRewardSettlement(adminSupabase, settlement),
+      );
+    }
     return {
       status: settlement.status,
       purchaserBonusCredits: rewards

@@ -27,6 +27,7 @@ import {
   notifyMobileCreditPurchase,
   notifyMobilePurchasesRestored,
   notifyPostResourceUnlockCompleted,
+  notifyReferralReward,
 } from '@/lib/mobile-notifications';
 import { EXTERNAL_API_REQUEST_TIMEOUT_MS } from '@/lib/provider-fetch';
 
@@ -40,6 +41,8 @@ afterEach(() => {
 function createCreditSupabase(options: {
   credits?: number;
   duplicateInsertForOrderId?: string;
+  /** What `settle_referral_purchase_rewards` reports, by credit transaction id. Unlisted: not referred. */
+  referralSettlements?: Record<string, unknown>;
   transactions?: Array<{
     id: string;
     user_id: string;
@@ -200,7 +203,11 @@ function createCreditSupabase(options: {
           };
         }
         if (name === 'settle_referral_purchase_rewards') {
-          return { data: { status: 'not_referred', rewards: [] }, error: null };
+          return {
+            data: options.referralSettlements?.[String(args.p_transaction_id)]
+              ?? { status: 'not_referred', rewards: [] },
+            error: null,
+          };
         }
         if (name === 'reconcile_mobile_credit_purchase_adjustment') {
           const restored = transactions.find((item) => item.razorpay_order_id === args.p_external_order_id);
@@ -1482,13 +1489,46 @@ const settledPurchases: SettledPurchaseCase[] = [
   },
 ];
 
+const inviterId = '33333333-3333-3333-3333-333333333333';
+
+// What `settle_referral_purchase_rewards` reports for a referred buyer's first
+// purchase: a reward for whoever invited them, and their own welcome bonus.
+const referredFirstPurchase = {
+  status: 'settled',
+  rewards: [
+    {
+      id: 'reward-inviter-1',
+      user_id: inviterId,
+      event_key: 'grant:inviter',
+      kind: 'inviter_purchase',
+      status: 'granted',
+      credits: 5,
+      active_credits: 5,
+    },
+    {
+      id: 'reward-invitee-1',
+      user_id: userId,
+      event_key: 'grant:invitee',
+      kind: 'invitee_first_purchase',
+      status: 'granted',
+      credits: 5,
+      active_credits: 5,
+    },
+  ],
+};
+const referredFirstPurchaseKeys = [
+  'referral-reward:reward-inviter-1:grant:inviter',
+  'referral-reward:reward-invitee-1:grant:invitee',
+];
+
 function createSettledPurchaseClient(
   settlement: Record<string, unknown>,
   history: MobileNotificationHistory,
+  referral: Record<string, unknown> = { status: 'not_referred', rewards: [] },
 ) {
   const rpc = vi.fn(async (name: string) => (
     name === 'settle_referral_purchase_rewards'
-      ? { data: { status: 'not_referred', rewards: [] }, error: null }
+      ? { data: referral, error: null }
       : { data: settlement, error: null }
   ));
 
@@ -1655,6 +1695,147 @@ describe('mobile purchase notifications', () => {
         msg: 'mobile_commerce_notification_deferral_failed',
         errorMessage: '`after` was called outside a request scope.',
       }),
+    ]);
+  });
+
+  it('answers a referred buyer\'s purchase before any of its notifications go out, and still announces the bonus before the balance', async () => {
+    const [{ authority, settlement, answer }] = settledPurchases;
+    const history = createMobileNotificationHistory();
+    history.hold();
+    const { adminSupabase } = createSettledPurchaseClient(
+      { status: 'completed', ...settlement },
+      history,
+      referredFirstPurchase,
+    );
+    const deferred: Array<() => Promise<unknown>> = [];
+
+    const purchase = completeMobilePurchase({
+      adminSupabase,
+      userId,
+      authority,
+      provider: 'app_store',
+      transactionId: '1000000123456789',
+      runAfterResponse: (task) => { deferred.push(task); },
+    });
+
+    // The bonus in the answer comes from the settlement, so it is there
+    // although nobody has been told yet.
+    expect(await hasAnswered(purchase)).toBe(true);
+    await expect(purchase).resolves.toEqual({ ...answer, alreadyProcessed: false, referralBonusCredits: 5 });
+    expect(history.started).toEqual([]);
+    expect(deferred).toHaveLength(2);
+
+    // Next's after() starts everything it was handed at once. Started that way,
+    // the two must still go out as they do when nothing is deferred: the
+    // rewards first, and "Credits added" only once those are done.
+    const sending = Promise.all(deferred.map((task) => task()));
+    expect(await hasAnswered(sending)).toBe(false);
+    expect(history.started).toEqual(referredFirstPurchaseKeys);
+
+    history.release();
+    await sending;
+    expect(history.sent.map((notification) => [notification.type, notification.user_id])).toEqual([
+      ['referral_reward_earned', inviterId],
+      ['referral_reward_earned', userId],
+      ['credits_purchased', userId],
+    ]);
+  });
+
+  it('announces a referred buyer\'s bonus and then the balance before answering when the caller has nowhere to run them afterwards', async () => {
+    const [{ authority, settlement, answer }] = settledPurchases;
+    const history = createMobileNotificationHistory();
+    history.hold();
+    const { adminSupabase } = createSettledPurchaseClient(
+      { status: 'completed', ...settlement },
+      history,
+      referredFirstPurchase,
+    );
+
+    const purchase = completeMobilePurchase({
+      adminSupabase,
+      userId,
+      authority,
+      provider: 'app_store',
+      transactionId: '1000000123456789',
+    });
+
+    expect(await hasAnswered(purchase)).toBe(false);
+    expect(history.started).toEqual(referredFirstPurchaseKeys);
+
+    history.release();
+    await expect(purchase).resolves.toEqual({ ...answer, alreadyProcessed: false, referralBonusCredits: 5 });
+    expect(history.sent.map((notification) => [notification.type, notification.user_id])).toEqual([
+      ['referral_reward_earned', inviterId],
+      ['referral_reward_earned', userId],
+      ['credits_purchased', userId],
+    ]);
+  });
+
+  it('keeps a referred buyer\'s restore in order: each purchase\'s bonus, then its balance', async () => {
+    const fakeSupabase = createCreditSupabase({
+      credits: 100,
+      referralSettlements: {
+        'txn-mobile-1': referredFirstPurchase,
+        // Their inviter earns on the second purchase too; the welcome bonus is
+        // for the first alone.
+        'txn-mobile-2': {
+          status: 'settled',
+          rewards: [{
+            id: 'reward-inviter-2',
+            user_id: inviterId,
+            event_key: 'grant:inviter',
+            kind: 'inviter_purchase',
+            status: 'granted',
+            credits: 5,
+            active_credits: 5,
+          }],
+        },
+      },
+    });
+    const history = createMobileNotificationHistory();
+    history.hold();
+    const deferred: Array<() => Promise<unknown>> = [];
+
+    const restore = restoreMobileEntitlements(
+      withMobileNotificationHistory(fakeSupabase.client, history),
+      userId,
+      {
+        fetcher: revenueCatCreditPurchases(['1000000123456701', '1000000123456702']),
+        revenueCatApiKey: 'rc-secret',
+        runAfterResponse: (task) => { deferred.push(task); },
+      },
+    );
+
+    expect(await hasAnswered(restore)).toBe(true);
+    await expect(restore).resolves.toMatchObject({
+      success: true,
+      credits: 1100,
+      restoredCreditPurchases: 2,
+      alreadyProcessedCreditPurchases: 0,
+    });
+    expect(history.started).toEqual([]);
+
+    // The restore hands its notifications over chained, and so does each
+    // purchase inside it. Started all at once, they still go out in one line.
+    const sending = Promise.all(deferred.map((task) => task()));
+    expect(await hasAnswered(sending)).toBe(false);
+    expect(history.started).toEqual(referredFirstPurchaseKeys);
+
+    history.release();
+    await sending;
+    expect(history.sent.map((notification) => [notification.type, notification.user_id])).toEqual([
+      ['referral_reward_earned', inviterId],
+      ['referral_reward_earned', userId],
+      ['credits_purchased', userId],
+      ['referral_reward_earned', inviterId],
+      ['credits_purchased', userId],
+      ['purchases_restored', userId],
+    ]);
+    expect(history.sent.filter((notification) => notification.type === 'credits_purchased').map(
+      (notification) => notification.body,
+    )).toEqual([
+      'Your balance is now 600 credits.',
+      'Your balance is now 1,100 credits.',
     ]);
   });
 
@@ -1837,6 +2018,12 @@ describe('mobile purchase notifications', () => {
       bundleId: 'bundle-1',
     })],
     ['a restore', (client) => notifyMobilePurchasesRestored(client, userId)],
+    ['a referral reward', (client) => notifyReferralReward(client, {
+      userId,
+      credits: 5,
+      rewardId: 'reward-invitee-1',
+      eventKey: 'grant:invitee',
+    })],
   ])('the notifier for %s logs a failure instead of rejecting', async (_purchase, notify) => {
     const unavailable = {
       from: () => {
