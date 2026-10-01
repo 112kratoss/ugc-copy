@@ -6,6 +6,7 @@ import { getGenerationKind, getGenerationLabel, getGenerationRenderableMediaKind
 import { formatCompactCount } from './home-view-model';
 import { formatUnlockCreditPrice } from './pricing';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from './showcase-display';
+import { getShowcaseRemixAccess, type ShowcaseRemixAccess } from './showcase-remix-access';
 
 export type PreviewViewerSource =
   | 'showcase-feed'
@@ -94,6 +95,12 @@ export interface ImmersivePreviewItem {
   sharePath: string | null;
   recreateTool: CreatorToolId;
   recreatePrompt: string;
+  /**
+   * For someone else's post: what a tap on Remix has to get through first
+   * (lib/showcase-remix-access.ts). `free-unlock` still offers `recreate`, and
+   * the tap claims the unlock on its way to the editor.
+   */
+  remixAccess?: ShowcaseRemixAccess | null;
   showcasePostId: string | null;
   generationId: string | null;
   ownerPostId: string | null;
@@ -496,8 +503,11 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
   const textOnly = isTextOnlyShowcasePost(item);
   const creatorLabel = creatorHandle(item.creator.username, item.creator.name);
   const isSaved = Boolean(item.isSaved) || source === 'profile-saved';
-  const canRecreate = canRecreateShowcaseItem(item);
-  const canUnlockRemix = canUnlockRemixShowcaseItem(item);
+  const remixAccess = getShowcaseRemixAccess(item);
+  // A paid unlock is the one case that needs its own action: it opens a sheet
+  // before anything is spent. A free one is claimed by the Remix tap itself.
+  const canUnlockRemix = remixAccess === 'paid-unlock';
+  const canRecreate = remixAccess === 'open' || remixAccess === 'free-unlock';
 
   return {
     id: item.id,
@@ -529,6 +539,7 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
     sharePath: `/showcase/${item.id}`,
     recreateTool: toolForShowcaseItem(item),
     recreatePrompt: item.prompt.trim() || item.body.trim() || item.title.trim(),
+    remixAccess,
     showcasePostId: item.id,
     generationId: item.generationId,
     ownerPostId: null,
@@ -798,27 +809,10 @@ function creatorHandle(username: string | null, name: string) {
   return name.trim() || '@creator';
 }
 
-function hasAppGenerationId(generationId: string | null | undefined) {
-  return typeof generationId === 'string' && generationId.trim().length > 0;
-}
-
-function canRecreateShowcaseItem(item: ShowcaseFeedItem) {
-  return hasAppGenerationId(item.generationId) && item.canRemix;
-}
-
-function canUnlockRemixShowcaseItem(item: ShowcaseFeedItem) {
-  return (
-    hasAppGenerationId(item.generationId)
-    && !item.canRemix
-    && item.asset?.accessMode === 'paid'
-    && Boolean(item.asset.allowRemix)
-  );
-}
-
 function showcaseBadge(item: ShowcaseFeedItem) {
   if (item.asset?.accessMode === 'free') return 'Free unlock';
   if (item.asset) return formatUnlockCreditPrice(item.asset.priceUsdCents);
-  if (canRecreateShowcaseItem(item)) return 'Remix';
+  if (getShowcaseRemixAccess(item) === 'open') return 'Remix';
   if (item.category === 'text' || item.postFormat === 'text') return 'Prompt';
   if (item.creationMode === 'motion') return 'Motion';
   if (item.mediaKind === 'video' || item.category === 'video') return 'Video';

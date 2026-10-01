@@ -1,4 +1,4 @@
-import { MessageCircle, Repeat2 } from 'lucide-react-native';
+import { Lock, MessageCircle, Repeat2 } from 'lucide-react-native';
 import { memo, useCallback, useContext } from 'react';
 
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
@@ -144,10 +144,15 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
             label={card.commentLabel}
             onPress={onComments}
           />
-          {card.canRemix ? (
+          {/* Drawn for every post that can be remixed, whoever is looking: the
+              tap takes a free unlock on its way, and a paid one opens its sheet,
+              which the lock says before the tap. */}
+          {card.remixAccess ? (
             <FeedCardAction
-              accessibilityLabel={`Remix ${card.title}`}
-              icon={<Repeat2 size={appTheme.icon.compact} color={theme.colors.faint} />}
+              accessibilityLabel={card.remixAccessibilityLabel}
+              icon={card.remixAccess === 'paid-unlock'
+                ? <Lock size={appTheme.icon.compact} color={theme.colors.faint} />
+                : <Repeat2 size={appTheme.icon.compact} color={theme.colors.faint} />}
               label={card.remixLabel}
               loading={remixLoading}
               onPress={onRemix}

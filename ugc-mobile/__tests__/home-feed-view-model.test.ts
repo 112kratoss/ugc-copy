@@ -179,6 +179,69 @@ describe('home feed view model', () => {
     });
   });
 
+  describe('remix action', () => {
+    const bundle = {
+      id: 'asset-1',
+      postId: 'post-1',
+      title: 'A launch frame',
+      accessMode: 'free' as const,
+      priceUsdCents: 0,
+      previewText: 'The prompt behind this frame.',
+      allowRemix: true,
+      resourceKinds: ['prompt'],
+    };
+
+    it('offers Remix on a post anyone may remix', () => {
+      const card = showcaseToHomeFeedCard(item());
+
+      expect(card.remixAccess).toBe('open');
+      expect(card.remixAccessibilityLabel).toBe('Remix A launch frame');
+    });
+
+    it('keeps offering Remix when it sits behind a free unlock', () => {
+      // The card used to drop the button here, with nothing in its place.
+      const card = showcaseToHomeFeedCard(item({
+        canRemix: false,
+        remixCapability: 'unlock_required',
+        remixTarget: 'image',
+        asset: bundle,
+      }));
+
+      expect(card.remixAccess).toBe('free-unlock');
+      // Nothing is asked of the viewer, so it reads as any other Remix.
+      expect(card.remixLabel).toBe('Remix · 8');
+      expect(card.remixAccessibilityLabel).toBe('Remix A launch frame');
+    });
+
+    it('says a paid unlock comes first before the viewer taps', () => {
+      const card = showcaseToHomeFeedCard(item({
+        canRemix: false,
+        remixCapability: 'unlock_required',
+        remixTarget: 'image',
+        asset: { ...bundle, accessMode: 'paid', priceUsdCents: 900 },
+      }));
+
+      expect(card.remixAccess).toBe('paid-unlock');
+      expect(card.remixLabel).toBe('Remix · 8');
+      expect(card.remixAccessibilityLabel).toBe('Unlock A launch frame to remix it');
+    });
+
+    it('offers nothing where there is nothing to remix', () => {
+      // An upload from the camera roll, and a written note.
+      expect(showcaseToHomeFeedCard(item({ generationId: null })).remixAccess).toBeNull();
+      expect(showcaseToHomeFeedCard(item({
+        mediaUrl: null,
+        mediaKind: null,
+        category: 'text',
+        postFormat: 'text',
+        body: 'A note',
+        generationId: null,
+        canRemix: false,
+        remixCapability: 'none',
+      })).remixAccess).toBeNull();
+    });
+  });
+
   describe('body clamping', () => {
     const textCard = () => showcaseToHomeFeedCard(item({
       mediaUrl: null,

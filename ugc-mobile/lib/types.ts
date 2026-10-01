@@ -858,6 +858,13 @@ export interface ShowcaseFeedItem {
   generationId: string | null;
   asset: ShowcaseAssetSummary | null;
   canRemix: boolean;
+  /**
+   * Why `canRemix` reads as it does, and where a remix would land. The feed and
+   * the post endpoint send both; legacy sources and pages kept from an older
+   * build send neither, so nothing may depend on them being present.
+   */
+  remixCapability?: 'none' | 'public' | 'unlock_required' | 'unsupported';
+  remixTarget?: 'image' | 'video' | 'motion' | 'workflow' | 'text_template' | null;
   savedAt?: string;
   recommendation?: ShowcaseRecommendationMetadata | null;
 }

@@ -28,6 +28,7 @@ import { Reveal } from '@/components/reveal';
 import { HomeFeedSkeleton } from '@/components/skeleton';
 import { TopScrim } from '@/components/top-scrim';
 import { SecondaryButton, StatusBlock } from '@/components/ui';
+import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE } from '@/lib/viewer-actions';
@@ -59,7 +60,7 @@ import { createHomeFeedPlaybackController } from '@/lib/home-feed-playback';
 import { createFeedVideoActivationStore, FeedVideoActivationContext } from '@/lib/feed-video-activation';
 import { useAppForeground } from '@/lib/app-foreground';
 import { buildFeedFeedbackMenu } from '@/lib/feed-feedback-menu';
-import { immersiveViewerHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
+import { buildImmersiveShowcaseItems, immersiveViewerHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
 import { feedReadMoreSection, type FeedReadMoreSection } from '@/lib/feed-read-more';
 import type { NativeMenuModel } from '@/lib/native-menu';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
@@ -67,7 +68,10 @@ import { SHOWCASE_DRAW_DISTANCE } from '@/lib/media-performance';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
 import { MotionView, usePressMotion, useReducedMotion } from '@/lib/motion';
+import { startShowcaseRemix } from '@/lib/remix-start';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
+import { getShowcaseRemixAccess } from '@/lib/showcase-remix-access';
+import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
 import {
   SHOWCASE_PLAYBACK_VIEWABILITY,
   SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY,
@@ -219,6 +223,10 @@ export function HomeDashboard() {
   // The remix request runs before we know where it lands, so the tapped card
   // owns the spinner until navigation takes over.
   const [remixingItemId, setRemixingItemId] = useState<string | null>(null);
+  // The post whose paid unlock is being offered. It outlives `unlockRemixOpen`
+  // so the sheet still has something to draw while it leaves.
+  const [unlockRemixItem, setUnlockRemixItem] = useState<ShowcaseFeedItem | null>(null);
+  const [unlockRemixOpen, setUnlockRemixOpen] = useState(false);
 
   const activeChip = HOME_FEED_CHIPS.find((chip) => chip.id === activeChipId) ?? HOME_FEED_CHIPS[0];
   const queryKey = useMemo(
@@ -579,15 +587,54 @@ export function HomeDashboard() {
     }
   };
 
-  const remixItem = (item: ShowcaseFeedItem) => {
+  const remixItem = (item: ShowcaseFeedItem, options: { unlocked?: boolean } = {}) => {
     if (!user) {
       // The post page is where the Remix button lives, so land them on it
       // rather than the tab root they started from.
       router.push({ pathname: '/auth', params: { returnTo: `/post/${item.id}` } } as never);
       return;
     }
+    // Straight after the unlock sheet the loaded post still reads as locked;
+    // it catches up on the refetch, so its answer is not asked a second time.
+    const access = options.unlocked ? 'open' : getShowcaseRemixAccess(item);
+    const openUnlockSheet = () => {
+      setUnlockRemixItem(item);
+      setUnlockRemixOpen(true);
+    };
+    if (access === 'paid-unlock') {
+      // Credits are never spent by a tap in the feed. The sheet names the
+      // price, and carries on into the editor once it is paid.
+      openUnlockSheet();
+      return;
+    }
     const startRemix = async () => {
-      const result = await api.remixShowcasePost(item.id);
+      const started = await startShowcaseRemix({
+        api,
+        postId: item.id,
+        claimFreeUnlock: access === 'free-unlock',
+      });
+      if (started.kind === 'unlock-required') {
+        // This page was loaded before the creator put remix behind an unlock.
+        if (item.asset) {
+          openUnlockSheet();
+          return;
+        }
+        void queryClient.invalidateQueries({ queryKey: ['showcase-feed'] });
+        showMessageDialog({
+          title: 'Unlock needed',
+          message: 'The creator has put this remix behind an unlock. Open the post to get it.',
+        });
+        return;
+      }
+      if (started.claimedFreeUnlock && item.asset) {
+        // Not awaited: the editor opens now, and the feed learns that this
+        // viewer holds the unlock behind it.
+        void refreshUnlockedBundleCaches(queryClient, {
+          postId: item.asset.postId || item.id,
+          resourceId: item.asset.id,
+        });
+      }
+      const result = started.response;
       recordFeedEvent(item, 'remix_start');
       const href = getNativeRemixCreateHref({
         redirectTo: result.redirectTo,
@@ -765,6 +812,11 @@ export function HomeDashboard() {
     onBlockUser: () => blockFeedbackUser(item),
   });
 
+  // The unlock sheet reads a post the way the reel lists it.
+  const unlockRemixSheetItem = unlockRemixItem
+    ? buildImmersiveShowcaseItems('showcase-feed', [unlockRemixItem])[0] ?? null
+    : null;
+
   // Memoized by React Compiler on everything it reads. The hand-written
   // useCallback it replaces left out the handlers below, so a card could keep
   // calling an old `remixItem` (and the `user` inside it) until a listed value
@@ -941,6 +993,17 @@ export function HomeDashboard() {
           visible
         />
       ) : null}
+
+      <UnlockRemixPrompt
+        authReturnTo={unlockRemixItem ? `/post/${unlockRemixItem.id}` : undefined}
+        bottomInset={bottomInset}
+        item={unlockRemixSheetItem}
+        onClose={() => setUnlockRemixOpen(false)}
+        onUnlocked={() => {
+          if (unlockRemixItem) remixItem(unlockRemixItem, { unlocked: true });
+        }}
+        visible={unlockRemixOpen}
+      />
 
       <HomeSideMenu
         visible={menuVisible}

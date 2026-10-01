@@ -107,6 +107,8 @@ export interface PostDetailsPrimaryAction {
  *
  * "Remix" is someone else's work made yours — the server endpoint behind it is
  * literally `remixShowcasePost`. "Recreate" is your own creation run again.
+ * A post whose remix sits behind a free unlock keeps the button: it arrives
+ * with `recreate`, and the tap claims the unlock on its way to the editor.
  * A locked paid post has no page-level primary: the resources card's unlock
  * button is the purchase path, and two buttons for one purchase is one too many.
  * Once the viewer can access the bundle, a stale `unlock-remix` (the feed has
