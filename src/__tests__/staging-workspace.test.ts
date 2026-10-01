@@ -1,8 +1,9 @@
 import { fork, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, open, opendir, readFile, readdir, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { flockSync } from 'fs-ext';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStagingWorkspace, reclaimAbandonedStagingWorkspaces, STAGING_ROOT_NAME } from '@/lib/staging-workspace';
 
@@ -40,7 +41,73 @@ async function killedOwner(mode?: string) {
   return message;
 }
 
+async function manyOwners(count: number) {
+  const child = fork(path.resolve('src/__tests__/staging-workspace-worker.ts'), ['many', String(count)], {
+    execArgv: ['--import', 'tsx'],
+    env: { ...process.env, TMPDIR: root, TSX_TSCONFIG_PATH: path.resolve('tsconfig.scripts.json') },
+    stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
+  });
+  children.push(child);
+  await once(child, 'message');
+  const directories: string[] = [];
+  for await (const entry of await opendir(path.join(root, STAGING_ROOT_NAME))) {
+    directories.push(path.join(root, STAGING_ROOT_NAME, entry.name));
+  }
+  expect(directories).toHaveLength(count);
+  return { child, directories };
+}
+
+async function freshProcessSweep() {
+  const child = fork(path.resolve('src/__tests__/staging-workspace-worker.ts'), ['sweep'], {
+    execArgv: ['--import', 'tsx'],
+    env: { ...process.env, TMPDIR: root, TSX_TSCONFIG_PATH: path.resolve('tsconfig.scripts.json') },
+    stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
+  });
+  children.push(child);
+  const exit = once(child, 'exit');
+  const [message] = await once(child, 'message') as [{ reclaimed: number }];
+  expect((await exit)[0]).toBe(0);
+  return message.reclaimed;
+}
+
 describe('staging workspace inherited locks', () => {
+  it('a fresh process reaches dead owners behind 128 unpublished entries in real directory order', async () => {
+    const { child, directories } = await manyOwners(130);
+    for (const directory of directories.slice(0, 128)) await unlink(path.join(directory, 'ready'));
+    const exit = once(child, 'exit'); child.kill('SIGKILL'); await exit;
+    expect(await freshProcessSweep()).toBe(2);
+    expect(await freshProcessSweep()).toBe(0);
+    for (const directory of directories.slice(0, 128)) expect((await lstat(directory)).isDirectory()).toBe(true);
+    for (const directory of directories.slice(128)) await expect(lstat(directory)).rejects.toMatchObject({ code: 'ENOENT' });
+  }, 30_000);
+
+  it('caps successful reclamation while fresh processes make progress through larger abandoned sets', async () => {
+    const { child } = await manyOwners(140);
+    const exit = once(child, 'exit'); child.kill('SIGKILL'); await exit;
+    expect(await freshProcessSweep()).toBe(128);
+    expect(await freshProcessSweep()).toBe(12);
+    expect(await readdir(path.join(root, STAGING_ROOT_NAME))).toEqual([]);
+  }, 30_000);
+
+  it('preserves 128 locked entries while a fresh process reclaims later dead owners', async () => {
+    const { child, directories } = await manyOwners(130);
+    const exit = once(child, 'exit'); child.kill('SIGKILL'); await exit;
+    const leases: Awaited<ReturnType<typeof open>>[] = [];
+    try {
+      for (const directory of directories.slice(0, 128)) {
+        const lease = await open(path.join(directory, 'lease'), 'r+'); leases.push(lease);
+        flockSync(lease.fd, 'exnb');
+        await writeFile(path.join(directory, 'media'), 'protected bytes');
+      }
+      expect(await freshProcessSweep()).toBe(2);
+      for (const directory of directories.slice(0, 128)) {
+        expect(await readFile(path.join(directory, 'media'), 'utf8')).toBe('protected bytes');
+      }
+    } finally { for (const lease of leases) await lease.close(); }
+    expect(await freshProcessSweep()).toBe(128);
+    expect(await readdir(path.join(root, STAGING_ROOT_NAME))).toEqual([]);
+  }, 30_000);
+
   it('preserves live owners while sweeping and removes only the explicitly cleaned workspace', async () => {
     const a = await create(), b = await create();
     expect(await reclaimAbandonedStagingWorkspaces()).toBe(0);

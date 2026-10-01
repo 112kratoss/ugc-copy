@@ -6,14 +6,90 @@ Updated 2026-10-01 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/staging-reader-lock-6j`, based on main `bc2fc0976196d996fba2fcca25d399cb60f9049f`; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/staging-scan-progress-6l`, based on main `5934bd7dac80d402d4db5e274e2716a60432790a`; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
+Section 6L fixes persistent-prefix staging reclamation locally; CI/release pending.
+Read `docs/audits/backend-section-06-scan-progress-2026-10-01.md`.
+A new actual-filesystem/fresh-process regression fails before the fix (0 instead
+of 2 reclaimed). The pass now caps successful reclamations at 128 instead of
+examined entries, preserving the lease/marker authority checks. An early marker
+metadata check rejects unpublished entries before opening a lease; it is not
+sufficient deletion authority. No cursor state or new dependency is introduced.
+Directory validation is now linear, not capped at 128 entries or time-bounded;
+that explicit latency tradeoff is measured locally and metadata accumulation
+remains open. Local 2 MiB Linux/Node 24 probe reclaims the two blocked owners and
+allows the next import, preserving all 128 unpublished fixtures and active readers.
+Three new regression cases cover unpublished/locked prefixes and a 140-owner
+backlog across fresh processes. 23 focused tests, 6,176 full web tests (118 skips),
+app/test typing and targeted lint pass. The focused cases were rerun after the
+marker precheck; exact final-tree CI remains the release gate.
+Preserve `.audit-evidence/backend-section-06l/` and the 6J/6K local documents.
+No SQL/mobile change. Next: finish measured scan-cost review, PR, exact-main
+Quality, standard production release and independent live checks. Current
+production remains `5934bd7d` (Section 6J).
+
+The preceding investigation checkpoint follows.
+
+Section 6K bounded disk-pressure investigation and first completion ledger are
+complete locally. No runtime change, PR or production release was made in 6K;
+production remains verified Section 6J (`5934bd7d`). Read
+`docs/audits/backend-section-06-disk-pressure-2026-10-01.md` and use
+`docs/audits/backend-audit-completion-checklist.md` as the closure ledger.
+The surface map captures 162 routes, 201 services, 323 public functions,
+136 public relations and 12 jobs; every route has a review group. Seven page-only
+services and eight indirect RPC sites were traced. SQL/trigger/other entrypoint
+behavior reconciliation remains MAP-02; do not turn inventory counts into audit
+completion percentages.
+
+Actual Linux/Node 24.21.0 probes used a 2 MiB tmpfs, native fs-ext and no network.
+Five sequential worker kills no longer accumulate staged files within the scan
+window. Active owners and an inherited reader retain intact bytes under ENOSPC;
+failed new staging is cleaned. Two remaining obligations were reproduced:
+MEDIA-05: 128 unpublished entries in actual iteration order block two trailing
+dead owners through ten scans, retaining 1,843,200 reclaimable bytes and causing
+new staging ENOSPC. Removing only the known empty test fixtures lets the same
+sweeper reclaim both. MEDIA-06: two workers each observe 2 MiB free before a
+barrier, then request 1,228,800 bytes each; one succeeds, one gets ENOSPC, and
+cleanup succeeds. A space observation is not a shared reservation. These are
+local fault-injection results, not production incidents or provider delivery proof.
+
+Next: resolve MEDIA-05 with bounded progress across calls and restarts, preserving
+active readers/unpublished metadata. A larger limit or process-local cursor alone
+does not close it. Evaluate durable progress versus full-enumeration latency
+explicitly before changing cleanup. Then shared admission/other scratch owners,
+followed by workflow execution/recovery. Preserve
+`.audit-evidence/backend-section-06k/` and the new local documents. Both probes
+passed their assertions, including reproducing the open failures; no runtime
+tests were rerun for documentation-only changes. The dedicated probe containers
+and image were removed; existing database containers were untouched.
+
+The preceding deployed checkpoint follows.
+
 Section 6J inherited staging leases/reclamation is implemented and locally
-verified; full web suite passed (6,173 tests); PR/CI/release pending. Read
-`docs/audits/backend-section-06-staging-locks-2026-10-01.md`.
+verified; full web suite passed (6,173 tests). PR #255 head
+`285b39468f6a98219e6e4d7c1ee38ce6fac9aedb`. First Quality `36809462816`
+passed runtime tests, real FFmpeg, mobile, browser and DB but caught a test-worker
+mkdtemp overload cast in test typing. Follow-up commit fixes the wrapper; local
+test typing, all 14 workspace cases and lint pass. Updated PR Quality
+`36810222612` passed all four jobs, including 6,173 web, 2,802 mobile, 19 browser,
+1,941 SQL assertions and 119 DB checks. Actual FFmpeg inherited-lock and native
+packaging checks passed. No mobile store release was active before merge.
+PR #255 merged as `5934bd7dac80d402d4db5e274e2716a60432790a` at October 1,
+04:31:36 UTC (10:01:36 IST). Exact-main Quality `36815532624` passed all
+four jobs first run. Standard production release `36816387424` attempt 1
+promoted successfully and verified public live SHA, but its final protected
+health response reported a mismatched build ID. Independent SHA/feed/admin/
+unsigned-webhook checks pass. The unchanged failed release job passed on attempt 2,
+including staged and protected production health, completing October 1 at
+04:50:53 UTC (10:20:53 IST). Independent checks repeated afterward confirm live
+`5934bd7d`, feed 200, admin login redirect 307 and unsigned webhook 401; remote
+main still matches. The first failure is preserved; its cause is not established
+because the log omits the actual mismatched ID. Section 6J is deployed and verified.
+Read `docs/audits/backend-section-06-staging-locks-2026-10-01.md` and
+`docs/audits/backend-section-06-staging-locks-release-2026-10-01.md`.
 118 focused tests and all nine database worker-kill cases pass. Actual FFmpeg
 lease inheritance passes on macOS/Node 22 and Linux/Node 24; an independent Linux
 workspace probe reclaims dead owners and preserves active bytes. App/test/script
@@ -21,8 +97,12 @@ typing, targeted lint, production build and native artifact checks pass. CI now
 runs the real FFmpeg lease probe. Preserve `.audit-evidence/backend-section-06j/`.
 New workspaces use inherited fs-ext locks and bounded published-only reclamation;
 legacy/unpublished/foreign workspaces and other scratch namespaces are untouched.
-No migration/mobile change. Next: PR checks and merge, then exact-main CI,
-standard release and independent live checks. Production remains Section 6H.
+No migration/mobile change. No Section 6J release work remains pending. Preserve
+the local release records for the next audit PR. Next: bounded disk-pressure
+reproduction, scan fairness beyond 128 entries and other scratch lifetimes; see
+`.audit-evidence/backend-section-06j/next-disk-boundary.md`. Protected release
+health does not constitute a synthetic production media/lock transaction or close
+the broader audit and outstanding operator moderation review.
 The preceding investigation checkpoint follows.
 
 Section 6I local reader-lifetime investigation is complete; no runtime fix has

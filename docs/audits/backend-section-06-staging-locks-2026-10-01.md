@@ -1,6 +1,12 @@
 # Section 6J — inherited staging leases and crash reclamation
 
-Status: implemented and locally verified; full web suite passed; PR/release pending.
+Status: merged in PR #255 as `5934bd7dac80d402d4db5e274e2716a60432790a`;
+PR Quality passed after correcting a test-worker overload type. Exact-main CI
+passed on its first run; standard production release attempt 2 passed October 1
+at 04:50:53 UTC (10:20:53 IST), including protected health. Independent live
+SHA/feed/auth-boundary checks passed. See
+[release evidence](backend-section-06-staging-locks-release-2026-10-01.md) for the
+preserved first-attempt health build-ID mismatch and verification details.
 Baseline: `bc2fc0976196d996fba2fcca25d399cb60f9049f`.
 
 ## Behavior and scope
@@ -75,8 +81,10 @@ promise under more than 128 persistent entries, or proof that Vercel retains
 scratch across replacement. Incomplete initialization can leave empty/unmarked
 metadata directories; these are deliberately not swept. Legacy files and other
 scratch namespaces remain untouched. Disk admission and their lifetime policies
-are separate obligations. Production deployment and its runtime checks are still
-pending; local Linux/Alpine evidence does not substitute for the Vercel build.
+are separate obligations. Production deployment, staged/live health and independent
+live checks passed; these checks are not a synthetic production media/lock
+transaction. The native lock passed the CI packaging check; the Vercel release
+build also completed successfully.
 
 No SQL migration, mobile contract/runtime change, OTA, provider charge, customer
 repair or production fixture is involved. Private evidence:
