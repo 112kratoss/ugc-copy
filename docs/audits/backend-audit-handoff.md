@@ -6,22 +6,50 @@ Updated 2026-10-01 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/generation-worker-crash-6g`, based on main `1eb94f13a303d28f4071f1772efd7caf90378673`; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/generation-staging-cleanup-6h`, based on main `d848cd2d71b9f35b2d174b83f0906b5e8a57db55`; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-Section 6G actual worker termination is locally verified; PR/CI remain pending.
+Section 6H staging lifecycle fix is locally verified; PR/CI/release pending.
+Read `docs/audits/backend-section-06-staging-cleanup-2026-10-01.md`.
+Three real-filesystem regressions reproduced: failed cleanup could falsely succeed
+on retry; concurrent callers returned before deletion; allocation failure left an
+opened source uncancelled. Fix shares the deletion promise, permits retry after
+failure and cancels the source on allocation error. All 102 focused tests and
+25 DB output/crash checks pass, as do app/test typing and lint. Real HTTP source
+cancellation and permission-failure retry probes pass. No migration/mobile change.
+A separate bounded 2 MiB tmpfs probe confirms SIGKILL accumulation can cause ENOSPC
+if scratch survives worker replacement. That obligation remains open: no owner-
+unsafe stale sweep was added, and no production retention/incident is asserted.
+Private evidence: `.audit-evidence/backend-section-06h/`. Finish this release,
+then establish safe owner/preview-reader lifetime before cross-worker reclamation.
+The preceding live checkpoint follows.
+
+Section 6G merged in PR #253 as `d848cd2d71b9f35b2d174b83f0906b5e8a57db55`.
+PR Quality `36774458575` passed after an unchanged failed-job rerun: the first
+browser job failed on composer navigation destroying its page context; the second
+passed. Web/mobile/DB jobs passed initially: 6,153 web, 2,802 mobile, 1,941 SQL
+assertions and 119 DB checks (64 generation, including nine process-kill cases).
+No mobile store release was active before merge. Exact-main Quality `36775733672`
+passed all four jobs on its first run, including all 19 browser cases without
+retry. Standard release `36776882155` succeeded September 30 at 21:06:59 UTC
+(October 1, 02:36:59 IST). Independent live SHA `d848cd2d`, feed 200, admin login
+redirect 307 and unsigned webhook 401 passed. Section 6G is deployed and verified;
+no release work remains pending. Read
+`docs/audits/backend-section-06-worker-crash-release-2026-10-01.md` and preserve
+these local release records for the next audit PR.
 Read `docs/audits/backend-section-06-worker-crash-2026-10-01.md`.
 Nine actual SIGKILL cases pass with fresh-process recovery and real reservation,
 lease, settlement and notification SQL; all 64 generation DB checks pass together.
 Actual HTTP kill/restart probes cover before-dispatch refund and accepted-task
 callback/replay, preserving total/promotional credits with zero/one provider calls.
-No new runtime defect or production patch; add these regressions to DB CI.
+No new runtime defect or production patch; these regressions now run in DB CI.
 Test typing/lint pass. No migration/mobile runtime/OTA. Staging files left by
 SIGKILL are recorded as an open cleanup/disk-budget boundary, not silently fixed.
-Private evidence: `.audit-evidence/backend-section-06g/`. Finish CI/merge/release,
-then assess stale staging-file cleanup with active-file/ownership protections.
+Private evidence: `.audit-evidence/backend-section-06g/`. Next: assess stale
+staging-file cleanup with active-file/ownership protections; read private
+`next-staging-cleanup.md`. Genuine provider/edge delivery remains unverified.
 The preceding live checkpoint follows.
 
 Section 6F merged in PR #252 as `1eb94f13a303d28f4071f1772efd7caf90378673`.

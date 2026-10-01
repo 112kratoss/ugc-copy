@@ -1,7 +1,8 @@
 # Section 6G — actual generation worker termination
 
-Status: locally verified; PR/CI pending. No new production defect or runtime
-change in this batch. This extends the preceding SQL and exception-based tests
+Status: deployed and independently verified on `d848cd2d` through PR #253; see
+the [release evidence](backend-section-06-worker-crash-release-2026-10-01.md).
+No new production defect or runtime change in this batch. This extends the preceding SQL and exception-based tests
 with actual process death and fresh-process recovery.
 
 ## Scope and results
