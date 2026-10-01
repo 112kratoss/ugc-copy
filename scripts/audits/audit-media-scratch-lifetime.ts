@@ -94,7 +94,7 @@ async function audit() {
       'testsrc2=size=640x360:rate=30', '-t', '12', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '12', source], { timeout: 30_000 });
     for (const kind of ['poster', 'rendition', 'teaser']) {
       const scratch = path.join(root, kind); await mkdir(scratch);
-      const env = { ...process.env, TMPDIR: scratch, TSX_TSCONFIG_PATH: path.resolve('tsconfig.scripts.json') };
+      const env = { ...process.env, TSX_DISABLE_CACHE: '1', TMPDIR: scratch, TSX_TSCONFIG_PATH: path.resolve('tsconfig.scripts.json') };
       const owner = cp.fork(script, ['--worker', kind, source], { execArgv, env, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
       let reader: number | undefined;
       try {
@@ -132,7 +132,7 @@ async function audit() {
     }
     const cancellation = path.join(root, 'cancellation'); await mkdir(cancellation);
     const cancelled = cp.spawn(process.execPath, [...execArgv, script, '--worker', 'cancel', source], {
-      env: { ...process.env, TMPDIR: cancellation, TSX_TSCONFIG_PATH: path.resolve('tsconfig.scripts.json') },
+      env: { ...process.env, TSX_DISABLE_CACHE: '1', TMPDIR: cancellation, TSX_TSCONFIG_PATH: path.resolve('tsconfig.scripts.json') },
       stdio: 'inherit', timeout: 30_000, killSignal: 'SIGKILL',
     });
     assert.equal((await once(cancelled, 'close'))[0], 0, 'Cancellation must wait for FFmpeg to release both leases.');

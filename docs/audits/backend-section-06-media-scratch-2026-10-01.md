@@ -87,6 +87,13 @@ and metadata policy unresolved. The ledger now has 21 passed, 27 untested,
 
 ## Verification and evidence
 
+Initial PR Quality `36872492921` passed web unit, mobile, browser and database
+checks, then the new process probe found TSX compiler-cache files in its isolated
+temp root after media reclamation. The harness now disables child TSX caching;
+app cleanup must not remove unrelated compiler files. This corrects probe
+isolation without changing runtime cleanup or relaxing media assertions. The
+original CI failure is preserved.
+
 - Real failure before implementation: `regression-before.log`, 0 vs 2 reclaimed.
 - Actual FFmpeg after fix: three killed owners; live source/output leases
   preserved, both workspaces reclaimed after each child exits; successful and
