@@ -18,13 +18,15 @@ export async function createGenerationVideoPoster({
 
 export async function createGenerationVideoPosterFromFile({
   filePath,
+  sourceLeaseFd,
   storagePath,
   supabase,
 }: {
   filePath: string;
+  sourceLeaseFd?: number;
   storagePath: string;
   supabase: SupabaseClient;
 }) {
-  const poster = await createVideoPosterBufferFromFile(filePath);
+  const poster = await createVideoPosterBufferFromFile(filePath, sourceLeaseFd);
   return uploadGenerationPreview({ preview: poster, storagePath, supabase });
 }

@@ -42,7 +42,7 @@ export async function createVideoPosterBuffer(body: Blob) {
   }
 }
 
-export async function createVideoPosterBufferFromFile(inputPath: string) {
+export async function createVideoPosterBufferFromFile(inputPath: string, sourceLeaseFd?: number) {
   const tempDir = await mkdtemp(path.join(/* turbopackIgnore: true */ tmpdir(), 'generation-frame-'));
   const framePath = path.join(/* turbopackIgnore: true */ tempDir, 'frame.jpg');
 
@@ -54,9 +54,9 @@ export async function createVideoPosterBufferFromFile(inputPath: string) {
     // zero. One second is only the fallback for a source whose first frame
     // ffmpeg cannot decode.
     try {
-      await runVideoPosterFfmpeg(inputPath, framePath, '00:00:00.000');
+      await runVideoPosterFfmpeg(inputPath, framePath, '00:00:00.000', sourceLeaseFd);
     } catch {
-      await runVideoPosterFfmpeg(inputPath, framePath, '00:00:01.000');
+      await runVideoPosterFfmpeg(inputPath, framePath, '00:00:01.000', sourceLeaseFd);
     }
 
     const frame = await readFile(framePath);
@@ -77,7 +77,7 @@ export async function createVideoPosterBufferFromFile(inputPath: string) {
   }
 }
 
-export async function runVideoPosterFfmpeg(inputPath: string, framePath: string, seekTime: string) {
+export async function runVideoPosterFfmpeg(inputPath: string, framePath: string, seekTime: string, sourceLeaseFd?: number) {
   const ffmpegPath = getFfmpegPath();
   const args = [
     '-y',
@@ -94,13 +94,17 @@ export async function runVideoPosterFfmpeg(inputPath: string, framePath: string,
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(ffmpegPath, args, {
-      stdio: ['ignore', 'ignore', 'pipe'],
+      // Inherit the open lock description atomically with spawn. The kernel
+      // retains it if the Node parent dies while ffmpeg still needs the input.
+      stdio: sourceLeaseFd === undefined
+        ? ['ignore', 'ignore', 'pipe']
+        : ['ignore', 'ignore', 'pipe', sourceLeaseFd],
       timeout: VIDEO_POSTER_TIMEOUT_MS,
       killSignal: 'SIGKILL',
     });
     const stderr: Buffer[] = [];
 
-    child.stderr.on('data', (chunk: Buffer) => {
+    child.stderr!.on('data', (chunk: Buffer) => {
       stderr.push(chunk);
     });
     child.on('error', reject);

@@ -6,12 +6,58 @@ Updated 2026-10-01 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/generation-staging-cleanup-6h`, based on main `d848cd2d71b9f35b2d174b83f0906b5e8a57db55`; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/staging-reader-lock-6j`, based on main `bc2fc0976196d996fba2fcca25d399cb60f9049f`; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-Section 6H staging lifecycle fix is locally verified; PR/CI/release pending.
+Section 6J inherited staging leases/reclamation is implemented and locally
+verified; full web suite passed (6,173 tests); PR/CI/release pending. Read
+`docs/audits/backend-section-06-staging-locks-2026-10-01.md`.
+118 focused tests and all nine database worker-kill cases pass. Actual FFmpeg
+lease inheritance passes on macOS/Node 22 and Linux/Node 24; an independent Linux
+workspace probe reclaims dead owners and preserves active bytes. App/test/script
+typing, targeted lint, production build and native artifact checks pass. CI now
+runs the real FFmpeg lease probe. Preserve `.audit-evidence/backend-section-06j/`.
+New workspaces use inherited fs-ext locks and bounded published-only reclamation;
+legacy/unpublished/foreign workspaces and other scratch namespaces are untouched.
+No migration/mobile change. Next: PR checks and merge, then exact-main CI,
+standard release and independent live checks. Production remains Section 6H.
+The preceding investigation checkpoint follows.
+
+Section 6I local reader-lifetime investigation is complete; no runtime fix has
+been implemented and no release is pending for this evidence-only batch. Read
+`docs/audits/backend-section-06-reader-lifetime-2026-10-01.md`.
+The actual FFmpeg helper with an isolated FIFO retained a live child 31,521 ms
+after parent-only SIGKILL; the live-parent control killed its child at 30,005 ms.
+The repeatable script `scripts/audits/audit-video-poster-owner-lifetime.ts` exits
+1 when the finding reproduces; script typing/lint pass, and all fixture readers
+and files were removed. This is macOS/Node 22 fault injection, not a production
+incident or evidence that provider media can trigger a hung decoder. No safe
+cross-worker sweep has been established. A separate Linux/Node 24 inherited
+`flock` prototype denied reclamation while the orphan reader held its descriptor,
+allowed the delayed 614,400-byte read, then allowed exclusive cleanup after the
+reader released it. Corrected rerun has no stderr. This generic reader proof is
+not FFmpeg integration or a production utility/packaging guarantee. Next: verify
+production-compatible lock packaging and add reader/publication race tests before
+wiring cleanup. Never explicitly unlock the shared description while a child can
+hold it. Keep disk admission a separate obligation. Private evidence: `.audit-evidence/backend-section-06i/`.
+The Section 6H release records remain local for the next audit PR. An unrelated
+edit to `backend-section-05-receipt-identity-2026-09-29.md` was present at the start
+of 6I and remains untouched. The latest deployed checkpoint follows.
+
+Section 6H staging lifecycle fix is merged in PR #254 as
+`bc2fc0976196d996fba2fcca25d399cb60f9049f`. PR Quality `36804520935` passed
+all four jobs on its first run. Exact-main Quality `36805280456` also passed
+all four jobs first run: 6,159 web, 2,802 mobile, 19 browser without retry,
+1,941 SQL assertions and 119 DB checks (64 generation). Standard production
+release `36806100925` succeeded October 1 at 02:33:12 UTC (08:03:12 IST).
+Independent live SHA `bc2fc097`, feed 200, admin login redirect 307 and unsigned
+webhook 401 passed; protected staged/live health passed in the workflow.
+No mobile store release was active before merge. Section 6H is deployed and
+verified; no release work remains pending. Read
+`docs/audits/backend-section-06-staging-cleanup-release-2026-10-01.md` and preserve
+these local release records for the next audit PR.
 Read `docs/audits/backend-section-06-staging-cleanup-2026-10-01.md`.
 Three real-filesystem regressions reproduced: failed cleanup could falsely succeed
 on retry; concurrent callers returned before deletion; allocation failure left an
@@ -22,8 +68,11 @@ cancellation and permission-failure retry probes pass. No migration/mobile chang
 A separate bounded 2 MiB tmpfs probe confirms SIGKILL accumulation can cause ENOSPC
 if scratch survives worker replacement. That obligation remains open: no owner-
 unsafe stale sweep was added, and no production retention/incident is asserted.
-Private evidence: `.audit-evidence/backend-section-06h/`. Finish this release,
-then establish safe owner/preview-reader lifetime before cross-worker reclamation.
+Private evidence: `.audit-evidence/backend-section-06h/`. Next: establish safe
+owner/preview-reader lifetime before cross-worker reclamation; read private
+`next-owner-lifetime.md`.
+A separate parent-only SIGKILL probe confirmed its child survived and read the
+staged file 1.5 seconds later; this generic reader is not an ffmpeg measurement.
 The preceding live checkpoint follows.
 
 Section 6G merged in PR #253 as `d848cd2d71b9f35b2d174b83f0906b5e8a57db55`.

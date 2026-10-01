@@ -214,6 +214,7 @@ const nextConfig: NextConfig = {
   // what clears it.
   serverExternalPackages: [
     "ffmpeg-static",
+    "fs-ext",
     "@sentry/nextjs",
     "@sentry/node-core",
     "@sentry/server-utils",
@@ -222,6 +223,7 @@ const nextConfig: NextConfig = {
   // Keys are matched as globs, so a literal "[id]" reads as a character class
   // and never matches its route. Use "*" for dynamic segments.
   outputFileTracingIncludes: {
+    "/api/**": ["./node_modules/fs-ext/fs-ext.js", "./node_modules/fs-ext/package.json", "./node_modules/fs-ext/build/Release/fs_ext.node"],
     ...Object.fromEntries(SHARP_ROUTES.map((route) => [route, SHARP_TRACE])),
     "/api/cron/backend-jobs": [...FFMPEG_TRACE, ...SHARP_TRACE],
     "/api/cron/generation-completions": [...FFMPEG_TRACE, ...SHARP_TRACE],
