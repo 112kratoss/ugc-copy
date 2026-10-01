@@ -139,7 +139,18 @@ describe('creation draft resume', () => {
   });
 
   it('names its draft format for support diagnostics', () => {
-    expect(CREATION_DRAFT_FORMAT).toBe('v1 per identity, remix 4');
+    expect(CREATION_DRAFT_FORMAT).toBe('v1 per identity, remix 5');
+  });
+
+  // A remix saved before its source kept the reference clip holds no clip, and a
+  // later read of the source cannot tell that apart from the creator removing it.
+  it('starts a remix saved under the previous scope again from its source', async () => {
+    const memory = useMemoryStorage();
+    const previous = JSON.stringify(['remix', 4, 'reader', 'post', 'generation']);
+    await persistCreationDrafts({ ...defaultDrafts(), remixRestored: true }, previous);
+
+    expect(memory.has(creationDraftStorageKey(previous))).toBe(true);
+    expect(await loadPersistedCreationDrafts(remixDraftScope('reader', { generationId: 'generation', postId: 'post' })!)).toBeNull();
   });
 
   it('keeps no remix session for a creator with no identity', () => {

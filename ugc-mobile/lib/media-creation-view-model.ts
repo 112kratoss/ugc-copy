@@ -737,6 +737,8 @@ function createMediaDraftFromRemixAsset(
       mimeType: mimeTypeForKind(asset.kind),
       fileName: remixAssetFileName(asset, displayName),
       kind: asset.kind,
+      // A model that prices by reference seconds refuses a clip of unknown length.
+      durationSeconds: asset.durationSeconds ?? null,
     },
     {
       displayName,

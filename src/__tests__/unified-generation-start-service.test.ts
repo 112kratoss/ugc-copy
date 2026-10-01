@@ -320,9 +320,9 @@ describe('unified generation start service', () => {
 
     expect(startVideo).toHaveBeenCalledWith(expect.objectContaining({
       referenceVideoUrls: ['https://signed.example.com/dance.mp4'],
-      referenceVideos: [{ kind: 'video', label: 'Dance clip', storagePath: 'uploads/user-1/dance.mp4', sourceGenerationId: null }],
+      referenceVideos: [{ kind: 'video', label: 'Dance clip', storagePath: 'uploads/user-1/dance.mp4', sourceGenerationId: null, durationSeconds: 9 }],
       referenceAudioUrls: ['https://signed.example.com/beat.mp3'],
-      referenceAudios: [{ kind: 'audio', label: 'Beat', storagePath: 'uploads/user-1/beat.mp3', sourceGenerationId: 'generation-0' }],
+      referenceAudios: [{ kind: 'audio', label: 'Beat', storagePath: 'uploads/user-1/beat.mp3', sourceGenerationId: 'generation-0', durationSeconds: null }],
     }));
   });
 

@@ -459,7 +459,7 @@ describe('a recipe with a reference clip sent as a plain URL', () => {
       mediaType: 'video',
       sources: ['https://project.supabase.co/storage/v1/object/sign/uploads/creator-1/dance.mp4?token=read'],
       resolvedUrls: ['https://project.supabase.co/storage/v1/object/sign/uploads/creator-1/dance.mp4?token=provider'],
-      descriptors: [{ kind: 'video', label: 'Dance clip', storagePath: 'uploads/creator-1/dance.mp4', sourceGenerationId: null }],
+      descriptors: [{ kind: 'video', label: 'Dance clip', storagePath: 'uploads/creator-1/dance.mp4', sourceGenerationId: null, durationSeconds: 9.4 }],
     });
     mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', [KEPT_IMAGE, {
       id: 'row-1',
@@ -471,18 +471,20 @@ describe('a recipe with a reference clip sent as a plain URL', () => {
       storagePath: 'generation_inputs/creator-1/gen-1/01-reference_video.mp4',
       sourceGenerationId: clip.sourceGenerationId ?? null,
       sortOrder: 1,
-      metadata: { sourceStoragePath: clip.sourceStoragePath ?? null },
+      metadata: { ...clip.metadata, sourceStoragePath: clip.sourceStoragePath ?? null },
     }]]]));
 
     const bundle = await loadRemixSourceBundle(request(), 'gen-1');
 
     expect(bundle.inputs.video?.elements).toEqual([expect.objectContaining({ handle: '@ali', url: 'https://signed.example/ali.png' })]);
+    // With its length: a Seedance remix cannot be quoted without it.
     expect(bundle.inputs.video?.referenceVideos).toEqual([{
       kind: 'video',
       label: 'Dance clip',
       storagePath: 'generation_inputs/creator-1/gen-1/01-reference_video.mp4',
       sourceGenerationId: null,
       url: 'https://signed.example/dance.mp4',
+      durationSeconds: 9.4,
     }]);
     expect(bundle.restoreIssues.filter((issue) => issue.startsWith('input-media-not-kept'))).toEqual([]);
   });

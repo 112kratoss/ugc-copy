@@ -43,8 +43,14 @@ export function ordinaryDraftScope(identityUserId: string) {
  * Seedance 2 remix reopened at 16:9 carrying Kling's mode and isMultiShot, an image remix
  * at `auto`, and a motion remix as the empty default draft marked restored. Sessions saved
  * under 3 start again from the source.
+ *
+ * 5: until 2026-10-01 a run's reference clip was never kept, so its remix restored without
+ * one. A source read after the clip was kept only renews links, and the save that follows
+ * records the absent clip as the creator's removal, so such a session can never get it back.
+ * Sessions saved under 4 start again from the source, the owner's decision; 4 had been live
+ * for two weeks.
  */
-const REMIX_DRAFT_SCOPE_VERSION = 4;
+const REMIX_DRAFT_SCOPE_VERSION = 5;
 
 /** How saved drafts are keyed on this build, as support diagnostics name it. */
 export const CREATION_DRAFT_FORMAT = `${CREATION_DRAFT_STORAGE_KEY.slice(CREATION_DRAFT_STORAGE_KEY.lastIndexOf('.') + 1)} per identity, remix ${REMIX_DRAFT_SCOPE_VERSION}`;

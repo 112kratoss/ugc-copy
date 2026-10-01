@@ -3126,7 +3126,7 @@ describe('generation services', () => {
       }],
       elementImageUrls: ['https://signed.example.com/ali.png'],
       referenceVideoUrls: ['https://signed.example.com/dance.mp4'],
-      referenceVideos: [{ kind: 'video', label: 'Dance clip', storagePath: 'uploads/user-1/dance.mp4', sourceGenerationId: null }],
+      referenceVideos: [{ kind: 'video', label: 'Dance clip', storagePath: 'uploads/user-1/dance.mp4', sourceGenerationId: null, durationSeconds: 9.4 }],
       referenceAudioUrls: ['https://signed.example.com/beat.mp3'],
       referenceAudios: [{ kind: 'audio', label: 'Beat', storagePath: 'uploads/user-1/beat.mp3', sourceGenerationId: null }],
     });
@@ -3140,8 +3140,12 @@ describe('generation services', () => {
       bucket: 'generation_inputs',
       filePath: 'user-1/gen-1/01-reference_video.mp4',
     });
+    // The measured length is kept beside the clip: a remix needs it to quote.
     expect(inputMediaRows[1]).toMatchObject({
-      metadata: expect.objectContaining({ sourceStoragePath: 'uploads/user-1/dance.mp4' }),
+      metadata: expect.objectContaining({ sourceStoragePath: 'uploads/user-1/dance.mp4', durationSeconds: 9.4 }),
+    });
+    expect(inputMediaRows[2]).toMatchObject({
+      metadata: expect.not.objectContaining({ durationSeconds: expect.anything() }),
     });
   });
 

@@ -551,6 +551,44 @@ describe('reference clips and tracks sent as plain URLs', () => {
     }]);
   });
 
+  // A model that prices by reference seconds will not quote a clip of unknown
+  // length, so a remix has to hand the length back with the clip.
+  it('keeps a clip’s length with it, and reports it when the clip is restored', async () => {
+    const { collectReferenceMediaCandidates, toRemixAssetDescriptor } = await import('@/lib/generation-input-media');
+
+    const [candidate] = collectReferenceMediaCandidates({
+      mediaType: 'video',
+      sources: ['uploads/user-1/dance.mp4'],
+      resolvedUrls: ['https://signed.example.com/dance.mp4'],
+      descriptors: [{ kind: 'video', label: 'Dance clip', storagePath: 'uploads/user-1/dance.mp4', sourceGenerationId: null, durationSeconds: 9.4 }],
+    });
+    expect(candidate.metadata).toEqual({ durationSeconds: 9.4 });
+
+    const kept: GenerationInputMediaItem = {
+      id: 'row-1',
+      generationId: 'gen-1',
+      mediaType: 'video',
+      role: 'reference_video',
+      label: 'Dance clip',
+      url: 'https://signed.example.com/kept.mp4',
+      storagePath: 'generation_inputs/user-1/gen-1/01-reference_video.mp4',
+      sourceGenerationId: null,
+      sortOrder: 1,
+      metadata: { ...candidate.metadata, sourceStoragePath: 'uploads/user-1/dance.mp4' },
+    };
+    expect(toRemixAssetDescriptor(kept)).toEqual({
+      kind: 'video',
+      label: 'Dance clip',
+      storagePath: 'generation_inputs/user-1/gen-1/01-reference_video.mp4',
+      sourceGenerationId: null,
+      url: 'https://signed.example.com/kept.mp4',
+      durationSeconds: 9.4,
+    });
+    // Kept before lengths were recorded, or never measured: nothing is invented.
+    expect(toRemixAssetDescriptor({ ...kept, metadata: { durationSeconds: 0 } })).not.toHaveProperty('durationSeconds');
+    expect(toRemixAssetDescriptor({ ...kept, metadata: {} })).not.toHaveProperty('durationSeconds');
+  });
+
   it('reads the staged file from the reference itself when the caller described nothing', async () => {
     const { collectReferenceMediaCandidates } = await import('@/lib/generation-input-media');
 
