@@ -369,10 +369,10 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
       from: vi.fn((bucket: string) => ({
         download: vi.fn(async (filePath: string) => {
           if (bucket === 'uploads') {
-            return {
-              data: new Blob([`stored:${filePath}`], { type: filePath.endsWith('.mp4') ? 'video/mp4' : 'image/png' }),
-              error: null,
-            };
+            const type = filePath.endsWith('.mp4')
+              ? 'video/mp4'
+              : filePath.endsWith('.mp3') ? 'audio/mpeg' : 'image/png';
+            return { data: new Blob([`stored:${filePath}`], { type }), error: null };
           }
 
           return { data: null, error: { message: 'missing' } };
@@ -3094,6 +3094,87 @@ describe('generation services', () => {
         images: [expect.objectContaining({ assetId: 'asset-image-1' })],
       },
     });
+  });
+
+  // The catalog adapter sends a clip or a track as a plain URL, not as a
+  // prepared asset. Only prepared assets were kept, so the run went to the
+  // provider with its clip, and a remix of it came back with the images alone.
+  it('keeps the reference clip and track a Seedance run sends as plain URLs', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    vi.mocked(fetch).mockImplementation(async () => ({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-seedance-plain-references-1' } }),
+    }) as Response);
+
+    const { supabase, uploads, inputMediaRows } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Change the first person in the reference video to @ali.',
+      model: 'seedance-2',
+      duration: 12,
+      aspectRatio: '9:16',
+      resolution: '480p',
+      referenceMode: 'elements',
+      elements: [{
+        id: 'imageReferences-1',
+        displayName: 'Ali',
+        handle: '@ali',
+        storagePath: 'uploads/user-1/ali.png',
+        sourceGenerationId: null,
+      }],
+      elementImageUrls: ['https://signed.example.com/ali.png'],
+      referenceVideoUrls: ['https://signed.example.com/dance.mp4'],
+      referenceVideos: [{ kind: 'video', label: 'Dance clip', storagePath: 'uploads/user-1/dance.mp4', sourceGenerationId: null }],
+      referenceAudioUrls: ['https://signed.example.com/beat.mp3'],
+      referenceAudios: [{ kind: 'audio', label: 'Beat', storagePath: 'uploads/user-1/beat.mp3', sourceGenerationId: null }],
+    });
+
+    expect(inputMediaRows.map((row) => [row.media_type, row.role, row.label, row.storage_path])).toEqual([
+      ['image', 'reference_image', 'Ali', 'generation_inputs/user-1/gen-1/00-reference_image.png'],
+      ['video', 'reference_video', 'Dance clip', 'generation_inputs/user-1/gen-1/01-reference_video.mp4'],
+      ['audio', 'reference_audio', 'Beat', 'generation_inputs/user-1/gen-1/02-reference_audio.mp3'],
+    ]);
+    expect(uploads).toContainEqual({
+      bucket: 'generation_inputs',
+      filePath: 'user-1/gen-1/01-reference_video.mp4',
+    });
+    expect(inputMediaRows[1]).toMatchObject({
+      metadata: expect.objectContaining({ sourceStoragePath: 'uploads/user-1/dance.mp4' }),
+    });
+  });
+
+  it('keeps a Kling clip once, as the named element it is sent as', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    vi.mocked(fetch).mockImplementation(async () => ({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-kling-element-once-1' } }),
+    }) as Response);
+
+    const { supabase, inputMediaRows } = createSupabaseMock();
+    // The catalog adapter hands Kling 3.0 the same clip in both shapes.
+    await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Follow @reference_dancer through the room.',
+      model: 'kling-3.0-video',
+      duration: 5,
+      aspectRatio: '16:9',
+      mode: 'std',
+      referenceVideoUrls: ['https://cdn.example.com/ref-dancer.mp4'],
+      referenceVideos: [{ kind: 'video', label: 'Reference dancer', storagePath: 'uploads/user-1/ref-dancer.mp4', sourceGenerationId: null }],
+      klingVideoElements: [{
+        url: 'https://cdn.example.com/ref-dancer.mp4',
+        handle: '@reference_dancer',
+        displayName: 'Reference dancer',
+        storagePath: 'uploads/user-1/ref-dancer.mp4',
+        sourceGenerationId: null,
+      }],
+    });
+
+    expect(inputMediaRows.map((row) => row.role)).toEqual(['reference_video']);
   });
 
   it('passes Seedance 2 4K output through to Kie with the matching quote', async () => {

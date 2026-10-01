@@ -178,6 +178,16 @@ function isFetchableUrl(value: string | null | undefined): value is string {
   return typeof value === 'string' && /^https?:\/\//i.test(value.trim());
 }
 
+/**
+ * One name for a media source however it is written. A stored object is signed
+ * again each time it is read, so two links to it differ; its bucket and path
+ * do not.
+ */
+function mediaSourceKey(source: string): string {
+  const location = normalizeStoragePath(source);
+  return location ? `${location.bucket}/${location.filePath}` : source.trim();
+}
+
 function inferCandidateContentType(
   sourceName: string | null | undefined,
   mediaType: GenerationInputMediaType,
@@ -852,9 +862,12 @@ export async function buildLegacyGenerationInputMedia(params: {
   });
   if (endFrame) items.push(endFrame);
 
+  const preparedSources = new Set<string>();
+
   for (const [index, asset] of (seedanceAssets?.videos ?? []).entries()) {
     const sourceUrl = getSeedanceSourceUrl(asset);
     if (!sourceUrl || !isAllowlistedRemoteMediaUrl(sourceUrl)) continue;
+    preparedSources.add(mediaSourceKey(sourceUrl));
     items.push(createLegacyInputItem({
       generationId: params.generationId,
       mediaType: 'video',
@@ -869,6 +882,7 @@ export async function buildLegacyGenerationInputMedia(params: {
   for (const [index, asset] of (seedanceAssets?.audios ?? []).entries()) {
     const sourceUrl = getSeedanceSourceUrl(asset);
     if (!sourceUrl || !isAllowlistedRemoteMediaUrl(sourceUrl)) continue;
+    preparedSources.add(mediaSourceKey(sourceUrl));
     items.push(createLegacyInputItem({
       generationId: params.generationId,
       mediaType: 'audio',
@@ -879,6 +893,38 @@ export async function buildLegacyGenerationInputMedia(params: {
       metadata: { seedanceAsset: asset, sourceUrl },
     }));
   }
+
+  // A clip or track sent as a plain URL is recorded only as the link the
+  // provider was given. A prepared asset is declared above from its own source,
+  // and a provider handle names nothing that could have been kept.
+  const pushPlainReferences = async (value: unknown, mediaType: 'video' | 'audio') => {
+    for (const [index, source] of (Array.isArray(value) ? value : []).entries()) {
+      if (typeof source !== 'string' || preparedSources.has(mediaSourceKey(source))) continue;
+      const location = normalizeStoragePath(source);
+      const storagePath = location ? `${location.bucket}/${location.filePath}` : null;
+      if (!storagePath && !isAllowlistedRemoteMediaUrl(source)) continue;
+
+      // The recorded link to a stored object has long expired, so it is signed
+      // again from its path, which also holds it to the owner's prefix.
+      const url = urlMode !== 'signed'
+        ? null
+        : storagePath
+          ? await resolveLegacyStorageUrl(params.supabase, storagePath, params.ownerUserId)
+          : source;
+      items.push(createLegacyInputItem({
+        generationId: params.generationId,
+        mediaType,
+        role: mediaType === 'video' ? 'reference_video' : 'reference_audio',
+        label: `${mediaType === 'video' ? 'Video' : 'Audio'} reference ${index + 1}`,
+        url,
+        storagePath,
+        sortOrder: sortOrder++,
+        metadata: storagePath ? {} : { sourceUrl: source },
+      }));
+    }
+  };
+  await pushPlainReferences(params.workflowSettings.referenceVideoUrls, 'video');
+  await pushPlainReferences(params.workflowSettings.referenceAudioUrls, 'audio');
 
   // Legacy motion starts name these two inputs; the catalog path keeps them as slots.
   const motionInputs = motionInputDescriptors(params.workflowSettings);
@@ -1047,4 +1093,47 @@ export function collectSeedanceAssetCandidates(params: {
   }
 
   return candidates;
+}
+
+/**
+ * The reference clips or tracks a video run sends as plain URLs, as inputs to
+ * keep.
+ *
+ * `sources` are the references as submitted and `resolvedUrls` what the
+ * provider was given for each, in the same order. `descriptors` says what the
+ * caller knows about each one, again in order. Two kinds of reference keep
+ * nothing here: a provider asset handle, which names no media, and a source
+ * that `alreadyKept` holds, which is how the prepared-asset flow names a clip
+ * a second time.
+ */
+export function collectReferenceMediaCandidates(params: {
+  mediaType: 'video' | 'audio';
+  sources: string[];
+  resolvedUrls: string[];
+  descriptors?: (RemixMediaAssetDescriptor | null)[];
+  alreadyKept?: PersistGenerationInputCandidate[];
+}): PersistGenerationInputCandidate[] {
+  const keptSources = new Set(
+    (params.alreadyKept ?? [])
+      .map((candidate) => candidate.sourceUrl)
+      .filter(isFetchableUrl)
+      .map(mediaSourceKey),
+  );
+
+  return params.resolvedUrls.flatMap((sourceUrl, index) => {
+    const source = params.sources[index];
+    if (!source || !isFetchableUrl(sourceUrl) || keptSources.has(mediaSourceKey(source))) return [];
+    const descriptor = normalizeRemixMediaAssetDescriptor(params.descriptors?.[index], params.mediaType);
+
+    return [{
+      mediaType: params.mediaType,
+      role: params.mediaType === 'video' ? 'reference_video' : 'reference_audio',
+      label: descriptor?.label ?? `${params.mediaType === 'video' ? 'Video' : 'Audio'} reference ${index + 1}`,
+      sourceUrl,
+      // As for frames: with no staged path given, the reference as submitted
+      // names the caller's own object when it is a storage path or storage URL.
+      sourceStoragePath: descriptor?.storagePath ?? source,
+      sourceGenerationId: descriptor?.sourceGenerationId ?? null,
+    } satisfies PersistGenerationInputCandidate];
+  });
 }

@@ -263,6 +263,69 @@ describe('unified generation start service', () => {
     }));
   });
 
+  // The legacy video start takes clips and tracks as URLs. Handed only those, it
+  // had nothing to keep them by, and a remix of the run lost its reference clip.
+  it('tells the video start what each reference clip and track is, beside its URL', async () => {
+    const startVideo = vi.fn(async () => ({
+      predictionId: 'provider-task-seedance',
+      generationId: 'generation-seedance',
+      remainingCredits: 10,
+      cost: 90,
+    }));
+    const request = parseUnifiedGenerationRequest({
+      kind: 'video',
+      modelId: 'seedance-2',
+      catalogRevision: 'catalog-v2',
+      prompt: 'Change the first person in the reference video to @ali.',
+      settings: { duration: 12, resolution: '480p', referenceMode: 'elements' },
+      inputs: [
+        { slot: 'imageReferences', kind: 'image', url: 'https://signed.example.com/ali.png', label: 'Ali', handle: '@ali', storagePath: 'uploads/user-1/ali.png' },
+        { slot: 'videoReferences', kind: 'video', url: 'https://signed.example.com/dance.mp4', label: 'Dance clip', storagePath: 'uploads/user-1/dance.mp4', durationSeconds: 9 },
+        { slot: 'audioReferences', kind: 'audio', url: 'https://signed.example.com/beat.mp3', label: 'Beat', storagePath: 'uploads/user-1/beat.mp3', sourceGenerationId: 'generation-0' },
+      ],
+    });
+
+    await dispatchCatalogGenerationAdapter({
+      request,
+      quote: {
+        modelId: 'seedance-2',
+        catalogRevision: 'catalog-v2',
+        normalizedSettings: { duration: 12, resolution: '480p', referenceMode: 'elements' },
+        costCredits: 90,
+      },
+      operation: {
+        modelId: 'seedance-2',
+        kind: 'video',
+        adapterKey: 'video-v1',
+        providerModelMap: {},
+        adapterConfig: {},
+        pricingStrategy: 'flat',
+        pricingConfig: { credits: 90 },
+        validationStrategy: 'descriptor-rules-v1',
+        validationConfig: {},
+        verificationConfig: {},
+      },
+      supabase: {} as never,
+      adminSupabase: {} as never,
+      userId: 'user-1',
+      clientRequestKeyHash: 'request-hash',
+      sourceGenerationId: null,
+      dependencies: {
+        startCatalog: vi.fn(),
+        startImage: vi.fn(),
+        startVideo,
+        startMotion: vi.fn(),
+      },
+    });
+
+    expect(startVideo).toHaveBeenCalledWith(expect.objectContaining({
+      referenceVideoUrls: ['https://signed.example.com/dance.mp4'],
+      referenceVideos: [{ kind: 'video', label: 'Dance clip', storagePath: 'uploads/user-1/dance.mp4', sourceGenerationId: null }],
+      referenceAudioUrls: ['https://signed.example.com/beat.mp3'],
+      referenceAudios: [{ kind: 'audio', label: 'Beat', storagePath: 'uploads/user-1/beat.mp3', sourceGenerationId: 'generation-0' }],
+    }));
+  });
+
   it('rate limits before resolving the remix source or looking up attempts', async () => {
     // Grants on generations only allow service-role reads of is_public, so the
     // route must hand resolveSource the admin client — passing the user client

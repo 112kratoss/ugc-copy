@@ -57,6 +57,7 @@ vi.mock('@/lib/post-resource-bundles-server', () => ({
 }));
 
 import { buildCatalogInputMediaCandidates } from '@/lib/catalog-input-media-candidates';
+import { collectReferenceMediaCandidates } from '@/lib/generation-input-media';
 import { loadRemixSourceBundle, RemixSourceError } from '@/lib/remix-source-server';
 
 const LOCKED_PROMPT = 'The prompt a buyer pays for';
@@ -399,6 +400,90 @@ describe('a recipe whose inputs were only partly kept', () => {
 
     const bundle = await loadRemixSourceBundle(request(), 'gen-1');
 
+    expect(bundle.restoreIssues.filter((issue) => issue.startsWith('input-media-not-kept'))).toEqual([]);
+  });
+});
+
+// A Seedance run sends its reference clip to the provider as a plain URL, and
+// that URL is all the recipe records of it. Reported from a live post: the
+// remix opened with the three reference images and no sign that a clip existed.
+describe('a recipe with a reference clip sent as a plain URL', () => {
+  const OWNER_ACCESS = { allowed: true, basis: 'owner', post: null, includeSharedInputMedia: true, recipeEntitled: false };
+  const KEPT_IMAGE = {
+    id: 'row-0',
+    generationId: 'gen-1',
+    mediaType: 'image',
+    role: 'reference_image',
+    label: 'Ali',
+    url: 'https://signed.example/ali.png',
+    storagePath: 'generation_inputs/creator-1/gen-1/00-reference_image.png',
+    sourceGenerationId: null,
+    sortOrder: 0,
+    metadata: { id: 'imageReferences-1', handle: '@ali', displayName: 'Ali', sourceStoragePath: 'uploads/creator-1/ali.png' },
+  };
+
+  beforeEach(async () => {
+    // The recipe is read by the real builder here: what it declares is the point.
+    const actual = await vi.importActual<typeof import('@/lib/generation-input-media')>('@/lib/generation-input-media');
+    mocks.buildLegacyGenerationInputMedia.mockImplementation(actual.buildLegacyGenerationInputMedia);
+    mocks.resolveRemixAccess.mockResolvedValue(OWNER_ACCESS);
+    mocks.generation = {
+      ...mocks.generation,
+      category: 'video',
+      model: 'seedance-2',
+      prompt: 'Change the first person in the reference video to @ali',
+      workflow_settings: {
+        model: 'seedance-2',
+        referenceMode: 'references',
+        elements: [{ id: 'imageReferences-1', displayName: 'Ali', handle: '@ali', storagePath: 'uploads/creator-1/ali.png', sourceGenerationId: null }],
+        referenceVideoUrls: [
+          'https://project.supabase.co/storage/v1/object/sign/uploads/creator-1/dance.mp4?token=expired',
+        ],
+      },
+    };
+  });
+
+  it('says a clip is missing when only the images were kept', async () => {
+    mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', [KEPT_IMAGE]]]));
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.inputs.video?.referenceVideos).toEqual([]);
+    expect(bundle.restoreIssues).toContain('input-media-not-kept:video');
+  });
+
+  // The round trip for a run started now: the row the video start keeps for the
+  // clip, read back the way loadGenerationInputMediaMap returns it.
+  it('restores the clip beside the images once the run keeps it', async () => {
+    const [clip] = collectReferenceMediaCandidates({
+      mediaType: 'video',
+      sources: ['https://project.supabase.co/storage/v1/object/sign/uploads/creator-1/dance.mp4?token=read'],
+      resolvedUrls: ['https://project.supabase.co/storage/v1/object/sign/uploads/creator-1/dance.mp4?token=provider'],
+      descriptors: [{ kind: 'video', label: 'Dance clip', storagePath: 'uploads/creator-1/dance.mp4', sourceGenerationId: null }],
+    });
+    mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', [KEPT_IMAGE, {
+      id: 'row-1',
+      generationId: 'gen-1',
+      mediaType: clip.mediaType,
+      role: clip.role,
+      label: clip.label ?? '',
+      url: 'https://signed.example/dance.mp4',
+      storagePath: 'generation_inputs/creator-1/gen-1/01-reference_video.mp4',
+      sourceGenerationId: clip.sourceGenerationId ?? null,
+      sortOrder: 1,
+      metadata: { sourceStoragePath: clip.sourceStoragePath ?? null },
+    }]]]));
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.inputs.video?.elements).toEqual([expect.objectContaining({ handle: '@ali', url: 'https://signed.example/ali.png' })]);
+    expect(bundle.inputs.video?.referenceVideos).toEqual([{
+      kind: 'video',
+      label: 'Dance clip',
+      storagePath: 'generation_inputs/creator-1/gen-1/01-reference_video.mp4',
+      sourceGenerationId: null,
+      url: 'https://signed.example/dance.mp4',
+    }]);
     expect(bundle.restoreIssues.filter((issue) => issue.startsWith('input-media-not-kept'))).toEqual([]);
   });
 });

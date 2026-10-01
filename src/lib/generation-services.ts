@@ -48,6 +48,7 @@ import {
 } from '@/lib/generation-timing';
 import {
   collectImageInputCandidates,
+  collectReferenceMediaCandidates,
   collectSeedanceAssetCandidates,
   persistGenerationInputMedia,
   type PersistGenerationInputCandidate,
@@ -2068,6 +2069,9 @@ export async function startVideoGeneration(params: {
   imageUrls?: string[];
   referenceVideoUrls?: string[];
   referenceAudioUrls?: string[];
+  /** What the caller knows about each reference clip and track, in the order of their URLs. */
+  referenceVideos?: (RemixMediaAssetDescriptor | null)[];
+  referenceAudios?: (RemixMediaAssetDescriptor | null)[];
   preparedAudioIds?: string[];
   characterIds?: string[];
   klingVideoElements?: KlingVideoElementInput[];
@@ -2108,6 +2112,8 @@ export async function startVideoGeneration(params: {
     imageUrls = [],
     referenceVideoUrls = [],
     referenceAudioUrls = [],
+    referenceVideos,
+    referenceAudios,
     preparedAudioIds = [],
     characterIds = [],
     klingVideoElements = [],
@@ -3064,12 +3070,36 @@ export async function startVideoGeneration(params: {
         },
       });
     }
-    videoInputCandidates.push(
-      ...collectSeedanceAssetCandidates({
-        assets: seedanceAssets,
-        offset: inputSortOrder,
-      })
-    );
+    const seedanceAssetCandidates = collectSeedanceAssetCandidates({
+      assets: seedanceAssets,
+      offset: inputSortOrder,
+    });
+    videoInputCandidates.push(...seedanceAssetCandidates);
+    inputSortOrder += seedanceAssetCandidates.length;
+
+    // The clips and tracks the provider was sent as plain URLs. Only models that
+    // take them that way resolve any, so a Kling clip stays with its element above.
+    for (const candidate of [
+      ...collectReferenceMediaCandidates({
+        mediaType: 'video',
+        sources: normalizeMediaUrlList(referenceVideoUrls),
+        resolvedUrls: resolvedReferenceVideoUrls,
+        descriptors: referenceVideos,
+        alreadyKept: seedanceAssetCandidates,
+      }),
+      ...collectReferenceMediaCandidates({
+        mediaType: 'audio',
+        sources: normalizeMediaUrlList(referenceAudioUrls),
+        resolvedUrls: resolvedReferenceAudioUrls,
+        descriptors: referenceAudios,
+        alreadyKept: seedanceAssetCandidates,
+      }),
+    ]) {
+      videoInputCandidates.push({
+        ...candidate,
+        sortOrder: inputSortOrder++,
+      });
+    }
 
     if (persistInputMedia) {
       await persistGenerationInputMedia({
