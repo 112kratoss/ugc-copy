@@ -3,9 +3,7 @@ import type { ShowcaseFeedItem } from '@/lib/types';
 import type { PreviewViewerSource } from './immersive-preview-view-model';
 import { HOME_TOOL_SHORTCUTS, formatCompactCount, formatRelativeTime, type HomeToolShortcut } from './home-view-model';
 import type { ShowcaseFeedFilters } from './showcase-feed-query';
-import {
-  canRecreateShowcaseItem,
-} from './showcase-feed-view-model';
+import { getShowcaseRemixAccess, type ShowcaseRemixAccess } from './showcase-remix-access';
 
 export type HomeFeedChipId = 'for-you' | 'recent' | 'unlocks' | 'notes';
 
@@ -57,10 +55,15 @@ export interface HomeFeedCard {
   previewThumbhash: string | null;
   previewCacheKey: string;
   aspectRatio: number | null;
-  canRemix: boolean;
+  /**
+   * What a tap on Remix has to get through first; null when the post has
+   * nothing to remix, which is the only case with no Remix action.
+   */
+  remixAccess: ShowcaseRemixAccess | null;
   saveLabel: string;
   commentLabel: string;
   remixLabel: string;
+  remixAccessibilityLabel: string;
   isSaved: boolean;
   viewerSource: PreviewViewerSource;
 }
@@ -303,12 +306,14 @@ export function showcaseToHomeFeedCard(item: ShowcaseFeedItem): HomeFeedCard {
   const cover = item.mediaItems?.[0];
   const preview = cover?.preview;
   const creatorName = item.creator.name || item.creator.username || 'Creator';
+  const title = homeCardTitle(item, previewKind);
+  const remixAccess = getShowcaseRemixAccess(item);
 
   return {
     id: item.id,
     item,
     previewKind,
-    title: homeCardTitle(item, previewKind),
+    title,
     bodyText: homeCardBody(item, previewKind),
     bodyLines: homeCardBodyLines(previewKind),
     creatorLabel: item.creator.username ? `@${item.creator.username}` : creatorName,
@@ -324,10 +329,12 @@ export function showcaseToHomeFeedCard(item: ShowcaseFeedItem): HomeFeedCard {
     previewThumbhash: preview?.thumbhash ?? cover?.previewThumbhash ?? null,
     previewCacheKey: preview?.cacheKey ?? cover?.previewCacheKey ?? cover?.id ?? item.id,
     aspectRatio: getHomeCardAspectRatio(item),
-    canRemix: canRecreateShowcaseItem(item),
+    remixAccess,
     saveLabel: formatFeedActionLabel(item.saveCount, 'Save'),
     commentLabel: formatFeedActionLabel(item.commentCount, 'Comment'),
     remixLabel: item.remixCount > 0 ? `Remix · ${formatCompactCount(item.remixCount)}` : 'Remix',
+    // A free unlock asks nothing of the viewer, so only a paid one is announced.
+    remixAccessibilityLabel: remixAccess === 'paid-unlock' ? `Unlock ${title} to remix it` : `Remix ${title}`,
     isSaved: Boolean(item.isSaved),
     viewerSource: 'showcase-feed',
   };

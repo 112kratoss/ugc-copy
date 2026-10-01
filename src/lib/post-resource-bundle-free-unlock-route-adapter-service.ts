@@ -2,7 +2,7 @@ import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { isGuestUser } from '@/lib/account-identity';
 import 'server-only';
 
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
@@ -12,9 +12,12 @@ import {
 } from '@/lib/post-resource-bundle-free-unlock-service';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
+type RunAfterResponse = (task: () => Promise<unknown>) => void;
+
 type PostResourceBundleFreeUnlockRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
+  runAfterResponse?: RunAfterResponse;
   unlockFreePostResourceBundleForRoute?: typeof unlockFreePostResourceBundleForRoute;
 };
 
@@ -24,6 +27,7 @@ function resolveDependencies(
   return {
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
+    runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
     unlockFreePostResourceBundleForRoute:
       dependencies?.unlockFreePostResourceBundleForRoute ?? unlockFreePostResourceBundleForRoute,
   };
@@ -63,6 +67,9 @@ async function handlePostResourceBundleFreeUnlockPOST({
     adminSupabase: dependencies.createServiceClient(),
     postId,
     buyerUserId: user.id,
+    // The buyer's next request waits on this answer, so the pushes go out
+    // behind it rather than in front.
+    runAfterResponse: dependencies.runAfterResponse,
   }));
 }
 

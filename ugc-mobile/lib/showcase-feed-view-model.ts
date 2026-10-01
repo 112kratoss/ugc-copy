@@ -4,6 +4,7 @@ import type { PreviewViewerSource } from './immersive-preview-view-model';
 import { formatCompactCount } from './home-view-model';
 import { formatUnlockCreditPrice } from './pricing';
 import { isTextOnlyShowcasePost } from './showcase-display';
+import { getShowcaseRemixAccess } from './showcase-remix-access';
 
 export interface ShowcaseMasonryCard {
   id: string;
@@ -227,12 +228,9 @@ export function cardUnlock(item: ShowcaseFeedItem): ShowcaseMasonryUnlock | null
   return null;
 }
 
-function isAppCreatedShowcaseItem(item: ShowcaseFeedItem) {
-  return typeof item.generationId === 'string' && item.generationId.trim().length > 0;
-}
-
-export function canRecreateShowcaseItem(item: ShowcaseFeedItem) {
-  return isAppCreatedShowcaseItem(item) && item.canRemix;
+/** Remixable with nothing in the way; a post behind an unlock wears the unlock's badge instead. */
+function canRecreateShowcaseItem(item: ShowcaseFeedItem) {
+  return getShowcaseRemixAccess(item) === 'open';
 }
 
 function resourceSummary(kinds: string[] | undefined, allowRemix: boolean) {

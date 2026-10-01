@@ -435,6 +435,7 @@ These describe the app as of 0.1.6; each screen's `hig-*` test pins the details.
    - written posts open the post page;
    - the comment control opens comments directly;
    - the unused space within a card opens that card's post, while its labelled controls keep their own actions. There is no footer beneath the action row: remix descriptions, resource summaries, and unlock labels belong in the post details.
+   - Remix is on every card whose post can be remixed, whoever is looking (`lib/showcase-remix-access.ts`). When the creator put remix behind a free unlock, the tap takes the unlock on its way to the editor. When the unlock is paid, the control shows a lock in place of the remix glyph and opens the unlock sheet, which carries on into the editor once paid; credits are never spent by a tap in the feed. An upload or a written post has nothing to remix and shows no Remix.
 
 Rules:
 
@@ -466,6 +467,7 @@ Rules:
 - **Right rail:** Save, Comment, Share, Details, and Remix or Recreate (coral).
   - Own posts add Publish and a visibility control.
   - Paid posts add Unlock.
+  - Remix follows the same rule as Home's cards: a free unlock is taken by the tap, a paid one opens the unlock sheet first.
 - **Chrome:**
   - The creator and caption sit on a shade at the bottom.
   - Pictures and videos that don't fill the screen sit on plain black bands (`mediaColors.mediaGround`), as in a video player. The same black fills any contained picture or video elsewhere, such as reference tiles and creator-profile videos. Nothing is blurred: `media-blur-guard.test.ts` allows no `blurRadius`.

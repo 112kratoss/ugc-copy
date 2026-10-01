@@ -71,6 +71,7 @@ import {
   type ImmersiveSlidePage,
 } from '@/lib/immersive-slide-pages';
 import { getReelFollowTarget } from '@/lib/reel-overlay-view-model';
+import { startShowcaseRemix } from '@/lib/remix-start';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { useCreatorFollow } from '@/lib/use-creator-follow';
 import { useHardwareBack } from '@/lib/use-hardware-back';
@@ -128,6 +129,7 @@ import { appTheme, mediaColors } from '@/lib/theme';
 import { useNavigationBarSurface } from '@/lib/system-bars';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 import type { PostResourceKind, ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
+import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
 import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE, canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getViewerShareIntent, getViewerShareSourceSurface } from '@/lib/viewer-actions';
 import {
   changePostVisibility,
@@ -855,8 +857,35 @@ function ImmersivePreviewViewer() {
       return;
     }
 
+    const unlock = item.details?.unlock ?? null;
     const startRemix = async () => {
-      const response = await api.remixShowcasePost(showcasePostId);
+      // A free unlock is taken by this same tap. A paid one never is: the rail
+      // sends those to the unlock sheet, which calls back here once it is paid —
+      // with the slide still reading as locked until it refetches.
+      const started = await startShowcaseRemix({
+        api,
+        postId: showcasePostId,
+        claimFreeUnlock: item.remixAccess === 'free-unlock',
+      });
+      if (started.kind === 'unlock-required') {
+        // This slide was loaded before the creator put remix behind an unlock.
+        if (unlock) {
+          setUnlockRemixOpenItemId(item.id);
+          return;
+        }
+        void queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] });
+        showMessageDialog({
+          title: 'Unlock needed',
+          message: 'The creator has put this remix behind an unlock. Open the post’s details to get it.',
+        });
+        return;
+      }
+      if (started.claimedFreeUnlock && unlock) {
+        // Not awaited: the editor opens now, and the reel learns that this
+        // viewer holds the unlock behind it.
+        void refreshUnlockedBundleCaches(queryClient, unlock);
+      }
+      const response = started.response;
       if (source === 'showcase-feed') {
         recordViewerFeedEvent(item, 'remix_start');
       }

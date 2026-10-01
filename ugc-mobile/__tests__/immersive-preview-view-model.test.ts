@@ -16,6 +16,7 @@ import {
   showcaseFeedItemOpenHref,
   textPostViewerHref,
 } from '../lib/immersive-preview-view-model';
+import { getDetailsPrimaryAction } from '../lib/post-details-view-model';
 import { getViewerActionSlots } from '../lib/viewer-actions';
 import { getShowcasePlaybackUrl } from '../lib/showcase-media';
 import type { GenerationListItem, OwnerPostListItem, ShowcaseFeedItem } from '../lib/types';
@@ -620,7 +621,43 @@ describe('immersive preview view model', () => {
       ]);
 
       expect(lockedItem.availableActions).toEqual(['save', 'comment', 'share', 'unlock-remix', 'view-details', 'open-original']);
+      expect(lockedItem.remixAccess).toBe('paid-unlock');
       expect(unlockedItem.availableActions).toContain('recreate');
+      expect(unlockedItem.remixAccess).toBe('open');
+    });
+
+    it('offers a plain Remix when it sits behind a free unlock', () => {
+      // Used to offer neither action, so the reel had no Remix at all for a
+      // post whose creator gave the remix away.
+      const [item] = buildImmersiveShowcaseItems('showcase-feed', [
+        showcaseItem({
+          id: 'locked-free-remix-post',
+          generationId: 'gen-free',
+          category: 'video',
+          canRemix: false,
+          remixCapability: 'unlock_required',
+          remixTarget: 'video',
+          asset: {
+            id: 'asset-free-remix',
+            postId: 'locked-free-remix-post',
+            title: 'Trending',
+            accessMode: 'free',
+            priceUsdCents: 0,
+            previewText: 'The prompt behind this video.',
+            allowRemix: true,
+            resourceKinds: ['prompt'],
+          },
+        }),
+      ]);
+
+      expect(item.availableActions).toEqual(['save', 'comment', 'share', 'recreate', 'view-details', 'open-original']);
+      // The tap claims the unlock on the way: this is what tells it to.
+      expect(item.remixAccess).toBe('free-unlock');
+      expect(getViewerActionSlots(item).find((slot) => slot.id === 'create')).toMatchObject({
+        action: 'recreate',
+        label: 'Remix',
+      });
+      expect(getDetailsPrimaryAction(item, { canAccess: false })).toEqual({ label: 'Remix' });
     });
 
     it('does not offer recreate for showcase posts that were not created in the app', () => {
