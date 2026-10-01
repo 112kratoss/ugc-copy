@@ -49,6 +49,7 @@ import type {
   MotionModelId,
   VideoModelId,
 } from '@/lib/models';
+import type { RemixMediaAssetDescriptor } from '@/lib/remix-source';
 import { resolveSourceGenerationId } from '@/lib/source-generation';
 import { probeMediaDurationSeconds } from '@/lib/video-rendition';
 
@@ -534,6 +535,15 @@ function slotUrl(
   return inputs.find((asset) => asset.slot === key)?.url ?? null;
 }
 
+function referenceMediaDescriptor(asset: CatalogGenerationInputAsset): RemixMediaAssetDescriptor {
+  return {
+    kind: asset.kind === 'audio' ? 'audio' : 'video',
+    label: asset.label ?? null,
+    storagePath: asset.storagePath ?? null,
+    sourceGenerationId: asset.sourceGenerationId ?? null,
+  };
+}
+
 export async function dispatchCatalogGenerationAdapter({
   request,
   quote,
@@ -619,12 +629,10 @@ export async function dispatchCatalogGenerationAdapter({
     const referenceImageUrls = referenceInputs
       .filter((asset) => asset.kind === 'image' && asset.url && asset.slot !== 'subjectImages')
       .map((asset) => asset.url!);
-    const referenceVideoUrls = referenceInputs
-      .filter((asset) => asset.kind === 'video' && asset.url)
-      .map((asset) => asset.url!);
-    const referenceAudioUrls = referenceInputs
-      .filter((asset) => asset.kind === 'audio' && asset.url)
-      .map((asset) => asset.url!);
+    const referenceVideoInputs = referenceInputs.filter((asset) => asset.kind === 'video' && asset.url);
+    const referenceAudioInputs = referenceInputs.filter((asset) => asset.kind === 'audio' && asset.url);
+    const referenceVideoUrls = referenceVideoInputs.map((asset) => asset.url!);
+    const referenceAudioUrls = referenceAudioInputs.map((asset) => asset.url!);
     const preparedAudioIds = referenceInputs
       .filter((asset) => asset.kind === 'preparedVoice' && asset.assetId)
       .map((asset) => asset.assetId!);
@@ -688,6 +696,10 @@ export async function dispatchCatalogGenerationAdapter({
       elementImageUrls: namedImageInputs.map((asset) => asset.url!),
       referenceVideoUrls,
       referenceAudioUrls,
+      // The video start takes clips and tracks as URLs. These say what each one
+      // is, so the run keeps them the way it keeps its images.
+      referenceVideos: referenceVideoInputs.map(referenceMediaDescriptor),
+      referenceAudios: referenceAudioInputs.map(referenceMediaDescriptor),
       preparedAudioIds,
       characterIds,
       klingVideoElements: videoElementInputs.map((asset, index) => ({

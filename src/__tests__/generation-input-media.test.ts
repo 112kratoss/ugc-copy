@@ -429,6 +429,177 @@ describe('generation input media loading', () => {
       expect.objectContaining({ mediaType: 'video', role: 'motion_reference_video', label: 'Motion reference video', storagePath: 'uploads/user-1/moves.mp4' }),
     ]);
   });
+
+  // A clip sent as a plain URL is recorded only as the URL the provider was
+  // given. Read without it, a recipe that kept its images and lost its clip
+  // looked complete, and the input repair rebuilt the inputs without the clip.
+  it('declares the clips and tracks a run sent as plain URLs', async () => {
+    const { buildLegacyGenerationInputMedia } = await import('@/lib/generation-input-media');
+    const storageFrom = vi.fn();
+
+    const result = await buildLegacyGenerationInputMedia({
+      supabase: { storage: { from: storageFrom }, from: vi.fn() } as never,
+      generationId: 'gen-1',
+      ownerUserId: 'user-1',
+      category: 'video',
+      workflowSettings: {
+        model: 'seedance-2',
+        referenceVideoUrls: [
+          'https://project.supabase.co/storage/v1/object/sign/uploads/user-1/dance.mp4?token=expired',
+        ],
+        referenceAudioUrls: ['https://cdn.example.com/beat.mp3'],
+      },
+      urlMode: 'none',
+    });
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        mediaType: 'video',
+        role: 'reference_video',
+        label: 'Video reference 1',
+        storagePath: 'uploads/user-1/dance.mp4',
+        url: null,
+      }),
+      expect.objectContaining({
+        mediaType: 'audio',
+        role: 'reference_audio',
+        label: 'Audio reference 1',
+        storagePath: null,
+        url: null,
+        metadata: expect.objectContaining({ sourceUrl: 'https://cdn.example.com/beat.mp3' }),
+      }),
+    ]);
+    expect(storageFrom).not.toHaveBeenCalled();
+  });
+
+  it('signs a declared clip again from its stored object, never from the recorded link', async () => {
+    const { buildLegacyGenerationInputMedia } = await import('@/lib/generation-input-media');
+    const createSignedUrl = vi.fn(async (filePath: string) => ({
+      data: { signedUrl: `https://signed.example.com/${filePath}` },
+      error: null,
+    }));
+
+    const result = await buildLegacyGenerationInputMedia({
+      supabase: { storage: { from: vi.fn(() => ({ createSignedUrl })) }, from: vi.fn() } as never,
+      generationId: 'gen-1',
+      ownerUserId: 'user-1',
+      category: 'video',
+      workflowSettings: {
+        referenceVideoUrls: [
+          'https://project.supabase.co/storage/v1/object/sign/uploads/user-1/dance.mp4?token=expired',
+          'https://project.supabase.co/storage/v1/object/sign/uploads/user-2/theirs.mp4?token=expired',
+        ],
+      },
+    });
+
+    expect(result.map((item) => item.url)).toEqual(['https://signed.example.com/user-1/dance.mp4', null]);
+    expect(createSignedUrl).toHaveBeenCalledTimes(1);
+  });
+
+  // The asset flow names one clip twice: the prepared asset carries its source,
+  // and the reference list carries the same link or the provider's handle for it.
+  it('declares a prepared clip once, and a provider handle not at all', async () => {
+    const { buildLegacyGenerationInputMedia } = await import('@/lib/generation-input-media');
+
+    const result = await buildLegacyGenerationInputMedia({
+      supabase: { storage: { from: vi.fn() }, from: vi.fn() } as never,
+      generationId: 'gen-1',
+      ownerUserId: 'user-1',
+      category: 'video',
+      workflowSettings: {
+        referenceVideoUrls: [
+          'asset-video-1',
+          'https://media.example.com/storage/v1/object/sign/uploads/user-1/dance.mp4?token=provider',
+        ],
+        seedanceAssets: {
+          videos: [
+            { assetId: 'asset-video-1', assetType: 'Video', status: 'active', sourceUrl: null },
+            {
+              assetId: null,
+              assetType: 'Video',
+              status: 'idle',
+              sourceUrl: 'https://media.example.com/storage/v1/object/sign/uploads/user-1/dance.mp4?token=read',
+            },
+          ],
+        },
+      },
+      urlMode: 'none',
+    });
+
+    expect(result.filter((item) => item.mediaType === 'video')).toHaveLength(1);
+  });
+});
+
+// A video run can send clips and tracks as plain URLs. Only prepared assets
+// were kept, so a remix of such a run restored its images and lost the clip.
+describe('reference clips and tracks sent as plain URLs', () => {
+  it('keeps each one under the name and staged file the caller gave it', async () => {
+    const { collectReferenceMediaCandidates } = await import('@/lib/generation-input-media');
+
+    expect(collectReferenceMediaCandidates({
+      mediaType: 'video',
+      sources: ['https://project.supabase.co/storage/v1/object/sign/uploads/user-1/dance.mp4?token=read'],
+      resolvedUrls: ['https://project.supabase.co/storage/v1/object/sign/uploads/user-1/dance.mp4?token=provider'],
+      descriptors: [{ kind: 'video', label: 'Dance clip', storagePath: 'uploads/user-1/dance.mp4', sourceGenerationId: 'gen-0' }],
+    })).toEqual([{
+      mediaType: 'video',
+      role: 'reference_video',
+      label: 'Dance clip',
+      sourceUrl: 'https://project.supabase.co/storage/v1/object/sign/uploads/user-1/dance.mp4?token=provider',
+      sourceStoragePath: 'uploads/user-1/dance.mp4',
+      sourceGenerationId: 'gen-0',
+    }]);
+  });
+
+  it('reads the staged file from the reference itself when the caller described nothing', async () => {
+    const { collectReferenceMediaCandidates } = await import('@/lib/generation-input-media');
+
+    expect(collectReferenceMediaCandidates({
+      mediaType: 'audio',
+      sources: ['uploads/user-1/beat.mp3'],
+      resolvedUrls: ['https://signed.example.com/beat.mp3'],
+    })).toEqual([{
+      mediaType: 'audio',
+      role: 'reference_audio',
+      label: 'Audio reference 1',
+      sourceUrl: 'https://signed.example.com/beat.mp3',
+      sourceStoragePath: 'uploads/user-1/beat.mp3',
+      sourceGenerationId: null,
+    }]);
+  });
+
+  it('leaves out a provider handle and a source a prepared asset already keeps', async () => {
+    const { collectReferenceMediaCandidates, collectSeedanceAssetCandidates } = await import('@/lib/generation-input-media');
+    const prepared = collectSeedanceAssetCandidates({
+      assets: {
+        videos: [{
+          assetId: null,
+          assetType: 'Video',
+          status: 'idle',
+          sourceUrl: 'https://media.example.com/storage/v1/object/sign/uploads/user-1/dance.mp4?token=read',
+          error: null,
+          lastCheckedAt: null,
+        }],
+      },
+    });
+
+    const candidates = collectReferenceMediaCandidates({
+      mediaType: 'video',
+      sources: [
+        'asset-video-1',
+        'https://media.example.com/storage/v1/object/sign/uploads/user-1/dance.mp4?token=other',
+        'https://cdn.example.com/extra.mp4',
+      ],
+      resolvedUrls: [
+        'asset-video-1',
+        'https://media.example.com/storage/v1/object/sign/uploads/user-1/dance.mp4?token=provider',
+        'https://cdn.example.com/extra.mp4',
+      ],
+      alreadyKept: prepared,
+    });
+
+    expect(candidates.map((candidate) => candidate.sourceUrl)).toEqual(['https://cdn.example.com/extra.mp4']);
+  });
 });
 
 // Keeping a generation's inputs fails one item at a time. Comparing what its

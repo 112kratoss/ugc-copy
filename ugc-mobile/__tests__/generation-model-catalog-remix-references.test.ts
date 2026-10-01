@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildUnifiedCatalogGenerationRequest,
   hydrateCatalogCreationDraftFromRemixSource,
   validateCatalogCreationDraft,
 } from '../lib/generation-model-draft';
@@ -88,5 +89,52 @@ describe('catalog remix restore of reusable video references', () => {
 
     expect((restored.draft as VideoCreationDraft).references.map((reference) => reference.handle)).toEqual(['@ref1']);
     expect(restored.warning).toBe(REMIX_RESTORE_WARNING_MESSAGE);
+  });
+
+  // Reported from a live Seedance 2 post: its remix showed the three reference images
+  // and no clip. The server had never kept the clip, so the source arrived without it.
+  // This is the app's half of the fix: a source that carries the clip restores it, and
+  // the next run sends the kept copy on so that run keeps it too.
+  it('restores a reference clip beside the named images and sends it with the next run', () => {
+    const catalog = catalogV2();
+    const model = catalog.models.find((entry) => entry.id === 'remote-video-v2')!;
+    const keptClip = 'generation_inputs/owner/source-generation/01-reference_video.mp4';
+    const bundle = namedReferenceRemix(
+      [namedReference('@ali', 1)],
+      'Change the first person in the reference video to @ali',
+    );
+    bundle.inputs.video!.referenceVideos = [{
+      kind: 'video',
+      label: 'Dance clip',
+      storagePath: keptClip,
+      sourceGenerationId: null,
+      url: 'https://cdn.example.com/dance.mp4',
+    }];
+
+    const restored = hydrateCatalogCreationDraftFromRemixSource(
+      createDefaultCreationDraft('video'),
+      bundle,
+      catalog,
+    );
+
+    expect(restored.warning).toBeNull();
+    expect((restored.draft as VideoCreationDraft).references.map((reference) => reference.handle)).toEqual(['@ali']);
+    expect((restored.draft as VideoCreationDraft).referenceVideos).toEqual([
+      expect.objectContaining({
+        kind: 'video',
+        displayName: 'Dance clip',
+        url: 'https://cdn.example.com/dance.mp4',
+        storagePath: keptClip,
+      }),
+    ]);
+    expect(buildUnifiedCatalogGenerationRequest(restored.draft, model, catalog.revision).inputs).toContainEqual(
+      expect.objectContaining({
+        slot: 'videoReferences',
+        kind: 'video',
+        url: 'https://cdn.example.com/dance.mp4',
+        storagePath: keptClip,
+        label: 'Dance clip',
+      }),
+    );
   });
 });
