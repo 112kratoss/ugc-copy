@@ -9,6 +9,16 @@ async function main() {
     process.send?.({ reclaimed: await reclaimAbandonedStagingWorkspaces() });
     process.disconnect?.(); return;
   }
+  if (mode === 'many') {
+    const workspaces = [];
+    for (let i = 0; i < Number(process.argv[3]); i++) {
+      workspaces.push(await createStagingWorkspace());
+    }
+    process.send?.({ directories: workspaces.map((workspace) => workspace.directory) });
+    // Keep the owner descriptors alive until the test kills this process.
+    setInterval(() => { if (!workspaces.length) throw new Error('Missing owners'); }, 1000);
+    return;
+  }
   if (mode === 'allocation' || mode === 'publication') {
     const pause = async (directory: string): Promise<never> => {
       process.send?.({ directory });

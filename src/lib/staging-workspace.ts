@@ -9,7 +9,7 @@ import { flockSync } from 'fs-ext';
 export const STAGING_ROOT_NAME = 'magicbooklet-staging-v1';
 const MARKER = 'magicbooklet-staging-v1\n';
 const NAME = /^item-[a-zA-Z0-9]{6}$/;
-const SCAN_LIMIT = 128;
+const RECLAIM_LIMIT = 128;
 const sameFile = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino;
 const code = (error: unknown) => (error as NodeJS.ErrnoException)?.code;
 const privateDirectory = (stat: Stats) => stat.isDirectory()
@@ -47,6 +47,15 @@ async function openRegular(file: string) {
 async function reclaim(directory: string, requireMarker: boolean): Promise<boolean> {
   let lease: FileHandle | undefined;
   try {
+    if (requireMarker) {
+      // Incomplete allocations can persist indefinitely. Reject them with one
+      // metadata read instead of opening/locking every lease on each scan.
+      // This is only a fast rejection; authority is rechecked under the lock.
+      let marker: Stats;
+      try { marker = await lstat(path.join(directory, 'ready')); }
+      catch (error) { if (code(error) === 'ENOENT') return false; throw error; }
+      if (!marker.isFile() || marker.size !== Buffer.byteLength(MARKER)) return false;
+    }
     const before = await lstat(directory);
     if (!privateDirectory(before)) return false;
     lease = await openRegular(path.join(directory, 'lease'));
@@ -82,16 +91,21 @@ async function reclaim(directory: string, requireMarker: boolean): Promise<boole
 }
 
 let sweep: { root: string; promise: Promise<number> } | undefined;
-/** Bounded opportunistic sweep: unknown, legacy and unpublished directories stay. */
+/**
+ * At most 128 successful reclamations per pass. Preserve unknown, legacy and
+ * unpublished directories, but do not let them consume the reclamation budget:
+ * a persistent prefix must not hide later abandoned workspaces after a restart.
+ * Directory enumeration/validation is linear in the namespace, not time-bounded.
+ */
 export async function reclaimAbandonedStagingWorkspaces(): Promise<number> {
   const root = await rootDirectory();
   if (sweep?.root === root) return sweep.promise;
   const promise = (async () => {
     if (!await localLockFilesystem(root)) return 0;
     const directory = await opendir(root);
-    let reclaimed = 0, visited = 0;
+    let reclaimed = 0;
     for await (const entry of directory) {
-        if (++visited > SCAN_LIMIT) break;
+        if (reclaimed >= RECLAIM_LIMIT) break;
         if (!entry.isDirectory() || !NAME.test(entry.name)) continue;
         try {
           if (await reclaim(path.join(root, entry.name), true)) reclaimed++;
