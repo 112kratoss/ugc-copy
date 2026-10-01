@@ -26,7 +26,15 @@ export async function stageAllowlistedRemoteMedia(params: {
   kind: RemoteMediaKind;
 }): Promise<StagedRemoteMedia> {
   const media = await openAllowlistedRemoteMedia(params);
-  const tempDirectory = await mkdtemp(path.join(tmpdir(), 'remote-media-'));
+  let tempDirectory: string;
+  try {
+    tempDirectory = await mkdtemp(path.join(tmpdir(), 'remote-media-'));
+  } catch (error) {
+    // The response is already open, but no pipeline owns its body yet. Release
+    // that source if disk allocation fails, retaining the allocation error.
+    await media.body.cancel().catch(() => {});
+    throw error;
+  }
   const filePath = path.join(tempDirectory, 'media');
 
   try {
@@ -39,16 +47,20 @@ export async function stageAllowlistedRemoteMedia(params: {
     throw error;
   }
 
-  let cleanedUp = false;
+  let cleanupPromise: Promise<void> | undefined;
   return {
     contentLength: media.contentLength,
     contentType: media.contentType,
     filePath,
     sourceName: media.sourceName,
     async cleanup() {
-      if (cleanedUp) return;
-      cleanedUp = true;
-      await rm(tempDirectory, { recursive: true, force: true });
+      // Every caller must wait for deletion. Cache successful cleanup, but let
+      // a later call retry a failed removal instead of reporting false success.
+      cleanupPromise ??= rm(tempDirectory, { recursive: true, force: true }).catch((error) => {
+        cleanupPromise = undefined;
+        throw error;
+      });
+      await cleanupPromise;
     },
   };
 }
