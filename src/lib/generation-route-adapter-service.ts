@@ -1,12 +1,13 @@
 import 'server-only';
 
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders, getApiRequestId } from '@/lib/api-cache';
 import {
   BackendRateLimitError,
   createBackendRateLimitResponse,
 } from '@/lib/backend-rate-limit';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import { withProviderFetchRequestId } from '@/lib/provider-fetch';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
@@ -30,6 +31,8 @@ export type GenerationRouteOperationInput = {
   kieApiKey?: string;
   readRequestBody?: () => Promise<unknown>;
   request: Request;
+  /** Given to a status check only. A start has nothing to send once it has answered. */
+  runAfterResponse?: RunAfterResponse;
 };
 
 type GenerationRouteOperation = (
@@ -39,6 +42,7 @@ type GenerationRouteOperation = (
 type GenerationRouteAdapterDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
+  runAfterResponse?: RunAfterResponse;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
 };
 
@@ -46,6 +50,7 @@ function resolveDependencies(dependencies: GenerationRouteAdapterDependencies | 
   return {
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
+    runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
     withProviderFetchRequestId:
       dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
   };
@@ -65,12 +70,14 @@ async function runGenerationRouteOperation({
   operation,
   readRequestBody,
   request,
+  runAfterResponse,
 }: {
   dependencies: ReturnType<typeof resolveDependencies>;
   kieApiKey?: string;
   operation: GenerationRouteOperation;
   readRequestBody?: () => Promise<unknown>;
   request: Request;
+  runAfterResponse?: RunAfterResponse;
 }) {
   return dependencies.withProviderFetchRequestId(getApiRequestId(request), async () => {
     const response = createGenerationJsonResponse(await operation({
@@ -79,6 +86,7 @@ async function runGenerationRouteOperation({
       kieApiKey,
       ...(readRequestBody ? { readRequestBody } : {}),
       request,
+      ...(runAfterResponse ? { runAfterResponse } : {}),
     }));
 
     return applyPrivateNoStoreApiResponseHeaders(response, request);
@@ -116,11 +124,17 @@ export function getGenerationRouteResponse({
   kieApiKey?: string;
   request: Request;
 }) {
+  const resolvedDependencies = resolveDependencies(dependencies);
+
   return runGenerationRouteOperation({
-    dependencies: resolveDependencies(dependencies),
+    dependencies: resolvedDependencies,
     kieApiKey,
     operation: getGenerationForRoute,
     request,
+    // The app polls this while a generation runs, and waits on each answer to
+    // show how it ended. A poll that finds the provider failed it also tells
+    // the creator's devices, which is sent once the poll is answered.
+    runAfterResponse: resolvedDependencies.runAfterResponse,
   });
 }
 

@@ -6,6 +6,7 @@ import { logBackendError } from '@/lib/backend-logger';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { withBackendJobLock } from '@/lib/backend-job-lock';
+import { sendDeferrableNotification, type RunAfterResponse } from '@/lib/deferrable-notification';
 import {
   buildFailedGenerationStatusPayload,
   buildLockedGenerationStatusPayload,
@@ -143,6 +144,7 @@ export async function getImageGenerationStatusForRoute({
   userId,
   createAdminSupabase,
   kieApiKey,
+  runAfterResponse,
   dependencies,
 }: {
   request: Request;
@@ -153,6 +155,12 @@ export async function getImageGenerationStatusForRoute({
   // to reach for it and reintroduce the RLS failures this service had.
   createAdminSupabase: () => SupabaseClient;
   kieApiKey: string | undefined;
+  /**
+   * The status route passes one: the app is polling, and waits on this answer
+   * to stop showing the image as rendering. With none, the notification for a
+   * failure found here is sent before this returns.
+   */
+  runAfterResponse?: RunAfterResponse;
   dependencies?: Partial<ImageGenerationStatusDependencies>;
 }): Promise<ImageGenerationStatusRouteResult> {
   const resolvedDependencies = resolveDependencies(dependencies);
@@ -318,12 +326,14 @@ export async function getImageGenerationStatusForRoute({
         reason,
       );
       if (localGeneration.id && localGeneration.user_id) {
-        await resolvedDependencies.notifyGenerationStatus(admin, {
+        // The failure is settled. What is left is telling the creator's own
+        // devices, which the route sends behind its answer and outside this lock.
+        await sendDeferrableNotification(runAfterResponse, () => resolvedDependencies.notifyGenerationStatus(admin, {
           id: localGeneration.id,
           user_id: localGeneration.user_id,
           category: localGeneration.category,
           model: localGeneration.model,
-        }, 'failed');
+        }, 'failed'));
       }
     }
 

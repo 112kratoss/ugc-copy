@@ -5,6 +5,7 @@ import { logBackendError } from '@/lib/backend-logger';
 import {
   BackendRateLimitError,
 } from '@/lib/backend-rate-limit';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import { CatalogError } from '@/lib/generation-model-catalog';
 import {
   GenerationServiceError,
@@ -46,6 +47,8 @@ export interface ImageGenerationRouteInput {
   kieApiKey?: string;
   readRequestBody?: () => Promise<unknown>;
   request: Request;
+  /** Where a status check sends the notification for an image it finds failed, once it has answered. */
+  runAfterResponse?: RunAfterResponse;
 }
 
 async function getAuthenticatedUserId(supabase: ImageRouteSupabaseClient) {
@@ -191,6 +194,7 @@ export async function getImageGenerationForRoute(
       userId,
       createAdminSupabase: input.createAdminSupabase as () => ImageRouteSupabaseClient,
       kieApiKey: input.kieApiKey,
+      runAfterResponse: input.runAfterResponse,
     });
 
     if (!result.ok) {

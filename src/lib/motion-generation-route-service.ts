@@ -5,6 +5,7 @@ import { logBackendError } from '@/lib/backend-logger';
 import {
   BackendRateLimitError,
 } from '@/lib/backend-rate-limit';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import { CatalogError } from '@/lib/generation-model-catalog';
 import {
   GenerationServiceError,
@@ -47,6 +48,8 @@ export interface MotionGenerationRouteInput {
   kieApiKey?: string;
   readRequestBody?: () => Promise<unknown>;
   request: Request;
+  /** Where a status check sends the notification for a motion render it finds failed, once it has answered. */
+  runAfterResponse?: RunAfterResponse;
 }
 
 async function getAuthenticatedUserId(supabase: MotionRouteSupabaseClient) {
@@ -197,6 +200,7 @@ export async function getMotionGenerationForRoute(
       supabase,
       createAdminSupabase: input.createAdminSupabase as () => MotionRouteSupabaseClient,
       kieApiKey: input.kieApiKey,
+      runAfterResponse: input.runAfterResponse,
     });
 
     if (!result.ok) {

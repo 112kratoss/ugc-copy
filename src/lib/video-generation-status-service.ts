@@ -6,6 +6,7 @@ import { logBackendError } from '@/lib/backend-logger';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { withBackendJobLock } from '@/lib/backend-job-lock';
+import { sendDeferrableNotification, type RunAfterResponse } from '@/lib/deferrable-notification';
 import {
   buildFailedGenerationStatusPayload,
   buildLockedGenerationStatusPayload,
@@ -190,6 +191,7 @@ export async function getVideoGenerationStatusForRoute({
   userId,
   createAdminSupabase,
   kieApiKey,
+  runAfterResponse,
   dependencies,
 }: {
   request: Request;
@@ -198,6 +200,12 @@ export async function getVideoGenerationStatusForRoute({
   supabase: SupabaseClient;
   createAdminSupabase: () => SupabaseClient;
   kieApiKey: string | undefined;
+  /**
+   * The status route passes one: the app is polling, and waits on this answer
+   * to stop showing the video as rendering. With none, the notification for a
+   * result found here is sent before this returns.
+   */
+  runAfterResponse?: RunAfterResponse;
   dependencies?: Partial<VideoGenerationStatusDependencies>;
 }): Promise<VideoGenerationStatusRouteResult> {
   const resolvedDependencies = resolveDependencies(dependencies);
@@ -422,21 +430,24 @@ export async function getVideoGenerationStatusForRoute({
       }
     }
 
+    // A result found above is settled by now. What is left is telling the
+    // creator's own devices, which the route sends behind its answer and
+    // outside this lock.
     if (localGeneration.id && localGeneration.user_id) {
       if (status === 'succeeded' && output) {
-        await resolvedDependencies.notifyGenerationStatus(admin, {
+        await sendDeferrableNotification(runAfterResponse, () => resolvedDependencies.notifyGenerationStatus(admin, {
           id: localGeneration.id,
           user_id: localGeneration.user_id,
           category: localGeneration.category,
           model: localGeneration.model,
-        }, 'succeeded');
+        }, 'succeeded'));
       } else if (status === 'failed') {
-        await resolvedDependencies.notifyGenerationStatus(admin, {
+        await sendDeferrableNotification(runAfterResponse, () => resolvedDependencies.notifyGenerationStatus(admin, {
           id: localGeneration.id,
           user_id: localGeneration.user_id,
           category: localGeneration.category,
           model: localGeneration.model,
-        }, 'failed');
+        }, 'failed'));
       }
     }
 

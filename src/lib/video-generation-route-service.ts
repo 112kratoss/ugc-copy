@@ -5,6 +5,7 @@ import { logBackendError } from '@/lib/backend-logger';
 import {
   BackendRateLimitError,
 } from '@/lib/backend-rate-limit';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import { CatalogError } from '@/lib/generation-model-catalog';
 import {
   GenerationServiceError,
@@ -46,6 +47,8 @@ export interface VideoGenerationRouteInput {
   kieApiKey?: string;
   readRequestBody?: () => Promise<unknown>;
   request: Request;
+  /** Where a status check sends the notification for a video it finds failed, once it has answered. */
+  runAfterResponse?: RunAfterResponse;
 }
 
 async function getAuthenticatedUserId(supabase: VideoRouteSupabaseClient) {
@@ -192,6 +195,7 @@ export async function getVideoGenerationForRoute(
       supabase,
       createAdminSupabase: input.createAdminSupabase as () => VideoRouteSupabaseClient,
       kieApiKey: input.kieApiKey,
+      runAfterResponse: input.runAfterResponse,
     });
 
     if (!result.ok) {

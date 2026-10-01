@@ -3,6 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
+  createMobileNotificationHistory,
+  hasAnswered,
+  withMobileNotificationHistory,
+} from '@/__tests__/fixtures/mobile-notification-history';
+import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
+import {
   getVideoGenerationStatusForRoute,
   type VideoGenerationStatusDependencies,
 } from '@/lib/video-generation-status-service';
@@ -237,5 +243,258 @@ describe('getVideoGenerationStatusForRoute', () => {
     expect(createAdminSupabase).toHaveBeenCalledTimes(1);
     expect(dependencies.resolveStoredMediaUrl).not.toHaveBeenCalled();
     expect(dependencies.fetchWithProviderTimeout).not.toHaveBeenCalled();
+  });
+});
+
+describe('video generation failure notifications', () => {
+  // A poll that finds the provider failed the task settles the failure, then
+  // tells the creator's own devices. The real notifier runs here against held
+  // notification history.
+  type RunAfterResponse = Parameters<typeof getVideoGenerationStatusForRoute>[0]['runAfterResponse'];
+
+  const failedDedupeKey = 'generation:gen-video-1:failed';
+  const failedNotification = expect.objectContaining({
+    user_id: 'user-1',
+    type: 'generation_failed',
+    category: 'generation',
+    title: 'Your video failed',
+    object_id: 'gen-video-1',
+    dedupe_key: failedDedupeKey,
+  });
+  const failedAnswer = {
+    ok: true,
+    body: {
+      status: 'failed',
+      output: null,
+      error: 'provider failure',
+      timing: expect.objectContaining({
+        appStatus: 'failed',
+        completedAtMs: Date.parse('2026-04-15T10:01:00.000Z'),
+      }),
+    },
+  };
+  // The two provider APIs a video task can be on report a failure differently,
+  // and each has its own branch in the status check.
+  const failures = [
+    {
+      provider: 'Kling',
+      generation: {},
+      task: {
+        state: 'fail',
+        completeTime: '2026-04-15T10:01:00.000Z',
+        failMsg: 'provider failure',
+      },
+    },
+    {
+      provider: 'Veo',
+      generation: { model: 'veo3', workflow_settings: { model: 'veo-3.1' } },
+      task: {
+        successFlag: 2,
+        completeTime: '2026-04-15T10:01:00.000Z',
+        errorMessage: 'provider failure',
+      },
+    },
+  ];
+
+  function createPoll({
+    generation = {},
+    task = failures[0].task,
+    settled = 'failed',
+  }: {
+    generation?: Record<string, unknown>;
+    task?: Record<string, unknown>;
+    settled?: 'failed' | 'succeeded';
+  } = {}) {
+    const admin = createStatusClientMock({
+      status: 'processing',
+      output_url: null,
+      completed_at: null,
+      ...generation,
+    });
+    const history = createMobileNotificationHistory();
+    const adminSupabase = withMobileNotificationHistory(admin.client, history);
+    const settleGenerationFailed = vi.fn<VideoGenerationStatusDependencies['settleGenerationFailed']>(
+      async () => settled,
+    );
+    const enqueueGenerationOutputImportJob = vi.fn<
+      VideoGenerationStatusDependencies['enqueueGenerationOutputImportJob']
+    >(async () => 'import-job');
+
+    return {
+      history,
+      adminSupabase,
+      settleGenerationFailed,
+      enqueueGenerationOutputImportJob,
+      poll: (runAfterResponse?: RunAfterResponse) => getVideoGenerationStatusForRoute({
+        request: new Request('http://localhost/api/generate-video?id=task-video-1'),
+        predictionId: 'task-video-1',
+        userId: 'user-1',
+        supabase: admin.client,
+        createAdminSupabase: () => adminSupabase,
+        kieApiKey: 'test-key',
+        runAfterResponse,
+        dependencies: {
+          withBackendJobLock: async (_client, _options, run) => ({ acquired: true, value: await run() }),
+          tryAcquireGenerationProviderStatusThrottle: async () => true,
+          fetchWithProviderTimeout: async () => Response.json({ code: 200, data: task }),
+          enqueueGenerationOutputImportJob,
+          settleGenerationFailed,
+        },
+      }),
+    };
+  }
+
+  it.each(failures)(
+    'answers a poll that finds a $provider failure before the creator is told when the caller can run work after the response',
+    async ({ generation, task }) => {
+      // The notification ends in a push request to Expo for the creator's
+      // devices: five seconds a try, up to three tries. A poll that waited on
+      // it kept the app showing a video as still rendering after its failure
+      // was settled and its credits returned.
+      const { history, adminSupabase, settleGenerationFailed, poll } = createPoll({ generation, task });
+      history.hold();
+      const deferred: Array<() => Promise<unknown>> = [];
+
+      const request = poll((queued) => { deferred.push(queued); });
+
+      // A notification that has not finished no longer holds the answer back,
+      // and the failure behind that answer is settled as it always was.
+      expect(await hasAnswered(request)).toBe(true);
+      await expect(request).resolves.toEqual(failedAnswer);
+      expect(settleGenerationFailed).toHaveBeenCalledTimes(1);
+      expect(settleGenerationFailed).toHaveBeenCalledWith(
+        adminSupabase,
+        'task-video-1',
+        '2026-04-15T10:01:00.000Z',
+        'provider failure',
+      );
+      expect(history.started).toEqual([]);
+      expect(deferred).toHaveLength(1);
+
+      history.release();
+      await deferred[0]();
+      expect(history.sent).toEqual([failedNotification]);
+    },
+  );
+
+  it.each(failures)(
+    'tells the creator before answering a poll that finds a $provider failure when the caller has nowhere to run it afterwards',
+    async ({ generation, task }) => {
+      const { history, settleGenerationFailed, poll } = createPoll({ generation, task });
+      history.hold();
+
+      const request = poll();
+
+      expect(await hasAnswered(request)).toBe(false);
+      expect(history.started).toEqual([failedDedupeKey]);
+
+      history.release();
+      await expect(request).resolves.toEqual(failedAnswer);
+      expect(settleGenerationFailed).toHaveBeenCalledTimes(1);
+      expect(history.sent).toEqual([failedNotification]);
+    },
+  );
+
+  it.each(failures)(
+    'gives a poll that finds a $provider failure the same answer whether or not its notification waits for the response',
+    async ({ generation, task }) => {
+      const awaited = await createPoll({ generation, task }).poll();
+      const deferred = await createPoll({ generation, task }).poll(() => {});
+
+      expect(awaited).toEqual(failedAnswer);
+      expect(deferred).toStrictEqual(awaited);
+    },
+  );
+
+  it('tells the creator in front of the answer rather than fail a settled poll when the task cannot be queued', async () => {
+    const { history, poll } = createPoll();
+    const logged: BackendLogRecord[] = [];
+    const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
+
+    try {
+      // The failure is already settled. A scheduler that will not take the
+      // task must not turn that into a failed poll.
+      await expect(poll(() => {
+        throw new Error('`after` was called outside a request scope.');
+      })).resolves.toEqual(failedAnswer);
+    } finally {
+      restoreLogSink();
+    }
+
+    expect(history.sent).toEqual([failedNotification]);
+    expect(logged).toEqual([
+      expect.objectContaining({
+        level: 'error',
+        msg: 'mobile_notification_deferral_failed',
+        errorMessage: '`after` was called outside a request scope.',
+      }),
+    ]);
+  });
+
+  // The app polls for as long as a video renders, so a poll with nothing to
+  // tell anyone must hand the scheduler nothing.
+  it.each([
+    {
+      found: 'the video still rendering',
+      task: { state: 'generating' },
+      settled: 'failed' as const,
+      answer: { status: 'processing', output: null, error: null },
+    },
+    {
+      found: 'the video finished and waiting on its import',
+      task: {
+        state: 'success',
+        completeTime: '2026-04-15T10:01:00.000Z',
+        resultJson: JSON.stringify({ resultUrls: ['https://provider.example.com/output.mp4'] }),
+      },
+      settled: 'failed' as const,
+      answer: { status: 'processing', output: null, error: null },
+    },
+    {
+      // Its success was settled first, so there is no failure to report.
+      found: 'a failure the settlement turned down',
+      task: failures[0].task,
+      settled: 'succeeded' as const,
+      answer: { status: 'succeeded', output: null, error: 'provider failure' },
+    },
+  ])('defers nothing for a poll that finds $found', async ({ task, settled, answer }) => {
+    const { history, poll } = createPoll({ task, settled });
+    const runAfterResponse = vi.fn();
+
+    await expect(poll(runAfterResponse)).resolves.toMatchObject({ ok: true, body: answer });
+
+    expect(runAfterResponse).not.toHaveBeenCalled();
+    expect(history.started).toEqual([]);
+  });
+
+  it('queues nothing when the failure could not be settled', async () => {
+    // Telling the creator comes second. A failure that was not recorded, with
+    // its credits not returned, must not be announced.
+    const { history, settleGenerationFailed, poll } = createPoll();
+    settleGenerationFailed.mockRejectedValueOnce(new Error('settlement unavailable'));
+    const runAfterResponse = vi.fn();
+
+    await expect(poll(runAfterResponse)).rejects.toThrow('settlement unavailable');
+
+    expect(runAfterResponse).not.toHaveBeenCalled();
+    expect(history.started).toEqual([]);
+  });
+
+  it('defers nothing for a poll that finds the failure already settled', async () => {
+    // The webhook usually settles a failure seconds before the app next polls.
+    const { history, settleGenerationFailed, poll } = createPoll({
+      generation: {
+        status: 'failed',
+        completed_at: '2026-04-15T10:01:00.000Z',
+        error_message: 'provider failure',
+      },
+    });
+    const runAfterResponse = vi.fn();
+
+    await expect(poll(runAfterResponse)).resolves.toEqual(failedAnswer);
+
+    expect(runAfterResponse).not.toHaveBeenCalled();
+    expect(settleGenerationFailed).not.toHaveBeenCalled();
+    expect(history.started).toEqual([]);
   });
 });

@@ -6,6 +6,18 @@ import {
   getGenerationRouteResponse,
   postGenerationRouteResponse,
 } from '@/lib/generation-route-adapter-service';
+import { getActiveRequestTrace } from '@/lib/request-trace';
+
+const afterMock = vi.hoisted(() => vi.fn());
+
+vi.mock('next/server', async () => {
+  const actual = await vi.importActual<typeof import('next/server')>('next/server');
+
+  return {
+    ...actual,
+    after: afterMock,
+  };
+});
 
 describe('generation route adapter service', () => {
   const createServiceClient = vi.fn();
@@ -15,6 +27,7 @@ describe('generation route adapter service', () => {
   const userSupabase = { service: 'user' };
 
   beforeEach(() => {
+    afterMock.mockReset();
     createServiceClient.mockReset();
     createServiceClient.mockReturnValue(adminSupabase);
     createUserClient.mockReset();
@@ -208,5 +221,115 @@ describe('generation route adapter service', () => {
     await expect(getResponse.json()).resolves.toEqual({ status: 'completed' });
     expect(withProviderFetchRequestId).toHaveBeenCalledWith('generation-factory-post', expect.any(Function));
     expect(withProviderFetchRequestId).toHaveBeenCalledWith('generation-factory-get', expect.any(Function));
+  });
+
+  describe('work a status check leaves for after the response', () => {
+    // A status check that finds a provider failure tells the creator's devices.
+    // The app is waiting on that check, so it is given somewhere to run the
+    // notification once it has answered.
+    const notifyCreator = async () => null;
+    const statusCheckThatDefers = vi.fn(async (input) => {
+      input.runAfterResponse?.(notifyCreator);
+
+      return {
+        ok: true as const,
+        body: { status: 'failed' },
+      };
+    });
+
+    beforeEach(() => {
+      statusCheckThatDefers.mockClear();
+    });
+
+    it('runs through Next after() on the routes', async () => {
+      const { GET } = createGenerationRouteHandlers({
+        getGenerationForRoute: statusCheckThatDefers,
+        kieApiKey: 'kie-key',
+        postGenerationForRoute: vi.fn(),
+        dependencies: {
+          createServiceClient,
+          createUserClient,
+          withProviderFetchRequestId,
+        },
+      });
+
+      const response = await GET(new Request('http://localhost/api/generate-image?id=task-image-1'));
+
+      await expect(response.json()).resolves.toEqual({ status: 'failed' });
+      expect(afterMock).toHaveBeenCalledTimes(1);
+      expect(afterMock).toHaveBeenCalledWith(notifyCreator);
+    });
+
+    it('runs through the scheduler a caller supplies instead', async () => {
+      const runAfterResponse = vi.fn();
+
+      await getGenerationRouteResponse({
+        getGenerationForRoute: statusCheckThatDefers,
+        kieApiKey: 'kie-key',
+        request: new Request('http://localhost/api/generate-image?id=task-image-1'),
+        dependencies: {
+          createServiceClient,
+          createUserClient,
+          withProviderFetchRequestId,
+          runAfterResponse,
+        },
+      });
+
+      expect(runAfterResponse).toHaveBeenCalledTimes(1);
+      expect(runAfterResponse).toHaveBeenCalledWith(notifyCreator);
+      expect(afterMock).not.toHaveBeenCalled();
+    });
+
+    it('is queued inside the request trace, so what runs later is still logged under the poll that caused it', async () => {
+      // Next's after() runs a task in the async context it was queued from.
+      let queuedUnder: string | undefined;
+      const runAfterResponse = vi.fn(() => {
+        queuedUnder = getActiveRequestTrace()?.requestId;
+      });
+
+      await getGenerationRouteResponse({
+        getGenerationForRoute: statusCheckThatDefers,
+        kieApiKey: 'kie-key',
+        request: new Request('http://localhost/api/generate-image?id=task-image-1', {
+          headers: { 'x-request-id': 'generation-get-deferred-1' },
+        }),
+        dependencies: {
+          createServiceClient,
+          createUserClient,
+          runAfterResponse,
+        },
+      });
+
+      expect(queuedUnder).toBe('generation-get-deferred-1');
+    });
+
+    it('is not offered to a generation start, which has nothing to send', async () => {
+      const postGenerationForRoute = vi.fn(async (input) => {
+        expect(input.runAfterResponse).toBeUndefined();
+
+        return {
+          ok: true as const,
+          body: { predictionId: 'task-image-1' },
+        };
+      });
+
+      const response = await postGenerationRouteResponse({
+        kieApiKey: 'kie-key',
+        postGenerationForRoute,
+        request: new Request('http://localhost/api/generate-image', {
+          method: 'POST',
+          body: JSON.stringify({ prompt: 'A cinematic product shot' }),
+        }),
+        dependencies: {
+          createServiceClient,
+          createUserClient,
+          withProviderFetchRequestId,
+        },
+      });
+
+      expect(response.status).toBe(200);
+      expect(postGenerationForRoute).toHaveBeenCalledTimes(1);
+      expect(afterMock).not.toHaveBeenCalled();
+    });
   });
 });

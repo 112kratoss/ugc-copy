@@ -218,4 +218,30 @@ describe('image generation route service', () => {
       kieApiKey: 'kie-key',
     });
   });
+
+  it('hands a status check the scheduler it was given, and none when it was given none', async () => {
+    // A poll that finds a provider failure tells the creator's devices. The
+    // route has someone waiting on the poll, so it brings somewhere to run that
+    // once the poll is answered.
+    const { getImageGenerationForRoute } = await import('@/lib/image-generation-route-service');
+    const runAfterResponse = vi.fn();
+
+    await getImageGenerationForRoute({
+      createAdminSupabase,
+      createUserSupabase,
+      kieApiKey: 'kie-key',
+      request: new Request('http://localhost/api/generate-image?id=task-image-1'),
+      runAfterResponse,
+    });
+    await getImageGenerationForRoute({
+      createAdminSupabase,
+      createUserSupabase,
+      kieApiKey: 'kie-key',
+      request: new Request('http://localhost/api/generate-image?id=task-image-1'),
+    });
+
+    expect(mocks.getImageGenerationStatusForRoute.mock.calls.map(([input]) => input.runAfterResponse))
+      .toEqual([runAfterResponse, undefined]);
+    expect(runAfterResponse).not.toHaveBeenCalled();
+  });
 });

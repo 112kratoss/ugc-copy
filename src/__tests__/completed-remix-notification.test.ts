@@ -6,7 +6,9 @@ vi.mock('@/lib/mobile-notifications', () => ({
   createMobileNotification: notify,
   buildMobileNotificationDeepLink: ({ postId }: { postId: string }) => `/post/${postId}`,
 }));
+import { hasAnswered } from '@/__tests__/fixtures/mobile-notification-history';
 import { notifyCompletedRemix } from '@/lib/completed-remix-notification';
+import { settleGenerationSucceeded } from '@/lib/generation-settlement';
 
 function client(remix: unknown) {
   const query = { select: vi.fn(), eq: vi.fn(), maybeSingle: vi.fn().mockResolvedValue({ data: remix, error: null }) };
@@ -54,5 +56,28 @@ describe('completed remix notifications', () => {
     notify.mockRejectedValue(new Error('unavailable'));
     await expect(notifyCompletedRemix(db, 'prediction')).resolves.toBeUndefined();
     log.mockRestore();
+  });
+
+  // Only the output-import job settles a success, from the cron or from the
+  // webhook's own after() window. Neither has a person's answer to send the
+  // notification behind, so it stays inside the settlement.
+  it('is sent before a successful settlement returns', async () => {
+    let finishNotifying = () => {};
+    notify.mockImplementationOnce(() => new Promise<null>((resolve) => {
+      finishNotifying = () => resolve(null);
+    }));
+    const { db } = client(recorded);
+    const settlementClient = {
+      from: db.from,
+      rpc: vi.fn(async () => ({ data: { status: 'succeeded' }, error: null })),
+    } as unknown as SupabaseClient;
+
+    const settlement = settleGenerationSucceeded(settlementClient, { predictionId: 'prediction' });
+
+    expect(await hasAnswered(settlement)).toBe(false);
+    expect(notify).toHaveBeenCalledTimes(1);
+
+    finishNotifying();
+    await expect(settlement).resolves.toBe('succeeded');
   });
 });

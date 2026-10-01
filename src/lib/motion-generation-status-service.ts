@@ -6,6 +6,7 @@ import { logBackendError } from '@/lib/backend-logger';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { withBackendJobLock } from '@/lib/backend-job-lock';
+import { sendDeferrableNotification, type RunAfterResponse } from '@/lib/deferrable-notification';
 import {
   buildFailedGenerationStatusPayload,
   buildLockedGenerationStatusPayload,
@@ -126,17 +127,24 @@ function getMotionResultUrl(resultJson: unknown): string | null {
     : null;
 }
 
+/**
+ * A result the poll found is settled by the time this runs. What is left is
+ * telling the creator's own devices, which the route sends behind its answer
+ * and outside the status lock.
+ */
 async function notifyTerminalStatus({
   adminSupabase,
   localGeneration,
   status,
   output,
+  runAfterResponse,
   dependencies,
 }: {
   adminSupabase: SupabaseClient;
   localGeneration: MotionStatusGenerationRow;
   status: string;
   output: string | null;
+  runAfterResponse: RunAfterResponse | undefined;
   dependencies: MotionGenerationStatusDependencies;
 }) {
   if (!localGeneration.id || !localGeneration.user_id) {
@@ -144,19 +152,19 @@ async function notifyTerminalStatus({
   }
 
   if (status === 'succeeded' && output) {
-    await dependencies.notifyGenerationStatus(adminSupabase, {
+    await sendDeferrableNotification(runAfterResponse, () => dependencies.notifyGenerationStatus(adminSupabase, {
       id: localGeneration.id,
       user_id: localGeneration.user_id,
       category: localGeneration.category,
       model: localGeneration.model,
-    }, 'succeeded');
+    }, 'succeeded'));
   } else if (status === 'failed') {
-    await dependencies.notifyGenerationStatus(adminSupabase, {
+    await sendDeferrableNotification(runAfterResponse, () => dependencies.notifyGenerationStatus(adminSupabase, {
       id: localGeneration.id,
       user_id: localGeneration.user_id,
       category: localGeneration.category,
       model: localGeneration.model,
-    }, 'failed');
+    }, 'failed'));
   }
 }
 
@@ -166,6 +174,7 @@ export async function getMotionGenerationStatusForRoute({
   userId,
   createAdminSupabase,
   kieApiKey,
+  runAfterResponse,
   dependencies,
 }: {
   request: Request;
@@ -174,6 +183,12 @@ export async function getMotionGenerationStatusForRoute({
   supabase: SupabaseClient;
   createAdminSupabase: () => SupabaseClient;
   kieApiKey: string | undefined;
+  /**
+   * The status route passes one: the app is polling, and waits on this answer
+   * to stop showing the motion render as running. With none, the notification
+   * for a result found here is sent before this returns.
+   */
+  runAfterResponse?: RunAfterResponse;
   dependencies?: Partial<MotionGenerationStatusDependencies>;
 }): Promise<MotionGenerationStatusRouteResult> {
   const resolvedDependencies = resolveDependencies(dependencies);
@@ -334,6 +349,7 @@ export async function getMotionGenerationStatusForRoute({
       localGeneration,
       status,
       output,
+      runAfterResponse,
       dependencies: resolvedDependencies,
     });
 
