@@ -669,17 +669,19 @@ describe.skipIf(!connectionString || Boolean(workerMode))(
             )
           ).rows[0].status,
         ).toBe('succeeded');
-        // Crashed staging files are deliberately confined to this fixture TMPDIR.
-        // Record their presence; recovery does not promise SIGKILL finally cleanup.
-        expect(
-          (await readdir(directory)).filter((name) =>
-            name.startsWith('remote-media-'),
-          ).length,
-        ).toBe(
-          ['during-upload', 'after-upload', 'after-settlement'].includes(point)
-            ? 1
-            : 0,
-        );
+        // A fresh import opportunistically reclaims the dead worker's owned
+        // workspace. If recovery skips staging (already settled), sweep it here
+        // to check the independent cleanup boundary.
+        const { reclaimAbandonedStagingWorkspaces, STAGING_ROOT_NAME } = await import('@/lib/staging-workspace');
+        const priorTmpdir = process.env.TMPDIR;
+        process.env.TMPDIR = directory;
+        try {
+          await reclaimAbandonedStagingWorkspaces();
+          expect(await readdir(join(directory, STAGING_ROOT_NAME))).toEqual([]);
+        } finally {
+          if (priorTmpdir === undefined) delete process.env.TMPDIR;
+          else process.env.TMPDIR = priorTmpdir;
+        }
       }, 60_000);
     }
   },

@@ -8,6 +8,7 @@ const fixture = vi.hoisted(() => ({ open: vi.fn() }));
 vi.mock('@/lib/remote-media-security', () => ({
   openAllowlistedRemoteMedia: fixture.open,
 }));
+import { STAGING_ROOT_NAME } from '@/lib/staging-workspace';
 import { stageAllowlistedRemoteMedia } from '@/lib/staged-remote-media';
 
 let directory: string;
@@ -29,6 +30,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.unstubAllEnvs();
   await chmod(directory, 0o700);
+  await chmod(path.join(directory, STAGING_ROOT_NAME), 0o700).catch(() => {});
   await rm(directory, { recursive: true, force: true });
 });
 const stage = () =>
@@ -56,19 +58,20 @@ describe('staged remote media lifetime', () => {
     );
     await first.cleanup();
     await second.cleanup();
-    expect(await readdir(directory)).toEqual([]);
+    expect(await readdir(path.join(directory, STAGING_ROOT_NAME))).toEqual([]);
   });
   it.skipIf(!permissionsSupported)(
     'allows cleanup to retry after a real permission failure',
     async () => {
       const media = await stage();
-      await chmod(directory, 0o500);
+      const parent = path.dirname(path.dirname(media.filePath));
+      await chmod(parent, 0o500);
       await expect(media.cleanup()).rejects.toMatchObject({
         code: expect.stringMatching(/EACCES|EPERM/),
       });
-      await chmod(directory, 0o700);
+      await chmod(parent, 0o700);
       await media.cleanup();
-      expect(await readdir(directory)).toEqual([]);
+      expect(await readdir(path.join(directory, STAGING_ROOT_NAME))).toEqual([]);
     },
   );
   it('concurrent cleanup callers both wait for deletion', async () => {
@@ -78,7 +81,7 @@ describe('staged remote media lifetime', () => {
     await expect(readFile(media.filePath)).rejects.toMatchObject({
       code: 'ENOENT',
     });
-    expect(await readdir(directory)).toEqual([]);
+    expect(await readdir(path.join(directory, STAGING_ROOT_NAME))).toEqual([]);
     await first;
   });
   it.skipIf(!permissionsSupported)(
@@ -112,7 +115,7 @@ describe('staged remote media lifetime', () => {
       sourceName: 'test.png',
     });
     await expect(stage()).rejects.toThrow('interrupted media');
-    expect(await readdir(directory)).toEqual([]);
+    expect(await readdir(path.join(directory, STAGING_ROOT_NAME))).toEqual([]);
   });
   it.skipIf(!permissionsSupported)(
     'keeps the staging failure when cancellation also fails',

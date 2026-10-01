@@ -1,6 +1,9 @@
 # Section 6H — staging cleanup completion and source cancellation
 
-Status: locally verified; PR/CI/release pending.
+Status: deployed and independently verified in PR #254, live commit
+`bc2fc0976196d996fba2fcca25d399cb60f9049f`. PR and exact-main CI passed all four
+jobs first run; standard release `36806100925` succeeded. See
+[release evidence](backend-section-06-staging-cleanup-release-2026-10-01.md).
 
 ## Reproduced behavior
 
@@ -58,6 +61,12 @@ is not evidence of a production disk incident or Vercel's behavior after a kille
 process. Vercel documents [instance reuse and concurrent execution](https://vercel.com/docs/functions)
 and [500 MB writable temporary storage](https://vercel.com/docs/functions/runtimes),
 but these statements do not specify retention after every termination mode.
+
+A separate process probe killed only the staging parent with SIGKILL. Its child
+remained alive and opened the staged file 1.5 seconds later, reading all 614,400
+bytes. This is a generic child-reader reproduction, not an ffmpeg timing
+measurement; the probe removed its fixture files and stopped its children. It
+confirms that parent death alone is insufficient evidence for safe deletion.
 
 No cross-worker stale-file sweep is added. The current `remote-media-*` directory
 has no durable owner record, and a Node parent can die while a spawned preview

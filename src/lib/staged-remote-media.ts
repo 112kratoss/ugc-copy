@@ -1,8 +1,7 @@
 import 'server-only';
 
 import { createWriteStream } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { createStagingWorkspace } from '@/lib/staging-workspace';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -18,6 +17,7 @@ export type StagedRemoteMedia = {
   contentLength: number | null;
   contentType: string;
   filePath: string;
+  readerLeaseFd: number;
   sourceName: string;
 };
 
@@ -26,16 +26,16 @@ export async function stageAllowlistedRemoteMedia(params: {
   kind: RemoteMediaKind;
 }): Promise<StagedRemoteMedia> {
   const media = await openAllowlistedRemoteMedia(params);
-  let tempDirectory: string;
+  let workspace: Awaited<ReturnType<typeof createStagingWorkspace>>;
   try {
-    tempDirectory = await mkdtemp(path.join(tmpdir(), 'remote-media-'));
+    workspace = await createStagingWorkspace();
   } catch (error) {
     // The response is already open, but no pipeline owns its body yet. Release
     // that source if disk allocation fails, retaining the allocation error.
     await media.body.cancel().catch(() => {});
     throw error;
   }
-  const filePath = path.join(tempDirectory, 'media');
+  const filePath = path.join(workspace.directory, 'media');
 
   try {
     await pipeline(
@@ -43,24 +43,16 @@ export async function stageAllowlistedRemoteMedia(params: {
       createWriteStream(filePath, { flags: 'wx' }),
     );
   } catch (error) {
-    await rm(tempDirectory, { recursive: true, force: true });
+    await workspace.cleanup();
     throw error;
   }
 
-  let cleanupPromise: Promise<void> | undefined;
   return {
     contentLength: media.contentLength,
     contentType: media.contentType,
     filePath,
+    readerLeaseFd: workspace.readerLeaseFd,
     sourceName: media.sourceName,
-    async cleanup() {
-      // Every caller must wait for deletion. Cache successful cleanup, but let
-      // a later call retry a failed removal instead of reporting false success.
-      cleanupPromise ??= rm(tempDirectory, { recursive: true, force: true }).catch((error) => {
-        cleanupPromise = undefined;
-        throw error;
-      });
-      await cleanupPromise;
-    },
+    cleanup: workspace.cleanup,
   };
 }

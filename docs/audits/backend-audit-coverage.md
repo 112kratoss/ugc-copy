@@ -27,7 +27,7 @@ passed, failed, untested and externally blocked checks. That mapping is pending.
 | Marketplace/creator earnings/payouts | Earlier Section 5 batches plus deployed 5J; 5K fixes legacy restore ownership, a restore/repurchase deadlock and duplicate revenue reporting (deployed in PR #246 on `b04ccb46`) | Complete web/mobile/credit lifecycle matrix, creator payout recovery and reporting edge cases (5L detached reporting deployed in PR #247); genuine provider events |
 | Generation/provider callbacks | Prior implementation tests; Section 6A local 20-way queue, lease, settlement and task-attachment races passed; Section 6B incomplete-output callback/polling bug deployed in PR #248; Section 6C durable video/motion polling deployed in PR #249 with real-DB recovery checks; Section 6D grace/callback ordering checks and reconciliation retry fix deployed in PR #250; Section 6E incomplete creation-receipt recovery deployed in PR #251; Section 6F marker outage/reaper recovery deployed in PR #252; Section 6G nine actual process-kill recovery cases verified and merged in PR #253 | Systematic start/callback/poll races, failures, refunds and recovery with provider evidence |
 | Workflow/template execution | Prior implementation tests and partial ownership checks | Execution authorization, partial failure, retries, cancellation, recovery and billing invariants |
-| Media/storage/signing/retention | Prior implementation tests and partial ownership checks; Section 6H staging cleanup retry/concurrency/source cancellation locally verified, release pending | Upload/import validation, signed access, lifecycle deletion and retention behavior |
+| Media/storage/signing/retention | Prior implementation tests and partial ownership checks; Section 6H staging cleanup retry/concurrency/source cancellation deployed and verified in PR #254; Section 6I actual FFmpeg parent-death probe confirms the timeout does not bound an orphan reader; Section 6J inherited-lock reclamation locally verified, release pending; legacy files/other scratch/disk admission remain open | Upload/import validation, signed access, lifecycle deletion and retention behavior |
 | Posts/feeds/moderation/community | Prior implementation tests and partial ownership checks | Behavioral authorization, visibility, moderation propagation, pagination and community mutations |
 | Jobs/cron/retries/operations | Existing registry and operational tests | Lease contention, stale locks, retries, budgets, poison jobs and alert delivery |
 | Deployment/recovery/backups/capacity | Each released batch uses exact-main Quality, migration/staging/live gates; separate scaling audits exist | Recovery/restore exercises and explicit reconciliation with current scaling certificates |
@@ -39,12 +39,16 @@ passed, failed, untested and externally blocked checks. That mapping is pending.
    was dismissed; the live authenticated ops HTTP response remains unavailable locally.
 2. Complete the remaining commerce lifecycle/payout matrix, separating synthetic
    database evidence from externally blocked provider delivery.
-3. Sections 6B–6G are deployed; live build `d848cd2d`. Section 6D verifies grace
+3. Sections 6B–6H are deployed; live build `bc2fc097`. Section 6D verifies grace
    expiry/callback ordering and fixes reconciliation-write retry. Section 6E
    incomplete receipt/start replay and Section 6F marker-write/reaper recovery
    are deployed and verified. Section 6G process termination checks passed CI and
-   release. Section 6H cleanup completion/source cancellation is locally verified;
-   finish release, then safe stale-file ownership/reclamation and workflow/template execution; continue the other areas above without claiming them complete from
+   release. Section 6H cleanup completion/source cancellation is deployed and
+   verified. Section 6I local actual-reader lifetime investigation is complete;
+   parent death and directory age are insufficient deletion authority. An inherited
+   lock primitive passes an isolated Linux/Node 24 proof. Section 6J packaging, reader
+   integration and reclamation race tests pass locally; finish PR/release, then
+   remaining disk admission/scratch lifetimes and workflow/template execution; continue the other areas above without claiming them complete from
    code inventory alone.
 
 The [handoff](backend-audit-handoff.md) records the exact checkout, live build,

@@ -1325,6 +1325,7 @@ function getIdeogramImageSize(aspectRatio: string): string {
 async function createGenerationPreviewQuietly({
   body,
   filePath,
+  sourceLeaseFd,
   category,
   contentType,
   storagePath,
@@ -1332,6 +1333,7 @@ async function createGenerationPreviewQuietly({
 }: {
   body?: Blob;
   filePath?: string;
+  sourceLeaseFd?: number;
   category: string | null | undefined;
   contentType: string | null | undefined;
   storagePath: string;
@@ -1350,7 +1352,7 @@ async function createGenerationPreviewQuietly({
       : category === 'video' || category === 'motion' || resolvedContentType?.startsWith('video/')
         ? await import('@/lib/generation-video-preview').then((previewModule) => (
           filePath
-            ? previewModule.createGenerationVideoPosterFromFile({ filePath, storagePath, supabase })
+            ? previewModule.createGenerationVideoPosterFromFile({ filePath, sourceLeaseFd, storagePath, supabase })
             : body
               ? previewModule.createGenerationVideoPoster({ body, storagePath, supabase })
               : null
@@ -1425,6 +1427,7 @@ export async function persistGeneratedOutput(
       const storagePath = `${bucket}/${fileName}`;
       const preview = await createGenerationPreviewQuietly({
         filePath: stagedMedia.filePath,
+        sourceLeaseFd: stagedMedia.readerLeaseFd,
         category: generation.category,
         contentType: stagedMedia.contentType,
         storagePath,
@@ -1507,6 +1510,7 @@ export async function persistGeneratedOutputList(
         if (index === 0) {
           primaryPreview = await createGenerationPreviewQuietly({
             filePath: stagedMedia.filePath,
+            sourceLeaseFd: stagedMedia.readerLeaseFd,
             category: generation.category,
             contentType: stagedMedia.contentType,
             storagePath: `${bucket}/${fileName}`,
