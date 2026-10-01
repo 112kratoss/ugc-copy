@@ -1,8 +1,10 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { hasAnswered } from '@/__tests__/fixtures/mobile-notification-history';
 import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
 import { sendDeferrableNotification } from '@/lib/deferrable-notification';
+import { notifyCreatorFollowed, notifyPostSocialActivity } from '@/lib/mobile-notifications';
 
 describe('sendDeferrableNotification', () => {
   it('sends the notification before returning when the caller has nowhere to run it afterwards', async () => {
@@ -54,4 +56,86 @@ describe('sendDeferrableNotification', () => {
       }),
     ]);
   });
+});
+
+describe('notifiers sent behind an answer', () => {
+  // Sending a notifier after the response moves it out from under the request:
+  // an error it threw would no longer fail the request, it would only reach
+  // the log. That hides nothing as long as none of them can reject, which is
+  // what this pins for each notifier the follow, save and share paths queue.
+  const followNotifier: [string, (client: SupabaseClient) => Promise<unknown>] = [
+    'a follow',
+    (client) => notifyCreatorFollowed(client, {
+      followerUserId: 'follower-1',
+      followingUserId: 'creator-1',
+      followerUsername: 'athul',
+    }),
+  ];
+  // A save or a share is grouped: its first step is one database call, not a
+  // table read.
+  const groupedNotifiers: Array<[string, (client: SupabaseClient) => Promise<unknown>]> = [
+    ['a save', (client) => notifyPostSocialActivity(client, {
+      type: 'post_saved',
+      recipientUserId: 'creator-1',
+      actorUserId: 'user-1',
+      postId: 'post-1',
+    })],
+    ['a share', (client) => notifyPostSocialActivity(client, {
+      type: 'post_shared',
+      recipientUserId: 'creator-1',
+      actorUserId: 'user-1',
+      postId: 'post-1',
+    })],
+  ];
+
+  async function logsOf(run: () => Promise<void>) {
+    const logged: BackendLogRecord[] = [];
+    const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
+
+    try {
+      await run();
+    } finally {
+      restoreLogSink();
+    }
+
+    return logged.map((record) => record.msg);
+  }
+
+  it.each([followNotifier, ...groupedNotifiers])(
+    'the notifier for %s logs a failure instead of rejecting when the database is unavailable',
+    async (_action, notify) => {
+      const unavailable = {
+        from: () => {
+          throw new Error('database unavailable');
+        },
+        rpc: () => {
+          throw new Error('database unavailable');
+        },
+      } as unknown as SupabaseClient;
+
+      const logged = await logsOf(async () => {
+        await expect(notify(unavailable)).resolves.toBeNull();
+      });
+
+      expect(logged).toEqual(['failed_to_create_mobile_notification']);
+    },
+  );
+
+  it.each(groupedNotifiers)(
+    'the notifier for %s logs a failure instead of rejecting when its grouped write is refused',
+    async (_action, notify) => {
+      const refusing = {
+        from: () => {
+          throw new Error('Unexpected table read');
+        },
+        rpc: async () => ({ data: null, error: { message: 'permission denied' } }),
+      } as unknown as SupabaseClient;
+
+      const logged = await logsOf(async () => {
+        await expect(notify(refusing)).resolves.toBeNull();
+      });
+
+      expect(logged).toEqual(['failed_to_create_mobile_notification']);
+    },
+  );
 });
