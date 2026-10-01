@@ -325,6 +325,75 @@ describe('mobile notifications helper', () => {
     consoleError.mockRestore();
   });
 
+  it('asks the backend for nothing when this install never registered for push', async () => {
+    // The device id is written alongside the first token and outlives sign-out,
+    // so an empty store means this install never registered. Sign-out used to
+    // fill the gap with `allDevices: true`, and the backend answered by
+    // retiring the token of every other device the account had.
+    const api = {
+      unregisterMobilePushToken: vi.fn(async () => ({ success: true })),
+    };
+
+    const { unregisterMobilePushNotifications } = await import('../lib/notifications');
+    await unregisterMobilePushNotifications(api as never);
+
+    expect(api.unregisterMobilePushToken).not.toHaveBeenCalled();
+    expect(notificationsMocks.unregisterForNotificationsAsync).toHaveBeenCalledTimes(1);
+    expect(secureStoreMocks.deleteItemAsync).toHaveBeenCalledWith('magicbooklet.mobileNotifications.expoPushToken');
+  });
+
+  it('treats a store it cannot read as nothing registered, never as every device', async () => {
+    secureStoreMocks.getItemAsync.mockRejectedValue(new Error('Keychain is unavailable'));
+    const api = {
+      unregisterMobilePushToken: vi.fn(async () => ({ success: true })),
+    };
+
+    const { unregisterMobilePushNotifications } = await import('../lib/notifications');
+    await unregisterMobilePushNotifications(api as never);
+
+    expect(api.unregisterMobilePushToken).not.toHaveBeenCalled();
+    expect(notificationsMocks.unregisterForNotificationsAsync).toHaveBeenCalledTimes(1);
+    expect(secureStoreMocks.deleteItemAsync).toHaveBeenCalledWith('magicbooklet.mobileNotifications.expoPushToken');
+  });
+
+  it('names the stored token alone when the device id is missing', async () => {
+    secureStoreMocks.getItemAsync.mockImplementation(async (key: string) => (
+      key === 'magicbooklet.mobileNotifications.expoPushToken' ? 'ExponentPushToken[old123]' : null
+    ));
+    const api = {
+      unregisterMobilePushToken: vi.fn(async () => ({ success: true })),
+    };
+
+    const { unregisterMobilePushNotifications } = await import('../lib/notifications');
+    await unregisterMobilePushNotifications(api as never);
+
+    expect(api.unregisterMobilePushToken).toHaveBeenCalledTimes(1);
+    expect(api.unregisterMobilePushToken).toHaveBeenCalledWith({
+      expoPushToken: 'ExponentPushToken[old123]',
+      platform: 'ios',
+    }, undefined);
+  });
+
+  it('names the device id alone once an earlier sign-out has cleared the token', async () => {
+    // Clearing local state deletes the token and keeps the device id, so the
+    // next sign-out from this install can still name its own rows.
+    secureStoreMocks.getItemAsync.mockImplementation(async (key: string) => (
+      key === 'magicbooklet.mobileNotifications.deviceId' ? 'device-1' : null
+    ));
+    const api = {
+      unregisterMobilePushToken: vi.fn(async () => ({ success: true })),
+    };
+
+    const { unregisterMobilePushNotifications } = await import('../lib/notifications');
+    await unregisterMobilePushNotifications(api as never);
+
+    expect(api.unregisterMobilePushToken).toHaveBeenCalledTimes(1);
+    expect(api.unregisterMobilePushToken).toHaveBeenCalledWith({
+      deviceId: 'device-1',
+      platform: 'ios',
+    }, undefined);
+  });
+
   it('clears only local push state after the backend has deleted the account', async () => {
     const { clearLocalMobilePushRegistration } = await import('../lib/notifications');
 

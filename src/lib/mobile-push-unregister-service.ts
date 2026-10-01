@@ -62,12 +62,16 @@ export async function unregisterMobilePushTokenForRoute(
     const body = asRecord(await readRequestBody(input));
     const expoPushToken = optionalString(body.expoPushToken ?? body.token);
     const deviceId = optionalString(body.deviceId);
-    const allDevices = body.allDevices === true;
 
-    if (!expoPushToken && !deviceId && !allDevices) {
+    // A request has to name what it retires. Installed app builds still send
+    // `allDevices: true` on sign-out from a phone that never registered for
+    // push: it stood in for the missing token and device id, and it retired the
+    // token of every other device on the account. It is refused like the empty
+    // request it replaced, and ignored beside a token or a device id.
+    if (!expoPushToken && !deviceId) {
       return {
         ok: false,
-        body: { error: 'Provide an Expo push token, device ID, or allDevices: true.' },
+        body: { error: 'Provide an Expo push token or device ID.' },
         status: 400,
       };
     }
@@ -105,6 +109,10 @@ export async function unregisterMobilePushTokenForRoute(
 
     query = expoPushToken ? query.eq('expo_push_token', expoPushToken) : query;
     query = !expoPushToken && deviceId ? query.eq('device_id', deviceId) : query;
+    // Live rows only. A row the receipts job, a newer token on the same device
+    // or an earlier sign-out already retired keeps the disabled_at it was given
+    // then, so the column still says when that token stopped receiving pushes.
+    query = query.eq('is_active', true);
 
     const { error } = await query;
     if (error) {
