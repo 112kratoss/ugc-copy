@@ -186,6 +186,57 @@ describe('credit unlock route adapter service', () => {
       adminSupabase,
       userId: 'buyer-1',
       postId: 'post-1',
+      runAfterResponse: expect.any(Function),
     });
+  });
+
+  it('gives the post resource credit unlock a way to send its notifications after the response', async () => {
+    const notify = vi.fn(async () => null);
+    const scheduled: Array<() => Promise<unknown>> = [];
+    const unlockPostResourceBundleWithCredits = vi.fn(
+      async ({ runAfterResponse }: { runAfterResponse?: (task: () => Promise<unknown>) => void }) => {
+        runAfterResponse?.(notify);
+        return {
+          success: true as const,
+          entitlement: 'post_resource_unlock' as const,
+          postId: 'post-1',
+          credits: 12,
+          alreadyProcessed: false,
+        };
+      },
+    );
+
+    const response = await postResourceBundleCreditUnlockRouteResponse({
+      request: createRequest('http://localhost/api/posts/post-1/resource-bundle/unlock-with-credits'),
+      context: createPostContext(),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({ service: 'admin' }) as unknown as SupabaseClient),
+        createUserClient: () => createUserClient('buyer-1'),
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true,
+          limit: 20,
+          remaining: 19,
+          retryAfterSeconds: 0,
+          resetAt: '2026-06-23T08:30:00.000Z',
+        })),
+        runAfterResponse: (task) => { scheduled.push(task); },
+        unlockPostResourceBundleWithCredits,
+      },
+    });
+
+    // The response is ready while the notification is only queued.
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      entitlement: 'post_resource_unlock',
+      postId: 'post-1',
+      credits: 12,
+      alreadyProcessed: false,
+    });
+    expect(scheduled).toHaveLength(1);
+    expect(notify).not.toHaveBeenCalled();
+
+    await scheduled[0]();
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 });

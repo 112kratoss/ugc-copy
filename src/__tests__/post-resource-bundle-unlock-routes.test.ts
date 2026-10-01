@@ -16,6 +16,7 @@ const createServiceClientFactory = vi.hoisted(() => vi.fn(() => adminClient));
 const getBundleForOrderByPostIdMock = vi.hoisted(() => vi.fn());
 const notifyPostResourceUnlockCompletedMock = vi.hoisted(() => vi.fn());
 const unlockPostResourceBundleWithCreditsMock = vi.hoisted(() => vi.fn());
+const afterMock = vi.hoisted(() => vi.fn());
 
 class MockMobileCommerceError extends Error {
   constructor(message: string, public readonly status = 400) {
@@ -23,6 +24,14 @@ class MockMobileCommerceError extends Error {
     this.name = 'MobileCommerceError';
   }
 }
+
+vi.mock('next/server', async () => {
+  const actual = await vi.importActual<typeof import('next/server')>('next/server');
+  return {
+    ...actual,
+    after: afterMock,
+  };
+});
 
 vi.mock('@/lib/server-helpers', () => ({
   createUserClient: (request: Request) => createUserClientMock(request),
@@ -65,6 +74,7 @@ describe('/api/posts/[postId]/resource-bundle unlock routes', () => {
     });
     getBundleForOrderByPostIdMock.mockClear();
     notifyPostResourceUnlockCompletedMock.mockClear();
+    afterMock.mockReset();
     unlockPostResourceBundleWithCreditsMock.mockClear();
     unlockPostResourceBundleWithCreditsMock.mockResolvedValue({
       success: true,
@@ -192,7 +202,43 @@ describe('/api/posts/[postId]/resource-bundle unlock routes', () => {
       adminSupabase: adminClient,
       userId: 'buyer-1',
       postId: 'post-1',
+      runAfterResponse: expect.any(Function),
     });
+  });
+
+  it('queues the credit unlock notifications behind the response instead of sending them first', async () => {
+    createUserClientMock.mockReturnValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({
+          data: { user: { id: 'buyer-1' } },
+          error: null,
+        })),
+      },
+    });
+    const notify = vi.fn(async () => null);
+    unlockPostResourceBundleWithCreditsMock.mockImplementationOnce(
+      async ({ runAfterResponse }: { runAfterResponse?: (task: () => Promise<unknown>) => void }) => {
+        runAfterResponse?.(notify);
+        return { success: true, entitlement: 'post_resource_unlock', postId: 'post-1' };
+      },
+    );
+
+    const { POST } = await import('@/app/api/posts/[postId]/resource-bundle/unlock-with-credits/route');
+    const response = await POST(
+      new Request('http://localhost/api/posts/post-1/resource-bundle/unlock-with-credits', {
+        method: 'POST',
+        headers: { 'x-request-id': 'post-credit-after-1' },
+      }) as never,
+      { params: Promise.resolve({ postId: 'post-1' }) }
+    );
+
+    // The route as deployed hands the task to Next's after(), which runs it
+    // once the response has gone out.
+    expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'post-credit-after-1');
+    expect(afterMock).toHaveBeenCalledTimes(1);
+    expect(afterMock).toHaveBeenCalledWith(notify);
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it('does not create an admin client before paid unlock verification authentication succeeds', async () => {

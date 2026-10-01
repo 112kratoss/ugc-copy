@@ -995,11 +995,20 @@ export async function unlockPostResourceBundleWithCredits({
   userId,
   postId,
   invalidateMarketplaceResourceListCache = defaultInvalidateMarketplaceResourceListCache,
+  notifyPostResourceUnlockCompleted: notifyUnlockCompleted = notifyPostResourceUnlockCompleted,
+  runAfterResponse,
 }: {
   adminSupabase: SupabaseClient;
   userId: string;
   postId: string;
   invalidateMarketplaceResourceListCache?: () => void;
+  notifyPostResourceUnlockCompleted?: typeof notifyPostResourceUnlockCompleted;
+  /**
+   * Runs a task once the caller has answered its request. The route passes one
+   * so the notifications stop holding the answer back; without it they are
+   * sent before this returns.
+   */
+  runAfterResponse?: (task: () => Promise<unknown>) => void;
 }): Promise<MobileCommerceSyncResult> {
   const { data, error } = await adminSupabase.rpc('unlock_post_resource_bundle_with_credits', {
     p_user_id: userId,
@@ -1042,13 +1051,22 @@ export async function unlockPostResourceBundleWithCredits({
       throw new MobileCommerceError('Failed to unlock post resources.', 500);
     }
     invalidateMarketplaceResourceListCache();
-    await notifyPostResourceUnlockCompleted(adminSupabase, {
+    // The credits are spent and the unlock is recorded; what is left is telling
+    // both people. That is one push request for every device they have
+    // registered, sent in turn, and the buyer is waiting on this answer. So the
+    // answer goes first wherever it can.
+    const notify = () => notifyUnlockCompleted(adminSupabase, {
       buyerUserId: userId,
       ownerUserId,
       postId,
       bundleId,
       alreadyProcessed: false,
     });
+    if (runAfterResponse) {
+      runAfterResponse(notify);
+    } else {
+      await notify();
+    }
   }
 
   return {
