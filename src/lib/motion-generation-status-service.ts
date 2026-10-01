@@ -128,22 +128,21 @@ function getMotionResultUrl(resultJson: unknown): string | null {
 }
 
 /**
- * A result the poll found is settled by the time this runs. What is left is
+ * A failure the poll found is settled by the time this runs. What is left is
  * telling the creator's own devices, which the route sends behind its answer
- * and outside the status lock.
+ * and outside the status lock. A finished render is announced by the output
+ * import job that stores it, never from here.
  */
 async function notifyTerminalStatus({
   adminSupabase,
   localGeneration,
   status,
-  output,
   runAfterResponse,
   dependencies,
 }: {
   adminSupabase: SupabaseClient;
   localGeneration: MotionStatusGenerationRow;
   status: string;
-  output: string | null;
   runAfterResponse: RunAfterResponse | undefined;
   dependencies: MotionGenerationStatusDependencies;
 }) {
@@ -151,14 +150,7 @@ async function notifyTerminalStatus({
     return;
   }
 
-  if (status === 'succeeded' && output) {
-    await sendDeferrableNotification(runAfterResponse, () => dependencies.notifyGenerationStatus(adminSupabase, {
-      id: localGeneration.id,
-      user_id: localGeneration.user_id,
-      category: localGeneration.category,
-      model: localGeneration.model,
-    }, 'succeeded'));
-  } else if (status === 'failed') {
+  if (status === 'failed') {
     await sendDeferrableNotification(runAfterResponse, () => dependencies.notifyGenerationStatus(adminSupabase, {
       id: localGeneration.id,
       user_id: localGeneration.user_id,
@@ -298,7 +290,6 @@ export async function getMotionGenerationStatusForRoute({
       fallbackStartedAtMs: localGeneration.created_at ? Date.parse(localGeneration.created_at) : null,
     });
     let status = timing.appStatus;
-    const output: string | null = null;
     let error: string | null = null;
 
     if (status === 'succeeded') {
@@ -348,14 +339,14 @@ export async function getMotionGenerationStatusForRoute({
       adminSupabase: admin,
       localGeneration,
       status,
-      output,
       runAfterResponse,
       dependencies: resolvedDependencies,
     });
 
     return {
       status,
-      output,
+      // A finished render is answered from its stored row, before the lock.
+      output: null,
       error,
       timing: withGenerationTimingEstimate(timing, estimatedTotalMs),
     };

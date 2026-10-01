@@ -325,7 +325,9 @@ export async function getImageGenerationStatusForRoute({
         toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
         reason,
       );
-      if (localGeneration.id && localGeneration.user_id) {
+      // The settlement has the last word. It answers `succeeded` for an image
+      // whose success was settled first, and then nobody is told it failed.
+      if (status === 'failed' && localGeneration.id && localGeneration.user_id) {
         // The failure is settled. What is left is telling the creator's own
         // devices, which the route sends behind its answer and outside this lock.
         await sendDeferrableNotification(runAfterResponse, () => resolvedDependencies.notifyGenerationStatus(admin, {
