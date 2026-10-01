@@ -1,6 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
+import {
+  createMobileNotificationHistory,
+  hasAnswered,
+} from '@/__tests__/fixtures/mobile-notification-history';
+import type { completeMobilePurchase as CompleteMobilePurchase } from '@/lib/mobile-commerce';
 import { postRevenueCatWebhookRouteResponse } from '@/lib/revenuecat-webhook-route-adapter-service';
 
 function webhookRequest(
@@ -225,6 +230,103 @@ describe('RevenueCat webhook route adapter service', () => {
       storeReportedPrice: 1999,
       storeReportedCurrency: 'INR',
     }));
+  });
+
+  // The purchase sync answers the app before its notifications go out. The
+  // webhook deliberately does not: nobody is waiting on it, and its answer is
+  // what RevenueCat's redelivery hangs on (anything but a 200, or 60 s of
+  // silence, is retried), so it keeps doing all of its work in front of it.
+  it('gives the settlement nowhere to run work after the response', async () => {
+    const completeMobilePurchase = vi.fn<typeof CompleteMobilePurchase>(async () => ({
+      success: true,
+      entitlement: 'credits',
+      credits: 250,
+      alreadyProcessed: false,
+    }));
+
+    const response = await postRevenueCatWebhookRouteResponse({
+      request: webhookRequest(purchasePayload),
+      dependencies: {
+        createServiceClient: () => ({ rpc: vi.fn() }) as never,
+        getExpectedAuthorization: () => 'Bearer revenuecat-webhook-secret',
+        verifyMobilePurchase: vi.fn(async () => ({
+          provider: 'play_store' as const,
+          transactionId: 'GPA.9876-5432-1098-76543',
+          raw: {},
+        })),
+        resolveMobilePurchaseAuthority: vi.fn(async () => ({
+          entitlementType: 'credits' as const,
+          productId: 'magicbooklet.credits.creator',
+          purchaseIntentId: null,
+          resourceId: null,
+          amountSubunits: 1_999_00,
+          currency: 'INR',
+          credits: 250,
+        })),
+        completeMobilePurchase,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(completeMobilePurchase).toHaveBeenCalledTimes(1);
+    expect(completeMobilePurchase.mock.calls[0][0].runAfterResponse).toBeUndefined();
+  });
+
+  it('acknowledges a credit purchase only once its notification has gone out', async () => {
+    // The real settlement runs here against notification history that is held
+    // open, standing in for a push fan-out that has not finished.
+    const history = createMobileNotificationHistory();
+    history.hold();
+    const rpc = vi.fn(async (name: string) => (
+      name === 'settle_referral_purchase_rewards'
+        ? { data: { status: 'not_referred', rewards: [] }, error: null }
+        : {
+          data: {
+            status: 'completed',
+            entitlement_type: 'credits',
+            product_id: 'magicbooklet.credits.creator',
+            resource_id: null,
+            amount_subunits: 1_999_00,
+            currency: 'INR',
+            remaining_credits: 2250,
+            source_record_id: 'txn-webhook-1',
+          },
+          error: null,
+        }
+    ));
+
+    const response = postRevenueCatWebhookRouteResponse({
+      request: webhookRequest(purchasePayload),
+      dependencies: {
+        createServiceClient: () => ({ rpc, from: (table: string) => history.from(table) }) as never,
+        getExpectedAuthorization: () => 'Bearer revenuecat-webhook-secret',
+        verifyMobilePurchase: vi.fn(async () => ({
+          provider: 'play_store' as const,
+          transactionId: 'GPA.9876-5432-1098-76543',
+          raw: {},
+        })),
+        resolveMobilePurchaseAuthority: vi.fn(async () => ({
+          entitlementType: 'credits' as const,
+          productId: 'magicbooklet.credits.creator',
+          purchaseIntentId: null,
+          resourceId: null,
+          amountSubunits: 1_999_00,
+          currency: 'INR',
+          credits: 2000,
+        })),
+      },
+    });
+
+    expect(await hasAnswered(response)).toBe(false);
+    expect(history.started).toEqual(['credits:txn-webhook-1']);
+
+    history.release();
+    const acknowledged = await response;
+    expect(acknowledged.status).toBe(200);
+    await expect(acknowledged.json()).resolves.toEqual({ received: true, result: 'completed' });
+    expect(history.sent).toEqual([
+      expect.objectContaining({ type: 'credits_purchased', dedupe_key: 'credits:txn-webhook-1' }),
+    ]);
   });
 
   it('acknowledges unrelated purchase products without granting an entitlement', async () => {

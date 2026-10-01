@@ -68,6 +68,54 @@ describe('mobile commerce sync route adapter service', () => {
     expect(createServiceClient).toHaveBeenCalledTimes(1);
   });
 
+  it('gives the purchase sync a way to send its notifications after the response', async () => {
+    const notify = vi.fn(async () => null);
+    const scheduled: Array<() => Promise<unknown>> = [];
+    const syncMobileCommerceForRoute = vi.fn<typeof import('@/lib/mobile-commerce-sync-service').syncMobileCommerceForRoute>(
+      async ({ runAfterResponse }): Promise<MobileCommerceSyncRouteResult> => {
+        runAfterResponse?.(notify);
+        return {
+          ok: true,
+          body: {
+            success: true,
+            entitlement: 'credits',
+            credits: 100,
+            alreadyProcessed: false,
+          },
+        };
+      },
+    );
+
+    const response = await postMobileCommerceSyncRouteResponse({
+      request: new Request('http://localhost/api/mobile/commerce/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productId: 'credits-1' }),
+      }),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({ kind: 'admin' }) as unknown as SupabaseClient),
+        createUserClient: vi.fn(() => ({ kind: 'user' }) as unknown as SupabaseClient),
+        runAfterResponse: (task) => { scheduled.push(task); },
+        syncMobileCommerceForRoute,
+        withProviderFetchRequestId: mockRequestIdPassthrough(),
+      },
+    });
+
+    // The response is ready while the notification is only queued.
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      entitlement: 'credits',
+      credits: 100,
+      alreadyProcessed: false,
+    });
+    expect(scheduled).toHaveLength(1);
+    expect(notify).not.toHaveBeenCalled();
+
+    await scheduled[0]();
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
   it('maps service rate limits with standard backend and private headers', async () => {
     const rateLimitError = new BackendRateLimitError({
       allowed: false,

@@ -23,6 +23,7 @@ const normalizeMobileCommercePayloadMock = vi.fn();
 const resolveMobilePurchaseAuthorityMock = vi.fn();
 const verifyMobilePurchaseMock = vi.fn();
 const restoreMobileEntitlementsMock = vi.fn();
+const afterMock = vi.hoisted(() => vi.fn());
 
 class MockMobileCommerceError extends Error {
   constructor(message: string, public readonly status = 400) {
@@ -30,6 +31,14 @@ class MockMobileCommerceError extends Error {
     this.name = 'MobileCommerceError';
   }
 }
+
+vi.mock('next/server', async () => {
+  const actual = await vi.importActual<typeof import('next/server')>('next/server');
+  return {
+    ...actual,
+    after: afterMock,
+  };
+});
 
 vi.mock('@/lib/server-helpers', () => ({
   createUserClient: (request: Request) => createUserClientMock(request),
@@ -100,6 +109,7 @@ describe('/api/mobile/commerce routes', () => {
     });
     restoreMobileEntitlementsMock.mockClear();
     restoreMobileEntitlementsMock.mockResolvedValue(mobileApiContract.endpoints.mobileCommerceRestore.response);
+    afterMock.mockReset();
     createUserClientMock.mockReturnValue({
       auth: {
         getUser: vi.fn(async () => ({
@@ -228,7 +238,47 @@ describe('/api/mobile/commerce routes', () => {
       authority: expect.objectContaining({ entitlementType: 'credits' }),
       provider: 'app_store',
       transactionId: 'tx-1',
+      runAfterResponse: expect.any(Function),
     });
+  });
+
+  it('queues the purchase notifications behind the sync response instead of sending them first', async () => {
+    createUserClientMock.mockReturnValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({
+          data: { user: { id: 'buyer-1' } },
+          error: null,
+        })),
+      },
+    });
+    const notify = vi.fn(async () => null);
+    completeMobilePurchaseMock.mockImplementationOnce(
+      async ({ runAfterResponse }: { runAfterResponse?: (task: () => Promise<unknown>) => void }) => {
+        runAfterResponse?.(notify);
+        return mobileApiContract.endpoints.mobileCommerceSync.response;
+      },
+    );
+
+    const { POST } = await import('@/app/api/mobile/commerce/sync/route');
+    const response = await POST(
+      new Request('http://localhost/api/mobile/commerce/sync', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'mobile-commerce-sync-after-1',
+        },
+        body: JSON.stringify({ productId: 'credits-1' }),
+      }) as never
+    );
+
+    // The route as deployed hands the task to Next's after(), which runs it
+    // once the response has gone out.
+    expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'mobile-commerce-sync-after-1');
+    await expect(response.json()).resolves.toEqual(mobileApiContract.endpoints.mobileCommerceSync.response);
+    expect(afterMock).toHaveBeenCalledTimes(1);
+    expect(afterMock).toHaveBeenCalledWith(notify);
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it('does not create an admin client before restore authentication succeeds', async () => {
@@ -314,6 +364,45 @@ describe('/api/mobile/commerce routes', () => {
       p_limit: 6,
       p_window_seconds: 600,
     });
-    expect(restoreMobileEntitlementsMock).toHaveBeenCalledWith(adminClient, 'buyer-1');
+    expect(restoreMobileEntitlementsMock).toHaveBeenCalledWith(adminClient, 'buyer-1', {
+      runAfterResponse: expect.any(Function),
+    });
+  });
+
+  it('queues the restore notifications behind the response instead of sending them first', async () => {
+    createUserClientMock.mockReturnValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({
+          data: { user: { id: 'buyer-1' } },
+          error: null,
+        })),
+      },
+    });
+    const notify = vi.fn(async () => null);
+    restoreMobileEntitlementsMock.mockImplementationOnce(
+      async (
+        _adminSupabase: unknown,
+        _userId: string,
+        options?: { runAfterResponse?: (task: () => Promise<unknown>) => void },
+      ) => {
+        options?.runAfterResponse?.(notify);
+        return mobileApiContract.endpoints.mobileCommerceRestore.response;
+      },
+    );
+
+    const { POST } = await import('@/app/api/mobile/commerce/restore/route');
+    const response = await POST(
+      new Request('http://localhost/api/mobile/commerce/restore', {
+        method: 'POST',
+        headers: { 'x-request-id': 'mobile-commerce-restore-after-1' },
+      }) as never
+    );
+
+    expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'mobile-commerce-restore-after-1');
+    await expect(response.json()).resolves.toEqual(mobileApiContract.endpoints.mobileCommerceRestore.response);
+    expect(afterMock).toHaveBeenCalledTimes(1);
+    expect(afterMock).toHaveBeenCalledWith(notify);
+    expect(notify).not.toHaveBeenCalled();
   });
 });

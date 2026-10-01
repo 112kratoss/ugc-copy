@@ -161,6 +161,9 @@ export async function postMarketplaceCreditUnlockRouteResponse({
           adminSupabase,
           assetId: resourceId,
           userId,
+          // As for the post resource unlock below: the pushes go out behind
+          // the answer rather than in front.
+          runAfterResponse: resolvedDependencies.runAfterResponse,
         })
       ),
     }, resolvedDependencies),

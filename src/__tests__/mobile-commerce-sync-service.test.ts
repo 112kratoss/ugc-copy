@@ -183,6 +183,25 @@ describe('mobile commerce sync service', () => {
     });
   });
 
+  it('hands the purchase the route\'s way of running work after the response', async () => {
+    // The app waits on this answer with the store's charge already taken, so
+    // the notifications are queued behind it rather than sent in front.
+    const runAfterResponse = vi.fn();
+    const { syncMobileCommerceForRoute } = await import('@/lib/mobile-commerce-sync-service');
+    const result = await syncMobileCommerceForRoute({
+      getAdminSupabase,
+      requestBody: { productId: 'credits-1' },
+      runAfterResponse,
+      userSupabase: createUserSupabaseMock(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mocks.completeMobilePurchase).toHaveBeenCalledTimes(1);
+    expect(mocks.completeMobilePurchase.mock.calls[0][0].runAfterResponse).toBe(runAfterResponse);
+    // Queuing is the purchase's call to make, once it knows there is something to send.
+    expect(runAfterResponse).not.toHaveBeenCalled();
+  });
+
   it('routes verified marketplace and post resource entitlements to their completion services', async () => {
     const { syncMobileCommerceForRoute } = await import('@/lib/mobile-commerce-sync-service');
 

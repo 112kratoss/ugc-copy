@@ -14,6 +14,7 @@ import {
   resolveMobilePurchaseAuthority,
   verifyMobilePurchase,
   type MobileCommerceSyncResult,
+  type RunAfterResponse,
 } from '@/lib/mobile-commerce';
 
 type RouteBody = Record<string, unknown>;
@@ -37,6 +38,8 @@ export interface MobileCommerceSyncRouteInput {
   getAdminSupabase: () => unknown;
   readRequestBody?: () => Promise<unknown>;
   requestBody?: unknown;
+  /** Runs a task once the route has answered; the purchase queues its notifications on it. */
+  runAfterResponse?: RunAfterResponse;
   userSupabase: unknown;
 }
 
@@ -130,6 +133,9 @@ export async function syncMobileCommerceForRoute(
         authority,
         provider: verified.provider,
         transactionId: verified.transactionId,
+        // The app is waiting on this answer with the store's charge already
+        // taken, so the pushes go out behind it rather than in front.
+        runAfterResponse: input.runAfterResponse,
       }),
     };
   } catch (error) {

@@ -145,7 +145,58 @@ describe('credit unlock route adapter service', () => {
       adminSupabase,
       userId: 'buyer-1',
       assetId: 'asset-1',
+      runAfterResponse: expect.any(Function),
     });
+  });
+
+  it('gives the marketplace credit unlock a way to send its notifications after the response', async () => {
+    const notify = vi.fn(async () => null);
+    const scheduled: Array<() => Promise<unknown>> = [];
+    const unlockMarketplaceAssetWithCredits = vi.fn(
+      async ({ runAfterResponse }: { runAfterResponse?: (task: () => Promise<unknown>) => void }) => {
+        runAfterResponse?.(notify);
+        return {
+          success: true as const,
+          entitlement: 'marketplace_unlock' as const,
+          assetId: 'asset-1',
+          credits: 18,
+          alreadyProcessed: false,
+        };
+      },
+    );
+
+    const response = await postMarketplaceCreditUnlockRouteResponse({
+      request: createRequest(),
+      context: createMarketplaceContext(),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({ service: 'admin' }) as unknown as SupabaseClient),
+        createUserClient: () => createUserClient('buyer-1'),
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true,
+          limit: 20,
+          remaining: 19,
+          retryAfterSeconds: 0,
+          resetAt: '2026-06-23T08:30:00.000Z',
+        })),
+        runAfterResponse: (task) => { scheduled.push(task); },
+        unlockMarketplaceAssetWithCredits,
+      },
+    });
+
+    // The response is ready while the notification is only queued.
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      entitlement: 'marketplace_unlock',
+      assetId: 'asset-1',
+      credits: 18,
+      alreadyProcessed: false,
+    });
+    expect(scheduled).toHaveLength(1);
+    expect(notify).not.toHaveBeenCalled();
+
+    await scheduled[0]();
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 
   it('delegates successful post resource credit unlocks after rate limiting', async () => {

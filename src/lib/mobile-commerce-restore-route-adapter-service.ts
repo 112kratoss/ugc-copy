@@ -2,7 +2,7 @@ import 'server-only';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders, getApiRequestId } from '@/lib/api-cache';
 import {
@@ -15,12 +15,15 @@ import { MobileCommerceError, restoreMobileEntitlements } from '@/lib/mobile-com
 import { withProviderFetchRequestId } from '@/lib/provider-fetch';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
+type RunAfterResponse = (task: () => Promise<unknown>) => void;
+
 type MobileCommerceRestoreRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
   logError?: typeof logBackendRouteError;
   restoreMobileEntitlements?: typeof restoreMobileEntitlements;
+  runAfterResponse?: RunAfterResponse;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
 };
 
@@ -31,6 +34,7 @@ function resolveDependencies(dependencies: MobileCommerceRestoreRouteDependencie
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
     logError: dependencies?.logError ?? logBackendRouteError,
     restoreMobileEntitlements: dependencies?.restoreMobileEntitlements ?? restoreMobileEntitlements,
+    runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
   };
 }
@@ -75,7 +79,12 @@ async function handleMobileCommerceRestorePOST(
     const rateLimitResponse = await enforceRestoreRateLimit(adminSupabase, user.id, dependencies);
     if (rateLimitResponse) return rateLimitResponse;
 
-    return NextResponse.json(await dependencies.restoreMobileEntitlements(adminSupabase, user.id));
+    return NextResponse.json(await dependencies.restoreMobileEntitlements(adminSupabase, user.id, {
+      // Someone is waiting on this answer: the app's Restore button, and its
+      // fallback when a purchase it was just charged for has not landed. So
+      // the pushes go out behind it rather than in front.
+      runAfterResponse: dependencies.runAfterResponse,
+    }));
   } catch (error) {
     if (error instanceof MobileCommerceError) {
       return NextResponse.json({ error: error.message }, { status: error.status });

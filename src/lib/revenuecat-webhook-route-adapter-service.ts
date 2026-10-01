@@ -132,6 +132,11 @@ async function handleRevenueCatWebhookPOST(
         userId: event.userId,
         productId: event.productId,
       });
+      // No `runAfterResponse` here, on purpose. Nobody is waiting on this
+      // answer: when the webhook settles a purchase first, the app's own sync
+      // finds it already processed and answers at once. And this answer is
+      // what RevenueCat's redelivery hangs on, so everything the event asks
+      // for, the notification included, stays in front of it.
       const settlement = await dependencies.completeMobilePurchase({
         adminSupabase,
         userId: event.userId,

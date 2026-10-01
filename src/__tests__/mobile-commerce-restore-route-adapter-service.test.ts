@@ -129,6 +129,53 @@ describe('mobile commerce restore route adapter service', () => {
     expect(response.headers.get('x-request-id')).toBe('mobile-restore-success-1');
     await expect(response.json()).resolves.toEqual(restoreResult);
     expect(withProviderFetchRequestId).toHaveBeenCalledWith('mobile-restore-success-1', expect.any(Function));
-    expect(restoreMobileEntitlements).toHaveBeenCalledWith(adminSupabase, 'buyer-1');
+    expect(restoreMobileEntitlements).toHaveBeenCalledWith(adminSupabase, 'buyer-1', {
+      runAfterResponse: expect.any(Function),
+    });
+  });
+
+  it('gives the restore a way to send its notifications after the response', async () => {
+    const restoreResult = {
+      success: true,
+      credits: 42,
+      restoredCreditPurchases: 1,
+      alreadyProcessedCreditPurchases: 0,
+      entitlements: [],
+    };
+    const notify = vi.fn(async () => null);
+    const scheduled: Array<() => Promise<unknown>> = [];
+    const restoreMobileEntitlements = vi.fn<typeof import('@/lib/mobile-commerce').restoreMobileEntitlements>(
+      async (_adminSupabase, _userId, options) => {
+        options?.runAfterResponse?.(notify);
+        return restoreResult;
+      },
+    );
+
+    const response = await postMobileCommerceRestoreRouteResponse({
+      request: createRequest('mobile-restore-after-1'),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({ service: 'admin' }) as unknown as SupabaseClient),
+        createUserClient: () => createUserClient('buyer-1'),
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true,
+          limit: 6,
+          remaining: 5,
+          retryAfterSeconds: 0,
+          resetAt: '2026-06-23T08:30:00.000Z',
+        })),
+        restoreMobileEntitlements,
+        runAfterResponse: (task) => { scheduled.push(task); },
+        withProviderFetchRequestId: mockRequestIdPassthrough(),
+      },
+    });
+
+    // The response is ready while the notification is only queued.
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(restoreResult);
+    expect(scheduled).toHaveLength(1);
+    expect(notify).not.toHaveBeenCalled();
+
+    await scheduled[0]();
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 });
