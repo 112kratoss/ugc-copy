@@ -78,7 +78,38 @@ describe('postResourceBundleFreeUnlockRouteResponse', () => {
       adminSupabase,
       buyerUserId: 'buyer-1',
       postId: 'post-1',
+      runAfterResponse: expect.any(Function),
     });
+  });
+
+  it('gives the unlock a way to send its notifications after the response', async () => {
+    const notify = vi.fn(async () => null);
+    const scheduled: Array<() => Promise<unknown>> = [];
+    const unlockFreePostResourceBundleForRoute = vi.fn(
+      async ({ runAfterResponse }: { runAfterResponse?: (task: () => Promise<unknown>) => void }): Promise<PostResourceBundleFreeUnlockRouteResult> => {
+        runAfterResponse?.(notify);
+        return { ok: true, body: { success: true, free: true, alreadyProcessed: false } };
+      },
+    );
+
+    const response = await postResourceBundleFreeUnlockRouteResponse({
+      postId: 'post-1',
+      request: new Request('http://localhost/api/posts/post-1/resource-bundle/unlock-free', { method: 'POST' }),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({ kind: 'admin' }) as unknown as SupabaseClient),
+        createUserClient: () => createUserClient('buyer-1'),
+        unlockFreePostResourceBundleForRoute,
+        runAfterResponse: (task) => { scheduled.push(task); },
+      },
+    });
+
+    // The response is ready while the notification is only queued.
+    expect(response.status).toBe(200);
+    expect(scheduled).toHaveLength(1);
+    expect(notify).not.toHaveBeenCalled();
+
+    await scheduled[0]();
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 
   it('maps free unlock rate limits to standard private backend rate-limit responses', async () => {

@@ -214,6 +214,63 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     expect(invalidateMarketplaceResourceListCache).toHaveBeenCalledTimes(1);
   });
 
+  it('answers before the notifications go out when the caller can run work after the response', async () => {
+    // Measured in production on 2026-10-01: the buyer had 32 registered
+    // devices, each push is its own request, and the unlock answered 15 s after
+    // it was recorded. The app's Remix tap was waiting on that answer.
+    const admin = createAdminSupabaseMock();
+    const notifyPostResourceUnlockCompleted = vi.fn(() => new Promise<null>(() => {}));
+    const deferred: Array<() => Promise<unknown>> = [];
+
+    const result = await unlockFreePostResourceBundleForRoute({
+      adminSupabase: admin.client,
+      postId: 'post-1',
+      buyerUserId: 'buyer-1',
+      getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      notifyPostResourceUnlockCompleted,
+      invalidateMarketplaceResourceListCache: vi.fn(),
+      createId: vi.fn(() => 'id'),
+      runAfterResponse: (task) => { deferred.push(task); },
+    });
+
+    // A push that never finishes no longer holds the answer back.
+    expect(result).toEqual({
+      ok: true,
+      body: { success: true, free: true, alreadyProcessed: false },
+    });
+    expect(notifyPostResourceUnlockCompleted).not.toHaveBeenCalled();
+    expect(deferred).toHaveLength(1);
+
+    void deferred[0]();
+    expect(notifyPostResourceUnlockCompleted).toHaveBeenCalledWith(admin.client, {
+      buyerUserId: 'buyer-1',
+      ownerUserId: 'owner-1',
+      postId: 'post-1',
+      bundleId: 'bundle-1',
+      alreadyProcessed: false,
+    });
+  });
+
+  it('defers nothing when the unlock was already held', async () => {
+    const admin = createAdminSupabaseMock({
+      unlockResult: { status: 'already_owned', bundle_id: 'bundle-1', owner_user_id: 'owner-1' },
+    });
+    const runAfterResponse = vi.fn();
+
+    await unlockFreePostResourceBundleForRoute({
+      adminSupabase: admin.client,
+      postId: 'post-1',
+      buyerUserId: 'buyer-1',
+      getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      notifyPostResourceUnlockCompleted: vi.fn(),
+      invalidateMarketplaceResourceListCache: vi.fn(),
+      createId: vi.fn(() => 'id'),
+      runAfterResponse,
+    });
+
+    expect(runAfterResponse).not.toHaveBeenCalled();
+  });
+
   it('returns an existing atomic entitlement without creating or notifying again', async () => {
     const admin = createAdminSupabaseMock({
       unlockResult: {

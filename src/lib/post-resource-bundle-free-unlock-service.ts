@@ -75,6 +75,7 @@ export async function unlockFreePostResourceBundleForRoute({
   notifyPostResourceUnlockCompleted = defaultNotifyPostResourceUnlockCompleted,
   invalidateMarketplaceResourceListCache = defaultInvalidateMarketplaceResourceListCache,
   createId = randomUUID,
+  runAfterResponse,
 }: {
   adminSupabase: SupabaseClient;
   postId: string;
@@ -83,6 +84,12 @@ export async function unlockFreePostResourceBundleForRoute({
   notifyPostResourceUnlockCompleted?: NotifyPostResourceUnlockCompleted;
   invalidateMarketplaceResourceListCache?: () => void;
   createId?: () => string;
+  /**
+   * Runs a task once the caller has answered its request. The route passes one
+   * so the notifications stop holding the answer back; without it they are
+   * sent before this returns.
+   */
+  runAfterResponse?: (task: () => Promise<unknown>) => void;
 }): Promise<PostResourceBundleFreeUnlockRouteResult> {
   try {
     await enforceBackendRateLimit(adminSupabase, {
@@ -152,13 +159,24 @@ export async function unlockFreePostResourceBundleForRoute({
 
   invalidateMarketplaceResourceListCache();
 
-  await notifyPostResourceUnlockCompleted(adminSupabase, {
+  // The unlock is recorded; what is left is telling both people. That is one
+  // push request for every device they have registered, sent in turn, and the
+  // buyer is waiting on this answer: the app's Remix tap takes a free unlock
+  // and then starts the remix. So the answer goes first wherever it can.
+  const ownerUserId = unlockResult.owner_user_id;
+  const bundleId = unlockResult.bundle_id;
+  const notify = () => notifyPostResourceUnlockCompleted(adminSupabase, {
     buyerUserId,
-    ownerUserId: unlockResult.owner_user_id,
+    ownerUserId,
     postId,
-    bundleId: unlockResult.bundle_id,
+    bundleId,
     alreadyProcessed: false,
   });
+  if (runAfterResponse) {
+    runAfterResponse(notify);
+  } else {
+    await notify();
+  }
 
   return {
     ok: true,
