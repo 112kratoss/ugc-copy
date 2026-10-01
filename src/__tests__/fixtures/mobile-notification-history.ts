@@ -134,3 +134,76 @@ export async function hasAnswered(promise: Promise<unknown>) {
 
   return answered;
 }
+
+/** The lookup `createMobileNotification` makes before it writes. */
+type DedupeLookup = {
+  eq(column: string, value: unknown): DedupeLookup;
+  maybeSingle(): Promise<unknown>;
+};
+
+/**
+ * `history`, with the unique index the real table keeps on
+ * `(user_id, dedupe_key)`.
+ *
+ * On its own the history answers every lookup with "nothing yet", so two sends
+ * of one key both go out. With this a lookup finds the notification an earlier
+ * send wrote, and a second write of one that slipped past the lookup is
+ * refused the way Postgres refuses it.
+ */
+export function withUniqueDedupeKeys(history: MobileNotificationHistory): MobileNotificationHistory {
+  const written = (userId: unknown, dedupeKey: unknown) => {
+    if (dedupeKey === null || dedupeKey === undefined) return null;
+    const index = history.sent.findIndex(
+      (row) => row.user_id === userId && row.dedupe_key === dedupeKey,
+    );
+    return index < 0 ? null : { id: `notification-${index + 1}`, ...history.sent[index] };
+  };
+
+  function notifications() {
+    const table = history.from('mobile_notifications') as unknown as {
+      select(): DedupeLookup;
+      insert(values: Record<string, unknown>): unknown;
+    };
+
+    return {
+      select() {
+        const lookup = table.select();
+        const filters: Record<string, unknown> = {};
+        const query = {
+          eq(column: string, value: unknown) {
+            filters[column] = value;
+            lookup.eq(column, value);
+            return query;
+          },
+          async maybeSingle() {
+            // Still waits while the history is held, then reads what has been
+            // written by the time it is let go.
+            await lookup.maybeSingle();
+            return { data: written(filters.user_id, filters.dedupe_key), error: null };
+          },
+        };
+        return query;
+      },
+      insert(values: Record<string, unknown>) {
+        if (!written(values.user_id, values.dedupe_key)) return table.insert(values);
+
+        return {
+          select: () => ({
+            single: async () => ({
+              data: null,
+              error: {
+                code: '23505',
+                message: 'duplicate key value violates unique constraint "mobile_notifications_user_dedupe_key_idx"',
+              },
+            }),
+          }),
+        };
+      },
+    };
+  }
+
+  return {
+    ...history,
+    from: (table: string) => (table === 'mobile_notifications' ? notifications() : history.from(table)),
+  } as unknown as MobileNotificationHistory;
+}

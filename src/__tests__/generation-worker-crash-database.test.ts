@@ -553,10 +553,12 @@ describe.skipIf(!connectionString || Boolean(workerMode))(
             refunded: true,
             credits: 500,
             promotional_credits: 200,
+            notifications: 1,
           });
           expect(await recover('reap')).toMatchObject({
             startFailures: { settled: 0 },
           });
+          expect((await state()).notifications).toBe(1);
         }
         const calls = await readFile(
           join(directory, 'provider-calls'),

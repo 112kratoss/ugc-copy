@@ -1463,6 +1463,10 @@ export async function cancelTemplateRun(client: SupabaseClient, runId: string, u
           supabase: client,
           creditSupabase: client,
           generationIds: activeIds,
+          // The person cancelling is waiting on this request with the run in
+          // front of them. A failure found here is settled and refunded, and
+          // their answer is not held behind a push about it.
+          notifyFailures: false,
         });
       } catch (error) {
         logBackendError('failed_to_synchronize_template_generations', { error: error });

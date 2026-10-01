@@ -1,6 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  createMobileNotificationHistory,
+  withMobileNotificationHistory,
+} from '@/__tests__/fixtures/mobile-notification-history';
+
 // Foreign references stay rejected by default; individual tests opt into an
 // authorized shared-media import.
 const sharedImportMocks = vi.hoisted(() => ({
@@ -3695,7 +3700,7 @@ describe('generation services', () => {
       }),
     } as Response);
 
-    const { supabase, generations, rpcCalls } = createSupabaseMock([{
+    const { supabase: generationsClient, generations, rpcCalls } = createSupabaseMock([{
       id: 'gen-audio-2',
       user_id: 'user-1',
       prediction_id: 'task-audio-2',
@@ -3706,6 +3711,10 @@ describe('generation services', () => {
       workflow_settings: { model: 'sound-effect-v2' },
       created_at: '2026-04-15T10:00:00.000Z',
     }]);
+    // A settled failure is announced from here, so the client answers the
+    // notification tables too.
+    const notifications = createMobileNotificationHistory();
+    const supabase = withMobileNotificationHistory(generationsClient, notifications);
 
     await syncGenerationStatuses({
       supabase,
@@ -3715,6 +3724,7 @@ describe('generation services', () => {
 
     expect(generations[0].status).toBe('failed');
     expect(generations[0].completed_at).toBe('2026-04-15T10:01:00.000Z');
+    expect(notifications.started).toEqual(['generation:gen-audio-2:failed']);
     expect(rpcCalls).toContainEqual({
       fn: 'settle_generation_failed',
       args: {
@@ -3741,7 +3751,7 @@ describe('generation services', () => {
       }),
     } as Response);
 
-    const { supabase, generations, rpcCalls } = createSupabaseMock([{
+    const { supabase: generationsClient, generations, rpcCalls } = createSupabaseMock([{
       id: 'gen-audio-3',
       user_id: 'user-1',
       prediction_id: 'task-audio-3',
@@ -3752,6 +3762,8 @@ describe('generation services', () => {
       workflow_settings: { model: 'sound-effect-v2' },
       created_at: '2026-04-15T10:00:00.000Z',
     }]);
+    const notifications = createMobileNotificationHistory();
+    const supabase = withMobileNotificationHistory(generationsClient, notifications);
 
     await expect(syncGenerationStatusByPredictionId({
       supabase,
@@ -3769,6 +3781,7 @@ describe('generation services', () => {
 
     expect(generations[0].status).toBe('failed');
     expect(generations[0].completed_at).toBe('2026-04-15T10:02:00.000Z');
+    expect(notifications.started).toEqual(['generation:gen-audio-3:failed']);
     expect(rpcCalls).toContainEqual({
       fn: 'settle_generation_failed',
       args: {
@@ -3785,7 +3798,7 @@ describe('generation services', () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockRejectedValue(new Error('provider status should not be polled'));
 
-    const { supabase, generations, rpcCalls } = createSupabaseMock([{
+    const { supabase: generationsClient, generations, rpcCalls } = createSupabaseMock([{
       id: 'gen-webhook-fail-1',
       user_id: 'user-1',
       prediction_id: 'task-webhook-fail-1',
@@ -3796,6 +3809,8 @@ describe('generation services', () => {
       workflow_settings: { model: 'sound-effect-v2' },
       created_at: '2026-04-15T10:00:00.000Z',
     }]);
+    const notifications = createMobileNotificationHistory();
+    const supabase = withMobileNotificationHistory(generationsClient, notifications);
 
     await expect(syncGenerationStatusByPredictionId({
       supabase,
@@ -3817,6 +3832,7 @@ describe('generation services', () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(generations[0].status).toBe('failed');
     expect(generations[0].completed_at).toBe('2026-04-15T10:03:00.000Z');
+    expect(notifications.started).toEqual(['generation:gen-webhook-fail-1:failed']);
     expect(rpcCalls).toContainEqual({
       fn: 'settle_generation_failed',
       args: {

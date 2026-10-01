@@ -12,6 +12,7 @@ import {
   requireApiKey,
 } from '@/lib/generation-service-core';
 import { settleGenerationFailed } from '@/lib/generation-settlement';
+import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import { readProviderFailureReason } from '@/lib/provider-failure-messages';
 import { extractKieWebhookTaskId } from '@/lib/kie-webhook';
 import { enqueueGenerationOutputImportJob } from '@/lib/generation-output-import-jobs';
@@ -43,22 +44,45 @@ import {
  * Behaviour is unchanged by the extraction.
  */
 
+/**
+ * Settles a failure the provider reported and tells the creator.
+ *
+ * This is where most failures are settled: the provider's callback lands
+ * seconds before the client polls, and a poll that finds the row already failed
+ * returns without notifying anyone. Sent only from the status services, the
+ * push would go out for the few failures a poll happens to find first.
+ *
+ * It is awaited. The callers are jobs with no response to send it behind, and
+ * a send let go of unfinished is cut off when the function that ran the job is
+ * frozen. `notifyFailure` is off for the one caller someone is waiting on.
+ */
 async function markGenerationFailed(
   creditSupabase: SupabaseClient,
   generation: SyncableGenerationRecord,
   completedAt?: string | null,
-  errorMessage?: string | null
+  errorMessage?: string | null,
+  notifyFailure = true,
 ): Promise<'failed' | 'succeeded'> {
   if (!generation.prediction_id) {
     throw new GenerationServiceError('Generation does not have a provider task id.', 500);
   }
 
-  return settleGenerationFailed(
+  const status = await settleGenerationFailed(
     creditSupabase,
     generation.prediction_id,
     completedAt ?? new Date().toISOString(),
     errorMessage ?? null,
   );
+
+  // `succeeded` is a render whose output landed first: nothing failed. The
+  // notifier cannot throw, so it can never undo the refund above it, and it
+  // shares its dedupe key with the status services, so a poll that settles the
+  // same failure does not send a second one.
+  if (status === 'failed' && notifyFailure) {
+    await notifyGenerationStatus(creditSupabase, generation, 'failed');
+  }
+
+  return status;
 }
 
 async function queueProviderOutputImport(
@@ -213,7 +237,8 @@ async function syncSingleGenerationStatusFromProviderPayload(
 async function syncSingleGenerationStatus(
   supabase: SupabaseClient,
   creditSupabase: SupabaseClient,
-  generation: SyncableGenerationRecord
+  generation: SyncableGenerationRecord,
+  notifyFailure = true,
 ): Promise<Exclude<GenerationSyncStatus, 'missing'>> {
   if (!generation.prediction_id || !['processing', 'waiting'].includes(generation.status)) {
     if (generation.status === 'succeeded' || generation.status === 'failed') {
@@ -268,6 +293,7 @@ async function syncSingleGenerationStatus(
         generation,
         toIsoTimestamp(timing.completedAtMs),
         readProviderFailureReason(data.data),
+        notifyFailure,
       );
     }
 
@@ -335,6 +361,7 @@ async function syncSingleGenerationStatus(
       generation,
       toIsoTimestamp(timing.completedAtMs),
       readProviderFailureReason(data.data),
+      notifyFailure,
     );
   }
 
@@ -396,6 +423,12 @@ export async function syncGenerationStatuses(params: {
   supabase: SupabaseClient;
   creditSupabase: SupabaseClient;
   generationIds: string[];
+  /**
+   * A failure settled here sends "Your … failed" before this returns. That
+   * suits the run workers that call it. A request someone is waiting on turns
+   * it off rather than hold its answer behind the push provider.
+   */
+  notifyFailures?: boolean;
 }) {
   requireApiKey();
 
@@ -411,7 +444,12 @@ export async function syncGenerationStatuses(params: {
 
   for (const generation of (generations || []) as SyncableGenerationRecord[]) {
     try {
-      await syncSingleGenerationStatus(params.supabase, params.creditSupabase, generation);
+      await syncSingleGenerationStatus(
+        params.supabase,
+        params.creditSupabase,
+        generation,
+        params.notifyFailures ?? true,
+      );
     } catch (error) {
       logBackendError('generation_status_sync_failed', { generationId: generation.id, error });
     }

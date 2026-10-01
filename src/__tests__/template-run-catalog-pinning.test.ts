@@ -415,6 +415,39 @@ describe('cancelTemplateRun in-flight honesty', () => {
     expect(dto.status).toBe('cancelled');
     expect(dto.steps.every((step) => ['cancelled', 'succeeded'].includes(step.status))).toBe(true);
   });
+
+  it('does not hold the cancel behind a failure notification', async () => {
+    const { run, steps, generation } = seedProcessingRun();
+    const db = createFakeSupabase({ runs: [run], steps, generations: [generation] });
+    mocks.syncGenerationStatuses.mockResolvedValue(undefined);
+
+    const { cancelTemplateRun } = await import('@/lib/template-run-service');
+    await cancelTemplateRun(db.client, 'run-1', 'user-1');
+
+    // The sync sends "Your … failed" before it returns when it settles a
+    // failure. The person cancelling is waiting on this request with the run in
+    // front of them, so it settles here without the push.
+    expect(mocks.syncGenerationStatuses).toHaveBeenCalledWith(expect.objectContaining({
+      generationIds: ['generation-live'],
+      notifyFailures: false,
+    }));
+  });
+
+  it('leaves the notification on for the worker that syncs the same run', async () => {
+    const { run, steps, generation } = seedProcessingRun();
+    const db = createFakeSupabase({ runs: [run], steps, generations: [generation] });
+    mocks.syncGenerationStatuses.mockResolvedValue(undefined);
+
+    const { syncTemplateRun } = await import('@/lib/template-run-service');
+    await syncTemplateRun({ adminClient: db.client, runId: 'run-1', userId: 'user-1' });
+
+    expect(mocks.syncGenerationStatuses).toHaveBeenCalledWith(expect.objectContaining({
+      generationIds: ['generation-live'],
+    }));
+    expect(mocks.syncGenerationStatuses).not.toHaveBeenCalledWith(expect.objectContaining({
+      notifyFailures: false,
+    }));
+  });
 });
 
 describe('quotePublishedGenerationModelAtRevision', () => {

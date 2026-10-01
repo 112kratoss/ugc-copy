@@ -533,6 +533,11 @@ describe('workflow-runner recovery', () => {
     });
 
     expect(syncGenerationStatusesMock).toHaveBeenCalledTimes(1);
+    // The worker is where a failed step's "Your … failed" push is sent from when
+    // the provider callback never arrived, so it must not switch that off.
+    expect(syncGenerationStatusesMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ notifyFailures: false }),
+    );
     expect(startVideoGenerationMock).toHaveBeenCalledTimes(1);
     expect(startVideoGenerationMock).toHaveBeenCalledWith(
       expect.objectContaining({

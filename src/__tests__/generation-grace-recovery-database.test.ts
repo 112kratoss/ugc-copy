@@ -8,6 +8,13 @@ import {
 } from '@/lib/stalled-generation-reaper';
 import { handleKieWebhookForRoute } from '@/lib/kie-webhook-service';
 
+// The settlement SQL is real; who is told about it is observed, not delivered.
+const notifier = vi.hoisted(() => ({ notifyGenerationStatus: vi.fn() }));
+vi.mock('@/lib/mobile-notifications', () => ({
+  notifyGenerationStatus: (...args: unknown[]) =>
+    notifier.notifyGenerationStatus(...args),
+}));
+
 // These cases stop at durable callback admission; after() workers are not run.
 const connectionString = process.env.SUPABASE_TEST_DB_URL;
 describe.skipIf(!connectionString)(
@@ -46,6 +53,7 @@ describe.skipIf(!connectionString)(
       generationId = randomUUID();
       taskId = `audit-grace-${randomUUID()}`;
       scheduled = vi.fn();
+      notifier.notifyGenerationStatus.mockReset().mockResolvedValue(null);
       beforeSettlement = undefined;
       reconciliationFault = undefined;
       markerUnavailable = false;
@@ -251,6 +259,9 @@ describe.skipIf(!connectionString)(
           credits: offset > 0 ? 620 : 500,
           refunded: offset > 0,
         });
+        expect(notifier.notifyGenerationStatus).toHaveBeenCalledTimes(
+          offset > 0 ? 1 : 0,
+        );
       },
     );
     it('callback after reaper selection prevents the stale refund', async () => {
@@ -271,6 +282,8 @@ describe.skipIf(!connectionString)(
         reconciliations: 0,
         client_request_key_hash: 'a'.repeat(64),
       });
+      // The render is running after all: nothing failed, so nobody is told.
+      expect(notifier.notifyGenerationStatus).not.toHaveBeenCalled();
     });
     it('reaper wins once, and late callback replays leave one reconciliation', async () => {
       expect((await reap()).startFailures).toMatchObject({
@@ -290,6 +303,33 @@ describe.skipIf(!connectionString)(
         client_request_key_hash: null,
       });
       expect(scheduled).not.toHaveBeenCalled();
+      // Told once, when the hold was released. The second reap and the late
+      // callbacks settle nothing and say nothing.
+      expect(notifier.notifyGenerationStatus).toHaveBeenCalledExactlyOnceWith(
+        client,
+        {
+          id: generationId,
+          user_id: userId,
+          category: 'image',
+          model: 'nano-banana-pro',
+        },
+        'failed',
+      );
+    });
+    it('closes a start whose credits had already been returned without announcing it', async () => {
+      await db.query(
+        'update public.generations set refunded=true where id=$1',
+        [generationId],
+      );
+      // The settlement answers `already_failed`: it fails the row and returns
+      // nothing, because nothing was still held. This run released no hold.
+      expect((await reap()).startFailures.settled).toBe(1);
+      expect(await state()).toMatchObject({
+        status: 'failed',
+        credits: 500,
+        refunded: true,
+      });
+      expect(notifier.notifyGenerationStatus).not.toHaveBeenCalled();
     });
     it('restores an absent ambiguity marker before refund so a late callback is reconciled', async () => {
       await db.query(

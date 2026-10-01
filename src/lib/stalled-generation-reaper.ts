@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError, logBackendInfo } from '@/lib/backend-logger';
 import { getPublicGenerationStartFailure } from '@/lib/generation-services';
 import { syncGenerationStatusByPredictionId } from '@/lib/generation-status-sync';
+import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 
 /**
  * Stalled-generation reaper.
@@ -38,6 +39,11 @@ import { syncGenerationStatusByPredictionId } from '@/lib/generation-status-sync
  * have run and billed for this" from a clean start failure. The window here is
  * deliberately the only clock on those rows.
  *
+ * Both passes tell the creator when they settle a failure: the first inside the
+ * sync, and the second with the same "Your … failed" notification once the
+ * hold is released, which is when the start service said the credits would
+ * come back.
+ *
  * One bad row never aborts the batch: per-row failures are logged, counted,
  * and retried naturally on a later tick because the row stays eligible.
  */
@@ -69,6 +75,9 @@ type StalledGenerationRow = {
   prediction_id: string | null;
   status: string;
   created_at: string;
+  user_id?: string | null;
+  category?: string | null;
+  model?: string | null;
   template_run_id?: string | null;
   template_run_step_id?: string | null;
   submission_unknown_at?: string | null;
@@ -188,7 +197,7 @@ async function loadStalledStartFailureRows(
 ): Promise<StalledGenerationRow[]> {
   const { data, error } = await client
     .from('generations')
-    .select('id, prediction_id, status, created_at, template_run_id, template_run_step_id, submission_unknown_at')
+    .select('id, user_id, category, model, prediction_id, status, created_at, template_run_id, template_run_step_id, submission_unknown_at')
     .eq('status', 'pending')
     .is('prediction_id', null)
     .lt('created_at', startFailureCutoffIso(params.nowMs))
@@ -331,6 +340,17 @@ export async function reapStalledGenerations(params: {
           submissionUnknown,
           ...(row.template_run_id ? { templateRunId: row.template_run_id } : {}),
         });
+        // Only `failed` means this run released the hold; `already_failed` is a
+        // row something else had refunded first. The notifier cannot throw, so
+        // it cannot make a settled row count as a failed one below.
+        if (status === 'failed' && row.user_id) {
+          await notifyGenerationStatus(params.creditSupabase, {
+            id: row.id,
+            user_id: row.user_id,
+            category: row.category,
+            model: row.model,
+          }, 'failed');
+        }
       } else if (status === 'provider_task_attached' || status === 'already_succeeded') {
         // A provider task or terminal settlement raced in after our read; the
         // sync path (or the webhook pipeline) owns this row now.
