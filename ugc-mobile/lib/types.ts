@@ -1425,7 +1425,6 @@ export interface MobilePushTokenRegistration {
   platform: MobilePushPlatform;
   deviceId?: string | null;
   appVersion?: string | null;
-  allDevices?: boolean;
 }
 
 export interface MobileNotificationPreferences {

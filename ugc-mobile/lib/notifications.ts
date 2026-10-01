@@ -248,15 +248,21 @@ export async function unregisterMobilePushNotifications(
 
   const expoPushToken = await SecureStore.getItemAsync(EXPO_PUSH_TOKEN_KEY).catch(() => null);
   const deviceId = await SecureStore.getItemAsync(DEVICE_ID_KEY).catch(() => null);
-  try {
-    await api.unregisterMobilePushToken({
-      ...(expoPushToken ? { expoPushToken } : {}),
-      ...(deviceId ? { deviceId } : {}),
-      platform,
-      ...(!expoPushToken && !deviceId ? { allDevices: true } : {}),
-    }, signal);
-  } catch (error) {
-    console.error('Failed to unregister mobile push token', error);
+  // Only what this install registered. The device id is written alongside the
+  // first token and outlives sign-out, so with neither stored this install
+  // never registered and the backend holds nothing of its own to retire. The
+  // request that used to fill the gap, `allDevices`, retired the token of every
+  // other device on the account instead.
+  if (expoPushToken || deviceId) {
+    try {
+      await api.unregisterMobilePushToken({
+        ...(expoPushToken ? { expoPushToken } : {}),
+        ...(deviceId ? { deviceId } : {}),
+        platform,
+      }, signal);
+    } catch (error) {
+      console.error('Failed to unregister mobile push token', error);
+    }
   }
 
   await clearLocalMobilePushRegistration();

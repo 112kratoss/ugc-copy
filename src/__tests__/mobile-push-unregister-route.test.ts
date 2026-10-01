@@ -108,11 +108,35 @@ describe('/api/mobile/notifications/unregister route', () => {
         eqFilters: [
           ['user_id', 'user-1'],
           ['expo_push_token', 'ExponentPushToken[old123]'],
+          ['is_active', true],
         ],
         error: null,
         eq: expect.any(Function),
       },
     ]);
+  });
+
+  it('answers 400 to the all-device request installed apps still send on sign-out', async () => {
+    const { POST } = await import('@/app/api/mobile/notifications/unregister/route');
+    const response = await POST(
+      new Request('http://localhost/api/mobile/notifications/unregister', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'mobile-push-unregister-all-devices-1',
+        },
+        body: JSON.stringify({
+          platform: 'android',
+          allDevices: true,
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(400);
+    expectPrivateNoStoreTraceHeaders(response, 'mobile-push-unregister-all-devices-1');
+    await expect(response.json()).resolves.toEqual({ error: 'Provide an Expo push token or device ID.' });
+    expect(rateLimitRpcMock).not.toHaveBeenCalled();
+    expect(updateCalls).toEqual([]);
   });
 
   it('returns 429 before updating tokens when unregister requests exceed the backend limit', async () => {
