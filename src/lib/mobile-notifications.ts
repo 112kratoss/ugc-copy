@@ -79,6 +79,15 @@ type ExpoPushSendPayload = {
   priority?: ExpoPushPriority;
   fetcher?: typeof fetch;
 };
+type ExpoPushMessageContent = Omit<ExpoPushSendPayload, 'expoPushToken' | 'fetcher'>;
+type PushDevice = {
+  tokenId: string | null;
+  expoPushToken: string;
+  platform: MobilePushPlatform;
+};
+type PushSendOutcome =
+  | { result: ExpoPushSendResult; attemptCount: number }
+  | { failure: unknown };
 
 const DEFAULT_PREFERENCES: MobileNotificationPreferences = {
   pushEnabled: true,
@@ -92,6 +101,8 @@ const RECEIPT_MIN_AGE_MINUTES = 15;
 const RECEIPT_STALE_AFTER_HOURS = 24;
 const DEFAULT_EXPO_PUSH_MAX_ATTEMPTS = 3;
 const DEFAULT_EXPO_PUSH_RETRY_BASE_DELAY_MS = 500;
+// Expo's limit: "an array of up to 100 message objects" per request.
+const EXPO_PUSH_SEND_BATCH_SIZE = 100;
 const RETRYABLE_DELIVERY_BATCH_SIZE = 100;
 const DELIVERY_RETENTION_DAYS = 90;
 const READ_NOTIFICATION_RETENTION_DAYS = 180;
@@ -341,15 +352,23 @@ export function buildMobileNotificationDeepLink(target:
   return '/studio';
 }
 
-export async function sendExpoPushNotification({
-  expoPushToken,
-  title,
-  body,
-  data,
-  channelId = 'default',
-  priority = 'high',
-  fetcher = fetch,
-}: ExpoPushSendPayload): Promise<ExpoPushSendResult> {
+function buildExpoPushMessage(
+  expoPushToken: string,
+  { title, body, data, channelId = 'default', priority = 'high' }: ExpoPushMessageContent,
+) {
+  return {
+    to: expoPushToken,
+    sound: 'default',
+    title,
+    body,
+    channelId,
+    priority,
+    data,
+  };
+}
+
+/** Posts one message, or an array of them, and hands back Expo's `data` as it came. */
+async function postExpoPushSend(messages: unknown, fetcher: typeof fetch): Promise<unknown> {
   const response = await fetchWithProviderTimeout(
     'https://exp.host/--/api/v2/push/send',
     {
@@ -359,15 +378,7 @@ export async function sendExpoPushNotification({
         'Accept-Encoding': 'gzip, deflate',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        to: expoPushToken,
-        sound: 'default',
-        title,
-        body,
-        channelId,
-        priority,
-        data,
-      }),
+      body: JSON.stringify(messages),
     },
     EXTERNAL_API_REQUEST_TIMEOUT_MS,
     fetcher,
@@ -386,33 +397,88 @@ export async function sendExpoPushNotification({
     throw new MobileNotificationError(message, response.status === 429 ? 429 : Math.max(response.status, 400));
   }
 
-  const firstResult = Array.isArray(payload?.data) ? payload?.data[0] : payload?.data;
-  if (!isRecord(firstResult)) {
-    throw new MobileNotificationError('Expo push service returned an invalid response.', 502);
+  return payload?.data;
+}
+
+function toExpoPushSendResult(ticket: unknown): ExpoPushSendResult | null {
+  if (!isRecord(ticket)) {
+    return null;
   }
 
-  if (firstResult.status === 'ok') {
+  if (ticket.status === 'ok') {
     return {
       status: 'ok' as const,
-      id: normalizeOptionalString(firstResult.id),
+      id: normalizeOptionalString(ticket.id),
     };
   }
 
   return {
     status: 'error' as const,
-    message: normalizeOptionalString(firstResult.message) ?? 'Expo push delivery failed.',
-    details: isRecord(firstResult.details) ? firstResult.details : null,
+    message: normalizeOptionalString(ticket.message) ?? 'Expo push delivery failed.',
+    details: isRecord(ticket.details) ? ticket.details : null,
   };
 }
 
-export async function sendExpoPushNotificationWithRetry({
-  maxAttempts = DEFAULT_EXPO_PUSH_MAX_ATTEMPTS,
-  retryDelayMs = expoPushRetryDelayMs,
-  ...payload
-}: ExpoPushSendPayload & {
-  maxAttempts?: number;
-  retryDelayMs?: (attempt: number) => number;
-}): Promise<{ result: ExpoPushSendResult; attemptCount: number }> {
+export async function sendExpoPushNotification({
+  expoPushToken,
+  fetcher = fetch,
+  ...content
+}: ExpoPushSendPayload): Promise<ExpoPushSendResult> {
+  const data = await postExpoPushSend(buildExpoPushMessage(expoPushToken, content), fetcher);
+  const result = toExpoPushSendResult(Array.isArray(data) ? data[0] : data);
+  if (!result) {
+    throw new MobileNotificationError('Expo push service returned an invalid response.', 502);
+  }
+
+  return result;
+}
+
+/**
+ * One request for up to 100 devices, with a result per token in the order given.
+ *
+ * Expo answers a batch with "an array of push tickets in the same order in which
+ * the messages were sent", and the ticket for an accepted message carries only
+ * its own id. Position is the one link between the two lists, so a list of any
+ * other length is refused outright: matching it up by guesswork could retire a
+ * device that is fine.
+ */
+export async function sendExpoPushNotificationBatch({
+  expoPushTokens,
+  fetcher = fetch,
+  ...content
+}: ExpoPushMessageContent & {
+  expoPushTokens: string[];
+  fetcher?: typeof fetch;
+}): Promise<ExpoPushSendResult[]> {
+  if (expoPushTokens.length === 0) {
+    return [];
+  }
+
+  const data = await postExpoPushSend(
+    expoPushTokens.map((expoPushToken) => buildExpoPushMessage(expoPushToken, content)),
+    fetcher,
+  );
+  if (!Array.isArray(data) || data.length !== expoPushTokens.length) {
+    throw new MobileNotificationError('Expo push service returned an invalid response.', 502);
+  }
+
+  return data.map((ticket) => toExpoPushSendResult(ticket) ?? {
+    status: 'error' as const,
+    message: 'Expo push service returned an invalid response.',
+    details: null,
+  });
+}
+
+async function withExpoPushRetry<T>(
+  send: () => Promise<T>,
+  {
+    maxAttempts = DEFAULT_EXPO_PUSH_MAX_ATTEMPTS,
+    retryDelayMs = expoPushRetryDelayMs,
+  }: {
+    maxAttempts?: number;
+    retryDelayMs?: (attempt: number) => number;
+  } = {},
+): Promise<{ result: T; attemptCount: number }> {
   const boundedMaxAttempts = Number.isFinite(maxAttempts)
     ? Math.max(1, Math.min(Math.trunc(maxAttempts), DEFAULT_EXPO_PUSH_MAX_ATTEMPTS))
     : DEFAULT_EXPO_PUSH_MAX_ATTEMPTS;
@@ -422,7 +488,7 @@ export async function sendExpoPushNotificationWithRetry({
     attemptCount += 1;
 
     try {
-      const result = await sendExpoPushNotification(payload);
+      const result = await send();
       return { result, attemptCount };
     } catch (error) {
       if (attemptCount >= boundedMaxAttempts || !isTransientExpoPushError(error)) {
@@ -436,6 +502,62 @@ export async function sendExpoPushNotificationWithRetry({
       await wait(retryDelayMs(attemptCount));
     }
   }
+}
+
+export async function sendExpoPushNotificationWithRetry({
+  maxAttempts,
+  retryDelayMs,
+  ...payload
+}: ExpoPushSendPayload & {
+  maxAttempts?: number;
+  retryDelayMs?: (attempt: number) => number;
+}): Promise<{ result: ExpoPushSendResult; attemptCount: number }> {
+  return withExpoPushRetry(() => sendExpoPushNotification(payload), { maxAttempts, retryDelayMs });
+}
+
+/** True when Expo turned the request down, as opposed to failing to answer it. */
+function isRefusedExpoPushRequest(error: unknown) {
+  const cause = error instanceof ExpoPushRetryError ? error.cause : error;
+  return cause instanceof MobileNotificationError && !isTransientExpoPushError(cause);
+}
+
+/**
+ * Sends one notification to a batch of devices and reports on each, in order.
+ *
+ * Expo judges some things per request rather than per message — a single token
+ * from another Expo project is enough for it to refuse all hundred. When the
+ * pushes went out one at a time that token failed alone, so a refused batch is
+ * sent again that way: slower, and only on that rare path, but no device loses
+ * its notification to a neighbour's bad token.
+ */
+async function sendExpoPushBatchToDevices(
+  devices: PushDevice[],
+  content: ExpoPushMessageContent,
+): Promise<PushSendOutcome[]> {
+  try {
+    const { result, attemptCount } = await withExpoPushRetry(() => sendExpoPushNotificationBatch({
+      expoPushTokens: devices.map((device) => device.expoPushToken),
+      ...content,
+    }));
+    return result.map((ticket) => ({ result: ticket, attemptCount }));
+  } catch (error) {
+    if (devices.length === 1 || !isRefusedExpoPushRequest(error)) {
+      return devices.map(() => ({ failure: error }));
+    }
+  }
+
+  const outcomes: PushSendOutcome[] = [];
+  for (const device of devices) {
+    try {
+      outcomes.push(await sendExpoPushNotificationWithRetry({
+        expoPushToken: device.expoPushToken,
+        ...content,
+      }));
+    } catch (error) {
+      outcomes.push({ failure: error });
+    }
+  }
+  return outcomes;
 }
 
 export async function ensureMobileNotificationPreferences(supabase: SupabaseClient, userId: string) {
@@ -550,118 +672,123 @@ async function sendMobilePushForNotification(
     throw new MobileNotificationError('Failed to load mobile push tokens.', 500);
   }
 
-  const tokens = (data ?? []) as Array<{
+  const devices = ((data ?? []) as Array<{
     id?: string | null;
     expo_push_token?: string | null;
     platform?: string | null;
-  }>;
-  if (tokens.length === 0) {
+  }>).flatMap((token): PushDevice[] => (token.expo_push_token
+    ? [{
+      tokenId: token.id ?? null,
+      expoPushToken: token.expo_push_token,
+      platform: token.platform === 'android' ? 'android' : 'ios',
+    }]
+    : []));
+  if (devices.length === 0) {
     return;
   }
 
   let firstTicketId: string | null = null;
   let firstError: string | null = null;
   const pushedAt = new Date().toISOString();
+  const content: ExpoPushMessageContent = {
+    title: notification.title,
+    body: notification.body,
+    priority: priorityForNotificationCategory(notification.category),
+    data: {
+      notificationId: notification.id,
+      type: notification.type,
+      category: notification.category,
+      deepLink: notification.deepLink,
+    },
+  };
 
-  async function recordDeliveryAttempt(values: Record<string, unknown>) {
+  // An account's devices go out together: one Expo request, one ledger write
+  // and one token update per batch. Each used to happen once per device, in
+  // turn, inside the request of whoever caused the notification — an account
+  // holding 32 tokens kept that person waiting 14 seconds.
+  for (const batch of chunkValues(devices, EXPO_PUSH_SEND_BATCH_SIZE)) {
+    const outcomes = await sendExpoPushBatchToDevices(batch, content);
+    const deliveries: Record<string, unknown>[] = [];
+    const unregisteredTokenIds: string[] = [];
+
+    for (const [index, device] of batch.entries()) {
+      const outcome = outcomes[index];
+      const delivery = {
+        notification_id: notification.id,
+        user_id: notification.userId,
+        token_id: device.tokenId,
+        expo_push_token: device.expoPushToken,
+        platform: device.platform,
+        last_attempt_at: pushedAt,
+      };
+
+      if ('failure' in outcome) {
+        const providerMessage = getErrorMessage(outcome.failure, 'Expo push send failed before the provider accepted the notification.');
+        firstError ??= providerMessage;
+        deliveries.push({
+          ...delivery,
+          send_status: 'error',
+          receipt_status: 'error',
+          receipt_checked_at: pushedAt,
+          receipt_message: 'Push send failed before a receipt was created.',
+          provider_message: providerMessage,
+          provider_details: toProviderErrorDetails(outcome.failure),
+          attempt_count: getExpoPushAttemptCount(outcome.failure, 1),
+        });
+        continue;
+      }
+
+      const { result } = outcome;
+      if (result.status === 'ok') {
+        firstTicketId ??= result.id ?? null;
+        deliveries.push({
+          ...delivery,
+          push_ticket_id: result.id ?? null,
+          send_status: 'sent',
+          receipt_status: 'pending',
+          attempt_count: outcome.attemptCount,
+          sent_at: pushedAt,
+        });
+        continue;
+      }
+
+      firstError ??= result.message;
+      deliveries.push({
+        ...delivery,
+        send_status: 'error',
+        receipt_status: 'error',
+        receipt_checked_at: pushedAt,
+        receipt_error_code: isRecord(result.details) ? normalizeOptionalString(result.details.error) : null,
+        receipt_message: result.message,
+        provider_message: result.message,
+        provider_details: isRecord(result.details) ? result.details : null,
+        attempt_count: 1,
+      });
+
+      if (isDeviceNotRegistered(result.details) && device.tokenId) {
+        unregisteredTokenIds.push(device.tokenId);
+      }
+    }
+
+    // The rows carry different optional columns. All of those are nullable with
+    // no default, so the nulls PostgREST fills in across a mixed batch are what
+    // separate inserts would have left there.
     const { error: insertError } = await adminSupabase
       .from('mobile_push_deliveries')
-      .insert(values);
+      .insert(deliveries);
 
     if (insertError) {
       throw new MobileNotificationError('Failed to store mobile push delivery.', 500);
     }
-  }
 
-  for (const token of tokens) {
-    if (!token.expo_push_token) {
-      continue;
-    }
-
-    let result: ExpoPushSendResult;
-    let attemptCount = 1;
-    try {
-      const sendAttempt = await sendExpoPushNotificationWithRetry({
-        expoPushToken: token.expo_push_token,
-        title: notification.title,
-        body: notification.body,
-        priority: priorityForNotificationCategory(notification.category),
-        data: {
-          notificationId: notification.id,
-          type: notification.type,
-          category: notification.category,
-          deepLink: notification.deepLink,
-        },
-      });
-      result = sendAttempt.result;
-      attemptCount = sendAttempt.attemptCount;
-    } catch (error) {
-      const providerMessage = getErrorMessage(error, 'Expo push send failed before the provider accepted the notification.');
-      const failedAttemptCount = getExpoPushAttemptCount(error, 1);
-      firstError ??= providerMessage;
-
-      await recordDeliveryAttempt({
-        notification_id: notification.id,
-        user_id: notification.userId,
-        token_id: token.id ?? null,
-        expo_push_token: token.expo_push_token,
-        platform: token.platform === 'android' ? 'android' : 'ios',
-        send_status: 'error',
-        receipt_status: 'error',
-        receipt_checked_at: pushedAt,
-        receipt_message: 'Push send failed before a receipt was created.',
-        provider_message: providerMessage,
-        provider_details: toProviderErrorDetails(error),
-        attempt_count: failedAttemptCount,
-        last_attempt_at: pushedAt,
-      });
-      continue;
-    }
-
-    if (result.status === 'ok') {
-      firstTicketId ??= result.id ?? null;
-      await recordDeliveryAttempt({
-        notification_id: notification.id,
-        user_id: notification.userId,
-        token_id: token.id ?? null,
-        expo_push_token: token.expo_push_token,
-        platform: token.platform === 'android' ? 'android' : 'ios',
-        push_ticket_id: result.id ?? null,
-        send_status: 'sent',
-        receipt_status: 'pending',
-        attempt_count: attemptCount,
-        sent_at: pushedAt,
-        last_attempt_at: pushedAt,
-      });
-      continue;
-    }
-
-    firstError ??= result.message;
-    await recordDeliveryAttempt({
-      notification_id: notification.id,
-      user_id: notification.userId,
-      token_id: token.id ?? null,
-      expo_push_token: token.expo_push_token,
-      platform: token.platform === 'android' ? 'android' : 'ios',
-      send_status: 'error',
-      receipt_status: 'error',
-      receipt_checked_at: pushedAt,
-      receipt_error_code: isRecord(result.details) ? normalizeOptionalString(result.details.error) : null,
-      receipt_message: result.message,
-      provider_message: result.message,
-      provider_details: isRecord(result.details) ? result.details : null,
-      attempt_count: 1,
-      last_attempt_at: pushedAt,
-    });
-
-    if (isDeviceNotRegistered(result.details) && token.id) {
+    if (unregisteredTokenIds.length > 0) {
       await adminSupabase
         .from('mobile_push_tokens')
         .update({
           is_active: false,
           disabled_at: pushedAt,
         })
-        .eq('id', token.id);
+        .in('id', unregisteredTokenIds);
     }
   }
 
