@@ -2,11 +2,16 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateVideoClient from '@/app/create-video/CreateVideoClient';
+import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import type { PersistedImageElementRecord, PersistedSubjectRecord } from '@/lib/persisted-media';
+import type { RemixSourceBundle } from '@/lib/remix-source';
 
 const mockPush = vi.fn();
 const mockUpdateCredits = vi.fn();
 const generationCatalogRefetchMock = vi.hoisted(() => vi.fn());
+const quoteRequestMock = vi.hoisted(() => vi.fn((_request: GenerationModelQuoteInput | null) => {
+  void _request;
+}));
 const modelCatalogState = vi.hoisted(() => ({
   missingIds: [] as string[],
   error: null as Error | null,
@@ -209,16 +214,19 @@ vi.mock('@/lib/generation-model-client', async () => {
       revision: 'test-catalog-rev',
       refetch: generationCatalogRefetchMock,
     }),
-    useWebGenerationModelQuote: () => ({
-      status: 'ready',
-      quote: {
-        modelId: 'kling-3.0-video',
-        catalogRevision: 'test-catalog-rev',
-        normalizedSettings: {},
-        costCredits: 12,
-      },
-      error: null,
-    }),
+    useWebGenerationModelQuote: (request: GenerationModelQuoteInput | null) => {
+      quoteRequestMock(request);
+      return {
+        status: 'ready',
+        quote: {
+          modelId: 'kling-3.0-video',
+          catalogRevision: 'test-catalog-rev',
+          normalizedSettings: {},
+          costCredits: 12,
+        },
+        error: null,
+      };
+    },
   };
 });
 
@@ -244,6 +252,7 @@ describe('CreateVideoClient Kling video elements', () => {
     mockPush.mockClear();
     mockUpdateCredits.mockClear();
     generationCatalogRefetchMock.mockClear();
+    quoteRequestMock.mockClear();
     modelCatalogState.missingIds = [];
     modelCatalogState.error = null;
     modelCatalogState.summaries = [];
@@ -350,6 +359,58 @@ describe('CreateVideoClient Kling video elements', () => {
     // Without postId the server cannot reach loadGenerationRecipeRemixInputMediaByPostId,
     // so a viewer who unlocked the bundle silently gets no restored media.
     expect(url.searchParams.get('postId')).toBe('post-1');
+  });
+
+  it('restores a remix reference clip and track with their lengths, so the quote can price them', async () => {
+    // Seedance 2 prices a run by the length of its reference clip, and the quote refuses a
+    // clip that arrives without one ("Reference videos requires duration metadata for every
+    // asset"). The source generation keeps each length; the restore used to drop it.
+    const bundle: RemixSourceBundle = {
+      generation: { id: 'gen-1', title: 'Trending', prompt: 'Swap the dancer for the reference', category: 'video', model: 'seedance-2-5' },
+      result: { mediaType: 'video', url: 'https://example.com/result.mp4' },
+      inputs: {
+        video: {
+          referenceMode: 'elements',
+          startFrame: null,
+          endFrame: null,
+          elements: [],
+          referenceVideos: [{
+            kind: 'video',
+            label: 'Video reference 1',
+            storagePath: 'generation_inputs/owner-1/gen-1/00-reference_video.mp4',
+            sourceGenerationId: 'gen-1',
+            url: 'https://signed.example.com/generation_inputs/owner-1/gen-1/00-reference_video.mp4',
+            durationSeconds: 12.16,
+          }],
+          referenceAudios: [{
+            kind: 'audio',
+            label: 'Audio reference 1',
+            storagePath: 'generation_inputs/owner-1/gen-1/01-reference_audio.mp3',
+            sourceGenerationId: 'gen-1',
+            url: 'https://signed.example.com/generation_inputs/owner-1/gen-1/01-reference_audio.mp3',
+            durationSeconds: 7.5,
+          }],
+        },
+      },
+      workflowSettings: { model: 'seedance-2-5' },
+      restoreIssues: [],
+    };
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => ({
+      ok: true,
+      json: async () => (String(input).includes('/api/remix-source')
+        ? bundle
+        : { status: 'succeeded', output: 'https://example.com/result.mp4', timing: null }),
+    } as Response));
+
+    render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+    await waitFor(() => {
+      const request = quoteRequestMock.mock.calls.at(-1)?.[0];
+      expect(request?.modelId).toBe('seedance-2-5');
+      expect(request?.inputMetadata?.slots?.videoReferences).toEqual({ count: 1, durationsSeconds: [12.16] });
+      expect(request?.inputMetadata?.slots?.audioReferences).toEqual({ count: 1, durationsSeconds: [7.5] });
+      expect(request?.inputMetadata?.referenceVideoDurationsSeconds).toEqual([12.16]);
+    });
   });
 
   it('keeps active video element URLs alive when a frame changes', async () => {
