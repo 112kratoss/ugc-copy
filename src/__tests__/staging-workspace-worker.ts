@@ -16,10 +16,10 @@ async function main() {
     };
     if (mode === 'allocation') {
       const original = fs.mkdtemp;
-      fs.mkdtemp = (async (...args: Parameters<typeof fs.mkdtemp>) => {
+      fs.mkdtemp = async (...args: unknown[]): Promise<never> => {
         const directory = await Reflect.apply(original, fs, args);
         return pause(String(directory));
-      }) as typeof fs.mkdtemp;
+      };
     } else {
       const original = fs.open;
       fs.open = (async (...args: Parameters<typeof fs.open>) => {
