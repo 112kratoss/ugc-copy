@@ -6,12 +6,75 @@ Updated 2026-10-01 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/staging-scan-progress-6l`, based on main `5934bd7dac80d402d4db5e274e2716a60432790a`; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/media-scratch-leases-6n`, based on main `999c34d5b3435d160865a05c8ba3ff1bd3a0ec29`; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-Section 6L fixes persistent-prefix staging reclamation locally; CI/release pending.
+Section 6N scratch ownership fix is implemented locally; release pending. Read
+`docs/audits/backend-section-06-media-scratch-2026-10-01.md`. Real Linux/Node 24
+FFmpeg regular-file probes reproduce unreclaimed source/output in all five old
+scratch namespaces. Committed process regression fails before the fix (0 vs 2
+reclaimed), then passes for poster/rendition/teaser with inherited source/output
+leases. Abort ordering also reproduced EBUSY and is fixed by waiting for close.
+New work uses the existing staging lease/marker protocol; old scratch and
+unpublished metadata remain untouched. MEDIA-07 now failed/open, pending legacy
+policy. Ledger: 53 obligations, 21 passed, 27 untested, 2 failed, 3 external.
+Private evidence `.audit-evidence/backend-section-06n/`; preserve all existing
+6L/6M and unrelated local records. Current verified production remains 999c34d5.
+Next: exact-head Quality and standard release; then shared disk admission/output
+bounds and metadata/legacy policy, followed by WORKFLOW-02/03/04.
+
+The preceding investigation checkpoint follows.
+
+Section 6M actual disk-failure recovery investigation is complete locally; no
+runtime change or release in this batch. Read
+`docs/audits/backend-section-06-capacity-recovery-2026-10-01.md`.
+A Linux/Node 24.21.0 container with 2 MiB tmpfs ran actual staging, import queue,
+reconciliation/reaper, notification code and real isolated Postgres settlement.
+Four scenarios pass: one ENOSPC then retry; first output uploaded/second ENOSPC
+then full-list retry; ten ENOSPC failures then callback reconciliation; ten failures
+then stalled reaper reconciliation. Across 22 actual disk failures, the original
+120-credit reservation stays (500 -> 380 total, 200 -> 80 promotional); no premature
+success/refund or notification. Recovery succeeds with one notification and no
+second charge; duplicate enqueue/processing is stable. Partial list makes three
+upload calls by reuploading its first path with the existing upsert option.
+
+Media/provider responses and the local Storage sink are synthetic boundaries;
+queue/ledger/staging are real. No external push/Storage/provider delivery or
+FFmpeg is certified. Retry eligibility and reaper age were advanced on fixture
+rows, not by waiting out production timing. Exhausted imports are not claimed
+merely because capacity returns; callback or reaper reconciliation reopens the
+same job. No speculative stranded-credit fix is warranted by these results.
+All transactions rolled back, fixture users were checked, separate readback found
+zero probe generations/jobs, and dedicated probe resources were removed. Existing
+DB containers and unrelated local changes are preserved. Private evidence:
+`.audit-evidence/backend-section-06m/` (including reproducible probe and hashes).
+
+MEDIA-06 remains failed/open for shared capacity admission; recovery evidence does
+not prevent ENOSPC. Ledger unchanged: 53 obligations, 21 passed, 28 untested,
+1 failed, 3 external. Next: measure overlapping source/output bytes and actual
+owner/writer lifetimes for generation-poster, generation-frame, feed-rendition-src,
+feed-rendition and feed-teaser before designing cross-namespace reservation or
+cleanup. Then continue WORKFLOW-02/03/04. Preserve the local 6L release documents
+and 6M report for the next audit PR. Production remains `999c34d5` (Section 6L).
+
+The preceding deployed checkpoint follows.
+
+Section 6L is merged in PR #256 as `999c34d5b3435d160865a05c8ba3ff1bd3a0ec29`
+at 2026-10-01 12:35:45 UTC (18:05:45 IST). Exact-main Quality `36862814234`
+passed all four jobs first run. Standard production release `36864062596` passed
+attempt 1 at 12:50:32 UTC (18:20:32 IST), including staged and protected production
+health. Independent live build `999c34d5`, feed 200, admin login redirect 307 and
+unsigned webhook 401 passed; remote main still matches. Section 6L is deployed
+and verified; no release work remains pending. Read
+`docs/audits/backend-section-06-scan-progress-release-2026-10-01.md`.
+MEDIA-05 is passed: 53 checklist obligations now contain 21 passed, 28 untested,
+1 failed and 3 external. These counts are not a completion percentage.
+PR Quality `36853752909` passed all four jobs on its first run: 6,176 web,
+2,802 mobile, 19 browser, 1,941 SQL assertions and 119 DB checks. Real FFmpeg
+lease and native packaging checks passed. No mobile-store release was active
+before merge.
 Read `docs/audits/backend-section-06-scan-progress-2026-10-01.md`.
 A new actual-filesystem/fresh-process regression fails before the fix (0 instead
 of 2 reclaimed). The pass now caps successful reclamations at 128 instead of
@@ -27,9 +90,11 @@ backlog across fresh processes. 23 focused tests, 6,176 full web tests (118 skip
 app/test typing and targeted lint pass. The focused cases were rerun after the
 marker precheck; exact final-tree CI remains the release gate.
 Preserve `.audit-evidence/backend-section-06l/` and the 6J/6K local documents.
-No SQL/mobile change. Next: finish measured scan-cost review, PR, exact-main
-Quality, standard production release and independent live checks. Current
-production remains `5934bd7d` (Section 6J).
+No SQL/mobile change. Next: actual ENOSPC through import retry and settlement,
+then shared admission and other scratch lifetimes. Read private
+`.audit-evidence/backend-section-06l/next-capacity-boundary.md`. Keep Section 6L
+release records local for the next audit PR; unrelated changes remain preserved.
+Production is `999c34d5` (Section 6L).
 
 The preceding investigation checkpoint follows.
 

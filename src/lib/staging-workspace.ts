@@ -167,3 +167,16 @@ export async function createStagingWorkspace() {
     },
   };
 }
+
+/** A leased payload directory for encoders that need filename extensions. */
+export async function createMediaScratchWorkspace() {
+  const workspace = await createStagingWorkspace();
+  const mediaDirectory = path.join(workspace.directory, 'media');
+  try {
+    await mkdir(mediaDirectory, { mode: 0o700 });
+    return { ...workspace, mediaDirectory };
+  } catch (error) {
+    await workspace.cleanup();
+    throw error;
+  }
+}

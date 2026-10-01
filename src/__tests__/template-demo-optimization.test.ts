@@ -5,7 +5,7 @@ import { createVideoRenditionFromFile, withVideoInputFile } from '@/lib/video-re
 vi.mock('@/lib/video-rendition', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/lib/video-rendition')>(),
   createVideoRenditionFromFile: vi.fn(),
-  withVideoInputFile: vi.fn(async (blob: Blob, work: (path: string, size: number) => unknown) => work('input', blob.size)),
+  withVideoInputFile: vi.fn(async (blob: Blob, work: (path: string, size: number, lease: number) => unknown) => work('input', blob.size, 99)),
 }));
 vi.mock('@/lib/backend-logger', () => ({ logBackendError: vi.fn() }));
 
@@ -34,7 +34,7 @@ describe('published demo optimization', () => {
   });
   it('passes a deadline to the encoder', async () => {
     await fixture().run();
-    expect(createVideoRenditionFromFile).toHaveBeenCalledWith('input', original.size, { signal: expect.any(AbortSignal) });
+    expect(createVideoRenditionFromFile).toHaveBeenCalledWith('input', original.size, { signal: expect.any(AbortSignal), sourceLeaseFd: 99 });
   });
   it('still publishes the original demo when encoding fails or is not worthwhile', async () => {
     vi.mocked(createVideoRenditionFromFile).mockRejectedValue(new Error('not smaller / encode failed'));

@@ -64,7 +64,7 @@ export async function repairPostMediaTeasers(supabase: SupabaseClient) {
     const download = await storage.download(path, {}, { signal: AbortSignal.timeout(30_000) });
     if (download.error || !download.data) throw download.error ?? new Error('Teaser source could not be read.');
     if (!download.data.size || download.data.size > TEASER_REPAIR_MAX_BYTES) throw new Error('Teaser source exceeds the byte budget.');
-    const teaser = await withVideoInputFile(download.data, input => createVideoTeaserFromFile(input));
+    const teaser = await withVideoInputFile(download.data, (input, _bytes, sourceLeaseFd) => createVideoTeaserFromFile(input, sourceLeaseFd));
     if (!teaser.durationSeconds || teaser.durationSeconds > TEASER_SECONDS + 0.1 || !teaser.width || !teaser.height) {
       throw new Error('Encoded teaser has invalid duration or dimensions.');
     }

@@ -512,8 +512,8 @@ export async function copyOwnedTemplateAssetToVersion(params: {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 60_000);
     try {
-      const rendition = await withVideoInputFile(blob, (inputPath, sourceBytes) =>
-        createVideoRenditionFromFile(inputPath, sourceBytes, { signal: controller.signal }));
+      const rendition = await withVideoInputFile(blob, (inputPath, sourceBytes, sourceLeaseFd) =>
+        createVideoRenditionFromFile(inputPath, sourceBytes, { signal: controller.signal, sourceLeaseFd }));
       deliveryBlob = toStorageUploadBody(rendition.buffer, 'video/mp4');
       destination = `${params.templateId}/${params.versionId}/demo/playback.mp4`;
     } catch (error) {

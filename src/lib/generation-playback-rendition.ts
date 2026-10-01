@@ -72,8 +72,8 @@ export async function repairGenerationPlaybackRendition(supabase: SupabaseClient
     if (download.error || !download.data) throw new Error('Playback source could not be read.');
     if (download.data.size !== row.source_bytes)
       throw new Error('Playback source changed after byte admission.');
-    const rendition = await withVideoInputFile(download.data, (input, sourceBytes) =>
-      createVideoRenditionFromFile(input, sourceBytes, { signal }),
+    const rendition = await withVideoInputFile(download.data, (input, sourceBytes, sourceLeaseFd) =>
+      createVideoRenditionFromFile(input, sourceBytes, { signal, sourceLeaseFd }),
     );
     if (
       !rendition.width ||

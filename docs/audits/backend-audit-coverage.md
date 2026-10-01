@@ -46,7 +46,7 @@ MAP-02; this initial ledger is not yet a measured completion denominator.
    was dismissed; the live authenticated ops HTTP response remains unavailable locally.
 2. Complete the remaining commerce lifecycle/payout matrix, separating synthetic
    database evidence from externally blocked provider delivery.
-3. Sections 6B–6H and 6J are deployed; live build `5934bd7d`. Section 6D verifies grace
+3. Sections 6B–6H, 6J and 6L are deployed; live build `999c34d5`. Section 6D verifies grace
    expiry/callback ordering and fixes reconciliation-write retry. Section 6E
    incomplete receipt/start replay and Section 6F marker-write/reaper recovery
    are deployed and verified. Section 6G process termination checks passed CI and
@@ -58,8 +58,16 @@ MAP-02; this initial ledger is not yet a measured completion denominator.
    and independent live checks passed. Section 6K locally verifies sequential
    crash reclamation and active-reader preservation under disk pressure, but
    reproduces scan starvation behind 128 persistent entries and concurrent
-   capacity oversubscription. No runtime change/release in 6K. Next: MEDIA-05
-   scan progress, MEDIA-06/07 admission and remaining scratch lifetimes, then workflow/template
+   capacity oversubscription. Section 6L fixes MEDIA-05 scan progress and is
+   deployed/verified in PR #256: successful reclamations are capped at 128,
+   inspection is linear. Ledger: 21 passed, 27 untested, 2 failed, 3 external
+   (not a completion percentage). Section 6M verifies four real disk-failure/DB
+   recovery scenarios, including partial outputs and exhausted jobs reopened by
+   callback/reaper, with stable balances and one success notification. No runtime
+   change or release in 6M. Section 6N reproduces retained bytes in all five old
+   scratch namespaces and output expansion beyond input size. New scratch leases
+   and cancellation ordering pass real FFmpeg locally; release pending. Legacy
+   metadata policy and MEDIA-06 shared admission remain open, then workflow/template
    execution; continue the other areas above without claiming them complete from
    code inventory alone.
 

@@ -35,7 +35,10 @@ jobs:
         run: npm test
 
       - name: Verify inherited staging locks with real FFmpeg
-        run: npx tsx scripts/audits/audit-video-poster-owner-lifetime.ts --verify-reader-lease
+        run: npx tsx --tsconfig tsconfig.scripts.json scripts/audits/audit-video-poster-owner-lifetime.ts --verify-reader-lease
+
+      - name: Verify media scratch reclamation with real FFmpeg
+        run: npx tsx --tsconfig tsconfig.scripts.json scripts/audits/audit-media-scratch-lifetime.ts
 
       - name: Lint
         run: npm run lint

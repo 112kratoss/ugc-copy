@@ -1,6 +1,7 @@
 # Backend audit completion checklist
 
-Updated 2026-10-01. Baseline: deployed main `5934bd7dac80d402d4db5e274e2716a60432790a`.
+Updated 2026-10-01. Current verified release: `999c34d5b3435d160865a05c8ba3ff1bd3a0ec29`.
+Surface inventory baseline remains `5934bd7d`; Section 6L changed no surfaces.
 
 This is the closure ledger for the audit, replacing section numbers as a progress
 measure. A row is a bounded obligation, not a subsystem percentage. The rows have
@@ -8,7 +9,7 @@ unequal effort and risk. Do not turn their pass count into a percentage of backe
 safety or an ETA. New findings attach to these obligations; changes in scope must
 be recorded explicitly instead of silently adding another lettered batch.
 
-Initial ledger: **53 obligations — 20 passed, 28 untested, 2 failed, 3 external**.
+Current ledger: **53 obligations — 21 passed, 27 untested, 2 failed, 3 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
 
 Status meanings: **passed** has evidence for the stated scope; **failed** has a
@@ -101,9 +102,9 @@ coverage includes shared helpers that do not end in `service.ts`.
 | MEDIA-02 | Published dead-owner cleanup and inherited reader protection | passed | [6J release](backend-section-06-staging-locks-release-2026-10-01.md); no claim about legacy scratch |
 | MEDIA-03 | Sequential crash reclamation under a bounded filesystem | passed | [6K probe](backend-section-06-disk-pressure-2026-10-01.md): five killed owners on 2 MiB tmpfs followed by successful staging |
 | MEDIA-04 | Active/inherited reader preservation and failed-write cleanup under disk pressure | passed | [6K probe](backend-section-06-disk-pressure-2026-10-01.md): ENOSPC preserves active bytes; incomplete new staging removed |
-| MEDIA-05 | Reach reclaimable files beyond a persistent 128-entry scan prefix | failed | [6K reproduction](backend-section-06-disk-pressure-2026-10-01.md); [6L fix](backend-section-06-scan-progress-2026-10-01.md) passes local regressions; release verification pending |
-| MEDIA-06 | Concurrent disk admission/backpressure across writers | failed | [6K reproduction](backend-section-06-disk-pressure-2026-10-01.md): both writers observe enough free space; combined writes exceed it. This is a capacity obligation, not a data-corruption finding |
-| MEDIA-07 | Other scratch namespaces and metadata/legacy accumulation policy | untested | Establish reader/writer lifetimes for poster, frame, rendition source/output and teaser before any sweep |
+| MEDIA-05 | Reach reclaimable files beyond a persistent 128-entry scan prefix | passed | [6L release](backend-section-06-scan-progress-release-2026-10-01.md): real-filesystem regression, cold-process and Linux disk-pressure verification; deployed in PR #256. Inspection remains linear, not time-bounded (MEDIA-07/OPS-03) |
+| MEDIA-06 | Concurrent disk admission/backpressure across writers | failed | [6K reproduction](backend-section-06-disk-pressure-2026-10-01.md): combined writes exceed capacity. [6M](backend-section-06-capacity-recovery-2026-10-01.md) verifies real ENOSPC retry, partial-output and exhausted-job recovery with stable charges/notification; shared admission remains open |
+| MEDIA-07 | Other scratch namespaces and metadata/legacy accumulation policy | failed | [6N reproduction/fix](backend-section-06-media-scratch-2026-10-01.md): all five old namespaces retain bytes after owner death. New leased scratch and cancellation ordering pass real FFmpeg locally; release pending. Legacy/unpublished metadata policy remains open |
 | MEDIA-08 | Upload/import validation, private signed reads, finalization and revocation | untested | Real Storage/HTTP behavior with ownership, expiry, malformed input and replay |
 | MEDIA-09 | Deletion/retention correctness and durable input/output recovery | untested | Objects and DB references remain consistent through partial deletion and retry |
 
@@ -131,13 +132,14 @@ recorded scope decision, and external rows have been verified or clearly reporte
 as unresolved limitations. A green release cannot close unrelated operator or
 provider obligations. Passing an inventory check cannot close a behavioral row.
 
-1. Finish verification/release of the MEDIA-05 fix in Section 6L: cap successful
-   reclamations at 128, inspect past preserved entries, and keep all lock/marker
-   authority checks. Enumeration is explicitly linear rather than time-bounded;
+1. MEDIA-05 is closed by the verified Section 6L release. The pass caps successful
+   reclamations at 128 and inspects past preserved entries while retaining all
+   lock/marker authority checks. Enumeration is linear rather than time-bounded;
    metadata accumulation and latency remain MEDIA-07/OPS-03 obligations.
 2. Resolve MEDIA-06/07 by defining capacity and ownership across all scratch
-   writers; the 6K concurrent probe rejects a plain free-space preflight as a
-   reservation mechanism.
+   writers. Section 6M verifies four disk-failure recovery cases without a code
+   change; shared admission remains open. The 6K concurrent probe rejects a
+   plain free-space preflight as a reservation mechanism.
 3. Continue WORKFLOW-02/03/04, then SOCIAL and JOB gates, while finishing MAP-02
    and reconciling earlier domain evidence. Keep provider/operator rows visible.
 4. Finish OPS-02/03 and the remaining auth/commerce follow-ups before sign-off.
