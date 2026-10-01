@@ -101,8 +101,8 @@ export async function createPostMediaRendition({
   }
 
   try {
-    return await withVideoInputFile(body, async (inputPath, sourceBytes) => {
-      const inputProbe = await probeVideoFile(inputPath);
+    return await withVideoInputFile(body, async (inputPath, sourceBytes, sourceLeaseFd) => {
+      const inputProbe = await probeVideoFile(inputPath, undefined, sourceLeaseFd);
       onInputProbe?.(inputProbe);
 
       // Teaser first: an 8s transcode never approaches the ffmpeg timeout, so
@@ -115,7 +115,7 @@ export async function createPostMediaRendition({
         && inputProbe.durationSeconds > TEASER_MIN_SOURCE_SECONDS
       ) {
         try {
-          const teaser = await createVideoTeaserFromFile(inputPath);
+          const teaser = await createVideoTeaserFromFile(inputPath, sourceLeaseFd);
           const teaserStoragePath = buildPostMediaTeaserPath(
             storagePath,
             getMediaContentHash(teaser.buffer),
@@ -141,7 +141,7 @@ export async function createPostMediaRendition({
         onTeaserOutcome?.({ status: 'not-needed' });
       }
 
-      const rendition = await createVideoRenditionFromFile(inputPath, sourceBytes);
+      const rendition = await createVideoRenditionFromFile(inputPath, sourceBytes, { sourceLeaseFd });
 
       const renditionStoragePath = buildPostMediaRenditionPath(
         storagePath,

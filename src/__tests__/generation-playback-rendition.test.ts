@@ -7,8 +7,8 @@ import {
 const encode = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/video-rendition', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/video-rendition')>()),
-  withVideoInputFile: async (_body: Blob, work: (path: string, bytes: number) => unknown) =>
-    work('/tmp/input.mp4', 1024),
+  withVideoInputFile: async (_body: Blob, work: (path: string, bytes: number, lease: number) => unknown) =>
+    work('/tmp/input.mp4', 1024, 99),
   createVideoRenditionFromFile: encode,
 }));
 import { VideoRenditionSkipped } from '@/lib/video-rendition';
@@ -175,4 +175,9 @@ it('degrades only when its migration is absent', async () => {
   await expect(repairGenerationPlaybackRendition(f.db as never)).rejects.toMatchObject({
     code: '42501',
   });
+});
+
+it('passes the source workspace lease to the playback encoder', async () => {
+  await repairGenerationPlaybackRendition(fixture().db as never);
+  expect(encode).toHaveBeenCalledWith('/tmp/input.mp4', 1024, { signal: expect.any(AbortSignal), sourceLeaseFd: 99 });
 });

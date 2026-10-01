@@ -4,7 +4,7 @@ import { repairPostMediaTeasers, TEASER_REPAIR_MAX_BYTES } from '@/lib/post-medi
 const encode = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/video-rendition', () => ({
   TEASER_SECONDS: 8,
-  withVideoInputFile: async (_body: Blob, work: (path: string) => unknown) => work('/tmp/fixture.mp4'),
+  withVideoInputFile: async (_body: Blob, work: (path: string, bytes: number, lease: number) => unknown) => work('/tmp/fixture.mp4', 1024, 99),
   createVideoTeaserFromFile: encode,
 }));
 const bytes = Buffer.from('encoded video bytes');
@@ -102,4 +102,9 @@ it('degrades on an unapplied migration but surfaces unrelated database failures'
   const error = { code: '42501', message: 'permission denied' };
   f.db.rpc.mockResolvedValueOnce({ data: null, error } as never);
   await expect(repairPostMediaTeasers(f.db as never)).rejects.toEqual(error);
+});
+
+it('passes the source workspace lease to the teaser encoder', async () => {
+  await repairPostMediaTeasers(fixture().db as never);
+  expect(encode).toHaveBeenCalledWith('/tmp/fixture.mp4', 99);
 });

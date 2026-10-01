@@ -1,6 +1,6 @@
 /**
  * Local-only process lifetime audit. No database, network, or provider calls.
- * Run: npx tsx scripts/audits/audit-video-poster-owner-lifetime.ts
+ * Run: npx tsx --tsconfig tsconfig.scripts.json scripts/audits/audit-video-poster-owner-lifetime.ts
  * Requires POSIX mkfifo/ps and the installed ffmpeg-static binary; takes ~35s.
  * Add --verify-reader-lease to require inherited protection and release.
  * Default exit 1 reports a surviving orphan; exit 2 means inconclusive/error.
@@ -108,7 +108,7 @@ async function audit() {
       const observation: Observation = { banner: '' };
       const child = childProcess.fork(fileURLToPath(import.meta.url), [
         '--worker', input, path.join(root, `${name}.jpg`), ...(verifyLease ? ['--lease'] : []),
-      ], { execArgv: ['--import', 'tsx'], stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+      ], { execArgv: ['--import', 'tsx'], env: { ...process.env, TSX_TSCONFIG_PATH: path.resolve('tsconfig.scripts.json') }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
       fixtures.push({ worker: child, observation, input });
       child.on('message', (message: Message) => {
         if (message.type === 'spawn') observation.pid = message.pid;

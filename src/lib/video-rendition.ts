@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import { createWriteStream } from 'node:fs';
-import { mkdtemp, readFile, rm, stat } from 'fs/promises';
-import { tmpdir } from 'os';
+import { readFile, stat } from 'fs/promises';
+import { createMediaScratchWorkspace } from '@/lib/staging-workspace';
 import path from 'path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -163,24 +163,28 @@ export function parseVideoProbeOutput(output: string): VideoProbeResult {
   return { width, height, durationSeconds };
 }
 
-async function runFfmpeg(args: string[], signal?: AbortSignal): Promise<string> {
+async function runFfmpeg(args: string[], signal?: AbortSignal, leaseFds: number[] = []): Promise<string> {
   signal?.throwIfAborted();
   const ffmpegPath = getFfmpegPath();
 
   return new Promise<string>((resolve, reject) => {
     const child = spawn(ffmpegPath, args, {
-      stdio: ['ignore', 'ignore', 'pipe'],
+      stdio: ['ignore', 'ignore', 'pipe', ...leaseFds],
       timeout: RENDITION_TIMEOUT_MS,
       killSignal: 'SIGKILL',
       ...(signal ? { signal } : {}),
     });
     const stderr: Buffer[] = [];
 
-    child.stderr.on('data', (chunk: Buffer) => {
+    child.stderr!.on('data', (chunk: Buffer) => {
       stderr.push(chunk);
     });
-    child.on('error', reject);
+    // Abort emits `error` before the process has released inherited leases.
+    // Settle only on close so owner cleanup cannot race the encoder's exit.
+    let processError: Error | undefined;
+    child.on('error', (error) => { processError = error; });
     child.on('close', (code, signal) => {
+      if (processError) { reject(processError); return; }
       const output = Buffer.concat(stderr).toString('utf8');
       if (code === 0) {
         resolve(output);
@@ -197,10 +201,10 @@ async function runFfmpeg(args: string[], signal?: AbortSignal): Promise<string> 
   });
 }
 
-export async function probeVideoFile(inputPath: string, signal?: AbortSignal): Promise<VideoProbeResult> {
+export async function probeVideoFile(inputPath: string, signal?: AbortSignal, sourceLeaseFd?: number): Promise<VideoProbeResult> {
   // `-i` with no output makes ffmpeg exit non-zero after printing stream info.
   try {
-    const output = await runFfmpeg(['-hide_banner', '-i', inputPath], signal);
+    const output = await runFfmpeg(['-hide_banner', '-i', inputPath], signal, sourceLeaseFd === undefined ? [] : [sourceLeaseFd]);
     return parseVideoProbeOutput(output);
   } catch (error) {
     signal?.throwIfAborted();
@@ -250,14 +254,15 @@ export async function probeMediaDurationSeconds(input: string, signal?: AbortSig
 export async function createVideoRenditionFromFile(
   inputPath: string,
   sourceBytes: number,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; sourceLeaseFd?: number } = {},
 ): Promise<VideoRenditionResult> {
   options.signal?.throwIfAborted();
-  const tempDir = await mkdtemp(path.join(/* turbopackIgnore: true */ tmpdir(), 'feed-rendition-'));
-  const outputPath = path.join(/* turbopackIgnore: true */ tempDir, 'rendition.mp4');
+  const workspace = await createMediaScratchWorkspace();
+  const outputPath = path.join(workspace.mediaDirectory, 'rendition.mp4');
 
   try {
-    await runFfmpeg(buildRenditionArgs(inputPath, outputPath), options.signal);
+    await runFfmpeg(buildRenditionArgs(inputPath, outputPath), options.signal,
+      [options.sourceLeaseFd, workspace.readerLeaseFd].filter((fd): fd is number => fd !== undefined));
 
     const { size } = await stat(outputPath);
     if (size >= sourceBytes * RENDITION_MIN_SAVING_RATIO) {
@@ -267,7 +272,7 @@ export async function createVideoRenditionFromFile(
       );
     }
 
-    const probe = await probeVideoFile(outputPath, options.signal);
+    const probe = await probeVideoFile(outputPath, options.signal, workspace.readerLeaseFd);
     return {
       buffer: await readFile(outputPath),
       bytes: size,
@@ -276,7 +281,7 @@ export async function createVideoRenditionFromFile(
       durationSeconds: probe.durationSeconds,
     };
   } finally {
-    await rm(tempDir, { recursive: true, force: true });
+    await workspace.cleanup();
   }
 }
 
@@ -287,18 +292,18 @@ export async function createVideoRenditionFromFile(
  * check: a trim is always worth keeping — its entire point is bounding what
  * the feed streams, not saving bytes over the source.
  */
-export async function createVideoTeaserFromFile(inputPath: string): Promise<VideoRenditionResult> {
-  const tempDir = await mkdtemp(path.join(/* turbopackIgnore: true */ tmpdir(), 'feed-teaser-'));
-  const outputPath = path.join(/* turbopackIgnore: true */ tempDir, 'teaser.mp4');
+export async function createVideoTeaserFromFile(inputPath: string, sourceLeaseFd?: number): Promise<VideoRenditionResult> {
+  const workspace = await createMediaScratchWorkspace();
+  const outputPath = path.join(workspace.mediaDirectory, 'teaser.mp4');
 
   try {
     await runFfmpeg(buildRenditionArgs(inputPath, outputPath, {
       maxDurationSeconds: TEASER_SECONDS,
       stripAudio: true,
-    }));
+    }), undefined, [sourceLeaseFd, workspace.readerLeaseFd].filter((fd): fd is number => fd !== undefined));
 
     const { size } = await stat(outputPath);
-    const probe = await probeVideoFile(outputPath);
+    const probe = await probeVideoFile(outputPath, undefined, workspace.readerLeaseFd);
     return {
       buffer: await readFile(outputPath),
       bytes: size,
@@ -307,7 +312,7 @@ export async function createVideoTeaserFromFile(inputPath: string): Promise<Vide
       durationSeconds: probe.durationSeconds,
     };
   } finally {
-    await rm(tempDir, { recursive: true, force: true });
+    await workspace.cleanup();
   }
 }
 
@@ -318,7 +323,7 @@ export async function createVideoTeaserFromFile(inputPath: string): Promise<Vide
  */
 export async function withVideoInputFile<T>(
   body: Blob,
-  work: (inputPath: string, sourceBytes: number) => Promise<T>,
+  work: (inputPath: string, sourceBytes: number, sourceLeaseFd: number) => Promise<T>,
 ): Promise<T> {
   const sourceBytes = body.size;
   if (sourceBytes > RENDITION_MAX_INPUT_BYTES) {
@@ -328,21 +333,21 @@ export async function withVideoInputFile<T>(
     );
   }
 
-  const tempDir = await mkdtemp(path.join(/* turbopackIgnore: true */ tmpdir(), 'feed-rendition-src-'));
-  const inputPath = path.join(/* turbopackIgnore: true */ tempDir, 'input-video');
+  const workspace = await createMediaScratchWorkspace();
+  const inputPath = path.join(workspace.mediaDirectory, 'input-video');
 
   try {
     await pipeline(
       Readable.fromWeb(body.stream() as NodeReadableStream<Uint8Array>),
       createWriteStream(inputPath, { flags: 'wx' }),
     );
-    return await work(inputPath, sourceBytes);
+    return await work(inputPath, sourceBytes, workspace.readerLeaseFd);
   } finally {
-    await rm(tempDir, { recursive: true, force: true });
+    await workspace.cleanup();
   }
 }
 
 export async function createVideoRenditionBuffer(body: Blob): Promise<VideoRenditionResult> {
-  return withVideoInputFile(body, (inputPath, sourceBytes) =>
-    createVideoRenditionFromFile(inputPath, sourceBytes));
+  return withVideoInputFile(body, (inputPath, sourceBytes, sourceLeaseFd) =>
+    createVideoRenditionFromFile(inputPath, sourceBytes, { sourceLeaseFd }));
 }

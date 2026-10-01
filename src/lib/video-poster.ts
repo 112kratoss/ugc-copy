@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import { accessSync, constants as fsConstants, createWriteStream } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'fs/promises';
-import { tmpdir } from 'os';
+import { readFile } from 'fs/promises';
+import { createMediaScratchWorkspace } from '@/lib/staging-workspace';
 import path from 'path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -21,8 +21,8 @@ const PREVIEW_MAX_SIZE = 720;
 export const VIDEO_POSTER_TIMEOUT_MS = 30_000;
 
 export async function createVideoPosterBuffer(body: Blob) {
-  const tempDir = await mkdtemp(path.join(/* turbopackIgnore: true */ tmpdir(), 'generation-poster-'));
-  const inputPath = path.join(/* turbopackIgnore: true */ tempDir, 'input-video');
+  const workspace = await createMediaScratchWorkspace();
+  const inputPath = path.join(workspace.mediaDirectory, 'input-video');
 
   try {
     await pipeline(
@@ -36,15 +36,15 @@ export async function createVideoPosterBuffer(body: Blob) {
     // the file inside it. ffmpeg answered `AVERROR(ENOENT)`, which leaves exit
     // code 254, and three of those retired the row for good: a finished video
     // permanently without a poster.
-    return await createVideoPosterBufferFromFile(inputPath);
+    return await createVideoPosterBufferFromFile(inputPath, workspace.readerLeaseFd);
   } finally {
-    await rm(tempDir, { recursive: true, force: true });
+    await workspace.cleanup();
   }
 }
 
 export async function createVideoPosterBufferFromFile(inputPath: string, sourceLeaseFd?: number) {
-  const tempDir = await mkdtemp(path.join(/* turbopackIgnore: true */ tmpdir(), 'generation-frame-'));
-  const framePath = path.join(/* turbopackIgnore: true */ tempDir, 'frame.jpg');
+  const workspace = await createMediaScratchWorkspace();
+  const framePath = path.join(workspace.mediaDirectory, 'frame.jpg');
 
   try {
     // The poster is the clip's first frame, the way Instagram and TikTok
@@ -54,9 +54,9 @@ export async function createVideoPosterBufferFromFile(inputPath: string, sourceL
     // zero. One second is only the fallback for a source whose first frame
     // ffmpeg cannot decode.
     try {
-      await runVideoPosterFfmpeg(inputPath, framePath, '00:00:00.000', sourceLeaseFd);
+      await runVideoPosterFfmpeg(inputPath, framePath, '00:00:00.000', sourceLeaseFd, workspace.readerLeaseFd);
     } catch {
-      await runVideoPosterFfmpeg(inputPath, framePath, '00:00:01.000', sourceLeaseFd);
+      await runVideoPosterFfmpeg(inputPath, framePath, '00:00:01.000', sourceLeaseFd, workspace.readerLeaseFd);
     }
 
     const frame = await readFile(framePath);
@@ -73,11 +73,11 @@ export async function createVideoPosterBufferFromFile(inputPath: string, sourceL
       .webp({ quality: 72 })
       .toBuffer();
   } finally {
-    await rm(tempDir, { recursive: true, force: true });
+    await workspace.cleanup();
   }
 }
 
-export async function runVideoPosterFfmpeg(inputPath: string, framePath: string, seekTime: string, sourceLeaseFd?: number) {
+export async function runVideoPosterFfmpeg(inputPath: string, framePath: string, seekTime: string, sourceLeaseFd?: number, outputLeaseFd?: number) {
   const ffmpegPath = getFfmpegPath();
   const args = [
     '-y',
@@ -96,9 +96,7 @@ export async function runVideoPosterFfmpeg(inputPath: string, framePath: string,
     const child = spawn(ffmpegPath, args, {
       // Inherit the open lock description atomically with spawn. The kernel
       // retains it if the Node parent dies while ffmpeg still needs the input.
-      stdio: sourceLeaseFd === undefined
-        ? ['ignore', 'ignore', 'pipe']
-        : ['ignore', 'ignore', 'pipe', sourceLeaseFd],
+      stdio: ['ignore', 'ignore', 'pipe', ...[sourceLeaseFd, outputLeaseFd].filter((fd): fd is number => fd !== undefined)],
       timeout: VIDEO_POSTER_TIMEOUT_MS,
       killSignal: 'SIGKILL',
     });

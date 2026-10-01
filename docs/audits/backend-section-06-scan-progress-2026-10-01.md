@@ -1,6 +1,9 @@
 # Section 6L — staging reclamation past persistent entries
 
-Status: locally verified; PR/CI and production release pending.
+Status: PR #256 merged as `999c34d5b3435d160865a05c8ba3ff1bd3a0ec29`;
+PR/main Quality and standard production release passed first run. Deployed and
+verified at 12:50:32 UTC (18:20:32 IST); independent live checks passed. See
+[release evidence](backend-section-06-scan-progress-release-2026-10-01.md).
 Baseline: `5934bd7dac80d402d4db5e274e2716a60432790a`.
 
 ## Reproduced failure
@@ -64,7 +67,8 @@ unpublished or legacy workspaces.
   samples, not a controlled production performance guarantee.
 - The original 6K probes remain immutable; the updated probe and timing scripts,
   native image build log, and baseline/final tests are preserved under 6L.
-- PR/main CI and release identifiers will be recorded before completion.
+- PR Quality `36853752909`, exact-main Quality `36862814234` and standard
+  release `36864062596` passed first run; details are in the release evidence.
 
 Private evidence: `.audit-evidence/backend-section-06l/`. This batch carries the
 Section 6J release records and Section 6K investigation/initial closure ledger.
