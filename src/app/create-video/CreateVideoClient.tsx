@@ -1476,6 +1476,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                 storagePath: item.storagePath ?? null,
                                 source: 'remix' as const,
                                 sourceGenerationId: item.sourceGenerationId ?? null,
+                                // The quote refuses a clip with no length, and only a
+                                // fresh upload is measured here.
+                                durationSeconds: item.durationSeconds ?? null,
                                 seedanceAsset: restoredSeedanceAssets?.videos?.[index] ?? undefined,
                             }] : [])
                         : (settings?.referenceVideoUrls ?? []).map((url, index) => ({
@@ -1496,6 +1499,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                 storagePath: item.storagePath ?? null,
                                 source: 'remix' as const,
                                 sourceGenerationId: item.sourceGenerationId ?? null,
+                                durationSeconds: item.durationSeconds ?? null,
                                 seedanceAsset: restoredSeedanceAssets?.audios?.[index] ?? undefined,
                             }] : [])
                         : (settings?.referenceAudioUrls ?? []).map((url, index) => ({
