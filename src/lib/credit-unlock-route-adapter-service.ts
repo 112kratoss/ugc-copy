@@ -4,7 +4,7 @@ import 'server-only';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import {
@@ -29,11 +29,14 @@ type PostResourceCreditUnlockRouteContext = {
   params: Promise<{ postId: string }>;
 };
 
+type RunAfterResponse = (task: () => Promise<unknown>) => void;
+
 type CreditUnlockRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
   logError?: typeof logBackendRouteError;
+  runAfterResponse?: RunAfterResponse;
   unlockMarketplaceAssetWithCredits?: typeof unlockMarketplaceAssetWithCredits;
   unlockPostResourceBundleWithCredits?: typeof unlockPostResourceBundleWithCredits;
 };
@@ -66,6 +69,7 @@ function resolveDependencies(dependencies: CreditUnlockRouteDependencies | undef
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
     logError: dependencies?.logError ?? logBackendRouteError,
+    runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
   };
 }
 
@@ -185,6 +189,9 @@ export async function postResourceBundleCreditUnlockRouteResponse({
           adminSupabase,
           postId: resourceId,
           userId,
+          // The buyer is waiting on this answer, so the pushes go out behind
+          // it rather than in front.
+          runAfterResponse: resolvedDependencies.runAfterResponse,
         })
       ),
     }, resolvedDependencies),

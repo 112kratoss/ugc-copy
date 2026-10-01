@@ -574,3 +574,130 @@ describe('credit-funded mobile unlocks', () => {
     expect(from).not.toHaveBeenCalled();
   });
 });
+
+describe('post resource credit unlock notifications', () => {
+  it('answers before the notifications go out when the caller can run work after the response', async () => {
+    // Measured in production on 2026-10-01 on the free unlock, which sends the
+    // same two notifications: the buyer had 32 registered devices, each push is
+    // its own request, and the answer went out 15 s after the unlock was
+    // recorded.
+    const fakeSupabase = createBundleCreditSupabase({ credits: 1000 });
+    const notifyPostResourceUnlockCompleted = vi.fn(() => new Promise<null>(() => {}));
+    const deferred: Array<() => Promise<unknown>> = [];
+
+    const result = await unlockPostResourceBundleWithCredits({
+      adminSupabase: fakeSupabase.client,
+      userId,
+      postId: 'post-1',
+      invalidateMarketplaceResourceListCache: vi.fn(),
+      notifyPostResourceUnlockCompleted,
+      runAfterResponse: (task) => { deferred.push(task); },
+    });
+
+    // A push that never finishes no longer holds the answer back, and the
+    // charge behind that answer is the one it always was.
+    expect(result).toEqual({
+      success: true,
+      entitlement: 'post_resource_unlock',
+      postId: 'post-1',
+      credits: 100,
+      alreadyProcessed: false,
+    });
+    expect(fakeSupabase.credits).toBe(100);
+    expect(fakeSupabase.bundlePurchases).toEqual([{ bundle_id: 'bundle-1', buyer_user_id: userId }]);
+    expect(notifyPostResourceUnlockCompleted).not.toHaveBeenCalled();
+    expect(deferred).toHaveLength(1);
+
+    void deferred[0]();
+    expect(notifyPostResourceUnlockCompleted).toHaveBeenCalledTimes(1);
+    expect(notifyPostResourceUnlockCompleted).toHaveBeenCalledWith(fakeSupabase.client, {
+      buyerUserId: userId,
+      ownerUserId: ownerId,
+      postId: 'post-1',
+      bundleId: 'bundle-1',
+      alreadyProcessed: false,
+    });
+  });
+
+  it('sends the notifications before answering when the caller has nowhere to run them afterwards', async () => {
+    const fakeSupabase = createBundleCreditSupabase({ credits: 1000 });
+    let finishNotifying = () => {};
+    const notifyPostResourceUnlockCompleted = vi.fn(() => new Promise<null>((resolve) => {
+      finishNotifying = () => resolve(null);
+    }));
+    let answered = false;
+
+    const unlock = unlockPostResourceBundleWithCredits({
+      adminSupabase: fakeSupabase.client,
+      userId,
+      postId: 'post-1',
+      invalidateMarketplaceResourceListCache: vi.fn(),
+      notifyPostResourceUnlockCompleted,
+    }).then((result) => {
+      answered = true;
+      return result;
+    });
+
+    await vi.waitFor(() => expect(notifyPostResourceUnlockCompleted).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(answered).toBe(false);
+
+    finishNotifying();
+    await expect(unlock).resolves.toEqual({
+      success: true,
+      entitlement: 'post_resource_unlock',
+      postId: 'post-1',
+      credits: 100,
+      alreadyProcessed: false,
+    });
+    expect(notifyPostResourceUnlockCompleted).toHaveBeenCalledWith(fakeSupabase.client, {
+      buyerUserId: userId,
+      ownerUserId: ownerId,
+      postId: 'post-1',
+      bundleId: 'bundle-1',
+      alreadyProcessed: false,
+    });
+  });
+
+  it('defers nothing when the bundle was already unlocked', async () => {
+    const fakeSupabase = createBundleCreditSupabase({
+      credits: 100,
+      purchases: [{ bundle_id: 'bundle-1', buyer_user_id: userId }],
+    });
+    const notifyPostResourceUnlockCompleted = vi.fn(async () => null);
+    const runAfterResponse = vi.fn();
+
+    await expect(unlockPostResourceBundleWithCredits({
+      adminSupabase: fakeSupabase.client,
+      userId,
+      postId: 'post-1',
+      invalidateMarketplaceResourceListCache: vi.fn(),
+      notifyPostResourceUnlockCompleted,
+      runAfterResponse,
+    })).resolves.toMatchObject({ alreadyProcessed: true, credits: 100 });
+
+    expect(runAfterResponse).not.toHaveBeenCalled();
+    expect(notifyPostResourceUnlockCompleted).not.toHaveBeenCalled();
+  });
+
+  it('defers nothing when the unlock is refused', async () => {
+    const fakeSupabase = createBundleCreditSupabase({ credits: 50 });
+    const notifyPostResourceUnlockCompleted = vi.fn(async () => null);
+    const runAfterResponse = vi.fn();
+
+    await expect(unlockPostResourceBundleWithCredits({
+      adminSupabase: fakeSupabase.client,
+      userId,
+      postId: 'post-1',
+      invalidateMarketplaceResourceListCache: vi.fn(),
+      notifyPostResourceUnlockCompleted,
+      runAfterResponse,
+    })).rejects.toMatchObject({
+      status: 402,
+    } satisfies Partial<MobileCommerceError>);
+
+    expect(fakeSupabase.credits).toBe(50);
+    expect(runAfterResponse).not.toHaveBeenCalled();
+    expect(notifyPostResourceUnlockCompleted).not.toHaveBeenCalled();
+  });
+});
