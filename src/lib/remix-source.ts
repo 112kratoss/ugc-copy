@@ -14,6 +14,8 @@ export interface RemixMediaAssetDescriptor {
 
 export interface RemixResolvedAsset extends RemixMediaAssetDescriptor {
   url: string | null;
+  /** A clip or track's length, when the generation kept it. */
+  durationSeconds?: number;
 }
 
 interface RemixImageElementDescriptor extends ImageElementDescriptor {

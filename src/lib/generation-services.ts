@@ -52,6 +52,7 @@ import {
   collectSeedanceAssetCandidates,
   persistGenerationInputMedia,
   type PersistGenerationInputCandidate,
+  type ReferenceMediaDescriptor,
 } from '@/lib/generation-input-media';
 import { importSharedGenerationInputMedia } from '@/lib/generation-input-media-import';
 import { buildCatalogInputMediaCandidates } from '@/lib/catalog-input-media-candidates';
@@ -2070,8 +2071,8 @@ export async function startVideoGeneration(params: {
   referenceVideoUrls?: string[];
   referenceAudioUrls?: string[];
   /** What the caller knows about each reference clip and track, in the order of their URLs. */
-  referenceVideos?: (RemixMediaAssetDescriptor | null)[];
-  referenceAudios?: (RemixMediaAssetDescriptor | null)[];
+  referenceVideos?: (ReferenceMediaDescriptor | null)[];
+  referenceAudios?: (ReferenceMediaDescriptor | null)[];
   preparedAudioIds?: string[];
   characterIds?: string[];
   klingVideoElements?: KlingVideoElementInput[];

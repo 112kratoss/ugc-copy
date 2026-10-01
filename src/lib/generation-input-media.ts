@@ -178,6 +178,10 @@ function isFetchableUrl(value: string | null | undefined): value is string {
   return typeof value === 'string' && /^https?:\/\//i.test(value.trim());
 }
 
+function positiveSeconds(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
 /**
  * One name for a media source however it is written. A stored object is signed
  * again each time it is read, so two links to it differ; its bucket and path
@@ -1027,13 +1031,19 @@ export function findUncapturedInputMediaTypes(
   });
 }
 
-export function toRemixAssetDescriptor(item: GenerationInputMediaItem): RemixMediaAssetDescriptor & { url: string | null } {
+export function toRemixAssetDescriptor(
+  item: GenerationInputMediaItem,
+): RemixMediaAssetDescriptor & { url: string | null; durationSeconds?: number } {
+  // A model that prices or caps a run by its reference seconds will not quote a
+  // clip of unknown length, so a restored clip says how long it is when known.
+  const durationSeconds = positiveSeconds(item.metadata?.durationSeconds);
   return {
     kind: item.mediaType,
     label: item.label,
     storagePath: item.storagePath,
     sourceGenerationId: item.sourceGenerationId,
     url: item.url,
+    ...(durationSeconds === null ? {} : { durationSeconds }),
   };
 }
 
@@ -1095,6 +1105,9 @@ export function collectSeedanceAssetCandidates(params: {
   return candidates;
 }
 
+/** What a caller knows about a reference clip or track it sends as a plain URL. */
+export type ReferenceMediaDescriptor = RemixMediaAssetDescriptor & { durationSeconds?: number | null };
+
 /**
  * The reference clips or tracks a video run sends as plain URLs, as inputs to
  * keep.
@@ -1110,7 +1123,7 @@ export function collectReferenceMediaCandidates(params: {
   mediaType: 'video' | 'audio';
   sources: string[];
   resolvedUrls: string[];
-  descriptors?: (RemixMediaAssetDescriptor | null)[];
+  descriptors?: (ReferenceMediaDescriptor | null)[];
   alreadyKept?: PersistGenerationInputCandidate[];
 }): PersistGenerationInputCandidate[] {
   const keptSources = new Set(
@@ -1124,6 +1137,7 @@ export function collectReferenceMediaCandidates(params: {
     const source = params.sources[index];
     if (!source || !isFetchableUrl(sourceUrl) || keptSources.has(mediaSourceKey(source))) return [];
     const descriptor = normalizeRemixMediaAssetDescriptor(params.descriptors?.[index], params.mediaType);
+    const durationSeconds = descriptor ? positiveSeconds(params.descriptors?.[index]?.durationSeconds) : null;
 
     return [{
       mediaType: params.mediaType,
@@ -1134,6 +1148,8 @@ export function collectReferenceMediaCandidates(params: {
       // names the caller's own object when it is a storage path or storage URL.
       sourceStoragePath: descriptor?.storagePath ?? source,
       sourceGenerationId: descriptor?.sourceGenerationId ?? null,
+      // Kept for the remix that restores this clip: see toRemixAssetDescriptor.
+      ...(durationSeconds === null ? {} : { metadata: { durationSeconds } }),
     } satisfies PersistGenerationInputCandidate];
   });
 }

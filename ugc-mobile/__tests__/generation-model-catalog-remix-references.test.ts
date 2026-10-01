@@ -109,6 +109,7 @@ describe('catalog remix restore of reusable video references', () => {
       storagePath: keptClip,
       sourceGenerationId: null,
       url: 'https://cdn.example.com/dance.mp4',
+      durationSeconds: 9,
     }];
 
     const restored = hydrateCatalogCreationDraftFromRemixSource(
@@ -125,6 +126,7 @@ describe('catalog remix restore of reusable video references', () => {
         displayName: 'Dance clip',
         url: 'https://cdn.example.com/dance.mp4',
         storagePath: keptClip,
+        durationSeconds: 9,
       }),
     ]);
     expect(buildUnifiedCatalogGenerationRequest(restored.draft, model, catalog.revision).inputs).toContainEqual(
@@ -134,7 +136,34 @@ describe('catalog remix restore of reusable video references', () => {
         url: 'https://cdn.example.com/dance.mp4',
         storagePath: keptClip,
         label: 'Dance clip',
+        durationSeconds: 9,
       }),
     );
+  });
+
+  // A model that prices or caps a run by its reference seconds will not quote a clip
+  // whose length it does not know. A restored clip arrived without one, so the remix
+  // showed the clip and then refused to generate until it was removed and added again,
+  // which someone remixing another creator's post has no file to do with.
+  it('restores a clip with its length, so the run it joins can be quoted', () => {
+    const catalog = catalogV2();
+    const model = catalog.models.find((entry) => entry.id === 'remote-video-v2')!;
+    const clip = {
+      kind: 'video' as const,
+      label: 'Dance clip',
+      storagePath: 'generation_inputs/owner/source-generation/01-reference_video.mp4',
+      sourceGenerationId: null,
+      url: 'https://cdn.example.com/dance.mp4',
+    };
+    const restore = (referenceVideos: NonNullable<RemixSourceBundle['inputs']['video']>['referenceVideos']) => {
+      const bundle = namedReferenceRemix([namedReference('@ali', 1)], 'Change the first person to @ali');
+      bundle.inputs.video!.referenceVideos = referenceVideos;
+      return hydrateCatalogCreationDraftFromRemixSource(createDefaultCreationDraft('video'), bundle, catalog).draft;
+    };
+
+    expect(validateCatalogCreationDraft(restore([{ ...clip, durationSeconds: 9 }]), model).errors).toEqual([]);
+    // A source that kept the clip before lengths were recorded still says so.
+    expect(validateCatalogCreationDraft(restore([clip]), model).errors)
+      .toEqual(['Reference videos requires duration metadata.']);
   });
 });

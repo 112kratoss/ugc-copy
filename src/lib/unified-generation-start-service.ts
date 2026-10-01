@@ -26,6 +26,7 @@ import type {
 import {
   GenerationProviderAdapterError,
 } from '@/lib/generation-model-adapters';
+import type { ReferenceMediaDescriptor } from '@/lib/generation-input-media';
 import type { GenerationModelOperationalConfig } from '@/lib/generation-model-runtime';
 import {
   resolveGenerationMediaSource,
@@ -49,7 +50,6 @@ import type {
   MotionModelId,
   VideoModelId,
 } from '@/lib/models';
-import type { RemixMediaAssetDescriptor } from '@/lib/remix-source';
 import { resolveSourceGenerationId } from '@/lib/source-generation';
 import { probeMediaDurationSeconds } from '@/lib/video-rendition';
 
@@ -535,12 +535,14 @@ function slotUrl(
   return inputs.find((asset) => asset.slot === key)?.url ?? null;
 }
 
-function referenceMediaDescriptor(asset: CatalogGenerationInputAsset): RemixMediaAssetDescriptor {
+function referenceMediaDescriptor(asset: CatalogGenerationInputAsset): ReferenceMediaDescriptor {
   return {
     kind: asset.kind === 'audio' ? 'audio' : 'video',
     label: asset.label ?? null,
     storagePath: asset.storagePath ?? null,
     sourceGenerationId: asset.sourceGenerationId ?? null,
+    // Measured before the run was priced, where the model reads reference lengths.
+    durationSeconds: asset.durationSeconds ?? null,
   };
 }
 
