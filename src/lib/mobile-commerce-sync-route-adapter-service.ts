@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders, getApiRequestId } from '@/lib/api-cache';
 import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
@@ -11,9 +11,12 @@ import {
 import { withProviderFetchRequestId } from '@/lib/provider-fetch';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
+type RunAfterResponse = (task: () => Promise<unknown>) => void;
+
 type MobileCommerceSyncRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
+  runAfterResponse?: RunAfterResponse;
   syncMobileCommerceForRoute?: typeof syncMobileCommerceForRoute;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
 };
@@ -22,6 +25,7 @@ function resolveDependencies(dependencies: MobileCommerceSyncRouteDependencies |
   return {
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
+    runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
     syncMobileCommerceForRoute:
       dependencies?.syncMobileCommerceForRoute ?? syncMobileCommerceForRoute,
     withProviderFetchRequestId:
@@ -44,6 +48,9 @@ async function handleMobileCommerceSyncPOST(
   return toJsonResponse(await dependencies.syncMobileCommerceForRoute({
     getAdminSupabase: dependencies.createServiceClient,
     readRequestBody: () => request.json(),
+    // The app waits on this answer after every in-app purchase, so the pushes
+    // go out behind it rather than in front.
+    runAfterResponse: dependencies.runAfterResponse,
     userSupabase: dependencies.createUserClient(request),
   }));
 }

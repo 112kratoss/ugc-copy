@@ -14,6 +14,7 @@ const rpcMock = vi.hoisted(() => vi.fn(async () => ({
 const adminClient = vi.hoisted(() => ({ service: 'admin', rpc: rpcMock }));
 const createServiceClientFactory = vi.hoisted(() => vi.fn(() => adminClient));
 const unlockMarketplaceAssetWithCreditsMock = vi.hoisted(() => vi.fn());
+const afterMock = vi.hoisted(() => vi.fn());
 
 class MockMobileCommerceError extends Error {
   constructor(message: string, public readonly status = 400) {
@@ -21,6 +22,14 @@ class MockMobileCommerceError extends Error {
     this.name = 'MobileCommerceError';
   }
 }
+
+vi.mock('next/server', async () => {
+  const actual = await vi.importActual<typeof import('next/server')>('next/server');
+  return {
+    ...actual,
+    after: afterMock,
+  };
+});
 
 vi.mock('@/lib/server-helpers', () => ({
   createUserClient: (request: Request) => createUserClientMock(request),
@@ -53,6 +62,7 @@ describe('marketplace admin route auth gates', () => {
       },
       error: null,
     });
+    afterMock.mockReset();
     unlockMarketplaceAssetWithCreditsMock.mockClear();
     unlockMarketplaceAssetWithCreditsMock.mockResolvedValue({
       success: true,
@@ -219,7 +229,43 @@ describe('marketplace admin route auth gates', () => {
       adminSupabase: adminClient,
       userId: 'buyer-1',
       assetId: 'asset-1',
+      runAfterResponse: expect.any(Function),
     });
+  });
+
+  it('queues the marketplace credit unlock notifications behind the response instead of sending them first', async () => {
+    createUserClientMock.mockReturnValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({
+          data: { user: { id: 'buyer-1' } },
+          error: null,
+        })),
+      },
+    });
+    const notify = vi.fn(async () => null);
+    unlockMarketplaceAssetWithCreditsMock.mockImplementationOnce(
+      async ({ runAfterResponse }: { runAfterResponse?: (task: () => Promise<unknown>) => void }) => {
+        runAfterResponse?.(notify);
+        return { success: true, entitlement: 'marketplace_unlock', assetId: 'asset-1' };
+      },
+    );
+
+    const { POST } = await import('@/app/api/marketplace/assets/[assetId]/unlock-with-credits/route');
+    const response = await POST(
+      new Request('http://localhost/api/marketplace/assets/asset-1/unlock-with-credits', {
+        method: 'POST',
+        headers: { 'x-request-id': 'asset-credit-after-1' },
+      }) as never,
+      { params: Promise.resolve({ assetId: 'asset-1' }) }
+    );
+
+    // The route as deployed hands the task to Next's after(), which runs it
+    // once the response has gone out.
+    expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'asset-credit-after-1');
+    expect(afterMock).toHaveBeenCalledTimes(1);
+    expect(afterMock).toHaveBeenCalledWith(notify);
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it('does not create an admin client before sales export authentication succeeds', async () => {

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { logBackendError } from '@/lib/backend-logger';
 import {
   notifyReferralRewardSettlement,
   settleCreditPurchaseReferralRewards,
@@ -63,6 +64,13 @@ export interface MobileCommerceSyncResult {
   message?: string;
   referralBonusCredits?: number;
 }
+
+/**
+ * Runs a task once the caller has answered its request. A route with someone
+ * waiting on its answer passes one, so the notifications stop holding that
+ * answer back.
+ */
+export type RunAfterResponse = (task: () => Promise<unknown>) => void;
 
 export class MobileCommerceError extends Error {
   constructor(
@@ -624,6 +632,51 @@ function throwMobileSettlementError(status: string | null, entitlementType: Mobi
   throw new MobileCommerceError(`Failed to complete mobile ${label}.`, 500);
 }
 
+/**
+ * Once a purchase is settled, what is left is telling the people involved.
+ * That is one push request for every device they have registered, sent in
+ * turn, so a caller with someone waiting on its answer passes a scheduler and
+ * the notification goes out behind the answer. Without one it is sent before
+ * this returns.
+ *
+ * Neither path can fail a purchase that is already settled. Every notifier
+ * handed in logs its own failures and never rejects, so sending it later hides
+ * no error; and a scheduler that will not take the task only means the
+ * notification is sent the slow way, in front of the answer.
+ */
+async function sendPurchaseNotification(
+  runAfterResponse: RunAfterResponse | undefined,
+  notify: () => Promise<unknown>,
+) {
+  if (runAfterResponse) {
+    try {
+      runAfterResponse(notify);
+      return;
+    } catch (error) {
+      logBackendError('mobile_commerce_notification_deferral_failed', { error });
+    }
+  }
+
+  await notify();
+}
+
+/**
+ * A restore can settle several purchases in one request, each with its own
+ * notification. Next's after() starts everything it was handed at once, which
+ * would send them side by side and could land "balance is now 600" after
+ * "balance is now 1,100". Queued through this they still go out one at a
+ * time, in the order they were queued, as they do when nothing is deferred.
+ */
+function oneAtATime(runAfterResponse: RunAfterResponse): RunAfterResponse {
+  let previous: Promise<unknown> = Promise.resolve();
+
+  return (task) => runAfterResponse(() => {
+    // The next one goes either way: a notification that failed holds nothing back.
+    previous = previous.then(task, task);
+    return previous;
+  });
+}
+
 export async function completeMobilePurchase({
   adminSupabase,
   userId,
@@ -633,6 +686,7 @@ export async function completeMobilePurchase({
   storeReportedPrice = null,
   storeReportedCurrency = null,
   invalidateMarketplaceResourceListCache = defaultInvalidateMarketplaceResourceListCache,
+  runAfterResponse,
 }: {
   adminSupabase: SupabaseClient;
   userId: string;
@@ -643,6 +697,12 @@ export async function completeMobilePurchase({
   storeReportedPrice?: number | null;
   storeReportedCurrency?: string | null;
   invalidateMarketplaceResourceListCache?: () => void;
+  /**
+   * The purchase sync and the restore pass one: the app is waiting on their
+   * answer with the store's charge already taken. The RevenueCat webhook
+   * passes none, so there the notifications are sent before this returns.
+   */
+  runAfterResponse?: RunAfterResponse;
 }): Promise<MobileCommerceSyncResult> {
   const externalOrderId = buildMobileExternalOrderId(provider, transactionId);
   const { data, error } = await adminSupabase.rpc('complete_mobile_purchase', {
@@ -696,11 +756,11 @@ export async function completeMobilePurchase({
     });
     const credits = requiredSafeInteger(data.remaining_credits) ?? await getProfileCredits(adminSupabase, userId);
     if (!alreadyProcessed) {
-      await notifyMobileCreditPurchase(adminSupabase, {
+      await sendPurchaseNotification(runAfterResponse, () => notifyMobileCreditPurchase(adminSupabase, {
         userId,
         credits,
         transactionId: creditTransactionId,
-      });
+      }));
     }
     return {
       success: true,
@@ -721,12 +781,12 @@ export async function completeMobilePurchase({
     const sellerUserId = normalizeOptionalString(data.seller_user_id);
     if (!alreadyProcessed) {
       if (!sellerUserId) throw new MobileCommerceError('Failed to unlock marketplace purchase.', 500);
-      await notifyMarketplaceUnlockCompleted(adminSupabase, {
+      await sendPurchaseNotification(runAfterResponse, () => notifyMarketplaceUnlockCompleted(adminSupabase, {
         buyerUserId: userId,
         sellerUserId,
         assetId: settledResourceId,
         alreadyProcessed: false,
-      });
+      }));
     }
     return {
       success: true,
@@ -741,13 +801,13 @@ export async function completeMobilePurchase({
   if (!alreadyProcessed) {
     if (!ownerUserId || !bundleId) throw new MobileCommerceError('Failed to unlock post resources.', 500);
     invalidateMarketplaceResourceListCache();
-    await notifyPostResourceUnlockCompleted(adminSupabase, {
+    await sendPurchaseNotification(runAfterResponse, () => notifyPostResourceUnlockCompleted(adminSupabase, {
       buyerUserId: userId,
       ownerUserId,
       postId: settledResourceId,
       bundleId,
       alreadyProcessed: false,
-    });
+    }));
   }
   return {
     success: true,
@@ -834,12 +894,14 @@ export async function completeMobileCreditPurchase({
   productId,
   provider,
   transactionId,
+  runAfterResponse,
 }: {
   adminSupabase: SupabaseClient;
   userId: string;
   productId: string;
   provider: MobilePurchaseProvider;
   transactionId: string;
+  runAfterResponse?: RunAfterResponse;
 }): Promise<MobileCommerceSyncResult> {
   const plan = resolveMobileCreditProduct(productId);
   if (!plan) {
@@ -859,6 +921,7 @@ export async function completeMobileCreditPurchase({
       currency: 'INR',
       credits: plan.credits,
     },
+    runAfterResponse,
   });
 }
 
@@ -893,10 +956,16 @@ export async function unlockMarketplaceAssetWithCredits({
   adminSupabase,
   userId,
   assetId,
+  runAfterResponse,
 }: {
   adminSupabase: SupabaseClient;
   userId: string;
   assetId: string;
+  /**
+   * The route passes one so the notifications stop holding the answer back;
+   * without it they are sent before this returns.
+   */
+  runAfterResponse?: RunAfterResponse;
 }): Promise<MobileCommerceSyncResult> {
   const { data, error } = await adminSupabase.rpc('unlock_marketplace_asset_with_credits', {
     p_user_id: userId,
@@ -937,12 +1006,12 @@ export async function unlockMarketplaceAssetWithCredits({
     if (!sellerUserId) {
       throw new MobileCommerceError('Failed to unlock marketplace purchase.', 500);
     }
-    await notifyMarketplaceUnlockCompleted(adminSupabase, {
+    await sendPurchaseNotification(runAfterResponse, () => notifyMarketplaceUnlockCompleted(adminSupabase, {
       buyerUserId: userId,
       sellerUserId,
       assetId,
       alreadyProcessed: false,
-    });
+    }));
   }
 
   return {
@@ -1004,11 +1073,10 @@ export async function unlockPostResourceBundleWithCredits({
   invalidateMarketplaceResourceListCache?: () => void;
   notifyPostResourceUnlockCompleted?: typeof notifyPostResourceUnlockCompleted;
   /**
-   * Runs a task once the caller has answered its request. The route passes one
-   * so the notifications stop holding the answer back; without it they are
-   * sent before this returns.
+   * The route passes one so the notifications stop holding the answer back;
+   * without it they are sent before this returns.
    */
-  runAfterResponse?: (task: () => Promise<unknown>) => void;
+  runAfterResponse?: RunAfterResponse;
 }): Promise<MobileCommerceSyncResult> {
   const { data, error } = await adminSupabase.rpc('unlock_post_resource_bundle_with_credits', {
     p_user_id: userId,
@@ -1052,21 +1120,14 @@ export async function unlockPostResourceBundleWithCredits({
     }
     invalidateMarketplaceResourceListCache();
     // The credits are spent and the unlock is recorded; what is left is telling
-    // both people. That is one push request for every device they have
-    // registered, sent in turn, and the buyer is waiting on this answer. So the
-    // answer goes first wherever it can.
-    const notify = () => notifyUnlockCompleted(adminSupabase, {
+    // both people, and the buyer is waiting on this answer.
+    await sendPurchaseNotification(runAfterResponse, () => notifyUnlockCompleted(adminSupabase, {
       buyerUserId: userId,
       ownerUserId,
       postId,
       bundleId,
       alreadyProcessed: false,
-    });
-    if (runAfterResponse) {
-      runAfterResponse(notify);
-    } else {
-      await notify();
-    }
+    }));
   }
 
   return {
@@ -1084,6 +1145,11 @@ export async function restoreMobileEntitlements(
   options: {
     fetcher?: typeof fetch;
     revenueCatApiKey?: string;
+    /**
+     * The route passes one so the notifications stop holding the answer back;
+     * without it they are sent before this returns.
+     */
+    runAfterResponse?: RunAfterResponse;
   } = {}
 ) {
   const revenueCatResponse = await fetchRevenueCatSubscriber({
@@ -1094,6 +1160,7 @@ export async function restoreMobileEntitlements(
   const creditResults: MobileCommerceSyncResult[] = [];
   let restoredCreditPurchases = 0;
   let alreadyProcessedCreditPurchases = 0;
+  const runAfterResponse = options.runAfterResponse && oneAtATime(options.runAfterResponse);
 
   for (const purchase of listRestorableMobileCreditPurchases(revenueCatResponse)) {
     const result = await completeMobileCreditPurchase({
@@ -1102,6 +1169,7 @@ export async function restoreMobileEntitlements(
       productId: purchase.productId,
       provider: purchase.provider,
       transactionId: purchase.transactionId,
+      runAfterResponse,
     });
     creditResults.push(result);
     if (result.alreadyProcessed) {
@@ -1146,7 +1214,7 @@ export async function restoreMobileEntitlements(
       : [];
   });
 
-  await notifyMobilePurchasesRestored(adminSupabase, userId);
+  await sendPurchaseNotification(runAfterResponse, () => notifyMobilePurchasesRestored(adminSupabase, userId));
 
   return {
     success: true,

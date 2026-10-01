@@ -2,6 +2,13 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  createMobileNotificationHistory,
+  hasAnswered,
+  withMobileNotificationHistory,
+  type MobileNotificationHistory,
+} from '@/__tests__/fixtures/mobile-notification-history';
+import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
+import {
   MobileCommerceError,
   buildMobileExternalOrderId,
   completeMobileCreditPurchase,
@@ -13,7 +20,14 @@ import {
   resolveMobileCreditProduct,
   restoreMobileEntitlements,
   verifyMobilePurchase,
+  type MobilePurchaseAuthority,
 } from '@/lib/mobile-commerce';
+import {
+  notifyMarketplaceUnlockCompleted,
+  notifyMobileCreditPurchase,
+  notifyMobilePurchasesRestored,
+  notifyPostResourceUnlockCompleted,
+} from '@/lib/mobile-notifications';
 import { EXTERNAL_API_REQUEST_TIMEOUT_MS } from '@/lib/provider-fetch';
 
 const userId = '11111111-1111-1111-1111-111111111111';
@@ -1364,5 +1378,483 @@ describe('mobile commerce helpers', () => {
       status: 500,
       message: 'Mobile receipt verification is not configured.',
     });
+  });
+});
+
+const sellerId = '22222222-2222-2222-2222-222222222222';
+
+type SettledPurchaseCase = {
+  kind: string;
+  authority: MobilePurchaseAuthority;
+  /** What `complete_mobile_purchase` reports, minus its status. */
+  settlement: Record<string, unknown>;
+  /** What the caller is told, minus `alreadyProcessed`. */
+  answer: Record<string, unknown>;
+  invalidatesMarketplaceList: boolean;
+  notifications: Array<Record<string, unknown>>;
+};
+
+// One row for each kind of purchase completeMobilePurchase settles.
+const settledPurchases: SettledPurchaseCase[] = [
+  {
+    kind: 'a credit purchase',
+    authority: {
+      entitlementType: 'credits',
+      productId: 'magicbooklet.credits.starter',
+      purchaseIntentId: null,
+      resourceId: null,
+      amountSubunits: 41500,
+      currency: 'INR',
+      credits: 500,
+    },
+    settlement: {
+      entitlement_type: 'credits',
+      product_id: 'magicbooklet.credits.starter',
+      resource_id: null,
+      amount_subunits: 41500,
+      currency: 'INR',
+      remaining_credits: 600,
+      source_record_id: 'txn-mobile-1',
+    },
+    answer: { success: true, entitlement: 'credits', credits: 600 },
+    invalidatesMarketplaceList: false,
+    notifications: [
+      {
+        user_id: userId,
+        type: 'credits_purchased',
+        body: 'Your balance is now 600 credits.',
+        dedupe_key: 'credits:txn-mobile-1',
+      },
+    ],
+  },
+  {
+    kind: 'a marketplace unlock',
+    authority: {
+      entitlementType: 'marketplace_unlock',
+      productId: 'magicbooklet.marketplace.usd900',
+      purchaseIntentId: 'intent-marketplace-1',
+      resourceId: 'asset-1',
+      amountSubunits: 900,
+      currency: 'USD',
+      credits: null,
+    },
+    settlement: {
+      entitlement_type: 'marketplace_unlock',
+      product_id: 'magicbooklet.marketplace.usd900',
+      resource_id: 'asset-1',
+      amount_subunits: 900,
+      currency: 'USD',
+      seller_user_id: sellerId,
+    },
+    answer: { success: true, entitlement: 'marketplace_unlock', assetId: 'asset-1' },
+    invalidatesMarketplaceList: false,
+    notifications: [
+      { user_id: userId, type: 'marketplace_unlocked', dedupe_key: `marketplace-unlock:asset-1:${userId}` },
+      { user_id: sellerId, type: 'marketplace_unlocked', dedupe_key: `marketplace-sale:asset-1:${userId}` },
+    ],
+  },
+  {
+    kind: 'a post resource unlock',
+    authority: {
+      entitlementType: 'post_resource_unlock',
+      productId: 'magicbooklet.post.usd1200',
+      purchaseIntentId: 'intent-post-1',
+      resourceId: 'post-1',
+      amountSubunits: 1200,
+      currency: 'USD',
+      credits: null,
+    },
+    settlement: {
+      entitlement_type: 'post_resource_unlock',
+      product_id: 'magicbooklet.post.usd1200',
+      resource_id: 'post-1',
+      amount_subunits: 1200,
+      currency: 'USD',
+      bundle_id: 'bundle-1',
+      owner_user_id: sellerId,
+    },
+    answer: { success: true, entitlement: 'post_resource_unlock', postId: 'post-1' },
+    invalidatesMarketplaceList: true,
+    notifications: [
+      { user_id: userId, type: 'post_resource_unlocked', dedupe_key: `post-resource-unlock:post-1:${userId}` },
+      { user_id: sellerId, type: 'post_resource_unlocked', dedupe_key: `post-resource-sale:post-1:${userId}` },
+    ],
+  },
+];
+
+function createSettledPurchaseClient(
+  settlement: Record<string, unknown>,
+  history: MobileNotificationHistory,
+) {
+  const rpc = vi.fn(async (name: string) => (
+    name === 'settle_referral_purchase_rewards'
+      ? { data: { status: 'not_referred', rewards: [] }, error: null }
+      : { data: settlement, error: null }
+  ));
+
+  return {
+    adminSupabase: { rpc, from: (table: string) => history.from(table) } as unknown as SupabaseClient,
+    rpc,
+  };
+}
+
+function revenueCatCreditPurchases(storeTransactionIds: string[]) {
+  return vi.fn(async () => new Response(JSON.stringify({
+    subscriber: {
+      non_subscriptions: {
+        'magicbooklet.credits.starter': storeTransactionIds.map((storeTransactionId, index) => ({
+          id: `rc-${index + 1}`,
+          store: 'app_store',
+          store_transaction_id: storeTransactionId,
+          purchase_date: '2026-05-13T12:00:00Z',
+        })),
+      },
+    },
+  }), {
+    headers: { 'content-type': 'application/json' },
+    status: 200,
+  })) as unknown as typeof fetch;
+}
+
+describe('mobile purchase notifications', () => {
+  // The notifier sends one push request for every device a person has
+  // registered, in turn. Measured in production on 2026-10-01 on an unlock: an
+  // account with 32 devices held the answer for 15 s. The purchase sync sends
+  // the same kind of notification in front of the same kind of answer, with the
+  // store's charge already taken and the app giving up on the request at 30 s.
+  it.each(settledPurchases)(
+    'answers $kind before its notifications go out when the caller can run work after the response',
+    async ({ authority, settlement, answer, invalidatesMarketplaceList, notifications }) => {
+      const history = createMobileNotificationHistory();
+      history.hold();
+      const { adminSupabase, rpc } = createSettledPurchaseClient({ status: 'completed', ...settlement }, history);
+      const invalidateMarketplaceResourceListCache = vi.fn();
+      const deferred: Array<() => Promise<unknown>> = [];
+
+      const purchase = completeMobilePurchase({
+        adminSupabase,
+        userId,
+        authority,
+        provider: 'app_store',
+        transactionId: '1000000123456789',
+        invalidateMarketplaceResourceListCache,
+        runAfterResponse: (task) => { deferred.push(task); },
+      });
+
+      // A notification that has not finished no longer holds the answer back,
+      // and the purchase behind that answer is settled by the same single call.
+      expect(await hasAnswered(purchase)).toBe(true);
+      await expect(purchase).resolves.toEqual({ ...answer, alreadyProcessed: false });
+      expect(rpc.mock.calls.filter(([name]) => name === 'complete_mobile_purchase')).toHaveLength(1);
+      expect(invalidateMarketplaceResourceListCache).toHaveBeenCalledTimes(invalidatesMarketplaceList ? 1 : 0);
+      expect(history.started).toEqual([]);
+      expect(deferred).toHaveLength(1);
+
+      history.release();
+      await deferred[0]();
+      expect(history.sent).toEqual(notifications.map((notification) => expect.objectContaining(notification)));
+    },
+  );
+
+  it.each(settledPurchases)(
+    'sends the notifications for $kind before answering when the caller has nowhere to run them afterwards',
+    async ({ authority, settlement, answer, notifications }) => {
+      const history = createMobileNotificationHistory();
+      history.hold();
+      const { adminSupabase } = createSettledPurchaseClient({ status: 'completed', ...settlement }, history);
+
+      const purchase = completeMobilePurchase({
+        adminSupabase,
+        userId,
+        authority,
+        provider: 'app_store',
+        transactionId: '1000000123456789',
+        invalidateMarketplaceResourceListCache: vi.fn(),
+      });
+
+      expect(await hasAnswered(purchase)).toBe(false);
+      expect(history.started).toEqual([notifications[0].dedupe_key]);
+
+      history.release();
+      await expect(purchase).resolves.toEqual({ ...answer, alreadyProcessed: false });
+      expect(history.sent).toEqual(notifications.map((notification) => expect.objectContaining(notification)));
+    },
+  );
+
+  it.each(settledPurchases)(
+    'defers nothing for $kind that was already settled',
+    async ({ authority, settlement, answer }) => {
+      const history = createMobileNotificationHistory();
+      const { adminSupabase } = createSettledPurchaseClient({ status: 'already_processed', ...settlement }, history);
+      const runAfterResponse = vi.fn();
+
+      await expect(completeMobilePurchase({
+        adminSupabase,
+        userId,
+        authority,
+        provider: 'app_store',
+        transactionId: '1000000123456789',
+        invalidateMarketplaceResourceListCache: vi.fn(),
+        runAfterResponse,
+      })).resolves.toEqual({ ...answer, alreadyProcessed: true });
+
+      expect(runAfterResponse).not.toHaveBeenCalled();
+      expect(history.started).toEqual([]);
+    },
+  );
+
+  it('defers nothing when the settlement is refused', async () => {
+    const history = createMobileNotificationHistory();
+    const { adminSupabase } = createSettledPurchaseClient({ status: 'revoked' }, history);
+    const runAfterResponse = vi.fn();
+
+    await expect(completeMobilePurchase({
+      adminSupabase,
+      userId,
+      authority: settledPurchases[0].authority,
+      provider: 'app_store',
+      transactionId: '1000000123456789',
+      runAfterResponse,
+    })).rejects.toMatchObject({
+      status: 409,
+      message: 'This mobile store transaction has been revoked.',
+    });
+
+    expect(runAfterResponse).not.toHaveBeenCalled();
+    expect(history.started).toEqual([]);
+  });
+
+  it('sends the notification in front of the answer rather than fail a settled purchase when the task cannot be queued', async () => {
+    const [{ authority, settlement, answer, notifications }] = settledPurchases;
+    const history = createMobileNotificationHistory();
+    const { adminSupabase } = createSettledPurchaseClient({ status: 'completed', ...settlement }, history);
+    const logged: BackendLogRecord[] = [];
+    const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
+
+    try {
+      // The store has already charged for this. A scheduler that will not take
+      // the task must not turn that into a failed purchase.
+      await expect(completeMobilePurchase({
+        adminSupabase,
+        userId,
+        authority,
+        provider: 'app_store',
+        transactionId: '1000000123456789',
+        runAfterResponse: () => {
+          throw new Error('`after` was called outside a request scope.');
+        },
+      })).resolves.toEqual({ ...answer, alreadyProcessed: false });
+    } finally {
+      restoreLogSink();
+    }
+
+    expect(history.sent).toEqual(notifications.map((notification) => expect.objectContaining(notification)));
+    expect(logged).toEqual([
+      expect.objectContaining({
+        level: 'error',
+        msg: 'mobile_commerce_notification_deferral_failed',
+        errorMessage: '`after` was called outside a request scope.',
+      }),
+    ]);
+  });
+
+  it('answers a restore before any of its notifications go out, and still sends them one at a time in order', async () => {
+    const fakeSupabase = createCreditSupabase({ credits: 100 });
+    const history = createMobileNotificationHistory();
+    history.hold();
+    const deferred: Array<() => Promise<unknown>> = [];
+
+    const restore = restoreMobileEntitlements(
+      withMobileNotificationHistory(fakeSupabase.client, history),
+      userId,
+      {
+        fetcher: revenueCatCreditPurchases(['1000000123456701', '1000000123456702']),
+        revenueCatApiKey: 'rc-secret',
+        runAfterResponse: (task) => { deferred.push(task); },
+      },
+    );
+
+    expect(await hasAnswered(restore)).toBe(true);
+    await expect(restore).resolves.toMatchObject({
+      success: true,
+      credits: 1100,
+      restoredCreditPurchases: 2,
+      alreadyProcessedCreditPurchases: 0,
+    });
+    expect(fakeSupabase.credits).toBe(1100);
+    expect(history.started).toEqual([]);
+
+    // Next's after() starts everything it was handed at once. Started that way,
+    // the notifications must still go out as they do when nothing is deferred:
+    // one behind the other, so a balance of 600 never lands after one of 1,100.
+    const sending = Promise.all(deferred.map((task) => task()));
+    expect(await hasAnswered(sending)).toBe(false);
+    expect(history.started).toEqual(['credits:txn-mobile-1']);
+
+    history.release();
+    await sending;
+    expect(history.sent.map((notification) => notification.type)).toEqual([
+      'credits_purchased',
+      'credits_purchased',
+      'purchases_restored',
+    ]);
+    expect(history.sent.slice(0, 2).map((notification) => notification.body)).toEqual([
+      'Your balance is now 600 credits.',
+      'Your balance is now 1,100 credits.',
+    ]);
+  });
+
+  it('sends a restore\'s notifications before answering when the caller has nowhere to run them afterwards', async () => {
+    const fakeSupabase = createCreditSupabase({ credits: 100 });
+    const history = createMobileNotificationHistory();
+    history.hold();
+
+    const restore = restoreMobileEntitlements(
+      withMobileNotificationHistory(fakeSupabase.client, history),
+      userId,
+      {
+        fetcher: revenueCatCreditPurchases(['1000000123456701', '1000000123456702']),
+        revenueCatApiKey: 'rc-secret',
+      },
+    );
+
+    // Held at the first purchase's notification, with the second purchase not
+    // yet settled: each one is settled and then told about, in turn.
+    expect(await hasAnswered(restore)).toBe(false);
+    expect(history.started).toEqual(['credits:txn-mobile-1']);
+    expect(fakeSupabase.transactions).toHaveLength(1);
+
+    history.release();
+    await expect(restore).resolves.toMatchObject({
+      success: true,
+      credits: 1100,
+      restoredCreditPurchases: 2,
+    });
+    expect(history.sent.map((notification) => notification.type)).toEqual([
+      'credits_purchased',
+      'credits_purchased',
+      'purchases_restored',
+    ]);
+  });
+
+  it('defers only the refresh notice when a restore finds nothing new to settle', async () => {
+    const fakeSupabase = createCreditSupabase({
+      credits: 600,
+      transactions: [{
+        id: 'txn-existing',
+        user_id: userId,
+        razorpay_order_id: buildMobileExternalOrderId('app_store', '1000000123456701'),
+        credits: 500,
+        status: 'success',
+      }],
+    });
+    const history = createMobileNotificationHistory();
+    history.hold();
+    const deferred: Array<() => Promise<unknown>> = [];
+
+    const restore = restoreMobileEntitlements(
+      withMobileNotificationHistory(fakeSupabase.client, history),
+      userId,
+      {
+        fetcher: revenueCatCreditPurchases(['1000000123456701']),
+        revenueCatApiKey: 'rc-secret',
+        runAfterResponse: (task) => { deferred.push(task); },
+      },
+    );
+
+    expect(await hasAnswered(restore)).toBe(true);
+    await expect(restore).resolves.toMatchObject({
+      success: true,
+      credits: 600,
+      restoredCreditPurchases: 0,
+      alreadyProcessedCreditPurchases: 1,
+    });
+    expect(history.started).toEqual([]);
+
+    history.release();
+    await Promise.all(deferred.map((task) => task()));
+    expect(history.sent.map((notification) => notification.type)).toEqual(['purchases_restored']);
+  });
+
+  it('still tells the buyer about a purchase the restore settled when a later purchase fails it', async () => {
+    // RevenueCat still lists the second purchase, but it was refunded here, so
+    // settling it is refused and the restore fails after the first has landed.
+    const fakeSupabase = createCreditSupabase({
+      credits: 100,
+      transactions: [{
+        id: 'txn-refunded',
+        user_id: userId,
+        razorpay_order_id: buildMobileExternalOrderId('app_store', '1000000123456702'),
+        credits: 500,
+        status: 'refunded',
+      }],
+    });
+    const history = createMobileNotificationHistory();
+    history.hold();
+    const deferred: Array<() => Promise<unknown>> = [];
+
+    const restore = restoreMobileEntitlements(
+      withMobileNotificationHistory(fakeSupabase.client, history),
+      userId,
+      {
+        fetcher: revenueCatCreditPurchases(['1000000123456701', '1000000123456702']),
+        revenueCatApiKey: 'rc-secret',
+        runAfterResponse: (task) => { deferred.push(task); },
+      },
+    );
+
+    expect(await hasAnswered(restore)).toBe(true);
+    await expect(restore).rejects.toMatchObject({
+      status: 409,
+      message: 'This mobile store transaction has been revoked.',
+    });
+    expect(fakeSupabase.credits).toBe(600);
+
+    history.release();
+    await Promise.all(deferred.map((task) => task()));
+    expect(history.sent.map((notification) => notification.type)).toEqual(['credits_purchased']);
+  });
+
+  // Sending a notifier after the response moves it out from under the request:
+  // an error it threw would no longer fail the purchase, it would only reach
+  // the log. That hides nothing as long as none of them can reject, which is
+  // what this pins for each notifier the purchase paths queue.
+  it.each<[string, (client: SupabaseClient) => Promise<unknown>]>([
+    ['a credit purchase', (client) => notifyMobileCreditPurchase(client, {
+      userId,
+      credits: 600,
+      transactionId: 'txn-mobile-1',
+    })],
+    ['a marketplace unlock', (client) => notifyMarketplaceUnlockCompleted(client, {
+      buyerUserId: userId,
+      sellerUserId: sellerId,
+      assetId: 'asset-1',
+    })],
+    ['a post resource unlock', (client) => notifyPostResourceUnlockCompleted(client, {
+      buyerUserId: userId,
+      ownerUserId: sellerId,
+      postId: 'post-1',
+      bundleId: 'bundle-1',
+    })],
+    ['a restore', (client) => notifyMobilePurchasesRestored(client, userId)],
+  ])('the notifier for %s logs a failure instead of rejecting', async (_purchase, notify) => {
+    const unavailable = {
+      from: () => {
+        throw new Error('database unavailable');
+      },
+    } as unknown as SupabaseClient;
+    const logged: BackendLogRecord[] = [];
+    const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
+
+    try {
+      await expect(notify(unavailable)).resolves.toBeNull();
+    } finally {
+      restoreLogSink();
+    }
+
+    expect(logged.length).toBeGreaterThan(0);
+    expect(logged.map((record) => record.msg)).toEqual(
+      logged.map(() => 'failed_to_create_mobile_notification'),
+    );
   });
 });

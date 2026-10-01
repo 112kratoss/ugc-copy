@@ -2,6 +2,11 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  createMobileNotificationHistory,
+  hasAnswered,
+  withMobileNotificationHistory,
+} from '@/__tests__/fixtures/mobile-notification-history';
+import {
   MobileCommerceError,
   unlockMarketplaceAssetWithCredits,
   unlockPostResourceBundleWithCredits,
@@ -699,5 +704,119 @@ describe('post resource credit unlock notifications', () => {
     expect(fakeSupabase.credits).toBe(50);
     expect(runAfterResponse).not.toHaveBeenCalled();
     expect(notifyPostResourceUnlockCompleted).not.toHaveBeenCalled();
+  });
+});
+
+describe('marketplace credit unlock notifications', () => {
+  // The real notifier runs here against held notification history: the same
+  // two notifications as the post resource unlock, to the buyer and the seller.
+  const buyerAndSellerNotifications = [
+    expect.objectContaining({
+      user_id: userId,
+      type: 'marketplace_unlocked',
+      dedupe_key: `marketplace-unlock:asset-1:${userId}`,
+    }),
+    expect.objectContaining({
+      user_id: ownerId,
+      actor_user_id: userId,
+      type: 'marketplace_unlocked',
+      dedupe_key: `marketplace-sale:asset-1:${userId}`,
+    }),
+  ];
+
+  it('answers before the notifications go out when the caller can run work after the response', async () => {
+    const fakeSupabase = createMarketplaceCreditSupabase({ credits: 1000 });
+    const history = createMobileNotificationHistory();
+    history.hold();
+    const deferred: Array<() => Promise<unknown>> = [];
+
+    const unlock = unlockMarketplaceAssetWithCredits({
+      adminSupabase: withMobileNotificationHistory(fakeSupabase.client, history),
+      userId,
+      assetId: 'asset-1',
+      runAfterResponse: (task) => { deferred.push(task); },
+    });
+
+    // A push that has not finished no longer holds the answer back, and the
+    // charge behind that answer is the one it always was.
+    expect(await hasAnswered(unlock)).toBe(true);
+    await expect(unlock).resolves.toEqual({
+      success: true,
+      entitlement: 'marketplace_unlock',
+      assetId: 'asset-1',
+      credits: 300,
+      alreadyProcessed: false,
+    });
+    expect(fakeSupabase.credits).toBe(300);
+    expect(fakeSupabase.marketplacePurchases).toEqual([{ asset_id: 'asset-1', buyer_user_id: userId }]);
+    expect(history.started).toEqual([]);
+    expect(deferred).toHaveLength(1);
+
+    history.release();
+    await deferred[0]();
+    expect(history.sent).toEqual(buyerAndSellerNotifications);
+  });
+
+  it('sends the notifications before answering when the caller has nowhere to run them afterwards', async () => {
+    const fakeSupabase = createMarketplaceCreditSupabase({ credits: 1000 });
+    const history = createMobileNotificationHistory();
+    history.hold();
+
+    const unlock = unlockMarketplaceAssetWithCredits({
+      adminSupabase: withMobileNotificationHistory(fakeSupabase.client, history),
+      userId,
+      assetId: 'asset-1',
+    });
+
+    expect(await hasAnswered(unlock)).toBe(false);
+    expect(history.started).toEqual([`marketplace-unlock:asset-1:${userId}`]);
+
+    history.release();
+    await expect(unlock).resolves.toEqual({
+      success: true,
+      entitlement: 'marketplace_unlock',
+      assetId: 'asset-1',
+      credits: 300,
+      alreadyProcessed: false,
+    });
+    expect(history.sent).toEqual(buyerAndSellerNotifications);
+  });
+
+  it('defers nothing when the asset was already unlocked', async () => {
+    const fakeSupabase = createMarketplaceCreditSupabase({
+      credits: 300,
+      purchases: [{ asset_id: 'asset-1', buyer_user_id: userId }],
+    });
+    const history = createMobileNotificationHistory();
+    const runAfterResponse = vi.fn();
+
+    await expect(unlockMarketplaceAssetWithCredits({
+      adminSupabase: withMobileNotificationHistory(fakeSupabase.client, history),
+      userId,
+      assetId: 'asset-1',
+      runAfterResponse,
+    })).resolves.toMatchObject({ alreadyProcessed: true, credits: 300 });
+
+    expect(runAfterResponse).not.toHaveBeenCalled();
+    expect(history.started).toEqual([]);
+  });
+
+  it('defers nothing when the unlock is refused', async () => {
+    const fakeSupabase = createMarketplaceCreditSupabase({ credits: 50 });
+    const history = createMobileNotificationHistory();
+    const runAfterResponse = vi.fn();
+
+    await expect(unlockMarketplaceAssetWithCredits({
+      adminSupabase: withMobileNotificationHistory(fakeSupabase.client, history),
+      userId,
+      assetId: 'asset-1',
+      runAfterResponse,
+    })).rejects.toMatchObject({
+      status: 402,
+    } satisfies Partial<MobileCommerceError>);
+
+    expect(fakeSupabase.credits).toBe(50);
+    expect(runAfterResponse).not.toHaveBeenCalled();
+    expect(history.started).toEqual([]);
   });
 });
