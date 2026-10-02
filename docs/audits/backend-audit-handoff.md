@@ -6,7 +6,7 @@ Updated 2026-10-03 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/workflow-lifecycle-audit-7a`, based on main `dd3d6c13e25b2963e9d190a88c8df1354fcdb88c`; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/template-completion-audit-7c`, incorporating main `475fe2b73ce2d1e4d8b37124aaa305b6658d9769` and publication candidate PR #291; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
@@ -17,17 +17,38 @@ Section 6S is deployed as dd3d6c13. PR Quality 37052965820, exact-main Quality
 `backend-section-06-metadata-lifecycle-release-2026-10-03.md`. Legacy environment
 retirement remains unverified, so MEDIA-07 is still open.
 
-Section 7A PR #289 (b52ada71 initial commit) is being extended with atomic
-checkpoint retries. Read `backend-section-07-template-lifecycle-2026-10-03.md`.
-The stale late-refund credit DTO bug is fixed, with 13 DB cases and 6,648 web tests
-passing locally. First PR CI 37056295355 exposed the duplicate-retry race, also
-reproduced locally. Deterministic approval/cancel-vs-retry probes both inserted
-unwanted replacement attempts before the next fix. New service-role-only atomic
-RPC replaces the multi-write approval retry. All 17 DB cases pass, including
-rollback when the second insert fails and unchanged balances. Ten repeated suites pass (170 cases), all type projects and targeted lint pass.
-The updated full web suite is running; updated PR CI, clean migration replay,
-merge and release are pending. No workflow obligation is closed by this initial
-matrix. Ledger remains 22 passed, 27 untested, one failed, three external.
+Section 7A PR #289 merged as 475fe2b7 on October 3 at 01:39:35 IST. Updated
+PR Quality 37057488661 passed all four jobs: 6,650 web, 2,911 mobile, 21 browser,
+1,941 SQL assertions, 142 DB cases (one harness skip), native checks and 163 traces.
+First CI failure 37056295355 exposed the real concurrent-retry race and remains
+recorded. The final transaction fix passes 17 actual DB cases in ten consecutive
+runs. Exact-main Quality 37058779424 passed all four jobs. Standard production
+release 37059587121 is running; live verification remains pending. No mobile store release was active before merge.
+
+Intervening main 38048f43 (#283 reference-card handle) is incorporated. Its release
+37058745760 correctly rejected the stale SHA before changing production after
+#289 merged. Production remains verified at dd3d6c13 until the next release.
+
+Section 7B PR #291 contains publication-acknowledgement cleanup fix, runtime commit
+69cdc871, plus merged main. A committed immutable version lost its referenced
+asset after activation reply loss; permanent service and actual service-role SQL
+before/after probes reproduce/fix it. SQL commit was confirmed by a second
+connection; Storage was controlled in memory. The disposable database was removed.
+Read `backend-section-07-publication-acknowledgement-2026-10-03.md`. Five new cases
+and existing focused suites pass, app/test types and lint pass; full candidate
+suite passes 6,655 tests (141 skipped) before the #283 test addition. PR Quality
+37059027223 is running; do not merge before #289 release completes.
+
+Section 7C extends the real-DB fixture through video completion and partial
+failure/retry. Nineteen cases pass; test types and lint pass. Both media kinds now
+call their actual start/hold/settlement services with controlled node settings.
+No new runtime fix; these test changes are in the local 7C branch and not in PR #291.
+Read `backend-section-07-downstream-completion-2026-10-03.md`. Provider
+network/status sync and media transport remain mocked; process death and the real
+node executor remain unverified. Preserve the local changes for the next batch.
+
+No whole workflow obligation is closed by these scoped cases. Ledger remains
+22 passed, 27 untested, one failed, three external.
 
 The preceding checkpoint follows.
 

@@ -3,7 +3,7 @@ import { Client } from 'pg';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { startImageGeneration, type TemplateGenerationContext } from '@/lib/generation-services';
+import { startImageGeneration, startVideoGeneration, type TemplateGenerationContext } from '@/lib/generation-services';
 import { validateAndCompileTemplateGraph } from '@/lib/template-graph-compiler';
 import { processTemplateRunJobs } from '@/lib/template-run-jobs-processor';
 import { approveTemplateRunStep, cancelTemplateRun, getTemplateRun, retryTemplateRunStep, syncTemplateRun } from '@/lib/template-run-service';
@@ -40,6 +40,7 @@ vi.mock('@/lib/server-helpers', async (original) => ({
 }));
 
 type StepStart = {
+  node: { type: string };
   supabase: SupabaseClient;
   userId: string;
   clientRequestKeyHash?: string | null;
@@ -48,21 +49,23 @@ type StepStart = {
   templateContext?: TemplateGenerationContext;
 };
 
-// The node executor is stood in for by the one thing it does for an image
-// step: the real start service, called with the context the worker gave it.
+// The node executor uses controlled image/video settings, while each step
+// calls its real start service with the context the worker gave it.
 vi.mock('@/lib/workflow-runner', () => ({
   executeWorkflowRunnableNode: async (params: StepStart) => {
-    const started = await startImageGeneration({
+    const startParams = {
       supabase: params.supabase,
       creditSupabase: params.supabase,
       userId: params.userId,
       prompt: 'A ceramic mug on a linen cloth',
-      model: 'nano-banana-2',
       clientRequestKeyHash: params.clientRequestKeyHash,
       persistInputMedia: params.persistInputMedia,
       privateRecipe: params.privateRecipe,
       templateContext: params.templateContext,
-    });
+    };
+    const started = params.node.type === 'video-generate'
+      ? await startVideoGeneration({ ...startParams, model: 'kling-3.0-video', duration: 5, mode: 'std' })
+      : await startImageGeneration({ ...startParams, model: 'nano-banana-2' });
     return {
       status: 'processing',
       generation_id: started.generationId ?? null,
@@ -439,6 +442,73 @@ describe.skipIf(!connectionString)('template run step starts the provider turns 
     expect(gates.map(step => step.status)).toEqual(['awaiting_approval', 'awaiting_approval']);
     return { run, gates, spent: rows.reduce((sum, row) => sum + row.cost, 0) };
   }
+
+  it('completes approved images through a real video hold and canonical final settlement without double charging', async () => {
+    const { gates } = await finishImagesAndAwaitApproval();
+    for (const gate of gates) {
+      await approveTemplateRunStep({ adminClient: client, runId, stepId: gate.id, userId });
+    }
+    const processing = await tick();
+    expect(processing.status, JSON.stringify(processing.steps.map(step => ({ status: step.status, error: step.errorMessage })))).toBe('processing');
+    const video = (await admin.query("select id,prediction_id,cost from public.generations where user_id=$1 and category='video'", [userId])).rows;
+    expect(video).toHaveLength(1);
+    expect(await generations()).toHaveLength(3);
+    const spent = (await generations()).reduce((sum, row) => sum + row.cost, 0);
+    expect(await credits()).toBe(STARTING_CREDITS - spent);
+    await tick();
+    expect(await generations()).toHaveLength(3);
+    for (let repeat = 0; repeat < 2; repeat++) {
+      expect((await client.rpc('settle_generation_succeeded', {
+        p_prediction_id: video[0].prediction_id,
+        p_output_url: `generated_videos/${userId}/${video[0].id}.mp4`,
+      })).error).toBeNull();
+    }
+    const completed = await tick();
+    expect(completed.status).toBe('succeeded');
+    expect(completed.creditsUsed).toBe(spent);
+    expect((await admin.query('select result_generation_id from public.template_runs where id=$1', [runId])).rows[0].result_generation_id).toBe(video[0].id);
+    expect((await tick()).status).toBe('succeeded');
+    expect((await cancelTemplateRun(client, runId, userId)).status).toBe('succeeded');
+    expect(await credits()).toBe(STARTING_CREDITS - spent);
+    expect(await generations()).toHaveLength(3);
+  });
+
+  it('refunds a failed downstream video once and completes one manual retry while retaining image charges', async () => {
+    const { gates, spent: imageCost } = await finishImagesAndAwaitApproval();
+    for (const gate of gates) {
+      await approveTemplateRunStep({ adminClient: client, runId, stepId: gate.id, userId });
+    }
+    const started = await tick();
+    const step = started.steps.find(item => item.kind === 'generation' && item.mediaKind === 'video')!;
+    expect(step.status).toBe('processing');
+    const original = (await admin.query("select id,prediction_id from public.generations where user_id=$1 and category='video'", [userId])).rows[0];
+    for (let repeat = 0; repeat < 2; repeat++) {
+      expect((await client.rpc('settle_generation_failed', {
+        p_prediction_id: original.prediction_id, p_error_message: 'fixture downstream failure',
+      })).error).toBeNull();
+    }
+    expect(await credits()).toBe(STARTING_CREDITS - imageCost);
+    expect((await tick()).status).toBe('needs_attention');
+    expect((await getTemplateRun({ adminClient: client, runId, userId })).creditsUsed).toBe(imageCost);
+    for (let repeat = 0; repeat < 2; repeat++) {
+      await retryTemplateRunStep({ adminClient: client, runId, stepId: step.id, userId });
+    }
+    const retried = await tick();
+    expect(retried.status).toBe('processing');
+    const retry = (await admin.query("select id,prediction_id,cost from public.generations where user_id=$1 and category='video' and id<>$2", [userId,original.id])).rows;
+    expect(retry).toHaveLength(1);
+    expect(await credits()).toBe(STARTING_CREDITS - imageCost - retry[0].cost);
+    expect((await client.rpc('settle_generation_succeeded', {
+      p_prediction_id: retry[0].prediction_id,
+      p_output_url: `generated_videos/${userId}/${retry[0].id}.mp4`,
+    })).error).toBeNull();
+    const completed = await tick();
+    expect(completed.status).toBe('succeeded');
+    expect(completed.creditsUsed).toBe(imageCost + retry[0].cost);
+    expect((await tick()).creditsUsed).toBe(completed.creditsUsed);
+    expect(await generations()).toHaveLength(4);
+    expect(await credits()).toBe(STARTING_CREDITS - completed.creditsUsed);
+  });
 
   it('approves a checkpoint once and rejects duplicate/foreign approval without extra charges', async () => {
     const { gates, spent } = await finishImagesAndAwaitApproval();
