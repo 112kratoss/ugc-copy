@@ -8,6 +8,10 @@ import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 
 import { getFfmpegPath } from '@/lib/video-poster';
+import { mediaEncoderCommand, MediaOutputLimitError } from '@/lib/media-encoder-limit';
+
+// Generous headroom above the eight-second teaser bitrate, while bounding disk.
+export const VIDEO_TEASER_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
 /**
  * Showcase feed renditions.
@@ -163,12 +167,15 @@ export function parseVideoProbeOutput(output: string): VideoProbeResult {
   return { width, height, durationSeconds };
 }
 
-async function runFfmpeg(args: string[], signal?: AbortSignal, leaseFds: number[] = []): Promise<string> {
+async function runFfmpeg(args: string[], signal?: AbortSignal, leaseFds: number[] = [], maxOutputBytes?: number): Promise<string> {
   signal?.throwIfAborted();
   const ffmpegPath = getFfmpegPath();
+  const command = maxOutputBytes === undefined ? { executable: ffmpegPath, args }
+    : await mediaEncoderCommand(ffmpegPath, args, maxOutputBytes);
+  signal?.throwIfAborted();
 
   return new Promise<string>((resolve, reject) => {
-    const child = spawn(ffmpegPath, args, {
+    const child = spawn(command.executable, command.args, {
       stdio: ['ignore', 'ignore', 'pipe', ...leaseFds],
       timeout: RENDITION_TIMEOUT_MS,
       killSignal: 'SIGKILL',
@@ -185,6 +192,9 @@ async function runFfmpeg(args: string[], signal?: AbortSignal, leaseFds: number[
     child.on('error', (error) => { processError = error; });
     child.on('close', (code, signal) => {
       if (processError) { reject(processError); return; }
+      if (signal === 'SIGXFSZ' && maxOutputBytes !== undefined) {
+        reject(new MediaOutputLimitError(maxOutputBytes)); return;
+      }
       const output = Buffer.concat(stderr).toString('utf8');
       if (code === 0) {
         resolve(output);
@@ -257,12 +267,17 @@ export async function createVideoRenditionFromFile(
   options: { signal?: AbortSignal; sourceLeaseFd?: number } = {},
 ): Promise<VideoRenditionResult> {
   options.signal?.throwIfAborted();
+  if (!Number.isSafeInteger(sourceBytes) || sourceBytes <= 0 || sourceBytes > RENDITION_MAX_INPUT_BYTES) {
+    throw new VideoRenditionSkipped('too-large', 'Source bytes are outside the rendition budget.');
+  }
+  // Anything at/above the savings threshold would already be discarded.
+  const maxOutputBytes = Math.max(1024, Math.ceil(sourceBytes * RENDITION_MIN_SAVING_RATIO / 1024) * 1024);
   const workspace = await createMediaScratchWorkspace();
   const outputPath = path.join(workspace.mediaDirectory, 'rendition.mp4');
 
   try {
     await runFfmpeg(buildRenditionArgs(inputPath, outputPath), options.signal,
-      [options.sourceLeaseFd, workspace.readerLeaseFd].filter((fd): fd is number => fd !== undefined));
+      [options.sourceLeaseFd, workspace.readerLeaseFd].filter((fd): fd is number => fd !== undefined), maxOutputBytes);
 
     const { size } = await stat(outputPath);
     if (size >= sourceBytes * RENDITION_MIN_SAVING_RATIO) {
@@ -280,6 +295,11 @@ export async function createVideoRenditionFromFile(
       height: probe.height,
       durationSeconds: probe.durationSeconds,
     };
+  } catch (error) {
+    if (error instanceof MediaOutputLimitError) {
+      throw new VideoRenditionSkipped('not-smaller', 'Rendition exceeded its useful output size.');
+    }
+    throw error;
   } finally {
     await workspace.cleanup();
   }
@@ -300,9 +320,10 @@ export async function createVideoTeaserFromFile(inputPath: string, sourceLeaseFd
     await runFfmpeg(buildRenditionArgs(inputPath, outputPath, {
       maxDurationSeconds: TEASER_SECONDS,
       stripAudio: true,
-    }), undefined, [sourceLeaseFd, workspace.readerLeaseFd].filter((fd): fd is number => fd !== undefined));
+    }), undefined, [sourceLeaseFd, workspace.readerLeaseFd].filter((fd): fd is number => fd !== undefined), VIDEO_TEASER_MAX_OUTPUT_BYTES);
 
     const { size } = await stat(outputPath);
+    if (size >= VIDEO_TEASER_MAX_OUTPUT_BYTES) throw new MediaOutputLimitError(VIDEO_TEASER_MAX_OUTPUT_BYTES);
     const probe = await probeVideoFile(outputPath, undefined, workspace.readerLeaseFd);
     return {
       buffer: await readFile(outputPath),

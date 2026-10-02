@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { accessSync, constants as fsConstants, createWriteStream } from 'node:fs';
-import { readFile } from 'fs/promises';
+import { readFile, stat } from 'fs/promises';
+import { mediaEncoderCommand, MediaOutputLimitError } from '@/lib/media-encoder-limit';
 import { createMediaScratchWorkspace } from '@/lib/staging-workspace';
 import path from 'path';
 import { Readable } from 'node:stream';
@@ -10,6 +11,8 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import ffmpegStaticPath from 'ffmpeg-static';
 import sharp from 'sharp';
 
+// Bound the intermediate full-resolution JPEG before sharp produces the preview.
+export const VIDEO_POSTER_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const PREVIEW_MAX_SIZE = 720;
 
 /**
@@ -55,10 +58,14 @@ export async function createVideoPosterBufferFromFile(inputPath: string, sourceL
     // ffmpeg cannot decode.
     try {
       await runVideoPosterFfmpeg(inputPath, framePath, '00:00:00.000', sourceLeaseFd, workspace.readerLeaseFd);
-    } catch {
+    } catch (error) {
+      if (error instanceof MediaOutputLimitError) throw error;
       await runVideoPosterFfmpeg(inputPath, framePath, '00:00:01.000', sourceLeaseFd, workspace.readerLeaseFd);
     }
 
+    if ((await stat(framePath)).size >= VIDEO_POSTER_MAX_OUTPUT_BYTES) {
+      throw new MediaOutputLimitError(VIDEO_POSTER_MAX_OUTPUT_BYTES);
+    }
     const frame = await readFile(framePath);
     // Awaited for the same reason as above: the encode has to finish inside the
     // lifetime of the directory the frame was written to.
@@ -92,8 +99,9 @@ export async function runVideoPosterFfmpeg(inputPath: string, framePath: string,
     framePath,
   ];
 
+  const command = await mediaEncoderCommand(ffmpegPath, args, VIDEO_POSTER_MAX_OUTPUT_BYTES);
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(ffmpegPath, args, {
+    const child = spawn(command.executable, command.args, {
       // Inherit the open lock description atomically with spawn. The kernel
       // retains it if the Node parent dies while ffmpeg still needs the input.
       stdio: ['ignore', 'ignore', 'pipe', ...[sourceLeaseFd, outputLeaseFd].filter((fd): fd is number => fd !== undefined)],
@@ -105,8 +113,11 @@ export async function runVideoPosterFfmpeg(inputPath: string, framePath: string,
     child.stderr!.on('data', (chunk: Buffer) => {
       stderr.push(chunk);
     });
-    child.on('error', reject);
+    let processError: Error | undefined;
+    child.on('error', (error) => { processError = error; });
     child.on('close', (code, signal) => {
+      if (processError) { reject(processError); return; }
+      if (signal === 'SIGXFSZ') { reject(new MediaOutputLimitError(VIDEO_POSTER_MAX_OUTPUT_BYTES)); return; }
       if (code === 0) {
         resolve();
         return;

@@ -6,6 +6,11 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
+vi.mock('@/lib/media-encoder-limit', async (original) => ({
+  ...await original<typeof import('@/lib/media-encoder-limit')>(),
+  mediaEncoderCommand: async (executable: string, args: string[]) => ({ executable, args }),
+}));
+
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
   return { ...actual, default: { ...actual, spawn: spawnMock }, spawn: spawnMock };

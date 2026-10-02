@@ -66,7 +66,15 @@ MAP-02; this initial ledger is not yet a measured completion denominator.
    callback/reaper, with stable balances and one success notification. No runtime
    change or release in 6M. Section 6N reproduces retained bytes in all five old
    scratch namespaces and output expansion beyond input size. New scratch leases
-   and cancellation ordering pass real FFmpeg locally; release pending. Legacy
+   and cancellation ordering pass real FFmpeg locally/in CI; deployed in PR #257.
+   October 2 live build 626f398c contains this fix unchanged and 15 later PRs;
+   their behavior remains subject to the same audit gates. Section 6O verifies
+   194 compatibility tests and nine real worker-kill cases on that build, and
+   shows candidate FFmpeg output limits can overshoot; no runtime change in 6O.
+   Section 6P proves an inherited kernel per-file bound on Mac/Linux, including
+   owner death and retained leases; no runtime change in 6P. Section 6Q integrates
+   per-file limits into actual runners and passes local real-FFmpeg bounds,
+   cancellation, normal/failure and orphan cleanup checks. Release remains pending. Legacy
    metadata policy and MEDIA-06 shared admission remain open, then workflow/template
    execution; continue the other areas above without claiming them complete from
    code inventory alone.
