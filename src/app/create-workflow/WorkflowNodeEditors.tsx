@@ -71,6 +71,7 @@ import {
 } from '@/lib/workflow-canvas';
 import {
   createSeedanceAssetMetadata,
+  getSeedanceAssetSourceName,
   getSeedanceAssetStatusLabel,
   type SeedanceAssetKind,
 } from '@/lib/seedance-assets';
@@ -293,7 +294,9 @@ function StaticField({
   return (
     <div>
       <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-zinc-500">{label}</label>
-      <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-zinc-300">
+      {/* An asset ID or a provider error can be one unbreakable run, so the value may
+          break anywhere instead of scrolling the inspector sideways. */}
+      <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-zinc-300 [overflow-wrap:anywhere]">
         {value}
       </div>
     </div>
@@ -658,8 +661,8 @@ function SeedanceAssetStatusCard({
           value={asset.assetType || 'Unassigned'}
         />
         <StaticField
-          label="Source URL"
-          value={sourceUrl || asset.sourceUrl || 'Not captured yet'}
+          label="Source"
+          value={getSeedanceAssetSourceName(sourceUrl || asset.sourceUrl) || 'Not captured yet'}
         />
       </div>
 
