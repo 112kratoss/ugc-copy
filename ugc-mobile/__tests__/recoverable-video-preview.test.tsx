@@ -91,6 +91,29 @@ it('preserves lightbox autoplay', () => {
   mount(true);
   expect(state.players[0].play).toHaveBeenCalledOnce();
 });
+// On Android an uncached looping player downloads its clip again for every
+// repeat it buffers: five times for a paused 12s reference clip (2026-10-02).
+it('reads a network clip through the video cache so its loops are not downloaded again', () => {
+  mount();
+  expect(state.players[0].source).toEqual({ uri: 'https://media.test/video.mp4', useCaching: true });
+});
+it('keeps reading through the cache when the effective URL renews', () => {
+  const view = mount();
+  state.sourceVersion = 1;
+  renderer.act(() => view.update(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 300 }} />));
+  expect(state.players[1].source).toEqual({ uri: 'https://media.test/video.mp4?version=1', useCaching: true });
+});
+it('plays a clip already on the device without copying it into the cache', () => {
+  renderer.act(() => { tree = renderer.create(<RecoverableVideoPreview url="file:///data/user/0/app/cache/picked.mp4" style={{ height: 300 }} />); });
+  expect(state.players[0].source).toEqual({ uri: 'file:///data/user/0/app/cache/picked.mp4', useCaching: false });
+});
+// A capped player stops partway through the file and keeps its cache entry
+// open, so a second player on the same clip (the details sheet over a tile, the
+// lightbox over a result) downloads it again instead of reading the cache.
+it('leaves the forward buffer uncapped so the download finishes and other players can read it', () => {
+  mount();
+  expect(state.players[0]).not.toHaveProperty('bufferOptions');
+});
 it('pauses a retained screen on blur and does not resume it automatically on return', () => {
   const view = mount(true);
   const player = state.players[0];
@@ -181,7 +204,7 @@ it('renews once before replacing a failed player and ignores repeated presses wh
   state.initialStatus = 'readyToPlay';
   await renderer.act(async () => { finish('https://media.test/renewed.mp4'); });
   expect(state.players[0].release).toHaveBeenCalledOnce();
-  expect(state.players[1].source).toEqual({ uri: 'https://media.test/renewed.mp4' });
+  expect(state.players[1].source).toEqual({ uri: 'https://media.test/renewed.mp4', useCaching: true });
   expect(state.players[1].play).toHaveBeenCalledOnce();
 });
 
@@ -205,7 +228,7 @@ it('ignores renewal completing after the selected source changes', async () => {
   renderer.act(() => { tree!.update(<RecoverableVideoPreview url="https://media.test/other.mp4" style={{ height: 300 }} />); });
   await renderer.act(async () => { finish('https://media.test/late.mp4'); });
   expect(state.players).toHaveLength(2);
-  expect(state.players[1].source).toEqual({ uri: 'https://media.test/other.mp4' });
+  expect(state.players[1].source).toEqual({ uri: 'https://media.test/other.mp4', useCaching: true });
   expect(state.players[1].play).not.toHaveBeenCalled();
 });
 it('turns a stalled native load into an actionable retry after 30 seconds', () => {

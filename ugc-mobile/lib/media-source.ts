@@ -23,3 +23,19 @@ export function buildMediaSource(url: string, apiBaseUrl: string, accessToken?: 
     ...(accessToken ? { headers: { Authorization: `Bearer ${accessToken}` } } : {}),
   };
 }
+
+/**
+ * A video source for a looping player, read through expo-video's disk cache.
+ *
+ * Android loops a clip by queueing it again behind itself, and its player
+ * buffers 50 seconds ahead across those copies. Without the cache every copy is
+ * a new download of the whole file: a paused 12s clip was fetched five times, a
+ * 5s clip eleven times, and a playing clip once more on every loop (measured
+ * 2026-10-02). Through the cache each copy after the first is read from disk.
+ *
+ * Only a network URL is cached. A file already on the device would be copied
+ * into the cache, pushing downloaded media out of it.
+ */
+export function cachedVideoSource<Source extends { uri: string }>(source: Source): Source & { useCaching: boolean } {
+  return { ...source, useCaching: /^https?:\/\//i.test(source.uri) };
+}

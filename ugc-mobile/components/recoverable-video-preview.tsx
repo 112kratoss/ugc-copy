@@ -5,6 +5,7 @@ import { ActivityIndicator, Text, View, type StyleProp, type ViewStyle } from 'r
 
 import { SecondaryButton } from '@/components/ui';
 import { useNativePreviewPlayback } from '@/lib/use-native-preview-playback';
+import { cachedVideoSource } from '@/lib/media-source';
 import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
 import { useAppTheme } from '@/lib/theme-context';
@@ -73,7 +74,12 @@ function VideoPreviewAttempt({
   const isFocused = useIsFocused();
   const { source } = useMediaSource(url);
   const previousPlayer = useRef<VideoPlayer | null>(null);
-  const player = useVideoPlayer(source, instance => {
+  // Cached, because this player loops: uncached, every repeat downloads the
+  // clip again (see cachedVideoSource). Without the feed's forward-buffer cap,
+  // on purpose. A capped player stops partway through the file and holds its
+  // cache entry open, so a second player on the same clip (the details sheet
+  // over a tile, the lightbox over a result) has to download it again.
+  const player = useVideoPlayer(cachedVideoSource(source), instance => {
     const previous = previousPlayer.current;
     instance.loop = true;
     instance.muted = previous?.muted ?? false;
