@@ -12,6 +12,7 @@ import {
   validateAndCompileTemplateGraph,
 } from '@/lib/template-graph-compiler';
 import { toStorageUploadBody } from '@/lib/storage-upload-body';
+import { isDefinitiveSupabaseMutationRejection } from '@/lib/upload-byte-admission';
 import { createVideoPosterBuffer } from '@/lib/video-poster';
 import { createVideoRenditionFromFile, VideoRenditionSkipped, withVideoInputFile } from '@/lib/video-rendition';
 import {
@@ -668,7 +669,7 @@ export async function publishMediaTemplate(client: SupabaseClient, userId: strin
     demoOutputUrl,
   };
   const snapshotHash = createTemplateSnapshotHash(privateSnapshot);
-  const { data: activation, error: activationError } = await client.rpc('activate_template_version', {
+  const activationResult = await client.rpc('activate_template_version', {
     p_version_id: versionId,
     p_template_id: template.id,
     p_creator_id: userId,
@@ -685,8 +686,13 @@ export async function publishMediaTemplate(client: SupabaseClient, userId: strin
     p_demo_output_url: demoOutputUrl,
     p_rights_confirmed_at: new Date().toISOString(),
   });
-  if (activationError || !isRecord(activation)) {
-    if (copied.copiedPaths.length) await client.storage.from('template_assets').remove(copied.copiedPaths);
+  const { data: activation, error: activationError } = activationResult;
+  if (activationError || !isRecord(activation) || typeof activation.inserted !== 'boolean') {
+    // A lost acknowledgement may follow a committed immutable version. Keep
+    // its assets unless the database definitively rejected the activation.
+    if (isDefinitiveSupabaseMutationRejection(activationResult) && copied.copiedPaths.length) {
+      await client.storage.from('template_assets').remove(copied.copiedPaths);
+    }
     if (activationError) throw activationError;
     throw new MediaTemplateError('The template version could not be activated.', 500, 'VERSION_ACTIVATION_FAILED');
   }
