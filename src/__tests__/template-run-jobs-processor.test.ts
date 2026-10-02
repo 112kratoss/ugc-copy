@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
 
 const mocks = vi.hoisted(() => ({
   claim: vi.fn(),
@@ -13,6 +15,10 @@ vi.mock('@/lib/template-run-jobs', () => ({
   deferTemplateRunJob: (...args: unknown[]) => mocks.defer(...args),
   finishTemplateRunJob: (...args: unknown[]) => mocks.finish(...args),
   heartbeatTemplateRunJob: (...args: unknown[]) => mocks.heartbeat(...args),
+  // No run is stranded here. The sweep has its own tests in
+  // template-run-job-exhaustion.test.ts.
+  findStrandedTemplateRuns: async () => [],
+  TEMPLATE_RUN_GIVE_UP_SECONDS: 30 * 60,
 }));
 
 vi.mock('@/lib/template-run-service', () => ({
@@ -36,12 +42,20 @@ const job = {
 };
 
 describe('durable template run processor', () => {
+  let logs: BackendLogRecord[];
+  let restoreLogSink: () => void;
+
   beforeEach(() => {
+    logs = [];
+    restoreLogSink = setBackendLogSink((record) => logs.push(record));
     vi.clearAllMocks();
     mocks.claim.mockResolvedValue([{ ...job }]);
     mocks.heartbeat.mockResolvedValue(true);
     mocks.defer.mockResolvedValue(true);
     mocks.finish.mockResolvedValue('succeeded');
+  });
+  afterEach(() => {
+    restoreLogSink();
   });
 
   it('defers the same leased ticket while provider work is active', async () => {
@@ -100,6 +114,15 @@ describe('durable template run processor', () => {
       retryDelaySeconds: 60,
     }));
     expect(result.retried).toBe(1);
+    // A pass that fails is on the record, with the run it failed for.
+    expect(logs).toEqual([expect.objectContaining({
+      level: 'error',
+      msg: 'template_run_pass_failed',
+      jobId: 'template-job-1',
+      runId: 'template-run-1',
+      outcome: 'retry_scheduled',
+      errorMessage: 'transient database failure',
+    })]);
   });
 
   it('does not finish work after losing its database lease', async () => {

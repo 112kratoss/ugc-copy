@@ -114,6 +114,7 @@ function databaseClient(db: Client, startAnswers: string[], beforeWrite?: (table
       const filters: string[] = [];
       const values: unknown[] = [];
       const orders: string[] = [];
+      let limit: number | null = null;
       let insert: Record<string, unknown> | null = null;
       let update: Record<string, unknown> | null = null;
 
@@ -136,7 +137,7 @@ function databaseClient(db: Client, startAnswers: string[], beforeWrite?: (table
           )).rows;
         }
         return (await db.query(
-          `select * from public.${table}${where}${orders.length ? ` order by ${orders.join(',')}` : ''}`,
+          `select * from public.${table}${where}${orders.length ? ` order by ${orders.join(',')}` : ''}${limit === null ? '' : ` limit ${limit}`}`,
           values,
         )).rows;
       };
@@ -169,6 +170,12 @@ function databaseClient(db: Client, startAnswers: string[], beforeWrite?: (table
         },
         eq: compare('='),
         neq: compare('<>'),
+        // The job processor's sweep reads the runs in progress with these two.
+        lt: compare('<'),
+        limit(count: number) {
+          limit = Math.trunc(count);
+          return query;
+        },
         in(column: string, value: unknown[]) {
           values.push(value);
           filters.push(`${identifier(column)}=any($${values.length})`);

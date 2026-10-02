@@ -64,7 +64,11 @@ import {
   hasPendingShowcaseMediaRevocations,
   processShowcaseMediaRevocations,
 } from '@/lib/showcase-media-revocations';
-import { hasDueTemplateRunJobs, pruneTemplateRunJobs } from '@/lib/template-run-jobs';
+import {
+  findStrandedTemplateRuns,
+  hasDueTemplateRunJobs,
+  pruneTemplateRunJobs,
+} from '@/lib/template-run-jobs';
 import {
   TEMPLATE_RUN_JOB_BATCH_LIMIT,
   processTemplateRunJobs,
@@ -719,11 +723,14 @@ export function runWorkflowRunStepsBackendJob(options: {
     // Two independent sources of work: queued step jobs, and runs left
     // unfinished with no live job at all. The second is the strand F12 exists
     // to fix, and it is invisible to a queue-only probe -- a stranded run has
-    // no job by definition.
+    // no job by definition. Template runs strand the same way, and their
+    // probe keeps its own limit: it reads the runs before their tickets, so
+    // a limit of one would look at the oldest run in progress and no other.
     hasWork: async (client, context) => (
       await hasDueWorkflowRunStepJobs(client, { nowMs: context.startedAtMs })
       || await hasDueTemplateRunJobs(client)
       || (await findStalledWorkflowRuns(client, { nowMs: context.startedAtMs, limit: 1 })).length > 0
+      || (await findStrandedTemplateRuns(client, { nowMs: context.startedAtMs })).length > 0
     ),
     onNoWork: async (client, context) => ({
       pruned: await maybePruneWorkflowRunStepJobs(client, { nowMs: context.startedAtMs }),
