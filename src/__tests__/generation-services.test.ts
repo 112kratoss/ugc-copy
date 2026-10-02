@@ -1408,6 +1408,118 @@ describe('generation services', () => {
     expect(generations[0].client_request_key_hash).toBe('a'.repeat(64));
   });
 
+  // What `start_generation` answers when the request key is already on a
+  // generation. Each case is one of its three replay answers.
+  describe('a start replayed with the same request key', () => {
+    const replayed = () => ({
+      userId: 'user-1',
+      clientRequestKeyHash: 'a'.repeat(64),
+      prompt: 'A premium skincare product hero image.',
+      model: 'nano-banana-2' as const,
+    });
+
+    it('names the generation that holds the key when the first start is still unresolved', async () => {
+      const { startImageGeneration } = await import('@/lib/generation-services');
+      const {
+        getHeldProviderSubmissionGenerationId,
+        getInProgressStartGenerationId,
+        getPublicGenerationStartFailure,
+      } = await import('@/lib/generation-public-failure');
+      // The key is on a generation that is active and has no provider task.
+      const { supabase, generations, rpcCalls } = createSupabaseMock([], {
+        rpcResults: {
+          start_generation: { status: 'in_progress', generation_id: 'gen-first', remaining_credits: 88, cost: 9 },
+        },
+      });
+
+      const error = await startImageGeneration({ supabase, creditSupabase: supabase, ...replayed() })
+        .catch((caught: unknown) => caught);
+
+      // A request still answers exactly as before: the same status and words.
+      expect(error).toMatchObject({
+        name: 'GenerationServiceError',
+        status: 409,
+        failureCode: null,
+        message: 'A generation with this idempotency key is already starting. Retry shortly.',
+      });
+      // For a run worker that repeated its own start: that generation is its
+      // step's, and it takes it back.
+      expect(getInProgressStartGenerationId(error)).toBe('gen-first');
+      // It is not a held submission: a route answers a held one differently.
+      expect(getHeldProviderSubmissionGenerationId(error)).toBeNull();
+      expect(getPublicGenerationStartFailure(error).code).not.toBe('submission_pending');
+      expect(JSON.stringify(error)).not.toContain('gen-first');
+      // Nothing was reserved, sent or settled by the replay.
+      expect(rpcCalls.map((call) => call.fn)).toEqual(['start_generation']);
+      expect(generations).toEqual([]);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('names no generation when the key belongs to a start that already ended', async () => {
+      const { startImageGeneration } = await import('@/lib/generation-services');
+      const { getInProgressStartGenerationId } = await import('@/lib/generation-public-failure');
+      const { supabase, rpcCalls } = createSupabaseMock([], {
+        rpcResults: {
+          start_generation: { status: 'key_already_used', generation_id: 'gen-first', remaining_credits: 100, cost: 9 },
+        },
+      });
+
+      const error = await startImageGeneration({ supabase, creditSupabase: supabase, ...replayed() })
+        .catch((caught: unknown) => caught);
+
+      // Also a 409 that carries a generation id in the RPC's answer, and never
+      // one to take back: that generation has ended and nothing frees its key.
+      expect(error).toMatchObject({
+        name: 'GenerationServiceError',
+        status: 409,
+        message: expect.stringContaining('already used by a failed generation start'),
+      });
+      expect(getInProgressStartGenerationId(error)).toBeNull();
+      expect(rpcCalls.map((call) => call.fn)).toEqual(['start_generation']);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('names no generation when the in-progress answer carries none', async () => {
+      const { startImageGeneration } = await import('@/lib/generation-services');
+      const { getInProgressStartGenerationId } = await import('@/lib/generation-public-failure');
+      const { supabase } = createSupabaseMock([], {
+        rpcResults: { start_generation: { status: 'in_progress', remaining_credits: 88, cost: 9 } },
+      });
+
+      const error = await startImageGeneration({ supabase, creditSupabase: supabase, ...replayed() })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toMatchObject({ name: 'GenerationServiceError', status: 409 });
+      expect(getInProgressStartGenerationId(error)).toBeNull();
+    });
+
+    it('returns the first generation once it has a provider task, without starting another', async () => {
+      const { startImageGeneration } = await import('@/lib/generation-services');
+      const { supabase, generations, rpcCalls } = createSupabaseMock([], {
+        rpcResults: {
+          start_generation: {
+            status: 'already_started',
+            generation_id: 'gen-first',
+            prediction_id: 'task-first',
+            remaining_credits: 88,
+            cost: 9,
+          },
+        },
+      });
+
+      await expect(startImageGeneration({ supabase, creditSupabase: supabase, ...replayed() })).resolves.toEqual({
+        generationId: 'gen-first',
+        predictionId: 'task-first',
+        remainingCredits: 88,
+        cost: 9,
+        idempotentReplay: true,
+      });
+      expect(rpcCalls.map((call) => call.fn)).toEqual(['start_generation']);
+      expect(generations).toEqual([]);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+  });
+
   it('reserves a pending image generation before submitting provider work', async () => {
     const { startImageGeneration } = await import('@/lib/generation-services');
     const fetchMock = vi.mocked(fetch);

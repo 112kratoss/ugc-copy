@@ -449,6 +449,30 @@ function createSupabaseMock(state: RunnerTestState) {
   return mock;
 }
 
+// The worker starts a step with a key made from the run and the node, so a
+// start it repeats finds the generation its first try reserved. The start
+// service raises this when that generation is still active with no provider
+// task (`in_progress`), and names it: the step lost its link, not its
+// generation.
+async function earlierStartStillUnresolved(generationId: string) {
+  const { markGenerationStartInProgress } = await import('@/lib/generation-public-failure');
+  const { GenerationServiceError } = await import('@/lib/generation-service-core');
+  const error = new GenerationServiceError(
+    'A generation with this idempotency key is already starting. Retry shortly.',
+    409,
+  );
+  markGenerationStartInProgress(error, generationId);
+  return error;
+}
+
+/** The worker's record of taking a generation back, as the structured logger wrote it. */
+function relinkWarnings(spy: { mock: { calls: unknown[][] } }) {
+  return spy.mock.calls
+    .map(([line]) => String(line))
+    .filter((line) => line.includes('workflow_run_step_relinked_to_earlier_start'))
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
 describe('workflow-runner recovery', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -615,6 +639,120 @@ describe('workflow-runner recovery', () => {
       error_message: expect.stringContaining(confirmed ? 'credits stay reserved' : 'current status'),
     });
     expect(startVideoGenerationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes back the generation its own earlier start left unresolved', async () => {
+    const state = createQueuedWorkflowState();
+    const supabase = createSupabaseMock(state);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    startVideoGenerationMock.mockRejectedValueOnce(await earlierStartStillUnresolved('gen-earlier-video'));
+
+    const { advanceWorkflowRunOnce } = await import('@/lib/workflow-runner');
+    const run = await advanceWorkflowRunOnce({
+      supabase: supabase as never,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    });
+
+    expect(run.status).toBe('processing');
+    expect(state.run).toMatchObject({ status: 'processing', finished_at: null });
+    // Exactly the step a held submission leaves, so it follows that generation
+    // to its callback or to the reaper and says what a held step says. The
+    // repeated start's own error would read as "check your inputs".
+    const takenBack = {
+      status: 'processing',
+      generation_id: 'gen-earlier-video',
+      output_snapshot: { submissionPending: true },
+      error_message: expect.stringMatching(/may still be running.*credits stay reserved/i),
+      started_at: expect.any(String),
+      finished_at: null,
+    };
+    expect(run.steps?.find((step) => step.node_id === state.videoNodeId)).toMatchObject(takenBack);
+    expect(state.steps.find((step) => step.id === 'step-video')).toMatchObject(takenBack);
+    expect(state.steps.find((step) => step.id === 'step-video')?.error_message).not.toMatch(/retry|could not accept/i);
+    expect(startVideoGenerationMock).toHaveBeenCalledTimes(1);
+    expect(relinkWarnings(warn)).toEqual([expect.objectContaining({
+      level: 'warn',
+      runId: 'run-1',
+      stepId: 'step-video',
+      nodeId: state.videoNodeId,
+      generationId: 'gen-earlier-video',
+    })]);
+  });
+
+  it('does not start a step again once it has its generation back', async () => {
+    const state = createQueuedWorkflowState();
+    const supabase = createSupabaseMock(state);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // The earlier start reserved the row before the step lost it, and it is
+    // still `pending` when the repeated start finds it.
+    state.generations.push({
+      id: 'gen-earlier-video',
+      user_id: state.run.user_id,
+      status: 'pending',
+      output_url: null,
+    });
+    startVideoGenerationMock.mockRejectedValueOnce(await earlierStartStillUnresolved('gen-earlier-video'));
+
+    const { advanceWorkflowRunOnce } = await import('@/lib/workflow-runner');
+    const advance = () => advanceWorkflowRunOnce({
+      supabase: supabase as never,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    });
+    await advance();
+    const run = await advance();
+
+    expect(startVideoGenerationMock).toHaveBeenCalledTimes(1);
+    expect(run.status).toBe('processing');
+    expect(state.steps.find((step) => step.id === 'step-video')).toMatchObject({
+      status: 'processing',
+      generation_id: 'gen-earlier-video',
+      finished_at: null,
+    });
+    expect(relinkWarnings(warn)).toHaveLength(1);
+  });
+
+  it.each([
+    [
+      'the key belongs to a generation that already ended without a task',
+      { status: 409, message: 'This idempotency key was already used by a failed generation start. Retry with a new key.' },
+    ],
+    [
+      'the catalog the run was quoted against has been replaced',
+      { status: 409, code: 'CATALOG_CHANGED', message: 'The model catalog has changed. Refresh settings before generating.' },
+    ],
+    [
+      'the catalog release the run names is gone',
+      { status: 409, code: 'CATALOG_CHANGED', message: 'This item was published against a model catalog release that is no longer available.' },
+    ],
+    [
+      'the error only says the same words, and the start service named no generation',
+      { status: 409, message: 'A generation with this idempotency key is already starting. Retry shortly.' },
+    ],
+  ])('still ends a step on a 409 that names no live generation: %s', async (_case, refusal) => {
+    const state = createQueuedWorkflowState();
+    const supabase = createSupabaseMock(state);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    startVideoGenerationMock.mockRejectedValueOnce(refusal);
+
+    const { advanceWorkflowRunOnce } = await import('@/lib/workflow-runner');
+    const run = await advanceWorkflowRunOnce({
+      supabase: supabase as never,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    });
+
+    // None of these resolves by waiting, and a step left queued keeps its run
+    // `processing` until the 24-hour cap.
+    expect(run.status).toBe('failed');
+    expect(state.run).toMatchObject({ status: 'failed', finished_at: expect.any(String) });
+    expect(state.steps.find((step) => step.id === 'step-video')).toMatchObject({
+      status: 'failed',
+      generation_id: null,
+      finished_at: expect.any(String),
+    });
+    expect(relinkWarnings(warn)).toEqual([]);
   });
 
   it('continues from the immutable run snapshot when the source canvas changes', async () => {
@@ -1211,6 +1349,42 @@ describe('workflow-runner: a step follows its generation', () => {
 
     expect(storedStep(state, 'step-image')).toMatchObject({ status: 'failed', error_message: expected });
     expect(expected).not.toContain('provider.example');
+  });
+
+  it.each([
+    [
+      'its render succeeds',
+      { status: 'succeeded', output_url: 'generated_videos/user-1/late.mp4' },
+      { status: 'succeeded', error_message: null },
+      'succeeded',
+    ],
+    [
+      'the reaper settles it',
+      { status: 'failed', error_message: REAPED_MESSAGE },
+      { status: 'failed', error_message: REAPED_MESSAGE },
+      'failed',
+    ],
+  ] as const)('finishes a step that took its earlier generation back when %s', async (_ending, generationEnd, stepEnd, runEnd) => {
+    const state = createQueuedWorkflowState();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    state.generations.push({
+      id: 'gen-earlier-video',
+      user_id: state.run.user_id,
+      status: 'pending',
+      output_url: null,
+    });
+    startVideoGenerationMock.mockRejectedValueOnce(await earlierStartStillUnresolved('gen-earlier-video'));
+    const { advance } = await loadRunner(state);
+
+    await advance();
+    Object.assign(state.generations[1], generationEnd);
+    const run = await advance();
+
+    // The same endings as a held step whose link was never lost.
+    expect(storedStep(state, 'step-video')).toMatchObject({ ...stepEnd, generation_id: 'gen-earlier-video' });
+    expect(storedStep(state, 'step-video').output_snapshot).not.toHaveProperty('submissionPending');
+    expect(run.status).toBe(runEnd);
+    expect(startVideoGenerationMock).toHaveBeenCalledTimes(1);
   });
 
   it.each(['pending', 'waiting'])(

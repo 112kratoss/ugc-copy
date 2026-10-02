@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createHash } from 'node:crypto';
 import { createServiceClient, resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
-import { logBackendError } from '@/lib/backend-logger';
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 import { enqueueWorkflowRunStepJob } from '@/lib/workflow-run-jobs';
 import {
   startImageGeneration,
@@ -14,7 +14,9 @@ import {
 } from '@/lib/generation-services';
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import {
+  GENERATION_SUBMISSION_PENDING_MESSAGE,
   getHeldProviderSubmissionGenerationId,
+  getInProgressStartGenerationId,
   getPublicGenerationStartFailure,
 } from '@/lib/generation-public-failure';
 import { syncGenerationStatuses } from '@/lib/generation-status-sync';
@@ -1295,6 +1297,13 @@ async function advanceWorkflowRunProgress(params: {
     } catch (error) {
       const failure = getPublicGenerationStartFailure(error);
       const heldGenerationId = getHeldProviderSubmissionGenerationId(error);
+      // A start the worker repeats carries the same request key, so it can
+      // find the generation its first try reserved still active with no
+      // provider task: the worker died, or the step write or the task attach
+      // failed, before that generation was linked to the step. The start
+      // service names it on the error. No other 409 names one, and those
+      // never resolve, so they still end the step below.
+      const earlierGenerationId = getInProgressStartGenerationId(error);
 
       if (failure.code === 'provider_busy' || failure.code === 'provider_unavailable') {
         // Admission/backpressure is a scheduling condition, not a failed
@@ -1314,18 +1323,31 @@ async function advanceWorkflowRunProgress(params: {
         continue;
       }
 
-      if (failure.code === 'submission_pending' && heldGenerationId) {
+      if ((failure.code === 'submission_pending' && heldGenerationId) || earlierGenerationId) {
         // The provider may have accepted the request. The generation start RPC
         // already reserved money and the idempotency key, so link that exact
         // held row instead of retrying and risking a second provider task.
+        // The generation an earlier start left behind is the same case found
+        // one tick late: the step takes it back and follows it to its callback
+        // or to the reaper, as if the link had never been lost.
+        if (earlierGenerationId) {
+          logBackendWarning('workflow_run_step_relinked_to_earlier_start', {
+            runId: run.id,
+            stepId: queuedStep.id,
+            nodeId: node.id,
+            generationId: earlierGenerationId,
+          });
+        }
         const processingStep: HydratedRunStep = {
           ...queuedStep,
           status: 'processing',
-          generation_id: heldGenerationId,
+          generation_id: earlierGenerationId ?? heldGenerationId,
           output_snapshot: {
             submissionPending: true,
           },
-          error_message: failure.message,
+          // The repeated start's own error reads as a refusal. What is true of
+          // the generation is what a held submission says.
+          error_message: earlierGenerationId ? GENERATION_SUBMISSION_PENDING_MESSAGE : failure.message,
           started_at: startedAt,
           finished_at: null,
         };

@@ -14,6 +14,12 @@ export const GENERATION_PROMPT_BLOCKED_MESSAGE =
   'Magicbooklet can’t create this. We don’t make nude, undressed or see-through images of people, '
   + 'or anything sexual involving minors. Edit your prompt and try again. No credits were used.';
 
+/** Shown while a submission's outcome is unknown and its credits are confirmed
+ * as still reserved. A run worker shows the same words on a step it links
+ * back to its own earlier start, which is in that same state. */
+export const GENERATION_SUBMISSION_PENDING_MESSAGE =
+  'We could not confirm this request with the generation provider in time. It may still be running — check Studio in a few minutes. Your credits stay reserved until it resolves, and are returned automatically if it does not.';
+
 export type PublicGenerationStartFailure = Readonly<{
   code: GenerationStartFailureCode;
   message: string;
@@ -115,6 +121,37 @@ export function getRefundedStartGenerationId(error: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+const START_IN_PROGRESS_GENERATION_ID = '__magicbookletStartInProgressGenerationId';
+
+/**
+ * Marks an error from a start that was repeated while the first one is still
+ * unresolved, with the generation that holds the request key: it is active
+ * and has no provider task yet (`in_progress` from the start RPC).
+ *
+ * A request answers with the error itself and its client retries. A run worker
+ * made both starts, so that generation belongs to its own step: it reads the
+ * mark and takes the generation back. The 409s that carry no mark
+ * (`key_already_used`, a changed catalog) never resolve.
+ *
+ * Non-enumerable for the same reason as the held-submission metadata.
+ */
+export function markGenerationStartInProgress(error: unknown, generationId: string): void {
+  if (!error || typeof error !== 'object') return;
+  Object.defineProperty(error, START_IN_PROGRESS_GENERATION_ID, {
+    value: generationId,
+    enumerable: false,
+    configurable: true,
+    writable: false,
+  });
+}
+
+/** The generation an unresolved earlier start still holds, when the error carries one. */
+export function getInProgressStartGenerationId(error: unknown): string | null {
+  if (!error || typeof error !== 'object') return null;
+  const value = (error as Record<string, unknown>)[START_IN_PROGRESS_GENERATION_ID];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 function recordValue(error: unknown, keys: string[]): unknown {
   if (!error || typeof error !== 'object') return undefined;
   const record = error as Record<string, unknown>;
@@ -194,7 +231,7 @@ export function getPublicGenerationStartFailure(error: unknown): PublicGeneratio
     }
     return {
       code: 'submission_pending',
-      message: 'We could not confirm this request with the generation provider in time. It may still be running — check Studio in a few minutes. Your credits stay reserved until it resolves, and are returned automatically if it does not.',
+      message: GENERATION_SUBMISSION_PENDING_MESSAGE,
     };
   }
 
