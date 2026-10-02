@@ -215,4 +215,30 @@ describe('video generation route service', () => {
       kieApiKey: 'kie-key',
     });
   });
+
+  it('hands a status check the scheduler it was given, and none when it was given none', async () => {
+    // A poll that finds a provider failure tells the creator's devices. The
+    // route has someone waiting on the poll, so it brings somewhere to run that
+    // once the poll is answered.
+    const { getVideoGenerationForRoute } = await import('@/lib/video-generation-route-service');
+    const runAfterResponse = vi.fn();
+
+    await getVideoGenerationForRoute({
+      createAdminSupabase,
+      createUserSupabase,
+      kieApiKey: 'kie-key',
+      request: new Request('http://localhost/api/generate-video?id=task-video-1'),
+      runAfterResponse,
+    });
+    await getVideoGenerationForRoute({
+      createAdminSupabase,
+      createUserSupabase,
+      kieApiKey: 'kie-key',
+      request: new Request('http://localhost/api/generate-video?id=task-video-1'),
+    });
+
+    expect(mocks.getVideoGenerationStatusForRoute.mock.calls.map(([input]) => input.runAfterResponse))
+      .toEqual([runAfterResponse, undefined]);
+    expect(runAfterResponse).not.toHaveBeenCalled();
+  });
 });

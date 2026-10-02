@@ -212,4 +212,30 @@ describe('motion generation route service', () => {
       kieApiKey: 'kie-key',
     });
   });
+
+  it('hands a status check the scheduler it was given, and none when it was given none', async () => {
+    // A poll that finds a provider failure tells the creator's devices. The
+    // route has someone waiting on the poll, so it brings somewhere to run that
+    // once the poll is answered.
+    const { getMotionGenerationForRoute } = await import('@/lib/motion-generation-route-service');
+    const runAfterResponse = vi.fn();
+
+    await getMotionGenerationForRoute({
+      createAdminSupabase,
+      createUserSupabase,
+      kieApiKey: 'kie-key',
+      request: new Request('http://localhost/api/generate?id=task-motion-1'),
+      runAfterResponse,
+    });
+    await getMotionGenerationForRoute({
+      createAdminSupabase,
+      createUserSupabase,
+      kieApiKey: 'kie-key',
+      request: new Request('http://localhost/api/generate?id=task-motion-1'),
+    });
+
+    expect(mocks.getMotionGenerationStatusForRoute.mock.calls.map(([input]) => input.runAfterResponse))
+      .toEqual([runAfterResponse, undefined]);
+    expect(runAfterResponse).not.toHaveBeenCalled();
+  });
 });

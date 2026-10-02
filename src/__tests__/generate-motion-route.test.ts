@@ -5,8 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // implementation so fixtures exercise the same validation production does.
 import { getStoredMediaLocation as actualGetStoredMediaLocation } from '@/lib/media-urls';
 
+import {
+  createMobileNotificationHistory,
+  hasAnswered,
+  type MobileNotificationHistory,
+} from '@/__tests__/fixtures/mobile-notification-history';
+
 const rawCreateClientMock = vi.hoisted(() => vi.fn());
 const createUserClientMock = vi.hoisted(() => vi.fn());
+// Stands in for Next's after(): a queued task starts at once unless a test holds it.
+const afterMock = vi.hoisted(() => vi.fn((task: () => Promise<unknown>): unknown => task()));
 
 type LocalGenerationRow = {
   id: string;
@@ -276,6 +284,15 @@ function createSupabaseMock(
   };
 }
 
+vi.mock('next/server', async () => {
+  const actual = await vi.importActual<typeof import('next/server')>('next/server');
+
+  return {
+    ...actual,
+    after: afterMock,
+  };
+});
+
 vi.mock('@supabase/supabase-js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@supabase/supabase-js')>();
   return {
@@ -292,6 +309,17 @@ vi.mock('@/lib/server-helpers', () => ({
   resolveOwnedStoredMediaUrl: vi.fn(async (_supabase: unknown, value: string) => value),
 }));
 
+/** Lets the real notifier run: `history` answers its tables, the mock answers the rest as before. */
+function serveNotificationHistory(
+  client: ReturnType<typeof createSupabaseMock>['client'],
+  history: MobileNotificationHistory,
+) {
+  const from = client.from;
+  client.from = vi.fn((table: string) => (
+    history.handles(table) ? history.from(table) : from(table)
+  )) as unknown as typeof from;
+}
+
 function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
   expect(response.headers.get('Cache-Control')).toBe('private, no-store');
   expect(response.headers.get('x-request-id')).toBe(requestId);
@@ -306,6 +334,7 @@ describe('/api/generate route', () => {
     process.env.NEXT_PUBLIC_SITE_URL = 'https://magicbooklet.com';
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co';
     currentSupabaseMock = createSupabaseMock();
+    afterMock.mockReset();
     rawCreateClientMock.mockReset();
     rawCreateClientMock.mockImplementation(() => currentSupabaseMock.client);
     createUserClientMock.mockReset();
@@ -789,6 +818,74 @@ describe('/api/generate route', () => {
       p_completed_at: '2026-04-15T10:01:00.000Z',
       p_error_message: null,
     });
+  });
+
+  it('answers a failed motion poll before its notification goes out', async () => {
+    currentSupabaseMock = createSupabaseMock({
+      id: 'gen-motion-notify-1',
+      prediction_id: 'task-motion-notify-1',
+      user_id: 'user-1',
+      status: 'processing',
+      output_url: null,
+      created_at: '2026-04-15T10:00:00.000Z',
+      completed_at: null,
+      model: 'kling-3.0',
+      category: 'video',
+      creation_mode: 'motion',
+      duration: 6,
+    });
+    const history = createMobileNotificationHistory();
+    serveNotificationHistory(currentSupabaseMock.client, history);
+    history.hold();
+    // The response has not gone out yet, so what was queued has not started.
+    afterMock.mockImplementationOnce(() => undefined);
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        code: 200,
+        data: {
+          state: 'fail',
+          completeTime: '2026-04-15T10:01:00.000Z',
+          failMsg: 'provider failure',
+        },
+      }),
+    } as Response)));
+
+    const { GET } = await import('@/app/api/generate/route');
+    const poll = GET(
+      new Request('http://localhost/api/generate?id=task-motion-notify-1', {
+        headers: { Authorization: 'Bearer token' },
+      }) as never
+    );
+
+    // The notification ends in a push request to Expo for the creator's devices,
+    // and one that has not finished must not keep the app waiting on this poll.
+    expect(await hasAnswered(poll)).toBe(true);
+    const response = await poll;
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      status: 'failed',
+      error: 'provider failure',
+    });
+    expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('settle_generation_failed', {
+      p_prediction_id: 'task-motion-notify-1',
+      p_completed_at: '2026-04-15T10:01:00.000Z',
+      p_error_message: 'provider failure',
+    });
+    expect(history.started).toEqual([]);
+    expect(afterMock).toHaveBeenCalledTimes(1);
+
+    history.release();
+    await afterMock.mock.calls[0][0]();
+    expect(history.sent).toEqual([
+      expect.objectContaining({
+        user_id: 'user-1',
+        type: 'generation_failed',
+        title: 'Your video failed',
+        dedupe_key: 'generation:gen-motion-notify-1:failed',
+      }),
+    ]);
   });
 
   it('queues live provider motion output without downloading or settling in the route', async () => {

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { hasAnswered } from '@/__tests__/fixtures/mobile-notification-history';
+
 const mocks = vi.hoisted(() => ({
   claim: vi.fn(),
   finish: vi.fn(),
@@ -112,6 +114,34 @@ describe('generation output import processor', () => {
     expect(mocks.notify).toHaveBeenCalledWith(client, expect.objectContaining({ id: 'generation-1' }), 'succeeded');
     expect(mocks.finish).toHaveBeenCalledWith(expect.objectContaining({ succeeded: true }));
     expect(summary).toEqual({ claimed: 1, completed: 1, retried: 0, exhausted: 0 });
+  });
+
+  it('sends the success notification before it settles the ticket, because nobody is waiting on an import', async () => {
+    // This runs from the cron and from the webhook's own after() window, never
+    // in front of a person's answer: the render is already settled, so the app
+    // polling for it is answered by its own request. There is no response here
+    // to send the notification behind, and work left running past the end of a
+    // job can be cut off with it.
+    let finishNotifying = () => {};
+    mocks.notify.mockImplementationOnce(() => new Promise<null>((resolve) => {
+      finishNotifying = () => resolve(null);
+    }));
+    const { processGenerationOutputImportJobs } = await import(
+      '@/lib/generation-output-import-jobs-processor'
+    );
+
+    const sweep = processGenerationOutputImportJobs({
+      client: clientWithGeneration() as never,
+      lockedBy: 'import-worker',
+    });
+
+    expect(await hasAnswered(sweep)).toBe(false);
+    expect(mocks.notify).toHaveBeenCalledTimes(1);
+    expect(mocks.finish).not.toHaveBeenCalled();
+
+    finishNotifying();
+    await expect(sweep).resolves.toEqual({ claimed: 1, completed: 1, retried: 0, exhausted: 0 });
+    expect(mocks.finish).toHaveBeenCalledWith(expect.objectContaining({ succeeded: true }));
   });
 
   it('retries storage failures without settling the generation as failed', async () => {

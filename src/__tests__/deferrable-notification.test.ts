@@ -4,7 +4,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { hasAnswered } from '@/__tests__/fixtures/mobile-notification-history';
 import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
 import { sendDeferrableNotification } from '@/lib/deferrable-notification';
-import { notifyCreatorFollowed, notifyPostSocialActivity } from '@/lib/mobile-notifications';
+import {
+  notifyCreatorFollowed,
+  notifyGenerationStatus,
+  notifyPostSocialActivity,
+} from '@/lib/mobile-notifications';
 
 describe('sendDeferrableNotification', () => {
   it('sends the notification before returning when the caller has nowhere to run it afterwards', async () => {
@@ -62,7 +66,19 @@ describe('notifiers sent behind an answer', () => {
   // Sending a notifier after the response moves it out from under the request:
   // an error it threw would no longer fail the request, it would only reach
   // the log. That hides nothing as long as none of them can reject, which is
-  // what this pins for each notifier the follow, save and share paths queue.
+  // what this pins for each notifier the follow, save and share paths queue,
+  // and for the one a generation status poll queues.
+  const generationNotifiers: Array<[string, (client: SupabaseClient) => Promise<unknown>]> = (
+    ['failed', 'succeeded'] as const
+  ).map((status) => [
+    `a generation that ${status}`,
+    (client) => notifyGenerationStatus(client, {
+      id: 'generation-1',
+      user_id: 'user-1',
+      category: 'video',
+      model: 'kling-3.0-video',
+    }, status),
+  ]);
   const followNotifier: [string, (client: SupabaseClient) => Promise<unknown>] = [
     'a follow',
     (client) => notifyCreatorFollowed(client, {
@@ -101,7 +117,7 @@ describe('notifiers sent behind an answer', () => {
     return logged.map((record) => record.msg);
   }
 
-  it.each([followNotifier, ...groupedNotifiers])(
+  it.each([followNotifier, ...groupedNotifiers, ...generationNotifiers])(
     'the notifier for %s logs a failure instead of rejecting when the database is unavailable',
     async (_action, notify) => {
       const unavailable = {
