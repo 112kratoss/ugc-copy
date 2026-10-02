@@ -81,7 +81,7 @@ type RunDatabaseOptions = {
   insufficientCredits?: boolean;
   /** Our own gate in front of the provider turns the submission away. */
   admissionRefused?: boolean;
-  /** The refused generation cannot be read back. */
+  /** The refused generation cannot be read back to announce it. */
   generationsUnreadable?: boolean;
 };
 
@@ -194,7 +194,9 @@ function createRunDatabase(options: RunDatabaseOptions = {}) {
     if (!tables[table]) throw new Error(`Unexpected table: ${table}`);
     const filters: Filter[] = [];
     let update: Row | null = null;
+    let inserted: Row | null = null;
     const run = () => {
+      if (inserted) return [inserted];
       const rows = matching(table, filters);
       if (update) for (const row of rows) Object.assign(row, update);
       return rows;
@@ -209,14 +211,40 @@ function createRunDatabase(options: RunDatabaseOptions = {}) {
         update = values;
         return query;
       },
+      // The worker queues the next attempt of a step that was turned away as busy.
+      insert(values: Row) {
+        inserted = {
+          id: `step-${tables[table].length + 1}`,
+          generation_id: null,
+          output_url: null,
+          error_message: null,
+          input_snapshot: null,
+          output_snapshot: null,
+          approved_at: null,
+          started_at: null,
+          finished_at: null,
+          created_at: '2026-10-02T10:00:03.000Z',
+          ...values,
+        };
+        tables[table].push(inserted);
+        return query;
+      },
+      async single() {
+        const row = run()[0];
+        return { data: row ? { ...row } : null, error: null };
+      },
       eq: filter('eq'),
       neq: filter('neq'),
       in: filter('in'),
       order: () => query,
       async maybeSingle() {
-        // The worker loads a run's generations as a list. Only the read made
-        // to announce a refused start asks for one row.
-        if (table === 'generations' && options.generationsUnreadable) {
+        // Only the read made to announce a refused start asks for a
+        // generation by its id.
+        if (
+          table === 'generations'
+          && options.generationsUnreadable
+          && filters.some((filter) => filter.column === 'id')
+        ) {
           return { data: null, error: { message: 'database unavailable' } };
         }
         const row = run()[0];
@@ -471,13 +499,43 @@ describe('template run steps the provider refuses at start', () => {
 
     const run = await withCapturedLog(() => sync(connect(database, history)));
 
-    // The credits came back, so each settlement answered `failed`, but the
-    // worker put the steps back in the queue: they have not failed.
+    // The credits came back, so each settlement answered `failed`, and the
+    // refused attempts are over. The steps have not failed: the worker put
+    // each back in line as its next attempt.
     expect(database.settlements()).toHaveLength(2);
     expect(database.generations.map((row) => [row.status, row.refunded])).toEqual([['failed', true], ['failed', true]]);
-    expect(database.imageSteps.map((step) => step.status)).toEqual(['queued', 'queued']);
+    expect(database.imageSteps.map((step) => step.status)).toEqual(['failed', 'failed']);
+    expect(run.steps.filter((step) => step.kind === 'generation' && step.mediaKind === 'image').map((step) => step.status))
+      .toEqual(['queued', 'queued']);
     expect(run.status).toBe('queued');
     expect(history.started).toEqual([]);
+  });
+
+  it('tells the creator once a step that kept being turned away as busy stops being tried', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-02T10:00:00.000Z'));
+      providerIsBusy();
+      const database = createRunDatabase();
+      const history = createMobileNotificationHistory();
+      const client = connect(database, history);
+
+      await withCapturedLog(() => sync(client));
+      expect(history.started).toEqual([]);
+
+      // Half an hour after the first refusal the worker gives up on the steps.
+      vi.setSystemTime(new Date('2026-10-02T10:31:00.000Z'));
+      const run = await withCapturedLog(() => sync(client));
+
+      expect(run.status).toBe('needs_attention');
+      // The attempts that ended the wait are the ones announced.
+      expect(history.sent.map((row) => [row.type, row.object_id])).toEqual([
+        ['generation_failed', 'gen-3'],
+        ['generation_failed', 'gen-4'],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('sends nothing for submissions the provider may have accepted', async () => {

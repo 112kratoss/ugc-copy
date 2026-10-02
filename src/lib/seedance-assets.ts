@@ -44,6 +44,36 @@ export function getSeedanceAssetStatusLabel(status: SeedanceAssetStatus): string
   return 'Idle';
 }
 
+/**
+ * The file an asset's source points at, for display.
+ *
+ * `sourceUrl` is whatever the reference was last read from. Once a reference is
+ * uploaded, or restored from a remix, that is a signed storage link, and its
+ * token is several hundred characters with nowhere to break. Printed whole it
+ * ran out of its box and across the page, and it showed a working link to the
+ * file. The file name identifies the source just as well.
+ *
+ * A `blob:` or `data:` preview exists only in this browser, so nothing has been
+ * uploaded yet and there is no source to name.
+ */
+export function getSeedanceAssetSourceName(sourceUrl: string | null | undefined): string | null {
+  const value = typeof sourceUrl === 'string' ? sourceUrl.trim() : '';
+  if (!value || /^(blob|data):/i.test(value)) {
+    return null;
+  }
+
+  const name = value.split(/[?#]/, 1)[0].split('/').filter(Boolean).pop();
+  if (!name) {
+    return null;
+  }
+
+  try {
+    return decodeURIComponent(name);
+  } catch {
+    return name;
+  }
+}
+
 export function normalizeSeedanceAssetStatus(value: unknown): SeedanceAssetStatus {
   if (typeof value !== 'string') {
     return 'processing';

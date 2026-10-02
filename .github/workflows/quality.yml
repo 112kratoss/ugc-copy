@@ -40,6 +40,9 @@ jobs:
       - name: Verify media scratch reclamation with real FFmpeg
         run: npx tsx --tsconfig tsconfig.scripts.json scripts/audits/audit-media-scratch-lifetime.ts
 
+      - name: Verify encoder output bounds with real FFmpeg
+        run: npx tsx --tsconfig tsconfig.scripts.json scripts/audits/audit-media-output-limits.ts
+
       - name: Lint
         run: npm run lint
 
@@ -247,6 +250,14 @@ jobs:
 
       - name: Test generation recovery with real settlement SQL
         run: npx vitest run src/__tests__/generation-output-recovery-database.test.ts src/__tests__/generation-grace-recovery-database.test.ts src/__tests__/generation-start-recovery-database.test.ts src/__tests__/generation-worker-crash-database.test.ts
+        env:
+          SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+
+      # A step of its own: this file runs the template run job processor, which
+      # claims whichever run job is due, so no other file may be creating
+      # template runs while it does.
+      - name: Test template run retries with real start and settlement SQL
+        run: npx vitest run src/__tests__/template-run-step-busy-retry-database.test.ts
         env:
           SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
 

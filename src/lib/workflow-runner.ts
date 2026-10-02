@@ -114,6 +114,7 @@ interface WorkflowRunRow {
 interface GenerationStatusSnapshot {
   status: WorkflowRunStatus;
   output_url: string | null;
+  error_message: string | null;
 }
 
 type WorkflowRunResponse = WorkflowCanvasRunRecord & {
@@ -397,16 +398,21 @@ function getWorkflowRunMonitorKey(canvasId: string, runId: string) {
   return `${canvasId}:${runId}`;
 }
 
+/**
+ * A generation ends as `succeeded` or `failed`, and only those end the step
+ * that follows it. Any other status is still in flight with its credits held:
+ * `pending` until a provider task is attached (a held submission waits there
+ * for its callback or the reaper), `processing` after that, and `waiting`
+ * when `syncGenerationStatuses` finds the task queued at the provider.
+ * Reading one of those as a failure cannot be taken back: the run is failed,
+ * every step downstream is blocked, and a finished run is never woken again.
+ */
 function mapGenerationStatus(status: string): WorkflowRunStatus {
-  if (status === 'succeeded') {
-    return 'succeeded';
+  if (status === 'succeeded' || status === 'failed') {
+    return status;
   }
 
-  if (status === 'processing') {
-    return 'processing';
-  }
-
-  return 'failed';
+  return 'processing';
 }
 
 function getDerivedStepFinishedAt(step: HydratedRunStep, status: WorkflowRunStatus): string | null {
@@ -582,7 +588,7 @@ async function hydrateRunSteps(params: {
   const loadOwnedGenerations = async (ids: string[]) => {
     const { data, error } = await adminSupabase
       .from('generations')
-      .select('id, status, output_url')
+      .select('id, status, output_url, error_message')
       .eq('user_id', userId)
       .in('id', ids);
 
@@ -612,12 +618,14 @@ async function hydrateRunSteps(params: {
     output_url: generation.output_url
       ? await resolveOwnedStoredMediaUrl(adminSupabase, generation.output_url, userId)
       : null,
+    error_message: generation.error_message ?? null,
   })));
 
   for (const generation of resolvedGenerations) {
     generationMap.set(generation.id, {
       status: generation.status,
       output_url: generation.output_url,
+      error_message: generation.error_message,
     });
   }
 
@@ -632,13 +640,30 @@ async function hydrateRunSteps(params: {
     }
 
     const nextStatus = generation.status;
+    const outputSnapshot: Record<string, unknown> = {
+      ...(step.output_snapshot as Record<string, unknown> | null),
+      outputUrl: generation.output_url,
+    };
+    let errorMessage = step.error_message;
+
+    // A step linked to a held submission carries a note that the request may
+    // still be running. Once the generation ends the note is no longer true:
+    // a success clears it, and a failure replaces it with the same public
+    // copy the template worker gives a failed step.
+    if (outputSnapshot.submissionPending === true && nextStatus !== 'processing') {
+      delete outputSnapshot.submissionPending;
+      errorMessage = nextStatus === 'failed'
+        ? getPublicGenerationStartFailure({
+            message: generation.error_message || 'This generation could not be completed.',
+          }).message
+        : null;
+    }
+
     return {
       ...step,
       status: nextStatus,
-      output_snapshot: {
-        ...(step.output_snapshot as Record<string, unknown> | null),
-        outputUrl: generation.output_url,
-      },
+      output_snapshot: outputSnapshot,
+      error_message: errorMessage,
       finished_at: getDerivedStepFinishedAt(step, nextStatus),
     };
   });

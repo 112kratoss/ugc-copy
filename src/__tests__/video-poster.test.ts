@@ -4,6 +4,11 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
+vi.mock('@/lib/media-encoder-limit', async (original) => ({
+  ...await original<typeof import('@/lib/media-encoder-limit')>(),
+  mediaEncoderCommand: async (executable: string, args: string[]) => ({ executable, args }),
+}));
+
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
   return {
@@ -20,6 +25,7 @@ import {
   runVideoPosterFfmpeg,
   VIDEO_POSTER_TIMEOUT_MS,
 } from '@/lib/video-poster';
+import { MediaOutputLimitError } from '@/lib/media-encoder-limit';
 
 type MockChild = EventEmitter & { stderr: EventEmitter };
 
@@ -76,5 +82,15 @@ describe('video poster ffmpeg execution', () => {
 
     await expect(runVideoPosterFfmpeg('/tmp/input.mp4', '/tmp/frame.jpg', '00:00:00.000'))
       .resolves.toBeUndefined();
+  });
+
+  it('rejects a kernel-truncated frame as an output-limit failure', async () => {
+    const child = createMockChild();
+    spawnMock.mockImplementation(() => {
+      queueMicrotask(() => child.emit('close', null, 'SIGXFSZ'));
+      return child;
+    });
+    await expect(runVideoPosterFfmpeg('/tmp/input.mp4', '/tmp/frame.jpg', '00:00:00.000'))
+      .rejects.toBeInstanceOf(MediaOutputLimitError);
   });
 });
