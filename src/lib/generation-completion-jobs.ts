@@ -8,11 +8,11 @@ import {
 } from '@/lib/generation-services';
 import { syncGenerationStatusByPredictionId } from '@/lib/generation-status-sync';
 import { notifyGenerationStatus, type GenerationNotificationSubject } from '@/lib/mobile-notifications';
+import { MAX_COMPLETION_ATTEMPTS } from '@/lib/generation-completion-job-policy';
 
 const DEFAULT_LOCK_TTL_SECONDS = 300;
 const DEFAULT_RETRY_DELAY_SECONDS = 60;
 const MAX_RETRY_DELAY_SECONDS = 15 * 60;
-const MAX_COMPLETION_ATTEMPTS = 5;
 const DEFAULT_RETENTION_DAYS = 30;
 const DEFAULT_PRUNE_LIMIT = 500;
 const DEFAULT_PRUNE_WINDOW_MINUTES = 5;
