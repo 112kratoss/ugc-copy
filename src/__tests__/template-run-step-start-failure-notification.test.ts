@@ -434,6 +434,10 @@ describe('template run steps the provider refuses at start', () => {
       type: 'generation_failed',
       category: 'generation',
       title: 'Your image failed',
+      // A step's creation is kept out of the library, so the tap opens the
+      // run, where the step is retried.
+      body: 'Open your template run to retry this step.',
+      deep_link: '/template-runs/run-1',
       object_type: 'generation',
       object_id: generationId,
       dedupe_key: `generation:${generationId}:failed`,

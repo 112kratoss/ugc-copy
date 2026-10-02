@@ -301,6 +301,9 @@ const NOTIFICATION_ROUTE_PATTERNS = [
   /^\/showcase\/[^/]+$/,
   /^\/creators\/[^/]+$/,
   /^\/marketplace\/[^/]+$/,
+  // Where a template step's notification leads: the run has the retry and the
+  // review, and the step's own creation is kept out of the library.
+  /^\/template-runs\/[^/]+$/,
 ] as const;
 
 function isAllowedNotificationDeepLink(target: string) {

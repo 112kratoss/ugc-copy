@@ -2,6 +2,7 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { notifyGenerationStatus } from '@/lib/mobile-notifications';
+import { placeFinishedTemplateStep } from '@/lib/template-step-announcement';
 
 import {
   claimGenerationOutputImportJobs,
@@ -18,7 +19,10 @@ export const GENERATION_OUTPUT_IMPORT_BATCH_LIMIT = 4;
 // Admission deadline, not an interruption of an import already persisting.
 export const GENERATION_OUTPUT_IMPORT_TIME_BUDGET_MS = 60_000;
 
-type GenerationRow = SyncableGenerationRecord & { workflow_settings?: Record<string, unknown> | null };
+type GenerationRow = SyncableGenerationRecord & {
+  workflow_settings?: Record<string, unknown> | null;
+  template_run_step_id?: string | null;
+};
 
 function retryDelay(attempt: number) {
   return Math.min(15 * 60, 60 * (2 ** Math.max(0, attempt)));
@@ -27,7 +31,7 @@ function retryDelay(attempt: number) {
 async function loadGeneration(client: SupabaseClient, id: string): Promise<GenerationRow> {
   const { data, error } = await client
     .from('generations')
-    .select('id, user_id, prediction_id, status, output_url, model, category, workflow_settings, created_at, completed_at')
+    .select('id, user_id, prediction_id, status, output_url, model, category, workflow_settings, created_at, completed_at, template_run_id, template_run_step_id')
     .eq('id', id)
     .single();
   if (error) throw error;
@@ -69,6 +73,34 @@ async function importOne(client: SupabaseClient, job: GenerationOutputImportJob)
   return generation;
 }
 
+/**
+ * Tells the creator their render is ready.
+ *
+ * An ordinary creation is always announced. A template step is announced when
+ * the run then waits on the person, or is done: its result goes to a review,
+ * or it is the result of the run. A step the run carries on from by itself is
+ * not, because the person asked for the result and not for each render on the
+ * way to it. A step that cannot be placed is announced, without saying which
+ * it is: a notification too many costs less than a run waiting for a review
+ * that nobody was told about.
+ */
+async function announceImportedOutput(client: SupabaseClient, generation: GenerationRow) {
+  const templateRunId = generation.template_run_id;
+  if (!templateRunId) {
+    await notifyGenerationStatus(client, generation, 'succeeded');
+    return;
+  }
+
+  const place = await placeFinishedTemplateStep(client, {
+    id: generation.id,
+    template_run_id: templateRunId,
+    template_run_step_id: generation.template_run_step_id,
+  });
+  if (place === 'intermediate') return;
+
+  await notifyGenerationStatus(client, generation, 'succeeded', place === 'unplaced' ? undefined : place);
+}
+
 export async function processGenerationOutputImportJobs(params: {
   client: SupabaseClient;
   lockedBy: string;
@@ -95,7 +127,7 @@ export async function processGenerationOutputImportJobs(params: {
       const generation = await importOne(params.client, job);
       // The import now owns the success transition formerly handled by status
       // polling. The notification's generation/status dedupe key covers retries.
-      await notifyGenerationStatus(params.client, generation, 'succeeded');
+      await announceImportedOutput(params.client, generation);
       await finishGenerationOutputImportJob({
         client: params.client,
         id: job.id,

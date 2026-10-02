@@ -39,7 +39,7 @@ import {
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { readProviderFailureReason, UNKNOWN_PROVIDER_FAILURE } from '@/lib/provider-failure-messages';
 
-const IMAGE_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, workflow_settings, error_message';
+const IMAGE_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, workflow_settings, error_message, template_run_id';
 
 type ImageStatusGenerationRow = {
   id: string;
@@ -53,6 +53,8 @@ type ImageStatusGenerationRow = {
   category: string | null;
   workflow_settings?: unknown;
   error_message?: string | null;
+  /** The template run this generation is a step of, for the failure notification. */
+  template_run_id?: string | null;
 };
 
 export type ImageGenerationStatusDependencies = {
@@ -335,6 +337,7 @@ export async function getImageGenerationStatusForRoute({
           user_id: localGeneration.user_id,
           category: localGeneration.category,
           model: localGeneration.model,
+          template_run_id: localGeneration.template_run_id,
         }, 'failed'));
       }
     }

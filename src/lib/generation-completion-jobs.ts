@@ -6,7 +6,7 @@ import {
   settleGenerationFailed,
 } from '@/lib/generation-services';
 import { syncGenerationStatusByPredictionId } from '@/lib/generation-status-sync';
-import { notifyGenerationStatus } from '@/lib/mobile-notifications';
+import { notifyGenerationStatus, type GenerationNotificationSubject } from '@/lib/mobile-notifications';
 
 const DEFAULT_LOCK_TTL_SECONDS = 300;
 const DEFAULT_RETRY_DELAY_SECONDS = 60;
@@ -262,17 +262,13 @@ async function notifyAbandonedGeneration(client: SupabaseClient, predictionId: s
   try {
     const { data, error } = await client
       .from('generations')
-      .select('id, user_id, category, model')
+      .select('id, user_id, category, model, template_run_id')
       .eq('prediction_id', predictionId)
       .maybeSingle();
     if (error) throw error;
     if (!data) return;
 
-    await notifyGenerationStatus(
-      client,
-      data as { id: string; user_id: string; category: string | null; model: string | null },
-      'failed',
-    );
+    await notifyGenerationStatus(client, data as GenerationNotificationSubject, 'failed');
   } catch (error) {
     logBackendError('failed_to_notify_abandoned_generation', { predictionId, error });
   }

@@ -60,7 +60,8 @@ async function notificationFor(
   const history = createMobileNotificationHistory();
   await notifyGenerationStatus(
     withMobileNotificationHistory(NO_OTHER_TABLES, history),
-    { id: 'gen-1', user_id: 'user-1', ...generation },
+    // An ordinary creation, said to be one: left unsaid, the notifier reads the row to find out.
+    { id: 'gen-1', user_id: 'user-1', template_run_id: null, ...generation },
     status,
   );
 

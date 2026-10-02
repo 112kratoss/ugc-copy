@@ -176,6 +176,9 @@ function createRunDatabase(kind: 'image' | 'video' | 'voiceover', options: RunDa
         refunded: false,
         client_request_key_hash: args.p_client_request_key_hash,
         submission_unknown_at: null,
+        // A canvas step is an ordinary creation: it belongs to no template run.
+        template_run_id: null,
+        template_run_step_id: null,
       };
       tables.generations.push(generation);
       return {
@@ -302,6 +305,8 @@ describe('a workflow run step the provider refuses at start', () => {
       type: 'generation_failed',
       category: 'generation',
       title,
+      // A canvas step's creation is in the library, and the tap opens it there.
+      deep_link: '/viewer?source=studio-creations&initialId=gen-1',
       object_type: 'generation',
       object_id: 'gen-1',
       dedupe_key: 'generation:gen-1:failed',

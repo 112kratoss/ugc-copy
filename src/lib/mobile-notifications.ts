@@ -327,8 +327,15 @@ export function toMobileNotificationRecord(row: NotificationRow): MobileNotifica
   };
 }
 
+/**
+ * The app opens a link only when its route is on the list in
+ * `ugc-mobile/lib/notifications.ts`, and does nothing with any other. Each
+ * kind here has a line in `contracts/mobile-api-v1.json` that both test suites
+ * read: a new kind goes there, and onto the app's list, before it is sent.
+ */
 export function buildMobileNotificationDeepLink(target:
   | { kind: 'generation'; generationId: string }
+  | { kind: 'templateRun'; runId: string }
   | { kind: 'showcasePost'; postId: string }
   | { kind: 'marketplaceResource'; resourceId: string }
   | { kind: 'creatorProfile'; username: string }
@@ -336,6 +343,10 @@ export function buildMobileNotificationDeepLink(target:
 ) {
   if (target.kind === 'generation') {
     return `/viewer?source=studio-creations&initialId=${encodeURIComponent(target.generationId)}`;
+  }
+
+  if (target.kind === 'templateRun') {
+    return `/template-runs/${encodeURIComponent(target.runId)}`;
   }
 
   if (target.kind === 'showcasePost') {
@@ -1402,22 +1413,106 @@ function generationLabel(category?: string | null, model?: string | null) {
   return 'image';
 }
 
+/** What the notifier is told about the generation it announces. */
+export type GenerationNotificationSubject = {
+  id: string;
+  user_id: string;
+  category?: string | null;
+  model?: string | null;
+  /**
+   * The template run this generation is a step of, as the caller read it:
+   * `null` for every other creation. Left `undefined`, the column was not
+   * read and the notifier reads it, so a caller passes on what it has and
+   * never turns a missing value into `null`.
+   */
+  template_run_id?: string | null;
+};
+
+/**
+ * Why a finished template step is announced: its result waits for the person's
+ * review, or it is the result of the run. `template-step-announcement.ts`
+ * tells the two apart, and tells them from a step that is neither.
+ */
+export type FinishedTemplateStep = 'review' | 'result';
+
+/**
+ * The run a generation is a step of, for a caller that did not say. A row that
+ * cannot be read is taken for an ordinary creation, which nearly every one is,
+ * so the notification still goes out.
+ */
+async function readTemplateRunId(adminSupabase: SupabaseClient, generationId: string): Promise<string | null> {
+  try {
+    const { data, error } = await adminSupabase
+      .from('generations')
+      .select('template_run_id')
+      .eq('id', generationId)
+      .maybeSingle();
+    if (error) throw error;
+
+    const templateRunId = (data as { template_run_id?: unknown } | null)?.template_run_id;
+    return typeof templateRunId === 'string' ? templateRunId : null;
+  } catch (error) {
+    logBackendError('generation_notification_run_unread', { generationId, error });
+    return null;
+  }
+}
+
+function templateStepCopy(label: string, status: 'succeeded' | 'failed', finishedStep?: FinishedTemplateStep) {
+  if (status === 'failed') {
+    // The recipe is the template's, so the person running it has no prompt to
+    // adjust. What they can do is retry the step, and the run is where.
+    return { title: `Your ${label} failed`, body: 'Open your template run to retry this step.' };
+  }
+  if (finishedStep === 'review') {
+    return { title: `Your ${label} is ready to review`, body: 'Approve it to keep your template run going.' };
+  }
+  if (finishedStep === 'result') {
+    return { title: `Your ${label} is ready`, body: 'Your template run is finished. Open it to see the result.' };
+  }
+  return { title: `Your ${label} is ready`, body: 'Open your template run to see it.' };
+}
+
+/**
+ * Tells the creator a render finished or failed.
+ *
+ * An ordinary creation opens in the library viewer. A template step cannot:
+ * its creation is kept out of the library (only the run's result joins it,
+ * once the run has succeeded), so a link to it opens "This isn't available
+ * anymore". Its notification leads to the run, where a failed step is retried
+ * and a finished one is reviewed, and it is worded for the run.
+ *
+ * `finishedStep` says why a finished template step is being announced. It is
+ * left out for a failure, and means nothing for an ordinary creation.
+ */
 export async function notifyGenerationStatus(
   adminSupabase: SupabaseClient,
-  generation: { id: string; user_id: string; category?: string | null; model?: string | null },
-  status: 'succeeded' | 'failed'
+  generation: GenerationNotificationSubject,
+  status: 'succeeded' | 'failed',
+  finishedStep?: FinishedTemplateStep,
 ) {
   const label = generationLabel(generation.category, generation.model);
+  const templateRunId = (generation.template_run_id === undefined
+    ? await readTemplateRunId(adminSupabase, generation.id)
+    : generation.template_run_id) || null;
+  const copy = templateRunId
+    ? templateStepCopy(label, status, finishedStep)
+    : {
+      title: status === 'succeeded' ? `Your ${label} is ready` : `Your ${label} failed`,
+      body: status === 'succeeded'
+        ? 'Open it in your mobile history.'
+        : 'Open Magicbooklet to try again or adjust the prompt.',
+    };
+
   return createMobileNotificationSafely({
     adminSupabase,
     userId: generation.user_id,
     type: status === 'succeeded' ? 'generation_succeeded' : 'generation_failed',
     category: 'generation',
-    title: status === 'succeeded' ? `Your ${label} is ready` : `Your ${label} failed`,
-    body: status === 'succeeded'
-      ? 'Open it in your mobile history.'
-      : 'Open Magicbooklet to try again or adjust the prompt.',
-    deepLink: buildMobileNotificationDeepLink({ kind: 'generation', generationId: generation.id }),
+    title: copy.title,
+    body: copy.body,
+    deepLink: templateRunId
+      ? buildMobileNotificationDeepLink({ kind: 'templateRun', runId: templateRunId })
+      : buildMobileNotificationDeepLink({ kind: 'generation', generationId: generation.id }),
     objectType: 'generation',
     objectId: generation.id,
     dedupeKey: `generation:${generation.id}:${status}`,

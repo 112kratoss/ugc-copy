@@ -40,7 +40,7 @@ import {
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { readProviderFailureReason, UNKNOWN_PROVIDER_FAILURE } from '@/lib/provider-failure-messages';
 
-const VIDEO_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration, error_message';
+const VIDEO_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration, error_message, template_run_id';
 
 type VideoStatusGenerationRow = {
   id: string;
@@ -56,6 +56,8 @@ type VideoStatusGenerationRow = {
   workflow_settings?: unknown;
   duration?: number | null;
   error_message?: string | null;
+  /** The template run this generation is a step of, for the failure notification. */
+  template_run_id?: string | null;
 };
 
 export type VideoGenerationStatusDependencies = {
@@ -439,6 +441,7 @@ export async function getVideoGenerationStatusForRoute({
         user_id: localGeneration.user_id,
         category: localGeneration.category,
         model: localGeneration.model,
+        template_run_id: localGeneration.template_run_id,
       }, 'failed'));
     }
 

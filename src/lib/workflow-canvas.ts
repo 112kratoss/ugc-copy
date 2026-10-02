@@ -1666,7 +1666,7 @@ export function getIncomingEdges(graph: WorkflowCanvasGraph, nodeId: string): Wo
   return graph.edges.filter((edge) => edge.target === nodeId);
 }
 
-function getOutgoingEdges(graph: WorkflowCanvasGraph, nodeId: string): WorkflowCanvasEdge[] {
+export function getOutgoingEdges(graph: WorkflowCanvasGraph, nodeId: string): WorkflowCanvasEdge[] {
   return graph.edges.filter((edge) => edge.source === nodeId);
 }
 

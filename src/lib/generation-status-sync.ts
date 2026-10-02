@@ -378,7 +378,7 @@ async function loadGenerationByPredictionId(
 ): Promise<SyncableGenerationRecord | null> {
   const { data, error } = await supabase
     .from('generations')
-    .select('id, user_id, prediction_id, status, output_url, model, category, workflow_settings, created_at, completed_at')
+    .select('id, user_id, prediction_id, status, output_url, model, category, workflow_settings, created_at, completed_at, template_run_id')
     .eq('prediction_id', predictionId)
     .single();
 
@@ -439,7 +439,7 @@ export async function syncGenerationStatuses(params: {
 
   const { data: generations } = await params.supabase
     .from('generations')
-    .select('id, user_id, prediction_id, status, output_url, model, category, workflow_settings, created_at, completed_at')
+    .select('id, user_id, prediction_id, status, output_url, model, category, workflow_settings, created_at, completed_at, template_run_id')
     .in('id', generationIds);
 
   for (const generation of (generations || []) as SyncableGenerationRecord[]) {
