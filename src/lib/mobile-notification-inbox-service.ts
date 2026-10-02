@@ -144,15 +144,20 @@ export async function getMobileNotificationInboxForRoute(
       return { ok: false, body: { error: 'Unauthorized' }, status: 401 };
     }
 
+    // An alert's place follows its last event: its arrival, or the latest event
+    // grouped into it. Never updated_at, which every write to the row stamps:
+    // marking an alert read is a write, and it used to lift the alert to the
+    // top of the list as "Just now". `id` settles alerts that share a time.
     let query = userSupabase
       .from('mobile_notifications')
-      .select('id, type, category, title, body, deep_link, object_type, object_id, event_count, is_read, created_at, updated_at')
+      .select('id, type, category, title, body, deep_link, object_type, object_id, event_count, is_read, created_at, last_event_at')
       .eq('user_id', userId)
-      .order('updated_at', { ascending: false })
+      .order('last_event_at', { ascending: false })
+      .order('id', { ascending: false })
       .limit(clampLimit(input.limitValue));
 
     if (input.before) {
-      query = query.lt('updated_at', input.before);
+      query = query.lt('last_event_at', input.before);
     }
 
     const [{ data, error }, unreadResult] = await Promise.all([

@@ -287,7 +287,7 @@ export default function NotificationsPage() {
                     </span>
                     <span className="inline-flex items-center gap-1 text-[11px] text-zinc-500 font-medium">
                       <Clock className="h-3 w-3" />
-                      {formatNotificationTime(notification.createdAt, currentTimeMs)}
+                      {formatNotificationTime(notification.updatedAt, currentTimeMs)}
                     </span>
                   </div>
                 </div>

@@ -49,6 +49,12 @@ export interface MobileNotificationRecord {
   eventCount: number;
   isRead: boolean;
   createdAt: string;
+  /**
+   * The alert's last event: its arrival, or the latest event grouped into it.
+   * Clients print it as the alert's age, and the inbox is ordered by it. It is
+   * the row's `last_event_at`, never its `updated_at`, which moves on every
+   * write to the row, marking the alert read included.
+   */
   updatedAt: string;
 }
 
@@ -323,7 +329,7 @@ export function toMobileNotificationRecord(row: NotificationRow): MobileNotifica
     eventCount: rowNumber(row, 'event_count', 1),
     isRead: rowBoolean(row, 'is_read'),
     createdAt: rowString(row, 'created_at') ?? new Date(0).toISOString(),
-    updatedAt: rowString(row, 'updated_at') ?? rowString(row, 'created_at') ?? new Date(0).toISOString(),
+    updatedAt: rowString(row, 'last_event_at') ?? rowString(row, 'created_at') ?? new Date(0).toISOString(),
   };
 }
 
