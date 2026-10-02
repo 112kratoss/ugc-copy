@@ -670,6 +670,39 @@ async function createAggregatedMobileNotification({
   };
 }
 
+/**
+ * Retires the push tokens Expo reported as `DeviceNotRegistered` and returns
+ * how many rows that changed.
+ *
+ * Live rows only. No code reads `disabled_at`: its use is working out
+ * afterwards when a token stopped receiving pushes. A dead token goes on
+ * collecting `DeviceNotRegistered` for every push still on its way to it —
+ * each receipt arrives on its own, and a send Expo refuses is tried twice more
+ * by the retry job — so an unfiltered update moved that time, and `updated_at`
+ * with it, forward to each of those runs.
+ */
+async function retireUnregisteredPushTokens(
+  adminSupabase: SupabaseClient,
+  tokenIds: string[],
+  disabledAt: string,
+): Promise<number> {
+  if (tokenIds.length === 0) {
+    return 0;
+  }
+
+  const { data } = await adminSupabase
+    .from('mobile_push_tokens')
+    .update({
+      is_active: false,
+      disabled_at: disabledAt,
+    })
+    .in('id', tokenIds)
+    .eq('is_active', true)
+    .select('id');
+
+  return data?.length ?? 0;
+}
+
 async function sendMobilePushForNotification(
   adminSupabase: SupabaseClient,
   notification: MobileNotificationRecord & { userId: string }
@@ -793,15 +826,7 @@ async function sendMobilePushForNotification(
       throw new MobileNotificationError('Failed to store mobile push delivery.', 500);
     }
 
-    if (unregisteredTokenIds.length > 0) {
-      await adminSupabase
-        .from('mobile_push_tokens')
-        .update({
-          is_active: false,
-          disabled_at: pushedAt,
-        })
-        .in('id', unregisteredTokenIds);
-    }
+    await retireUnregisteredPushTokens(adminSupabase, unregisteredTokenIds, pushedAt);
   }
 
   await adminSupabase
@@ -1039,14 +1064,7 @@ export async function processPendingMobilePushReceipts(
       .eq('id', deliveryId);
 
     if (receiptErrorCode === 'DeviceNotRegistered' && tokenId) {
-      disabledTokenCount += 1;
-      await adminSupabase
-        .from('mobile_push_tokens')
-        .update({
-          is_active: false,
-          disabled_at: nowIso,
-        })
-        .eq('id', tokenId);
+      disabledTokenCount += await retireUnregisteredPushTokens(adminSupabase, [tokenId], nowIso);
     }
   }
 
@@ -1183,14 +1201,7 @@ async function processRetryableMobilePushDeliveries(
         .eq('id', deliveryId);
 
       if (isDeviceNotRegistered(result.details) && tokenId) {
-        disabledTokenCount += 1;
-        await adminSupabase
-          .from('mobile_push_tokens')
-          .update({
-            is_active: false,
-            disabled_at: nowIso,
-          })
-          .eq('id', tokenId);
+        disabledTokenCount += await retireUnregisteredPushTokens(adminSupabase, [tokenId], nowIso);
       }
     } catch (error) {
       retryFailedCount += 1;
