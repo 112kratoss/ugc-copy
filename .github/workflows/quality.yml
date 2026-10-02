@@ -253,6 +253,14 @@ jobs:
         env:
           SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
 
+      # A step of its own: this file runs the template run job processor, which
+      # claims whichever run job is due, so no other file may be creating
+      # template runs while it does.
+      - name: Test template run retries with real start and settlement SQL
+        run: npx vitest run src/__tests__/template-run-step-busy-retry-database.test.ts
+        env:
+          SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+
       - name: Stop isolated Supabase database
         if: always()
         continue-on-error: true
