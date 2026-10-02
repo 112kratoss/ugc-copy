@@ -208,6 +208,8 @@ export interface SyncableGenerationRecord {
   workflow_settings: Record<string, unknown> | null;
   created_at: string;
   completed_at: string | null;
+  /** The template run this generation is a step of. Read where it is announced. */
+  template_run_id?: string | null;
 }
 
 export type GenerationSyncStatus = 'missing' | 'skipped' | 'waiting' | 'processing' | 'succeeded' | 'failed';

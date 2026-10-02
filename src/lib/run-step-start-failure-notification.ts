@@ -3,7 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendError } from '@/lib/backend-logger';
 import { getRefundedStartGenerationId } from '@/lib/generation-public-failure';
-import { notifyGenerationStatus } from '@/lib/mobile-notifications';
+import { notifyGenerationStatus, type GenerationNotificationSubject } from '@/lib/mobile-notifications';
 
 /**
  * Tells the creator that a run step was refused at start.
@@ -22,8 +22,10 @@ import { notifyGenerationStatus } from '@/lib/mobile-notifications';
  *
  * Only a start whose settlement released the hold itself is announced, which
  * the start service marks on the error it rethrows. The generation is read
- * back so the wording comes from the stored row. Nothing here throws: the step
- * is failed and its credits are back whatever becomes of the notification.
+ * back so the wording comes from the stored row, and so does the link: a
+ * template step's leads to its run, where the step is retried. Nothing here
+ * throws: the step is failed and its credits are back whatever becomes of the
+ * notification.
  */
 export async function notifyRunStepStartFailure(params: {
   /** Service-role: it reads the generation and writes the notification. */
@@ -37,18 +39,14 @@ export async function notifyRunStepStartFailure(params: {
   try {
     const { data, error } = await params.client
       .from('generations')
-      .select('id, user_id, category, model')
+      .select('id, user_id, category, model, template_run_id')
       .eq('id', generationId)
       .eq('user_id', params.userId)
       .maybeSingle();
     if (error) throw error;
     if (!data) return;
 
-    await notifyGenerationStatus(
-      params.client,
-      data as { id: string; user_id: string; category: string | null; model: string | null },
-      'failed',
-    );
+    await notifyGenerationStatus(params.client, data as GenerationNotificationSubject, 'failed');
   } catch (error) {
     logBackendError('failed_to_notify_run_step_start_failure', { generationId, error });
   }

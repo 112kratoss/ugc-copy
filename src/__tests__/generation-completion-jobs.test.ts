@@ -606,7 +606,7 @@ describe('generation completion jobs', () => {
       history.release();
       await expect(processing).resolves.toEqual({ claimed: 1, completed: 0, retried: 0, failed: 1 });
 
-      expect(renders.select).toHaveBeenCalledWith('id, user_id, category, model');
+      expect(renders.select).toHaveBeenCalledWith('id, user_id, category, model, template_run_id');
       expect(renders.eq).toHaveBeenCalledWith('prediction_id', 'task-1');
       expect(history.sent).toEqual([expect.objectContaining({
         user_id: 'user-1',

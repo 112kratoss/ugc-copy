@@ -36,6 +36,8 @@ function createStatusClientMock(
       mode: '1080p',
       duration: 6,
     },
+    // An ordinary creation is a step of no template run.
+    template_run_id: null,
     ...overrides,
   };
   const createSignedUrl = vi.fn(async (path: string) => ({
@@ -174,7 +176,7 @@ describe('getMotionGenerationStatusForRoute', () => {
     // model, completed_at or workflow_settings, so reading it as the user denies
     // the row and the caller reports a phantom "Generation not found".
     expect(adminClient.selects).toEqual([
-      'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration, error_message',
+      'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration, error_message, template_run_id',
     ]);
     expect(adminClient.eqs).toEqual([
       { column: 'prediction_id', value: 'task-motion-1' },
@@ -338,6 +340,21 @@ describe('motion generation failure notifications', () => {
       }),
     };
   }
+
+  it('leads a template step that a poll finds failed to its run, where the step is retried', async () => {
+    // The library keeps a step's creation out of sight, so a link to it opens
+    // "This isn't available anymore". The poll reads the run and hands it on.
+    const { history, poll } = createPoll({ generation: { template_run_id: 'run-1' } });
+
+    await expect(poll()).resolves.toEqual(failedAnswer);
+
+    expect(history.sent).toEqual([expect.objectContaining({
+      title: 'Your video failed',
+      body: 'Open your template run to retry this step.',
+      deep_link: '/template-runs/run-1',
+      dedupe_key: failedDedupeKey,
+    })]);
+  });
 
   it('answers a failed poll before the creator is told when the caller can run work after the response', async () => {
     // The notification ends in a push request to Expo for the creator's

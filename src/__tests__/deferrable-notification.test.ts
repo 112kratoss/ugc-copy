@@ -77,6 +77,7 @@ describe('notifiers sent behind an answer', () => {
       user_id: 'user-1',
       category: 'video',
       model: 'kling-3.0-video',
+      template_run_id: null,
     }, status),
   ]);
   const followNotifier: [string, (client: SupabaseClient) => Promise<unknown>] = [

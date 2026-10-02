@@ -33,6 +33,7 @@ type GenerationRow = {
   workflow_settings: Record<string, unknown> | null;
   created_at: string;
   completed_at: string | null;
+  template_run_id: string | null;
 };
 
 type Settlement = 'failed' | 'already_succeeded' | 'unavailable';
@@ -51,6 +52,7 @@ function generation(overrides: Partial<GenerationRow> = {}): GenerationRow {
     workflow_settings: null,
     created_at: '2026-10-01T10:00:00.000Z',
     completed_at: null,
+    template_run_id: null,
     ...overrides,
   };
 }

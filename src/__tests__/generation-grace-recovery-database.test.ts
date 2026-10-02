@@ -312,6 +312,8 @@ describe.skipIf(!connectionString)(
           user_id: userId,
           category: 'image',
           model: 'nano-banana-pro',
+          // An ordinary creation: its notification opens it in the library.
+          template_run_id: null,
         },
         'failed',
       );

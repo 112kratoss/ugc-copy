@@ -349,6 +349,7 @@ export async function reapStalledGenerations(params: {
             user_id: row.user_id,
             category: row.category,
             model: row.model,
+            template_run_id: row.template_run_id,
           }, 'failed');
         }
       } else if (status === 'provider_task_attached' || status === 'already_succeeded') {
