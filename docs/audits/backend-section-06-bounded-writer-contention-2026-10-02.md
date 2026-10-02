@@ -1,7 +1,9 @@
 # Section 6R — bounded writers still contend for shared capacity
 
 Date: 2026-10-02. Runtime: merged Section 6Q `a8dd6c1f`.
-Status: reproduction and fix verified locally; CI and release pending.
+Status: deployed in PR #281 as 20862a0b; exact-main CI and standard release passed.
+See [release evidence](backend-section-06-capacity-admission-release-2026-10-03.md).
+The investigation and pre-release checkpoints below are historical.
 The reproduction below used a8dd6c1f; the implementation also incorporates main
 1f31715c and its seven later product/workflow/notification commits.
 
