@@ -121,7 +121,7 @@ describe('MediaLightbox', () => {
 
     const video = tree.root.findByType('video-view' as never);
     expect(video.props.nativeControls).toBe(true);
-    expect(video.props.player.url).toEqual({ uri: 'https://cdn.example.com/camera.mp4' });
+    expect(video.props.player.url).toEqual({ uri: 'https://cdn.example.com/camera.mp4', useCaching: true });
     expect(tree.root.findAll((node) => String(node.type) === 'stable-image')).toHaveLength(0);
   });
 
