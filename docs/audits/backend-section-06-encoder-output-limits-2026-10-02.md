@@ -1,7 +1,9 @@
 # Section 6Q — bounded encoder output in actual runners
 
 Date: 2026-10-02. Base: `626f398ca01d179113663868d76d658e332184e1`.
-Status: implemented and locally verified; PR/exact-main Quality and release pending.
+Status: merged in [PR #277](https://github.com/112kratoss/ugc-copy/pull/277) as
+`a8dd6c1fa40a1a74d4f1f5115d611f830a8ced28`; deployed and independently verified.
+See [release evidence](backend-section-06-encoder-output-limits-release-2026-10-02.md).
 
 ## Reproduction and change
 
@@ -58,7 +60,11 @@ metadata, bound decoded memory, or prevent concurrent ENOSPC.
   private `.audit-evidence/**` is excluded. Initial unrestricted lint traversed
   generated private bundles and failed; none of those bundles is included in the PR.
 - Quality now runs the committed actual-output regression alongside the existing
-  real scratch/abort/orphan regression. Final CI build/native tracing is still required.
+  real scratch/abort/orphan regression. PR Quality [36989530190](https://github.com/112kratoss/ugc-copy/actions/runs/36989530190)
+  passed all four jobs first attempt: 6,407 web tests (121 skips), 2,848 mobile tests,
+  19 browser tests, 1,941 SQL assertions, 122 DB checks (one child-harness skip),
+  all three real FFmpeg probes and 163 native route traces. The static Linux
+  FFmpeg CI fixture produced a 2,002-byte source and exactly 2,048-byte capped output.
 
 Private logs and reproducible Linux bundling inputs are preserved under
 `.audit-evidence/backend-section-06q/`; prior evidence remains intact. The Linux

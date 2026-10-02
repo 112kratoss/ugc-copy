@@ -26,7 +26,7 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 async function create() {
-  const workspace = await createStagingWorkspace(); workspaces.push(workspace);
+  const workspace = await createStagingWorkspace(1024); workspaces.push(workspace);
   await writeFile(path.join(workspace.directory, 'media'), 'active staged bytes');
   return workspace;
 }
@@ -71,6 +71,29 @@ async function freshProcessSweep() {
 }
 
 describe('staging workspace inherited locks', () => {
+  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, 1.5])('rejects invalid reservation %s before allocation', async (budget) => {
+    await expect(createStagingWorkspace(budget)).rejects.toMatchObject({ code: 'STAGING_CAPACITY' });
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  it.each(['', 'foreign', 'magicbooklet-capacity-v1 -1\n'])('fails closed around an active unknown reservation %j', async (claim) => {
+    const active = await create();
+    await writeFile(path.join(active.directory, 'lease'), claim);
+    await expect(createStagingWorkspace(1024)).rejects.toMatchObject({ code: 'STAGING_CAPACITY' });
+    expect(await readFile(path.join(active.directory, 'media'), 'utf8')).toBe('active staged bytes');
+    expect(await reclaimAbandonedStagingWorkspaces()).toBe(0);
+  });
+
+  it('seals a completed source idempotently and preserves its bytes and reader lease', async () => {
+    const active = await create();
+    await Promise.all([active.seal(), active.seal()]);
+    expect(await readFile(path.join(active.directory, 'sealed'), 'utf8')).toBe('complete\n');
+    expect(await reclaimAbandonedStagingWorkspaces()).toBe(0);
+    expect(await readFile(path.join(active.directory, 'media'), 'utf8')).toBe('active staged bytes');
+    await active.cleanup();
+    expect(await readdir(path.join(root, STAGING_ROOT_NAME))).toEqual([]);
+  });
+
   it('a fresh process reaches dead owners behind 128 unpublished entries in real directory order', async () => {
     const { child, directories } = await manyOwners(130);
     for (const directory of directories.slice(0, 128)) await unlink(path.join(directory, 'ready'));
@@ -214,7 +237,7 @@ describe('staging workspace inherited locks', () => {
     const foreign = path.join(root, 'foreign'); await mkdir(foreign);
     await writeFile(path.join(foreign, 'keep'), 'foreign');
     await symlink(foreign, path.join(root, STAGING_ROOT_NAME));
-    await expect(createStagingWorkspace()).rejects.toThrow('Unsafe staging');
+    await expect(createStagingWorkspace(1024)).rejects.toThrow('Unsafe staging');
     expect(await readdir(foreign)).toEqual(['keep']);
   });
 });

@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
+import { StagingCapacityError } from '@/lib/staging-workspace';
 import {
   repairGenerationPlaybackRendition,
   GENERATION_PLAYBACK_MAX_BYTES,
@@ -64,14 +65,16 @@ function fixture(
     })),
     storage: { from: vi.fn(() => storage) },
     from: () => ({
-      select: () => ({
-        eq: () => ({
+      select: () => {
+        const query = {
+          eq: (key: string, value: unknown) => { guards.push([key, value]); return query; },
           maybeSingle: async () => ({
-            data: options.deleted ? null : { id: 'generation' },
+            data: options.deleted ? null : { id: 'generation', playback_rendition_attempt_count: 3 },
             error: null,
           }),
-        }),
-      }),
+        };
+        return query;
+      },
       update: (values: Record<string, unknown>) => {
         updates.push(values);
         const q = {
@@ -180,4 +183,14 @@ it('degrades only when its migration is absent', async () => {
 it('passes the source workspace lease to the playback encoder', async () => {
   await repairGenerationPlaybackRendition(fixture().db as never);
   expect(encode).toHaveBeenCalledWith('/tmp/input.mp4', 1024, { signal: expect.any(AbortSignal), sourceLeaseFd: 99 });
+});
+
+it('defers disk admission without spending the final playback attempt or uploading', async () => {
+  encode.mockRejectedValue(new StagingCapacityError());
+  const f = fixture();
+  await expect(repairGenerationPlaybackRendition(f.db as never)).resolves.toEqual({ attempted: 1, completed: 0, failed: 1 });
+  expect(f.storage.upload).not.toHaveBeenCalled();
+  expect(f.updates).toEqual([expect.objectContaining({ playback_rendition_attempt_count: 2, playback_rendition_locked_by: null, playback_rendition_status: 'failed' })]);
+  expect(f.guards).toContainEqual(['playback_rendition_attempt_count', 3]);
+  expect(f.guards).toContainEqual(['output_url', 'generated_videos/owner/original.mp4']);
 });

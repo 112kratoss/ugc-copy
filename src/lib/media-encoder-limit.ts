@@ -23,7 +23,7 @@ async function measureShellUnit() {
   if (!['linux', 'darwin'].includes(process.platform)) {
     throw new Error('Media output limits require a supported POSIX runtime.');
   }
-  const workspace = await createMediaScratchWorkspace();
+  const workspace = await createMediaScratchWorkspace(8192);
   try {
     const file = path.join(workspace.mediaDirectory, 'limit-probe');
     // Shells differ in units, including macOS sh vs Linux sh. Test the actual

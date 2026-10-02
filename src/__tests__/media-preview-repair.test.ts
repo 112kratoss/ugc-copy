@@ -262,11 +262,11 @@ describe('rendition byte admission (F14)', () => {
   });
 
   it('still applies the attempt cap to whatever the RPC returns', async () => {
-    // Defence in depth: the RPC filters by attempts, but the app must not
-    // depend on a database function to enforce a spend cap.
+    // Claims return the already-reserved ordinal: 3 is the final valid
+    // attempt; 4 is beyond the cap even for a leased claim.
     const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
     const { client } = createAdmissionClient([
-      { id: 'm1', storage_path: 'a.mp4', content_type: 'video/mp4', rendition_attempt_count: 3 },
+      { id: 'm1', storage_path: 'a.mp4', content_type: 'video/mp4', rendition_attempt_count: 4 },
     ]);
 
     const summary = await repairPostMediaRenditions(client as never);
@@ -709,7 +709,8 @@ describe('showcase feed rendition repair', () => {
         })),
         update: vi.fn((payload: Record<string, unknown>) => {
           updates.push({ table, payload });
-          return { eq: vi.fn(async () => ({ error: null })) };
+          const query = { eq: vi.fn(() => query), then: (resolve: (result: { error: null }) => unknown) => Promise.resolve({ error: null }).then(resolve) };
+          return query;
         }),
       })),
       storage: { from: storageFrom },
@@ -844,6 +845,26 @@ describe('showcase feed rendition repair', () => {
         }),
       }),
     ]));
+  });
+
+  it('does not consume a rendition attempt when shared disk admission refuses encoding', async () => {
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    const { StagingCapacityError } = await import('@/lib/staging-workspace');
+    const { supabase, updates } = createRenditionClient([{ ...pendingVideoRow, rendition_attempt_count: 2 }]);
+    renditionMocks.createPostMediaRendition.mockRejectedValueOnce(new StagingCapacityError());
+    await repairPostMediaRenditions(withAdmissionFallback(supabase) as never);
+    expect(updates.at(-1)?.payload).toMatchObject({ rendition_status: 'failed', rendition_attempt_count: 2 });
+  });
+
+  it('runs an already reserved final attempt and restores it on capacity denial', async () => {
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    const { StagingCapacityError } = await import('@/lib/staging-workspace');
+    const row = { ...pendingVideoRow, rendition_attempt_count: 3 };
+    const { supabase, updates } = createRenditionClient([row]);
+    renditionMocks.createPostMediaRendition.mockRejectedValueOnce(new StagingCapacityError());
+    const summary = await repairPostMediaRenditions({ ...supabase, rpc: async () => ({ data: [row], error: null }) } as never);
+    expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
+    expect(updates.at(-1)?.payload).toMatchObject({ rendition_attempt_count: 2 });
   });
 
   it('keeps a landed teaser and the probed duration when the transcode then fails', async () => {

@@ -5,7 +5,8 @@ import { ReadableStream } from 'node:stream/web';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const fixture = vi.hoisted(() => ({ open: vi.fn() }));
-vi.mock('@/lib/remote-media-security', () => ({
+vi.mock('@/lib/remote-media-security', async (original) => ({
+  ...await original<typeof import('@/lib/remote-media-security')>(),
   openAllowlistedRemoteMedia: fixture.open,
 }));
 import { STAGING_ROOT_NAME } from '@/lib/staging-workspace';

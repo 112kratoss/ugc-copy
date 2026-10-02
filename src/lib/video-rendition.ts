@@ -272,7 +272,7 @@ export async function createVideoRenditionFromFile(
   }
   // Anything at/above the savings threshold would already be discarded.
   const maxOutputBytes = Math.max(1024, Math.ceil(sourceBytes * RENDITION_MIN_SAVING_RATIO / 1024) * 1024);
-  const workspace = await createMediaScratchWorkspace();
+  const workspace = await createMediaScratchWorkspace(maxOutputBytes);
   const outputPath = path.join(workspace.mediaDirectory, 'rendition.mp4');
 
   try {
@@ -313,7 +313,7 @@ export async function createVideoRenditionFromFile(
  * the feed streams, not saving bytes over the source.
  */
 export async function createVideoTeaserFromFile(inputPath: string, sourceLeaseFd?: number): Promise<VideoRenditionResult> {
-  const workspace = await createMediaScratchWorkspace();
+  const workspace = await createMediaScratchWorkspace(VIDEO_TEASER_MAX_OUTPUT_BYTES);
   const outputPath = path.join(workspace.mediaDirectory, 'teaser.mp4');
 
   try {
@@ -354,7 +354,7 @@ export async function withVideoInputFile<T>(
     );
   }
 
-  const workspace = await createMediaScratchWorkspace();
+  const workspace = await createMediaScratchWorkspace(sourceBytes);
   const inputPath = path.join(workspace.mediaDirectory, 'input-video');
 
   try {
@@ -362,6 +362,7 @@ export async function withVideoInputFile<T>(
       Readable.fromWeb(body.stream() as NodeReadableStream<Uint8Array>),
       createWriteStream(inputPath, { flags: 'wx' }),
     );
+    await workspace.seal();
     return await work(inputPath, sourceBytes, workspace.readerLeaseFd);
   } finally {
     await workspace.cleanup();

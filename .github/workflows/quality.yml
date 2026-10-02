@@ -43,6 +43,9 @@ jobs:
       - name: Verify encoder output bounds with real FFmpeg
         run: npx tsx --tsconfig tsconfig.scripts.json scripts/audits/audit-media-output-limits.ts
 
+      - name: Verify cross-process staging admission
+        run: npx tsx --tsconfig tsconfig.scripts.json scripts/audits/audit-staging-admission.ts
+
       - name: Lint
         run: npm run lint
 

@@ -8,6 +8,7 @@ import {
   appendFile,
   readdir,
   rm,
+  statfs,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -501,6 +502,40 @@ describe.skipIf(!connectionString || Boolean(workerMode))(
         [taskId],
       );
     }
+    it('retries actual staging admission denial without settlement or duplicate charge', async () => {
+      const { createStagingWorkspace, STAGING_ROOT_NAME } = await import('@/lib/staging-workspace');
+      const priorTmpdir = process.env.TMPDIR;
+      process.env.TMPDIR = directory;
+      let reservation: Awaited<ReturnType<typeof createStagingWorkspace>> | undefined;
+      try {
+        const space = await statfs(directory);
+        // Reserve almost all free space without allocating a large physical file.
+        // Leave the 64 MiB maximum safety margin plus 16 MiB of slack (below the 25 MiB image ceiling).
+        const budget = space.bavail * space.bsize - 80 * 1024 * 1024;
+        expect(budget).toBeGreaterThan(25 * 1024 * 1024);
+        reservation = await createStagingWorkspace(budget);
+        await db.query('select public.enqueue_generation_output_import_job($1,$2)',
+          [generationId, JSON.stringify(['https://provider.invalid/output.png'])]);
+        expect(await recover('import')).toMatchObject({ claimed: 1, completed: 0, retried: 1, exhausted: 0 });
+        expect(await state()).toMatchObject({ status: 'processing', refunded: false,
+          credits: 380, promotional_credits: 80, notifications: 0, imports: 1 });
+        expect(await readdir(join(directory, STAGING_ROOT_NAME))).toHaveLength(1);
+        await expect(readFile(join(directory, 'uploads.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' });
+        await reservation.cleanup();
+        // Advance only the isolated fixture's retry eligibility.
+        await db.query("update public.generation_output_import_jobs set next_attempt_at=now()-interval '1 second' where generation_id=$1", [generationId]);
+        expect(await recover('import')).toMatchObject({ claimed: 1, completed: 1, exhausted: 0 });
+        expect(await state()).toMatchObject({ status: 'succeeded', refunded: false,
+          credits: 380, promotional_credits: 80, notifications: 1, imports: 1 });
+        expect(await recover('import')).toMatchObject({ claimed: 0 });
+        expect((await readFile(join(directory, 'uploads.jsonl'), 'utf8')).trim().split('\n')).toHaveLength(1);
+        expect(await readdir(join(directory, STAGING_ROOT_NAME))).toEqual([]);
+      } finally {
+        await reservation?.cleanup();
+        if (priorTmpdir === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = priorTmpdir;
+      }
+    }, 60_000);
+
     for (const point of ['after-reservation', 'after-provider-accept']) {
       it(`recovers a start after SIGKILL ${point}`, async () => {
         await db.query('delete from public.generations where id=$1', [

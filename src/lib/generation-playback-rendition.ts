@@ -1,3 +1,4 @@
+import { deferMediaRepairCapacity } from '@/lib/media-repair-capacity';
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
@@ -125,6 +126,9 @@ export async function repairGenerationPlaybackRendition(supabase: SupabaseClient
       throw new Error('Playback source or lease changed before publication.');
     return { attempted: 1, completed: 1, failed: 0 };
   } catch (error) {
+    if (await deferMediaRepairCapacity({ supabase, error, kind: 'playback_rendition', id: row.id, lockedBy, source: row.output_url })) {
+      return { attempted: 1, completed: 0, failed: 1 };
+    }
     if (uploadedPath) {
       // A different lease may be publishing the same content hash, so retain
       // it while the generation exists. A deleted generation cannot publish.

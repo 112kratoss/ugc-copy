@@ -1,3 +1,4 @@
+import { mediaRepairAttemptAfterFailure } from '@/lib/media-repair-capacity';
 import { postMediaStorageBucket } from '@/lib/post-media-storage';
 import { randomUUID } from 'node:crypto';
 import { hasRepairablePostMediaTeasers, repairPostMediaTeasers } from '@/lib/post-media-teaser-repair';
@@ -108,12 +109,13 @@ function hasRows(data: unknown): boolean {
   return Array.isArray(data) && data.length > 0;
 }
 
-export function canRepairPreview(attemptCount: number | null | undefined): boolean {
-  return (attemptCount ?? 0) < MAX_PREVIEW_ATTEMPTS;
+export function canRepairPreview(attemptCount: number | null | undefined, leased = false): boolean {
+  // The claim already consumed this attempt; its final ordinal must still run.
+  return (attemptCount ?? 0) < MAX_PREVIEW_ATTEMPTS + (leased ? 1 : 0);
 }
 
-export function canRepairRendition(attemptCount: number | null | undefined): boolean {
-  return (attemptCount ?? 0) < MAX_RENDITION_ATTEMPTS;
+export function canRepairRendition(attemptCount: number | null | undefined, leased = false): boolean {
+  return (attemptCount ?? 0) < MAX_RENDITION_ATTEMPTS + (leased ? 1 : 0);
 }
 
 /**
@@ -194,7 +196,7 @@ export async function hasRepairableMediaPreviews(supabase: SupabaseClient): Prom
 function previewFailure(error: unknown, reservedAttempt: number) {
   return {
     preview_status: 'failed',
-    preview_attempt_count: Math.min(MAX_PREVIEW_ATTEMPTS, reservedAttempt),
+    preview_attempt_count: Math.min(MAX_PREVIEW_ATTEMPTS, mediaRepairAttemptAfterFailure(error, reservedAttempt)),
     preview_error: summarizeMediaToolError(error, 'Preview generation failed.'),
   };
 }
@@ -596,7 +598,7 @@ async function repairPostMediaRendition(
   } catch (error) {
     const failure = supabase.from('post_media').update({
       rendition_status: 'failed',
-      rendition_attempt_count: Math.min(MAX_RENDITION_ATTEMPTS, reservedAttempt),
+      rendition_attempt_count: Math.min(MAX_RENDITION_ATTEMPTS, mediaRepairAttemptAfterFailure(error, reservedAttempt)),
       rendition_error: summarizeMediaToolError(error, 'Rendition generation failed.'),
       // The whole point of teaser-first: a timeout here must not lose the
       // teaser that already uploaded, nor the probed duration.
@@ -697,7 +699,7 @@ export async function repairPostMediaRenditions(
     return { attempted: 0, completed: 0, failed: 0 };
   }
 
-  const rows = claimed.rows.filter((row) => canRepairRendition(row.rendition_attempt_count));
+  const rows = claimed.rows.filter((row) => canRepairRendition(row.rendition_attempt_count, claimed.leased));
 
   // Sequential on purpose: concurrent ffmpeg processes would contend for the
   // same one or two cores and push the job past its duration budget.
@@ -983,7 +985,7 @@ export async function repairMediaPreviews(
   ]);
   const repairRows = [
     ...generations.rows
-      .filter((row) => canRepairPreview(row.preview_attempt_count))
+      .filter((row) => canRepairPreview(row.preview_attempt_count, generations.leased))
       .map((row) => ({
         row,
         worker: () => repairGeneration(
@@ -993,7 +995,7 @@ export async function repairMediaPreviews(
         ),
       })),
     ...postMedia.rows
-      .filter((row) => canRepairPreview(row.preview_attempt_count))
+      .filter((row) => canRepairPreview(row.preview_attempt_count, postMedia.leased))
       .map((row) => ({
         row,
         worker: () => repairPostMedia(

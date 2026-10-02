@@ -9,6 +9,7 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 
 import {
   openAllowlistedRemoteMedia,
+  MAX_REMOTE_MEDIA_BYTES,
   type RemoteMediaKind,
 } from '@/lib/remote-media-security';
 
@@ -28,7 +29,7 @@ export async function stageAllowlistedRemoteMedia(params: {
   const media = await openAllowlistedRemoteMedia(params);
   let workspace: Awaited<ReturnType<typeof createStagingWorkspace>>;
   try {
-    workspace = await createStagingWorkspace();
+    workspace = await createStagingWorkspace(MAX_REMOTE_MEDIA_BYTES[params.kind]);
   } catch (error) {
     // The response is already open, but no pipeline owns its body yet. Release
     // that source if disk allocation fails, retaining the allocation error.
@@ -42,6 +43,7 @@ export async function stageAllowlistedRemoteMedia(params: {
       Readable.fromWeb(media.body as NodeReadableStream<Uint8Array>),
       createWriteStream(filePath, { flags: 'wx' }),
     );
+    await workspace.seal();
   } catch (error) {
     await workspace.cleanup();
     throw error;
