@@ -1,7 +1,7 @@
 # Section 6S — recover interrupted staging initialization
 
 Date: October 3, 2026. Baseline: 6R merge `20862a0b`, then current main
-`24194f1d`. Status: implemented locally; final CI and release pending.
+`24194f1d`. Status: deployed in PR #288; exact-main CI, standard release and live checks pass.
 
 ## Reproduced failure
 
@@ -68,7 +68,7 @@ each other. Pre-admission writers and unrelated processes remain outside the
 - All three type projects and targeted lint pass. A full suite run under shared
   host load encountered timeouts; later interrupted runs have no completed
   result and are not counted as passes. The completed updated-main suite, with
-  two workers, passes 6,648 tests (129 skipped). Final CI/release remain pending.
+  two workers, passes 6,648 tests (129 skipped). Final CI/release passed; see the linked release evidence below.
 
 Automatic legacy policy is intentionally conservative: older unpublished `item-`
 directories and the five pre-lease namespaces still lack enough ownership evidence
@@ -83,3 +83,5 @@ not a production latency or capacity certificate.
 Private reproducible scripts, baseline/candidate/final results and failed harness
 logs are under `.audit-evidence/backend-section-06s/`. No migration, dependency,
 mobile change, provider charge or production contention probe is introduced.
+
+Release evidence: [Section 6S release](backend-section-06-metadata-lifecycle-release-2026-10-03.md). Legacy environment retirement remains open.

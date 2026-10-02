@@ -11,24 +11,23 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 
 ## Exact checkpoint
 
-Section 6S PR #288 is merged as dd3d6c13 (October 3, 01:05:01 IST).
-PR Quality 37052965820 passed all four jobs first attempt: 6,648 web tests,
-2,911 mobile, 21 browser, 1,941 SQL assertions, 130 DB cases (one harness skip),
-actual FFmpeg/admission checks and 163 native route traces. No mobile store
-release was active before merge. Exact-main Quality 37055063444 is running;
-standard production release and live verification still need completion.
+Section 6S is deployed as dd3d6c13. PR Quality 37052965820, exact-main Quality
+37055063444 and standard release 37056337938 passed. Release completed October 3
+01:20:18 IST. Independent exact SHA/feed/admin/webhook checks pass. Read
+`backend-section-06-metadata-lifecycle-release-2026-10-03.md`. Legacy environment
+retirement remains unverified, so MEDIA-07 is still open.
 
-Section 7A has begun on a separate branch in the same checkout. Read
-`backend-section-07-template-lifecycle-2026-10-03.md`. Eight additional actual-DB
-lifecycle/concurrency cases pass alongside five existing busy-retry cases. A
-late-refund response bug was reproduced: balance restores correctly after cancel,
-but the DTO says 16 credits used rather than zero. The small runtime fix computes
-creditsUsed from all loaded run generations, preserving retry history and pure
-GET behavior. After-fix 13 DB cases, 45 targeted tests and 6,648 full-web tests pass (137
-skipped). App/test types and targeted lint pass; independent database readback
-is empty. This separate 7A change is ready for PR CI after the merged 6S fix.
-No whole WORKFLOW obligation is closed by this initial matrix. Ledger remains
-22 passed, 27 untested, one failed, three external.
+Section 7A PR #289 (b52ada71 initial commit) is being extended with atomic
+checkpoint retries. Read `backend-section-07-template-lifecycle-2026-10-03.md`.
+The stale late-refund credit DTO bug is fixed, with 13 DB cases and 6,648 web tests
+passing locally. First PR CI 37056295355 exposed the duplicate-retry race, also
+reproduced locally. Deterministic approval/cancel-vs-retry probes both inserted
+unwanted replacement attempts before the next fix. New service-role-only atomic
+RPC replaces the multi-write approval retry. All 17 DB cases pass, including
+rollback when the second insert fails and unchanged balances. Ten repeated suites pass (170 cases), all type projects and targeted lint pass.
+The updated full web suite is running; updated PR CI, clean migration replay,
+merge and release are pending. No workflow obligation is closed by this initial
+matrix. Ledger remains 22 passed, 27 untested, one failed, three external.
 
 The preceding checkpoint follows.
 

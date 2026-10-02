@@ -1,4 +1,4 @@
-# Section 7A — template lifecycle and late-refund projection
+# Section 7A — template lifecycle, refunds and checkpoint concurrency
 
 Date: October 3, 2026. Baseline: `dd3d6c13` (6S merge). Status: initial lifecycle
 matrix and a reproduced reporting fix verified locally; final CI/release pending.
@@ -67,3 +67,31 @@ pending; their final results are recorded in the handoff.
 Private failures, successful runs and the remaining matrix are preserved in
 `.audit-evidence/backend-section-07/`. No customer data, paid provider transaction,
 SQL schema change or mobile runtime change is involved.
+
+## Checkpoint conflicts and atomic replacement
+
+PR #289 first Quality run `37056295355` exposed a concurrent-retry failure:
+one of two simultaneous retry calls was rejected while the other was between
+its separate checkpoint cancellation and replacement inserts. The same test
+also failed locally. This was an application race, not a reason to weaken the
+idempotency assertion or rerun CI until green.
+
+Further deterministic tests hold a retry after its initial read, let a separate
+database connection approve or cancel, then resume it. Both before-fix cases
+incorrectly insert two replacement steps. The checkpoint update matched zero
+rows but its result was ignored. A small compare-and-set candidate fixed those
+two interleavings locally, but retained the multiple-write interruption boundary.
+
+The final fix uses a service-role-only, SECURITY INVOKER RPC. It locks and checks
+the owned run and current checkpoint, verifies the current successful upstream
+step, then cancels the gate, inserts both replacement attempts and queues durable
+execution in one transaction. Approval competes on the checkpoint row; cancellation
+competes on the run row. A retry that loses returns a conflict; duplicate retries
+share the committed next attempt. There is no credit hold until a worker starts it.
+
+The 17 actual-database cases include the two competing-action reproductions,
+concurrent duplicate retries, actual role grants/foreign ownership, and an injected
+PostgreSQL trigger failure on the second insert. That failure leaves the original
+gate and run awaiting approval, with no partial attempt or extra charge; removing
+the fault allows retry. Ten repeated suite runs all pass (170 cases), targeting the earlier scheduling
+failure. App, script and test TypeScript projects and targeted lint pass. Clean migration replay and full PR/main/release gates remain required.

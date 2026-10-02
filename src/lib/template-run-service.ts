@@ -1504,13 +1504,25 @@ export async function retryTemplateRunStep(params: {
     if (!sourceStep || sourceStep.kind !== 'generation' || sourceStep.status !== 'succeeded') {
       throw new MediaTemplateError('The generation before this checkpoint cannot be retried.', 409, 'UPSTREAM_STEP_NOT_RETRYABLE');
     }
-    const cancelledAt = new Date().toISOString();
-    await params.adminClient.from('template_run_steps').update({
-      status: 'cancelled',
-      finished_at: cancelledAt,
-    }).eq('id', step.id).eq('status', 'awaiting_approval');
-    await insertRetryStep(params.adminClient, sourceStep);
-    await insertRetryStep(params.adminClient, step);
+    const { data: result, error: retryError } = await params.adminClient.rpc('retry_template_checkpoint', {
+      p_run_id: state.run.id,
+      p_step_id: step.id,
+      p_source_step_id: sourceStep.id,
+      p_user_id: params.userId,
+    });
+    if (retryError) throw retryError;
+    if (result !== 'retried' && result !== 'existing') {
+      const code = typeof result === 'string' ? result : 'STEP_NOT_RETRYABLE';
+      throw new MediaTemplateError(
+        code === 'RUN_TERMINAL'
+          ? 'This run has ended. Start a new run to try the template again.'
+          : 'This checkpoint was already handled. Refresh the run before retrying.',
+        code === 'RUN_NOT_FOUND' || code === 'STEP_NOT_FOUND' ? 404 : 409,
+        code,
+      );
+    }
+    const next = await loadRunState(params.adminClient, state.run.id, params.userId);
+    return toRunDto(params.adminClient, next);
   }
   await params.adminClient.from('template_runs').update({ status: 'queued', error_message: null })
     .eq('id', state.run.id).in('status', ['awaiting_approval', 'needs_attention']);
