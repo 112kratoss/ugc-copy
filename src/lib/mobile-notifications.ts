@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
+import { isAudioModel, isSoundEffectModel, isVoiceoverModel } from '@/lib/models';
 
 import {
   EXTERNAL_API_REQUEST_TIMEOUT_MS,
@@ -1386,10 +1387,18 @@ async function createMobileNotificationSafely(params: Parameters<typeof createMo
   }
 }
 
-function generationLabel(category?: string | null) {
+function generationLabel(category?: string | null, model?: string | null) {
   if (category === 'video' || category === 'ugc-ad') return 'video';
   if (category === 'motion') return 'motion render';
   if (category === 'text') return 'post';
+  if (category === 'audio' || (model && isAudioModel(model))) {
+    // Voiceovers and sound effects are both stored as `audio`, so the model is
+    // what tells them apart. The names follow the workflow builder's Voiceover
+    // and Sound FX nodes. Audio from a model in neither table stays "audio".
+    if (model && isVoiceoverModel(model)) return 'voiceover';
+    if (model && isSoundEffectModel(model)) return 'sound effect';
+    return 'audio';
+  }
   return 'image';
 }
 
@@ -1398,7 +1407,7 @@ export async function notifyGenerationStatus(
   generation: { id: string; user_id: string; category?: string | null; model?: string | null },
   status: 'succeeded' | 'failed'
 ) {
-  const label = generationLabel(generation.category);
+  const label = generationLabel(generation.category, generation.model);
   return createMobileNotificationSafely({
     adminSupabase,
     userId: generation.user_id,
