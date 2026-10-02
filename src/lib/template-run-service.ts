@@ -58,6 +58,7 @@ import {
 } from '@/lib/upload-finalization';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { resolveTemplateRunMedia, type TemplateMediaGeneration } from '@/lib/template-run-media-delivery';
+import { notifyRunStepStartFailure } from '@/lib/run-step-start-failure-notification';
 import {
   getIncomingEdges,
   getNodeById,
@@ -1242,6 +1243,14 @@ async function advanceTemplateRun(client: SupabaseClient, runId: string, userId:
           ...failureSnapshot(step, failure.code),
           ...(busySince !== null ? { busySince: new Date(busySince).toISOString() } : {}),
         };
+        // A step that ends here has no request waiting to carry the reason, so
+        // a start that was refused and refunded is announced from the worker.
+        // One that goes back in line has not failed, though its credits were
+        // returned too, and neither has the refused attempt of a step that is
+        // being tried again as its next one.
+        if (stepStatus === 'failed' && !retryAsNextAttempt) {
+          await notifyRunStepStartFailure({ client, error, userId });
+        }
         if (retryAsNextAttempt) {
           await insertRetryStep(client, step, {
             error_message: failure.message,

@@ -18,6 +18,7 @@ import {
   getPublicGenerationStartFailure,
 } from '@/lib/generation-public-failure';
 import { syncGenerationStatuses } from '@/lib/generation-status-sync';
+import { notifyRunStepStartFailure } from '@/lib/run-step-start-failure-notification';
 import {
   type ApprovalGateNodeData,
   type AudioInputNodeData,
@@ -1340,6 +1341,12 @@ async function advanceWorkflowRunProgress(params: {
         });
         continue;
       }
+
+      // The step ends here, and no request is waiting to carry the reason, so
+      // a start that was refused and refunded is announced from the worker. It
+      // is announced before the step is marked: a worker that died after
+      // marking it would never be asked about this step again.
+      await notifyRunStepStartFailure({ client: supabase, error, userId: run.user_id });
 
       const message = failure.message || (error instanceof Error
         ? error.message
