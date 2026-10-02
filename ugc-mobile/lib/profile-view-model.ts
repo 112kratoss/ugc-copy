@@ -2,12 +2,17 @@ import type { GenerationListItem, OwnerPostListItem, ProfileResponse, ProfileSta
 import { buildImmersiveShowcaseItems, type ImmersivePreviewItem, type PreviewViewerSource } from './immersive-preview-view-model';
 
 import { isCreationLibraryMember } from './creation-library';
-import { getGenerationKind, getGenerationLabel, getGenerationRenderableMediaKind } from './generation-media';
+import {
+  getGenerationKind,
+  getGenerationLabel,
+  getGenerationRenderableMediaKind,
+  type GenerationMediaKind,
+} from './generation-media';
 import { formatCompactCount, formatRelativeTime } from './home-view-model';
 import { mediaItemAspectRatio } from './media-zoom-transition';
 import { UNKNOWN_AMOUNT_LABEL, formatUnlockCreditPrice } from './pricing';
 
-export type ProfilePreviewState = 'image' | 'videoPoster' | 'videoFallback' | 'text' | 'artFallback';
+export type ProfilePreviewState = 'image' | 'videoPoster' | 'videoFallback' | 'text' | 'audio' | 'artFallback';
 
 export interface ProfileMediaCard {
   id: string;
@@ -32,7 +37,8 @@ export interface ProfileMediaCard {
    * carries its rail and caption from the first frame (`ZoomStill.post`).
    */
   post?: ImmersivePreviewItem | null;
-  previewKind?: 'text';
+  /** A creation that is words, or sound, rather than a picture or video. */
+  previewKind?: 'text' | 'audio';
   previewText?: string;
   previewState?: ProfilePreviewState;
   previewStatusLabel?: string;
@@ -226,8 +232,13 @@ export function getProfileMediaSwipeTarget(currentTab: ProfileMediaTab, directio
 export function generationToProfileMediaCard(item: GenerationListItem): ProfileMediaCard {
   const kind = getGenerationKind(item);
   const mediaKind = getGenerationRenderableMediaKind(kind);
-  const mediaUrl = item.media?.url ?? item.output_urls?.[0] ?? item.output_url ?? null;
-  const posterUrl = item.media?.previewUrl ?? item.previewUrl ?? item.preview_url ?? null;
+  const outputUrl = item.media?.url ?? item.output_urls?.[0] ?? item.output_url ?? null;
+  // A sound file's address is never handed on as `mediaUrl` or as a poster:
+  // both are read by picture and video components, and the tile opens the card
+  // feed, which is where an audio creation plays.
+  const isAudio = kind === 'audio';
+  const mediaUrl = isAudio ? null : outputUrl;
+  const posterUrl = isAudio ? null : item.media?.previewUrl ?? item.previewUrl ?? item.preview_url ?? null;
   // Whether a real derivative exists, as opposed to the source standing in for
   // one: the route answers an image with no poster yet by echoing its own
   // `output_url` back as `preview_url`, so a non-null poster proves nothing on
@@ -235,7 +246,9 @@ export function generationToProfileMediaCard(item: GenerationListItem): ProfileM
   const posterReady = item.media?.gridReady ?? Boolean(posterUrl);
   const previewUrl = posterReady ? posterUrl : null;
   const previewText = kind === 'text' ? item.prompt || item.description || item.title || 'Saved text generation' : undefined;
-  const previewState = getGenerationPreviewState({ kind, mediaKind, mediaUrl, posterReady, posterUrl, previewText });
+  const previewState = getGenerationPreviewState({
+    kind, mediaKind, mediaUrl, posterReady, posterUrl, previewText, hasAudio: isAudio && Boolean(outputUrl),
+  });
   const isArchived = Boolean(item.archived_at);
   // A finished creation earns a tile whether or not its poster job did. The
   // derivative decides what the tile *draws* -- with one it paints the 720px
@@ -254,7 +267,7 @@ export function generationToProfileMediaCard(item: GenerationListItem): ProfileM
   // The library rule the card feed and the reel apply as well, so a tile can
   // only ever open onto a list that contains it.
   const isGridReady = isCreationLibraryMember(item, isArchived ? 'archived' : 'active');
-  const label = getGenerationLabel(kind);
+  const label = getGenerationLabel(kind, item.audioKind);
 
   return {
     id: item.id,
@@ -268,7 +281,7 @@ export function generationToProfileMediaCard(item: GenerationListItem): ProfileM
     previewExpiresAt: item.media?.expiresAt ?? null,
     previewStatus: item.media?.status ?? (posterUrl ? 'ready' : 'pending'),
     mediaKind,
-    previewKind: kind === 'text' ? 'text' : undefined,
+    previewKind: kind === 'text' ? 'text' : previewState === 'audio' ? 'audio' : undefined,
     previewText,
     previewState,
     // "Preview unavailable" is true of the poster and false of the creation:
@@ -468,15 +481,21 @@ function getGenerationPreviewState({
   posterReady,
   posterUrl,
   previewText,
+  hasAudio,
 }: {
-  kind: 'image' | 'video' | 'motion' | 'text';
+  kind: GenerationMediaKind;
   mediaKind: 'image' | 'video' | null;
   mediaUrl: string | null;
   posterReady: boolean;
   posterUrl: string | null;
   previewText?: string;
+  /** An audio creation with a file to play. */
+  hasAudio: boolean;
 }): ProfilePreviewState {
   if (kind === 'text') return previewText?.trim() ? 'text' : 'artFallback';
+  // Sound has no poster to wait for. Its tile is the audio plate, or, for a
+  // file that is gone, the same plate every other unavailable creation draws.
+  if (kind === 'audio') return hasAudio ? 'audio' : 'artFallback';
   if (posterReady && posterUrl) return mediaKind === 'video' ? 'videoPoster' : 'image';
   if (mediaKind === 'video' && mediaUrl) return 'videoFallback';
   return 'artFallback';

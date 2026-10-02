@@ -566,6 +566,9 @@ export function getViewerStateChip(
   }
 
   if (item.sourceType === 'generation') {
+    // Audio cannot be posted, so "Not posted" would report a state it can
+    // never leave.
+    if (item.creationKind === 'audio') return null;
     if (!item.linkedPostId) return { label: 'Not posted', tone: 'neutral' };
     if (item.linkedPostVisibility === 'public') return { label: 'Public post', tone: 'success' };
     if (item.linkedPostVisibility === 'private') return { label: 'Private post', tone: 'warning' };

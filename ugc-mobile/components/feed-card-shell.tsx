@@ -46,6 +46,7 @@ export function FeedCardShell({
   moreAccessibilityLabel,
   renderMoreMenu,
   media,
+  player,
   readMore,
   onOpen,
   onOpenTouchStart,
@@ -72,6 +73,12 @@ export function FeedCardShell({
    */
   renderMoreMenu?: (more: { trigger: NativeMenuTrigger; renderButton: (onPress: () => void) => ReactNode }) => ReactNode;
   media?: ReactNode;
+  /**
+   * Controls that own their taps, such as an audio creation's player. Drawn
+   * outside the card's open target: nested inside it, VoiceOver would read the
+   * card as one button and never reach the play button.
+   */
+  player?: ReactNode;
   /** Its own tap target, beside the preview's ordinary post-open target. */
   readMore?: ReactNode;
   onOpen?: () => void;
@@ -237,6 +244,8 @@ export function FeedCardShell({
       ) : null}
 
       {readMore}
+
+      {player}
 
       <View
         style={{

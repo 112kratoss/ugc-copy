@@ -87,6 +87,23 @@ it('opens an owner image on its display rendition and keeps the original for dow
   expect(item.mediaItems[0].url).toBe('https://cdn.example.test/generation-1.png');
 });
 
+it('plays an audio creation from the owner library as sound, never as a picture', async () => {
+  // The whole path again, contract payload to reel item. The server sends an
+  // audio creation with no `media` descriptor, and the app once read that as
+  // an image whose file could not be drawn.
+  const payload = await clientForEndpoint('listGenerations').listGenerations(false);
+  const voiceover = payload.generations.find(generation => generation.id === 'voiceover-1');
+  const [item] = buildImmersiveGenerationItems('studio-creations', voiceover ? [voiceover] : [], { creatorLabel: '@owner' });
+  expect(item).toMatchObject({
+    previewKind: 'audio',
+    badge: 'Voiceover',
+    mediaKind: null,
+    mediaUrl: null,
+    mediaItems: [],
+    audio: { url: 'https://storage.example.test/generated_audio/owner-1/generated_task.mp3', kind: 'voiceover' },
+  });
+});
+
 const successCases: Array<{
   key: Exclude<ContractEndpointKey, 'mobileUpdateRequired' | 'getPostResourceBundle'>;
   call: (api: MagicbookletApiClient) => Promise<unknown>;

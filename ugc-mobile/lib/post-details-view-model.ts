@@ -217,6 +217,7 @@ export function prepareUnlockedResourcesForDetails(
 }
 
 export function getDetailsBackLabel(item: Pick<ImmersivePreviewItem, 'previewKind'>) {
+  if (item.previewKind === 'audio') return 'Back to audio';
   return item.previewKind === 'text' ? 'Back to post' : 'Back to media';
 }
 

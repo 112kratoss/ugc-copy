@@ -2,7 +2,14 @@ import type { CreatorToolId, GenerationListItem, OwnerPostListItem, PostResource
 
 import { withAppleZoom, type AppleZoomOpen } from './apple-zoom';
 import { getCreationAvailability, type CreationAvailability } from './creation-library';
-import { getGenerationKind, getGenerationLabel, getGenerationRenderableMediaKind } from './generation-media';
+import {
+  getGenerationKind,
+  getGenerationLabel,
+  getGenerationRenderableMediaKind,
+  normalizeGenerationAudioKind,
+  type GenerationAudioKind,
+  type GenerationMediaKind,
+} from './generation-media';
 import { formatCompactCount } from './home-view-model';
 import { formatUnlockCreditPrice } from './pricing';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from './showcase-display';
@@ -65,6 +72,18 @@ export interface ImmersivePostDetails {
   } | null;
 }
 
+/**
+ * The sound of an audio creation. It travels apart from `mediaUrl` and
+ * `mediaItems`, which picture and video components read: a sound file's
+ * address must never reach one of them.
+ */
+export interface ImmersivePreviewAudio {
+  url: string;
+  kind: GenerationAudioKind;
+  /** The length the run was asked for, when it was asked for one; the player reports the real one. */
+  durationSeconds: number | null;
+}
+
 export interface ImmersivePreviewItem {
   isNsfw?: boolean;
   nsfwRevealed?: boolean;
@@ -76,7 +95,12 @@ export interface ImmersivePreviewItem {
   mediaUrl: string | null;
   mediaKind: 'image' | 'video' | null;
   mediaItems: ShowcaseMediaItem[];
-  previewKind?: 'text';
+  /** A slide that is words, or sound, rather than a picture or video. */
+  previewKind?: 'text' | 'audio';
+  /** Present exactly when `previewKind` is `audio`. */
+  audio?: ImmersivePreviewAudio | null;
+  /** What kind of creation a generation is; unset for posts. */
+  creationKind?: GenerationMediaKind;
   creatorLabel: string;
   creatorAvatar: string | null;
   creatorId?: string | null;
@@ -401,9 +425,14 @@ export function getImmersiveStatusSlide(item: ImmersivePreviewItem): { title: st
   }
 
   if (item.runStatus === 'failed') {
+    // Audio is made by workflow steps on the web; the app has no tool to start
+    // it again from.
+    const again = item.creationKind === 'audio'
+      ? 'run its workflow again on magicbooklet.com'
+      : 'start it again from Create';
     return {
       title: 'This render failed',
-      body: `No ${label} came back from the model, so there is nothing to play here. The prompt is on the next page — swipe left to read it, or start it again from Create.`,
+      body: `No ${label} came back from the model, so there is nothing to play here. The prompt is on the next page — swipe left to read it, or ${again}.`,
     };
   }
 
@@ -610,6 +639,20 @@ function generationToImmersiveItem(
   // produced no media cannot do. The rail reads `canShare` rather than
   // `availableActions`, so the two have to agree.
   const hasOutput = Boolean(item.output_url || item.output_urls?.length);
+  const isAudio = kind === 'audio';
+  const outputUrl = item.output_urls?.[0] ?? item.output_url ?? null;
+  const availability = getCreationAvailability(item);
+  // Only a finished audio creation with its file has something to play. One
+  // that failed, is still rendering or lost its file sits on the status page
+  // like any other creation in that state.
+  const audio: ImmersivePreviewAudio | null = isAudio && availability === 'available' && outputUrl
+    ? {
+        url: outputUrl,
+        kind: normalizeGenerationAudioKind(item.audioKind),
+        durationSeconds: typeof item.duration === 'number' && item.duration > 0 ? item.duration : null,
+      }
+    : null;
+  const label = getGenerationLabel(kind, item.audioKind);
 
   return {
     id: item.id,
@@ -617,14 +660,16 @@ function generationToImmersiveItem(
     sourceType: 'generation',
     title,
     displayText,
-    mediaUrl: item.output_urls?.[0] ?? item.output_url ?? null,
+    mediaUrl: isAudio ? null : outputUrl,
     mediaKind,
     mediaItems: getGenerationMediaItemsList(item.id, item.output_urls, item.output_url, mediaKind, previewUrl, item.media),
-    previewKind: kind === 'text' ? 'text' : undefined,
+    previewKind: kind === 'text' ? 'text' : audio ? 'audio' : undefined,
+    audio,
+    creationKind: kind,
     creatorLabel: owner.creatorLabel,
     creatorAvatar: owner.creatorAvatar ?? null,
     createdAt: item.created_at ?? null,
-    badge: getGenerationLabel(kind),
+    badge: label,
     saveLabel: 'Saved',
     saveCount: 0,
     commentLabel: '0',
@@ -632,8 +677,11 @@ function generationToImmersiveItem(
     canComment: false,
     isSaved: true,
     canSave: false,
-    canShare: hasOutput,
+    // Sharing an unposted creation publishes it first, and the server refuses
+    // to publish audio.
+    canShare: hasOutput && !isAudio,
     sharePath: null,
+    // Unread for audio, which never offers `recreate`: no create tool takes it.
     recreateTool: kind === 'motion' ? 'motion' : kind === 'video' ? 'video' : 'image',
     recreatePrompt: item.prompt?.trim() || item.description?.trim() || item.title?.trim() || '',
     showcasePostId: linkedPostId,
@@ -643,7 +691,7 @@ function generationToImmersiveItem(
       title,
       prompt: item.prompt?.trim() ?? '',
       body: item.description?.trim() ?? '',
-      categoryLabel: getGenerationLabel(kind),
+      categoryLabel: label,
       sourceLabel: 'Creations',
       creatorLabel: owner.creatorLabel,
       creatorAvatar: owner.creatorAvatar ?? null,
@@ -668,9 +716,9 @@ function generationToImmersiveItem(
     linkedPostOwnerPath,
     archivedAt: item.archived_at ?? null,
     runStatus: item.status ?? null,
-    availability: getCreationAvailability(item),
+    availability,
     visibility: null,
-    availableActions: getGenerationAvailableActions(item, linkedPostId, linkedPostArchivedAt),
+    availableActions: getGenerationAvailableActions(item, linkedPostId, linkedPostArchivedAt, isAudio),
     disabledActions: item.archived_at
       ? {
           publish: 'This creation is archived',
@@ -691,10 +739,18 @@ function findLinkedOwnerPost(item: GenerationListItem, ownerPosts: OwnerPostList
 function getGenerationAvailableActions(
   item: GenerationListItem,
   linkedPostId: string | null,
-  linkedPostArchivedAt: string | null
+  linkedPostArchivedAt: string | null,
+  isAudio: boolean
 ) {
   if (item.archived_at) {
     return ['restore', 'view-details'];
+  }
+
+  // The server answers 400 to publishing, sharing and remixing audio, and the
+  // app has no tool that makes it. Offering those led to a composer that could
+  // not load the creation and to the image tool holding a voiceover script.
+  if (isAudio) {
+    return ['archive', 'view-details'];
   }
 
   // A run that produced nothing has nothing to publish or share. It reaches

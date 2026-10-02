@@ -123,8 +123,9 @@ describe('shared mobile API v1 contract fixture', () => {
   });
   it('keeps private playback separate from the owner original', () => {
     const video = mobileApiContract.endpoints.listGenerations.response.generations[1];
-    expect(video.media.url).toBe(video.output_url);
-    expect(video.media.renditionUrl).toBe('/api/media?bucket=generated_videos&path=owner-1%2Fplayback%2Fprivate-video-1%2Fabc123.mp4');
+    // `media` is null for an audio creation, so the list's type allows it here too.
+    expect(video.media?.url).toBe(video.output_url);
+    expect(video.media?.renditionUrl).toBe('/api/media?bucket=generated_videos&path=owner-1%2Fplayback%2Fprivate-video-1%2Fabc123.mp4');
     expect(video).not.toHaveProperty('playback_rendition_path');
   });
 

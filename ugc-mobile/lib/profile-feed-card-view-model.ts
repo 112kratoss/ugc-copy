@@ -1,5 +1,5 @@
 import { estimateWrappedLineCount } from './home-feed-view-model';
-import type { ImmersivePreviewItem } from './immersive-preview-view-model';
+import type { ImmersivePreviewAudio, ImmersivePreviewItem } from './immersive-preview-view-model';
 import { formatRelativeTime } from './home-view-model';
 import type { ToolAccent } from './theme';
 import { getViewerStateChip, type ViewerStateTone } from './viewer-actions';
@@ -118,6 +118,8 @@ export interface ProfileFeedCard {
    * media would be, so the card the reader opened is visibly the one they tapped.
    */
   sourceUnavailable: boolean;
+  /** An audio creation's sound: the card draws a player under its title. */
+  audio: ImmersivePreviewAudio | null;
   creatorLabel: string;
   creatorName: string;
   creatorAvatar: string | null;
@@ -147,6 +149,7 @@ export function toProfileFeedCard(item: ImmersivePreviewItem, now?: Date): Profi
     isTextOnly,
     hasMedia,
     sourceUnavailable: !isTextOnly && item.availability === 'source-unavailable',
+    audio: item.previewKind === 'audio' ? item.audio ?? null : null,
     creatorLabel: item.creatorLabel,
     creatorName,
     creatorAvatar: item.creatorAvatar,
@@ -185,6 +188,7 @@ function normalize(value: string) {
 
 function profileCardAccent(item: ImmersivePreviewItem): ToolAccent {
   if (item.previewKind === 'text') return 'amber';
+  if (item.creationKind === 'audio') return 'motion';
   if (item.mediaKind === 'video') return 'video';
   if (item.badge === 'Motion') return 'motion';
   return 'image';

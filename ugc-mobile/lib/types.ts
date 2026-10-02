@@ -262,6 +262,12 @@ export interface GenerationListItem {
     templateTitle: string | null;
   } | null;
   creationMode?: 'motion' | null;
+  /**
+   * Set on an audio creation: which kind of sound it is. A string, not the
+   * union, because a newer server may name a kind this build has not heard of;
+   * `normalizeGenerationAudioKind` reads it.
+   */
+  audioKind?: string | null;
   status: string;
   created_at: string;
   completed_at?: string | null;

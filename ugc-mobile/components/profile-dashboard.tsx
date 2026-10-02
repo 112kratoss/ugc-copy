@@ -5,6 +5,7 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import {
+  AudioLines,
   ChevronRight,
   Crown,
   Gift,
@@ -1240,11 +1241,15 @@ function ProfileMediaTile({
         }}
       >
         <ProfileGalleryPreview item={item} height={height} watchdog={mediaWatchdog} />
-        <LinearGradient
-          colors={[hexWithAlpha(mediaColors.mediaGround, 0), hexWithAlpha(mediaColors.mediaGround, 0.16), mediaColors.mediaScrimStrong]}
-          locations={[0, 0.48, 1]}
-          style={{ position: 'absolute', inset: 0 }}
-        />
+        {/* The shade keeps the corner marks legible over a picture. An audio
+            plate has no picture, and under the shade its own words went grey. */}
+        {item.previewKind === 'audio' ? null : (
+          <LinearGradient
+            colors={[hexWithAlpha(mediaColors.mediaGround, 0), hexWithAlpha(mediaColors.mediaGround, 0.16), mediaColors.mediaScrimStrong]}
+            locations={[0, 0.48, 1]}
+            style={{ position: 'absolute', inset: 0 }}
+          />
+        )}
         {item.mediaKind === 'video' ? (
           <View style={{ position: 'absolute', top: 8, right: 8, width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: mediaColors.mediaScrim }}>
             <Play size={appTheme.icon.sm} color={mediaColors.onMedia} fill={mediaColors.onMedia} />
@@ -1357,9 +1362,14 @@ function ProfileSavedFeedOverlay({
 export function getProfileTileState(item: ProfileMediaCard): {
   label: string;
   color: string;
-  glyph: 'globe' | 'lock' | 'sparkles';
+  glyph: 'globe' | 'lock' | 'sparkles' | 'audio';
 } {
   if (item.label === 'Creation') {
+    // Audio cannot be posted, so its tile reports what it is where the others
+    // report whether they reached a post.
+    if (item.previewKind === 'audio') {
+      return { label: item.badge ?? 'Audio', color: themes.dark.colors.motion, glyph: 'audio' };
+    }
     const posted = Boolean(item.linkedPostLabel && item.linkedPostLabel !== 'Not posted');
     return posted
       ? { label: item.linkedPostLabel ?? 'Posted', color: themes.dark.colors.success, glyph: 'globe' }
@@ -1385,7 +1395,11 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
       ? <Play size={appTheme.icon.xs} color={accent} fill={accent} />
       : <ImageIcon size={appTheme.icon.xs} color={accent} />;
   const state = getProfileTileState(item);
-  const StateGlyph = state.glyph === 'globe' ? Globe : state.glyph === 'lock' ? LockKeyhole : Sparkles;
+  const StateGlyph = state.glyph === 'globe'
+    ? Globe
+    : state.glyph === 'lock'
+      ? LockKeyhole
+      : state.glyph === 'audio' ? AudioLines : Sparkles;
 
   return (
     <View testID="profile-minimal-overlay" pointerEvents="none" style={{ position: 'absolute', inset: 0 }}>
@@ -1486,8 +1500,49 @@ function ProfileGalleryPreview({
     return <ProfileTextPreview item={item} height={height} />;
   }
 
+  if (item.previewKind === 'audio') {
+    return <ProfileAudioPreview item={item} height={height} />;
+  }
+
   return (
     <ProfileUnavailableFallback item={item} height={height} showTitle={item.label !== 'Post'} />
+  );
+}
+
+/**
+ * An audio creation's tile: what it is, and the script or prompt it was made
+ * from. The plate a text creation draws, since both are a creation with no
+ * picture. It does not play here; the tile opens the card that does.
+ */
+function ProfileAudioPreview({ item, height }: { item: ProfileMediaCard; height: number }) {
+  const theme = useAppTheme();
+  const accent = theme.colors.motion;
+
+  return (
+    <View testID="profile-audio-preview" style={{ height, overflow: 'hidden', backgroundColor: theme.colors.surfaceInset }}>
+      {/* Laid out from the top, clear of the mark in each corner, so the label
+          sits at one height on every tile however long the title runs. */}
+      <View style={{ flex: 1, paddingHorizontal: 12, paddingTop: 46, paddingBottom: 38 }}>
+        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, backgroundColor: accent }} />
+        <View
+          style={{
+            alignSelf: 'flex-start',
+            borderRadius: 999,
+            backgroundColor: `${accent}1f`,
+            borderWidth: 1,
+            borderColor: `${accent}66`,
+            paddingHorizontal: 8,
+            paddingVertical: 4,
+            marginBottom: 8,
+          }}
+        >
+          <Text numberOfLines={1} style={{ color: accent, fontSize: 11, fontWeight: '800' }}>{item.badge ?? 'Audio'}</Text>
+        </View>
+        <Text numberOfLines={3} style={{ color: theme.colors.text, fontSize: 13, lineHeight: 16, fontWeight: '800' }}>
+          {item.title}
+        </Text>
+      </View>
+    </View>
   );
 }
 

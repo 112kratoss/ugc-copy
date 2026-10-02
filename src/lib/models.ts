@@ -1408,3 +1408,16 @@ export function isSoundEffectModel(modelId: string): boolean {
 
     return Object.values(SOUND_EFFECT_MODELS).some((model) => model.apiModelId === modelId);
 }
+
+export type AudioGenerationKind = 'voiceover' | 'sound-effect' | 'audio';
+
+/**
+ * Which kind of sound an audio generation is. Voiceovers and sound effects are
+ * both stored as `audio`, so the model is what tells them apart; audio from a
+ * model in neither table is plain audio.
+ */
+export function getAudioGenerationKind(modelId: string | null | undefined): AudioGenerationKind {
+    if (modelId && isVoiceoverModel(modelId)) return 'voiceover';
+    if (modelId && isSoundEffectModel(modelId)) return 'sound-effect';
+    return 'audio';
+}

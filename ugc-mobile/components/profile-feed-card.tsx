@@ -2,6 +2,7 @@ import { FileText, Globe, ImageOff, LockKeyhole, MessageCircle, Repeat2, Wand2 }
 import { memo } from 'react';
 import { Text, View } from 'react-native';
 
+import { AudioCreationPlayer } from '@/components/audio-creation-player';
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
 import { ViewerActionsMenu } from '@/components/viewer-actions-menu';
 import { MediaZoomSourceView, useMediaZoomSource } from '@/components/media-zoom';
@@ -25,6 +26,7 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
   contentWidth,
   mediaWatchdog = false,
   showActiveVideo,
+  screenFocused,
   pendingAction,
   onOpen,
   onReadMore,
@@ -36,6 +38,8 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
   /** Arms display deadlines for the card's media; only while the feed is focused. */
   mediaWatchdog?: boolean;
   showActiveVideo: boolean;
+  /** The feed is the screen in front: an audio creation may only sound while its player can be reached. */
+  screenFocused: boolean;
   pendingAction: string | null;
   /** Opens the post, carrying the zoom the tile hands the push on iOS 18 (lib/apple-zoom.ts). */
   onOpen: (zoom: AppleZoomOpen | null) => void;
@@ -119,6 +123,26 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
       ) : card.sourceUnavailable ? (
         <UnavailableMediaPlate height={mediaHeight} />
       ) : null}
+      player={card.audio ? (
+        <View
+          style={{
+            borderRadius: FEED_CARD_MEDIA_RADIUS,
+            borderCurve: 'continuous',
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.surfaceInset,
+            paddingHorizontal: appTheme.spacing.gap,
+            paddingVertical: appTheme.spacing.compact,
+          }}
+        >
+          <AudioCreationPlayer
+            itemId={item.id}
+            audio={card.audio}
+            label={card.categoryLabel}
+            reachable={screenFocused}
+          />
+        </View>
+      ) : undefined}
       actions={slots.map((slot) => (
         <FeedCardAction
           key={slot.id}

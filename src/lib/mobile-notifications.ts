@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
-import { isAudioModel, isSoundEffectModel, isVoiceoverModel } from '@/lib/models';
+import { getAudioGenerationKind, isAudioModel } from '@/lib/models';
 
 import {
   EXTERNAL_API_REQUEST_TIMEOUT_MS,
@@ -1406,9 +1406,10 @@ function generationLabel(category?: string | null, model?: string | null) {
     // Voiceovers and sound effects are both stored as `audio`, so the model is
     // what tells them apart. The names follow the workflow builder's Voiceover
     // and Sound FX nodes. Audio from a model in neither table stays "audio".
-    if (model && isVoiceoverModel(model)) return 'voiceover';
-    if (model && isSoundEffectModel(model)) return 'sound effect';
-    return 'audio';
+    // The owner library names the creation with the same call (`audioKind`),
+    // so the push and the screen it opens cannot disagree about what it is.
+    const kind = getAudioGenerationKind(model);
+    return kind === 'sound-effect' ? 'sound effect' : kind;
   }
   return 'image';
 }

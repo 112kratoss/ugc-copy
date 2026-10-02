@@ -53,6 +53,7 @@ export function countVideoPlayers(source: string) {
 const EXEMPT: Record<string, string> = {
   'lib/use-viewer-video-player.ts': "the reel's hook: app/viewer.tsx hands it a cached source",
   'lib/use-viewer-video-player.ios.ts': "the reel's hook: app/viewer.tsx hands it a cached source",
+  'lib/audio-creation-native-player.ts': "an audio creation's player: it never loops, so no copy queues behind another, and expo-video's iOS cache refuses a response that is not video/*",
 };
 
 /**
@@ -99,6 +100,19 @@ describe('video player cache coverage', () => {
       .filter((entry) => !(entry.file in EXEMPT) && entry.uncached > 0)
       .map((entry) => `${entry.file}: ${entry.uncached} of ${entry.players}`);
     expect(uncached).toEqual([]);
+  });
+
+  it('holds the uncached audio player to the two things its exemption rests on', () => {
+    const audio = stripComments(readFileSync(path.join(mobileRoot, 'lib/audio-creation-native-player.ts'), 'utf8'));
+    // No loop, so Android never queues the file behind itself.
+    expect(audio).toContain('player.loop = false;');
+    expect(audio).not.toMatch(/\.loop = true/);
+    // And the reason it cannot simply be cached: on iOS the cache answers a
+    // sound file with an unsupported-format error.
+    const iosCache = readFileSync(
+      path.join(mobileRoot, 'node_modules/expo-video/ios/Cache/ResourceLoaderDelegate.swift'), 'utf8',
+    );
+    expect(iosCache).toMatch(/func isSupported\(mimeType: String\?\) -> Bool \{\s*return mimeType\?\.starts\(with: "video\/"\) \?\? false/);
   });
 
   it('keeps no exemption for a file that no longer makes a player', () => {
