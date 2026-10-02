@@ -1390,3 +1390,21 @@ export function isAudioModel(modelId: string): boolean {
 
     return Object.values(AUDIO_MODELS).some((model) => model.apiModelId === modelId);
 }
+
+/** Returns true if the model ID is a voiceover model or voiceover provider ID. */
+export function isVoiceoverModel(modelId: string): boolean {
+    if (modelId in VOICEOVER_MODELS) {
+        return true;
+    }
+
+    return Object.values(VOICEOVER_MODELS).some((model) => model.apiModelId === modelId);
+}
+
+/** Returns true if the model ID is a sound-effect model or sound-effect provider ID. */
+export function isSoundEffectModel(modelId: string): boolean {
+    if (modelId in SOUND_EFFECT_MODELS) {
+        return true;
+    }
+
+    return Object.values(SOUND_EFFECT_MODELS).some((model) => model.apiModelId === modelId);
+}

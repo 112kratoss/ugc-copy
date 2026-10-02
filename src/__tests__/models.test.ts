@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getDefaultVideoDuration, getMotionCost, getImageCost, getImageResolutionOptions, getSoundEffectCost, getVideoCost, getVideoDurationRange, getVoiceoverCost, isAudioModel, isImageModel, isMotionModel, isVideoModel, isValidImageResolution, isValidVideoDuration, supportsImageResolutionControl } from '@/lib/models';
+import { getDefaultVideoDuration, getMotionCost, getImageCost, getImageResolutionOptions, getSoundEffectCost, getVideoCost, getVideoDurationRange, getVoiceoverCost, isAudioModel, isImageModel, isMotionModel, isSoundEffectModel, isVideoModel, isVoiceoverModel, isValidImageResolution, isValidVideoDuration, supportsImageResolutionControl } from '@/lib/models';
 
 describe('Model Pricing', () => {
     describe('getMotionCost', () => {
@@ -336,6 +336,22 @@ describe('Model Type Checks', () => {
         expect(isAudioModel('text-to-speech-turbo-2-5')).toBe(true);
         expect(isAudioModel('elevenlabs/text-to-dialogue-v3')).toBe(true);
         expect(isAudioModel('kling-3.0/video')).toBe(false);
+    });
+
+    it('tells voiceover models from sound-effect models, by app or provider id', () => {
+        expect(isVoiceoverModel('text-to-speech-turbo-2-5')).toBe(true);
+        expect(isVoiceoverModel('elevenlabs/text-to-speech-multilingual-v2')).toBe(true);
+        expect(isVoiceoverModel('elevenlabs/text-to-dialogue-v3')).toBe(true);
+        expect(isVoiceoverModel('sound-effect-v2')).toBe(false);
+        expect(isVoiceoverModel('elevenlabs/sound-effect-v2')).toBe(false);
+
+        expect(isSoundEffectModel('sound-effect-v2')).toBe(true);
+        expect(isSoundEffectModel('elevenlabs/sound-effect-v2')).toBe(true);
+        expect(isSoundEffectModel('text-to-dialogue-v3')).toBe(false);
+        expect(isSoundEffectModel('elevenlabs/text-to-speech-turbo-2-5')).toBe(false);
+
+        expect(isVoiceoverModel('kling-3.0/video')).toBe(false);
+        expect(isSoundEffectModel('kling-3.0/video')).toBe(false);
     });
 
     it('identifies video models correctly', () => {
