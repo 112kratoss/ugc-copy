@@ -58,6 +58,7 @@ import {
 } from '@/lib/upload-finalization';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { resolveTemplateRunMedia, type TemplateMediaGeneration } from '@/lib/template-run-media-delivery';
+import { notifyRunStepStartFailure } from '@/lib/run-step-start-failure-notification';
 import {
   getIncomingEdges,
   getNodeById,
@@ -1196,14 +1197,22 @@ async function advanceTemplateRun(client: SupabaseClient, runId: string, userId:
         const submissionPending = failure.code === 'submission_pending';
         const retryableBackpressure = failure.code === 'provider_busy'
           || failure.code === 'provider_unavailable';
+        const stepStatus = submissionPending ? 'processing' : retryableBackpressure ? 'queued' : 'failed';
+        // A step that ends here has no request waiting to carry the reason, so
+        // a start that was refused and refunded is announced from the worker.
+        // One that goes back in the queue has not failed, though its credits
+        // were returned too.
+        if (stepStatus === 'failed') {
+          await notifyRunStepStartFailure({ client, error, userId });
+        }
         await client.from('template_run_steps').update({
-          status: submissionPending ? 'processing' : retryableBackpressure ? 'queued' : 'failed',
+          status: stepStatus,
           error_message: failure.message,
           output_snapshot: failureSnapshot(step, failure.code),
-          finished_at: submissionPending || retryableBackpressure ? null : new Date().toISOString(),
+          finished_at: stepStatus === 'failed' ? new Date().toISOString() : null,
         }).eq('id', step.id);
         graph = updateNodeRunState(graph, node.id, {
-          status: submissionPending ? 'processing' : retryableBackpressure ? 'queued' : 'failed',
+          status: stepStatus,
           error: failure.message,
         });
       }

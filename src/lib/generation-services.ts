@@ -64,6 +64,7 @@ import {
   GENERATION_PROMPT_BLOCKED_MESSAGE,
   getPublicGenerationStartFailure,
   markHeldProviderSubmission,
+  markRefundedGenerationStart,
   type GenerationStartFailureCode,
   type PublicGenerationStartFailure,
 } from '@/lib/generation-public-failure';
@@ -591,6 +592,8 @@ async function settleTemplateGenerationStartFailureQuietly(params: {
       : null;
 
     if (!error && (status === 'failed' || status === 'already_failed')) {
+      // `already_failed` is a row something else had refunded first.
+      if (status === 'failed') markRefundedGenerationStart(params.error, params.generationId);
       logBackendError(TEMPLATE_START_FAILED_EVENT, { ...logEntry, settlement: status });
       return;
     }
@@ -733,7 +736,11 @@ async function settleGenerationStartFailureQuietly(params: {
       ? (data as { status?: unknown }).status
       : null;
 
-    if (!error && (status === 'failed' || status === 'already_failed')) return;
+    if (!error && (status === 'failed' || status === 'already_failed')) {
+      // `already_failed` is a row something else had refunded first.
+      if (status === 'failed') markRefundedGenerationStart(params.error, params.generationId);
+      return;
+    }
 
     logBackendError('generation_start_failure_settlement_failed', {
       generationId: params.generationId,

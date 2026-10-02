@@ -414,6 +414,22 @@ describe('one failure, reported by the job and by a status poll', () => {
   });
 });
 
+function sourceFiles(directory: string): string[] {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) return entry.name === '__tests__' ? [] : sourceFiles(entryPath);
+    return /\.tsx?$/.test(entry.name) ? [entryPath] : [];
+  });
+}
+
+/** Every module under `src`, tests aside: its path from the repository root, and its source. */
+function sourceModules(): Array<[string, string]> {
+  return sourceFiles(path.resolve('src')).map((file) => [
+    path.relative(process.cwd(), file).split(path.sep).join('/'),
+    fs.readFileSync(file, 'utf8'),
+  ]);
+}
+
 describe('every module that settles a failed render', () => {
   // The push was first written into the status poll alone. When the provider
   // callback became the first to settle a failure, nothing moved it, and most
@@ -421,10 +437,11 @@ describe('every module that settles a failed render', () => {
   // the notification or is named here with the reason it need not.
   const SPOKEN_FOR: Record<string, string> = {
     'src/lib/generation-settlement.ts': 'the settlement itself',
-    // Not the whole story: a run step is started by a worker, with no request
-    // to answer, and one refused at start still tells nobody.
+    // The start services mark what they refunded and leave the telling to
+    // their caller. A request answers in its response. A run worker has no
+    // request to answer, and is held to announcing it by the guard below.
     'src/lib/generation-services.ts':
-      'a standalone creation refused at start is answered in the response to the request that started it',
+      'a creation refused at start is answered in the response to its request, or announced by the run worker that started it',
   };
   const SETTLES_A_FAILURE = new RegExp([
     String.raw`(?<!function )settleGenerationFailed\(`,
@@ -432,23 +449,13 @@ describe('every module that settles a failed render', () => {
     String.raw`'settle_(?:template_)?generation_start_failed'`,
   ].join('|'));
 
-  function sourceFiles(directory: string): string[] {
-    return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-      const entryPath = path.join(directory, entry.name);
-      if (entry.isDirectory()) return entry.name === '__tests__' ? [] : sourceFiles(entryPath);
-      return /\.tsx?$/.test(entry.name) ? [entryPath] : [];
-    });
-  }
-
   it('also tells the creator, or says why it does not have to', () => {
     const silent: string[] = [];
     const settling: string[] = [];
 
-    for (const file of sourceFiles(path.resolve('src'))) {
-      const source = fs.readFileSync(file, 'utf8');
+    for (const [name, source] of sourceModules()) {
       if (!SETTLES_A_FAILURE.test(source)) continue;
 
-      const name = path.relative(process.cwd(), file).split(path.sep).join('/');
       settling.push(name);
       if (!source.includes('notifyGenerationStatus(') && !SPOKEN_FOR[name]) silent.push(name);
     }
@@ -461,6 +468,32 @@ describe('every module that settles a failed render', () => {
       'src/lib/generation-status-sync.ts',
       'src/lib/image-generation-status-service.ts',
       'src/lib/stalled-generation-reaper.ts',
+    ]));
+  });
+});
+
+describe('every worker that starts a run step', () => {
+  // A step started through the node executor has no request to carry a
+  // refusal. A run engine added later inherits the gap unless it announces a
+  // refused start as these two do.
+  const STARTS_A_STEP = /(?<!function )executeWorkflowRunnableNode\(/;
+
+  it('announces a start that was refused and refunded', () => {
+    const silent: string[] = [];
+    const starting: string[] = [];
+
+    for (const [name, source] of sourceModules()) {
+      if (!STARTS_A_STEP.test(source)) continue;
+
+      starting.push(name);
+      if (!source.includes('notifyRunStepStartFailure(')) silent.push(name);
+    }
+
+    expect(silent).toEqual([]);
+    // The scan is looking at the code it thinks it is.
+    expect(starting).toEqual(expect.arrayContaining([
+      'src/lib/template-run-service.ts',
+      'src/lib/workflow-runner.ts',
     ]));
   });
 });

@@ -4,7 +4,9 @@ import {
   GENERATION_PROMPT_BLOCKED_MESSAGE,
   getHeldProviderSubmissionGenerationId,
   getPublicGenerationStartFailure,
+  getRefundedStartGenerationId,
   markHeldProviderSubmission,
+  markRefundedGenerationStart,
   requiresReplacementGenerationInput,
 } from '@/lib/generation-public-failure';
 
@@ -143,6 +145,44 @@ describe('public generation failure classification', () => {
       expect(() => markHeldProviderSubmission(null)).not.toThrow();
       expect(getPublicGenerationStartFailure('timed out').code).not.toBe('submission_pending');
       expect(getPublicGenerationStartFailure(null).code).not.toBe('submission_pending');
+    });
+  });
+
+  describe('starts that were failed and refunded', () => {
+    it('carries the refunded generation to whoever catches the error', () => {
+      const error = new Error('Provider rejected the request');
+      expect(getRefundedStartGenerationId(error)).toBeNull();
+
+      markRefundedGenerationStart(error, 'generation-refunded-1');
+      expect(getRefundedStartGenerationId(error)).toBe('generation-refunded-1');
+    });
+
+    it('changes nothing the person is told about the failure', () => {
+      // The mark says what happened to the hold. The copy still comes from
+      // what the provider answered, and a refunded start is never a held one.
+      const error = Object.assign(new Error('Too many requests'), { status: 429 });
+      const before = getPublicGenerationStartFailure(error);
+
+      markRefundedGenerationStart(error, 'generation-refunded-1');
+
+      expect(getPublicGenerationStartFailure(error)).toEqual(before);
+      expect(getHeldProviderSubmissionGenerationId(error)).toBeNull();
+    });
+
+    it('does not leak the mark into a serialized error payload', () => {
+      const error = new Error('Provider rejected the request');
+      markRefundedGenerationStart(error, 'generation-refunded-1');
+
+      expect(Object.keys(error)).toEqual([]);
+      expect(JSON.stringify({ ...error })).toBe('{}');
+      expect(JSON.stringify(error)).toBe('{}');
+    });
+
+    it('ignores non-object errors rather than throwing', () => {
+      expect(() => markRefundedGenerationStart('rejected', 'generation-refunded-1')).not.toThrow();
+      expect(() => markRefundedGenerationStart(null, 'generation-refunded-1')).not.toThrow();
+      expect(getRefundedStartGenerationId('rejected')).toBeNull();
+      expect(getRefundedStartGenerationId(null)).toBeNull();
     });
   });
 });

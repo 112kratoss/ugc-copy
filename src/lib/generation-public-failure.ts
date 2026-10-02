@@ -85,6 +85,36 @@ function isHeldProviderSubmission(error: unknown): boolean {
   );
 }
 
+const REFUNDED_START_GENERATION_ID = '__magicbookletRefundedStartGenerationId';
+
+/**
+ * Marks an error whose generation was failed and refunded at start: the
+ * opposite outcome to a held submission, and never set together with it.
+ *
+ * The start services set it only when their settlement released the hold
+ * itself. A request that started the generation answers with the error and
+ * has no use for the mark. A run worker has nobody to answer, and reads it to
+ * announce the failure if the step ends there.
+ *
+ * Non-enumerable for the same reason as the held-submission metadata.
+ */
+export function markRefundedGenerationStart(error: unknown, generationId: string): void {
+  if (!error || typeof error !== 'object') return;
+  Object.defineProperty(error, REFUNDED_START_GENERATION_ID, {
+    value: generationId,
+    enumerable: false,
+    configurable: true,
+    writable: false,
+  });
+}
+
+/** The generation a refused start failed and refunded, when the error carries one. */
+export function getRefundedStartGenerationId(error: unknown): string | null {
+  if (!error || typeof error !== 'object') return null;
+  const value = (error as Record<string, unknown>)[REFUNDED_START_GENERATION_ID];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 function recordValue(error: unknown, keys: string[]): unknown {
   if (!error || typeof error !== 'object') return undefined;
   const record = error as Record<string, unknown>;
