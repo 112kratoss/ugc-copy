@@ -11,6 +11,7 @@ import {
 } from '@/lib/generation-input-media';
 import { buildGenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { classifyVisualMedia } from '@/lib/media-contract';
+import { getAudioGenerationKind, isAudioModel } from '@/lib/models';
 import { buildVisualMediaDescriptor, type MediaPreviewStatus, type VisualMediaDescriptor } from '@/lib/media-descriptor';
 import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
 import { buildMediaProxyUrl } from '@/lib/media-urls';
@@ -596,7 +597,12 @@ export async function listOwnerGenerationsForRoute({
       category: generation.category,
       contentType: inferVisualContentType(generation.output_url),
     });
-    const canonicalCategory = classification?.category ?? generation.category;
+    // `classifyVisualMedia` answers null for sound and for nothing else: an
+    // audio category, or a sound file. The mobile app plays an audio creation
+    // from this payload and reads the category to know it is one, so a row
+    // that only its file or its model marks as audio is sent as audio too.
+    const isAudio = classification === null || isAudioModel(generation.model);
+    const canonicalCategory = isAudio ? 'audio' : classification?.category ?? generation.category;
     const previewSource = generation.preview_url || null;
     const previewStatus: MediaPreviewStatus = generation.preview_status
       ?? (previewSource ? 'ready' : 'pending');
@@ -609,7 +615,7 @@ export async function listOwnerGenerationsForRoute({
     )
       ? new Date(Date.now() + 55 * 60 * 1000).toISOString()
       : null;
-    const media = outputUrl && classification?.kind
+    const media = !isAudio && outputUrl && classification?.kind
       ? withDisplayUrl(buildVisualMediaDescriptor({
         id: generation.id,
         kind: classification.kind,
@@ -647,6 +653,9 @@ export async function listOwnerGenerationsForRoute({
       template,
       category: canonicalCategory,
       creationMode: generation.creation_mode ?? classification?.creationMode ?? null,
+      // Which kind of sound: the app has no model table to tell a voiceover
+      // from a sound effect, and must not grow one.
+      ...(isAudio ? { audioKind: getAudioGenerationKind(generation.model) } : {}),
       media: sourceUnavailable ? null : media,
       ...(outputUrl && !sourceUnavailable ? { output_url: outputUrl } : {}),
       preview_url: sourceUnavailable ? null : previewUrl,

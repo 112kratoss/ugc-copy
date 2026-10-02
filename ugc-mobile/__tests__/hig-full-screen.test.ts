@@ -220,6 +220,9 @@ describe('S6 — no player holds the audio session while it is silent', () => {
     'lib/use-viewer-video-player.ios.ts',
     'components/feed-video-preview.tsx',
     'components/recoverable-video-preview.tsx',
+    // An audio creation's player. It makes sound only after a tap, and gives
+    // the session back when it stops, like the reel's own.
+    'lib/audio-creation-native-player.ts',
   ];
 
   it.each(playerFiles)('%s declares a mixing mode for every player it creates', (name) => {

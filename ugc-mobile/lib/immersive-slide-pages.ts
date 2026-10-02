@@ -6,6 +6,7 @@ import type { ShowcaseMediaItem } from './types';
 
 export type ImmersiveSlidePage =
   | { type: 'text' }
+  | { type: 'audio' }
   | { type: 'status' }
   | { type: 'media'; mediaIndex: number; mediaItem: ShowcaseMediaItem }
   | { type: 'details' };
@@ -27,6 +28,9 @@ export function buildImmersiveSlidePages(item: ImmersivePreviewItem): ImmersiveS
 
   if (item.previewKind === 'text') {
     pages.push({ type: 'text' });
+  } else if (item.previewKind === 'audio') {
+    // Sound has no media pages. It has a player, on a page of its own.
+    pages.push({ type: 'audio' });
   } else {
     const mediaItems = item.mediaItems ?? [];
     if (mediaItems.length === 0) {
@@ -75,6 +79,7 @@ export function getImmersiveSlideHint({
     // does a run that produced nothing, and promising it media it never made
     // is the one thing that page must not do.
     if (item.previewKind === 'text') return 'Swipe right for the post';
+    if (item.previewKind === 'audio') return 'Swipe right for the audio';
     return pages.some((page) => page.type === 'status') ? 'Swipe right to go back' : 'Swipe right for media';
   }
 

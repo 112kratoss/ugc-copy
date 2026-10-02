@@ -7,13 +7,14 @@ import { StatusBar } from 'expo-status-bar';
 import { type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
 import { useViewerVideoPlayer } from '@/lib/use-viewer-video-player';
 import { useReelBackdrop } from '@/lib/reel-backdrop';
-import { Copy, ImageOff, Lock, Play, Volume2, VolumeX } from 'lucide-react-native';
+import { AudioLines, Copy, ImageOff, Lock, Play, Volume2, VolumeX } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { createContext, useContext, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
+import { AudioCreationPlayer } from '@/components/audio-creation-player';
 import { DoubleTapPressable } from '@/components/double-tap-pressable';
 import { AppleZoomProgress } from '@/components/apple-zoom-progress';
 import { AppleZoomTarget, useAppleZoomRetarget, useAppleZoomSourceId } from '@/components/apple-zoom';
@@ -2054,6 +2055,8 @@ function MediaSlidePage({
         />
       ) : page.type === 'text' ? (
         <TextSlide item={item} width={width} height={height} />
+      ) : page.type === 'audio' ? (
+        <AudioSlide item={item} active={active} width={width} height={height} />
       ) : page.type === 'status' ? (
         <StatusSlide item={item} width={width} height={height} />
       ) : (
@@ -2713,6 +2716,46 @@ function StatusSlide({ item, width, height }: { item: ImmersivePreviewItem; widt
         <Text numberOfLines={6} style={{ color: theme.colors.textSecondary, fontSize: 16, lineHeight: 23 }}>
           {body}
         </Text>
+      </View>
+    </View>
+  );
+}
+
+/**
+ * The page an audio creation plays on. The same plate as `TextSlide` and
+ * `StatusSlide`: a slide that is not a picture. It holds the player, and the
+ * reel's own caption underneath carries the script or the prompt.
+ *
+ * It never starts by itself, unlike the reel's video. A voice starting because
+ * a notification was tapped is not what "open it" asked for, and the reel's
+ * mute control, which is what makes autoplaying video acceptable, is not drawn
+ * for sound.
+ */
+function AudioSlide({ item, active, width, height }: { item: ImmersivePreviewItem; active: boolean; width: number; height: number }) {
+  const theme = useAppTheme();
+  const isFocused = useIsFocused();
+  if (!item.audio) return null;
+
+  return (
+    <View
+      style={{ width, height, justifyContent: 'center', paddingLeft: 22, paddingRight: 90, paddingBottom: 120, backgroundColor: theme.colors.app }}
+    >
+      <View style={{ borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.panel, padding: 20, gap: 18, overflow: 'hidden' }}>
+        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, backgroundColor: theme.colors.motion }} />
+        <View style={{ alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 999, backgroundColor: theme.colors.surfaceStrong, paddingHorizontal: 11, paddingVertical: 6 }}>
+          <AudioLines size={appTheme.icon.xs} color={theme.colors.motion} />
+          <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
+            {item.badge}
+          </Text>
+        </View>
+        <AudioCreationPlayer
+          itemId={item.id}
+          audio={item.audio}
+          label={item.badge}
+          // Out of reach behind another screen, on a neighbouring slide, or with Details over it.
+          reachable={active && isFocused}
+          size="slide"
+        />
       </View>
     </View>
   );

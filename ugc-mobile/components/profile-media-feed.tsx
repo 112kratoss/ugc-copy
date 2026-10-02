@@ -25,6 +25,7 @@ import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
 import { ViewerActionsMenuProvider } from '@/components/viewer-actions-menu';
 import type { ViewerActionCallbacks } from '@/lib/use-viewer-action-handlers';
+import { audioCreationPlayback } from '@/lib/audio-creation-native-player';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
@@ -106,6 +107,20 @@ export function ProfileMediaFeedScreen() {
   const [commentsOpenItemId, setCommentsOpenItemId] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
+  // An audio creation scrolled right off the screen has no control left to stop
+  // it with. Left alone it played on until the list reused its row, at no point
+  // a person could predict, and lost its place when it did; so its sound stops
+  // as its card leaves, and its place is kept for the way back. Any part of the
+  // card on screen counts as there: the player may be the part still showing.
+  // Held in state because FlashList reads the pairs once, when the list is made.
+  const [audioViewabilityPairs] = useState(() => [{
+    viewabilityConfig: { itemVisiblePercentThreshold: 0, minimumViewTime: 0 },
+    onViewableItemsChanged: ({ changed }: { changed: Array<ViewToken<ProfileFeedCard>> }) => {
+      for (const token of changed) {
+        if (!token.isViewable && token.item?.audio) audioCreationPlayback.pause(token.item.id);
+      }
+    },
+  }]);
 
   const contentWidth = Math.min(width, 430);
   const horizontalPadding = contentWidth < 390 ? 12 : 14;
@@ -504,9 +519,11 @@ export function ProfileMediaFeedScreen() {
         pointerEvents={landing.phase === 'seeking' ? 'none' : 'auto'}
         getItemType={(card) => card.isTextOnly
           ? 'text'
-          : card.sourceUnavailable
-            ? 'unavailable'
-            : card.item.mediaKind ?? 'image'}
+          : card.audio
+            ? 'audio'
+            : card.sourceUnavailable
+              ? 'unavailable'
+              : card.item.mediaKind ?? 'image'}
         extraData={{ activeVideoId, isFocused, pendingAction }}
         maintainVisibleContentPosition={{ disabled: true }}
         onLoad={() => {
@@ -532,6 +549,7 @@ export function ProfileMediaFeedScreen() {
           }
         }}
         viewabilityConfig={{ itemVisiblePercentThreshold: 60 }}
+        viewabilityConfigCallbackPairs={audioViewabilityPairs}
         onEndReached={requestNextPage}
         onEndReachedThreshold={0.6}
         ListFooterComponent={isFetchingNextPage
@@ -551,6 +569,7 @@ export function ProfileMediaFeedScreen() {
             card={card}
             contentWidth={cardWidth}
             showActiveVideo={isFocused && activeVideoId === card.id}
+            screenFocused={isFocused}
             mediaWatchdog={isFocused}
             pendingAction={pendingAction}
             onOpen={(zoom) => openItem(card.item, { zoom })}
