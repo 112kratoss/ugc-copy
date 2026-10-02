@@ -84,12 +84,22 @@ const mocks = vi.hoisted(() => {
   });
   const createServiceClient = vi.fn(() => ({ rpc }));
 
+  // Stands in for Next's after(): it runs the task on the spot unless a test
+  // holds it back to look at the answer first.
+  const after = vi.fn((task: () => Promise<unknown>): unknown => task());
+  const notifyReferralReward = vi.fn(async (...args: unknown[]): Promise<null> => {
+    void args;
+    return null;
+  });
+
   return {
+    after,
     createClient,
     createServiceClient,
     createUserClient,
     firstEq,
     from,
+    notifyReferralReward,
     rawGetUser,
     rpc,
     providerFetch,
@@ -100,8 +110,21 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+vi.mock('next/server', async () => {
+  const actual = await vi.importActual<typeof import('next/server')>('next/server');
+
+  return {
+    ...actual,
+    after: mocks.after,
+  };
+});
+
 vi.mock('@supabase/supabase-js', () => ({
   createClient: (url: string, key: string, options?: unknown) => mocks.createClient(url, key, options),
+}));
+
+vi.mock('@/lib/mobile-notifications', () => ({
+  notifyReferralReward: (...args: unknown[]) => mocks.notifyReferralReward(...args),
 }));
 
 vi.mock('@/lib/server-helpers', () => ({
@@ -151,6 +174,8 @@ describe('/api/razorpay/verify route', () => {
 
   beforeEach(() => {
     vi.resetModules();
+    mocks.after.mockReset();
+    mocks.notifyReferralReward.mockClear();
     mocks.createClient.mockClear();
     mocks.createServiceClient.mockClear();
     mocks.createUserClient.mockClear();
@@ -321,5 +346,80 @@ describe('/api/razorpay/verify route', () => {
       p_transaction_id: 'txn_123',
       p_user_id: 'user_123',
     });
+    expect(mocks.after).not.toHaveBeenCalled();
+  });
+
+  it('queues a referred buyer\'s reward notifications behind the response instead of sending them first', async () => {
+    mocks.userGetUser.mockResolvedValue({
+      data: { user: { id: 'user_123' } },
+      error: null,
+    });
+    mocks.rpc.mockImplementation(async (name: string) => {
+      if (name === 'check_backend_rate_limit') {
+        return {
+          data: {
+            allowed: true,
+            limit: 30,
+            remaining: 29,
+            retryAfterSeconds: 0,
+            resetAt: '2026-06-22T06:30:00.000Z',
+          },
+          error: null,
+        };
+      }
+
+      if (name === 'settle_referral_purchase_rewards') {
+        return {
+          data: {
+            status: 'settled',
+            rewards: [
+              {
+                id: 'reward-inviter',
+                user_id: 'inviter_123',
+                event_key: 'grant:inviter',
+                kind: 'inviter_purchase',
+                status: 'granted',
+                credits: 5,
+                active_credits: 5,
+              },
+              {
+                id: 'reward-invitee',
+                user_id: 'user_123',
+                event_key: 'grant:invitee',
+                kind: 'invitee_first_purchase',
+                status: 'granted',
+                credits: 5,
+                active_credits: 5,
+              },
+            ],
+          },
+          error: null,
+        };
+      }
+
+      return { data: true, error: null };
+    });
+    mocks.after.mockImplementationOnce(() => undefined);
+
+    const { POST } = await import('@/app/api/razorpay/verify/route');
+    const response = await POST(buildVerifyRequest(buildSignedPayload(), {
+      'x-request-id': 'credit-verify-after-1',
+    }));
+
+    // The route as deployed hands the task to Next's after(), which runs it
+    // once the response has gone out. The bonus is in the answer already.
+    expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'credit-verify-after-1');
+    expect(await response.json()).toEqual({ success: true, referralBonusCredits: 5 });
+    expect(mocks.after).toHaveBeenCalledTimes(1);
+    expect(mocks.notifyReferralReward).not.toHaveBeenCalled();
+
+    await mocks.after.mock.calls[0][0]();
+    expect(mocks.notifyReferralReward).toHaveBeenCalledTimes(2);
+    expect(mocks.notifyReferralReward).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      userId: 'user_123',
+      rewardId: 'reward-invitee',
+      eventKey: 'grant:invitee',
+    }));
   });
 });

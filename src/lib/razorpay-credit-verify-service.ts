@@ -10,6 +10,7 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { settleCreditPurchaseReferralRewards } from '@/lib/credit-referral-integration';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import {
   createPendingPaymentResultBody,
   verifyRazorpayPaymentAgainstOrder,
@@ -69,6 +70,7 @@ export async function verifyCreditRazorpayPaymentForRoute({
   createAdminSupabase,
   verifySignature = verifyRazorpayPaymentSignature,
   fetchPayment = defaultFetchRazorpayPayment,
+  runAfterResponse,
 }: {
   keyId?: string | null;
   keySecret?: string | null;
@@ -77,6 +79,12 @@ export async function verifyCreditRazorpayPaymentForRoute({
   createAdminSupabase: () => SupabaseClient;
   verifySignature?: typeof verifyRazorpayPaymentSignature;
   fetchPayment?: typeof defaultFetchRazorpayPayment;
+  /**
+   * Runs a task once the caller has answered its request. The route passes one
+   * so a referred buyer's reward notifications stop holding the checkout's
+   * answer back; without it they are sent before this returns.
+   */
+  runAfterResponse?: RunAfterResponse;
 }): Promise<CreditRazorpayVerifyRouteResult> {
   const body = normalizeBody(await readBody());
   const razorpayOrderId = normalizeString(body.razorpay_order_id);
@@ -222,6 +230,7 @@ export async function verifyCreditRazorpayPaymentForRoute({
       purchaserUserId: user.id,
       transactionId: transaction.id,
       source: 'razorpay_verify',
+      runAfterResponse,
     });
     return {
       ok: true,
@@ -275,6 +284,7 @@ export async function verifyCreditRazorpayPaymentForRoute({
       purchaserUserId: user.id,
       transactionId: transaction.id,
       source: 'razorpay_verify',
+      runAfterResponse,
     });
     return {
       ok: true,
@@ -293,6 +303,7 @@ export async function verifyCreditRazorpayPaymentForRoute({
     purchaserUserId: user.id,
     transactionId: transaction.id,
     source: 'razorpay_verify',
+    runAfterResponse,
   });
 
   return {

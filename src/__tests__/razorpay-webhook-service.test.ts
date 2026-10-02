@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import {
+  createMobileNotificationHistory,
+  hasAnswered,
+  withMobileNotificationHistory,
+} from '@/__tests__/fixtures/mobile-notification-history';
 import { processRazorpayWebhookForRoute } from '@/lib/razorpay-webhook-service';
 
 type CreditTransactionRow = {
@@ -36,6 +41,8 @@ function createAdminSupabaseMock(state: {
   resourceAdjustmentStatus?: string;
   adjustmentError?: boolean;
   creditAdjustmentStatus?: string;
+  /** What `settle_referral_purchase_rewards` reports. Unset: the buyer was not referred. */
+  referralSettlement?: Record<string, unknown>;
 }) {
   const tableReads: string[] = [];
   const rpcCalls: Array<{ name: string; payload: Record<string, unknown> }> = [];
@@ -143,7 +150,7 @@ function createAdminSupabaseMock(state: {
       }
 
       if (name === 'settle_referral_purchase_rewards') {
-        return { data: { status: 'not_referred', rewards: [] }, error: null };
+        return { data: state.referralSettlement ?? { status: 'not_referred', rewards: [] }, error: null };
       }
 
       if (name === 'reconcile_razorpay_credit_source') {
@@ -333,6 +340,64 @@ describe('processRazorpayWebhookForRoute', () => {
     ]);
     expect(createAdminSupabase).toHaveBeenCalledTimes(1);
     expect(admin.providerDependencyInserts).toEqual([]);
+  });
+
+  it('announces a referred buyer\'s rewards before it acknowledges the capture', async () => {
+    // Nobody waits on a webhook, and what it acknowledges is what Razorpay's
+    // redelivery hangs on. So it hands the settlement no way to run work after
+    // the response: the rewards are announced first, as they always were, even
+    // now that the checkout's own verify route answers ahead of them.
+    const admin = createAdminSupabaseMock({
+      creditTransaction: {
+        id: 'txn-1',
+        user_id: 'user-1',
+        credits: 100,
+        status: 'pending',
+      },
+      referralSettlement: {
+        status: 'settled',
+        rewards: [
+          {
+            id: 'reward-inviter',
+            user_id: 'inviter-1',
+            event_key: 'grant:inviter',
+            kind: 'inviter_purchase',
+            status: 'granted',
+            credits: 5,
+            active_credits: 5,
+          },
+          {
+            id: 'reward-invitee',
+            user_id: 'user-1',
+            event_key: 'grant:invitee',
+            kind: 'invitee_first_purchase',
+            status: 'granted',
+            credits: 5,
+            active_credits: 5,
+          },
+        ],
+      },
+    });
+    const history = createMobileNotificationHistory();
+    history.hold();
+
+    const webhook = processRazorpayWebhookForRoute({
+      createAdminSupabase: vi.fn(() => withMobileNotificationHistory(admin.client, history)),
+      rawBody: paymentCapturedBody(),
+    });
+
+    expect(await hasAnswered(webhook)).toBe(false);
+    expect(history.started).toEqual([
+      'referral-reward:reward-inviter:grant:inviter',
+      'referral-reward:reward-invitee:grant:invitee',
+    ]);
+
+    history.release();
+    await expect(webhook).resolves.toEqual({ status: 200, body: 'OK' });
+    expect(history.sent.map((notification) => [notification.type, notification.user_id])).toEqual([
+      ['referral_reward_earned', 'inviter-1'],
+      ['referral_reward_earned', 'user-1'],
+    ]);
   });
 
   it('asks Razorpay to retry when the credit transaction load fails transiently', async () => {

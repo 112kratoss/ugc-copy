@@ -633,11 +633,11 @@ function throwMobileSettlementError(status: string | null, entitlementType: Mobi
 }
 
 /**
- * Once a purchase is settled, what is left is telling the people involved.
- * That is one push request for every device they have registered, sent in
- * turn, so a caller with someone waiting on its answer passes a scheduler and
- * the notification goes out behind the answer. Without one it is sent before
- * this returns.
+ * Once a purchase is settled, what is left is telling the people involved: a
+ * notification row, then a push to their devices through Expo, which can be
+ * slow, retried, or refused. So a caller with someone waiting on its answer
+ * passes a scheduler and the notification goes out behind the answer. Without
+ * one it is sent before this returns.
  *
  * Neither path can fail a purchase that is already settled. Every notifier
  * handed in logs its own failures and never rejects, so sending it later hides
@@ -662,10 +662,11 @@ async function sendPurchaseNotification(
 
 /**
  * A restore can settle several purchases in one request, each with its own
- * notification. Next's after() starts everything it was handed at once, which
- * would send them side by side and could land "balance is now 600" after
- * "balance is now 1,100". Queued through this they still go out one at a
- * time, in the order they were queued, as they do when nothing is deferred.
+ * notification, and a referred buyer's purchase announces its rewards and
+ * then its balance. Next's after() starts everything it was handed at once,
+ * which would send them side by side and could land "balance is now 600"
+ * after "balance is now 1,100". Queued through this they still go out one at
+ * a time, in the order they were queued, as they do when nothing is deferred.
  */
 function oneAtATime(runAfterResponse: RunAfterResponse): RunAfterResponse {
   let previous: Promise<unknown> = Promise.resolve();
@@ -748,15 +749,20 @@ export async function completeMobilePurchase({
     if (!creditTransactionId) {
       throw new MobileCommerceError('Failed to record mobile credit purchase.', 500);
     }
+    // A referred buyer's purchase has two things to announce: the rewards it
+    // earned, then the new balance. They are handed over chained, so that
+    // order holds when they go out behind the answer too.
+    const runInOrder = runAfterResponse && oneAtATime(runAfterResponse);
     const referral = await settleCreditPurchaseReferralRewards({
       adminSupabase,
       purchaserUserId: userId,
       transactionId: creditTransactionId,
       source: 'mobile_purchase',
+      runAfterResponse: runInOrder,
     });
     const credits = requiredSafeInteger(data.remaining_credits) ?? await getProfileCredits(adminSupabase, userId);
     if (!alreadyProcessed) {
-      await sendPurchaseNotification(runAfterResponse, () => notifyMobileCreditPurchase(adminSupabase, {
+      await sendPurchaseNotification(runInOrder, () => notifyMobileCreditPurchase(adminSupabase, {
         userId,
         credits,
         transactionId: creditTransactionId,

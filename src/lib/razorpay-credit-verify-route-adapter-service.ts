@@ -1,10 +1,11 @@
 import 'server-only';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import {
   verifyCreditRazorpayPaymentForRoute,
   type CreditRazorpayVerifyRouteResult,
@@ -17,6 +18,7 @@ type RazorpayCreditVerifyRouteDependencies = {
   getRazorpayKeyId?: () => string | undefined;
   getRazorpayKeySecret?: () => string | undefined;
   logError?: typeof logBackendRouteError;
+  runAfterResponse?: RunAfterResponse;
   verifyCreditRazorpayPaymentForRoute?: typeof verifyCreditRazorpayPaymentForRoute;
 };
 
@@ -27,6 +29,7 @@ function resolveDependencies(dependencies: RazorpayCreditVerifyRouteDependencies
     getRazorpayKeyId: dependencies?.getRazorpayKeyId ?? (() => process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID),
     getRazorpayKeySecret: dependencies?.getRazorpayKeySecret ?? (() => process.env.RAZORPAY_KEY_SECRET),
     logError: dependencies?.logError ?? logBackendRouteError,
+    runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
     verifyCreditRazorpayPaymentForRoute:
       dependencies?.verifyCreditRazorpayPaymentForRoute ?? verifyCreditRazorpayPaymentForRoute,
   };
@@ -53,6 +56,9 @@ async function handleRazorpayCreditVerifyPOST(
       readBody: () => request.json(),
       createUserSupabase: () => dependencies.createUserClient(request),
       createAdminSupabase: () => dependencies.createServiceClient(),
+      // The buyer waits on this answer with the payment already taken, so a
+      // referral's pushes go out behind it rather than in front.
+      runAfterResponse: dependencies.runAfterResponse,
     }));
   } catch (error: unknown) {
     // Detail stays in the structured log; clients get a fixed generic message
