@@ -280,7 +280,6 @@ export async function getVideoGenerationStatusForRoute({
   const selectedModel = getWorkflowModelId(localGeneration);
   const estimatedTotalMs = estimateVideoTotalMs(localGeneration, selectedModel);
   let status: 'processing' | 'waiting' | 'succeeded' | 'failed' = 'processing';
-  const output: string | null = null;
   let error: string | null = null;
   let timing = normalizeStoredGenerationTiming({
     kind: getGenerationKind({
@@ -430,30 +429,23 @@ export async function getVideoGenerationStatusForRoute({
       }
     }
 
-    // A result found above is settled by now. What is left is telling the
+    // A failure found above is settled by now. What is left is telling the
     // creator's own devices, which the route sends behind its answer and
-    // outside this lock.
-    if (localGeneration.id && localGeneration.user_id) {
-      if (status === 'succeeded' && output) {
-        await sendDeferrableNotification(runAfterResponse, () => resolvedDependencies.notifyGenerationStatus(admin, {
-          id: localGeneration.id,
-          user_id: localGeneration.user_id,
-          category: localGeneration.category,
-          model: localGeneration.model,
-        }, 'succeeded'));
-      } else if (status === 'failed') {
-        await sendDeferrableNotification(runAfterResponse, () => resolvedDependencies.notifyGenerationStatus(admin, {
-          id: localGeneration.id,
-          user_id: localGeneration.user_id,
-          category: localGeneration.category,
-          model: localGeneration.model,
-        }, 'failed'));
-      }
+    // outside this lock. A finished video is announced by the output import
+    // job that stores it, never from here.
+    if (status === 'failed' && localGeneration.id && localGeneration.user_id) {
+      await sendDeferrableNotification(runAfterResponse, () => resolvedDependencies.notifyGenerationStatus(admin, {
+        id: localGeneration.id,
+        user_id: localGeneration.user_id,
+        category: localGeneration.category,
+        model: localGeneration.model,
+      }, 'failed'));
     }
 
     return {
       status,
-      output,
+      // A finished video is answered from its stored row, before the lock.
+      output: null,
       error,
       timing: withGenerationTimingEstimate(timing, estimatedTotalMs),
     };

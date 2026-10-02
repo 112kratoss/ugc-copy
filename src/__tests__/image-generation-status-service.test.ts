@@ -403,6 +403,8 @@ describe('image generation failure notifications', () => {
     {
       found: 'the image still rendering',
       task: { state: 'generating' },
+      settled: 'failed' as const,
+      settlements: 0,
       answer: { status: 'processing', output: null, error: null },
     },
     {
@@ -412,17 +414,50 @@ describe('image generation failure notifications', () => {
         completeTime: '2026-04-15T10:01:00.000Z',
         resultJson: JSON.stringify({ resultUrls: ['https://provider.example.com/output.png'] }),
       },
+      settled: 'failed' as const,
+      settlements: 0,
       answer: { status: 'processing', output: null, error: null },
     },
-  ])('defers nothing for a poll that finds $found', async ({ task, answer }) => {
-    const { history, settleGenerationFailed, poll } = createPoll({ task });
+    {
+      // Its success was settled first, so there is no failure to report.
+      found: 'a failure the settlement turned down',
+      task: failedTask,
+      settled: 'succeeded' as const,
+      settlements: 1,
+      answer: { status: 'succeeded', output: null, error: 'provider failure' },
+    },
+  ])('defers nothing for a poll that finds $found', async ({ task, settled, settlements, answer }) => {
+    const { history, settleGenerationFailed, poll } = createPoll({ task, settled });
     const runAfterResponse = vi.fn();
 
     await expect(poll(runAfterResponse)).resolves.toMatchObject({ ok: true, body: answer });
 
     expect(runAfterResponse).not.toHaveBeenCalled();
-    expect(settleGenerationFailed).not.toHaveBeenCalled();
+    expect(settleGenerationFailed).toHaveBeenCalledTimes(settlements);
     expect(history.started).toEqual([]);
+  });
+
+  it('tells the creator nothing about a failure the settlement turned down when the caller has nowhere to run it afterwards', async () => {
+    // The provider reports a failure for an image whose success was settled
+    // first. The settlement keeps the success and the poll answers with it, so
+    // "Your image failed" would contradict the answer it was sent beside.
+    const { history, adminSupabase, settleGenerationFailed, poll } = createPoll({ settled: 'succeeded' });
+
+    await expect(poll()).resolves.toMatchObject({
+      ok: true,
+      body: { status: 'succeeded', output: null, error: 'provider failure' },
+    });
+
+    // The settlement was still asked, exactly as for any provider failure.
+    expect(settleGenerationFailed).toHaveBeenCalledTimes(1);
+    expect(settleGenerationFailed).toHaveBeenCalledWith(
+      adminSupabase,
+      'task-image-1',
+      '2026-04-15T10:01:00.000Z',
+      'provider failure',
+    );
+    expect(history.started).toEqual([]);
+    expect(history.sent).toEqual([]);
   });
 
   it('queues nothing when the failure could not be settled', async () => {
