@@ -12,7 +12,10 @@ import {
   type WorkflowCanvasGraph,
   type WorkflowCanvasRunStepRecord,
 } from '@/lib/workflow-canvas';
-import { markHeldProviderSubmission } from '@/lib/generation-public-failure';
+import {
+  getPublicGenerationStartFailure,
+  markHeldProviderSubmission,
+} from '@/lib/generation-public-failure';
 
 // The runner reads generations service-role (authenticated grants stop at the
 // resume projection), so the service client must serve the same state-backed
@@ -102,6 +105,7 @@ type RunnerTestState = {
     user_id: string;
     status: string;
     output_url: string | null;
+    error_message?: string | null;
   }>;
 };
 
@@ -400,7 +404,9 @@ function createSupabaseMock(state: RunnerTestState) {
 
       if (table === 'generations') {
         return {
-          select() {
+          select(columns: string) {
+            // Like PostgREST, hand back only the columns that were asked for.
+            const selected = columns.split(',').map((column) => column.trim());
             const filters = new Map<string, unknown>();
             const query = {
               eq(column: string, value: unknown) {
@@ -419,7 +425,12 @@ function createSupabaseMock(state: RunnerTestState) {
                     .filter((generation) => (
                       !filters.has('user_id') || filters.get('user_id') === generation.user_id
                     ))
-                    .map((generation) => ({ ...generation })),
+                    .map((generation) => Object.fromEntries(
+                      selected.map((column) => [
+                        column,
+                        (generation as Record<string, unknown>)[column] ?? null,
+                      ]),
+                    )),
                   error: null,
                 };
               },
@@ -915,4 +926,313 @@ describe('workflow-runner recovery', () => {
     expect(syncGenerationStatusesMock).toHaveBeenCalledTimes(1);
     expect(firstRun).toEqual(secondRun);
   });
+});
+
+// A step reaches its generation through hydrateRunSteps, on every worker tick
+// and on every read. A generations row is `pending` until a provider task is
+// attached (a held submission stays there), `processing` after that, and
+// `waiting` when the status sync finds the task queued at the provider. Only
+// `succeeded` and `failed` end it, so only those may end the step: a failed
+// step fails the run and blocks everything downstream, and nothing wakes a
+// finished run again.
+describe('workflow-runner: a step follows its generation', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    // Back to the implementations the mocks were created with: the suite above
+    // leaves a start that never resolves behind.
+    startVideoGenerationMock.mockReset();
+    syncGenerationStatusesMock.mockReset();
+  });
+
+  // What the reaper writes on a held row it settles after its 45 minutes.
+  const REAPED_MESSAGE = getPublicGenerationStartFailure({
+    status: 504,
+    message: 'Generation start timed out before a provider task was created.',
+  }).message;
+
+  function heldSubmissionNote(confirmed = true) {
+    const held = new Error('provider response timed out');
+    markHeldProviderSubmission(held, 'gen-held', { confirmed });
+    return getPublicGenerationStartFailure(held).message;
+  }
+
+  function storedStep(state: RunnerTestState, id: string) {
+    const step = state.steps.find((candidate) => candidate.id === id);
+    if (!step) throw new Error(`No stored step ${id}`);
+    return step;
+  }
+
+  /** The image step as the worker's catch leaves it once it has linked a held
+   * submission, with the video step waiting on its output. */
+  function createHeldImageStepState() {
+    const state = createQueuedWorkflowState();
+    Object.assign(storedStep(state, 'step-image'), {
+      output_snapshot: { submissionPending: true },
+      error_message: heldSubmissionNote(),
+    });
+    Object.assign(state.generations[0], { status: 'pending', output_url: null });
+    return state;
+  }
+
+  async function loadRunner(state: RunnerTestState) {
+    const supabase = createSupabaseMock(state);
+    const runner = await import('@/lib/workflow-runner');
+    return {
+      advance: () => runner.advanceWorkflowRunOnce({
+        supabase: supabase as never,
+        canvasId: state.run.canvas_id,
+        runId: state.run.id,
+      }),
+      read: () => runner.getWorkflowRunDetails({
+        supabase: supabase as never,
+        userId: state.run.user_id,
+        canvasId: state.run.canvas_id,
+        runId: state.run.id,
+      }),
+    };
+  }
+
+  it.each([true, false])(
+    'keeps following a held submission on the next tick (marker confirmed: %s)',
+    async (confirmed) => {
+      const state = createQueuedWorkflowState();
+      const ambiguous = new Error('provider response timed out');
+      markHeldProviderSubmission(ambiguous, 'gen-held-video', { confirmed });
+      // The start RPC reserves the generation before the provider is called, so
+      // the held row is already there, still `pending`, when the start throws.
+      startVideoGenerationMock.mockImplementationOnce(async () => {
+        state.generations.push({
+          id: 'gen-held-video',
+          user_id: state.run.user_id,
+          status: 'pending',
+          output_url: null,
+        });
+        throw ambiguous;
+      });
+      const { advance } = await loadRunner(state);
+
+      await advance();
+      const run = await advance();
+
+      expect(run.status).toBe('processing');
+      expect(run.steps.find((step) => step.id === 'step-video')).toMatchObject({
+        status: 'processing',
+        generation_id: 'gen-held-video',
+        finished_at: null,
+      });
+      expect(state.run).toMatchObject({ status: 'processing', finished_at: null });
+      expect(storedStep(state, 'step-video')).toMatchObject({
+        status: 'processing',
+        generation_id: 'gen-held-video',
+        output_snapshot: { submissionPending: true },
+        error_message: expect.stringContaining('It may still be running'),
+        finished_at: null,
+      });
+      expect(startVideoGenerationMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(['pending', 'waiting', 'processing'])(
+    'reads a %s generation as a step that is still running',
+    async (status) => {
+      const state = createQueuedWorkflowState();
+      Object.assign(state.generations[0], { status, output_url: null });
+      const { advance } = await loadRunner(state);
+
+      const run = await advance();
+
+      expect(run.status).toBe('processing');
+      expect(state.run).toMatchObject({ status: 'processing', finished_at: null });
+      expect(storedStep(state, 'step-image')).toMatchObject({ status: 'processing', finished_at: null });
+      // `blocked` is never queued again, so what depends on the step has to wait.
+      expect(storedStep(state, 'step-video')).toMatchObject({ status: 'queued', finished_at: null });
+      expect(startVideoGenerationMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps a step running when the tick finds its task queued at the provider', async () => {
+    const state = createQueuedWorkflowState();
+    Object.assign(state.generations[0], { status: 'processing', output_url: null });
+    // The worker polls the provider before it reads the row, and that sync
+    // writes `waiting` for a task the provider reports as waiting or queuing.
+    syncGenerationStatusesMock.mockImplementationOnce(async () => {
+      state.generations[0].status = 'waiting';
+      return undefined;
+    });
+    const { advance } = await loadRunner(state);
+
+    const run = await advance();
+
+    expect(syncGenerationStatusesMock).toHaveBeenCalledTimes(1);
+    expect(run.status).toBe('processing');
+    expect(storedStep(state, 'step-image')).toMatchObject({ status: 'processing', finished_at: null });
+    expect(storedStep(state, 'step-video')).toMatchObject({ status: 'queued' });
+    expect(state.run.status).toBe('processing');
+  });
+
+  it('does not end a step on a generation status it does not know', async () => {
+    const state = createQueuedWorkflowState();
+    // `waiting` was once a status this code had never heard of.
+    Object.assign(state.generations[0], { status: 'a-status-added-later', output_url: null });
+    const { advance } = await loadRunner(state);
+
+    const run = await advance();
+
+    expect(run.status).toBe('processing');
+    expect(storedStep(state, 'step-image')).toMatchObject({ status: 'processing', finished_at: null });
+    expect(storedStep(state, 'step-video')).toMatchObject({ status: 'queued' });
+  });
+
+  it('fails a step whose generation failed and blocks what depends on it', async () => {
+    const state = createQueuedWorkflowState();
+    Object.assign(state.generations[0], {
+      status: 'failed',
+      output_url: null,
+      error_message: 'The provider reported a failure.',
+    });
+    const { advance } = await loadRunner(state);
+
+    const run = await advance();
+
+    expect(run.status).toBe('failed');
+    expect(state.run.status).toBe('failed');
+    expect(storedStep(state, 'step-image')).toMatchObject({
+      status: 'failed',
+      // Only a held-submission note is replaced, and this step never had one.
+      error_message: null,
+    });
+    expect(storedStep(state, 'step-video')).toMatchObject({ status: 'blocked' });
+    expect(startVideoGenerationMock).not.toHaveBeenCalled();
+  });
+
+  it('picks the run back up when a held submission turns out to have succeeded', async () => {
+    const state = createHeldImageStepState();
+    const { advance, read } = await loadRunner(state);
+
+    const heldRun = await advance();
+    expect(heldRun.status).toBe('processing');
+    expect(storedStep(state, 'step-image')).toMatchObject({
+      status: 'processing',
+      error_message: heldSubmissionNote(),
+      finished_at: null,
+    });
+    expect(storedStep(state, 'step-video')).toMatchObject({ status: 'queued' });
+    expect(startVideoGenerationMock).not.toHaveBeenCalled();
+
+    // The provider's callback arrives late and the render completes.
+    Object.assign(state.generations[0], {
+      status: 'succeeded',
+      output_url: 'generated_images/user-1/hero-frame.png',
+    });
+
+    // A read before the worker's next tick already says so, without writing.
+    const seen = (await read()).steps.find((step) => step.id === 'step-image');
+    expect(seen).toMatchObject({
+      status: 'succeeded',
+      error_message: null,
+      output_snapshot: {
+        outputUrl: 'https://signed.example.com/generated_images%2Fuser-1%2Fhero-frame.png',
+      },
+    });
+    expect(seen?.output_snapshot).not.toHaveProperty('submissionPending');
+    expect(storedStep(state, 'step-image').status).toBe('processing');
+
+    const resumedRun = await advance();
+
+    // What the worker stores is what the read showed.
+    expect(storedStep(state, 'step-image')).toMatchObject({
+      status: 'succeeded',
+      error_message: null,
+      output_snapshot: seen?.output_snapshot,
+    });
+    expect(storedStep(state, 'step-image').output_snapshot).not.toHaveProperty('submissionPending');
+    expect(startVideoGenerationMock).toHaveBeenCalledTimes(1);
+    expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+      startImageUrl: 'https://signed.example.com/generated_images%2Fuser-1%2Fhero-frame.png',
+    }));
+    expect(storedStep(state, 'step-video')).toMatchObject({
+      status: 'processing',
+      generation_id: 'gen-video',
+    });
+    expect(resumedRun.status).toBe('processing');
+    expect(state.run.status).toBe('processing');
+  });
+
+  it('fails the step, and says why, once a held submission is settled as failed', async () => {
+    const state = createHeldImageStepState();
+    const { advance, read } = await loadRunner(state);
+
+    await advance();
+    expect(storedStep(state, 'step-image')).toMatchObject({ status: 'processing', finished_at: null });
+    expect(state.run.status).toBe('processing');
+
+    // No callback came: the reaper returns the credits and fails the generation.
+    Object.assign(state.generations[0], { status: 'failed', error_message: REAPED_MESSAGE });
+
+    const seenRun = await read();
+    const seen = seenRun.steps.find((step) => step.id === 'step-image');
+    expect(seenRun.status).toBe('failed');
+    expect(seen).toMatchObject({ status: 'failed', error_message: REAPED_MESSAGE });
+    expect(storedStep(state, 'step-image').status).toBe('processing');
+
+    const run = await advance();
+
+    expect(run.status).toBe('failed');
+    expect(state.run.status).toBe('failed');
+    // The step no longer says the request may still be running.
+    expect(REAPED_MESSAGE).not.toContain('may still be running');
+    expect(storedStep(state, 'step-image')).toMatchObject({
+      status: 'failed',
+      error_message: REAPED_MESSAGE,
+      output_snapshot: seen?.output_snapshot,
+    });
+    expect(storedStep(state, 'step-image').output_snapshot).not.toHaveProperty('submissionPending');
+    expect(storedStep(state, 'step-video')).toMatchObject({ status: 'blocked' });
+    expect(startVideoGenerationMock).not.toHaveBeenCalled();
+  });
+
+  // The same public copy the template worker gives a failed step: a provider's
+  // own wording never reaches the step.
+  const PUBLIC_FAILURE = getPublicGenerationStartFailure({
+    message: 'This generation could not be completed.',
+  }).message;
+
+  it.each([
+    ['the reason the reaper stored', REAPED_MESSAGE, REAPED_MESSAGE],
+    ['a provider’s own wording', 'upstream rejected task 9931 at https://provider.example/tasks/9931', PUBLIC_FAILURE],
+    ['no stored reason', null, PUBLIC_FAILURE],
+  ])('words a failed held step from %s', async (_source, storedReason, expected) => {
+    const state = createHeldImageStepState();
+    Object.assign(state.generations[0], { status: 'failed', error_message: storedReason });
+    const { advance } = await loadRunner(state);
+
+    await advance();
+
+    expect(storedStep(state, 'step-image')).toMatchObject({ status: 'failed', error_message: expected });
+    expect(expected).not.toContain('provider.example');
+  });
+
+  it.each(['pending', 'waiting'])(
+    'shows a step following a %s generation as running to whoever reads the run',
+    async (status) => {
+      const state = createHeldImageStepState();
+      state.generations[0].status = status;
+      const stepsBefore = structuredClone(state.steps);
+      const { read } = await loadRunner(state);
+
+      const run = await read();
+
+      expect(run.status).toBe('processing');
+      expect(run.finished_at).toBeNull();
+      expect(run.steps.find((step) => step.id === 'step-image')).toMatchObject({
+        status: 'processing',
+        error_message: heldSubmissionNote(),
+        finished_at: null,
+      });
+      // Still a pure read.
+      expect(state.steps).toEqual(stepsBefore);
+      expect(syncGenerationStatusesMock).not.toHaveBeenCalled();
+    },
+  );
 });
