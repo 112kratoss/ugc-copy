@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { startImageGeneration, type TemplateGenerationContext } from '@/lib/generation-services';
 import { validateAndCompileTemplateGraph } from '@/lib/template-graph-compiler';
 import { processTemplateRunJobs } from '@/lib/template-run-jobs-processor';
-import { retryTemplateRunStep, syncTemplateRun } from '@/lib/template-run-service';
+import { approveTemplateRunStep, cancelTemplateRun, getTemplateRun, retryTemplateRunStep, syncTemplateRun } from '@/lib/template-run-service';
 import { createTemplateReadyStarterGraph } from '@/lib/workflow-canvas';
 
 // The provider key and the callback settings are read when the generation
@@ -98,7 +98,7 @@ function databaseError(error: unknown) {
 }
 
 /** The PostgREST calls the run worker, the start service and the job queue make, over one connection. */
-function databaseClient(db: Client, startAnswers: string[]): SupabaseClient {
+function databaseClient(db: Client, startAnswers: string[], beforeWrite?: (table: string) => Promise<void>): SupabaseClient {
   return {
     from(table: string) {
       identifier(table);
@@ -109,6 +109,7 @@ function databaseClient(db: Client, startAnswers: string[]): SupabaseClient {
       let update: Record<string, unknown> | null = null;
 
       const run = async () => {
+        if (insert || update) await beforeWrite?.(table);
         if (insert) {
           const keys = Object.keys(insert).map(identifier);
           return (await db.query(
@@ -180,6 +181,7 @@ function databaseClient(db: Client, startAnswers: string[]): SupabaseClient {
       identifier(name);
       const call = `public.${name}(${Object.keys(args).map((key, index) => `${identifier(key)}=>$${index + 1}`).join(',')})`;
       try {
+        if (name === 'retry_template_checkpoint') await beforeWrite?.('template_run_steps');
         const { rows } = await db.query(
           ROW_FUNCTIONS.has(name) ? `select * from ${call}` : `select ${call} as result`,
           Object.values(args).map(writable),
@@ -366,6 +368,224 @@ describe.skipIf(!connectionString)('template run step starts the provider turns 
   }
   type ShownRun = Awaited<ReturnType<typeof tick>>;
   const shownImageSteps = (run: ShownRun) => run.steps.filter((step) => step.kind === 'generation' && step.mediaKind === 'image');
+
+  it('cancels a queued run twice without starting or charging any generation', async () => {
+    const cancelled = await cancelTemplateRun(client, runId, userId);
+    expect(cancelled.status).toBe('cancelled');
+    expect(cancelled.steps.every(step => step.status === 'cancelled')).toBe(true);
+    expect(await credits()).toBe(STARTING_CREDITS);
+    expect(await generations()).toEqual([]);
+    expect(providerCalls()).toBe(0);
+    expect((await cancelTemplateRun(client, runId, userId)).status).toBe('cancelled');
+    expect((await tick()).status).toBe('cancelled');
+    expect(providerCalls()).toBe(0);
+    expect(await credits()).toBe(STARTING_CREDITS);
+  });
+
+  it('cancellation keeps in-flight charges and later failure refunds each generation only once', async () => {
+    providerHasRoom();
+    const started = await tick();
+    expect(started.status).toBe('processing');
+    const rows = (await admin.query('select id,prediction_id,cost from public.generations where user_id=$1', [userId])).rows;
+    expect(rows).toHaveLength(2);
+    const spent = rows.reduce((sum, row) => sum + row.cost, 0);
+    expect(await credits()).toBe(STARTING_CREDITS - spent);
+    const cancelled = await cancelTemplateRun(client, runId, userId);
+    expect(cancelled.status).toBe('cancelled');
+    expect(await credits()).toBe(STARTING_CREDITS - spent);
+    expect((await generations()).every(row => row.status === 'processing' && !row.refunded)).toBe(true);
+    let remainingSpent = spent;
+    for (const row of rows) {
+      for (let repeat = 0; repeat < 2; repeat++) {
+        const result = await client.rpc('settle_generation_failed', { p_prediction_id: row.prediction_id, p_error_message: 'fixture provider failure' });
+        expect(result.error).toBeNull();
+      }
+      remainingSpent -= row.cost;
+      expect((await getTemplateRun({ adminClient: client, runId, userId })).creditsUsed).toBe(remainingSpent);
+      expect(await credits()).toBe(STARTING_CREDITS - remainingSpent);
+    }
+    expect(await credits()).toBe(STARTING_CREDITS);
+    const refundedRun = await getTemplateRun({ adminClient: client, runId, userId });
+    expect(refundedRun.status).toBe('cancelled');
+    expect(refundedRun.creditsUsed).toBe(0);
+    expect((await tick()).creditsUsed).toBe(0);
+    expect((await cancelTemplateRun(client, runId, userId)).creditsUsed).toBe(0);
+    expect(await credits()).toBe(STARTING_CREDITS);
+    expect(await generations()).toHaveLength(2);
+  });
+
+  it('refuses a foreign cancellation and preserves the owner run and balance', async () => {
+    await expect(cancelTemplateRun(client, runId, randomUUID())).rejects.toMatchObject({ status: 404 });
+    expect((await admin.query('select status from public.template_runs where id=$1', [runId])).rows[0].status).toBe('queued');
+    expect(await credits()).toBe(STARTING_CREDITS);
+    expect(await generations()).toEqual([]);
+  });
+
+  async function finishImagesAndAwaitApproval() {
+    providerHasRoom();
+    await tick();
+    const rows = (await admin.query('select id,prediction_id,cost from public.generations where user_id=$1', [userId])).rows;
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      const result = await client.rpc('settle_generation_succeeded', {
+        p_prediction_id: row.prediction_id,
+        p_output_url: `generated_images/${userId}/${row.id}.png`,
+      });
+      expect(result.error).toBeNull();
+    }
+    const run = await tick();
+    expect(run.status).toBe('awaiting_approval');
+    const gates = run.steps.filter(step => step.kind === 'approval');
+    expect(gates.map(step => step.status)).toEqual(['awaiting_approval', 'awaiting_approval']);
+    return { run, gates, spent: rows.reduce((sum, row) => sum + row.cost, 0) };
+  }
+
+  it('approves a checkpoint once and rejects duplicate/foreign approval without extra charges', async () => {
+    const { gates, spent } = await finishImagesAndAwaitApproval();
+    await expect(approveTemplateRunStep({ adminClient: client, runId, stepId: gates[0].id, userId: randomUUID() })).rejects.toMatchObject({ status: 404 });
+    const approved = await approveTemplateRunStep({ adminClient: client, runId, stepId: gates[0].id, userId });
+    expect(approved.steps.find(step => step.id === gates[0].id)?.status).toBe('succeeded');
+    await expect(approveTemplateRunStep({ adminClient: client, runId, stepId: gates[0].id, userId })).rejects.toMatchObject({ status: 409 });
+    expect(await credits()).toBe(STARTING_CREDITS - spent);
+    expect(await generations()).toHaveLength(2);
+  });
+
+  it('cancel after settled images retains the successful work and rejects retry', async () => {
+    const { run, spent } = await finishImagesAndAwaitApproval();
+    const cancelled = await cancelTemplateRun(client, runId, userId);
+    expect(cancelled.steps.filter(step => step.kind === 'generation' && step.mediaKind === 'image').map(step => step.status)).toEqual(['succeeded', 'succeeded']);
+    expect(cancelled.steps.filter(step => step.kind === 'approval').every(step => step.status === 'cancelled')).toBe(true);
+    expect(await credits()).toBe(STARTING_CREDITS - spent);
+    await expect(retryTemplateRunStep({ adminClient: client, runId, stepId: run.steps[0].id, userId })).rejects.toMatchObject({ code: 'RUN_TERMINAL' });
+    expect(await generations()).toHaveLength(2);
+  });
+
+  it('duplicate retry of a checkpoint creates only one next generation attempt and one next gate', async () => {
+    const { gates, spent } = await finishImagesAndAwaitApproval();
+    const args = { adminClient: client, runId, stepId: gates[0].id, userId };
+    await retryTemplateRunStep(args);
+    await retryTemplateRunStep(args);
+    const next = (await admin.query('select kind,status from public.template_run_steps where run_id=$1 and attempt=1 order by kind', [runId])).rows;
+    expect(next).toEqual([{kind:'approval',status:'queued'},{kind:'generation',status:'queued'}]);
+    expect(await credits()).toBe(STARTING_CREDITS - spent);
+    const restarted = await tick();
+    expect(restarted.status).toBe('processing');
+    const rows = await generations();
+    expect(rows).toHaveLength(3);
+    const totalSpent = rows.reduce((sum, row) => sum + row.cost, 0);
+    expect(await credits()).toBe(STARTING_CREDITS - totalSpent);
+    expect(restarted.creditsUsed).toBe(totalSpent);
+    expect((await getTemplateRun({ adminClient: client, runId, userId })).creditsUsed).toBe(totalSpent);
+    await tick();
+    expect(await generations()).toHaveLength(3);
+  });
+
+  it('two database clients cannot approve the same checkpoint twice', async () => {
+    const { gates, spent } = await finishImagesAndAwaitApproval();
+    const second = new Client({ connectionString, statement_timeout: 10_000 });
+    await second.connect();
+    try {
+      await second.query('set role service_role');
+      const other = databaseClient(second, []);
+      const results = await Promise.allSettled([client, other].map(adminClient => approveTemplateRunStep({ adminClient, runId, stepId: gates[0].id, userId })));
+      expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+      const rejected = results.find(result => result.status === 'rejected') as PromiseRejectedResult;
+      expect(rejected.reason).toMatchObject({ status: 409 });
+      expect(await credits()).toBe(STARTING_CREDITS - spent);
+      expect(await generations()).toHaveLength(2);
+    } finally { await second.end(); }
+  });
+
+  it.each(['approval', 'cancellation'] as const)('does not retry a checkpoint when concurrent %s wins after the retry read', async action => {
+    const { gates, spent } = await finishImagesAndAwaitApproval();
+    const second = new Client({ connectionString, statement_timeout: 10_000 });
+    await second.connect();
+    let releaseWrite!: () => void;
+    let reachedWrite!: () => void;
+    const held = new Promise<void>(resolve => { releaseWrite = resolve; });
+    const reached = new Promise<void>(resolve => { reachedWrite = resolve; });
+    try {
+      await second.query('set role service_role');
+      let paused = false;
+      const other = databaseClient(second, [], async table => {
+        if (table === 'template_run_steps' && !paused) {
+          paused = true;
+          reachedWrite();
+          await held;
+        }
+      });
+      const retry = retryTemplateRunStep({ adminClient: other, runId, stepId: gates[0].id, userId });
+      const result = retry.then(value => ({ value, error: null }), error => ({ value: null, error }));
+      await reached;
+      if (action === 'approval') {
+        await approveTemplateRunStep({ adminClient: client, runId, stepId: gates[0].id, userId });
+      } else {
+        await cancelTemplateRun(client, runId, userId);
+      }
+      releaseWrite();
+      const outcome = await result;
+      expect((await admin.query('select id from public.template_run_steps where run_id=$1 and attempt=1', [runId])).rows).toEqual([]);
+      expect(outcome.error).toMatchObject({ status: 409 });
+      expect(await credits()).toBe(STARTING_CREDITS - spent);
+      expect(await generations()).toHaveLength(2);
+    } finally { releaseWrite(); await second.end(); }
+  });
+
+  it('rolls back the cancelled checkpoint and first replacement if the second insert fails', async () => {
+    const { gates, spent } = await finishImagesAndAwaitApproval();
+    await admin.query(`create or replace function pg_temp.reject_audit_checkpoint_insert() returns trigger
+      language plpgsql as $$ begin
+        if new.run_id = '${runId}'::uuid and new.kind = 'approval' and new.attempt = 1 then
+          raise exception 'audit checkpoint insert failure';
+        end if;
+        return new;
+      end $$`);
+    await admin.query(`create trigger audit_checkpoint_insert_failure before insert on public.template_run_steps
+      for each row execute function pg_temp.reject_audit_checkpoint_insert()`);
+    try {
+      await expect(retryTemplateRunStep({ adminClient: client, runId, stepId: gates[0].id, userId }))
+        .rejects.toMatchObject({ message: 'audit checkpoint insert failure' });
+      expect((await admin.query('select status from public.template_run_steps where id=$1', [gates[0].id])).rows[0].status)
+        .toBe('awaiting_approval');
+      expect((await admin.query('select id from public.template_run_steps where run_id=$1 and attempt=1', [runId])).rows).toEqual([]);
+      expect((await admin.query('select status from public.template_runs where id=$1', [runId])).rows[0].status).toBe('awaiting_approval');
+      expect(await credits()).toBe(STARTING_CREDITS - spent);
+    } finally {
+      await admin.query('drop trigger audit_checkpoint_insert_failure on public.template_run_steps');
+    }
+    await retryTemplateRunStep({ adminClient: client, runId, stepId: gates[0].id, userId });
+    expect((await admin.query('select id from public.template_run_steps where run_id=$1 and attempt=1', [runId])).rows).toHaveLength(2);
+  });
+
+  it('restricts the atomic checkpoint RPC to service_role and checks run ownership', async () => {
+    const { gates } = await finishImagesAndAwaitApproval();
+    const permissions = await admin.query(`select
+      has_function_privilege('anon', 'public.retry_template_checkpoint(uuid,uuid,uuid,uuid)', 'execute') as anon,
+      has_function_privilege('authenticated', 'public.retry_template_checkpoint(uuid,uuid,uuid,uuid)', 'execute') as authenticated,
+      has_function_privilege('service_role', 'public.retry_template_checkpoint(uuid,uuid,uuid,uuid)', 'execute') as service`);
+    expect(permissions.rows[0]).toEqual({ anon: false, authenticated: false, service: true });
+    const foreign = await client.rpc('retry_template_checkpoint', {
+      p_run_id: runId, p_step_id: gates[0].id, p_source_step_id: randomUUID(), p_user_id: randomUUID(),
+    });
+    expect(foreign).toEqual({ data: 'RUN_NOT_FOUND', error: null });
+    expect((await admin.query('select id from public.template_run_steps where run_id=$1 and attempt=1', [runId])).rows).toEqual([]);
+  });
+
+  it('two database clients retry a checkpoint into one next attempt without another credit hold', async () => {
+    const { gates, spent } = await finishImagesAndAwaitApproval();
+    const second = new Client({ connectionString, statement_timeout: 10_000 });
+    await second.connect();
+    try {
+      await second.query('set role service_role');
+      const other = databaseClient(second, []);
+      const results = await Promise.allSettled([client, other].map(adminClient => retryTemplateRunStep({ adminClient, runId, stepId: gates[0].id, userId })));
+      expect(results.every(result => result.status === 'fulfilled')).toBe(true);
+      expect((await admin.query('select kind,status from public.template_run_steps where run_id=$1 and attempt=1 order by kind', [runId])).rows)
+        .toEqual([{kind:'approval',status:'queued'},{kind:'generation',status:'queued'}]);
+      expect(await credits()).toBe(STARTING_CREDITS - spent);
+      expect(await generations()).toHaveLength(2);
+    } finally { await second.end(); }
+  });
 
   it('a busy step starts on a later tick once the provider has room, and holds credits only then', async () => {
     providerIsBusy();

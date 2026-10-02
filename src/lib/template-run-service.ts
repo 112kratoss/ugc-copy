@@ -381,7 +381,10 @@ async function toRunDto(client: SupabaseClient, state: RunState): Promise<Templa
       : null,
     estimatedTotalCredits: Math.max(0, state.run.estimated_total_credits),
     estimatedRemainingCredits: Math.max(0, state.run.estimated_remaining_credits),
-    creditsUsed: Math.max(0, state.run.credits_used || generationCredits(state.generations.values())),
+    // The worker summary can predate late settlement, especially after cancel.
+    // All attempts are loaded (including refunded/retried generations); reads
+    // must report their current cost without executing or mutating the run.
+    creditsUsed: generationCredits(state.generations.values()),
     errorMessage: state.run.error_message,
     isTest: Boolean(state.run.is_test),
     createdAt: state.run.created_at,
@@ -1501,13 +1504,25 @@ export async function retryTemplateRunStep(params: {
     if (!sourceStep || sourceStep.kind !== 'generation' || sourceStep.status !== 'succeeded') {
       throw new MediaTemplateError('The generation before this checkpoint cannot be retried.', 409, 'UPSTREAM_STEP_NOT_RETRYABLE');
     }
-    const cancelledAt = new Date().toISOString();
-    await params.adminClient.from('template_run_steps').update({
-      status: 'cancelled',
-      finished_at: cancelledAt,
-    }).eq('id', step.id).eq('status', 'awaiting_approval');
-    await insertRetryStep(params.adminClient, sourceStep);
-    await insertRetryStep(params.adminClient, step);
+    const { data: result, error: retryError } = await params.adminClient.rpc('retry_template_checkpoint', {
+      p_run_id: state.run.id,
+      p_step_id: step.id,
+      p_source_step_id: sourceStep.id,
+      p_user_id: params.userId,
+    });
+    if (retryError) throw retryError;
+    if (result !== 'retried' && result !== 'existing') {
+      const code = typeof result === 'string' ? result : 'STEP_NOT_RETRYABLE';
+      throw new MediaTemplateError(
+        code === 'RUN_TERMINAL'
+          ? 'This run has ended. Start a new run to try the template again.'
+          : 'This checkpoint was already handled. Refresh the run before retrying.',
+        code === 'RUN_NOT_FOUND' || code === 'STEP_NOT_FOUND' ? 404 : 409,
+        code,
+      );
+    }
+    const next = await loadRunState(params.adminClient, state.run.id, params.userId);
+    return toRunDto(params.adminClient, next);
   }
   await params.adminClient.from('template_runs').update({ status: 'queued', error_message: null })
     .eq('id', state.run.id).in('status', ['awaiting_approval', 'needs_attention']);

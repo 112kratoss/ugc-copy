@@ -6,10 +6,30 @@ Updated 2026-10-03 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/media-metadata-lifecycle-6s`, based on main `24194f1d232af37fca43628bcfd07c74928c8296`; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/workflow-lifecycle-audit-7a`, based on main `dd3d6c13e25b2963e9d190a88c8df1354fcdb88c`; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+Section 6S is deployed as dd3d6c13. PR Quality 37052965820, exact-main Quality
+37055063444 and standard release 37056337938 passed. Release completed October 3
+01:20:18 IST. Independent exact SHA/feed/admin/webhook checks pass. Read
+`backend-section-06-metadata-lifecycle-release-2026-10-03.md`. Legacy environment
+retirement remains unverified, so MEDIA-07 is still open.
+
+Section 7A PR #289 (b52ada71 initial commit) is being extended with atomic
+checkpoint retries. Read `backend-section-07-template-lifecycle-2026-10-03.md`.
+The stale late-refund credit DTO bug is fixed, with 13 DB cases and 6,648 web tests
+passing locally. First PR CI 37056295355 exposed the duplicate-retry race, also
+reproduced locally. Deterministic approval/cancel-vs-retry probes both inserted
+unwanted replacement attempts before the next fix. New service-role-only atomic
+RPC replaces the multi-write approval retry. All 17 DB cases pass, including
+rollback when the second insert fails and unchanged balances. Ten repeated suites pass (170 cases), all type projects and targeted lint pass.
+The updated full web suite is running; updated PR CI, clean migration replay,
+merge and release are pending. No workflow obligation is closed by this initial
+matrix. Ledger remains 22 passed, 27 untested, one failed, three external.
+
+The preceding checkpoint follows.
 
 Section 6R is deployed: PR #281 merged as 20862a0b. Updated PR Quality
 37037902850, exact-main Quality 37039015096 and standard production release
