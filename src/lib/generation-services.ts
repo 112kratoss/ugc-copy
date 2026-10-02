@@ -63,6 +63,7 @@ import type { GenerationStartResult } from '@/lib/generation-start-idempotency';
 import {
   GENERATION_PROMPT_BLOCKED_MESSAGE,
   getPublicGenerationStartFailure,
+  markGenerationStartInProgress,
   markHeldProviderSubmission,
   markRefundedGenerationStart,
   type GenerationStartFailureCode,
@@ -476,10 +477,14 @@ async function startGenerationRecord(
   }
 
   if (status === 'in_progress') {
-    throw new GenerationServiceError(
+    const inProgress = new GenerationServiceError(
       'A generation with this idempotency key is already starting. Retry shortly.',
       409,
     );
+    // The one 409 here whose generation is still alive. A run worker that
+    // repeated its own start takes that generation back.
+    if (generationId) markGenerationStartInProgress(inProgress, generationId);
+    throw inProgress;
   }
 
   if (status === 'key_already_used') {
