@@ -14,6 +14,7 @@ import {
     GeneratorPageHeader,
     MediaStudioShell,
     StudioBackgroundProcessingNotice,
+    StudioElementHandle,
     StudioGenerationStatus,
     StudioMediaPreviewModal,
     StudioModelNotice,
@@ -3824,7 +3825,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                        />
 	                                                    </div>
 	                                                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2">
-	                                                        <span className="truncate text-xs font-semibold text-emerald-300">{element.handle}</span>
+	                                                        <StudioElementHandle handle={element.handle} className="text-xs font-semibold text-emerald-300" />
 	                                                        <div className="flex shrink-0 items-center gap-1.5">
 	                                                            <button
 	                                                                type="button"
@@ -4099,8 +4100,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                             placeholder="Rename element"
                                                         />
                                                     </div>
-                                                    <div className="flex items-center justify-between gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2">
-                                                        <span className="truncate text-xs font-semibold text-sky-300">{element.handle}</span>
+                                                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2">
+                                                        <StudioElementHandle handle={element.handle} className="text-xs font-semibold text-sky-300" />
                                                         <button
                                                             type="button"
                                                             onClick={() => handleInsertElementHandle(element.handle)}
