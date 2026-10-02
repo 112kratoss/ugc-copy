@@ -10,6 +10,7 @@ import {
   sendExpoPushNotification,
   sendExpoPushNotificationBatch,
   sendExpoPushNotificationWithRetry,
+  toMobileNotificationRecord,
 } from '@/lib/mobile-notifications';
 import { EXTERNAL_API_REQUEST_TIMEOUT_MS } from '@/lib/provider-fetch';
 
@@ -297,6 +298,32 @@ describe('mobile notifications', () => {
       .toBe('/viewer?source=showcase-feed&initialId=post-1');
     expect(buildMobileNotificationDeepLink({ kind: 'notifications' }))
       .toBe('/studio');
+  });
+
+  // `updatedAt` is the age the app prints. The row's own updated_at is stamped
+  // by every write, reading the alert included, so it must never feed it.
+  it("reports an alert's last event as updatedAt, not the last write to its row", () => {
+    expect(toMobileNotificationRecord({
+      id: 'notification-1',
+      type: 'post_saved',
+      category: 'social',
+      event_count: 3,
+      is_read: true,
+      created_at: '2026-06-22T06:00:00.000Z',
+      last_event_at: '2026-06-22T06:10:00.000Z',
+      updated_at: '2026-06-22T09:00:00.000Z',
+    })).toMatchObject({
+      createdAt: '2026-06-22T06:00:00.000Z',
+      updatedAt: '2026-06-22T06:10:00.000Z',
+    });
+  });
+
+  it('falls back to the arrival time for a row read without its last event', () => {
+    expect(toMobileNotificationRecord({
+      id: 'notification-1',
+      created_at: '2026-06-22T06:00:00.000Z',
+      updated_at: '2026-06-22T09:00:00.000Z',
+    }).updatedAt).toBe('2026-06-22T06:00:00.000Z');
   });
 
   it('checks only receipts that have reached the recommended 15-minute age', async () => {

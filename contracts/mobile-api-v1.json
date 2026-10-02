@@ -1636,6 +1636,11 @@
         ],
         "unreadCount": 7
       },
+      "ordering": {
+        "by": "updatedAt",
+        "direction": "descending",
+        "updatedAt": "The alert's last event: its arrival, or the latest event grouped into it. Marking it read does not change it."
+      },
       "deepLinks": {
         "generation": "/viewer?source=studio-creations&initialId=generation-1",
         "templateRun": "/template-runs/run-1",
