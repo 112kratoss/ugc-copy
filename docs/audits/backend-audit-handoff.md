@@ -1,15 +1,52 @@
 # Backend audit — session handoff
 
-Updated 2026-10-02 (Asia/Kolkata). Read this first when continuing the section-by-section Magicbooklet backend audit.
+Updated 2026-10-03 (Asia/Kolkata). Read this first when continuing the section-by-section Magicbooklet backend audit.
 
 ## Workspace and authorization
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/media-capacity-admission-6r`, based on main `1f31715c51a318d863b3f54d88d33a8484c46855`; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/media-metadata-lifecycle-6s`, based on main `24194f1d232af37fca43628bcfd07c74928c8296`; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+Section 6R is deployed: PR #281 merged as 20862a0b. Updated PR Quality
+37037902850, exact-main Quality 37039015096 and standard production release
+37040248048 passed. Release completed October 2 at 17:25:53 UTC / 22:55:53 IST.
+Read `backend-section-06-capacity-admission-release-2026-10-03.md`. MEDIA-06 now
+passes its cooperating-writer scope; ledger 22 passed, 27 untested, one failed,
+three external. No global filesystem or production throughput claim is implied.
+
+Current 6S metadata lifecycle fix is uncommitted and under final validation.
+Private `.audit-evidence/backend-section-06s/` records the real 31-kill/64-inode
+failure, 400 candidate kill controls, five failing permanent regressions, inherited
+reader/live allocator/unknown metadata controls, and an old/new admission
+compatibility failure caught before shipment. The fix uses item2- only during
+initialization under the root lock, then atomically renames to the old item-
+prefix before releasing admission. Older capacity-aware workers therefore count
+new claims too. Name collisions preserve existing workspaces. Legacy unpublished
+item- metadata and unknown payloads remain untouched. Final local targeted
+workspace run: 38 passed; updated-main focused suite: 83 passed; all ten isolated
+worker cases pass (one harness skip). Native FFmpeg/admission regressions pass.
+Read `backend-section-06-metadata-lifecycle-2026-10-03.md`.
+One full-suite attempt under heavy shared-host load timed out; its log is kept.
+Later runs were interrupted by the session boundary and are not passes. Cleaned
+one verified abandoned audit-crash fixture on isolated port 55322; no customer
+or other checkout rows were touched. All type projects and targeted lint pass
+on updated main. The completed two-worker full suite passes 6,648 tests
+(129 skipped). Final 6S CI/release remain pending.
+
+Main advanced through #282 and #284 to 24194f1d; both incorporated by fast-forward
+without changing local edits. Live 1361e2c4 independently passed SHA/feed/admin/
+webhook checks. Later release 37051401271 for 24194f1d failed protected live build-ID
+verification after promotion; do not call that run successful. Subsequent
+independent public SHA/feed/admin/webhook checks pass on 24194f1d; protected
+health on that latest build is not independently reverified. Preserve unrelated receipt edits,
+Section 1 files and private evidence. Next: finish/CI/release 6S, then the prepared
+WORKFLOW-02/03/04 matrix in private `backend-section-07/coverage-prep.md`.
+
+The preceding checkpoint follows.
 
 Section 6R shared staging admission is implemented and locally verified, not yet
 released. Read `docs/audits/backend-section-06-bounded-writer-contention-2026-10-02.md`.

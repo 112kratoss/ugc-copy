@@ -1,6 +1,6 @@
 # Backend audit coverage tracker
 
-Updated 2026-10-01. This is the shared area-level tracker, not a completion
+Updated 2026-10-03. This is the shared area-level tracker, not a completion
 percentage. The [completion checklist](backend-audit-completion-checklist.md)
 now holds stable closure obligations and their evidence/status. A numbered fix
 batch is not a whole subsystem. A green inventory or
@@ -60,7 +60,7 @@ MAP-02; this initial ledger is not yet a measured completion denominator.
    reproduces scan starvation behind 128 persistent entries and concurrent
    capacity oversubscription. Section 6L fixes MEDIA-05 scan progress and is
    deployed/verified in PR #256: successful reclamations are capped at 128,
-   inspection is linear. Ledger: 21 passed, 27 untested, 2 failed, 3 external
+   inspection is linear. Ledger: 22 passed, 27 untested, 1 failed, 3 external
    (not a completion percentage). Section 6M verifies four real disk-failure/DB
    recovery scenarios, including partial outputs and exhausted jobs reopened by
    callback/reaper, with stable balances and one success notification. No runtime
@@ -76,10 +76,11 @@ MAP-02; this initial ledger is not yet a measured completion denominator.
    per-file limits into actual runners and passes local real-FFmpeg bounds,
    cancellation, normal/failure and orphan cleanup checks. PR #277 is deployed as
    a8dd6c1f with exact-main Quality and live health verified. Section 6R reproduces
-   shared ENOSPC between bounded encoders; its shared-admission fix now passes local
-   real-process, bounded-disk/inode and DB retry checks, with release pending. Main
-   1f31715c and seven newer product/workflow PRs are incorporated and live verified. Legacy
-   metadata policy and MEDIA-06 shared admission remain open, then workflow/template
+   shared ENOSPC between bounded encoders. Its shared-admission fix is deployed in
+   PR #281 (20862a0b), with exact-main Quality and standard release verified;
+   MEDIA-06 passes for cooperating writers. Current main 24194f1d is incorporated.
+   Section 6S locally fixes interrupted initialization, with legacy operational
+   evidence still open under MEDIA-07. Next are workflow/template
    execution; continue the other areas above without claiming them complete from
    code inventory alone.
 
