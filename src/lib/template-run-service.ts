@@ -81,6 +81,12 @@ const TEMPLATE_CANCELLED_MID_GENERATION_MESSAGE =
 const MAX_IDEMPOTENCY_KEY_LENGTH = 256;
 const ACTIVE_GENERATION_STATUSES = new Set(['pending', 'waiting', 'processing']);
 const TERMINAL_RUN_STATUSES = new Set<TemplateRunStatus>(['succeeded', 'failed', 'cancelled']);
+// How long a step is tried again while the provider, or our own gate in front
+// of it, turns it away as busy. Each try that gets as far as the gate holds
+// and returns the step's credits and leaves a refunded generation behind, so
+// the wait has to end. The step then fails with the busy message, and a retry
+// by hand starts the wait again.
+const STEP_BUSY_RETRY_WINDOW_MS = 30 * 60 * 1000;
 
 const RUN_SELECT = [
   'id', 'template_id', 'template_version_id', 'user_id', 'graph_snapshot',
@@ -258,6 +264,14 @@ function failureSnapshot(step: TemplateRunStepRow, failureCode: GenerationStartF
   };
 }
 
+/** When a step that is waiting on a busy provider was first turned away. */
+function stepBusySince(step: TemplateRunStepRow): number | null {
+  if (!isRecord(step.output_snapshot)) return null;
+  const since = step.output_snapshot.busySince;
+  const time = typeof since === 'string' ? Date.parse(since) : Number.NaN;
+  return Number.isFinite(time) ? time : null;
+}
+
 async function loadOwnedRun(client: SupabaseClient, runId: string, userId: string): Promise<TemplateRunRow> {
   const { data, error } = await client.from('template_runs').select(RUN_SELECT)
     .eq('id', runId).eq('user_id', userId).maybeSingle();
@@ -278,6 +292,14 @@ async function loadRunGenerations(client: SupabaseClient, runId: string): Promis
     .eq('template_run_id', runId);
   if (error) throw error;
   return new Map(((data ?? []) as unknown as GenerationRow[]).map((row) => [row.id, row]));
+}
+
+/** The generation a step row was started with. A step row has at most one. */
+async function loadStepGeneration(client: SupabaseClient, stepId: string) {
+  const { data, error } = await client.from('generations').select('id, status')
+    .eq('template_run_step_id', stepId).maybeSingle();
+  if (error) throw error;
+  return data as Pick<GenerationRow, 'id' | 'status'> | null;
 }
 
 async function loadRunState(client: SupabaseClient, runId: string, userId: string): Promise<RunState> {
@@ -1104,10 +1126,13 @@ async function advanceTemplateRun(client: SupabaseClient, runId: string, userId:
     const dependency = inspectWorkflowNodeDependencies(graph, node);
     if (dependency.kind === 'queued') continue;
     if (dependency.kind === 'blocked') {
-      const hasFailedUpstream = getIncomingEdges(graph, node.id).some((edge) => {
-        const upstream = state.latestSteps.get(edge.source);
-        return upstream?.status === 'failed' || upstream?.status === 'cancelled';
-      });
+      // Read from the graph, which carries what this pass has done as well as
+      // what it started from (a cancelled step is hydrated as failed). A step
+      // that failed a moment ago must not take the steps after it down too:
+      // they stay in line for when it is retried.
+      const hasFailedUpstream = getIncomingEdges(graph, node.id).some((edge) => (
+        getNodeById(graph, edge.source)?.data.runState.status === 'failed'
+      ));
       if (hasFailedUpstream) continue;
       await client.from('template_run_steps').update({
         status: 'failed',
@@ -1194,16 +1219,43 @@ async function advanceTemplateRun(client: SupabaseClient, runId: string, userId:
       if (status !== 409) {
         const failure = getPublicGenerationStartFailure(error);
         const submissionPending = failure.code === 'submission_pending';
-        const retryableBackpressure = failure.code === 'provider_busy'
-          || failure.code === 'provider_unavailable';
+        const busySince = failure.code === 'provider_busy' || failure.code === 'provider_unavailable'
+          ? stepBusySince(step) ?? Date.now()
+          : null;
+        const retryableBackpressure = busySince !== null
+          && Date.now() - busySince < STEP_BUSY_RETRY_WINDOW_MS;
+        // A busy start that got as far as holding credits has used this step
+        // row up: the database keeps one generation per step row, so the
+        // refused, refunded generation stays on it and
+        // `start_template_generation` will not start the row again. The step
+        // goes back in line as its next attempt, as a retry by hand does. A
+        // start refused before the hold left the row unused, and it waits as
+        // it is. A refused generation whose refund did not land still holds
+        // its credits: the step follows it, and nothing is started beside it.
+        const refused = busySince !== null ? await loadStepGeneration(client, step.id) : null;
+        const stillHeld = refused !== null && refused.status !== 'failed';
+        const retryAsNextAttempt = retryableBackpressure && refused?.status === 'failed';
+        const stepStatus = submissionPending || stillHeld
+          ? 'processing'
+          : retryableBackpressure && !refused ? 'queued' : 'failed';
+        const outputSnapshot = {
+          ...failureSnapshot(step, failure.code),
+          ...(busySince !== null ? { busySince: new Date(busySince).toISOString() } : {}),
+        };
+        if (retryAsNextAttempt) {
+          await insertRetryStep(client, step, {
+            error_message: failure.message,
+            output_snapshot: outputSnapshot,
+          });
+        }
         await client.from('template_run_steps').update({
-          status: submissionPending ? 'processing' : retryableBackpressure ? 'queued' : 'failed',
+          status: stepStatus,
           error_message: failure.message,
-          output_snapshot: failureSnapshot(step, failure.code),
-          finished_at: submissionPending || retryableBackpressure ? null : new Date().toISOString(),
+          output_snapshot: outputSnapshot,
+          finished_at: stepStatus === 'failed' ? new Date().toISOString() : null,
         }).eq('id', step.id);
         graph = updateNodeRunState(graph, node.id, {
-          status: submissionPending ? 'processing' : retryableBackpressure ? 'queued' : 'failed',
+          status: retryAsNextAttempt ? 'queued' : stepStatus,
           error: failure.message,
         });
       }
@@ -1351,7 +1403,15 @@ export async function approveTemplateRunStep(params: {
   return toRunDto(params.adminClient, next);
 }
 
-async function insertRetryStep(client: SupabaseClient, step: TemplateRunStepRow) {
+/**
+ * Queues the next attempt of a step. `waiting` is what a step the worker is
+ * still trying shows while it waits; a retry by hand starts clean.
+ */
+async function insertRetryStep(
+  client: SupabaseClient,
+  step: TemplateRunStepRow,
+  waiting?: { error_message: string; output_snapshot: Record<string, unknown> },
+) {
   const nextAttempt = step.attempt + 1;
   const { data, error } = await client.from('template_run_steps').insert({
     run_id: step.run_id,
@@ -1363,6 +1423,7 @@ async function insertRetryStep(client: SupabaseClient, step: TemplateRunStepRow)
     status: 'queued',
     can_retry: step.can_retry,
     estimated_credits: step.estimated_credits,
+    ...waiting,
   }).select(STEP_SELECT).single();
   if (error) {
     const code = isRecord(error) && typeof error.code === 'string' ? error.code : '';
