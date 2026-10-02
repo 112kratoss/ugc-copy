@@ -1,7 +1,8 @@
 # Section 6N — media scratch ownership and footprint
 
 Updated 2026-10-01. Baseline: `999c34d5`. Implementation branch:
-`codex/media-scratch-leases-6n`. Local verification complete; release pending.
+`codex/media-scratch-leases-6n`. Merged in PR #257 and deployed as `149b9edc`; see the release report.
+October 2 production `626f398c` retains this implementation unchanged.
 
 ## Reproduction
 
@@ -81,7 +82,7 @@ runtime change is needed.
 Old scratch directories, unpublished metadata and unknown files remain outside
 deletion authority. Their names, ages and parent PIDs do not prove exclusive
 ownership. Shared disk admission also remains open. MEDIA-07 is therefore
-**failed/open**, with the newly created scratch leak fixed locally but legacy
+**failed/open**, with the newly created scratch leak fixed and deployed but legacy
 and metadata policy unresolved. The ledger now has 21 passed, 27 untested,
 2 failed and 3 external obligations (53 total, unequal scope).
 
@@ -115,6 +116,6 @@ exited before fixture removal; `/scratch` cleanup is asserted by the initial
 probe. Dedicated containers are ephemeral. Existing databases and local evidence
 are preserved.
 
-Next: finish release, then define/enforce a shared source/output reservation
+Next: define/enforce a shared source/output reservation
 budget and resolve legacy/unpublished metadata policy before closing MEDIA-06/07.
 Continue WORKFLOW-02/03/04 afterward.

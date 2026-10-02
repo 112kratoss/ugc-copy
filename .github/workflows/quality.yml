@@ -40,6 +40,9 @@ jobs:
       - name: Verify media scratch reclamation with real FFmpeg
         run: npx tsx --tsconfig tsconfig.scripts.json scripts/audits/audit-media-scratch-lifetime.ts
 
+      - name: Verify encoder output bounds with real FFmpeg
+        run: npx tsx --tsconfig tsconfig.scripts.json scripts/audits/audit-media-output-limits.ts
+
       - name: Lint
         run: npm run lint
 

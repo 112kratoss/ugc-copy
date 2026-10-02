@@ -1,29 +1,89 @@
 # Backend audit — session handoff
 
-Updated 2026-10-01 (Asia/Kolkata). Read this first when continuing the section-by-section Magicbooklet backend audit.
+Updated 2026-10-02 (Asia/Kolkata). Read this first when continuing the section-by-section Magicbooklet backend audit.
 
 ## Workspace and authorization
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/media-scratch-leases-6n`, based on main `999c34d5b3435d160865a05c8ba3ff1bd3a0ec29`; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/media-output-limits-6q`, based on main `626f398ca01d179113663868d76d658e332184e1`; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-Section 6N scratch ownership fix is implemented locally; release pending. Read
-`docs/audits/backend-section-06-media-scratch-2026-10-01.md`. Real Linux/Node 24
-FFmpeg regular-file probes reproduce unreclaimed source/output in all five old
-scratch namespaces. Committed process regression fails before the fix (0 vs 2
+Section 6Q integrates the proven per-file limit into actual poster, rendition
+and teaser runners. Local application regression fails before (13,007 bytes vs
+2,048 budget), then passes on macOS and Linux (2,048 bytes, existing not-smaller
+fallback, empty scratch). Real Linux normal/decode-failure/cancellation and
+owner-death reclamation controls pass. Local web suite: 6,406 passed, 121 skipped;
+focused final runner/capability checks: 59 passed; all three type projects pass.
+Lint has no errors after excluding private generated evidence, two existing warnings.
+Read `docs/audits/backend-section-06-encoder-output-limits-2026-10-02.md`.
+PR/exact-main Quality and standard production release are pending. Runtime
+capability is measured asynchronously once per process; unavailable enforcement
+fails closed. No production media transaction has yet verified this launcher.
+MEDIA-06 shared capacity reservation and MEDIA-07 legacy metadata policy remain
+open; scoped ledger stays 21 passed, 27 untested, 2 failed, 3 external.
+Private evidence `.audit-evidence/backend-section-06q/`. Preserve unrelated local
+receipt edits, Section 1 files, and all prior evidence. Current live is 626f398c.
+
+The preceding checkpoint follows.
+
+Section 6P kernel output-bound proof passes locally on macOS/Node 22/FFmpeg 6.0
+and Linux/Node 24/FFmpeg 8.1.2. No runtime integration or deployment yet. Read
+`docs/audits/backend-section-06-kernel-output-bound-2026-10-02.md`.
+A fixed positional-argument shell launcher applies the kernel file-size limit
+before exec. Outputs stop exactly at 4 KiB/64 KiB with SIGXFSZ; normal 1 MiB-budget
+encodes succeed. The cap and both leases survive parent death beyond the Node
+timeout; a fresh process reclaims both workspaces only after FFmpeg exits.
+Shell units differ: measured Mac 1024 vs Alpine 512 bytes. Do not assume one unit
+or call this aggregate admission: two files can each consume the per-file cap.
+Next: verify production launcher capability/units and explicit output budgets,
+then integrate/test actual runners and shared cross-process reservation, including
+completed source accounting and metadata headroom. No age-based legacy deletion.
+Private evidence `.audit-evidence/backend-section-06p/`; scoped ledger unchanged.
+Current branch/main baseline and verified production remain 626f398c; preserve
+uncommitted 6N release, 6O/6P evidence and unrelated edits.
+
+The preceding checkpoint follows.
+
+Section 6N is merged in PR #257 as 149b9edc39c4ab895f049b270e86bdff960b1b95
+at 2026-10-01 14:17:15 UTC. Updated PR Quality 36873464662 passed all four jobs;
+6,178 web tests, real FFmpeg media scratch/cancellation and 163 native artifact
+traces passed. Initial Quality 36872492921 exposed child TSX cache files in the
+probe scratch root; e2f5b6b2 isolates that cache without runtime changes. Both
+results are preserved. No mobile store release was active before merge.
+Exact-main Quality 36875154079 passed all four jobs first run. Standard release
+36876633477 succeeded first attempt October 1 at 14:31:58 UTC (20:01:58 IST),
+including staged/protected production health. On October 2, remote main and live
+production are 626f398c, including #257 and 15 later PRs. Audit checkout fast-forwarded
+without conflict; all local evidence and unrelated edits remain. Scratch runtime
+and process probe are unchanged by the later PRs. Current release 36975169861
+succeeded at 06:49:45 UTC (12:19:45 IST). Independent live SHA/feed 200/admin 307/
+unsigned webhook 401 passed on this newer build. No stale deployment required.
+Read `docs/audits/backend-section-06-media-scratch-release-2026-10-01.md` and
+`docs/audits/backend-section-06-media-scratch-2026-10-01.md`.
+
+Real Linux/Node 24 FFmpeg regular-file probes reproduce unreclaimed source/output
+in all five old namespaces. Committed process regression fails before (0 vs 2
 reclaimed), then passes for poster/rendition/teaser with inherited source/output
 leases. Abort ordering also reproduced EBUSY and is fixed by waiting for close.
-New work uses the existing staging lease/marker protocol; old scratch and
-unpublished metadata remain untouched. MEDIA-07 now failed/open, pending legacy
-policy. Ledger: 53 obligations, 21 passed, 27 untested, 2 failed, 3 external.
-Private evidence `.audit-evidence/backend-section-06n/`; preserve all existing
-6L/6M and unrelated local records. Current verified production remains 999c34d5.
-Next: exact-head Quality and standard release; then shared disk admission/output
-bounds and metadata/legacy policy, followed by WORKFLOW-02/03/04.
+New work uses existing staging authority; old scratch and unpublished metadata
+remain untouched. MEDIA-07 remains failed/open for legacy policy. Ledger: 53
+obligations, 21 passed, 27 untested, 2 failed, 3 external.
+Private evidence `.audit-evidence/backend-section-06n/`; 6L/6M reports are committed
+in #257. Preserve uncommitted 6N release records and unrelated local files. Next:
+shared disk admission/output bounds and metadata policy, followed by WORKFLOW-02/03/04.
+October 2 compatibility check: 194 focused media/import/notification tests and all
+nine actual isolated-DB worker-kill cases pass on current main. Separate readback
+found zero audit-crash generations/import/completion jobs. Section 6O local
+candidate output-limit probe shows FFmpeg -fs is not a strict byte ceiling:
+16 KiB cap produced 266,960 bytes before exit 187. Current runner rejects that
+failure; do not claim successful truncated output or Linux behavior. No runtime
+change in 6O. Read `backend-section-06-current-baseline-output-limits-2026-10-02.md`.
+Private evidence `.audit-evidence/backend-section-06o/`. Next: prove enforceable
+output bounds before shared cross-process reservation. Preserve newer product
+and notification changes; do not rerun an old deployment.
 
 The preceding investigation checkpoint follows.
 
