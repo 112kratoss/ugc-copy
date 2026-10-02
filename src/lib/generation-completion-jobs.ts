@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendError } from '@/lib/backend-logger';
+import { GenerationServiceError } from '@/lib/generation-service-core';
 import {
   attachGenerationProviderTask,
   settleGenerationFailed,
@@ -59,6 +60,25 @@ export type GenerationCompletionProcessSummary = {
   retried: number;
   failed: number;
 };
+
+/**
+ * What `processGenerationCompletionJobs` throws once it has attempted every job
+ * it claimed and at least one of them threw.
+ *
+ * It keeps the message of the first job that threw, so a failed run reads as it
+ * did when that job aborted the batch. `summary` counts the jobs that were seen
+ * through, for a caller that has work queued behind the batch and wants to do
+ * it before reporting the failure.
+ */
+export class GenerationCompletionBatchError extends Error {
+  readonly summary: GenerationCompletionProcessSummary;
+
+  constructor(cause: unknown, summary: GenerationCompletionProcessSummary) {
+    super(errorMessage(cause), { cause });
+    this.name = 'GenerationCompletionBatchError';
+    this.summary = summary;
+  }
+}
 
 type GenerationSyncResult = Awaited<ReturnType<typeof syncGenerationStatusByPredictionId>>;
 
@@ -251,6 +271,32 @@ function isExhaustedCompletionAttempt(job: GenerationCompletionJob): boolean {
 }
 
 /**
+ * Fails and refunds the generation an exhausted job has given up on.
+ *
+ * `missing` is the settlement's 404, `settle_generation_failed` finding no
+ * generation for the provider task: a callback for a task nothing here
+ * started, or a generation deleted while its job was retrying. No row carries
+ * the task, so there is no hold this job could refund, and the caller closes
+ * the job. Left open it would be claimed again each time its lock expired and
+ * throw again, for good.
+ *
+ * Any other settlement error may leave a refund owed. It keeps propagating, the
+ * job keeps its lock, and the next sweep settles it.
+ */
+async function settleAbandonedGeneration(
+  creditSupabase: SupabaseClient,
+  predictionId: string,
+  reason: string,
+): Promise<'failed' | 'succeeded' | 'missing'> {
+  try {
+    return await settleGenerationFailed(creditSupabase, predictionId, null, reason);
+  } catch (error) {
+    if (error instanceof GenerationServiceError && error.status === 404) return 'missing';
+    throw error;
+  }
+}
+
+/**
  * Tells the creator their render was given up on.
  *
  * The settlement answers with a status alone and the job knows the render only
@@ -288,10 +334,9 @@ async function finishUnsuccessfulCompletionJob(params: {
     // cause: the row is being failed precisely because that never resolved.
     // Record why it was abandoned, keeping the last observed reason for
     // operators.
-    const settlement = await settleGenerationFailed(
+    const settlement = await settleAbandonedGeneration(
       params.creditSupabase,
       params.job.prediction_id,
-      null,
       `The provider never reported a final result after ${params.job.attempt_count} completion attempts (last status: ${params.error})`,
     );
 
@@ -299,7 +344,7 @@ async function finishUnsuccessfulCompletionJob(params: {
     // nothing, so the failure is announced from here. It goes out before the
     // job is closed: a job that died in between is claimed again, settles to
     // the same answer, and the dedupe key absorbs the second send. `succeeded`
-    // is a render that finished after all.
+    // is a render that finished after all, and `missing` has no creator to tell.
     if (settlement === 'failed') {
       await notifyAbandonedGeneration(params.creditSupabase, params.job.prediction_id);
     }
@@ -443,19 +488,41 @@ export async function processGenerationCompletionJobs(params: {
     failed: 0,
   };
 
+  const failures: unknown[] = [];
   const outcomes = await mapWithConcurrency(
     jobs,
     GENERATION_COMPLETION_CONCURRENCY,
-    (job) => processGenerationCompletionJob({
-      supabase: params.supabase,
-      creditSupabase: params.creditSupabase,
-      job,
-      lockedBy: params.lockedBy,
-      retryDelaySeconds: params.retryDelaySeconds,
-    }),
+    async (job) => {
+      try {
+        return await processGenerationCompletionJob({
+          supabase: params.supabase,
+          creditSupabase: params.creditSupabase,
+          job,
+          lockedBy: params.lockedBy,
+          retryDelaySeconds: params.retryDelaySeconds,
+        });
+      } catch (error) {
+        // Nothing closed this job, so it keeps its lock and is claimed again
+        // once that expires. The jobs beside it are other people's renders:
+        // they are seen through before the failure is reported, not left
+        // mid-flight behind a rejection.
+        logBackendError('generation_completion_job_processing_failed', {
+          jobId: job.id,
+          predictionId: job.prediction_id,
+          attemptCount: job.attempt_count,
+          error,
+        });
+        failures.push(error);
+        return null;
+      }
+    },
   );
   for (const outcome of outcomes) {
-    summary[outcome] += 1;
+    if (outcome) summary[outcome] += 1;
+  }
+
+  if (failures.length > 0) {
+    throw new GenerationCompletionBatchError(failures[0], summary);
   }
 
   return summary;

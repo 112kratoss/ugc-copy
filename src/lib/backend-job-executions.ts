@@ -25,9 +25,11 @@ import { BACKEND_JOBS_BY_NAME, type BackendJobDefinition } from '@/lib/backend-j
 import { maintainFeedPersonalization } from '@/lib/feed-maintenance';
 import { pruneOperationalBackendData } from '@/lib/operational-data-retention';
 import {
+  GenerationCompletionBatchError,
   hasDueGenerationCompletionJobs,
   maybePruneGenerationCompletionJobs,
   processGenerationCompletionJobs,
+  type GenerationCompletionProcessSummary,
 } from '@/lib/generation-completion-jobs';
 import { hasDueGenerationOutputImportJobs } from '@/lib/generation-output-import-jobs';
 import {
@@ -389,12 +391,23 @@ export function runGenerationCompletionsBackendJob(options: {
       pruned: await maybePruneGenerationCompletionJobs(client, { nowMs: context.startedAtMs }),
     }),
     run: async (client, context) => {
-      const completionSummary = await processGenerationCompletionJobs({
-        supabase: client,
-        creditSupabase: client,
-        lockedBy: context.lockOwner,
-        limit: GENERATION_COMPLETION_BATCH_LIMIT,
-      });
+      // A job the drain could not finish fails this run, but only at the end.
+      // Everything below is owed to other generations: the reaper is their
+      // safety net and must not be switched off by one job that keeps throwing.
+      let completionFailure: GenerationCompletionBatchError | null = null;
+      let completionSummary: GenerationCompletionProcessSummary;
+      try {
+        completionSummary = await processGenerationCompletionJobs({
+          supabase: client,
+          creditSupabase: client,
+          lockedBy: context.lockOwner,
+          limit: GENERATION_COMPLETION_BATCH_LIMIT,
+        });
+      } catch (error) {
+        if (!(error instanceof GenerationCompletionBatchError)) throw error;
+        completionFailure = error;
+        completionSummary = error.summary;
+      }
       // Webhook-less safety net: reconcile stalled generations that the
       // durable completion queue never heard about (missed webhook, closed
       // app) so credit holds cannot linger forever. Bounded and idempotent.
@@ -428,6 +441,7 @@ export function runGenerationCompletionsBackendJob(options: {
           })
         : null;
       const pruned = await maybePruneGenerationCompletionJobs(client, { nowMs: context.startedAtMs });
+      if (completionFailure) throw completionFailure;
       return {
         ...completionSummary,
         stalled,

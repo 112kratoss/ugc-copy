@@ -229,6 +229,25 @@ describe.skipIf(!connectionString)('generation output recovery with real queue a
       .toBe('succeeded');
   });
 
+  for (const gone of ['never existed', 'was deleted while the job retried'] as const) {
+    it(`closes an exhausted completion job whose generation ${gone}`, async () => {
+      if (gone !== 'never existed') await seed(false);
+      await enqueue({ data: { taskId: predictionId, state: 'generating' } });
+      if (gone !== 'never existed') await db.query('delete from public.generations where id=$1', [generationId]);
+      await db.query('update public.generation_completion_jobs set attempt_count=4 where prediction_id=$1', [predictionId]);
+      // settle_generation_failed answers `missing`: there is no hold to refund,
+      // so the fifth attempt closes the job instead of leaving it locked.
+      expect(await process()).toEqual({ claimed: 1, completed: 0, retried: 0, failed: 1 });
+      expect((await db.query('select status,attempt_count,locked_by,last_error from public.generation_completion_jobs where prediction_id=$1', [predictionId])).rows[0])
+        .toEqual({ status: 'failed', attempt_count: 5, locked_by: null, last_error: 'Generation row not found for provider task.' });
+      expect((await db.query('select credits from public.profiles where id=$1', [userId])).rows[0].credits).toBe(500);
+      expect(provider.fetch).not.toHaveBeenCalled();
+      // No generation, so no creator to tell that a render was given up on.
+      expect(provider.notify).not.toHaveBeenCalled();
+      expect(await process()).toMatchObject({ claimed: 0 });
+    });
+  }
+
   for (const kind of ['video', 'motion', 'veo'] as const) {
     for (const failure of ['download', 'upload'] as const) {
       it(`${kind}: queues status output and recovers a ${failure} outage before settlement`, async () => {

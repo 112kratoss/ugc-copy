@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createMobileNotificationHistory,
@@ -6,6 +6,7 @@ import {
   withMobileNotificationHistory,
 } from '@/__tests__/fixtures/mobile-notification-history';
 import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
+import { GenerationServiceError } from '@/lib/generation-service-core';
 import {
   attachGenerationProviderTask,
   settleGenerationFailed,
@@ -15,6 +16,7 @@ import {
   claimGenerationCompletionJobs,
   enqueueGenerationCompletionJob,
   finishGenerationCompletionJob,
+  GenerationCompletionBatchError,
   getGenerationCompletionRetryDelaySeconds,
   hasDueGenerationCompletionJobs,
   maybePruneGenerationCompletionJobs,
@@ -743,5 +745,299 @@ describe('generation completion jobs', () => {
 
     expect(peakActive).toBe(4);
     expect(syncGenerationStatusByPredictionId).toHaveBeenCalledTimes(7);
+  });
+
+  describe('a job whose failure settlement does not go through', () => {
+    function claimedJob(job: {
+      id: string;
+      prediction_id: string;
+      attempt_count: number;
+      callbackGenerationId?: string;
+    }) {
+      const { callbackGenerationId, ...row } = job;
+      return {
+        ...row,
+        payload: {
+          data: { taskId: job.prediction_id, state: 'generating' },
+          ...(callbackGenerationId ? { magicbooklet: { callbackGenerationId } } : {}),
+        },
+        status: 'processing',
+        locked_by: 'worker-1',
+      };
+    }
+
+    function syncedGeneration(predictionId: string, status: 'processing' | 'succeeded') {
+      return {
+        id: `generation-${predictionId}`,
+        user_id: 'user-1',
+        prediction_id: predictionId,
+        status,
+        output_url: null,
+        category: 'image',
+        model: 'nanobanana',
+        workflow_settings: null,
+        created_at: '2026-06-21T10:00:00.000Z',
+        completed_at: status === 'succeeded' ? '2026-06-21T10:01:00.000Z' : null,
+      };
+    }
+
+    // Answers like the queue's own RPCs: one claim hands out the batch, and a
+    // finish closes a job as succeeded, fails it on its fifth attempt, or puts
+    // it back for another try.
+    function createQueueClient(jobs: Array<ReturnType<typeof claimedJob>>) {
+      return {
+        rpc: vi.fn(async (functionName: string, args: Record<string, unknown>) => {
+          if (functionName === 'claim_generation_completion_jobs') {
+            return { data: jobs, error: null };
+          }
+          if (functionName !== 'finish_generation_completion_job') {
+            throw new Error(`Unexpected RPC ${functionName}`);
+          }
+          const job = jobs.find((candidate) => candidate.id === args.p_id);
+          if (!job) throw new Error(`Unexpected job ${String(args.p_id)}`);
+          if (args.p_succeeded) return { data: 'succeeded', error: null };
+          return { data: job.attempt_count >= 5 ? 'failed' : 'pending', error: null };
+        }),
+      };
+    }
+
+    function finishCalls(client: ReturnType<typeof createQueueClient>) {
+      return client.rpc.mock.calls
+        .filter(([functionName]) => functionName === 'finish_generation_completion_job')
+        .map(([, args]) => args);
+    }
+
+    let logs: BackendLogRecord[];
+    let restoreLogSink: () => void;
+
+    beforeEach(async () => {
+      // The settlement itself runs here, on a credit client that answers the
+      // way settle_generation_failed would. That pins what the settlement
+      // throws for each answer, which is what the queue has to tell apart.
+      const settlement = await vi.importActual<typeof import('@/lib/generation-settlement')>(
+        '@/lib/generation-settlement',
+      );
+      vi.mocked(settleGenerationFailed).mockImplementation(settlement.settleGenerationFailed);
+      logs = [];
+      restoreLogSink = setBackendLogSink((record) => logs.push(record));
+    });
+
+    afterEach(() => {
+      restoreLogSink();
+    });
+
+    it('closes an exhausted job whose generation is gone, and still processes the rest of the batch', async () => {
+      const supabase = createQueueClient([
+        claimedJob({ id: 'job-1', prediction_id: 'task-1', attempt_count: 5 }),
+        claimedJob({ id: 'job-2', prediction_id: 'task-2', attempt_count: 1 }),
+      ]);
+      // No generation carries task-1: a callback for a task nothing here
+      // started, or a row deleted while the job was retrying.
+      const creditSupabase = createRpcClient([{ data: { status: 'missing' }, error: null }]);
+      vi.mocked(syncGenerationStatusByPredictionId).mockImplementation(async ({ predictionId }) => (
+        predictionId === 'task-1'
+          ? { found: false, status: 'missing', generation: null }
+          : { found: true, status: 'succeeded', generation: syncedGeneration(predictionId, 'succeeded') }
+      ));
+
+      await expect(processGenerationCompletionJobs({
+        supabase: supabase as never,
+        creditSupabase: creditSupabase as never,
+        lockedBy: 'worker-1',
+        limit: 5,
+      })).resolves.toEqual({
+        claimed: 2,
+        completed: 1,
+        retried: 0,
+        failed: 1,
+      });
+
+      expect(creditSupabase.rpc).toHaveBeenCalledExactlyOnceWith('settle_generation_failed', {
+        p_prediction_id: 'task-1',
+        p_completed_at: null,
+        p_error_message: 'The provider never reported a final result after 5 completion attempts (last status: Generation row not found for provider task.)',
+      });
+      // There was nothing to refund, so the job is closed rather than left
+      // locked for every later sweep to trip over.
+      expect(finishCalls(supabase)).toEqual(expect.arrayContaining([
+        {
+          p_id: 'job-1',
+          p_locked_by: 'worker-1',
+          p_succeeded: false,
+          p_error: 'Generation row not found for provider task.',
+          p_retry_delay_seconds: 900,
+        },
+        {
+          p_id: 'job-2',
+          p_locked_by: 'worker-1',
+          p_succeeded: true,
+          p_error: null,
+          p_retry_delay_seconds: 60,
+        },
+      ]));
+      expect(finishCalls(supabase)).toHaveLength(2);
+      // Nothing went wrong, and with no generation there is no creator to
+      // tell: looking one up on this client would have logged a failure.
+      expect(logs).toEqual([]);
+    });
+
+    it('closes an exhausted job when the generation its callback named has been deleted', async () => {
+      const supabase = createQueueClient([
+        claimedJob({
+          id: 'job-1',
+          prediction_id: 'task-1',
+          attempt_count: 5,
+          callbackGenerationId: 'generation-1',
+        }),
+      ]);
+      const creditSupabase = createRpcClient([{ data: { status: 'missing' }, error: null }]);
+      vi.mocked(syncGenerationStatusByPredictionId).mockResolvedValue({
+        found: false,
+        status: 'missing',
+        generation: null,
+      });
+      // An account deleted mid-render takes its generations with it, so the
+      // attempt to put the task back on its generation finds no row either.
+      vi.mocked(attachGenerationProviderTask).mockRejectedValue(
+        new GenerationServiceError('Generation not found for provider task attach.', 404),
+      );
+
+      await expect(processGenerationCompletionJobs({
+        supabase: supabase as never,
+        creditSupabase: creditSupabase as never,
+        lockedBy: 'worker-1',
+        limit: 5,
+      })).resolves.toEqual({
+        claimed: 1,
+        completed: 0,
+        retried: 0,
+        failed: 1,
+      });
+
+      expect(attachGenerationProviderTask).toHaveBeenCalledWith(supabase, {
+        generationId: 'generation-1',
+        predictionId: 'task-1',
+      });
+      expect(finishCalls(supabase)).toEqual([{
+        p_id: 'job-1',
+        p_locked_by: 'worker-1',
+        p_succeeded: false,
+        p_error: 'Generation not found for provider task attach.',
+        p_retry_delay_seconds: 900,
+      }]);
+      expect(logs).toEqual([]);
+    });
+
+    it.each([
+      {
+        answer: 'a database error',
+        settlement: { data: null, error: new Error('database unavailable') },
+        message: 'database unavailable',
+      },
+      {
+        answer: 'profile_not_found',
+        settlement: { data: { status: 'profile_not_found' }, error: null },
+        message: 'Could not find a credit profile for this account.',
+      },
+      {
+        answer: 'invalid_request',
+        settlement: { data: { status: 'invalid_request' }, error: null },
+        message: 'Invalid generation failure settlement request.',
+      },
+      {
+        answer: 'a status it does not know',
+        settlement: { data: { status: 'unexpected' }, error: null },
+        message: 'Failed to settle failed generation.',
+      },
+    ])('leaves an exhausted job locked when its settlement answers $answer', async ({ settlement, message }) => {
+      const supabase = createQueueClient([
+        claimedJob({ id: 'job-1', prediction_id: 'task-1', attempt_count: 5 }),
+      ]);
+      const creditSupabase = createRpcClient([settlement]);
+      vi.mocked(syncGenerationStatusByPredictionId).mockResolvedValue({
+        found: true,
+        status: 'processing',
+        generation: syncedGeneration('task-1', 'processing'),
+      });
+
+      await expect(processGenerationCompletionJobs({
+        supabase: supabase as never,
+        creditSupabase: creditSupabase as never,
+        lockedBy: 'worker-1',
+        limit: 5,
+      })).rejects.toThrow(message);
+
+      // The refund is still owed. Closing the job would abandon it; left
+      // locked, its lease expires and the next sweep settles it.
+      expect(creditSupabase.rpc).toHaveBeenCalledTimes(1);
+      expect(finishCalls(supabase)).toEqual([]);
+    });
+
+    it('attempts every job in the batch before reporting the one it could not finish', async () => {
+      const supabase = createQueueClient([
+        claimedJob({ id: 'job-1', prediction_id: 'task-1', attempt_count: 5 }),
+        claimedJob({ id: 'job-2', prediction_id: 'task-2', attempt_count: 1 }),
+        claimedJob({ id: 'job-3', prediction_id: 'task-3', attempt_count: 2 }),
+      ]);
+      const creditSupabase = createRpcClient([{ data: null, error: new Error('database unavailable') }]);
+      vi.mocked(syncGenerationStatusByPredictionId).mockImplementation(async ({ predictionId }) => {
+        if (predictionId === 'task-1') {
+          return { found: true, status: 'processing', generation: syncedGeneration(predictionId, 'processing') };
+        }
+        // The other jobs are still mid-flight when the first one throws.
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        const status = predictionId === 'task-2' ? 'succeeded' : 'processing';
+        return { found: true, status, generation: syncedGeneration(predictionId, status) };
+      });
+
+      const batch = processGenerationCompletionJobs({
+        supabase: supabase as never,
+        creditSupabase: creditSupabase as never,
+        lockedBy: 'worker-1',
+        limit: 5,
+      });
+
+      // It still fails, with the settlement's own message...
+      await expect(batch).rejects.toThrow('database unavailable');
+      // ...but only once the jobs beside it have been seen through.
+      expect(finishCalls(supabase)).toEqual(expect.arrayContaining([
+        {
+          p_id: 'job-2',
+          p_locked_by: 'worker-1',
+          p_succeeded: true,
+          p_error: null,
+          p_retry_delay_seconds: 60,
+        },
+        {
+          p_id: 'job-3',
+          p_locked_by: 'worker-1',
+          p_succeeded: false,
+          p_error: 'Generation is still processing.',
+          p_retry_delay_seconds: 120,
+        },
+      ]));
+      expect(finishCalls(supabase)).toHaveLength(2);
+      // The caller is told what did get done, so it can carry on from there.
+      await expect(batch).rejects.toBeInstanceOf(GenerationCompletionBatchError);
+      await expect(batch).rejects.toMatchObject({
+        summary: {
+          claimed: 3,
+          completed: 1,
+          retried: 1,
+          failed: 0,
+        },
+      });
+      // The batch error names one cause; the log names the job it belongs to.
+      expect(logs).toEqual([
+        expect.objectContaining({
+          level: 'error',
+          msg: 'generation_completion_job_processing_failed',
+          jobId: 'job-1',
+          predictionId: 'task-1',
+          attemptCount: 5,
+          errorMessage: 'database unavailable',
+        }),
+      ]);
+    });
   });
 });

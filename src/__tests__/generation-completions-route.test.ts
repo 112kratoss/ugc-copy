@@ -382,4 +382,55 @@ describe('/api/cron/generation-completions route', () => {
       reason: 'no_due_jobs',
     });
   });
+
+  it('still reaps, imports and wakes when one completion job could not be finished, then fails the run', async () => {
+    const { GenerationCompletionBatchError } = await import('@/lib/generation-completion-jobs');
+    mocks.processGenerationCompletionJobs.mockRejectedValue(new GenerationCompletionBatchError(
+      new Error('database unavailable'),
+      { claimed: 2, completed: 1, retried: 0, failed: 0 },
+    ));
+
+    const { GET } = await import('@/app/api/cron/generation-completions/route');
+    const response = await GET(new Request('http://localhost/api/cron/generation-completions', {
+      headers: { authorization: 'Bearer secret-123' },
+    }));
+
+    // The reaper is the safety net for generations the queue lost track of,
+    // so one job the queue could not finish must not switch it off.
+    expect(mocks.reapStalledGenerations).toHaveBeenCalledWith({
+      supabase: { service: 'supabase' },
+      creditSupabase: { service: 'supabase' },
+      nowMs: expect.any(Number),
+    });
+    expect(mocks.processGenerationOutputImportJobs).toHaveBeenCalled();
+    // Woken for the job that did complete, plus the reaper's two and the import.
+    expect(mocks.processWorkflowRunStepJobs).toHaveBeenCalledWith(expect.objectContaining({ limit: 4 }));
+    expect(mocks.processTemplateRunJobs).toHaveBeenCalledWith(expect.objectContaining({ limit: 4 }));
+    expect(mocks.maybePruneGenerationCompletionJobs).toHaveBeenCalled();
+    // The run is still reported as failed, with the job's own error.
+    expect(mocks.finishBackendJobRun).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      expect.objectContaining({ id: 'run-1' }),
+      expect.objectContaining({ status: 'failed', errorMessage: 'database unavailable' }),
+    );
+    expect(response.status).toBe(500);
+  });
+
+  it('aborts the run when the completion batch could not be claimed at all', async () => {
+    mocks.processGenerationCompletionJobs.mockRejectedValue(new Error('database unavailable'));
+
+    const { GET } = await import('@/app/api/cron/generation-completions/route');
+    const response = await GET(new Request('http://localhost/api/cron/generation-completions', {
+      headers: { authorization: 'Bearer secret-123' },
+    }));
+
+    expect(mocks.reapStalledGenerations).not.toHaveBeenCalled();
+    expect(mocks.processGenerationOutputImportJobs).not.toHaveBeenCalled();
+    expect(mocks.finishBackendJobRun).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      expect.objectContaining({ id: 'run-1' }),
+      expect.objectContaining({ status: 'failed', errorMessage: 'database unavailable' }),
+    );
+    expect(response.status).toBe(500);
+  });
 });
