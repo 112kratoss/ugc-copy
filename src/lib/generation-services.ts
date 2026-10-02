@@ -3534,6 +3534,7 @@ export async function startVoiceoverGeneration(params: {
   supabase: SupabaseClient;
   creditSupabase: SupabaseClient;
   userId: string;
+  clientRequestKeyHash?: string | null;
   model: VoiceoverModelId;
   text?: string;
   voice?: string;
@@ -3549,6 +3550,7 @@ export async function startVoiceoverGeneration(params: {
   const {
     creditSupabase,
     userId,
+    clientRequestKeyHash = null,
     model,
     text,
     voice = 'Rachel',
@@ -3614,6 +3616,7 @@ export async function startVoiceoverGeneration(params: {
       user_id: userId,
       model: selectedModel.apiModelId,
       cost,
+      client_request_key_hash: clientRequestKeyHash,
       prompt: buildVoicePromptPreview(model, trimmedText, normalizedDialogueTurns),
       category: 'audio',
       workflow_settings: {
@@ -3669,6 +3672,7 @@ export async function startSoundEffectGeneration(params: {
   supabase: SupabaseClient;
   creditSupabase: SupabaseClient;
   userId: string;
+  clientRequestKeyHash?: string | null;
   prompt: string;
   model?: SoundEffectModelId;
   duration?: number;
@@ -3680,6 +3684,7 @@ export async function startSoundEffectGeneration(params: {
   const {
     creditSupabase,
     userId,
+    clientRequestKeyHash = null,
     prompt,
     model = 'sound-effect-v2',
     duration = 5,
@@ -3703,6 +3708,7 @@ export async function startSoundEffectGeneration(params: {
       user_id: userId,
       model: selectedModel.apiModelId,
       cost,
+      client_request_key_hash: clientRequestKeyHash,
       duration,
       prompt: trimmedPrompt,
       category: 'audio',

@@ -980,6 +980,7 @@ export async function executeWorkflowRunnableNode(params: {
       characterOrientation: data.characterOrientation,
       mode: data.mode,
       quotedCostCredits: quote.costCredits,
+      clientRequestKeyHash,
     });
 
     return {
@@ -1017,6 +1018,7 @@ export async function executeWorkflowRunnableNode(params: {
       speed: data.speed,
       timestamps: data.timestamps,
       dialogueTurns: data.dialogueTurns,
+      clientRequestKeyHash,
     });
 
     return {
@@ -1052,6 +1054,7 @@ export async function executeWorkflowRunnableNode(params: {
       loop: data.loop,
       promptInfluence: data.promptInfluence,
       outputFormat: data.outputFormat,
+      clientRequestKeyHash,
     });
 
     return {

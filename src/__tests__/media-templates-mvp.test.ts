@@ -14,7 +14,10 @@ import {
   validateAndCompileTemplateGraph,
 } from '@/lib/template-graph-compiler';
 import {
+  createCanvasEdge,
   createTemplateReadyStarterGraph,
+  createWorkflowNode,
+  normalizeWorkflowGraph,
   type ImageInputNodeData,
 } from '@/lib/workflow-canvas';
 
@@ -109,6 +112,46 @@ describe('graph media template MVP', () => {
       imageUrl: null,
       storagePath: 'generated_images/user-1/vehicle.png',
     });
+  });
+
+  // A template run starts each step through `start_template_generation`, which
+  // ties the generation to its step row. The motion and audio starts do not go
+  // through it, and a template run is never given one of them to start: such a
+  // node in the way of the output stops the graph compiling, and no step row is
+  // planned for one either.
+  it.each([
+    ['motion-generate', 'video', 'reference-video'],
+    ['voiceover-generate', 'audio', 'reference-audio'],
+    ['sound-effects-generate', 'audio', 'reference-audio'],
+  ] as const)('never plans a %s step for a template run', (kind, sourceHandle, targetHandle) => {
+    const { graph, output, result: starter } = compileStarter();
+    const extra = createWorkflowNode(kind, { x: 1800, y: 800 });
+    const graphWithExtra = normalizeWorkflowGraph({
+      ...graph,
+      nodes: [...graph.nodes, extra],
+      edges: [...graph.edges, createCanvasEdge(extra.id, sourceHandle, output.id, targetHandle)],
+    });
+    expect(graphWithExtra.edges.some((edge) => edge.source === extra.id && edge.target === output.id)).toBe(true);
+
+    const result = validateAndCompileTemplateGraph({
+      graph: graphWithExtra,
+      outputNodeId: output.id,
+      canvasRevision: 5,
+      catalogRevision: null,
+    });
+
+    expect(result.validation.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'unsupported-node', nodeId: extra.id }),
+    ]));
+    expect(result.validation.valid).toBe(false);
+    expect(result.compiled).toBeNull();
+
+    const planned = getTemplateStepDefinitions({
+      ...starter.compiled!,
+      graph: graphWithExtra as unknown as Record<string, unknown>,
+    });
+    expect(planned.map((step) => step.nodeId)).not.toContain(extra.id);
+    expect(planned).toHaveLength(getTemplateStepDefinitions(starter.compiled!).length);
   });
 
   it('normalizes public slots and stable listing slugs', () => {

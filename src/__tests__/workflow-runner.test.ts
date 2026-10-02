@@ -11,6 +11,7 @@ import {
   type VideoInputNodeData,
   type WorkflowCanvasGraph,
   type WorkflowCanvasRunStepRecord,
+  type WorkflowNodeKind,
 } from '@/lib/workflow-canvas';
 import {
   getPublicGenerationStartFailure,
@@ -473,6 +474,71 @@ function relinkWarnings(spy: { mock: { calls: unknown[][] } }) {
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
+type StepStartService =
+  | 'startImageGeneration'
+  | 'startVideoGeneration'
+  | 'startMotionGeneration'
+  | 'startVoiceoverGeneration'
+  | 'startSoundEffectGeneration';
+
+// Which start service a step of each kind goes to. A kind added to the canvas
+// has to be listed here before the tests typecheck, and a start listed here has
+// to be shown to carry the step's request key: without it, every start the
+// worker repeats holds the credits again and asks the provider for another
+// render. A model run through the catalog has one more start, held to the
+// same in `workflow-remote-model.test.ts`.
+const STEP_START_SERVICES: Record<WorkflowNodeKind, StepStartService | null> = {
+  'text-input': null,
+  'image-input': null,
+  'video-input': null,
+  'audio-input': null,
+  'image-generate': 'startImageGeneration',
+  'video-generate': 'startVideoGeneration',
+  'motion-generate': 'startMotionGeneration',
+  'voiceover-generate': 'startVoiceoverGeneration',
+  // Refused as blocked until music has a start of its own.
+  'music-generate': null,
+  'sound-effects-generate': 'startSoundEffectGeneration',
+  'approval-gate': null,
+  note: null,
+  group: null,
+};
+
+/** One node of the kind as the canvas makes it, with the inputs it needs to start. */
+function createSingleStepGraph(kind: WorkflowNodeKind) {
+  const step = createWorkflowNode(kind, { x: 320, y: 40 });
+  const prompt = createWorkflowNode('text-input', { x: 40, y: 40 });
+  const character = createWorkflowNode('image-input', { x: 40, y: 240 });
+  const performance = createWorkflowNode('video-input', { x: 40, y: 440 });
+  const graph = normalizeWorkflowGraph(kind === 'motion-generate'
+    ? {
+        nodes: [
+          {
+            ...character,
+            data: { ...(character.data as ImageInputNodeData), imageUrl: 'https://cdn.example.com/character.png' },
+          },
+          {
+            ...performance,
+            data: { ...(performance.data as VideoInputNodeData), videoUrl: 'https://cdn.example.com/reference.mp4' },
+          },
+          step,
+        ],
+        edges: [
+          createCanvasEdge(character.id, 'image', step.id, 'reference-image'),
+          createCanvasEdge(performance.id, 'video', step.id, 'reference-video'),
+        ],
+      }
+    : {
+        nodes: [
+          { ...prompt, data: { ...(prompt.data as TextInputNodeData), text: 'A short, clear line.' } },
+          step,
+        ],
+        edges: [createCanvasEdge(prompt.id, 'text', step.id, 'prompt')],
+      });
+
+  return { graph, node: graph.nodes.find((node) => node.id === step.id)! };
+}
+
 describe('workflow-runner recovery', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -544,6 +610,64 @@ describe('workflow-runner recovery', () => {
       templateContext: { runId: 'run-1', stepId: 'step-1' },
       clientRequestKeyHash: 'a'.repeat(64),
     }));
+  });
+
+  describe('the request key a step is run with', () => {
+    const stepStarts = Object.entries(STEP_START_SERVICES) as Array<[WorkflowNodeKind, StepStartService | null]>;
+
+    /** Runs one node of the kind with a request key, and says what each start service was asked. */
+    async function runSingleStep(kind: WorkflowNodeKind) {
+      const services = await import('@/lib/generation-services');
+      const starts: Record<StepStartService, ReturnType<typeof vi.fn>> = {
+        startImageGeneration: vi.mocked(services.startImageGeneration),
+        startVideoGeneration: startVideoGenerationMock,
+        startMotionGeneration: vi.mocked(services.startMotionGeneration),
+        startVoiceoverGeneration: vi.mocked(services.startVoiceoverGeneration),
+        startSoundEffectGeneration: vi.mocked(services.startSoundEffectGeneration),
+      };
+      for (const start of Object.values(starts)) {
+        start.mockResolvedValue({ predictionId: 'pred-step', remainingCredits: 42, cost: 7, generationId: 'gen-step' });
+      }
+      const { graph, node } = createSingleStepGraph(kind);
+
+      const { executeWorkflowRunnableNode } = await import('@/lib/workflow-runner');
+      const result = await executeWorkflowRunnableNode({
+        supabase: {} as never,
+        userId: 'user-1',
+        graph,
+        node,
+        catalogRevision: 'catalog-rev-1',
+        clientRequestKeyHash: 'a'.repeat(64),
+      });
+
+      return { result, starts };
+    }
+
+    it.each(
+      stepStarts.filter((entry): entry is [WorkflowNodeKind, StepStartService] => entry[1] !== null),
+    )('reaches the %s start', async (kind, startService) => {
+      const { result, starts } = await runSingleStep(kind);
+
+      for (const [name, start] of Object.entries(starts)) {
+        expect(start, name).toHaveBeenCalledTimes(name === startService ? 1 : 0);
+      }
+      expect(starts[startService]).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'user-1',
+        clientRequestKeyHash: 'a'.repeat(64),
+      }));
+      expect(result).toMatchObject({ status: 'processing', generation_id: 'gen-step' });
+    });
+
+    it.each(
+      stepStarts.filter(([, startService]) => startService === null).map(([kind]) => kind),
+    )('starts nothing for %s', async (kind) => {
+      const { result, starts } = await runSingleStep(kind);
+
+      for (const [name, start] of Object.entries(starts)) {
+        expect(start, name).not.toHaveBeenCalled();
+      }
+      expect(result).toMatchObject({ status: 'blocked', generation_id: null });
+    });
   });
 
   // F12 moved advancing off the read path. These tests exercise the runner's
