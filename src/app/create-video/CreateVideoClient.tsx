@@ -84,6 +84,7 @@ import {
 import {
     createSeedanceAssetMetadata,
     getPreferredSeedanceReferenceValue,
+    getSeedanceAssetSourceName,
     getSeedanceAssetStatusLabel,
     isSeedance2VideoModelId,
     type SeedanceAssetCollections,
@@ -4392,8 +4393,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         }))].map((item) => {
                                             const activeKey = createSeedanceAssetKey(item.kind, item.id);
                                             const isBusy = activeSeedanceAssetKey === activeKey;
+                                            // A reference name, an asset ID or a provider error can be one
+                                            // unbreakable run, so the card's text may break anywhere
+                                            // instead of widening the page.
                                             return (
-                                                <div key={activeKey} className="rounded-2xl border border-white/8 bg-black/30 p-4">
+                                                <div key={activeKey} className="rounded-2xl border border-white/8 bg-black/30 p-4 [overflow-wrap:anywhere]">
                                                     <div className="flex flex-wrap items-start justify-between gap-3">
                                                         <div>
                                                             <div className="text-sm font-semibold text-white">{item.title}</div>
@@ -4427,7 +4431,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                     </div>
                                                     <div className="mt-3 grid gap-2 text-xs text-zinc-500 sm:grid-cols-2">
                                                         <div className="rounded-2xl border border-white/8 bg-black/20 px-3 py-2">
-                                                            Source: {item.asset.sourceUrl || 'Upload or prepare to capture a source URL'}
+                                                            Source: {getSeedanceAssetSourceName(item.asset.sourceUrl) || 'Upload or prepare to capture a source URL'}
                                                         </div>
                                                         <div className="rounded-2xl border border-white/8 bg-black/20 px-3 py-2">
                                                             Last checked: {item.asset.lastCheckedAt || 'Never'}
