@@ -3,10 +3,11 @@ import { isGuestUser } from '@/lib/account-identity';
 import 'server-only';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import {
   getCreatorFollowStateForRoute,
   notifyCreatorFollowForRoute,
@@ -20,6 +21,7 @@ type ProfileFollowRouteDependencies = {
   createUserClient?: typeof createUserClient;
   getCreatorFollowStateForRoute?: typeof getCreatorFollowStateForRoute;
   notifyCreatorFollowForRoute?: typeof notifyCreatorFollowForRoute;
+  runAfterResponse?: RunAfterResponse;
   updateCreatorFollowForRoute?: typeof updateCreatorFollowForRoute;
   logError?: typeof logBackendRouteError;
 };
@@ -32,6 +34,7 @@ function resolveDependencies(dependencies: ProfileFollowRouteDependencies | unde
       ?? getCreatorFollowStateForRoute,
     notifyCreatorFollowForRoute: dependencies?.notifyCreatorFollowForRoute
       ?? notifyCreatorFollowForRoute,
+    runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
     updateCreatorFollowForRoute: dependencies?.updateCreatorFollowForRoute
       ?? updateCreatorFollowForRoute,
     logError: dependencies?.logError ?? logBackendRouteError,
@@ -104,6 +107,9 @@ async function handleProfileFollowPOST(
       adminSupabase: dependencies.createServiceClient,
       followerId,
       body,
+      // The follower waits on this answer, so the creator's pushes go out
+      // behind it rather than in front.
+      runAfterResponse: dependencies.runAfterResponse,
     }));
   } catch (error) {
     dependencies.logError('Creator follow mutation failed:', error);
@@ -126,6 +132,8 @@ async function handleProfileFollowNotifyPOST(
       adminSupabase: dependencies.createServiceClient,
       followerId,
       body,
+      // As above: whoever sent this waits on the answer, not on the pushes.
+      runAfterResponse: dependencies.runAfterResponse,
     }));
   } catch (error) {
     dependencies.logError('Creator follow notification failed:', error);

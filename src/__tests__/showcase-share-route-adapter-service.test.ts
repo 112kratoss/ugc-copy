@@ -105,7 +105,51 @@ describe('postShowcaseShareRouteResponse', () => {
       referenceId: 'post-1',
       serviceClient,
       sourceSurface: 'showcase',
+      runAfterResponse: expect.any(Function),
     });
+  });
+
+  it('gives shares a way to tell the creator after the response', async () => {
+    const serviceClient = createServiceClient();
+    const runAfterResponse = vi.fn();
+    const shareShowcasePostForRoute = vi.fn(async () => ({
+      ok: true as const,
+      body: { success: true as const },
+    }));
+
+    const response = await postShowcaseShareRouteResponse({
+      request: new Request('http://localhost/api/showcase/share', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+        },
+        body: JSON.stringify({
+          postId: 'post-1',
+          sourceSurface: 'showcase',
+          channel: 'copy-link',
+        }),
+      }),
+      dependencies: {
+        createServiceClient: vi.fn(() => serviceClient),
+        createUserClient: () => createUserClient('user-1'),
+        runAfterResponse,
+        shareShowcasePostForRoute,
+      },
+    });
+
+    // Whoever shared is waiting on this answer, so the service is handed the
+    // scheduler; whether anything is queued is the service's call.
+    expect(response.status).toBe(200);
+    expect(shareShowcasePostForRoute).toHaveBeenCalledWith({
+      actorUserId: 'user-1',
+      channel: 'copy-link',
+      referenceId: 'post-1',
+      serviceClient,
+      sourceSurface: 'showcase',
+      runAfterResponse,
+    });
+    expect(runAfterResponse).not.toHaveBeenCalled();
   });
 
   it('falls back to the forwarded IP when optional auth fails', async () => {

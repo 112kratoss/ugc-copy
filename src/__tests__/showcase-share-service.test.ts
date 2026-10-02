@@ -2,6 +2,12 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  createMobileNotificationHistory,
+  hasAnswered,
+  withMobileNotificationHistory,
+} from '@/__tests__/fixtures/mobile-notification-history';
+import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
+import {
   parseShowcaseSharePayloadForRoute,
   shareShowcasePostForRoute,
   type ShowcaseShareServiceDependencies,
@@ -184,5 +190,174 @@ describe('shareShowcasePostForRoute', () => {
     });
     expect(dependencies.recordPostShareEvent).not.toHaveBeenCalled();
     expect(dependencies.notifyPostSocialActivity).not.toHaveBeenCalled();
+  });
+});
+
+describe('post share notifications', () => {
+  // The real notifier runs here against held notification history: one grouped
+  // notification, to the creator whose post was shared. Its key ends in the
+  // quarter-hour it was sent in.
+  const shareAggregationKey = expect.stringMatching(/^post-social:post_shared:creator-1:post-1:\d+$/);
+  const shareNotification = expect.objectContaining({
+    user_id: 'creator-1',
+    actor_user_id: 'user-1',
+    type: 'post_shared',
+    category: 'social',
+    title: 'Someone shared your post',
+    object_id: 'post-1',
+    aggregation_key: shareAggregationKey,
+  });
+  const sharedAnswer = { ok: true, body: { success: true } };
+  const shareClick = {
+    postId: 'post-1',
+    eventType: 'share_click',
+    sourceSurface: 'showcase',
+    channel: 'copy-link',
+    actorUserId: 'user-1',
+  };
+
+  // Everything but the notifier is stood in for, so the real one runs.
+  function createRealNotifierDependencies(post?: SharePostReference) {
+    const {
+      findPublicPostReferenceByIdOrGenerationId,
+      isUserRelationshipBlocked,
+      recordPostShareEvent,
+    } = createDependencies(post);
+
+    return { findPublicPostReferenceByIdOrGenerationId, isUserRelationshipBlocked, recordPostShareEvent };
+  }
+
+  function createHistoryClient(history: ReturnType<typeof createMobileNotificationHistory>) {
+    return withMobileNotificationHistory(createServiceClientMock().client, history);
+  }
+
+  it('answers a share before the creator is told when the caller can run work after the response', async () => {
+    // The notification ends in a push request to Expo for the creator's
+    // devices. In production, before an account's devices went out in one
+    // request (#259), a share waited 17 s on a creator with 51. Whoever
+    // shared is the one waiting on that request.
+    const history = createMobileNotificationHistory();
+    history.hold();
+    const serviceClient = createHistoryClient(history);
+    const dependencies = createRealNotifierDependencies();
+    const deferred: Array<() => Promise<unknown>> = [];
+
+    const share = shareShowcasePostForRoute({
+      actorUserId: 'user-1',
+      channel: 'copy-link',
+      referenceId: 'post-1',
+      serviceClient,
+      sourceSurface: 'showcase',
+      dependencies,
+      runAfterResponse: (task) => { deferred.push(task); },
+    });
+
+    // A notification that has not finished no longer holds the answer back,
+    // and the share behind that answer is recorded as it always was.
+    expect(await hasAnswered(share)).toBe(true);
+    await expect(share).resolves.toEqual(sharedAnswer);
+    expect(dependencies.recordPostShareEvent.mock.calls).toEqual([[shareClick, serviceClient]]);
+    expect(history.started).toEqual([]);
+    expect(deferred).toHaveLength(1);
+
+    history.release();
+    await deferred[0]();
+    expect(history.sent).toEqual([shareNotification]);
+  });
+
+  it('tells the creator before answering a share when the caller has nowhere to run it afterwards', async () => {
+    const history = createMobileNotificationHistory();
+    history.hold();
+    const serviceClient = createHistoryClient(history);
+    const dependencies = createRealNotifierDependencies();
+
+    const share = shareShowcasePostForRoute({
+      actorUserId: 'user-1',
+      channel: 'copy-link',
+      referenceId: 'post-1',
+      serviceClient,
+      sourceSurface: 'showcase',
+      dependencies,
+    });
+
+    expect(await hasAnswered(share)).toBe(false);
+    expect(history.started).toEqual([shareAggregationKey]);
+
+    history.release();
+    await expect(share).resolves.toEqual(sharedAnswer);
+    expect(dependencies.recordPostShareEvent.mock.calls).toEqual([[shareClick, serviceClient]]);
+    expect(history.sent).toEqual([shareNotification]);
+  });
+
+  it.each([
+    {
+      kind: 'a share by someone who is signed out',
+      actorUserId: null,
+      blocked: false,
+      post: undefined,
+    },
+    {
+      kind: 'a share across a block',
+      actorUserId: 'user-1',
+      blocked: true,
+      post: undefined,
+    },
+    {
+      kind: 'a share of a post that is not public',
+      actorUserId: 'user-1',
+      blocked: false,
+      post: null,
+    },
+  ])('defers nothing for $kind', async ({ actorUserId, blocked, post }) => {
+    const history = createMobileNotificationHistory();
+    const dependencies = createRealNotifierDependencies(post);
+    dependencies.isUserRelationshipBlocked.mockResolvedValue(blocked);
+    const runAfterResponse = vi.fn();
+
+    await shareShowcasePostForRoute({
+      actorUserId,
+      channel: 'copy-link',
+      referenceId: 'post-1',
+      serviceClient: createHistoryClient(history),
+      sourceSurface: 'showcase',
+      dependencies,
+      runAfterResponse,
+    });
+
+    expect(runAfterResponse).not.toHaveBeenCalled();
+    expect(history.started).toEqual([]);
+  });
+
+  it('tells the creator in front of the answer rather than fail a recorded share when the task cannot be queued', async () => {
+    const history = createMobileNotificationHistory();
+    const logged: BackendLogRecord[] = [];
+    const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
+
+    try {
+      // The share is already recorded. A scheduler that will not take the task
+      // must not turn that into a failed share.
+      await expect(shareShowcasePostForRoute({
+        actorUserId: 'user-1',
+        channel: 'copy-link',
+        referenceId: 'post-1',
+        serviceClient: createHistoryClient(history),
+        sourceSurface: 'showcase',
+        dependencies: createRealNotifierDependencies(),
+        runAfterResponse: () => {
+          throw new Error('`after` was called outside a request scope.');
+        },
+      })).resolves.toEqual(sharedAnswer);
+    } finally {
+      restoreLogSink();
+    }
+
+    expect(history.sent).toEqual([shareNotification]);
+    expect(logged).toEqual([
+      expect.objectContaining({
+        level: 'error',
+        msg: 'mobile_notification_deferral_failed',
+        errorMessage: '`after` was called outside a request scope.',
+      }),
+    ]);
   });
 });

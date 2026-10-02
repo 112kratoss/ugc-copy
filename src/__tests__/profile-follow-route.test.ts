@@ -15,9 +15,21 @@ const fromMock = vi.fn();
 const adminClient = { from: fromMock, rpc: rpcMock };
 const createServiceClientFactory = vi.fn(() => adminClient);
 const notifyCreatorFollowedMock = vi.fn();
+// Stands in for Next's after(): it runs the task on the spot unless a test
+// holds it back to look at the answer first.
+const afterMock = vi.fn((task: () => Promise<unknown>): unknown => task());
 
 let followRows: Array<{ follower_id: string; following_id: string }> = [];
 let profileRows: Array<{ id: string; username: string | null }> = [];
+
+vi.mock('next/server', async () => {
+  const actual = await vi.importActual<typeof import('next/server')>('next/server');
+
+  return {
+    ...actual,
+    after: afterMock,
+  };
+});
 
 function createFollowQuery() {
   const filters: Record<string, unknown> = {};
@@ -142,6 +154,7 @@ describe('/api/profile/follow route', () => {
     });
     notifyCreatorFollowedMock.mockClear();
     notifyCreatorFollowedMock.mockResolvedValue(null);
+    afterMock.mockReset();
     createUserClientMock.mockReturnValue({
       auth: {
         getUser: vi.fn(async () => ({
@@ -166,6 +179,7 @@ describe('/api/profile/follow route', () => {
     expectPrivateNoStoreTraceHeaders(response, 'profile-follow-get-1');
     await expect(response.json()).resolves.toEqual({ following: true });
     expect(rpcMock).not.toHaveBeenCalled();
+    expect(afterMock).not.toHaveBeenCalled();
     expect(notifyCreatorFollowedMock).not.toHaveBeenCalled();
   });
 
@@ -220,6 +234,40 @@ describe('/api/profile/follow route', () => {
       p_limit: 60,
       p_window_seconds: 600,
     });
+    expect(afterMock).toHaveBeenCalledTimes(1);
+    expect(notifyCreatorFollowedMock).toHaveBeenCalledWith(adminClient, {
+      followerUserId: 'follower-1',
+      followingUserId: 'creator-1',
+      followerUsername: 'athul',
+    });
+  });
+
+  it('queues the follow notification behind the response instead of sending it first', async () => {
+    afterMock.mockImplementationOnce(() => undefined);
+
+    const { POST } = await import('@/app/api/profile/follow/route');
+    const response = await POST(
+      new Request('http://localhost/api/profile/follow', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'profile-follow-after-1',
+        },
+        body: JSON.stringify({ followingId: 'creator-1', following: true }),
+      }) as never
+    );
+
+    // The route as deployed hands the task to Next's after(), which runs it
+    // once the response has gone out.
+    expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'profile-follow-after-1');
+    await expect(response.json()).resolves.toEqual({ following: true });
+    expect(followRows).toContainEqual({ follower_id: 'follower-1', following_id: 'creator-1' });
+    expect(afterMock).toHaveBeenCalledTimes(1);
+    expect(notifyCreatorFollowedMock).not.toHaveBeenCalled();
+
+    await afterMock.mock.calls[0][0]();
+    expect(notifyCreatorFollowedMock).toHaveBeenCalledTimes(1);
     expect(notifyCreatorFollowedMock).toHaveBeenCalledWith(adminClient, {
       followerUserId: 'follower-1',
       followingUserId: 'creator-1',
@@ -242,6 +290,7 @@ describe('/api/profile/follow route', () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ following: false });
     expect(followRows).toEqual([]);
+    expect(afterMock).not.toHaveBeenCalled();
     expect(notifyCreatorFollowedMock).not.toHaveBeenCalled();
   });
 });

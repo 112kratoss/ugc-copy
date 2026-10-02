@@ -3,7 +3,7 @@ import { isGuestUser } from '@/lib/account-identity';
 import 'server-only';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import {
@@ -12,6 +12,7 @@ import {
   createBackendRateLimitResponse,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import { saveShowcasePostForRoute } from '@/lib/showcase-save-service';
 
@@ -20,6 +21,7 @@ type ShowcaseSaveRouteDependencies = {
   createUserClient?: typeof createUserClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
   logError?: typeof logBackendRouteError;
+  runAfterResponse?: RunAfterResponse;
   saveShowcasePostForRoute?: typeof saveShowcasePostForRoute;
 };
 
@@ -29,6 +31,7 @@ function resolveDependencies(dependencies: ShowcaseSaveRouteDependencies | undef
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
     logError: dependencies?.logError ?? logBackendRouteError,
+    runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
     saveShowcasePostForRoute: dependencies?.saveShowcasePostForRoute ?? saveShowcasePostForRoute,
   };
 }
@@ -92,6 +95,9 @@ async function handleShowcaseSavePOST(
       actorUserId: userId,
       referenceId,
       requestedSaveState,
+      // Whoever saved waits on this answer, so the creator's pushes go out
+      // behind it rather than in front.
+      runAfterResponse: dependencies.runAfterResponse,
       serviceClient,
       sourceSurface,
     });

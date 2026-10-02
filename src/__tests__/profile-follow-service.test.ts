@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  createMobileNotificationHistory,
+  hasAnswered,
+  withMobileNotificationHistory,
+} from '@/__tests__/fixtures/mobile-notification-history';
+import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
+import {
   getCreatorFollowStateForRoute,
   notifyCreatorFollowForRoute,
   updateCreatorFollowForRoute,
@@ -325,4 +331,184 @@ describe('profile follow service', () => {
     expect(client.followRows).toEqual([]);
     expect(notifyCreatorFollowedMock).not.toHaveBeenCalled();
   });
+});
+
+describe('creator follow notifications', () => {
+  // The real notifier runs here against held notification history: one
+  // notification, to the creator who was followed.
+  const existingFollow = { follower_id: 'follower-1', following_id: 'creator-1' };
+  const followDedupeKey = 'creator-follow:follower-1:creator-1';
+  const followNotification = expect.objectContaining({
+    user_id: 'creator-1',
+    actor_user_id: 'follower-1',
+    type: 'creator_followed',
+    category: 'social',
+    body: '@athul followed you.',
+    dedupe_key: followDedupeKey,
+  });
+
+  // Both routes end by telling the creator: the follow itself, and the
+  // standalone notification for a follow that is already in the table.
+  const notifyingRequests = [
+    {
+      kind: 'a new follow',
+      send: updateCreatorFollowForRoute,
+      body: { followingId: 'creator-1', following: true },
+      initialFollows: [] as Array<typeof existingFollow>,
+      answer: { ok: true, body: { following: true } },
+    },
+    {
+      kind: 'a standalone follow notification',
+      send: notifyCreatorFollowForRoute,
+      body: { followingId: 'creator-1' },
+      initialFollows: [existingFollow],
+      answer: { ok: true, body: { success: true } },
+    },
+  ];
+
+  beforeEach(async () => {
+    const { notifyCreatorFollowed } = await vi.importActual<typeof import('@/lib/mobile-notifications')>(
+      '@/lib/mobile-notifications',
+    );
+    notifyCreatorFollowedMock.mockReset();
+    notifyCreatorFollowedMock.mockImplementation(notifyCreatorFollowed);
+  });
+
+  it.each(notifyingRequests)(
+    'answers $kind before the creator is told when the caller can run work after the response',
+    async ({ send, body, initialFollows, answer }) => {
+      // The notification ends in a push request to Expo for the creator's
+      // devices. In production on 2026-10-01, before an account's devices went
+      // out in one request, one with 32 held an unlock's answer for 14 s. Here
+      // the person waiting on that request is the follower.
+      const client = createClient({ initialFollows });
+      const history = createMobileNotificationHistory();
+      history.hold();
+      const deferred: Array<() => Promise<unknown>> = [];
+
+      const request = send({
+        adminSupabase: withMobileNotificationHistory(client.client, history),
+        followerId: 'follower-1',
+        body,
+        runAfterResponse: (task) => { deferred.push(task); },
+      });
+
+      // A notification that has not finished no longer holds the answer back,
+      // and the follow behind that answer is recorded as it always was.
+      expect(await hasAnswered(request)).toBe(true);
+      await expect(request).resolves.toEqual(answer);
+      expect(client.followRows).toEqual([existingFollow]);
+      expect(history.started).toEqual([]);
+      expect(deferred).toHaveLength(1);
+
+      history.release();
+      await deferred[0]();
+      expect(history.sent).toEqual([followNotification]);
+    },
+  );
+
+  it.each(notifyingRequests)(
+    'tells the creator before answering $kind when the caller has nowhere to run it afterwards',
+    async ({ send, body, initialFollows, answer }) => {
+      const client = createClient({ initialFollows });
+      const history = createMobileNotificationHistory();
+      history.hold();
+
+      const request = send({
+        adminSupabase: withMobileNotificationHistory(client.client, history),
+        followerId: 'follower-1',
+        body,
+      });
+
+      expect(await hasAnswered(request)).toBe(false);
+      expect(history.started).toEqual([followDedupeKey]);
+
+      history.release();
+      await expect(request).resolves.toEqual(answer);
+      expect(client.followRows).toEqual([existingFollow]);
+      expect(history.sent).toEqual([followNotification]);
+    },
+  );
+
+  it.each([
+    {
+      kind: 'a follow that already exists',
+      send: updateCreatorFollowForRoute,
+      body: { followingId: 'creator-1', following: true },
+      options: { initialFollows: [existingFollow] },
+    },
+    {
+      kind: 'an unfollow',
+      send: updateCreatorFollowForRoute,
+      body: { followingId: 'creator-1', following: false },
+      options: { initialFollows: [existingFollow] },
+    },
+    {
+      kind: 'a follow across a block',
+      send: updateCreatorFollowForRoute,
+      body: { followingId: 'creator-1', following: true },
+      options: { userBlocks: [{ blocker_user_id: 'creator-1', blocked_user_id: 'follower-1' }] },
+    },
+    {
+      kind: 'a follow over the rate limit',
+      send: updateCreatorFollowForRoute,
+      body: { followingId: 'creator-1', following: true },
+      options: { rateLimitAllowed: false },
+    },
+    {
+      kind: 'a standalone notification for a follow that is gone',
+      send: notifyCreatorFollowForRoute,
+      body: { followingId: 'creator-1' },
+      options: { rateLimitLimit: 30 },
+    },
+  ])('defers nothing for $kind', async ({ send, body, options }) => {
+    const client = createClient(options);
+    const history = createMobileNotificationHistory();
+    const runAfterResponse = vi.fn();
+
+    await send({
+      adminSupabase: withMobileNotificationHistory(client.client, history),
+      followerId: 'follower-1',
+      body,
+      runAfterResponse,
+    });
+
+    expect(runAfterResponse).not.toHaveBeenCalled();
+    expect(history.started).toEqual([]);
+  });
+
+  it.each(notifyingRequests)(
+    'tells the creator in front of the answer rather than fail $kind when the task cannot be queued',
+    async ({ send, body, initialFollows, answer }) => {
+      const client = createClient({ initialFollows });
+      const history = createMobileNotificationHistory();
+      const logged: BackendLogRecord[] = [];
+      const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
+
+      try {
+        // The follow is already in the table. A scheduler that will not take
+        // the task must not turn that into a failed request.
+        await expect(send({
+          adminSupabase: withMobileNotificationHistory(client.client, history),
+          followerId: 'follower-1',
+          body,
+          runAfterResponse: () => {
+            throw new Error('`after` was called outside a request scope.');
+          },
+        })).resolves.toEqual(answer);
+      } finally {
+        restoreLogSink();
+      }
+
+      expect(client.followRows).toEqual([existingFollow]);
+      expect(history.sent).toEqual([followNotification]);
+      expect(logged).toEqual([
+        expect.objectContaining({
+          level: 'error',
+          msg: 'mobile_notification_deferral_failed',
+          errorMessage: '`after` was called outside a request scope.',
+        }),
+      ]);
+    },
+  );
 });

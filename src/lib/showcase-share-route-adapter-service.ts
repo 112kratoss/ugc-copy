@@ -2,7 +2,7 @@ import 'server-only';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import {
@@ -12,6 +12,7 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { getClientNetworkKey } from '@/lib/client-network-key';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import {
   parseShowcaseSharePayloadForRoute,
@@ -23,6 +24,7 @@ type ShowcaseShareRouteDependencies = {
   createUserClient?: typeof createUserClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
   parseShowcaseSharePayloadForRoute?: typeof parseShowcaseSharePayloadForRoute;
+  runAfterResponse?: RunAfterResponse;
   shareShowcasePostForRoute?: typeof shareShowcasePostForRoute;
   logError?: typeof logBackendRouteError;
 };
@@ -34,6 +36,7 @@ function resolveDependencies(dependencies: ShowcaseShareRouteDependencies | unde
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
     parseShowcaseSharePayloadForRoute: dependencies?.parseShowcaseSharePayloadForRoute
       ?? parseShowcaseSharePayloadForRoute,
+    runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
     shareShowcasePostForRoute: dependencies?.shareShowcasePostForRoute ?? shareShowcasePostForRoute,
     logError: dependencies?.logError ?? logBackendRouteError,
   };
@@ -90,6 +93,9 @@ async function handleShowcaseSharePOST(
 
     const result = await dependencies.shareShowcasePostForRoute({
       actorUserId,
+      // Whoever shared waits on this answer, so the creator's pushes go out
+      // behind it rather than in front.
+      runAfterResponse: dependencies.runAfterResponse,
       serviceClient: adminSupabase,
       ...payloadResult.payload,
     });

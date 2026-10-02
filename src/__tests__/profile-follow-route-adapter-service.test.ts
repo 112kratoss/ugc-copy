@@ -197,7 +197,74 @@ describe('profile follow route adapter service', () => {
       adminSupabase: serviceClientFactory,
       followerId: 'follower-1',
       body: null,
+      runAfterResponse: expect.any(Function),
     });
+  });
+
+  it('gives follow mutations a way to tell the creator after the response', async () => {
+    const serviceClientFactory = vi.fn(() => ({ kind: 'admin' }) as unknown as SupabaseClient);
+    const runAfterResponse = vi.fn();
+    const updateCreatorFollowForRoute = vi.fn(async () => ({
+      ok: true as const,
+      body: { following: true },
+    }));
+
+    const response = await postProfileFollowRouteResponse({
+      request: new Request('http://localhost/api/profile/follow', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ followingId: 'creator-1', following: true }),
+      }),
+      dependencies: {
+        createServiceClient: serviceClientFactory,
+        createUserClient: () => createUserClient('follower-1'),
+        runAfterResponse,
+        updateCreatorFollowForRoute,
+      },
+    });
+
+    // The follower is waiting on this answer, so the service is handed the
+    // scheduler; whether anything is queued is the service's call.
+    expect(response.status).toBe(200);
+    expect(updateCreatorFollowForRoute).toHaveBeenCalledWith({
+      adminSupabase: serviceClientFactory,
+      followerId: 'follower-1',
+      body: { followingId: 'creator-1', following: true },
+      runAfterResponse,
+    });
+    expect(runAfterResponse).not.toHaveBeenCalled();
+  });
+
+  it('gives standalone follow notifications a way to tell the creator after the response', async () => {
+    const serviceClientFactory = vi.fn(() => ({ kind: 'admin' }) as unknown as SupabaseClient);
+    const runAfterResponse = vi.fn();
+    const notifyCreatorFollowForRoute = vi.fn(async () => ({
+      ok: true as const,
+      body: { success: true as const },
+    }));
+
+    const response = await postProfileFollowNotifyRouteResponse({
+      request: new Request('http://localhost/api/profile/follow/notify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ followingId: 'creator-1' }),
+      }),
+      dependencies: {
+        createServiceClient: serviceClientFactory,
+        createUserClient: () => createUserClient('follower-1'),
+        notifyCreatorFollowForRoute,
+        runAfterResponse,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(notifyCreatorFollowForRoute).toHaveBeenCalledWith({
+      adminSupabase: serviceClientFactory,
+      followerId: 'follower-1',
+      body: { followingId: 'creator-1' },
+      runAfterResponse,
+    });
+    expect(runAfterResponse).not.toHaveBeenCalled();
   });
 
   it('maps follow notification rate-limit results to standard backend rate-limit responses', async () => {
