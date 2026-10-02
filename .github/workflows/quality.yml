@@ -43,6 +43,9 @@ jobs:
       - name: Verify encoder output bounds with real FFmpeg
         run: npx tsx --tsconfig tsconfig.scripts.json scripts/audits/audit-media-output-limits.ts
 
+      - name: Verify cross-process staging admission
+        run: npx tsx --tsconfig tsconfig.scripts.json scripts/audits/audit-staging-admission.ts
+
       - name: Lint
         run: npm run lint
 
@@ -248,8 +251,10 @@ jobs:
         env:
           SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
 
+      # These suites run unscoped queue claim RPCs against one shared database.
+      # Keep files sequential; their explicit worker/concurrency probes still run.
       - name: Test generation recovery with real settlement SQL
-        run: npx vitest run src/__tests__/generation-output-recovery-database.test.ts src/__tests__/generation-grace-recovery-database.test.ts src/__tests__/generation-start-recovery-database.test.ts src/__tests__/generation-worker-crash-database.test.ts
+        run: npx vitest run --no-file-parallelism src/__tests__/generation-output-recovery-database.test.ts src/__tests__/generation-grace-recovery-database.test.ts src/__tests__/generation-start-recovery-database.test.ts src/__tests__/generation-worker-crash-database.test.ts
         env:
           SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
 

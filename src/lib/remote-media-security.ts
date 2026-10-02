@@ -10,7 +10,7 @@ import {
 
 export type RemoteMediaKind = StorageMediaKind;
 
-const MAX_REMOTE_MEDIA_BYTES: Record<RemoteMediaKind, number> = {
+export const MAX_REMOTE_MEDIA_BYTES: Record<RemoteMediaKind, number> = {
   image: 25 * 1024 * 1024,
   video: 250 * 1024 * 1024,
   audio: 50 * 1024 * 1024,

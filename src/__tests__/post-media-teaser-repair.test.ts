@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
+import { StagingCapacityError } from '@/lib/staging-workspace';
 import { repairPostMediaTeasers, TEASER_REPAIR_MAX_BYTES } from '@/lib/post-media-teaser-repair';
 
 const encode = vi.hoisted(() => vi.fn());
@@ -25,7 +26,15 @@ function fixture(options: { path?: string; generationId?: string | null; sourceB
       rendition_storage_path: options.path ?? 'posts/post/clip.feed.mp4',
       source_bytes: options.sourceBytes ?? 1024 }], error: null }),
     storage: { from: vi.fn(() => storage) },
-    from: () => ({ update: (values: Record<string, unknown>) => {
+    from: () => ({
+      select: () => {
+        const query = {
+          eq: (key: string, value: unknown) => { guards.push([key, value]); return query; },
+          maybeSingle: async () => ({ data: { teaser_attempt_count: 3 }, error: null }),
+        };
+        return query;
+      },
+      update: (values: Record<string, unknown>) => {
       updates.push(values);
       const chain = {
         eq: (key: string, value: unknown) => { guards.push([key, value]); return chain; },
@@ -107,4 +116,14 @@ it('degrades on an unapplied migration but surfaces unrelated database failures'
 it('passes the source workspace lease to the teaser encoder', async () => {
   await repairPostMediaTeasers(fixture().db as never);
   expect(encode).toHaveBeenCalledWith('/tmp/fixture.mp4', 99);
+});
+
+it('defers disk admission without spending the final teaser attempt or uploading', async () => {
+  encode.mockRejectedValue(new StagingCapacityError());
+  const f = fixture();
+  await expect(repairPostMediaTeasers(f.db as never)).resolves.toEqual({ attempted: 1, completed: 0, failed: 1 });
+  expect(f.storage.upload).not.toHaveBeenCalled();
+  expect(f.updates).toEqual([expect.objectContaining({ teaser_attempt_count: 2, teaser_locked_by: null })]);
+  expect(f.guards).toContainEqual(['teaser_attempt_count', 3]);
+  expect(f.guards).toContainEqual(['rendition_storage_path', 'posts/post/clip.feed.mp4']);
 });

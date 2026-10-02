@@ -74,7 +74,11 @@ MAP-02; this initial ledger is not yet a measured completion denominator.
    Section 6P proves an inherited kernel per-file bound on Mac/Linux, including
    owner death and retained leases; no runtime change in 6P. Section 6Q integrates
    per-file limits into actual runners and passes local real-FFmpeg bounds,
-   cancellation, normal/failure and orphan cleanup checks. Release remains pending. Legacy
+   cancellation, normal/failure and orphan cleanup checks. PR #277 is deployed as
+   a8dd6c1f with exact-main Quality and live health verified. Section 6R reproduces
+   shared ENOSPC between bounded encoders; its shared-admission fix now passes local
+   real-process, bounded-disk/inode and DB retry checks, with release pending. Main
+   1f31715c and seven newer product/workflow PRs are incorporated and live verified. Legacy
    metadata policy and MEDIA-06 shared admission remain open, then workflow/template
    execution; continue the other areas above without claiming them complete from
    code inventory alone.

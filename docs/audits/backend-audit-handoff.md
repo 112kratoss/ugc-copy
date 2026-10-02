@@ -6,10 +6,53 @@ Updated 2026-10-02 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/media-output-limits-6q`, based on main `626f398ca01d179113663868d76d658e332184e1`; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/media-capacity-admission-6r`, based on main `1f31715c51a318d863b3f54d88d33a8484c46855`; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+Section 6R shared staging admission is implemented and locally verified, not yet
+released. Read `docs/audits/backend-section-06-bounded-writer-contention-2026-10-02.md`.
+All seven writer allocations now declare enforced ceilings. Root-directory flock
+serializes admission; immutable lease claims survive inherited children, source
+completion releases only growth, and block/inode headroom rejects excess work
+before allocation. In-flight partial bytes are deliberately over-reserved to avoid
+truncate/rewrite races; completed-source bytes are counted only through actual
+filesystem occupancy. Unknown active legacy claims/unsupported filesystems fail
+closed. Coordination covers cooperating writers on the common root only.
+
+The real two-writer regression fails before (2 admitted vs 1), passes after,
+and verifies completed/partial source markers and parent-death claim retention.
+Original 10.5 MiB real-FFmpeg ENOSPC probe now yields one success/one early capacity
+denial, intact source, no encoder ENOSPC and empty cleanup. A 64-inode probe admits
+five writers and leaves 37 inodes after all writes/seals. Existing real media
+normal/failure/abort/orphan regressions pass. Ten actual isolated-DB worker cases
+pass, including capacity denial -> retry -> one upload/notification with stable
+380/80 credit balances. Separate DB readback is empty. Final focused 73 cases,
+all type projects, lint (two existing warnings), and updated-main web suite
+6,583 passed/127 skipped pass. Final repair-focused suite: 70 passed.
+Capacity refusal now restores preview/rendition/teaser/playback retry allowance
+with lease/source/count guards where claims omit their ordinal. Reproduced and
+fixed the skipped final leased attempt (ordinal 3); ordinal 4 remains rejected.
+Real isolated worker rerun: ten passed, one harness skip. Final Linux admission
+run passes. PR #281 runtime commit 12687d78 is open. First Quality
+37037025984 exposed shared-queue test interference; reproduced locally (two
+failures) and fixed by sequential recovery test files, preserving explicit
+in-test concurrency. All 68 DB cases then pass (one harness skip). Updated
+CI and release remain pending. Private 6S metadata-kill reproduction and
+candidate cleanup proof are saved; no 6S runtime edits are included in this PR.
+
+Main advanced through seven PRs to 1f31715c. They are incorporated without conflict,
+including new workflow/template/notification fixes and mobile audio. Read the new
+AGENTS notification contract guidance. Current production 1f31715c release
+37022122147 succeeded and independent SHA/feed/admin/webhook boundary checks pass.
+Local 6Q release documents and 6R evidence are preserved for this PR; unrelated
+receipt and Section 1 files remain excluded. MEDIA-06/07 stay failed/open until
+closure evidence is complete. Next: CI/release this batch, then legacy metadata
+policy and WORKFLOW-02/03/04, reusing the newer workflow regression evidence.
+Private `.audit-evidence/backend-section-06r/` holds logs and reproducible probes.
+
+The preceding checkpoint follows.
 
 Section 6Q integrates the proven per-file limit into actual poster, rendition
 and teaser runners. Local application regression fails before (13,007 bytes vs
@@ -19,13 +62,37 @@ owner-death reclamation controls pass. Local web suite: 6,406 passed, 121 skippe
 focused final runner/capability checks: 59 passed; all three type projects pass.
 Lint has no errors after excluding private generated evidence, two existing warnings.
 Read `docs/audits/backend-section-06-encoder-output-limits-2026-10-02.md`.
-PR/exact-main Quality and standard production release are pending. Runtime
+PR #277 merged as a8dd6c1fa40a1a74d4f1f5115d611f830a8ced28 at 09:36:22 UTC.
+PR Quality 36989530190 passed all four jobs first attempt: 6,407 web, 2,848 mobile,
+19 browser, 1,941 SQL assertions, 122 DB checks (one child-harness skip), all real
+FFmpeg checks and 163 native route traces. No mobile store release was active.
+Exact-main Quality 36990750061 passed all four jobs. Standard production release
+36991829551 succeeded on attempt 1 at 09:51:18 UTC (15:21:18 IST), including staged
+and protected production health. Independent live exact SHA/feed 200/admin 307/
+unsigned webhook 401 pass; remote main matches a8dd6c1f. Runtime
 capability is measured asynchronously once per process; unavailable enforcement
 fails closed. No production media transaction has yet verified this launcher.
 MEDIA-06 shared capacity reservation and MEDIA-07 legacy metadata policy remain
 open; scoped ledger stays 21 passed, 27 untested, 2 failed, 3 external.
 Private evidence `.audit-evidence/backend-section-06q/`. Preserve unrelated local
-receipt edits, Section 1 files, and all prior evidence. Current live is 626f398c.
+receipt edits, Section 1 files, and all prior evidence. Current verified live is a8dd6c1f.
+
+Release details: `docs/audits/backend-section-06-encoder-output-limits-release-2026-10-02.md`.
+
+Section 6R has reproduced the next shared-capacity failure on this exact merged
+runtime: one bounded rendition succeeds on a 10.5 MiB tmpfs, while two concurrent
+bounded renditions with retained sources/outputs both hit real ENOSPC below their
+individual caps. Both sources remain byte-identical, a separate parent-process
+sweep reclaims zero live workspaces, and both worker paths eventually clean up.
+Barriers deliberately overlap staging/retention; this is not a production-load
+claim. Read `docs/audits/backend-section-06-bounded-writer-contention-2026-10-02.md`.
+No new 6R runtime change. Private `.audit-evidence/backend-section-06r/` contains
+reproduction, final source-integrity assertions and hashes. Next: implement and
+prove shared atomic admission, including remaining-growth vs retained-byte
+accounting, block/metadata headroom, inherited child claims, abort/death cleanup
+and malformed/legacy state. The private 6Q `next-capacity-boundary.md` lists the
+seven writer allocations and important failure cases. Preserve these local
+release/reproduction documents for the next PR. MEDIA-06/07 remain open.
 
 The preceding checkpoint follows.
 

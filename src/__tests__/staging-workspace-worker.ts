@@ -12,7 +12,7 @@ async function main() {
   if (mode === 'many') {
     const workspaces = [];
     for (let i = 0; i < Number(process.argv[3]); i++) {
-      workspaces.push(await createStagingWorkspace());
+      workspaces.push(await createStagingWorkspace(1024));
     }
     process.send?.({ directories: workspaces.map((workspace) => workspace.directory) });
     // Keep the owner descriptors alive until the test kills this process.
@@ -44,7 +44,7 @@ async function main() {
     await new Promise((resolve) => setTimeout(resolve, 150));
     process.send?.({ bytes: (await readFile(process.argv[3])).toString('utf8') });
   } else {
-    const workspace = await createStagingWorkspace();
+    const workspace = await createStagingWorkspace(1024);
     const file = path.join(workspace.directory, 'media');
     await writeFile(file, 'worker staged bytes');
     process.send?.({ directory: workspace.directory, file });

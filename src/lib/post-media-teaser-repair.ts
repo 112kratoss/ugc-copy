@@ -1,3 +1,4 @@
+import { deferMediaRepairCapacity } from '@/lib/media-repair-capacity';
 import { postMediaStorageBucket } from '@/lib/post-media-storage';
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -87,6 +88,9 @@ export async function repairPostMediaTeasers(supabase: SupabaseClient) {
     if (!updated.data?.length) throw new Error('Teaser source or lease changed before publication.');
     return { attempted: 1, completed: 1, failed: 0 };
   } catch (error) {
+    if (await deferMediaRepairCapacity({ supabase, error, kind: 'teaser', id: row.id, lockedBy, source: row.rendition_storage_path })) {
+      return { attempted: 1, completed: 0, failed: 1 };
+    }
     const result = await supabase.from('post_media').update({
       teaser_error: summarizeMediaToolError(error, 'Teaser repair failed.'),
       teaser_locked_at: null, teaser_locked_by: null,

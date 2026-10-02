@@ -24,7 +24,7 @@ const PREVIEW_MAX_SIZE = 720;
 export const VIDEO_POSTER_TIMEOUT_MS = 30_000;
 
 export async function createVideoPosterBuffer(body: Blob) {
-  const workspace = await createMediaScratchWorkspace();
+  const workspace = await createMediaScratchWorkspace(body.size);
   const inputPath = path.join(workspace.mediaDirectory, 'input-video');
 
   try {
@@ -32,6 +32,7 @@ export async function createVideoPosterBuffer(body: Blob) {
       Readable.fromWeb(body.stream() as NodeReadableStream<Uint8Array>),
       createWriteStream(inputPath, { flags: 'wx' }),
     );
+    await workspace.seal();
     // `await`, not a bare `return`. A `finally` runs when its `try` block
     // *completes*, and `return someAsyncCall()` completes the block the moment
     // the call is made rather than when its promise settles -- so the cleanup
@@ -46,7 +47,7 @@ export async function createVideoPosterBuffer(body: Blob) {
 }
 
 export async function createVideoPosterBufferFromFile(inputPath: string, sourceLeaseFd?: number) {
-  const workspace = await createMediaScratchWorkspace();
+  const workspace = await createMediaScratchWorkspace(VIDEO_POSTER_MAX_OUTPUT_BYTES);
   const framePath = path.join(workspace.mediaDirectory, 'frame.jpg');
 
   try {

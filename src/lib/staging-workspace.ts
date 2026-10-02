@@ -10,6 +10,18 @@ export const STAGING_ROOT_NAME = 'magicbooklet-staging-v1';
 const MARKER = 'magicbooklet-staging-v1\n';
 const NAME = /^item-[a-zA-Z0-9]{6}$/;
 const RECLAIM_LIMIT = 128;
+const CAPACITY_VERSION = 'magicbooklet-capacity-v1';
+const SEALED = 'complete\n';
+const WORKSPACE_HEADROOM = 32 * 1024;
+
+export class StagingCapacityError extends Error {
+  readonly code = 'STAGING_CAPACITY';
+  constructor(message = 'Insufficient staging capacity; retry later.') {
+    super(message);
+    this.name = 'StagingCapacityError';
+  }
+}
+
 const sameFile = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino;
 const code = (error: unknown) => (error as NodeJS.ErrnoException)?.code;
 const privateDirectory = (stat: Stats) => stat.isDirectory()
@@ -26,7 +38,7 @@ async function rootDirectory() {
 async function localLockFilesystem(root: string) {
   const { type } = await statfs(root);
   // Only local filesystems whose inherited flock semantics are supported here.
-  // Unknown/network filesystems can still stage; they are never swept.
+  // Unknown/network filesystems are neither swept nor admitted.
   return process.platform === 'linux'
     ? [0x01021994, 0x794c7630, 0xef53].includes(type) // tmpfs, overlayfs, ext4
     : process.platform === 'darwin' && type === 0x1a; // APFS
@@ -73,10 +85,11 @@ async function reclaim(directory: string, requireMarker: boolean): Promise<boole
       } finally { await marker.close(); }
     }
     const entries = await readdir(directory);
-    if (entries.some((name) => !['media', 'ready', 'lease'].includes(name))) return false;
+    if (entries.some((name) => !['media', 'ready', 'lease', 'sealed'].includes(name))) return false;
     // Keep deletion authority intact until all payload bytes are gone. A failed
     // media removal can be retried without losing the lease or ready marker.
     await rm(path.join(directory, 'media'), { recursive: true, force: true });
+    await rm(path.join(directory, 'sealed'), { force: true });
     await rm(path.join(directory, 'ready'), { force: true });
     await unlink(path.join(directory, 'lease'));
     await rmdir(directory);
@@ -121,30 +134,115 @@ export async function reclaimAbandonedStagingWorkspaces(): Promise<number> {
   finally { if (sweep?.promise === promise) sweep = undefined; }
 }
 
-export async function createStagingWorkspace() {
+/** Serialize admission on the persistent root inode, never an unlinkable lock file. */
+async function withAdmission<T>(root: string, work: () => Promise<T>): Promise<T> {
+  if (!await localLockFilesystem(root)) throw new StagingCapacityError('Unsupported staging admission filesystem.');
+  const lock = await open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try {
+    const deadline = Date.now() + 5_000;
+    while (true) {
+      try { flockSync(lock.fd, 'exnb'); break; }
+      catch (error) {
+        if (!['EAGAIN', 'EWOULDBLOCK'].includes(code(error) ?? '')) throw error;
+        if (Date.now() >= deadline) throw new StagingCapacityError('Staging admission is busy; retry later.');
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    }
+    if (!sameFile(await lock.stat(), await lstat(root))) throw new StagingCapacityError('Staging root changed.');
+    return await work();
+  } finally { await lock.close(); }
+}
+
+async function outstandingCapacity(root: string) {
+  let reserved = 0;
+  let active = 0;
+  for await (const entry of await opendir(root)) {
+    if (!entry.isDirectory() || !NAME.test(entry.name)) continue;
+    const directory = path.join(root, entry.name);
+    let lease: FileHandle | undefined;
+    try {
+      lease = await openRegular(path.join(directory, 'lease'));
+      try {
+        flockSync(lease.fd, 'exnb');
+        // A dead writer cannot grow. Its retained bytes are still in statfs.
+        continue;
+      } catch (error) {
+        if (!['EAGAIN', 'EWOULDBLOCK'].includes(code(error) ?? '')) throw error;
+      }
+      active++;
+      const size = (await lease.stat()).size;
+      if (size > 128) throw new StagingCapacityError('Invalid active staging reservation.');
+      const match = /^(magicbooklet-capacity-v1) ([0-9]+)\n$/.exec(await lease.readFile('utf8'));
+      const maximum = match ? Number(match[2]) : NaN;
+      if (!Number.isSafeInteger(maximum) || maximum < 0) {
+        // Old active writers have no declared limit. Never assume zero growth.
+        throw new StagingCapacityError('An active staging writer has no valid reservation.');
+      }
+      let sealed = false;
+      try {
+        const marker = await openRegular(path.join(directory, 'sealed'));
+        try { sealed = (await marker.stat()).size === SEALED.length && await marker.readFile('utf8') === SEALED; }
+        finally { await marker.close(); }
+      } catch (error) { if (code(error) !== 'ENOENT') throw error; }
+      // In-flight reservations deliberately retain their FULL ceiling. Counting
+      // partial bytes again is conservative, and avoids races with truncation or
+      // faststart rewrites. Only a closed writer may seal and release growth.
+      reserved += (sealed ? 0 : maximum) + WORKSPACE_HEADROOM;
+      if (!Number.isSafeInteger(reserved)) throw new StagingCapacityError('Staging reservation overflow.');
+    } catch (error) {
+      if (code(error) !== 'ENOENT') throw error;
+    } finally { await lease?.close(); }
+  }
+  return { reserved, active };
+}
+
+/** maxBytes is the caller's enforced write ceiling, not an HTTP length hint. */
+export async function createStagingWorkspace(maxBytes: number) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new StagingCapacityError('Invalid staging byte budget.');
   const root = await rootDirectory();
   await reclaimAbandonedStagingWorkspaces();
-  const directory = await mkdtemp(path.join(root, 'item-'));
-  let lease: FileHandle | undefined;
-  try {
-    lease = await open(path.join(directory, 'lease'), 'wx+', 0o600);
-    flockSync(lease.fd, 'exnb');
-    // Publish only after acquiring the lease; no media is written before this.
-    const marker = await open(path.join(directory, 'ready'), 'wx', 0o600);
-    try { await marker.writeFile(MARKER); }
-    finally { await marker.close(); }
-  } catch (error) {
-    await lease?.close();
-    await rm(directory, { recursive: true, force: true });
-    throw error;
-  }
+  const { directory, lease } = await withAdmission(root, async () => {
+    const { reserved, active } = await outstandingCapacity(root);
+    const space = await statfs(root);
+    const bytes = Math.ceil(maxBytes / space.bsize) * space.bsize;
+    const headroom = Math.max(1024 * 1024, Math.min(64 * 1024 * 1024, Math.ceil(space.blocks * space.bsize * 0.01)));
+    if (space.bavail * space.bsize < reserved + bytes + headroom + WORKSPACE_HEADROOM
+      || (space.files > 0 && space.ffree < 32 + active * 4)) throw new StagingCapacityError();
+    const directory = await mkdtemp(path.join(root, 'item-'));
+    let lease: FileHandle | undefined;
+    try {
+      lease = await open(path.join(directory, 'lease'), 'wx+', 0o600);
+      flockSync(lease.fd, 'exnb');
+      await lease.writeFile(`${CAPACITY_VERSION} ${bytes}\n`);
+      // Publish the claim while admission is locked, before any payload writes.
+      const marker = await open(path.join(directory, 'ready'), 'wx', 0o600);
+      try { await marker.writeFile(MARKER); }
+      finally { await marker.close(); }
+      return { directory, lease };
+    } catch (error) {
+      await lease?.close();
+      await rm(directory, { recursive: true, force: true });
+      throw error;
+    }
+  });
   const identity = await lstat(directory);
   const readerLeaseFd = lease.fd;
   let cleanupPromise: Promise<void> | undefined;
   let released = false;
+  let sealPromise: Promise<void> | undefined;
   return {
     directory,
     readerLeaseFd,
+    /** Call only after all writes close; the payload must remain immutable. */
+    seal() {
+      sealPromise ??= withAdmission(root, async () => {
+        if (released) throw new StagingCapacityError('Cannot seal a released workspace.');
+        const marker = await open(path.join(directory, 'sealed'), 'wx', 0o600);
+        try { await marker.writeFile(SEALED); }
+        finally { await marker.close(); }
+      });
+      return sealPromise;
+    },
     async cleanup() {
       cleanupPromise ??= (async () => {
         if (!released) {
@@ -169,8 +267,8 @@ export async function createStagingWorkspace() {
 }
 
 /** A leased payload directory for encoders that need filename extensions. */
-export async function createMediaScratchWorkspace() {
-  const workspace = await createStagingWorkspace();
+export async function createMediaScratchWorkspace(maxBytes: number) {
+  const workspace = await createStagingWorkspace(maxBytes);
   const mediaDirectory = path.join(workspace.directory, 'media');
   try {
     await mkdir(mediaDirectory, { mode: 0o700 });
