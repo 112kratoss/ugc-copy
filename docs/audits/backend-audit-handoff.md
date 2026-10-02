@@ -6,10 +6,31 @@ Updated 2026-10-03 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/media-metadata-lifecycle-6s`, based on main `24194f1d232af37fca43628bcfd07c74928c8296`; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/workflow-lifecycle-audit-7a`, based on main `dd3d6c13e25b2963e9d190a88c8df1354fcdb88c`; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+Section 6S PR #288 is merged as dd3d6c13 (October 3, 01:05:01 IST).
+PR Quality 37052965820 passed all four jobs first attempt: 6,648 web tests,
+2,911 mobile, 21 browser, 1,941 SQL assertions, 130 DB cases (one harness skip),
+actual FFmpeg/admission checks and 163 native route traces. No mobile store
+release was active before merge. Exact-main Quality 37055063444 is running;
+standard production release and live verification still need completion.
+
+Section 7A has begun on a separate branch in the same checkout. Read
+`backend-section-07-template-lifecycle-2026-10-03.md`. Eight additional actual-DB
+lifecycle/concurrency cases pass alongside five existing busy-retry cases. A
+late-refund response bug was reproduced: balance restores correctly after cancel,
+but the DTO says 16 credits used rather than zero. The small runtime fix computes
+creditsUsed from all loaded run generations, preserving retry history and pure
+GET behavior. After-fix 13 DB cases, 45 targeted tests and 6,648 full-web tests pass (137
+skipped). App/test types and targeted lint pass; independent database readback
+is empty. This separate 7A change is ready for PR CI after the merged 6S fix.
+No whole WORKFLOW obligation is closed by this initial matrix. Ledger remains
+22 passed, 27 untested, one failed, three external.
+
+The preceding checkpoint follows.
 
 Section 6R is deployed: PR #281 merged as 20862a0b. Updated PR Quality
 37037902850, exact-main Quality 37039015096 and standard production release

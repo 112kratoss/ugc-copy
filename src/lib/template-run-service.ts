@@ -381,7 +381,10 @@ async function toRunDto(client: SupabaseClient, state: RunState): Promise<Templa
       : null,
     estimatedTotalCredits: Math.max(0, state.run.estimated_total_credits),
     estimatedRemainingCredits: Math.max(0, state.run.estimated_remaining_credits),
-    creditsUsed: Math.max(0, state.run.credits_used || generationCredits(state.generations.values())),
+    // The worker summary can predate late settlement, especially after cancel.
+    // All attempts are loaded (including refunded/retried generations); reads
+    // must report their current cost without executing or mutating the run.
+    creditsUsed: generationCredits(state.generations.values()),
     errorMessage: state.run.error_message,
     isTest: Boolean(state.run.is_test),
     createdAt: state.run.created_at,
