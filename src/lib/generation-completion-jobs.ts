@@ -1,10 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { logBackendError } from '@/lib/backend-logger';
 import {
   attachGenerationProviderTask,
   settleGenerationFailed,
 } from '@/lib/generation-services';
 import { syncGenerationStatusByPredictionId } from '@/lib/generation-status-sync';
+import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 
 const DEFAULT_LOCK_TTL_SECONDS = 300;
 const DEFAULT_RETRY_DELAY_SECONDS = 60;
@@ -248,6 +250,34 @@ function isExhaustedCompletionAttempt(job: GenerationCompletionJob): boolean {
   return job.attempt_count >= MAX_COMPLETION_ATTEMPTS;
 }
 
+/**
+ * Tells the creator their render was given up on.
+ *
+ * The settlement answers with a status alone and the job knows the render only
+ * by its provider task id, so one read finds whose it is. Nothing here may undo
+ * the refund that came before it or keep the job open: a read that fails is
+ * logged, and the notifier itself never throws.
+ */
+async function notifyAbandonedGeneration(client: SupabaseClient, predictionId: string) {
+  try {
+    const { data, error } = await client
+      .from('generations')
+      .select('id, user_id, category, model')
+      .eq('prediction_id', predictionId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return;
+
+    await notifyGenerationStatus(
+      client,
+      data as { id: string; user_id: string; category: string | null; model: string | null },
+      'failed',
+    );
+  } catch (error) {
+    logBackendError('failed_to_notify_abandoned_generation', { predictionId, error });
+  }
+}
+
 async function finishUnsuccessfulCompletionJob(params: {
   supabase: SupabaseClient;
   creditSupabase: SupabaseClient;
@@ -262,12 +292,21 @@ async function finishUnsuccessfulCompletionJob(params: {
     // cause: the row is being failed precisely because that never resolved.
     // Record why it was abandoned, keeping the last observed reason for
     // operators.
-    await settleGenerationFailed(
+    const settlement = await settleGenerationFailed(
       params.creditSupabase,
       params.job.prediction_id,
       null,
       `The provider never reported a final result after ${params.job.attempt_count} completion attempts (last status: ${params.error})`,
     );
+
+    // A status poll that comes after this reads the row as failed and announces
+    // nothing, so the failure is announced from here. It goes out before the
+    // job is closed: a job that died in between is claimed again, settles to
+    // the same answer, and the dedupe key absorbs the second send. `succeeded`
+    // is a render that finished after all.
+    if (settlement === 'failed') {
+      await notifyAbandonedGeneration(params.creditSupabase, params.job.prediction_id);
+    }
   }
 
   return finishGenerationCompletionJob(params.supabase, {

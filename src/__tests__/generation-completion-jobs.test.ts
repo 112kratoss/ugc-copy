@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  createMobileNotificationHistory,
+  hasAnswered,
+  withMobileNotificationHistory,
+} from '@/__tests__/fixtures/mobile-notification-history';
+import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
+import {
   attachGenerationProviderTask,
   settleGenerationFailed,
 } from '@/lib/generation-services';
@@ -48,6 +54,27 @@ function createCompletionWorkerClient(results: Array<{ data: unknown; error: Err
     update,
     updateEq,
     updateIs,
+  };
+}
+
+/**
+ * The credit client an exhausted job settles through. Its settlement is mocked
+ * above, so all it is asked for is whose render the job gave up on.
+ */
+function createAbandonedRenderClient(lookup: { data: unknown; error: { message: string } | null }) {
+  const maybeSingle = vi.fn(async () => lookup);
+  const eq = vi.fn(() => ({ maybeSingle }));
+  const select = vi.fn(() => ({ eq }));
+  const from = vi.fn((table: string) => {
+    if (table !== 'generations') throw new Error(`Unexpected table access: ${table}`);
+    return { select };
+  });
+
+  return {
+    ...createRpcClient([]),
+    from,
+    select,
+    eq,
   };
 }
 
@@ -459,7 +486,7 @@ describe('generation completion jobs', () => {
       },
       { data: 'failed', error: null },
     ]);
-    const creditSupabase = createRpcClient([]);
+    const creditSupabase = createAbandonedRenderClient({ data: null, error: null });
     vi.mocked(syncGenerationStatusByPredictionId).mockResolvedValue({
       found: true,
       status: 'processing',
@@ -504,6 +531,156 @@ describe('generation completion jobs', () => {
       p_succeeded: false,
       p_error: 'Generation is still processing.',
       p_retry_delay_seconds: 900,
+    });
+  });
+
+  describe('telling the creator a render was given up on', () => {
+    const ABANDONED_KEY = 'generation:generation-1:failed';
+
+    function claimedJob(attemptCount: number) {
+      return {
+        id: 'job-1',
+        prediction_id: 'task-1',
+        payload: { data: { taskId: 'task-1', state: 'generating' } },
+        status: 'processing',
+        attempt_count: attemptCount,
+        locked_by: 'worker-1',
+      };
+    }
+
+    /** The job queue: one claimed job, then the answer to closing it. */
+    function createJobQueue(attemptCount: number, closedAs: 'failed' | 'pending') {
+      return createRpcClient([
+        { data: [claimedJob(attemptCount)], error: null },
+        { data: closedAs, error: null },
+      ]);
+    }
+
+    function process(supabase: unknown, creditSupabase: unknown) {
+      return processGenerationCompletionJobs({
+        supabase: supabase as never,
+        creditSupabase: creditSupabase as never,
+        lockedBy: 'worker-1',
+        limit: 5,
+      });
+    }
+
+    beforeEach(() => {
+      vi.mocked(syncGenerationStatusByPredictionId).mockResolvedValue({
+        found: true,
+        status: 'processing',
+        generation: {
+          id: 'generation-1',
+          user_id: 'user-1',
+          prediction_id: 'task-1',
+          status: 'processing',
+          output_url: null,
+          category: 'video',
+          model: 'kling-2.6',
+          workflow_settings: null,
+          created_at: '2026-06-21T10:00:00.000Z',
+          completed_at: null,
+        },
+      });
+    });
+
+    it('sends the failure notification after the refund and before the job is closed', async () => {
+      const history = createMobileNotificationHistory();
+      history.hold();
+      const supabase = createJobQueue(5, 'failed');
+      const renders = createAbandonedRenderClient({
+        data: { id: 'generation-1', user_id: 'user-1', category: 'video', model: 'kling-2.6' },
+        error: null,
+      });
+
+      const processing = process(supabase, withMobileNotificationHistory(renders as never, history));
+
+      // Closed first, a job that died here would never be picked up again and
+      // nobody would be told. Left open, its retry settles to the same answer
+      // and the dedupe key absorbs the second send.
+      expect(await hasAnswered(processing)).toBe(false);
+      expect(settleGenerationFailed).toHaveBeenCalledTimes(1);
+      expect(history.started).toEqual([ABANDONED_KEY]);
+      expect(supabase.rpc).toHaveBeenCalledTimes(1);
+
+      history.release();
+      await expect(processing).resolves.toEqual({ claimed: 1, completed: 0, retried: 0, failed: 1 });
+
+      expect(renders.select).toHaveBeenCalledWith('id, user_id, category, model');
+      expect(renders.eq).toHaveBeenCalledWith('prediction_id', 'task-1');
+      expect(history.sent).toEqual([expect.objectContaining({
+        user_id: 'user-1',
+        type: 'generation_failed',
+        category: 'generation',
+        title: 'Your video failed',
+        object_type: 'generation',
+        object_id: 'generation-1',
+        dedupe_key: ABANDONED_KEY,
+      })]);
+      expect(supabase.rpc).toHaveBeenNthCalledWith(2, 'finish_generation_completion_job', expect.objectContaining({
+        p_id: 'job-1',
+        p_succeeded: false,
+      }));
+    });
+
+    it('sends nothing when the render turns out to have succeeded', async () => {
+      vi.mocked(settleGenerationFailed).mockResolvedValue('succeeded');
+      const history = createMobileNotificationHistory();
+      const supabase = createJobQueue(5, 'failed');
+      const renders = createAbandonedRenderClient({
+        data: { id: 'generation-1', user_id: 'user-1', category: 'video', model: 'kling-2.6' },
+        error: null,
+      });
+
+      await process(supabase, withMobileNotificationHistory(renders as never, history));
+
+      expect(settleGenerationFailed).toHaveBeenCalledTimes(1);
+      expect(renders.from).not.toHaveBeenCalled();
+      expect(history.started).toEqual([]);
+      expect(supabase.rpc).toHaveBeenCalledTimes(2);
+    });
+
+    it('sends nothing while the job can still be retried', async () => {
+      const history = createMobileNotificationHistory();
+      const supabase = createJobQueue(4, 'pending');
+      const renders = createAbandonedRenderClient({
+        data: { id: 'generation-1', user_id: 'user-1', category: 'video', model: 'kling-2.6' },
+        error: null,
+      });
+
+      await expect(process(supabase, withMobileNotificationHistory(renders as never, history)))
+        .resolves.toEqual({ claimed: 1, completed: 0, retried: 1, failed: 0 });
+
+      expect(settleGenerationFailed).not.toHaveBeenCalled();
+      expect(renders.from).not.toHaveBeenCalled();
+      expect(history.started).toEqual([]);
+    });
+
+    it.each([
+      ['the render cannot be read', { data: null, error: { message: 'database unavailable' } }, 1],
+      ['the render is no longer there', { data: null, error: null }, 0],
+    ])('still closes the job when %s', async (_reason, lookup, loggedFailures) => {
+      const history = createMobileNotificationHistory();
+      const supabase = createJobQueue(5, 'failed');
+      const renders = createAbandonedRenderClient(lookup);
+      const logged: BackendLogRecord[] = [];
+      const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
+
+      try {
+        await expect(process(supabase, withMobileNotificationHistory(renders as never, history)))
+          .resolves.toEqual({ claimed: 1, completed: 0, retried: 0, failed: 1 });
+      } finally {
+        restoreLogSink();
+      }
+
+      expect(renders.eq).toHaveBeenCalledWith('prediction_id', 'task-1');
+      expect(history.started).toEqual([]);
+      expect(logged.filter((record) => record.msg === 'failed_to_notify_abandoned_generation'))
+        .toHaveLength(loggedFailures);
+      expect(supabase.rpc).toHaveBeenNthCalledWith(2, 'finish_generation_completion_job', expect.objectContaining({
+        p_id: 'job-1',
+        p_succeeded: false,
+      }));
     });
   });
 

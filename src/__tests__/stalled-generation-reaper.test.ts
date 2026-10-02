@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  createMobileNotificationHistory,
+  hasAnswered,
+  withMobileNotificationHistory,
+} from '@/__tests__/fixtures/mobile-notification-history';
 import { getPublicGenerationStartFailure } from '@/lib/generation-services';
 import { syncGenerationStatusByPredictionId } from '@/lib/generation-status-sync';
 import {
@@ -340,6 +345,111 @@ describe('stalled generation reaper', () => {
       'settle_generation_start_failed',
       expect.objectContaining({ p_generation_id: 'gen-direct' }),
     );
+  });
+
+  describe('telling the creator a held start was given up on', () => {
+    function heldStart(overrides: Record<string, unknown> = {}) {
+      return {
+        id: 'gen-held',
+        user_id: 'user-1',
+        category: 'video',
+        model: 'kling-2.6',
+        prediction_id: null,
+        status: 'pending',
+        created_at: '2026-06-21T08:00:00.000Z',
+        template_run_id: null,
+        template_run_step_id: null,
+        submission_unknown_at: '2026-06-21T08:00:30.000Z',
+        ...overrides,
+      };
+    }
+
+    /** No stalled provider tasks, then the held starts, then one settlement answer each. */
+    function createHeldStartsClient(rows: unknown[], settlements: string[]) {
+      return createGenerationsClient(
+        [{ data: [], error: null }, { data: rows, error: null }],
+        settlements.map((status) => ({ data: { status, refunded: true }, error: null })),
+      );
+    }
+
+    function reap(client: ReturnType<typeof createGenerationsClient>, history: ReturnType<typeof createMobileNotificationHistory>) {
+      const notified = withMobileNotificationHistory(client as never, history);
+      return reapStalledGenerations({ supabase: notified, creditSupabase: notified, nowMs: NOW_MS });
+    }
+
+    it('sends the failure notification when the hold is released and the credits returned', async () => {
+      const client = createHeldStartsClient([heldStart()], ['failed']);
+      const history = createMobileNotificationHistory();
+
+      await expect(reap(client, history)).resolves.toMatchObject({
+        startFailures: { eligible: 1, settled: 1, failed: 0 },
+      });
+
+      expect(client.select).toHaveBeenNthCalledWith(2, expect.stringMatching(/\buser_id\b/));
+      expect(client.select).toHaveBeenNthCalledWith(2, expect.stringMatching(/\bcategory\b/));
+      expect(history.sent).toEqual([expect.objectContaining({
+        user_id: 'user-1',
+        type: 'generation_failed',
+        category: 'generation',
+        title: 'Your video failed',
+        object_type: 'generation',
+        object_id: 'gen-held',
+        dedupe_key: 'generation:gen-held:failed',
+      })]);
+    });
+
+    it('tells the creator of a template run step as well', async () => {
+      const client = createHeldStartsClient(
+        [heldStart({ id: 'gen-template', category: 'image', template_run_id: 'run-1', template_run_step_id: 'step-1' })],
+        ['failed'],
+      );
+      const history = createMobileNotificationHistory();
+
+      await reap(client, history);
+
+      expect(client.rpc).toHaveBeenCalledWith(
+        'settle_template_generation_start_failed',
+        expect.objectContaining({ p_generation_id: 'gen-template' }),
+      );
+      expect(history.sent).toEqual([expect.objectContaining({
+        user_id: 'user-1',
+        title: 'Your image failed',
+        dedupe_key: 'generation:gen-template:failed',
+      })]);
+    });
+
+    it('has sent it before it moves on to the next held start', async () => {
+      const client = createHeldStartsClient(
+        [heldStart(), heldStart({ id: 'gen-held-2', user_id: 'user-2' })],
+        ['failed', 'failed'],
+      );
+      const history = createMobileNotificationHistory();
+      history.hold();
+
+      const reaping = reap(client, history);
+
+      expect(await hasAnswered(reaping)).toBe(false);
+      expect(history.started).toEqual(['generation:gen-held:failed']);
+      expect(client.rpc).toHaveBeenCalledTimes(1);
+
+      history.release();
+      await reaping;
+      expect(history.sent.map((notification) => notification.user_id)).toEqual(['user-1', 'user-2']);
+    });
+
+    it.each([
+      ['had already been failed and refunded', 'already_failed'],
+      ['got its provider task after all', 'provider_task_attached'],
+      ['had succeeded', 'already_succeeded'],
+    ])('sends nothing for a start that %s', async (_outcome, settlement) => {
+      const client = createHeldStartsClient([heldStart()], [settlement]);
+      const history = createMobileNotificationHistory();
+
+      await reap(client, history);
+
+      expect(client.rpc).toHaveBeenCalledTimes(1);
+      expect(history.started).toEqual([]);
+    });
   });
 
   it('propagates batch query failures so the job-run ledger records the error', async () => {

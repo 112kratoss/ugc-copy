@@ -69,6 +69,7 @@ describe.skipIf(!connectionString)('generation output recovery with real queue a
             const { rows } = await db.query(`select * from public.generations where ${key}=$1`, [value]);
             return { data: rows[0] ?? null, error: null };
           },
+          maybeSingle: () => query.single(),
         };
         return query;
       },
@@ -145,6 +146,23 @@ describe.skipIf(!connectionString)('generation output recovery with real queue a
       expect(await state()).toMatchObject({ status: 'failed', output_url: null, refunded: true, credits: 620, job_status: 'failed', imports: 0 });
       expect(await process()).toMatchObject({ claimed: 0 });
       expect(await state()).toMatchObject({ credits: 620 });
+      // Whoever started the render is told it was given up on, once.
+      expect(provider.notify).toHaveBeenCalledExactlyOnceWith(client, expect.objectContaining({ id: generationId, user_id: userId }), 'failed');
+    });
+    it(`${kind}: a reported failure refunds once and tells the creator once, however often it is redelivered`, async () => {
+      await seed(veo);
+      const failed = { data: veo
+        ? { taskId: predictionId, successFlag: 3, errorMessage: 'provider failure' }
+        : { taskId: predictionId, state: 'fail', failMsg: 'provider failure' } };
+      await enqueue(failed);
+      expect(await process()).toMatchObject({ completed: 1, failed: 0 });
+      expect(await state()).toMatchObject({ status: 'failed', output_url: null, refunded: true, credits: 620, job_status: 'succeeded', imports: 0 });
+      await enqueue(failed);
+      await process();
+      expect(await state()).toMatchObject({ status: 'failed', refunded: true, credits: 620 });
+      // The callback carried the verdict, so the provider was never asked.
+      expect(provider.fetch).not.toHaveBeenCalled();
+      expect(provider.notify).toHaveBeenCalledExactlyOnceWith(client, expect.objectContaining({ id: generationId, user_id: userId }), 'failed');
     });
     it(`${kind}: polling cannot settle a success without output`, async () => {
       await seed(veo);
