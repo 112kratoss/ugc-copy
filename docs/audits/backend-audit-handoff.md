@@ -35,7 +35,12 @@ Capacity refusal now restores preview/rendition/teaser/playback retry allowance
 with lease/source/count guards where claims omit their ordinal. Reproduced and
 fixed the skipped final leased attempt (ordinal 3); ordinal 4 remains rejected.
 Real isolated worker rerun: ten passed, one harness skip. Final Linux admission
-run passes. Exact final CI/release remain pending.
+run passes. PR #281 runtime commit 12687d78 is open. First Quality
+37037025984 exposed shared-queue test interference; reproduced locally (two
+failures) and fixed by sequential recovery test files, preserving explicit
+in-test concurrency. All 68 DB cases then pass (one harness skip). Updated
+CI and release remain pending. Private 6S metadata-kill reproduction and
+candidate cleanup proof are saved; no 6S runtime edits are included in this PR.
 
 Main advanced through seven PRs to 1f31715c. They are incorporated without conflict,
 including new workflow/template/notification fixes and mobile audio. Read the new

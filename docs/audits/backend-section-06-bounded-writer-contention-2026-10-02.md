@@ -154,3 +154,18 @@ Linux admission run passed with the current source. One rerun initially mounted
 over the container dependency directory and failed to resolve fs-ext. Correcting
 the fixture mount restored the same installed native module; no runtime change
 was made to address that harness error. Failed and passing logs are retained.
+
+## First CI attempt and fixture isolation
+
+PR #281, first Quality run 37037025984, exposed two recovery-test failures.
+The combined four-file database command reproduced the same failures locally:
+66 passed, two failed, one harness skip. The output-recovery suite's injected
+lost-response failure was logged against an `audit-crash-*` generation belonging
+to the worker-crash suite. Both used the real unscoped queue-claim RPC against
+one database; concurrent files consumed one another's jobs.
+
+The CI generation-recovery command now runs files sequentially. Its deliberate
+in-test worker kills and concurrent SQL clients remain unchanged. With that
+isolation, the same four files pass all 68 cases (one harness skip), and six
+release-workflow checks pass. No application workaround or assertion relaxation
+is involved. Preserve the first CI/local failed logs alongside the passing run.
