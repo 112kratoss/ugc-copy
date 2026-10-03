@@ -273,7 +273,7 @@ export async function patchWorkflowCanvasForRoute({
   const mergedGraph = mergeWorkflowCanvasGraph(currentGraph, nextGraph);
   const nextStatus = normalizedCurrentCanvas.status === 'published' ? 'draft' : normalizedCurrentCanvas.status;
   const buildUpdateQuery = (useLifecycleColumns: boolean) => {
-    let updateQuery = supabase
+    const updateQuery = supabase
       .from('workflow_canvases')
       .update({
         title: nextTitle,
@@ -283,11 +283,8 @@ export async function patchWorkflowCanvasForRoute({
         ...(useLifecycleColumns ? { status: nextStatus } : {}),
       })
       .eq('id', canvasId)
-      .eq('user_id', userId);
-
-    if (baseRevision !== null) {
-      updateQuery = updateQuery.eq('revision', baseRevision);
-    }
+      .eq('user_id', userId)
+      .eq('revision', baseRevision ?? normalizedCurrentCanvas.revision);
 
     const selectedQuery = useLifecycleColumns
       ? updateQuery.select(WORKFLOW_CANVAS_SELECT)
@@ -316,7 +313,7 @@ export async function patchWorkflowCanvasForRoute({
     return { ok: false, status: 500, body: { error: 'Failed to update workflow canvas.' } };
   }
 
-  if (!data && !error && baseRevision !== null) {
+  if (!data && !error) {
     let latestCanvas: WorkflowCanvasRouteRow | null = null;
     let latestCanvasError: unknown = null;
     try {

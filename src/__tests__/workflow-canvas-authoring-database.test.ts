@@ -224,6 +224,18 @@ describe.skipIf(!connectionString)('canvas authoring with actual authenticated S
       await admin.query('drop function public.audit_canvas_authoring_failure()');
     }
   });
+  it.each(['save','publish','restore'] as const)('rejects a title-only rename when %s commits after its read', async (action) => {
+    let winningRow: Record<string, unknown> | undefined;
+    const delayedRename = databaseClient(owner, async () => {
+      const result = action === 'save' ? await save() : action === 'publish' ? await publish(databaseClient(other)) : await restore(databaseClient(other));
+      expect(result).toMatchObject({ ok:true });
+      winningRow = await saved();
+    });
+    expect.soft(await patchWorkflowCanvasForRoute({ canvasId,userId,supabase:delayedRename,body:{ title:'Delayed rename' } })).toMatchObject({ ok:false,status:409 });
+    expect.soft(await saved()).toMatchObject({ revision:5,title:action === 'save' ? 'Newer saved title' : action === 'publish' ? 'Current authoring audit' : 'Historical title',status:action === 'publish' ? 'published' : 'draft' });
+    expect(await saved()).toEqual(winningRow);
+    expect(await snapshots()).toHaveLength(2);
+  });
   it('publishes and restores sequentially with increasing revisions and persisted snapshots', async () => {
     expect(await publish()).toMatchObject({ ok:true,body:{ canvas:{ revision:5,status:'published' } } });
     expect(await restore()).toMatchObject({ ok:true,body:{ canvas:{ revision:6,status:'draft',title:'Historical title' } } });

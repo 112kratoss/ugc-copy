@@ -1,12 +1,11 @@
 # Backend audit completion checklist
 
 Updated 2026-10-03. Current independently checked production:
-`f6a3d3b12f4af0ac7325e1661cda7d894c35855c` (Section 7C/D). Exact-main Quality,
+`9416008a4d684e1451b40ddd6bf0fb9f084b87ed` (Section 7F). Exact-main Quality,
 standard release, protected health and independent public checks pass; see the
-[completion/recovery release](backend-section-07-completion-recovery-release-2026-10-03.md).
-New canvas persistence/approval fixes (#293/#294) are not yet deployed. The
-mobile store release completed successfully; #293 is merged and awaiting the
-standard exact-main release pipeline, while #294 is in updated-main CI.
+[atomic approval release](backend-section-07-atomic-approval-release-2026-10-03.md).
+Section 7G assistant discard (#308) merged as 17dfbbc5 and awaits its exact-main
+release. Section 7H canvas authoring (#310) is under verification.
 Surface inventory baseline remains `5934bd7d`; Section 6L changed no surfaces.
 
 This is the closure ledger for the audit, replacing section numbers as a progress
@@ -15,12 +14,11 @@ unequal effort and risk. Do not turn their pass count into a percentage of backe
 safety or an ETA. New findings attach to these obligations; changes in scope must
 be recorded explicitly instead of silently adding another lettered batch.
 
-Current ledger: **53 obligations — 22 passed, 25 untested, 3 failed, 3 external**.
+Current ledger: **53 obligations — 22 passed, 26 untested, 2 failed, 3 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
-WORKFLOW-02 and WORKFLOW-04 moved from untested to failed after the reproduced
-7E/7F canvas and 7G assistant-discard defects; no
-new obligation was added. Releasing these fixes will not by itself complete its
-remaining behavioral matrix.
+WORKFLOW-02 returns to untested after the 7E/7F canvas fixes shipped. WORKFLOW-04
+remains failed for the 7G discard and 7H authoring defects until their releases.
+No new obligation was added; these fixes do not complete the broader matrices.
 
 Status meanings: **passed** has evidence for the stated scope; **failed** has a
 reproduction and remains open; **untested** lacks complete evidence for this
@@ -105,9 +103,9 @@ coverage includes shared helpers that do not end in `service.ts`.
 | GEN-04 | Genuine provider/edge delivery, replay and lost-response behavior | external | Provider-controlled fixture/event evidence remains absent; no paid generation as an incidental probe |
 | GEN-05 | Remaining catalog/quote/admission/model verification and generation lifecycle behaviors | untested | Review the 19 assigned API routes and shared quota/cost paths; reuse existing certificates where applicable |
 | WORKFLOW-01 | Canvas/child/run-step ownership and start admission fixes | passed | [Workflow ownership](backend-section-02-workflow-release-2026-09-27.md), [RPC admission](backend-section-03-rpc-release-2026-09-27.md) |
-| WORKFLOW-02 | Execute, partially fail, restart, retry, approve and cancel runs | failed | [7E](backend-section-07-canvas-persistence-2026-10-03.md) reproduces accepted-task loss from a failed link write; [7F](backend-section-07-atomic-approval-2026-10-03.md) reproduces stranded partial approval. Candidate fixes pass actual SQL locally but remain unreleased. Template completion/worker death evidence is in [7C/D](backend-section-07-completion-recovery-release-2026-10-03.md); broader canvas recovery remains open |
+| WORKFLOW-02 | Execute, partially fail, restart, retry, approve and cancel runs | untested | [7E](backend-section-07-canvas-persistence-2026-10-03.md) reproduces accepted-task loss from a failed link write; [7F](backend-section-07-atomic-approval-2026-10-03.md) reproduces stranded partial approval. Both are released: [7E](backend-section-07-canvas-persistence-release-2026-10-03.md), [7F](backend-section-07-atomic-approval-release-2026-10-03.md). Template completion/worker death evidence is in [7C/D](backend-section-07-completion-recovery-release-2026-10-03.md); broader canvas recovery remains open |
 | WORKFLOW-03 | Billing conservation and idempotency across retry/cancel/recovery | untested | 7A/7C/D template SQL evidence and 7E/7F real canvas image/video holds, refunds, retries and duplicate settlement are recorded; remaining interruption and provider/Storage cases stay open |
-| WORKFLOW-04 | Template publication, sharing/import, assistant proposal application and input ownership | failed | [7G](backend-section-07-assistant-discard-2026-10-03.md) reproduces applied-state overwrite and false discard success; candidate verified locally, unreleased. [7H](backend-section-07-canvas-authoring-2026-10-03.md) also reproduces stale restore overwrite and publication revision regression; candidate passes 13 actual SQL cases, unreleased. [7B publication fix released](backend-section-07-publication-release-2026-10-03.md); [36-method inventory](backend-section-07-method-matrix-2026-10-03.md) records remaining actual Storage, cross-user, stale-version and authoring cases |
+| WORKFLOW-04 | Template publication, sharing/import, assistant proposal application and input ownership | failed | [7G](backend-section-07-assistant-discard-2026-10-03.md) reproduces applied-state overwrite and false discard success; candidate verified locally, unreleased. [7H](backend-section-07-canvas-authoring-2026-10-03.md) also reproduces stale restore overwrite and publication revision regression; candidate passes 16 actual SQL cases, unreleased. [7B publication fix released](backend-section-07-publication-release-2026-10-03.md); [36-method inventory](backend-section-07-method-matrix-2026-10-03.md) records remaining actual Storage, cross-user, stale-version and authoring cases |
 | MEDIA-01 | Cleanup retry/concurrency and allocation-failure source cancellation | passed | [6H release](backend-section-06-staging-cleanup-release-2026-10-01.md) |
 | MEDIA-02 | Published dead-owner cleanup and inherited reader protection | passed | [6J release](backend-section-06-staging-locks-release-2026-10-01.md); no claim about legacy scratch |
 | MEDIA-03 | Sequential crash reclamation under a bounded filesystem | passed | [6K probe](backend-section-06-disk-pressure-2026-10-01.md): five killed owners on 2 MiB tmpfs followed by successful staging |

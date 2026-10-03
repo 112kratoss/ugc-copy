@@ -11,16 +11,21 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 
 ## Exact checkpoint
 
-Current branch is `codex/canvas-authoring-audit-7h`, based on 7G head 68258ac5.
-7H reproduces four actual SQL races: stale publication, stale restore, competing
-restores, and publication decreasing revision 6 to 5. Both lifecycle updates now
-require their originally read revision and return 409 if it changed. Thirteen DB
-cases, ten lifecycle service/route cases, app/test types and lint pass. Read
-`backend-section-07-canvas-authoring-2026-10-03.md`. WORKFLOW-04 remains failed;
-this finding does not add a new obligation. Existing history remains best effort.
-7F exact-main Quality 37125525853 and 7G updated-main PR Quality 37125585448
-have passed database/browser/mobile jobs; web checks are still running. Release
-sequences and live verification remain pending. Existing local edits are preserved.
+Current branch is `codex/canvas-authoring-audit-7h` (#310), incorporating 7G.
+7F is deployed as 9416008a: exact-main Quality 37125525853, standard release
+37126198484 and independent exact-SHA/feed/admin/webhook checks pass. Release
+completed October 3 at 19:00:10 IST. Read the atomic-approval release report.
+WORKFLOW-02 returns to untested; ledger is 22 passed, 26 untested, two failed,
+three external. Broad workflow matrices remain open.
+
+7G PR #308 passed updated-main Quality 37125585448 and merged as 17dfbbc5 at
+19:01:14 IST with no mobile store release active. Exact-main release is next.
+7H PR #310 now targets main. It reproduces stale publication/restore, competing
+restores, publication decreasing revision 6 to 5, and title-only rename without
+baseRevision overwriting newer edits. Candidate revision guards pass 16 actual
+SQL cases; combined focused tests pass 42 and wider canvas suite passes 120
+(with the 16 SQL cases separately run). Read the canvas-authoring report.
+Current-head CI/release remain pending. Existing local changes are preserved.
 
 The preceding checkpoint follows.
 
