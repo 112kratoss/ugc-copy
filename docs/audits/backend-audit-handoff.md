@@ -33,7 +33,8 @@ partial refunds, backpressure and pure GET. Existing focused 65 tests pass.
 Read `backend-section-07-canvas-persistence-2026-10-03.md`. Runtime/test/CI changes
 are in PR #293, head cce105f3, with Quality 37095664257 running. Types/lint pass.
 No new whole
-obligation is closed: ledger remains 22 passed, 27 untested, one failed, three external.
+obligation is closed: ledger remains 22 passed, 26 untested, two failed, three external. WORKFLOW-02 now records the
+reproduced, unreleased canvas defects as failed; no obligation was added.
 
 7F reproduces interrupted approval: gate succeeded but run awaiting_approval,
 no ticket, duplicate approval 409 and no adopter recovery. New service-only
@@ -45,7 +46,9 @@ app/test types and targeted lint pass. Read
 `backend-section-07-atomic-approval-2026-10-03.md`. Finish checks, preserve 7E
 release ordering, then normal clean-replay/release pipeline. Mobile store
 release 37095865012 is active on f6a3d3b1; do not merge/push main until it finishes.
-A stacked PR against the 7E branch allows independent 7F CI while it runs.
+Stacked PR #294 (head ba199263) targets the 7E branch for independent 7F CI.
+After the store release completes, merge #293, retarget #294 to main and repeat
+its base-dependent checks. Do not skip exact-main Quality and standard release.
 
 The preceding checkpoint follows.
 
