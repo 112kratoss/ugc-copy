@@ -139,6 +139,11 @@ export function createTemplateRunDatabase(options: { credits?: number } = {}) {
     startUnavailable: false,
     /** A single generation cannot be read back. The worker loads a run's generations as a list. */
     generationUnreadable: false,
+    /**
+     * The writes the database refuses. A refused write changes nothing and is
+     * answered with an error, which supabase-js hands back and does not throw.
+     */
+    writeRefused: null as ((table: string, values: Row) => boolean) | null,
   };
   const now = () => new Date().toISOString();
   const answer = (status: string, extra: Row = {}): Answer<Row> => ({ data: { status, ...extra }, error: null });
@@ -393,6 +398,11 @@ export function createTemplateRunDatabase(options: { credits?: number } = {}) {
     // A query runs once, when it is awaited, the way PostgREST runs it.
     const execute = (): Answer<Row[]> => {
       if (result) return result;
+      const written = insert ?? (update ? [update] : []);
+      if (written.some((values) => conditions.writeRefused?.(table, values))) {
+        result = { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } };
+        return result;
+      }
       if (insert) {
         result = insertRows(insert);
       } else {

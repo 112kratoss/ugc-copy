@@ -26,6 +26,8 @@ const NOW = '2026-10-02T10:00:00.000Z';
 const IDLE_BEFORE = '2026-10-02T10:30:00.000Z';
 const NOT_FINISHED = 'This step was not finished because the run stopped.';
 const STOPPED_MID_GENERATION = 'This step was still generating when the run stopped, so its credits stay spent.';
+/** What the database answers a write it refuses with. */
+const REFUSED_WRITE = 'canceling statement due to statement timeout';
 
 describe('ending a template run the worker could not carry on with', () => {
   let database: TemplateRunDatabase;
@@ -247,7 +249,49 @@ describe('ending a template run the worker could not carry on with', () => {
     expect(await abandon()).toBe(true);
 
     expect(database.run).toMatchObject({ status: 'failed', input_storage_paths: uploads, inputs_deleted_at: null });
-    expect(logged('failed_to_clean_up_template_inputs')).toHaveLength(1);
+    expect(logged('failed_to_clean_up_template_inputs')).toEqual([
+      expect.objectContaining({ level: 'error', runId: TEMPLATE_RUN_ID, errorMessage: 'storage said no' }),
+    ]);
+    expect(history.sent).toHaveLength(1);
+  });
+
+  it('logs each write that closes the steps when the database refuses it, and finishes tidying the run', async () => {
+    database.run.status = 'processing';
+    const [first] = database.steps;
+    // Still with the provider.
+    started(first.id as string, {});
+    const uploads = Object.values(database.run.input_storage_paths as Record<string, string>);
+    database.conditions.writeRefused = (table, values) => table === 'template_run_steps' && values.status === 'cancelled';
+
+    expect(await abandon()).toBe(true);
+
+    // The run has ended. Its steps are as they were.
+    expect(database.run).toMatchObject({ status: 'failed', error_message: TEMPLATE_RUN_ABANDONED_MESSAGE });
+    expect(stepStates()).toEqual(database.steps.map((step) => [step.id, step === first ? 'processing' : 'queued', null]));
+    // One for the steps that were in line, one for the step that was generating.
+    expect(logged('template_run_abandon_cleanup_failed')).toEqual([
+      expect.objectContaining({ level: 'error', runId: TEMPLATE_RUN_ID, errorMessage: REFUSED_WRITE }),
+      expect.objectContaining({ level: 'error', runId: TEMPLATE_RUN_ID, errorMessage: REFUSED_WRITE }),
+    ]);
+    // A refused write does not cost the run the rest of its tidying.
+    expect(database.run).toMatchObject({ input_storage_paths: {}, inputs_deleted_at: NOW });
+    expect(database.removedInputs.sort()).toEqual(uploads.map((value) => value.replace(/^template_inputs\//, '')).sort());
+    expect(history.sent).toHaveLength(1);
+    expect(logged('template_run_abandoned')).toHaveLength(1);
+  });
+
+  it('logs it and keeps the upload paths when the run cannot be told its uploads are gone', async () => {
+    const uploads = { ...(database.run.input_storage_paths as Record<string, string>) };
+    database.conditions.writeRefused = (table, values) => table === 'template_runs' && 'inputs_deleted_at' in values;
+
+    expect(await abandon()).toBe(true);
+
+    expect(database.removedInputs).toHaveLength(Object.keys(uploads).length);
+    expect(database.run).toMatchObject({ status: 'failed', input_storage_paths: uploads, inputs_deleted_at: null });
+    expect(logged('failed_to_clean_up_template_inputs')).toEqual([
+      expect.objectContaining({ level: 'error', runId: TEMPLATE_RUN_ID, errorMessage: REFUSED_WRITE }),
+    ]);
+    expect(logged('template_run_abandon_cleanup_failed')).toEqual([]);
     expect(history.sent).toHaveLength(1);
   });
 });
