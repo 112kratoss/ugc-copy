@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assignElementHandles,
-  buildSubjectHandles,
+  assignSubjectHandles,
   createElementHandleReplacementMap,
   extractPromptHandles,
   findUnknownPromptHandles,
@@ -221,31 +221,40 @@ describe('assignElementHandles', () => {
  * 2026-10-03). No other handle has capitals, and the functions that read handles
  * out of a prompt read lower case only: the handle on the card was one no prompt
  * could mention, and the lower-case one was refused as unknown.
+ *
+ * It was also built from the subjects' names each time their cards were drawn,
+ * so it moved when another subject was renamed or removed. A subject keeps its
+ * handle now, by the rule assignElementHandles is tested for above. These are the
+ * cases a subject has of its own, and the two faults that rule ends.
  */
-describe('buildSubjectHandles', () => {
+describe('assignSubjectHandles', () => {
+  function subjectHandles(names: string[]) {
+    return handles(assignSubjectHandles(names.map((displayName) => ({ displayName }))));
+  }
+
   it('writes a handle in lower case, with an underscore for all but letters and digits', () => {
-    expect(buildSubjectHandles(['Hero creator', 'Subject 2', '  Élan — Paris 2026!  ', 'MAIN_Product-v2']))
+    expect(subjectHandles(['Hero creator', 'Subject 2', '  Élan — Paris 2026!  ', 'MAIN_Product-v2']))
       .toEqual(['@hero_creator', '@subject_2', '@lan_paris_2026', '@main_product_v2']);
   });
 
   it('builds the handle an element card builds from the same name', () => {
-    const names = ['Hero creator', 'Red JACKET', 'Élan — Paris 2026!'];
+    const names = ['Hero creator', 'Red JACKET', 'Élan — Paris 2026!', 'Hero creator'];
 
-    expect(buildSubjectHandles(names))
+    expect(subjectHandles(names))
       .toEqual(handles(assignElementHandles(names.map((displayName) => ({ displayName })))));
   });
 
   it('builds only handles that the prompt is read for', () => {
-    const subjectHandles = buildSubjectHandles(['Hero creator', 'Subject 1', 'HERO', '', 'नायक लाल रेनकोट में', 'X']);
-    expect(subjectHandles).toHaveLength(6);
+    const built = subjectHandles(['Hero creator', 'Subject 1', 'HERO', '', 'नायक लाल रेनकोट में', 'X']);
+    expect(built).toHaveLength(6);
 
-    for (const handle of subjectHandles) {
+    for (const handle of built) {
       expect(isValidElementHandle(handle), handle).toBe(true);
 
       // Mentioned in a prompt it is read whole, and it is not an unknown element.
       const prompt = `A scene with ${handle} walking, then ${handle}.`;
       expect(extractPromptHandles(prompt), handle).toEqual([handle]);
-      expect(findUnknownPromptHandles(prompt, subjectHandles), handle).toEqual([]);
+      expect(findUnknownPromptHandles(prompt, built), handle).toEqual([]);
 
       // While it is typed, each letter keeps the "@" panel open.
       for (let length = 1; length <= handle.length; length += 1) {
@@ -261,23 +270,68 @@ describe('buildSubjectHandles', () => {
 
   it('numbers the later of two subjects that give the same handle', () => {
     // Names that differ only by a capital are one handle, as they are to the server.
-    expect(buildSubjectHandles(['Hero', 'hero', 'Lead', 'HERO!'])).toEqual(['@hero', '@hero_2', '@lead', '@hero_3']);
+    expect(subjectHandles(['Hero', 'hero', 'Lead'])).toEqual(['@hero', '@hero_2', '@lead']);
+    // The number starts at the subject's place on the card, as an element's does.
+    expect(subjectHandles(['Hero', 'Lead', 'HERO!'])).toEqual(['@hero', '@lead', '@hero_3']);
     // A number that another subject's name already gives is passed over.
-    expect(buildSubjectHandles(['Hero 2', 'Hero', 'Hero'])).toEqual(['@hero_2', '@hero', '@hero_3']);
+    expect(subjectHandles(['Hero 2', 'Hero', 'Hero'])).toEqual(['@hero_2', '@hero', '@hero_3']);
   });
 
   it('calls a subject by its place when its name has nothing a handle can hold', () => {
-    expect(buildSubjectHandles(['', '   ', 'नायक लाल रेनकोट में', '???']))
-      .toEqual(['@subject_1', '@subject_2', '@subject_3', '@subject_4']);
+    expect(assignSubjectHandles([{ displayName: 'नायक लाल रेनकोट में' }, { displayName: '???' }])).toEqual([
+      { displayName: 'नायक लाल रेनकोट में', handle: '@subject_1' },
+      { displayName: '???', handle: '@subject_2' },
+    ]);
     // Beside a subject that is named that, it is numbered like any other pair.
-    expect(buildSubjectHandles(['Subject 2', ''])).toEqual(['@subject_2', '@subject_2_2']);
+    expect(subjectHandles(['Subject 2', '???'])).toEqual(['@subject_2', '@subject_2_2']);
+    // An element in the same case is "@element".
+    expect(handles(assignElementHandles([{ displayName: '???' }]))).toEqual(['@element']);
   });
 
-  it('keeps the handle of a subject while another one is removed', () => {
-    // The handles are built from the names each time, so the number of the second
-    // "Hero" must not depend on where its card stands.
-    expect(buildSubjectHandles(['Hero', 'Lead', 'Hero'])).toEqual(['@hero', '@lead', '@hero_2']);
-    expect(buildSubjectHandles(['Hero', 'Hero'])).toEqual(['@hero', '@hero_2']);
+  it('names a subject that has no name by its place, as a new subject is named', () => {
+    expect(assignSubjectHandles([{ id: 'a' }, { id: 'b', displayName: '   ' }, { id: 'c', displayName: null }])).toEqual([
+      { id: 'a', displayName: 'Subject 1', handle: '@subject_1' },
+      { id: 'b', displayName: 'Subject 2', handle: '@subject_2' },
+      { id: 'c', displayName: 'Subject 3', handle: '@subject_3' },
+    ]);
+  });
+
+  describe('two subjects with one name', () => {
+    const twins = assignSubjectHandles([
+      { id: 'a', displayName: 'Hero' },
+      { id: 'b', displayName: 'Hero' },
+    ]);
+
+    it('leave the second its handle when the first is renamed, and the prompt follows the first', () => {
+      const renamed = assignSubjectHandles<Seed>(twins.map((subject) => (
+        subject.id === 'a' ? { ...subject, displayName: 'Villain', handle: null } : subject
+      )));
+
+      // "@hero" is free now. The prompt mentions the second one as "@hero_2", so it stays.
+      expect(handles(renamed)).toEqual(['@villain', '@hero_2']);
+      expect(replacePromptHandles('@hero hands the cup to @hero_2', createElementHandleReplacementMap(twins, renamed)))
+        .toBe('@villain hands the cup to @hero_2');
+    });
+
+    it('leave the second its handle when the first is removed', () => {
+      expect(assignSubjectHandles(twins.filter((subject) => subject.id !== 'a'))).toEqual([
+        { id: 'b', displayName: 'Hero', handle: '@hero_2' },
+      ]);
+    });
+
+    it('come back from a reload with the handles that were saved', () => {
+      const saved = twins.filter((subject) => subject.id !== 'a').map(({ id, displayName, handle }) => ({ id, displayName, handle }));
+
+      // Built from the name again it would be "@hero", the handle of the subject that is gone.
+      expect(handles(assignSubjectHandles(saved))).toEqual(['@hero_2']);
+    });
+
+    it('take the handles of their names when they were saved before handles were kept', () => {
+      expect(handles(assignSubjectHandles([
+        { id: 'a', displayName: 'Hero', handle: null },
+        { id: 'b', displayName: 'Hero' },
+      ]))).toEqual(['@hero', '@hero_2']);
+    });
   });
 });
 

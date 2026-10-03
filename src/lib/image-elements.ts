@@ -39,9 +39,10 @@ export function normalizeElementDisplayName(value: string | undefined, index: nu
 export function buildElementHandle(
   displayName: string,
   usedHandles: Set<string>,
-  fallbackIndex: number
+  fallbackIndex: number,
+  standIn = 'element'
 ): string {
-  const base = toHandleBase(displayName);
+  const base = toHandleBase(displayName, standIn);
   let nextHandle = `@${base}`;
 
   if (!usedHandles.has(nextHandle)) {
@@ -60,6 +61,27 @@ export function buildElementHandle(
 }
 
 /**
+ * What stands in where a name gives nothing to go by. `place` is the place of
+ * the element on its card, counted from 1.
+ */
+type HandleStandIns = {
+  /** The name of an element that has none. */
+  displayName: (place: number) => string;
+  /** What the handle is built from when the name has nothing a handle can hold. */
+  handleBase: (place: number) => string;
+};
+
+const ELEMENT_STAND_INS: HandleStandIns = {
+  displayName: (place) => normalizeElementDisplayName(undefined, place),
+  handleBase: () => 'element',
+};
+
+const SUBJECT_STAND_INS: HandleStandIns = {
+  displayName: (place) => `Subject ${place}`,
+  handleBase: (place) => `subject_${place}`,
+};
+
+/**
  * Gives each reference element on a creator card its @handle.
  *
  * A handle follows its element's name: it is built from the name when the
@@ -70,9 +92,13 @@ export function buildElementHandle(
  *
  * The handles being kept are set aside first, so a new handle never takes one
  * that another element holds.
+ *
+ * `standIns` is for a card whose elements go by another word: see
+ * `assignSubjectHandles`.
  */
 export function assignElementHandles<T extends { displayName?: string | null; handle?: string | null }>(
-  elements: T[]
+  elements: T[],
+  standIns: HandleStandIns = ELEMENT_STAND_INS
 ): Array<T & { displayName: string; handle: string }> {
   const usedHandles = new Set<string>();
   const keptHandles = elements.map((element) => {
@@ -86,18 +112,21 @@ export function assignElementHandles<T extends { displayName?: string | null; ha
   });
 
   return elements.map((element, index) => {
-    const displayName = normalizeElementDisplayName(element.displayName ?? undefined, index + 1);
+    const place = index + 1;
+    const displayName = element.displayName?.trim() || standIns.displayName(place);
 
     return {
       ...element,
       displayName,
-      handle: keptHandles[index] ?? buildElementHandle(displayName, usedHandles, index + 1),
+      handle: keptHandles[index] ?? buildElementHandle(displayName, usedHandles, place, standIns.handleBase(place)),
     };
   });
 }
 
 /**
- * The @handles of the Kling O3 named subjects, in the order of their cards.
+ * Gives each Kling O3 named subject its @handle, by the rule of the element
+ * cards: built from the name when the subject is added and again when it is
+ * renamed, and kept through everything else.
  *
  * A subject's handle is written like every other handle, in lower case: the
  * prompt is read for lower-case handles only, and the server gives the provider
@@ -105,26 +134,13 @@ export function assignElementHandles<T extends { displayName?: string | null; ha
  * has to match. A handle that kept the capitals of its name ("@Hero_creator")
  * was one spelling on the card and another everywhere it was used.
  *
- * Unlike an element's, a subject's handle is not kept with it. These are built
- * from the names each time the cards are drawn, so the number of a second
- * subject with the same name counts the handles taken, not its place: removing
- * another subject must not change it.
+ * A subject whose name has nothing a handle can hold is called by its place,
+ * "@subject_2", the handle a new subject gets from the name it starts with.
  */
-export function buildSubjectHandles(displayNames: string[]): string[] {
-  const usedHandles = new Set<string>();
-
-  return displayNames.map((displayName, index) => {
-    const base = toHandleBase(displayName, `subject_${index + 1}`);
-    let handle = `@${base}`;
-    let suffix = 2;
-    while (usedHandles.has(handle)) {
-      handle = `@${base}_${suffix}`;
-      suffix += 1;
-    }
-
-    usedHandles.add(handle);
-    return handle;
-  });
+export function assignSubjectHandles<T extends { displayName?: string | null; handle?: string | null }>(
+  subjects: T[]
+): Array<T & { displayName: string; handle: string }> {
+  return assignElementHandles(subjects, SUBJECT_STAND_INS);
 }
 
 export function extractPromptHandles(prompt: string): string[] {
