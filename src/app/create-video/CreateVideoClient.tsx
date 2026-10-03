@@ -14,6 +14,7 @@ import {
     GeneratorPageHeader,
     MediaStudioShell,
     StudioBackgroundProcessingNotice,
+    StudioElementChip,
     StudioElementHandle,
     StudioGenerationStatus,
     StudioMediaPreviewModal,
@@ -3426,15 +3427,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                            {promptMentionCandidates.length > 0 ? (
 	                                                <div className="flex flex-wrap gap-2">
 	                                                    {promptMentionCandidates.map((candidate) => (
-	                                                        <button
+	                                                        <StudioElementChip
 	                                                            key={`${candidate.kind}-${candidate.id}`}
-	                                                            type="button"
-	                                                            onClick={() => handleInsertPromptHandle(candidate.handle)}
-	                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
-	                                                        >
-	                                                            <span className="text-zinc-400">{candidate.displayName}</span>
-	                                                            <span className={candidate.kind === 'video' ? 'text-emerald-300' : 'text-sky-300'}>{candidate.handle}</span>
-	                                                        </button>
+	                                                            displayName={candidate.displayName}
+	                                                            handle={candidate.handle}
+	                                                            handleClassName={candidate.kind === 'video' ? 'text-emerald-300' : 'text-sky-300'}
+	                                                            onInsert={() => handleInsertPromptHandle(candidate.handle)}
+	                                                        />
 	                                                    ))}
 	                                                </div>
                                             ) : (
@@ -3488,15 +3487,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                             {mentionSuggestions.length > 0 ? (
                                                 <div className="mt-3 flex flex-wrap gap-2">
 	                                                    {mentionSuggestions.map((candidate) => (
-	                                                        <button
+	                                                        <StudioElementChip
 	                                                            key={`${candidate.kind}-${candidate.id}`}
-	                                                            type="button"
-	                                                            onClick={() => handleInsertPromptHandle(candidate.handle)}
-	                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
-	                                                        >
-	                                                            <span className="text-zinc-400">{candidate.displayName}</span>
-	                                                            <span className={candidate.kind === 'video' ? 'text-emerald-300' : 'text-sky-300'}>{candidate.handle}</span>
-	                                                        </button>
+	                                                            displayName={candidate.displayName}
+	                                                            handle={candidate.handle}
+	                                                            handleClassName={candidate.kind === 'video' ? 'text-emerald-300' : 'text-sky-300'}
+	                                                            onInsert={() => handleInsertPromptHandle(candidate.handle)}
+	                                                        />
 	                                                    ))}
                                                 </div>
                                             ) : null}
@@ -3617,15 +3614,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                        {shotMentionSuggestions.length > 0 ? (
 	                                                            <div className="mt-3 flex flex-wrap gap-2">
 	                                                                {shotMentionSuggestions.map((element) => (
-	                                                                    <button
+	                                                                    <StudioElementChip
 	                                                                        key={element.id}
-	                                                                        type="button"
-	                                                                        onClick={() => handleInsertShotHandle(shot.id, element.handle)}
-	                                                                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
-	                                                                    >
-	                                                                        <span className="text-zinc-400">{element.displayName}</span>
-	                                                                        <span className="text-emerald-300">{element.handle}</span>
-	                                                                    </button>
+	                                                                        displayName={element.displayName}
+	                                                                        handle={element.handle}
+	                                                                        handleClassName="text-emerald-300"
+	                                                                        onInsert={() => handleInsertShotHandle(shot.id, element.handle)}
+	                                                                    />
 	                                                                ))}
 	                                                            </div>
 	                                                        ) : null}
@@ -3782,7 +3777,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                    </div>
 	                                                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2">
 	                                                        <StudioElementHandle handle={element.handle} className="text-xs font-semibold text-emerald-300" />
-	                                                        <div className="flex shrink-0 items-center gap-1.5">
+	                                                        <div className="flex flex-wrap items-center gap-1.5">
 	                                                            <button
 	                                                                type="button"
 	                                                                onClick={() => {

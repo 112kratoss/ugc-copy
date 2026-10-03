@@ -713,6 +713,43 @@ export function StudioElementHandle({
   );
 }
 
+/**
+ * The chip that puts a reference's @handle into a prompt: its name, then the handle.
+ *
+ * A chip could not shrink below its text, and a handle cannot break, so a long
+ * name made the chip wider than its row: 425px in a 308px row for a name of 34
+ * characters, which made the whole page 466px wide on a 390px phone. The chip
+ * stops at its row now (max-w-full). The handle is the part the prompt needs,
+ * so it keeps its full width and the name is cut to what is left. That order
+ * is what flex-1 is for: the name starts from no width and takes only the room
+ * the handle does not use. Were both merely allowed to shrink, they would
+ * shrink together, and the handle would wrap beside a name that still had
+ * room to give. A handle wider than the row by itself wraps the way it does
+ * on a reference card.
+ */
+export function StudioElementChip({
+  displayName,
+  handle,
+  handleClassName,
+  onInsert,
+}: {
+  displayName: string;
+  handle: string;
+  handleClassName?: string;
+  onInsert: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onInsert}
+      className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-left text-xs font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
+    >
+      <span className="min-w-0 flex-1 truncate text-zinc-400">{displayName}</span>
+      <StudioElementHandle handle={handle} className={handleClassName} />
+    </button>
+  );
+}
+
 export function StudioUploadedMediaPreview({
   mediaType,
   src,
