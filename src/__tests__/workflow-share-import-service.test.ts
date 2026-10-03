@@ -99,7 +99,7 @@ function createUserSupabaseMock(options?: {
 function createServiceSupabaseMock({ allowed = true, shareMissing = false } = {}) {
   const importCountUpdates: Array<Record<string, unknown>> = [];
   const tableReads: string[] = [];
-  const rpc = vi.fn(async () => ({
+  const rateLimitResult = () => ({
     data: {
       allowed,
       limit: 240,
@@ -108,7 +108,14 @@ function createServiceSupabaseMock({ allowed = true, shareMissing = false } = {}
       resetAt: '2026-06-22T06:30:00.000Z',
     },
     error: null,
-  }));
+  });
+  const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
+    if (name === 'increment_workflow_share_import_count') {
+      importCountUpdates.push(args);
+      return { data: 3, error: null };
+    }
+    return rateLimitResult();
+  });
 
   const client = {
     rpc,
@@ -252,6 +259,6 @@ describe('importWorkflowShareForRoute', () => {
       revision: 0,
       kind: 'draft',
     });
-    expect(serviceSupabase.importCountUpdates).toEqual([{ import_count: 3 }]);
+    expect(serviceSupabase.importCountUpdates).toEqual([{ p_share_id: SHARE_ID }]);
   });
 });
