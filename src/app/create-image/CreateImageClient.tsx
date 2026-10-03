@@ -90,6 +90,7 @@ import {
     useWebGenerationModelQuote,
 } from '@/lib/generation-model-client';
 import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
+import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
 
@@ -230,7 +231,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
     const [isResultPreviewOpen, setIsResultPreviewOpen] = useState(false);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
-    const [elementNameDrafts, setElementNameDrafts] = useState<Record<string, string>>({});
+    const elementNames = useNameDrafts();
     const [resultPreviewImage, setResultPreviewImage] = useState<string | null>(null);
     const nowMs = useTicker(isGenerating);
 
@@ -589,15 +590,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         const nextElements = hydrateImageElements(
             currentElements.filter((element) => element.id !== elementId)
         );
-        setElementNameDrafts((prev) => {
-            if (!(elementId in prev)) {
-                return prev;
-            }
-
-            const nextDrafts = { ...prev };
-            delete nextDrafts[elementId];
-            return nextDrafts;
-        });
+        elementNames.dropDraft(elementId);
         commitElements(nextElements);
         await persistUploadedImageElements(nextElements);
     };
@@ -629,25 +622,16 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     };
 
     const handleElementDraftChange = (elementId: string, nextValue: string) => {
-        setElementNameDrafts((prev) => ({
-            ...prev,
-            [elementId]: nextValue,
-        }));
+        elementNames.setDraft(elementId, nextValue);
     };
 
     const commitElementDraft = async (elementId: string) => {
-        const draftValue = elementNameDrafts[elementId];
+        const draftValue = elementNames.takeDraft(elementId);
         if (draftValue === undefined) {
             return;
         }
 
         const trimmed = draftValue.trim();
-        setElementNameDrafts((prev) => {
-            const nextDrafts = { ...prev };
-            delete nextDrafts[elementId];
-            return nextDrafts;
-        });
-
         if (!trimmed) {
             return;
         }
@@ -1510,7 +1494,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                                     </label>
                                                     <input
                                                         type="text"
-                                                        value={elementNameDrafts[element.id] ?? element.displayName}
+                                                        value={elementNames.drafts[element.id] ?? element.displayName}
                                                         onChange={(event) => handleElementDraftChange(element.id, event.target.value)}
                                                         onBlur={() => void commitElementDraft(element.id)}
                                                         onKeyDown={(event) => {
@@ -1521,15 +1505,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                                             }
 
                                                             if (event.key === 'Escape') {
-                                                                setElementNameDrafts((prev) => {
-                                                                    if (!(element.id in prev)) {
-                                                                        return prev;
-                                                                    }
-
-                                                                    const nextDrafts = { ...prev };
-                                                                    delete nextDrafts[element.id];
-                                                                    return nextDrafts;
-                                                                });
+                                                                elementNames.dropDraft(element.id);
                                                                 event.currentTarget.blur();
                                                             }
                                                         }}
