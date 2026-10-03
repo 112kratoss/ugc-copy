@@ -777,6 +777,47 @@ export function StudioElementHandleList({ handles }: { handles: string[] }) {
   );
 }
 
+/** A word that holds an @handle, with whatever is written against it: "@red_jacket,". */
+const HANDLE_WORD = /(?:^|\W)@\w/;
+
+/**
+ * A sentence held as one string that may name @handles, such as a run panel's
+ * error, which the page or the server may have written.
+ *
+ * Printed as plain text, a handle in such a sentence could not break. "Unknown
+ * element mention: @..." in the video creator's run panel stood 149px past its
+ * box in a 1280px window for a handle of 68 characters, and 219px on a 390px
+ * phone, where the page scrolled 165px sideways. The sentence is split at its
+ * spaces here, and a word that holds a handle gets the box
+ * StudioElementHandleList gives one: it moves to the next line whole while a
+ * line can hold it, and breaks after an underscore only when none can. A comma
+ * or full stop written against a handle is part of its word, so it is inside
+ * the box, as the list's commas are. Every other word stays the text it was.
+ */
+export function StudioElementHandleText({ text }: { text: string }) {
+  const pieces: Array<{ text: string; holdsHandle: boolean }> = [];
+  // Words and the white space between them, in turn.
+  for (const part of text.split(/(\s+)/)) {
+    const holdsHandle = HANDLE_WORD.test(part);
+    const last = pieces[pieces.length - 1];
+    if (!holdsHandle && last && !last.holdsHandle) {
+      last.text += part;
+    } else if (part) {
+      pieces.push({ text: part, holdsHandle });
+    }
+  }
+
+  return (
+    <>
+      {pieces.map((piece, index) => (
+        piece.holdsHandle ? (
+          <StudioElementHandle key={index} handle={piece.text} className="inline-block max-w-full" />
+        ) : piece.text
+      ))}
+    </>
+  );
+}
+
 export function StudioUploadedMediaPreview({
   mediaType,
   src,
