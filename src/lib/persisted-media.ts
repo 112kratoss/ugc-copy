@@ -77,7 +77,6 @@ export const PERSISTED_MEDIA_KEYS = {
   createMotionReferenceVideo: 'create-motion:reference-video',
   createImageElements: 'create-image:elements',
   createVideoElements: 'create-video:elements',
-  createVideoReferenceMode: 'create-video:reference-mode',
   createImageReferences: 'create-image:reference-images',
   createImageElementDrafts: 'create-image:element-drafts',
   createVideoStartImage: 'create-video:start-image',

@@ -53,6 +53,29 @@ describe('descriptor-driven affordances', () => {
     expect(fresh.referenceAudios.max, `${modelId} referenceAudios.max`).toBe(engaged.referenceAudios.max);
   });
 
+  it.each(videoModelIds)('%s: with a reference attached, a frames run means the model takes none', (modelId) => {
+    // The video creator asks for 'elements' whenever a reference is attached, so the
+    // answer is 'frames' only for a model, a mode or a multi-shot run that takes no
+    // reusable references. The page leans on that. A prompt that mentions a saved
+    // reference the run cannot use gets one answer, the reason references are off, and
+    // none that tells the creator to change the run's shape: there is nothing to
+    // change it with, since the shape is read off what is attached.
+    const modes = [undefined, ...VIDEO_MODELS[modelId].modeOptions.map((option) => option.value)];
+    for (const descriptor of [descriptorFor(modelId), null]) {
+      for (const mode of modes) {
+        for (const isMultiShot of [false, true]) {
+          const affordances = getVideoInputAffordances(descriptor, modelId, { referenceMode: 'elements', mode, isMultiShot });
+          if (affordances.activeMode === 'frames') {
+            expect(
+              affordances.elements.enabled,
+              `${modelId} from the ${descriptor ? 'descriptor' : 'built-in table'}, mode ${mode ?? 'not set'}, ${isMultiShot ? 'multi-shot' : 'single-shot'}`,
+            ).toBe(false);
+          }
+        }
+      }
+    }
+  });
+
   it('reports Seedance 2.5 reference slots with nothing attached', () => {
     // The reported case: the model publishes its image, video and audio reference slots
     // and the page rendered none of them. The counts track Kie's schema for
