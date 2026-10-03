@@ -1,6 +1,6 @@
 # Backend audit completion checklist
 
-Updated 2026-10-02. Current verified production: `1f31715c51a318d863b3f54d88d33a8484c46855` (contains Section 6Q).
+Updated 2026-10-03. Current independently checked production: `24194f1d232af37fca43628bcfd07c74928c8296` (contains Section 6R); its later release run failed protected build-ID verification despite subsequent public-boundary checks passing.
 Section 6N deployed as `149b9edc`; later product/notification changes are incorporated
 in the audit checkout, not automatically credited as full audit coverage.
 Surface inventory baseline remains `5934bd7d`; Section 6L changed no surfaces.
@@ -11,7 +11,7 @@ unequal effort and risk. Do not turn their pass count into a percentage of backe
 safety or an ETA. New findings attach to these obligations; changes in scope must
 be recorded explicitly instead of silently adding another lettered batch.
 
-Current ledger: **53 obligations — 21 passed, 27 untested, 2 failed, 3 external**.
+Current ledger: **53 obligations — 22 passed, 27 untested, 1 failed, 3 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
 
 Status meanings: **passed** has evidence for the stated scope; **failed** has a
@@ -105,8 +105,8 @@ coverage includes shared helpers that do not end in `service.ts`.
 | MEDIA-03 | Sequential crash reclamation under a bounded filesystem | passed | [6K probe](backend-section-06-disk-pressure-2026-10-01.md): five killed owners on 2 MiB tmpfs followed by successful staging |
 | MEDIA-04 | Active/inherited reader preservation and failed-write cleanup under disk pressure | passed | [6K probe](backend-section-06-disk-pressure-2026-10-01.md): ENOSPC preserves active bytes; incomplete new staging removed |
 | MEDIA-05 | Reach reclaimable files beyond a persistent 128-entry scan prefix | passed | [6L release](backend-section-06-scan-progress-release-2026-10-01.md): real-filesystem regression, cold-process and Linux disk-pressure verification; deployed in PR #256. Inspection remains linear, not time-bounded (MEDIA-07/OPS-03) |
-| MEDIA-06 | Concurrent disk admission/backpressure across writers | failed | [6K reproduction](backend-section-06-disk-pressure-2026-10-01.md): combined writes exceed capacity. [6M](backend-section-06-capacity-recovery-2026-10-01.md) verifies real ENOSPC retry, partial-output and exhausted-job recovery with stable charges/notification; shared admission remains open. [6O](backend-section-06-current-baseline-output-limits-2026-10-02.md) rechecks current-main compatibility and rejects candidate FFmpeg `-fs` as a strict byte ceiling. [6P](backend-section-06-kernel-output-bound-2026-10-02.md) proves inherited kernel per-file limits locally; [6Q](backend-section-06-encoder-output-limits-2026-10-02.md) integrates/deploys per-file bounds with verified actual runners. [6R](backend-section-06-bounded-writer-contention-2026-10-02.md) reproduces ENOSPC across bounded encoders and locally verifies shared admission, inherited claims, source accounting, inode headroom and DB retry with stable credits; final CI/release remain pending |
-| MEDIA-07 | Other scratch namespaces and metadata/legacy accumulation policy | failed | [6N reproduction/fix](backend-section-06-media-scratch-2026-10-01.md): all five old namespaces retain bytes after owner death. New leased scratch and cancellation ordering pass real FFmpeg locally and in CI; [deployed in #257](backend-section-06-media-scratch-release-2026-10-01.md). Legacy/unpublished metadata policy remains open |
+| MEDIA-06 | Concurrent disk admission/backpressure across cooperating writers | passed | [6R release](backend-section-06-capacity-admission-release-2026-10-03.md): shared atomic claims, enforced output ceilings, completed-source accounting, inherited readers, block/inode headroom and DB retry with stable credits; exact-main CI and standard release passed. Uncoordinated writers and production throughput remain outside this bounded certificate |
+| MEDIA-07 | Other scratch namespaces and metadata/legacy accumulation policy | failed | [6N reproduction/fix](backend-section-06-media-scratch-2026-10-01.md): all five old namespaces retain bytes after owner death. New leased scratch and cancellation ordering pass real FFmpeg locally and in CI; [deployed in #257](backend-section-06-media-scratch-release-2026-10-01.md). [6S release](backend-section-06-metadata-lifecycle-release-2026-10-03.md) fixes interrupted initialization; verified legacy environment-retirement evidence remains open |
 | MEDIA-08 | Upload/import validation, private signed reads, finalization and revocation | untested | Real Storage/HTTP behavior with ownership, expiry, malformed input and replay |
 | MEDIA-09 | Deletion/retention correctness and durable input/output recovery | untested | Objects and DB references remain consistent through partial deletion and retry |
 

@@ -6,10 +6,12 @@ import {
   createMobileNotification,
   hasPendingMobilePushReceipts,
   normalizeMobilePushTokenPayload,
+  processMobilePushMaintenance,
   processPendingMobilePushReceipts,
   sendExpoPushNotification,
   sendExpoPushNotificationBatch,
   sendExpoPushNotificationWithRetry,
+  toMobileNotificationRecord,
 } from '@/lib/mobile-notifications';
 import { EXTERNAL_API_REQUEST_TIMEOUT_MS } from '@/lib/provider-fetch';
 
@@ -23,6 +25,154 @@ function createPendingReceiptQuery(deliveryRows: Record<string, unknown>[]) {
 }
 
 type PushTokenRow = { id: string; expo_push_token: string; platform: 'ios' | 'android' };
+type PushTokenState = { id: string; is_active: boolean; disabled_at: string | null };
+
+/**
+ * `mobile_push_tokens` as the three retirement paths see it. An update changes
+ * only the rows its filters match and, when asked to, hands those rows back, so
+ * a test can read what became of a row as well as which filters were sent.
+ */
+function createPushTokenTable(rows: PushTokenState[]) {
+  const updates: Array<{ values: Record<string, unknown>; filters: Array<[string, unknown]> }> = [];
+
+  function update(values: Record<string, unknown>) {
+    const statement = { values, filters: [] as Array<[string, unknown]> };
+    updates.push(statement);
+    let returnsRows = false;
+
+    const query = {
+      eq(column: string, value: unknown) {
+        statement.filters.push([column, value]);
+        return query;
+      },
+      in(column: string, candidates: unknown[]) {
+        statement.filters.push([column, candidates]);
+        return query;
+      },
+      select() {
+        returnsRows = true;
+        return query;
+      },
+      then<Result>(resolve: (result: { data: Array<{ id: string }> | null; error: null }) => Result) {
+        const matched = rows.filter((row) => statement.filters.every(([column, expected]) => {
+          const actual = (row as Record<string, unknown>)[column];
+          return Array.isArray(expected) ? expected.includes(actual) : actual === expected;
+        }));
+        for (const row of matched) {
+          Object.assign(row, values);
+        }
+
+        return Promise.resolve({
+          data: returnsRows ? matched.map((row) => ({ id: row.id })) : null,
+          error: null,
+        }).then(resolve);
+      },
+    };
+
+    return query;
+  }
+
+  return { rows, updates, update };
+}
+
+const DEVICE_NOT_REGISTERED = {
+  status: 'error',
+  message: 'The recipient device is not registered with FCM.',
+  details: { error: 'DeviceNotRegistered' },
+};
+
+/**
+ * The tables the receipts job and the retry job touch. Both read
+ * `mobile_push_deliveries`; the retry job's read is the one that filters on
+ * `send_status`.
+ */
+function createPushMaintenanceSupabase({
+  pendingDeliveries = [],
+  retryableDeliveries = [],
+  tokens,
+}: {
+  pendingDeliveries?: Record<string, unknown>[];
+  retryableDeliveries?: Record<string, unknown>[];
+  tokens: PushTokenState[];
+}) {
+  const tokenTable = createPushTokenTable(tokens);
+  const deliveryUpdates: Array<{ id: string; values: Record<string, unknown> }> = [];
+
+  const adminSupabase = {
+    from(table: string) {
+      if (table === 'mobile_push_deliveries') {
+        return {
+          select() {
+            let rows = pendingDeliveries;
+            const query = {
+              eq(column: string) {
+                if (column === 'send_status') {
+                  rows = retryableDeliveries;
+                }
+                return query;
+              },
+              lte: () => query,
+              is: () => query,
+              lt: () => query,
+              order: () => query,
+              limit: async () => ({ data: rows, error: null }),
+            };
+            return query;
+          },
+          update(values: Record<string, unknown>) {
+            return {
+              eq(_column: string, value: unknown) {
+                deliveryUpdates.push({ id: String(value), values });
+                return Promise.resolve({ error: null });
+              },
+            };
+          },
+        };
+      }
+
+      if (table === 'mobile_notifications') {
+        return {
+          select() {
+            return {
+              eq(_column: string, value: unknown) {
+                return {
+                  async maybeSingle() {
+                    return {
+                      data: {
+                        id: value,
+                        type: 'generation_succeeded',
+                        category: 'generation',
+                        title: 'Render ready',
+                        body: 'Open it in the app.',
+                        deep_link: '/viewer?source=studio-creations&initialId=gen-1',
+                      },
+                      error: null,
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      }
+
+      if (table === 'mobile_push_tokens') {
+        return { update: tokenTable.update };
+      }
+
+      throw new Error(`Unexpected table ${table}`);
+    },
+    async rpc(name: string) {
+      expect(name).toBe('prune_mobile_notification_retention');
+      return {
+        data: { deliveriesDeleted: 0, notificationsDeleted: 0, batchLimitReached: false },
+        error: null,
+      };
+    },
+  };
+
+  return { adminSupabase, tokenTable, deliveryUpdates };
+}
 
 function expoResponse(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), {
@@ -42,7 +192,12 @@ function sentBodies(fetchMock: { mock: { calls: Parameters<typeof fetch>[] } }) 
 function createPushFanOutSupabase(tokens: PushTokenRow[]) {
   const tokenFilters: Array<[string, unknown]> = [];
   const deliveryInsertCalls: Array<Record<string, unknown>[]> = [];
-  const tokenUpdates: Array<{ values: Record<string, unknown>; ids: unknown[] }> = [];
+  // Every token the fan-out loads is live at the moment it is read.
+  const tokenTable = createPushTokenTable(tokens.map((token) => ({
+    id: token.id,
+    is_active: true,
+    disabled_at: null,
+  })));
   const notificationUpdates: Array<{ id: string; values: Record<string, unknown> }> = [];
 
   const adminSupabase = {
@@ -126,18 +281,7 @@ function createPushFanOutSupabase(tokens: PushTokenRow[]) {
             };
             return query;
           },
-          update(values: Record<string, unknown>) {
-            return {
-              eq(_column: string, value: unknown) {
-                tokenUpdates.push({ values, ids: [value] });
-                return Promise.resolve({ error: null });
-              },
-              in(_column: string, ids: unknown[]) {
-                tokenUpdates.push({ values, ids });
-                return Promise.resolve({ error: null });
-              },
-            };
-          },
+          update: tokenTable.update,
         };
       }
 
@@ -154,7 +298,14 @@ function createPushFanOutSupabase(tokens: PushTokenRow[]) {
     },
   };
 
-  return { adminSupabase, tokenFilters, deliveryInsertCalls, tokenUpdates, notificationUpdates };
+  return {
+    adminSupabase,
+    tokenFilters,
+    deliveryInsertCalls,
+    tokenTable,
+    tokenUpdates: tokenTable.updates,
+    notificationUpdates,
+  };
 }
 
 function unlockNotification(adminSupabase: unknown) {
@@ -299,6 +450,32 @@ describe('mobile notifications', () => {
       .toBe('/studio');
   });
 
+  // `updatedAt` is the age the app prints. The row's own updated_at is stamped
+  // by every write, reading the alert included, so it must never feed it.
+  it("reports an alert's last event as updatedAt, not the last write to its row", () => {
+    expect(toMobileNotificationRecord({
+      id: 'notification-1',
+      type: 'post_saved',
+      category: 'social',
+      event_count: 3,
+      is_read: true,
+      created_at: '2026-06-22T06:00:00.000Z',
+      last_event_at: '2026-06-22T06:10:00.000Z',
+      updated_at: '2026-06-22T09:00:00.000Z',
+    })).toMatchObject({
+      createdAt: '2026-06-22T06:00:00.000Z',
+      updatedAt: '2026-06-22T06:10:00.000Z',
+    });
+  });
+
+  it('falls back to the arrival time for a row read without its last event', () => {
+    expect(toMobileNotificationRecord({
+      id: 'notification-1',
+      created_at: '2026-06-22T06:00:00.000Z',
+      updated_at: '2026-06-22T09:00:00.000Z',
+    }).updatedAt).toBe('2026-06-22T06:00:00.000Z');
+  });
+
   it('checks only receipts that have reached the recommended 15-minute age', async () => {
     const limit = vi.fn(async () => ({
       data: [{ id: 'delivery-1' }],
@@ -334,7 +511,10 @@ describe('mobile notifications', () => {
       },
     ];
     const deliveryUpdates: Array<{ id: string; values: Record<string, unknown> }> = [];
-    const tokenUpdates: Array<{ id: string; values: Record<string, unknown> }> = [];
+    const tokenTable = createPushTokenTable([
+      { id: 'token-1', is_active: true, disabled_at: null },
+      { id: 'token-2', is_active: true, disabled_at: null },
+    ]);
     const pendingQuery = createPendingReceiptQuery(deliveryRows);
 
     const adminSupabase = {
@@ -357,17 +537,7 @@ describe('mobile notifications', () => {
         }
 
         if (table === 'mobile_push_tokens') {
-          return {
-            update(values: Record<string, unknown>) {
-              return {
-                eq(column: string, value: unknown) {
-                  expect(column).toBe('id');
-                  tokenUpdates.push({ id: String(value), values });
-                  return Promise.resolve({ error: null });
-                },
-              };
-            },
-          };
+          return { update: tokenTable.update };
         }
 
         throw new Error(`Unexpected table ${table}`);
@@ -422,13 +592,191 @@ describe('mobile notifications', () => {
         }),
       }),
     ]);
-    expect(tokenUpdates).toEqual([
-      expect.objectContaining({
-        id: 'token-1',
+    // The token the receipt names is retired at the time of this run; the
+    // account's other device is left alone.
+    expect(tokenTable.rows).toEqual([
+      { id: 'token-1', is_active: false, disabled_at: '2026-05-26T12:00:00.000Z' },
+      { id: 'token-2', is_active: true, disabled_at: null },
+    ]);
+  });
+
+  // disabled_at is written and never read: its whole use is working out, later,
+  // when a token stopped receiving pushes. A dead token keeps collecting
+  // DeviceNotRegistered receipts for every push still in flight to it, and each
+  // one used to move that time forward to its own run.
+  it('keeps the time a token was retired when a later receipt reports it gone again', async () => {
+    const maintenance = createPushMaintenanceSupabase({
+      pendingDeliveries: [{
+        id: 'delivery-2',
+        token_id: 'token-1',
+        push_ticket_id: 'ticket-2',
+        receipt_status: 'pending',
+        sent_at: '2026-10-01T11:00:00.000Z',
+      }],
+      tokens: [{ id: 'token-1', is_active: false, disabled_at: '2026-10-01T10:30:00.000Z' }],
+    });
+    const fetcher = vi.fn<typeof fetch>(async () => expoResponse({
+      data: { 'ticket-2': DEVICE_NOT_REGISTERED },
+    }));
+
+    await expect(processPendingMobilePushReceipts(maintenance.adminSupabase as never, {
+      fetcher,
+      now: new Date('2026-10-01T12:00:00.000Z'),
+    })).resolves.toEqual({
+      checkedCount: 1,
+      updatedCount: 1,
+      staleCount: 0,
+      disabledTokenCount: 0,
+    });
+
+    expect(maintenance.tokenTable.updates).toHaveLength(1);
+    expect(maintenance.tokenTable.updates[0]?.filters).toContainEqual(['is_active', true]);
+    expect(maintenance.tokenTable.rows).toEqual([
+      { id: 'token-1', is_active: false, disabled_at: '2026-10-01T10:30:00.000Z' },
+    ]);
+    // The delivery itself still records what Expo said about it.
+    expect(maintenance.deliveryUpdates).toEqual([
+      {
+        id: 'delivery-2',
         values: expect.objectContaining({
-          is_active: false,
+          receipt_status: 'error',
+          receipt_error_code: 'DeviceNotRegistered',
+          receipt_checked_at: '2026-10-01T12:00:00.000Z',
         }),
-      }),
+      },
+    ]);
+  });
+
+  it('counts the tokens a receipts run retired, not the receipts that named them', async () => {
+    const pending = (id: string, tokenId: string) => ({
+      id: `delivery-${id}`,
+      token_id: tokenId,
+      push_ticket_id: `ticket-${id}`,
+      receipt_status: 'pending',
+      sent_at: '2026-10-01T11:00:00.000Z',
+    });
+    const maintenance = createPushMaintenanceSupabase({
+      pendingDeliveries: [
+        pending('1', 'token-1'),
+        pending('2', 'token-1'),
+        pending('3', 'token-1'),
+        pending('4', 'token-2'),
+      ],
+      tokens: [
+        { id: 'token-1', is_active: true, disabled_at: null },
+        { id: 'token-2', is_active: true, disabled_at: null },
+      ],
+    });
+    const fetcher = vi.fn<typeof fetch>(async () => expoResponse({
+      data: {
+        'ticket-1': DEVICE_NOT_REGISTERED,
+        'ticket-2': DEVICE_NOT_REGISTERED,
+        'ticket-3': DEVICE_NOT_REGISTERED,
+        'ticket-4': { status: 'ok' },
+      },
+    }));
+
+    await expect(processPendingMobilePushReceipts(maintenance.adminSupabase as never, {
+      fetcher,
+      now: new Date('2026-10-01T12:00:00.000Z'),
+    })).resolves.toEqual({
+      checkedCount: 4,
+      updatedCount: 4,
+      staleCount: 0,
+      disabledTokenCount: 1,
+    });
+
+    expect(maintenance.tokenTable.rows).toEqual([
+      { id: 'token-1', is_active: false, disabled_at: '2026-10-01T12:00:00.000Z' },
+      { id: 'token-2', is_active: true, disabled_at: null },
+    ]);
+  });
+
+  // A push Expo refuses at send is filed as a failed send with no ticket, which
+  // is what the retry job picks up. The send path has already retired that
+  // token, so the next two runs each asked Expo again and each moved the
+  // token's disabled_at on to their own time.
+  it('leaves a token the send path already retired when the retry job is refused again', async () => {
+    const maintenance = createPushMaintenanceSupabase({
+      retryableDeliveries: [{
+        id: 'delivery-1',
+        notification_id: 'notification-1',
+        user_id: 'user-1',
+        token_id: 'token-1',
+        expo_push_token: 'ExponentPushToken[gone]',
+        platform: 'android',
+        attempt_count: 1,
+      }],
+      tokens: [{ id: 'token-1', is_active: false, disabled_at: '2026-10-01T14:36:18.412Z' }],
+    });
+    const fetcher = vi.fn<typeof fetch>(async () => expoResponse({ data: DEVICE_NOT_REGISTERED }));
+
+    await expect(processMobilePushMaintenance(maintenance.adminSupabase as never, {
+      fetcher,
+      now: new Date('2026-10-01T14:40:00.000Z'),
+    })).resolves.toMatchObject({
+      retryableCount: 1,
+      retriedCount: 1,
+      resentCount: 0,
+      retryFailedCount: 1,
+      retryDisabledTokenCount: 0,
+      disabledTokenCount: 0,
+    });
+
+    expect(sentBodies(fetcher)).toEqual([
+      expect.objectContaining({ to: 'ExponentPushToken[gone]', title: 'Render ready' }),
+    ]);
+    expect(maintenance.tokenTable.updates).toHaveLength(1);
+    expect(maintenance.tokenTable.updates[0]?.filters).toContainEqual(['is_active', true]);
+    expect(maintenance.tokenTable.rows).toEqual([
+      { id: 'token-1', is_active: false, disabled_at: '2026-10-01T14:36:18.412Z' },
+    ]);
+    expect(maintenance.deliveryUpdates).toEqual([
+      {
+        id: 'delivery-1',
+        values: expect.objectContaining({
+          receipt_error_code: 'DeviceNotRegistered',
+          attempt_count: 2,
+          last_attempt_at: '2026-10-01T14:40:00.000Z',
+        }),
+      },
+    ]);
+  });
+
+  // The first send was turned down for a reason of its own (Expo's rate limit,
+  // say), which says nothing about the device: the retry is the first to hear
+  // that it is gone.
+  it('retires a live token the retry job finds gone, and counts it once', async () => {
+    const maintenance = createPushMaintenanceSupabase({
+      retryableDeliveries: [{
+        id: 'delivery-1',
+        notification_id: 'notification-1',
+        user_id: 'user-1',
+        token_id: 'token-1',
+        expo_push_token: 'ExponentPushToken[gone]',
+        platform: 'android',
+        attempt_count: 1,
+      }],
+      tokens: [
+        { id: 'token-1', is_active: true, disabled_at: null },
+        { id: 'token-2', is_active: true, disabled_at: null },
+      ],
+    });
+    const fetcher = vi.fn<typeof fetch>(async () => expoResponse({ data: DEVICE_NOT_REGISTERED }));
+
+    await expect(processMobilePushMaintenance(maintenance.adminSupabase as never, {
+      fetcher,
+      now: new Date('2026-10-01T14:40:00.000Z'),
+    })).resolves.toMatchObject({
+      retriedCount: 1,
+      retryFailedCount: 1,
+      retryDisabledTokenCount: 1,
+      disabledTokenCount: 1,
+    });
+
+    expect(maintenance.tokenTable.rows).toEqual([
+      { id: 'token-1', is_active: false, disabled_at: '2026-10-01T14:40:00.000Z' },
+      { id: 'token-2', is_active: true, disabled_at: null },
     ]);
   });
 
@@ -696,8 +1044,14 @@ describe('mobile notifications', () => {
     expect(fanOut.tokenUpdates).toEqual([
       {
         values: { is_active: false, disabled_at: expect.any(String) },
-        ids: ['token-2'],
+        filters: [['id', ['token-2']], ['is_active', true]],
       },
+    ]);
+    expect(fanOut.tokenTable.rows).toEqual([
+      { id: 'token-1', is_active: true, disabled_at: null },
+      { id: 'token-2', is_active: false, disabled_at: expect.any(String) },
+      { id: 'token-3', is_active: true, disabled_at: null },
+      { id: 'token-4', is_active: true, disabled_at: null },
     ]);
     expect(fanOut.notificationUpdates).toEqual([
       {
@@ -709,6 +1063,35 @@ describe('mobile notifications', () => {
         },
       },
     ]);
+  });
+
+  // The fan-out reads its tokens before it calls Expo. A sign-out on that phone,
+  // or a receipt for an earlier push, can retire one in between.
+  it('keeps the time a token was retired while a push to it was in flight', async () => {
+    const fanOut = createPushFanOutSupabase([
+      { id: 'token-1', expo_push_token: 'ExponentPushToken[gone]', platform: 'android' },
+    ]);
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => {
+      Object.assign(fanOut.tokenTable.rows[0], {
+        is_active: false,
+        disabled_at: '2026-10-01T04:05:39.271Z',
+      });
+      return expoResponse({ data: [DEVICE_NOT_REGISTERED] });
+    }));
+
+    await unlockNotification(fanOut.adminSupabase);
+
+    expect(fanOut.tokenUpdates).toHaveLength(1);
+    expect(fanOut.tokenUpdates[0]?.filters).toContainEqual(['is_active', true]);
+    expect(fanOut.tokenTable.rows).toEqual([
+      { id: 'token-1', is_active: false, disabled_at: '2026-10-01T04:05:39.271Z' },
+    ]);
+    // The fan-out still ran to its end: the refusal is on the ledger and on the
+    // notification.
+    expect(fanOut.deliveryInsertCalls).toEqual([[
+      expect.objectContaining({ token_id: 'token-1', receipt_error_code: 'DeviceNotRegistered' }),
+    ]]);
+    expect(fanOut.notificationUpdates).toHaveLength(1);
   });
 
   it('splits an account past Expo\'s 100-message limit into as few requests as it allows', async () => {

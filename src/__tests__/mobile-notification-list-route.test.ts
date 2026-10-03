@@ -44,7 +44,9 @@ function createListQuery() {
         event_count: 1,
         is_read: false,
         created_at: '2026-06-22T06:00:00.000Z',
-        updated_at: '2026-06-22T06:01:00.000Z',
+        last_event_at: '2026-06-22T06:01:00.000Z',
+        // A later write to the row (its push ticket, say), which is not an event.
+        updated_at: '2026-06-22T06:30:00.000Z',
       }],
       error: null,
     }),
@@ -140,9 +142,14 @@ describe('/api/mobile/notifications route', () => {
     expectPrivateNoStoreTraceHeaders(response, 'mobile-notifications-list-1');
     await expect(response.json()).resolves.toEqual(mobileApiContract.endpoints.mobileNotifications.response);
     expect(supabase.listQuery.eq).toHaveBeenCalledWith('user_id', 'user-1');
-    expect(supabase.listQuery.order).toHaveBeenCalledWith('updated_at', { ascending: false });
+    // The contract's order: by `updatedAt`, which carries the alert's last event.
+    expect(mobileApiContract.endpoints.mobileNotifications.ordering).toMatchObject({
+      by: 'updatedAt',
+      direction: 'descending',
+    });
+    expect(supabase.listQuery.order).toHaveBeenCalledWith('last_event_at', { ascending: false });
     expect(supabase.listQuery.limit).toHaveBeenCalledWith(10);
-    expect(supabase.listQuery.lt).toHaveBeenCalledWith('updated_at', '2026-06-22T06:02:00.000Z');
+    expect(supabase.listQuery.lt).toHaveBeenCalledWith('last_event_at', '2026-06-22T06:02:00.000Z');
     expect(supabase.unreadCountQuery.eq).toHaveBeenCalledWith('user_id', 'user-1');
     expect(supabase.unreadCountQuery.eq).toHaveBeenCalledWith('is_read', false);
   });

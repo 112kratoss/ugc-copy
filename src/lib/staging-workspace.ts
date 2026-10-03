@@ -1,14 +1,17 @@
 import 'server-only';
 
 import { constants, type Stats } from 'node:fs';
-import { lstat, mkdir, mkdtemp, open, opendir, readdir, rm, rmdir, unlink, statfs, type FileHandle } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { lstat, mkdir, mkdtemp, open, opendir, readdir, rename, rm, rmdir, unlink, statfs, type FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { flockSync } from 'fs-ext';
 
 export const STAGING_ROOT_NAME = 'magicbooklet-staging-v1';
 const MARKER = 'magicbooklet-staging-v1\n';
-const NAME = /^item-[a-zA-Z0-9]{6}$/;
+const NAME = /^item(?:2)?-[a-zA-Z0-9]{6}$/;
+// Only this prefix promises root-lock ownership throughout initialization.
+const INITIALIZING_NAME = /^item2-[a-zA-Z0-9]{6}$/;
 const RECLAIM_LIMIT = 128;
 const CAPACITY_VERSION = 'magicbooklet-capacity-v1';
 const SEALED = 'complete\n';
@@ -60,8 +63,8 @@ async function reclaim(directory: string, requireMarker: boolean): Promise<boole
   let lease: FileHandle | undefined;
   try {
     if (requireMarker) {
-      // Incomplete allocations can persist indefinitely. Reject them with one
-      // metadata read instead of opening/locking every lease on each scan.
+      // Reject unpublished payload reclamation with one metadata read. New
+      // item2 initialization is handled separately under the root lock.
       // This is only a fast rejection; authority is rechecked under the lock.
       let marker: Stats;
       try { marker = await lstat(path.join(directory, 'ready')); }
@@ -103,9 +106,44 @@ async function reclaim(directory: string, requireMarker: boolean): Promise<boole
   } finally { await lease?.close(); }
 }
 
+/** Only item2 allocators publish under the root lock held by the caller. */
+async function reclaimInitialization(directory: string): Promise<boolean> {
+  let lease: FileHandle | undefined;
+  try {
+    const before = await lstat(directory);
+    if (!privateDirectory(before)) return false;
+    const entries = await readdir(directory);
+    if (entries.some(name => !['lease', 'ready'].includes(name))) return false;
+    if (entries.includes('lease')) {
+      lease = await openRegular(path.join(directory, 'lease'));
+      try { flockSync(lease.fd, 'exnb'); }
+      catch (error) { if (['EAGAIN', 'EWOULDBLOCK'].includes(code(error) ?? '')) return false; throw error; }
+      if ((await lease.stat()).size > 128) return false;
+      const claim = await lease.readFile('utf8');
+      if (!CAPACITY_VERSION.startsWith(claim) && !/^magicbooklet-capacity-v1 [0-9]*\n?$/.test(claim)) return false;
+      if (!sameFile(await lease.stat(), await lstat(path.join(directory, 'lease')))) return false;
+    }
+    if (entries.includes('ready')) {
+      const marker = await openRegular(path.join(directory, 'ready'));
+      try {
+        if ((await marker.stat()).size > MARKER.length || !MARKER.startsWith(await marker.readFile('utf8'))) return false;
+      } finally { await marker.close(); }
+    }
+    if (!sameFile(before, await lstat(directory))) return false;
+    // No payload recursion: an unexpected entry racing cleanup makes rmdir fail.
+    if (entries.includes('ready')) await unlink(path.join(directory, 'ready'));
+    if (entries.includes('lease')) await unlink(path.join(directory, 'lease'));
+    await rmdir(directory);
+    return true;
+  } catch (error) {
+    if (code(error) === 'ENOENT') return false;
+    throw error;
+  } finally { await lease?.close(); }
+}
+
 let sweep: { root: string; promise: Promise<number> } | undefined;
 /**
- * At most 128 successful reclamations per pass. Preserve unknown, legacy and
+ * At most 128 successful reclamations per pass. Preserve unknown and legacy
  * unpublished directories, but do not let them consume the reclamation budget:
  * a persistent prefix must not hide later abandoned workspaces after a restart.
  * Directory enumeration/validation is linear in the namespace, not time-bounded.
@@ -115,19 +153,23 @@ export async function reclaimAbandonedStagingWorkspaces(): Promise<number> {
   if (sweep?.root === root) return sweep.promise;
   const promise = (async () => {
     if (!await localLockFilesystem(root)) return 0;
-    const directory = await opendir(root);
-    let reclaimed = 0;
-    for await (const entry of directory) {
+    return withAdmission(root, async () => {
+      const directory = await opendir(root);
+      let reclaimed = 0;
+      for await (const entry of directory) {
         if (reclaimed >= RECLAIM_LIMIT) break;
         if (!entry.isDirectory() || !NAME.test(entry.name)) continue;
         try {
-          if (await reclaim(path.join(root, entry.name), true)) reclaimed++;
+          const directory = path.join(root, entry.name);
+          if (await reclaim(directory, true)
+            || (INITIALIZING_NAME.test(entry.name) && await reclaimInitialization(directory))) reclaimed++;
         } catch {
           // Missing permission, unsupported locks or malformed entries do not
           // authorize deletion and must not prevent an otherwise valid import.
         }
-    }
-    return reclaimed;
+      }
+      return reclaimed;
+    });
   })();
   sweep = { root, promise };
   try { return await promise; }
@@ -208,7 +250,7 @@ export async function createStagingWorkspace(maxBytes: number) {
     const headroom = Math.max(1024 * 1024, Math.min(64 * 1024 * 1024, Math.ceil(space.blocks * space.bsize * 0.01)));
     if (space.bavail * space.bsize < reserved + bytes + headroom + WORKSPACE_HEADROOM
       || (space.files > 0 && space.ffree < 32 + active * 4)) throw new StagingCapacityError();
-    const directory = await mkdtemp(path.join(root, 'item-'));
+    const directory = await mkdtemp(path.join(root, 'item2-'));
     let lease: FileHandle | undefined;
     try {
       lease = await open(path.join(directory, 'lease'), 'wx+', 0o600);
@@ -218,7 +260,18 @@ export async function createStagingWorkspace(maxBytes: number) {
       const marker = await open(path.join(directory, 'ready'), 'wx', 0o600);
       try { await marker.writeFile(MARKER); }
       finally { await marker.close(); }
-      return { directory, lease };
+      // Publish under the older prefix before releasing admission, so 6R
+      // workers count this reservation too. All capacity-aware allocators hold
+      // the same root lock; never replace an existing legacy directory.
+      for (let attempt = 0; attempt < 16; attempt++) {
+        const suffix = attempt === 0 ? path.basename(directory).slice('item2-'.length) : randomBytes(3).toString('hex');
+        const published = path.join(root, `item-${suffix}`);
+        try { await lstat(published); continue; }
+        catch (error) { if (code(error) !== 'ENOENT') throw error; }
+        await rename(directory, published);
+        return { directory: published, lease };
+      }
+      throw new StagingCapacityError('Cannot publish staging workspace without a name collision.');
     } catch (error) {
       await lease?.close();
       await rm(directory, { recursive: true, force: true });

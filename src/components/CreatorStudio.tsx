@@ -1,6 +1,7 @@
 import InlineMediaVideo from '@/components/InlineMediaVideo';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { Fragment } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { ArrowLeft, ArrowRight, CheckCircle2, Clock3, Expand, Loader2, RefreshCw, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import clsx from 'clsx';
@@ -676,6 +677,39 @@ export function StudioBackgroundProcessingNotice({
         ) : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * A reference's @handle, shown whole however narrow its card is.
+ *
+ * A handle is one run of letters, digits and underscores, and a browser never
+ * breaks a line inside such a run. The reference cards are 160px wide on a
+ * desktop, so a clipped handle read "@im…", which hid the one thing the card
+ * asks the creator to type. The handle may break after an underscore first,
+ * and anywhere only when one stretch is still too long. The breaks are <wbr>,
+ * which adds no character, so a handle copied off the page still matches.
+ * The lines are balanced, so a handle a few pixels too wide reads "@video_"
+ * then "element_2" and does not leave the 2 on a line of its own.
+ */
+export function StudioElementHandle({
+  handle,
+  className,
+}: {
+  handle: string;
+  className?: string;
+}) {
+  const segments = handle.split('_');
+
+  return (
+    <span className={clsx('min-w-0 text-balance [overflow-wrap:anywhere]', className)}>
+      {segments.map((segment, index) => (
+        <Fragment key={index}>
+          {index > 0 ? <wbr /> : null}
+          {index < segments.length - 1 ? `${segment}_` : segment}
+        </Fragment>
+      ))}
+    </span>
   );
 }
 

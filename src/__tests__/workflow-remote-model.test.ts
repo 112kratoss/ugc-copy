@@ -165,6 +165,24 @@ it('round-trips a remote model and dispatches its descriptor settings', async ()
     }),
   );
 });
+it('hands a catalog start the request key the step was run with', async () => {
+  const value = graph();
+  await executeWorkflowRunnableNode({
+    supabase: {} as SupabaseClient,
+    userId: 'u1',
+    node: value.nodes[1],
+    graph: value,
+    catalogRevision: 'active',
+    clientRequestKeyHash: 'a'.repeat(64),
+  });
+  // Without it, a start the run worker repeats is not recognised, and is
+  // charged and sent to the provider again.
+  expect(mocks.start).toHaveBeenCalledTimes(1);
+  expect(mocks.start).toHaveBeenCalledWith(
+    expect.objectContaining({ userId: 'u1', clientRequestKeyHash: 'a'.repeat(64) }),
+  );
+  expect(mocks.startImage).not.toHaveBeenCalled();
+});
 it('rejects stale ordinary workflow quotes before starting a provider request', async () => {
   const value = graph();
   mocks.quote.mockRejectedValue(new Error('CATALOG_CHANGED'));

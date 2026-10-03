@@ -49,6 +49,12 @@ export interface MobileNotificationRecord {
   eventCount: number;
   isRead: boolean;
   createdAt: string;
+  /**
+   * The alert's last event: its arrival, or the latest event grouped into it.
+   * Clients print it as the alert's age, and the inbox is ordered by it. It is
+   * the row's `last_event_at`, never its `updated_at`, which moves on every
+   * write to the row, marking the alert read included.
+   */
   updatedAt: string;
 }
 
@@ -323,7 +329,7 @@ export function toMobileNotificationRecord(row: NotificationRow): MobileNotifica
     eventCount: rowNumber(row, 'event_count', 1),
     isRead: rowBoolean(row, 'is_read'),
     createdAt: rowString(row, 'created_at') ?? new Date(0).toISOString(),
-    updatedAt: rowString(row, 'updated_at') ?? rowString(row, 'created_at') ?? new Date(0).toISOString(),
+    updatedAt: rowString(row, 'last_event_at') ?? rowString(row, 'created_at') ?? new Date(0).toISOString(),
   };
 }
 
@@ -670,6 +676,39 @@ async function createAggregatedMobileNotification({
   };
 }
 
+/**
+ * Retires the push tokens Expo reported as `DeviceNotRegistered` and returns
+ * how many rows that changed.
+ *
+ * Live rows only. No code reads `disabled_at`: its use is working out
+ * afterwards when a token stopped receiving pushes. A dead token goes on
+ * collecting `DeviceNotRegistered` for every push still on its way to it —
+ * each receipt arrives on its own, and a send Expo refuses is tried twice more
+ * by the retry job — so an unfiltered update moved that time, and `updated_at`
+ * with it, forward to each of those runs.
+ */
+async function retireUnregisteredPushTokens(
+  adminSupabase: SupabaseClient,
+  tokenIds: string[],
+  disabledAt: string,
+): Promise<number> {
+  if (tokenIds.length === 0) {
+    return 0;
+  }
+
+  const { data } = await adminSupabase
+    .from('mobile_push_tokens')
+    .update({
+      is_active: false,
+      disabled_at: disabledAt,
+    })
+    .in('id', tokenIds)
+    .eq('is_active', true)
+    .select('id');
+
+  return data?.length ?? 0;
+}
+
 async function sendMobilePushForNotification(
   adminSupabase: SupabaseClient,
   notification: MobileNotificationRecord & { userId: string }
@@ -793,15 +832,7 @@ async function sendMobilePushForNotification(
       throw new MobileNotificationError('Failed to store mobile push delivery.', 500);
     }
 
-    if (unregisteredTokenIds.length > 0) {
-      await adminSupabase
-        .from('mobile_push_tokens')
-        .update({
-          is_active: false,
-          disabled_at: pushedAt,
-        })
-        .in('id', unregisteredTokenIds);
-    }
+    await retireUnregisteredPushTokens(adminSupabase, unregisteredTokenIds, pushedAt);
   }
 
   await adminSupabase
@@ -1039,14 +1070,7 @@ export async function processPendingMobilePushReceipts(
       .eq('id', deliveryId);
 
     if (receiptErrorCode === 'DeviceNotRegistered' && tokenId) {
-      disabledTokenCount += 1;
-      await adminSupabase
-        .from('mobile_push_tokens')
-        .update({
-          is_active: false,
-          disabled_at: nowIso,
-        })
-        .eq('id', tokenId);
+      disabledTokenCount += await retireUnregisteredPushTokens(adminSupabase, [tokenId], nowIso);
     }
   }
 
@@ -1183,14 +1207,7 @@ async function processRetryableMobilePushDeliveries(
         .eq('id', deliveryId);
 
       if (isDeviceNotRegistered(result.details) && tokenId) {
-        disabledTokenCount += 1;
-        await adminSupabase
-          .from('mobile_push_tokens')
-          .update({
-            is_active: false,
-            disabled_at: nowIso,
-          })
-          .eq('id', tokenId);
+        disabledTokenCount += await retireUnregisteredPushTokens(adminSupabase, [tokenId], nowIso);
       }
     } catch (error) {
       retryFailedCount += 1;
@@ -1517,6 +1534,33 @@ export async function notifyGenerationStatus(
     objectType: 'generation',
     objectId: generation.id,
     dedupeKey: `generation:${generation.id}:${status}`,
+  });
+}
+
+/**
+ * Tells the person their template run was ended on our side.
+ *
+ * A run announces nothing itself while it works: its steps do, as each one
+ * finishes or fails. A run that is given up on has no step that failed, so
+ * this is the only word that it is over. It leads to the run, which says the
+ * same and offers a new one, and it never throws: the run has ended whatever
+ * becomes of the notification.
+ */
+export async function notifyTemplateRunStopped(
+  adminSupabase: SupabaseClient,
+  params: { runId: string; userId: string },
+) {
+  return createMobileNotificationSafely({
+    adminSupabase,
+    userId: params.userId,
+    type: 'generation_failed',
+    category: 'generation',
+    title: 'Your template run stopped',
+    body: 'A problem on our side ended it. Open it to start again.',
+    deepLink: buildMobileNotificationDeepLink({ kind: 'templateRun', runId: params.runId }),
+    objectType: 'template_run',
+    objectId: params.runId,
+    dedupeKey: `template-run:${params.runId}:stopped`,
   });
 }
 

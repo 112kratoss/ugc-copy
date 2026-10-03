@@ -1520,6 +1520,115 @@ describe('generation services', () => {
     });
   });
 
+  // The two audio starts are run by workflow steps, and a run worker repeats a
+  // start it lost track of. They take the request key the other starts take,
+  // and a caller that has none still starts as it always did.
+  describe.each(Object.entries({
+    voiceover: async (client: SupabaseClient, clientRequestKeyHash?: string) => {
+      const { startVoiceoverGeneration } = await import('@/lib/generation-services');
+      return startVoiceoverGeneration({
+        supabase: client,
+        creditSupabase: client,
+        userId: 'user-1',
+        clientRequestKeyHash,
+        model: 'text-to-speech-turbo-2-5',
+        text: 'Narrate this once.',
+        voice: 'Rachel',
+      });
+    },
+    'sound-effect': async (client: SupabaseClient, clientRequestKeyHash?: string) => {
+      const { startSoundEffectGeneration } = await import('@/lib/generation-services');
+      return startSoundEffectGeneration({
+        supabase: client,
+        creditSupabase: client,
+        userId: 'user-1',
+        clientRequestKeyHash,
+        prompt: 'A soft whoosh and sparkle.',
+        duration: 6,
+      });
+    },
+  }))('the request key of a %s start', (_kind, start) => {
+    const providerAccepts = (taskId: string) => vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId } }),
+    } as Response);
+
+    it('is stored on the generation the start reserves', async () => {
+      providerAccepts('task-audio-keyed-1');
+      const { supabase, generations, rpcCalls } = createSupabaseMock();
+
+      const result = await start(supabase, 'a'.repeat(64));
+
+      expect(result).toMatchObject({ predictionId: 'task-audio-keyed-1', generationId: 'gen-1' });
+      expect(rpcCalls[0]).toMatchObject({
+        fn: 'start_generation',
+        args: { p_category: 'audio', p_client_request_key_hash: 'a'.repeat(64) },
+      });
+      expect(generations[0]).toMatchObject({
+        status: 'processing',
+        prediction_id: 'task-audio-keyed-1',
+        client_request_key_hash: 'a'.repeat(64),
+      });
+    });
+
+    it('is left out by a caller that has none, and the start goes ahead', async () => {
+      providerAccepts('task-audio-unkeyed-1');
+      const { supabase, generations, rpcCalls } = createSupabaseMock();
+
+      const result = await start(supabase);
+
+      expect(result).toMatchObject({ predictionId: 'task-audio-unkeyed-1', generationId: 'gen-1' });
+      expect(rpcCalls[0]).toMatchObject({
+        fn: 'start_generation',
+        args: { p_client_request_key_hash: null },
+      });
+      expect(generations[0]).toMatchObject({ status: 'processing', client_request_key_hash: null });
+    });
+
+    it('names the generation that holds it when the first start is still unresolved', async () => {
+      const { getInProgressStartGenerationId } = await import('@/lib/generation-public-failure');
+      const { supabase, generations, rpcCalls } = createSupabaseMock([], {
+        rpcResults: {
+          start_generation: { status: 'in_progress', generation_id: 'gen-first', remaining_credits: 98, cost: 2 },
+        },
+      });
+
+      const error = await start(supabase, 'a'.repeat(64)).catch((caught: unknown) => caught);
+
+      expect(error).toMatchObject({ name: 'GenerationServiceError', status: 409 });
+      expect(getInProgressStartGenerationId(error)).toBe('gen-first');
+      // Nothing was reserved, sent or settled by the replay.
+      expect(rpcCalls.map((call) => call.fn)).toEqual(['start_generation']);
+      expect(generations).toEqual([]);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('returns the first generation once it has a provider task, without starting another', async () => {
+      const { supabase, generations, rpcCalls } = createSupabaseMock([], {
+        rpcResults: {
+          start_generation: {
+            status: 'already_started',
+            generation_id: 'gen-first',
+            prediction_id: 'task-first',
+            remaining_credits: 98,
+            cost: 2,
+          },
+        },
+      });
+
+      await expect(start(supabase, 'a'.repeat(64))).resolves.toEqual({
+        generationId: 'gen-first',
+        predictionId: 'task-first',
+        remainingCredits: 98,
+        cost: 2,
+        idempotentReplay: true,
+      });
+      expect(rpcCalls.map((call) => call.fn)).toEqual(['start_generation']);
+      expect(generations).toEqual([]);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+  });
+
   it('reserves a pending image generation before submitting provider work', async () => {
     const { startImageGeneration } = await import('@/lib/generation-services');
     const fetchMock = vi.mocked(fetch);

@@ -1,15 +1,128 @@
 # Backend audit — session handoff
 
-Updated 2026-10-02 (Asia/Kolkata). Read this first when continuing the section-by-section Magicbooklet backend audit.
+Updated 2026-10-03 (Asia/Kolkata). Read this first when continuing the section-by-section Magicbooklet backend audit.
 
 ## Workspace and authorization
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/media-capacity-admission-6r`, based on main `1f31715c51a318d863b3f54d88d33a8484c46855`; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/canvas-lifecycle-audit-7e`, incorporating main `f6a3d3b12f4af0ac7325e1661cda7d894c35855c` (completion/recovery PR #292); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+Current branch: `codex/canvas-lifecycle-audit-7e`, incorporating main f6a3d3b1.
+7B publication fix is released: exact-main Quality 37093085015 and release
+37093737713 passed; independent live build/feed/admin/webhook checks pass on
+34e8387f. Read `backend-section-07-publication-release-2026-10-03.md`.
+
+7C/D PR #292 passed final PR Quality 37093549114 (all four jobs: 6,670 web,
+2,913 mobile, 24 browser, 1,960 SQL, 146 DB cases with two harness skips).
+It merged as f6a3d3b12f4af0ac7325e1661cda7d894c35855c at 09:29:05 IST.
+No mobile release was active. Exact-main Quality 37095001982 is running;
+standard release and independent live checks remain pending.
+
+7E now reproduces a canvas persistence failure: after provider acceptance,
+a rejected step-link write marks the run failed while the generation keeps its
+8-credit hold. The candidate separates persistence from execution error handling,
+so the durable job retries and reconnects the same generation. Seven actual SQL
+cases pass, including a committed write with lost reply, full real-node execution,
+partial refunds, backpressure and pure GET. Existing focused 65 tests pass.
+Read `backend-section-07-canvas-persistence-2026-10-03.md`. Runtime/test/CI changes
+are local; finish types/lint, review, then PR and standard release. No new whole
+obligation is closed: ledger remains 22 passed, 27 untested, one failed, three external.
+
+The preceding checkpoint follows.
+
+Section 6S is deployed as dd3d6c13. PR Quality 37052965820, exact-main Quality
+37055063444 and standard release 37056337938 passed. Release completed October 3
+01:20:18 IST. Independent exact SHA/feed/admin/webhook checks pass. Read
+`backend-section-06-metadata-lifecycle-release-2026-10-03.md`. Legacy environment
+retirement remains unverified, so MEDIA-07 is still open.
+
+Section 7A PR #289 merged as 475fe2b7 on October 3 at 01:39:35 IST. Updated
+PR Quality 37057488661 passed all four jobs: 6,650 web, 2,911 mobile, 21 browser,
+1,941 SQL assertions, 142 DB cases (one harness skip), native checks and 163 traces.
+First CI failure 37056295355 exposed the real concurrent-retry race and remains
+recorded. The final transaction fix passes 17 actual DB cases in ten consecutive
+runs. Exact-main Quality 37058779424 passed all four jobs. Standard production
+release 37059587121 passed first attempt at 01:51:18 IST. Independent live checks
+pass on descendant c7a8419b (#290, release 37062922373). Read
+`backend-section-07-template-lifecycle-release-2026-10-03.md`. No mobile store release was active before merge.
+
+Intervening main 38048f43 (#283 reference-card handle) is incorporated. Its release
+37058745760 correctly rejected the stale SHA before changing production after
+#289 merged. Current independently verified production is c7a8419b, containing 7A.
+
+Section 7B PR #291 contains publication-acknowledgement cleanup fix, runtime commit
+69cdc871, plus merged main. A committed immutable version lost its referenced
+asset after activation reply loss; permanent service and actual service-role SQL
+before/after probes reproduce/fix it. SQL commit was confirmed by a second
+connection; Storage was controlled in memory. The disposable database was removed.
+Read `backend-section-07-publication-acknowledgement-2026-10-03.md`. Five new cases
+and existing focused suites pass, app/test types and lint pass; full candidate
+suite passes 6,655 tests (141 skipped) before the #283 test addition. PR Quality
+37059027223 passed all four jobs: 6,658 web, 2,911 mobile, 24 browser, 1,941 SQL,
+142 DB cases (one harness skip), media probes and 163 traces. PR #291 merged as
+34e8387f at 08:54:15 IST with no mobile store release active. Exact-main Quality
+37093085015 is running; standard production release/live checks remain pending.
+
+Section 7C extends the real-DB fixture through video completion and partial
+failure/retry. Nineteen cases pass; test types and lint pass. Both media kinds now
+call their actual start/hold/settlement services with controlled node settings.
+No new runtime fix; these test changes are in the local 7C branch and not in PR #291.
+Read `backend-section-07-downstream-completion-2026-10-03.md`. Provider
+network/status sync and media transport remain mocked; process death and the real
+node executor remain unverified. PR #292 contains the lifecycle tests (1037ce43) and method map (13df4ac7).
+The next update also includes Section 7D actual worker death after job claim and
+provider attachment. All 21 DB cases pass, one child-harness skip; types/lint and
+empty DB readback pass. Two real SIGKILL/restart cases preserve live leases and
+recover after controlled expiry without duplicate holds or provider submissions.
+Read `backend-section-07-worker-recovery-2026-10-03.md`. Updated PR CI is next.
+`backend-section-07-method-matrix-2026-10-03.md` inventories all 36 exported methods
+across 31 workflow routes, with explicit remaining evidence. This is not closure.
+
+No whole workflow obligation is closed by these scoped cases. Ledger remains
+22 passed, 27 untested, one failed, three external.
+
+The preceding checkpoint follows.
+
+Section 6R is deployed: PR #281 merged as 20862a0b. Updated PR Quality
+37037902850, exact-main Quality 37039015096 and standard production release
+37040248048 passed. Release completed October 2 at 17:25:53 UTC / 22:55:53 IST.
+Read `backend-section-06-capacity-admission-release-2026-10-03.md`. MEDIA-06 now
+passes its cooperating-writer scope; ledger 22 passed, 27 untested, one failed,
+three external. No global filesystem or production throughput claim is implied.
+
+Current 6S metadata lifecycle fix is uncommitted and under final validation.
+Private `.audit-evidence/backend-section-06s/` records the real 31-kill/64-inode
+failure, 400 candidate kill controls, five failing permanent regressions, inherited
+reader/live allocator/unknown metadata controls, and an old/new admission
+compatibility failure caught before shipment. The fix uses item2- only during
+initialization under the root lock, then atomically renames to the old item-
+prefix before releasing admission. Older capacity-aware workers therefore count
+new claims too. Name collisions preserve existing workspaces. Legacy unpublished
+item- metadata and unknown payloads remain untouched. Final local targeted
+workspace run: 38 passed; updated-main focused suite: 83 passed; all ten isolated
+worker cases pass (one harness skip). Native FFmpeg/admission regressions pass.
+Read `backend-section-06-metadata-lifecycle-2026-10-03.md`.
+One full-suite attempt under heavy shared-host load timed out; its log is kept.
+Later runs were interrupted by the session boundary and are not passes. Cleaned
+one verified abandoned audit-crash fixture on isolated port 55322; no customer
+or other checkout rows were touched. All type projects and targeted lint pass
+on updated main. The completed two-worker full suite passes 6,648 tests
+(129 skipped). Final 6S CI/release remain pending.
+
+Main advanced through #282 and #284 to 24194f1d; both incorporated by fast-forward
+without changing local edits. Live 1361e2c4 independently passed SHA/feed/admin/
+webhook checks. Later release 37051401271 for 24194f1d failed protected live build-ID
+verification after promotion; do not call that run successful. Subsequent
+independent public SHA/feed/admin/webhook checks pass on 24194f1d; protected
+health on that latest build is not independently reverified. Preserve unrelated receipt edits,
+Section 1 files and private evidence. Next: finish/CI/release 6S, then the prepared
+WORKFLOW-02/03/04 matrix in private `backend-section-07/coverage-prep.md`.
+
+The preceding checkpoint follows.
 
 Section 6R shared staging admission is implemented and locally verified, not yet
 released. Read `docs/audits/backend-section-06-bounded-writer-contention-2026-10-02.md`.
