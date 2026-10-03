@@ -6,10 +6,33 @@ Updated 2026-10-03 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/template-completion-audit-7c`, incorporating main `34e8387f731a1cba9b976845d0524f7366589af8` (publication PR #291); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/canvas-lifecycle-audit-7e`, incorporating main `f6a3d3b12f4af0ac7325e1661cda7d894c35855c` (completion/recovery PR #292); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+Current branch: `codex/canvas-lifecycle-audit-7e`, incorporating main f6a3d3b1.
+7B publication fix is released: exact-main Quality 37093085015 and release
+37093737713 passed; independent live build/feed/admin/webhook checks pass on
+34e8387f. Read `backend-section-07-publication-release-2026-10-03.md`.
+
+7C/D PR #292 passed final PR Quality 37093549114 (all four jobs: 6,670 web,
+2,913 mobile, 24 browser, 1,960 SQL, 146 DB cases with two harness skips).
+It merged as f6a3d3b12f4af0ac7325e1661cda7d894c35855c at 09:29:05 IST.
+No mobile release was active. Exact-main Quality 37095001982 is running;
+standard release and independent live checks remain pending.
+
+7E now reproduces a canvas persistence failure: after provider acceptance,
+a rejected step-link write marks the run failed while the generation keeps its
+8-credit hold. The candidate separates persistence from execution error handling,
+so the durable job retries and reconnects the same generation. Seven actual SQL
+cases pass, including a committed write with lost reply, full real-node execution,
+partial refunds, backpressure and pure GET. Existing focused 65 tests pass.
+Read `backend-section-07-canvas-persistence-2026-10-03.md`. Runtime/test/CI changes
+are local; finish types/lint, review, then PR and standard release. No new whole
+obligation is closed: ledger remains 22 passed, 27 untested, one failed, three external.
+
+The preceding checkpoint follows.
 
 Section 6S is deployed as dd3d6c13. PR Quality 37052965820, exact-main Quality
 37055063444 and standard release 37056337938 passed. Release completed October 3

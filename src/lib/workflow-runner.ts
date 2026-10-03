@@ -1262,40 +1262,15 @@ async function advanceWorkflowRunProgress(params: {
       continue;
     }
 
+    let result: WorkflowRunnableExecutionResult;
     try {
-      const result = await executeWorkflowRunnableNode({
+      result = await executeWorkflowRunnableNode({
         supabase,
         userId: run.user_id,
         node,
         graph: workingGraph,
         catalogRevision: run.catalog_revision,
         clientRequestKeyHash: workflowGenerationIdempotencyHash(run.id, node.id),
-      });
-
-      const resumedStep: HydratedRunStep = {
-        ...queuedStep,
-        status: result.status,
-        generation_id: result.generation_id,
-        input_snapshot: result.input_snapshot,
-        output_snapshot: result.output_snapshot,
-        error_message: result.error_message,
-        started_at: startedAt,
-        finished_at: result.status === 'processing' || result.status === 'awaiting_approval'
-          ? null
-          : new Date().toISOString(),
-      };
-
-      hydratedSteps[stepIndex] = resumedStep;
-      workingGraph = applyStepToGraph(workingGraph, resumedStep);
-
-      await updateRunStep(supabase, run.id, queuedStep.id, {
-        status: resumedStep.status,
-        generation_id: resumedStep.generation_id,
-        input_snapshot: resumedStep.input_snapshot,
-        output_snapshot: resumedStep.output_snapshot,
-        error_message: resumedStep.error_message,
-        started_at: resumedStep.started_at,
-        finished_at: resumedStep.finished_at,
       });
     } catch (error) {
       const failure = getPublicGenerationStartFailure(error);
@@ -1391,7 +1366,38 @@ async function advanceWorkflowRunProgress(params: {
         started_at: failedStep.started_at,
         finished_at: failedStep.finished_at,
       });
+      continue;
     }
+
+    // Once execution returns, provider work may already be accepted and paid.
+    // A failed step write must retry the durable job, not turn that accepted
+    // generation into a terminal workflow failure. Its request key reconnects
+    // the same generation when the worker retries.
+    const resumedStep: HydratedRunStep = {
+      ...queuedStep,
+      status: result.status,
+      generation_id: result.generation_id,
+      input_snapshot: result.input_snapshot,
+      output_snapshot: result.output_snapshot,
+      error_message: result.error_message,
+      started_at: startedAt,
+      finished_at: result.status === 'processing' || result.status === 'awaiting_approval'
+        ? null
+        : new Date().toISOString(),
+    };
+
+    hydratedSteps[stepIndex] = resumedStep;
+    workingGraph = applyStepToGraph(workingGraph, resumedStep);
+
+    await updateRunStep(supabase, run.id, queuedStep.id, {
+      status: resumedStep.status,
+      generation_id: resumedStep.generation_id,
+      input_snapshot: resumedStep.input_snapshot,
+      output_snapshot: resumedStep.output_snapshot,
+      error_message: resumedStep.error_message,
+      started_at: resumedStep.started_at,
+      finished_at: resumedStep.finished_at,
+    });
   }
 
   const nextRunStatus = deriveWorkflowRunStatus(hydratedSteps);
