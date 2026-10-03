@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateVideoClient from '@/app/create-video/CreateVideoClient';
@@ -837,6 +837,27 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.keyDown(field, { key: 'Enter' });
     }
 
+    /**
+     * Types a name into a card's field and presses Escape, as a creator who thinks
+     * better of a rename does. The field holds the focus, as it does on the page:
+     * Escape leaves the field, and jsdom tells only the focused element that it
+     * was left.
+     */
+    async function typeNameThenEscape(container: HTMLElement, placeholder: string, index: number, typedName: string) {
+      const field = container.querySelectorAll<HTMLInputElement>(`input[placeholder="${placeholder}"]`)[index];
+      act(() => field.focus());
+      fireEvent.change(field, { target: { value: typedName } });
+      expect(field).toHaveFocus();
+      expect(field).toHaveValue(typedName);
+
+      fireEvent.keyDown(field, { key: 'Escape' });
+      // A rename saves the card and then rewrites the prompt. Give one the time to do both.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      return field;
+    }
+
     /** The @handle each card of one kind shows, in card order. */
     function cardHandles(container: HTMLElement, placeholder: string) {
       return Array.from(container.querySelectorAll<HTMLInputElement>(`input[placeholder="${placeholder}"]`)).map((field) => {
@@ -994,6 +1015,26 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@red_jacket']);
     });
 
+    // Escape in a name field renamed the card to what had been typed (2026-10-03).
+    it('puts the old name back when Escape is pressed in a Kling clip name field', async () => {
+      const view = render(<CreateVideoClient prefill={{}} />);
+      addKlingClip(view.container, 'clip.mp4');
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']));
+      fireEvent.change(promptBox(), { target: { value: 'A dancer follows @video_element_1 across the stage' } });
+
+      const field = await typeNameThenEscape(view.container, KLING_RENAME, 0, 'Red jacket');
+
+      // Escape left the field, and nothing took the name that was typed.
+      expect(field).not.toHaveFocus();
+      expect(field).toHaveValue('Video element 1');
+      expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']);
+      expect(promptBox()).toHaveValue('A dancer follows @video_element_1 across the stage');
+      const savedNames = setPersistedMediaRecordsMock.mock.calls
+        .filter(([key]) => key === 'create-video:kling-video-elements')
+        .flatMap(([, records]) => records.map((record) => record.displayName));
+      expect(savedNames).not.toContain('Red jacket');
+    });
+
     it('shows the same Kling clip handles after a reload as before it', async () => {
       const first = render(<CreateVideoClient prefill={{}} />);
       addKlingClip(first.container, 'first.mp4');
@@ -1087,6 +1128,26 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(promptBox()).toHaveValue('A slow orbit around @red_jacket on a plinth');
       expect(screen.queryByText('@saved_product')).not.toBeInTheDocument();
       expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+    });
+
+    it('puts the old name back when Escape is pressed in an image reference name field', async () => {
+      getPersistedImageElementRecordsMock.mockResolvedValue([
+        { id: 'saved-1', displayName: 'Saved product', file: new File(['image'], 'saved.png', { type: 'image/png' }) },
+      ]);
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+      await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@saved_product']));
+      fireEvent.change(promptBox(), { target: { value: 'A slow orbit around @saved_product on a plinth' } });
+
+      const field = await typeNameThenEscape(view.container, IMAGE_RENAME, 0, 'Dancer');
+
+      // Escape left the field, and nothing took the name that was typed.
+      expect(field).not.toHaveFocus();
+      expect(field).toHaveValue('Saved product');
+      expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@saved_product']);
+      expect(promptBox()).toHaveValue('A slow orbit around @saved_product on a plinth');
+      const savedNames = setPersistedImageElementRecordsMock.mock.calls
+        .flatMap(([, records]) => records.map((record) => record.displayName));
+      expect(savedNames).not.toContain('Dancer');
     });
 
     it('shows the same image reference handles after a reload as before it', async () => {

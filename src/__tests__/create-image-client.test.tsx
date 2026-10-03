@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateImageClient from '@/app/create-image/CreateImageClient';
@@ -301,6 +301,27 @@ describe('CreateImageClient element handles', () => {
     fireEvent.keyDown(field, { key: 'Enter' });
   }
 
+  /**
+   * Types a name into a card's field and presses Escape, as a creator who thinks
+   * better of a rename does. The field holds the focus, as it does on the page:
+   * Escape leaves the field, and jsdom tells only the focused element that it
+   * was left.
+   */
+  async function typeNameThenEscape(container: HTMLElement, index: number, typedName: string) {
+    const field = container.querySelectorAll<HTMLInputElement>('input[placeholder="Rename element"]')[index];
+    act(() => field.focus());
+    fireEvent.change(field, { target: { value: typedName } });
+    expect(field).toHaveFocus();
+    expect(field).toHaveValue(typedName);
+
+    fireEvent.keyDown(field, { key: 'Escape' });
+    // A rename saves the card and then rewrites the prompt. Give one the time to do both.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    return field;
+  }
+
   /** The @handle each element card shows, in card order. */
   function cardHandles(container: HTMLElement) {
     return Array.from(container.querySelectorAll<HTMLInputElement>('input[placeholder="Rename element"]')).map((field) => {
@@ -347,6 +368,25 @@ describe('CreateImageClient element handles', () => {
 
     expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
     expect(cardHandles(view.container)).toEqual(['@red_jacket']);
+  });
+
+  // Escape in the name field renamed the element to what had been typed (2026-10-03).
+  it('puts the old name back when Escape is pressed in the name field', async () => {
+    const view = render(<CreateImageClient prefill={{}} />);
+    await waitFor(() => expect(cardHandles(view.container)).toEqual(['@restored_product']));
+    const promptBox = screen.getByPlaceholderText(promptPlaceholder);
+    fireEvent.change(promptBox, { target: { value: 'A portrait of @restored_product in the rain' } });
+
+    const field = await typeNameThenEscape(view.container, 0, 'Red jacket');
+
+    // Escape left the field, and nothing took the name that was typed.
+    expect(field).not.toHaveFocus();
+    expect(field).toHaveValue('Restored product');
+    expect(cardHandles(view.container)).toEqual(['@restored_product']);
+    expect(promptBox).toHaveValue('A portrait of @restored_product in the rain');
+    const savedNames = setPersistedImageElementRecordsMock.mock.calls
+      .flatMap(([, records]) => records.map((record) => record.displayName));
+    expect(savedNames).not.toContain('Red jacket');
   });
 
   it('keeps the "@" panel open at a capital letter, and inserts the handle from it', async () => {
