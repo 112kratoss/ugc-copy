@@ -37,7 +37,7 @@ describe('creator studio element handle text', () => {
 
   it('keeps the full stop that ends a sentence in the box of the last handle', () => {
     const { container } = render(
-      <p><StudioElementHandleText text="Switch to Reusable references to use @red_jacket, @blue_hat." /></p>,
+      <p><StudioElementHandleText text="This run cannot use @red_jacket, @blue_hat." /></p>,
     );
 
     expect(boxes(container).map((box) => box.innerHTML)).toEqual(['@red_<wbr>jacket,', '@blue_<wbr>hat.']);

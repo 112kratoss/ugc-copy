@@ -2659,11 +2659,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return;
         }
 
-        if (!currentIsMultiShot && activeReferenceMode !== 'elements' && hasKnownElementMentions) {
-            setError('Switch to Reusable references to use @mentions in the video prompt.');
-            return;
-        }
-
         if (isKlingVideoModel && klingVideoElements.length > KLING_VIDEO_ELEMENT_LIMIT) {
             setError(`Kling 3.0 Video supports up to ${KLING_VIDEO_ELEMENT_LIMIT} video elements.`);
             return;
@@ -3474,10 +3469,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                 Unknown element mention{staleElementMentions.length > 1 ? 's' : ''}:{' '}
                                                 <StudioElementHandleList handles={staleElementMentions} />
                                             </span>
-	                                        ) : activeReferenceMode !== 'elements' && hasKnownElementMentions ? (
-	                                            <span className="min-w-0 text-right text-amber-300">
-	                                                <StudioElementHandleText text={`Switch to Reusable references to use ${knownElementMentions.join(', ')}.`} />
-	                                            </span>
                                         ) : null}
                                     </div>
                                     {activeMentionQuery ? (

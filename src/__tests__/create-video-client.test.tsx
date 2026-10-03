@@ -118,7 +118,6 @@ vi.mock('@/lib/persisted-media', () => ({
     createVideoStartImage: 'create-video:start-image',
     createVideoEndImage: 'create-video:end-image',
     createVideoElements: 'create-video:elements',
-    createVideoReferenceMode: 'create-video:reference-mode',
     createVideoReferenceVideos: 'create-video:reference-videos',
     createVideoReferenceAudios: 'create-video:reference-audios',
     createVideoKlingVideoElements: 'create-video:kling-video-elements',
@@ -1407,6 +1406,60 @@ describe('CreateVideoClient Kling video elements', () => {
           { handle: '@hero_creator', displayName: 'Hero creator' },
         ]);
       });
+    });
+  });
+
+  /**
+   * A prompt that mentions a saved reference the selected model cannot take.
+   *
+   * A reference saved on one model stays in the browser, so a prompt on Kling 3.0
+   * can still mention it. The row under the prompt answered "Switch to Reusable
+   * references to use @hero", which named a mode switch the page lost when the
+   * shape of a run became a reading of what is attached (#95). The line was left
+   * showing only while the page had no catalog entry for the model, where
+   * Generate is disabled (2026-10-03). The card that says the references are on
+   * standby gives the model's reason, and Generate refuses the run with it.
+   *
+   * This file's catalog hook hands the page no descriptor, so the page reads its
+   * built-in table here, which is the state the line showed in.
+   */
+  describe('a saved reference the model cannot take', () => {
+    const prompt = 'A harbour at dusk where @hero walks home';
+
+    function promptBox() {
+      return screen.getByPlaceholderText(/^Describe the Kling 3\.0 Cinematic scene/);
+    }
+
+    async function renderWithSavedReferenceMentioned() {
+      getPersistedImageElementRecordsMock.mockResolvedValue([
+        { id: 'saved-1', displayName: 'Hero', file: new File(['image'], 'hero.png', { type: 'image/png' }) },
+      ]);
+      const view = render(<CreateVideoClient prefill={{}} />);
+      // The saved reference is read back, and Kling 3.0 cannot take it.
+      await screen.findByText('Saved references are on standby');
+      fireEvent.change(promptBox(), { target: { value: prompt } });
+      return view;
+    }
+
+    it('says why on the standby card, and leaves the row under the prompt to the character count', async () => {
+      await renderWithSavedReferenceMentioned();
+
+      expect(screen.getByText(/Reusable image references are not available for Kling yet\./)).toBeInTheDocument();
+      // The handle is one the page knows, so it is not an unknown mention either.
+      const row = promptBox().nextElementSibling;
+      expect(row?.textContent).toBe(`${prompt.length}/2500`);
+      expect(row?.children).toHaveLength(1);
+    });
+
+    it('refuses the run with the reason the card gives', async () => {
+      const view = await renderWithSavedReferenceMentioned();
+
+      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+
+      expect(view.container.querySelector('p.text-red-400')?.textContent)
+        .toBe('Reusable image references are not available for Kling yet.');
+      expect(temporaryUploadMock).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalledWith('/api/generations', expect.objectContaining({ method: 'POST' }));
     });
   });
 });
