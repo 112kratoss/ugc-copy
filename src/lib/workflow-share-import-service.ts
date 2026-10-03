@@ -174,17 +174,15 @@ export async function importWorkflowShareForRoute({
     }
   }
 
-  const nextImportCount = (typedShare.import_count ?? 0) + 1;
+  let nextImportCount = typedShare.import_count ?? 0;
   try {
-    const { error: updateShareError } = await serviceSupabase
-      .from('workflow_shares')
-      .update({
-        import_count: nextImportCount,
-      })
-      .eq('id', shareId);
+    const { data: storedImportCount, error: updateShareError } = await serviceSupabase
+      .rpc('increment_workflow_share_import_count', { p_share_id: shareId });
 
     if (updateShareError) {
       logBackendError('failed_to_increment_workflow_share_import_count', { error: updateShareError });
+    } else if (typeof storedImportCount === 'number') {
+      nextImportCount = storedImportCount;
     }
   } catch (updateShareError) {
     logBackendError('failed_to_increment_workflow_share_import_count', { error: updateShareError });

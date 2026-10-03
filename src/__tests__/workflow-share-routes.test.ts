@@ -42,7 +42,13 @@ const shareRow = {
 
 function createServiceSupabaseMock() {
   return {
-    rpc: rateLimitRpcMock,
+    async rpc(name: string, args: Record<string, unknown>) {
+      if (name === 'increment_workflow_share_import_count') {
+        shareImportCountUpdates.push(args);
+        return { data: 1, error: null };
+      }
+      return rateLimitRpcMock(name, args);
+    },
     from(table: string) {
       if (table !== 'workflow_shares') {
         throw new Error(`Unexpected service table: ${table}`);
@@ -327,7 +333,7 @@ describe('workflow share routes', () => {
       status: 'draft',
     });
     expect(shareImportCountUpdates[0]).toMatchObject({
-      import_count: 1,
+      p_share_id: SHARE_ID,
     });
     expect(shareRow.graph).toEqual(originalShareGraph);
   });

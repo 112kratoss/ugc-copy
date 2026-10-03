@@ -1,31 +1,37 @@
 # Backend audit — session handoff
 
-Updated 2026-10-03 (Asia/Kolkata). Read this first when continuing the section-by-section Magicbooklet backend audit.
+Updated 2026-10-04 (Asia/Kolkata). Read this first when continuing the section-by-section Magicbooklet backend audit.
 
 ## Workspace and authorization
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/canvas-authoring-audit-7h`, incorporating main `17dfbbc5bb8bf27c0e03f4871c60453feaea577a` (#308); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/share-import-audit-7i`, incorporating main `3befe071092beb75436b2135af94626cb8b2042b` (#310); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-Current branch is `codex/canvas-authoring-audit-7h` (#310), incorporating 7G.
-7F is deployed as 9416008a: exact-main Quality 37125525853, standard release
-37126198484 and independent exact-SHA/feed/admin/webhook checks pass. Release
-completed October 3 at 19:00:10 IST. Read the atomic-approval release report.
-WORKFLOW-02 returns to untested; ledger is 22 passed, 26 untested, two failed,
-three external. Broad workflow matrices remain open.
+Current branch is `codex/share-import-audit-7i`, incorporating main 3befe071.
+7H #310 passed PR Quality 37160265406 and exact-main Quality 37160881520 on
+attempt 2. First main E2E lost its post-composer execution context during navigation;
+the unchanged failed-job rerun passed. Logs retained. Standard production release
+37161742833 passed at 04:58:57 IST. Independent exact-SHA/feed/admin/webhook
+checks pass. Read the canvas-authoring release report. No mobile store
+run was active before the October 4 04:40:07 IST merge.
 
-7G PR #308 passed updated-main Quality 37125585448 and merged as 17dfbbc5 at
-19:01:14 IST with no mobile store release active. Exact-main release is next.
-7H PR #310 now targets main. It reproduces stale publication/restore, competing
-restores, publication decreasing revision 6 to 5, and title-only rename without
-baseRevision overwriting newer edits. Candidate revision guards pass 17 actual
-SQL cases; combined focused tests pass 42 and wider canvas suite passes 120
-(with the 17 SQL cases separately run). Read the canvas-authoring report.
-Current-head CI/release remain pending. Existing local changes are preserved.
+7I reproduces two successful share imports counted as one with actual service-role,
+authenticated and rate-limit SQL. Repeated imports intentionally make independent
+copies; deletion intentionally retains the immutable share. The candidate introduces
+a service-only atomic increment RPC and returns its persisted value. Eight actual
+SQL cases and 35 total focused cases pass; app/test types and lint pass, including the added SQL controls. Read the share-import-count
+report. This migration is only applied on isolated port 55322; CI/release pending.
+Its counter remains best effort separate from copy/history; no exact-once promise.
+
+7G is live in independently checked descendant ea49b373 (release 37157112250).
+The separate discard release report is prepared. Ledger remains 22 passed,
+26 untested, two failed, three external because WORKFLOW-04 now includes the
+unreleased 7I counter race. No scope rows were added. Preserve unrelated receipt
+and Section 1 edits, private evidence, and prior browser failure logs.
 
 The preceding checkpoint follows.
 
