@@ -1,4 +1,5 @@
 import { logBackendError } from '@/lib/backend-logger';
+import { extractPromptHandles } from '@/lib/image-elements';
 
 import {
   inspectPromptQuality,
@@ -879,6 +880,12 @@ export function applyPromptEnhancementSafeguardsWithMetadata(
   return { enhancedPrompt: trimmedEnhanced, appliedSafeguards: [] };
 }
 
+/**
+ * A handle the user mentioned is how a generation finds its reference: if the
+ * enhancement dropped one, name it again rather than ship a prompt that lost
+ * it. Mentions are read the way a generation reads them, so "@serum-style"
+ * mentions "@serum" and the "@serum" of an address does not.
+ */
 function preserveNamedHandles(
   originalPrompt: string,
   enhancedPrompt: string,
@@ -1906,9 +1913,4 @@ export async function callPromptEnhancer(
   }
 
   return { enhancedPrompt: content.trim() };
-}
-
-function extractPromptHandles(prompt: string): string[] {
-  const matches = prompt.match(/@[\p{L}\p{N}_-]+/gu);
-  return matches ?? [];
 }
