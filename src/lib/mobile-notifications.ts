@@ -1526,6 +1526,33 @@ export async function notifyGenerationStatus(
   });
 }
 
+/**
+ * Tells the person their template run was ended on our side.
+ *
+ * A run announces nothing itself while it works: its steps do, as each one
+ * finishes or fails. A run that is given up on has no step that failed, so
+ * this is the only word that it is over. It leads to the run, which says the
+ * same and offers a new one, and it never throws: the run has ended whatever
+ * becomes of the notification.
+ */
+export async function notifyTemplateRunStopped(
+  adminSupabase: SupabaseClient,
+  params: { runId: string; userId: string },
+) {
+  return createMobileNotificationSafely({
+    adminSupabase,
+    userId: params.userId,
+    type: 'generation_failed',
+    category: 'generation',
+    title: 'Your template run stopped',
+    body: 'A problem on our side ended it. Open it to start again.',
+    deepLink: buildMobileNotificationDeepLink({ kind: 'templateRun', runId: params.runId }),
+    objectType: 'template_run',
+    objectId: params.runId,
+    dedupeKey: `template-run:${params.runId}:stopped`,
+  });
+}
+
 export async function notifyMobileCreditPurchase(
   adminSupabase: SupabaseClient,
   params: { userId: string; credits: number | null; transactionId?: string | null }
