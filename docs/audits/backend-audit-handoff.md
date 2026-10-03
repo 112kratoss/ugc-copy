@@ -50,7 +50,12 @@ call their actual start/hold/settlement services with controlled node settings.
 No new runtime fix; these test changes are in the local 7C branch and not in PR #291.
 Read `backend-section-07-downstream-completion-2026-10-03.md`. Provider
 network/status sync and media transport remain mocked; process death and the real
-node executor remain unverified. The changes are committed locally as 1037ce43 and 13df4ac7; PR CI is next.
+node executor remain unverified. PR #292 contains the lifecycle tests (1037ce43) and method map (13df4ac7).
+The next update also includes Section 7D actual worker death after job claim and
+provider attachment. All 21 DB cases pass, one child-harness skip; types/lint and
+empty DB readback pass. Two real SIGKILL/restart cases preserve live leases and
+recover after controlled expiry without duplicate holds or provider submissions.
+Read `backend-section-07-worker-recovery-2026-10-03.md`. Updated PR CI is next.
 `backend-section-07-method-matrix-2026-10-03.md` inventories all 36 exported methods
 across 31 workflow routes, with explicit remaining evidence. This is not closure.
 

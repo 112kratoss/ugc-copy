@@ -1,3 +1,8 @@
+import { spawn, type ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
+import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -77,6 +82,7 @@ vi.mock('@/lib/workflow-runner', () => ({
 }));
 
 const connectionString = process.env.SUPABASE_TEST_DB_URL;
+const crashWorker = process.env.TEMPLATE_AUDIT_WORKER === 'true';
 const STARTING_CREDITS = 500;
 const BUSY_MESSAGE = 'The generation provider is busy right now. Please retry this step shortly.';
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
@@ -190,6 +196,10 @@ function databaseClient(db: Client, startAnswers: string[], beforeWrite?: (table
           Object.values(args).map(writable),
         );
         const data = ROW_FUNCTIONS.has(name) ? rows : rows[0].result;
+        if (crashWorker && process.env.TEMPLATE_AUDIT_POINT === name) {
+          await writeFile(join(process.env.TEMPLATE_AUDIT_DIRECTORY!, 'barrier.json'), JSON.stringify({ name, pid: process.pid }));
+          await new Promise(() => setInterval(() => {}, 1000));
+        }
         if (name === 'start_template_generation') startAnswers.push(data.status);
         return { data, error: null };
       } catch (error) {
@@ -214,7 +224,27 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
-describe.skipIf(!connectionString)('template run step starts the provider turns away, with real PostgreSQL', () => {
+it.skipIf(!crashWorker)('isolated template audit worker', async () => {
+  expect(['127.0.0.1', 'localhost']).toContain(new URL(connectionString!).hostname);
+  const db = new Client({ connectionString, statement_timeout: 10_000 });
+  await db.connect();
+  try {
+    await db.query('set role service_role');
+    const client = databaseClient(db, []);
+    service.client = client;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      await appendFile(join(process.env.TEMPLATE_AUDIT_DIRECTORY!, 'provider-calls'), 'accepted\n');
+      return json({ code: 200, data: { taskId: `task-${randomUUID()}` } });
+    }));
+    const result = await processTemplateRunJobs({ client, lockedBy: randomUUID(), limit: 1 });
+    await writeFile(join(process.env.TEMPLATE_AUDIT_DIRECTORY!, 'result.json'), JSON.stringify(result));
+  } finally {
+    service.client = null;
+    await db.end();
+  }
+}, 30_000);
+
+describe.skipIf(!connectionString || crashWorker)('template run step starts the provider turns away, with real PostgreSQL', () => {
   let admin: Client;
   let worker: Client;
   let client: SupabaseClient;
@@ -371,6 +401,63 @@ describe.skipIf(!connectionString)('template run step starts the provider turns 
   }
   type ShownRun = Awaited<ReturnType<typeof tick>>;
   const shownImageSteps = (run: ShownRun) => run.steps.filter((step) => step.kind === 'generation' && step.mediaKind === 'image');
+
+  it.each(['claim_template_run_jobs', 'attach_generation_provider_task'])('recovers a real killed worker after %s without duplicate charges', async point => {
+    const directory = await mkdtemp(join(tmpdir(), 'template-audit-crash-'));
+    const children = new Set<ChildProcess>();
+    function launch(barrier = '') {
+      const child = spawn(process.execPath, [resolve('node_modules/vitest/vitest.mjs'), 'run',
+        'src/__tests__/template-run-step-busy-retry-database.test.ts', '-t', '^isolated template audit worker$'], {
+        detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, TEMPLATE_AUDIT_WORKER: 'true', TEMPLATE_AUDIT_POINT: barrier, TEMPLATE_AUDIT_DIRECTORY: directory },
+      });
+      children.add(child);
+      let output = '';
+      child.stdout.on('data', chunk => { output += chunk.toString(); });
+      child.stderr.on('data', chunk => { output += chunk.toString(); });
+      const closed = once(child, 'close').then(([code, signal]) => { children.delete(child); return { code, signal }; });
+      return { child, closed, output: () => output };
+    }
+    async function recover() {
+      const worker = launch();
+      expect((await worker.closed).code, worker.output()).toBe(0);
+      return JSON.parse(await readFile(join(directory, 'result.json'), 'utf8'));
+    }
+    try {
+      await admin.query('select public.enqueue_template_run_job($1)', [runId]);
+      const worker = launch(point);
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        if (await readFile(join(directory, 'barrier.json'), 'utf8').catch(() => '')) break;
+        if (!children.has(worker.child)) throw new Error(worker.output());
+        await new Promise(resolve => setTimeout(resolve, 40));
+      }
+      const barrier = JSON.parse(await readFile(join(directory, 'barrier.json'), 'utf8'));
+      expect(barrier.name).toBe(point);
+      expect(Number.isInteger(barrier.pid)).toBe(true);
+      process.kill(-worker.child.pid!, 'SIGKILL');
+      expect((await worker.closed).signal).toBe('SIGKILL');
+      expect((await admin.query('select status from public.template_run_jobs where run_id=$1', [runId])).rows[0].status).toBe('processing');
+      expect(await generations()).toHaveLength(point === 'claim_template_run_jobs' ? 0 : 1);
+      expect(await recover()).toMatchObject({ claimed: 0 });
+      // Advance only this isolated fixture's lease age; no wall-clock TTL claim.
+      await admin.query("update public.template_run_jobs set locked_at=now()-interval '301 seconds', heartbeat_at=now()-interval '301 seconds' where run_id=$1", [runId]);
+      expect(await recover()).toMatchObject({ claimed: 1, deferred: 1, exhausted: 0 });
+      const rows = await generations();
+      expect(rows).toHaveLength(2);
+      expect(rows.every(row => row.status === 'processing')).toBe(true);
+      expect(await credits()).toBe(STARTING_CREDITS - rows.reduce((sum, row) => sum + row.cost, 0));
+      expect((await readFile(join(directory, 'provider-calls'), 'utf8')).trim().split('\n')).toHaveLength(2);
+      expect(await recover()).toMatchObject({ claimed: 0 });
+      expect(await generations()).toHaveLength(2);
+    } finally {
+      for (const child of children) {
+        try { process.kill(-child.pid!, 'SIGKILL'); } catch { /* Already exited. */ }
+      }
+      await Promise.all([...children].map(child => once(child, 'close')));
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 60_000);
 
   it('cancels a queued run twice without starting or charging any generation', async () => {
     const cancelled = await cancelTemplateRun(client, runId, userId);
