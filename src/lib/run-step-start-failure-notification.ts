@@ -36,6 +36,26 @@ export async function notifyRunStepStartFailure(params: {
   const generationId = getRefundedStartGenerationId(params.error);
   if (!generationId) return;
 
+  await notifyRunStepGenerationFailed({ client: params.client, generationId, userId: params.userId });
+}
+
+/**
+ * Tells the creator that a run step's generation has failed, by its id.
+ *
+ * A template step that follows a generation it was started with earlier can
+ * find it failed already, with nobody having said so: the pass that started
+ * it put the step back in line in place of failing it. The notification is
+ * keyed by the generation, so one that was announced when it failed is not
+ * announced again. Nothing here throws.
+ */
+export async function notifyRunStepGenerationFailed(params: {
+  /** Service-role: it reads the generation and writes the notification. */
+  client: SupabaseClient;
+  generationId: string;
+  userId: string;
+}): Promise<void> {
+  const { generationId } = params;
+
   try {
     const { data, error } = await params.client
       .from('generations')

@@ -1,5 +1,5 @@
 import 'server-only';
-import { logBackendError } from '@/lib/backend-logger';
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -12,6 +12,7 @@ import {
 } from '@/lib/generation-services';
 import { syncGenerationStatuses } from '@/lib/generation-status-sync';
 import {
+  getGenerationStartRefusal,
   getPublicGenerationStartFailure,
   normalizeGenerationStartFailureCode,
   requiresReplacementGenerationInput,
@@ -58,8 +59,11 @@ import {
 } from '@/lib/upload-finalization';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { resolveTemplateRunMedia, type TemplateMediaGeneration } from '@/lib/template-run-media-delivery';
-import { notifyTemplateRunStopped } from '@/lib/mobile-notifications';
-import { notifyRunStepStartFailure } from '@/lib/run-step-start-failure-notification';
+import { notifyTemplateRunStepRefused, notifyTemplateRunStopped } from '@/lib/mobile-notifications';
+import {
+  notifyRunStepGenerationFailed,
+  notifyRunStepStartFailure,
+} from '@/lib/run-step-start-failure-notification';
 import {
   getIncomingEdges,
   getNodeById,
@@ -88,6 +92,15 @@ export const TEMPLATE_RUN_ABANDONED_MESSAGE =
 const TEMPLATE_ABANDONED_STEP_MESSAGE = 'This step was not finished because the run stopped.';
 const TEMPLATE_ABANDONED_MID_GENERATION_MESSAGE =
   'This step was still generating when the run stopped, so its credits stay spent.';
+// What the person reads on a step the database refused to start. A row that
+// was ever started follows its generation and is not started again, so a step
+// that gets this never held credits.
+const TEMPLATE_STEP_REFUSED_MESSAGE =
+  'This step could not be started because of a problem on our side. No credits were used for it. Retry it to continue.';
+// A retry is a new row for the same node, and this one would be refused as a
+// new row too.
+const TEMPLATE_STEP_REFUSED_FOR_GOOD_MESSAGE =
+  'This step could not be started because of a problem on our side, and retrying it will not help. No credits were used for it. Start a new run to try again.';
 const MAX_IDEMPOTENCY_KEY_LENGTH = 256;
 const ACTIVE_GENERATION_STATUSES = new Set(['pending', 'waiting', 'processing']);
 const TERMINAL_RUN_STATUSES = new Set<TemplateRunStatus>(['succeeded', 'failed', 'cancelled']);
@@ -304,12 +317,14 @@ async function loadRunGenerations(client: SupabaseClient, runId: string): Promis
   return new Map(((data ?? []) as unknown as GenerationRow[]).map((row) => [row.id, row]));
 }
 
+type StepGeneration = Pick<GenerationRow, 'id' | 'status' | 'created_at' | 'template_run_id'>;
+
 /** The generation a step row was started with. A step row has at most one. */
 async function loadStepGeneration(client: SupabaseClient, stepId: string) {
-  const { data, error } = await client.from('generations').select('id, status')
+  const { data, error } = await client.from('generations').select('id, status, created_at, template_run_id')
     .eq('template_run_step_id', stepId).maybeSingle();
   if (error) throw error;
-  return data as Pick<GenerationRow, 'id' | 'status'> | null;
+  return data as StepGeneration | null;
 }
 
 async function loadRunState(client: SupabaseClient, runId: string, userId: string): Promise<RunState> {
@@ -1128,6 +1143,138 @@ async function updateRunProgress(client: SupabaseClient, state: RunState) {
   }).eq('id', state.run.id).neq('status', 'cancelled');
 }
 
+/**
+ * Puts a step that is in line behind the generation its row was started with,
+ * as a step that is processing is. Returns whether this call moved it:
+ * another pass may have taken the row first.
+ */
+async function followStepGeneration(
+  client: SupabaseClient,
+  run: Pick<TemplateRunRow, 'id' | 'user_id'>,
+  step: TemplateRunStepRow,
+  generation: Pick<GenerationRow, 'id' | 'status' | 'created_at'>,
+) {
+  const { data, error } = await client.from('template_run_steps').update({
+    status: 'processing',
+    generation_id: generation.id,
+    error_message: null,
+    started_at: step.started_at ?? generation.created_at,
+    finished_at: null,
+  }).eq('id', step.id).eq('status', 'queued').select('id').maybeSingle();
+  if (error) throw error;
+  if (!data) return false;
+  logBackendWarning('template_run_step_followed_its_generation', {
+    runId: run.id,
+    stepId: step.id,
+    nodeId: step.node_id,
+    generationId: generation.id,
+    generationStatus: generation.status,
+  });
+  // The step is about to fail with this generation's reason. Whoever put the
+  // row back in line may never have said that it failed; one that was
+  // announced then is not announced twice.
+  if (generation.status === 'failed') {
+    await notifyRunStepGenerationFailed({ client, generationId: generation.id, userId: run.user_id });
+  }
+  return true;
+}
+
+/**
+ * Takes the steps that are in line but were already started out of the line.
+ * Returns whether there were any.
+ *
+ * The database keeps one generation per step row and never starts a row
+ * twice. Asked to, it answers that the step has already started or that its
+ * request key is used, or it replays the start it made. The row would stay in
+ * line for good: the run shows as running, and a result the person paid for
+ * is never shown. So such a row is not started. It follows its generation and
+ * takes its result or its failure, and a step that fails this way is retried
+ * by hand as its next attempt, like any other.
+ *
+ * The worker leaves no row like this. An edit by hand does, and so does a
+ * pass that lost its lease and wrote over the pass that had taken the row.
+ */
+async function followStartedSteps(client: SupabaseClient, state: RunState) {
+  const startedWith = new Map<string, GenerationRow>();
+  for (const generation of state.generations.values()) {
+    if (generation.template_run_step_id) startedWith.set(generation.template_run_step_id, generation);
+  }
+  let found = false;
+  for (const step of state.latestSteps.values()) {
+    const generation = step.kind === 'generation' && step.status === 'queued' ? startedWith.get(step.id) : null;
+    if (!generation) continue;
+    found = true;
+    await followStepGeneration(client, state.run, step, generation);
+  }
+  return found;
+}
+
+/**
+ * Decides what a start the database refused (a 409) means for the step, and
+ * returns where the step stands now if this call moved it.
+ *
+ * The loser of two passes on one row gets this answer while the other pass
+ * has the row: the row is no longer in line, and what that pass wrote stands.
+ * A pass whose run was ended under it gets it too, and whatever ended the run
+ * deals with its steps. Nothing is written in either case.
+ *
+ * A row that is still in line was refused for what it is, and is refused
+ * again on every later pass while its run shows as running. If it turns out
+ * to have a generation of its own, it follows that. With nothing behind it,
+ * the step fails here, where the person can see it, and they are told.
+ */
+async function endRefusedStep(
+  client: SupabaseClient,
+  run: Pick<TemplateRunRow, 'id' | 'user_id'>,
+  step: TemplateRunStepRow,
+  error: unknown,
+): Promise<{ status: 'failed'; error: string } | { status: 'processing'; generationId: string } | null> {
+  const [current, row] = await Promise.all([
+    client.from('template_runs').select('status').eq('id', run.id).maybeSingle(),
+    client.from('template_run_steps').select('status').eq('id', step.id).maybeSingle(),
+  ]);
+  if (current.error) throw current.error;
+  if (row.error) throw row.error;
+  const runStatus = (current.data as Pick<TemplateRunRow, 'status'> | null)?.status;
+  if (!runStatus || TERMINAL_RUN_STATUSES.has(runStatus)) return null;
+  if ((row.data as Pick<TemplateRunStepRow, 'status'> | null)?.status !== 'queued') return null;
+
+  const generation = await loadStepGeneration(client, step.id);
+  if (generation && generation.template_run_id === run.id) {
+    return await followStepGeneration(client, run, step, generation)
+      ? { status: 'processing', generationId: generation.id }
+      : null;
+  }
+
+  const refusal = getGenerationStartRefusal(error);
+  // A retry is a new row with a new request key, which is what a row refused
+  // for its key or for the generation on it needs. A row refused for its
+  // context would be refused as a new row too.
+  const canRetry = step.can_retry && refusal !== 'invalid_template_context';
+  const message = canRetry ? TEMPLATE_STEP_REFUSED_MESSAGE : TEMPLATE_STEP_REFUSED_FOR_GOOD_MESSAGE;
+  const { data: failed, error: failError } = await client.from('template_run_steps').update({
+    status: 'failed',
+    can_retry: canRetry,
+    error_message: message,
+    output_snapshot: failureSnapshot(step, 'provider_rejected'),
+    finished_at: new Date().toISOString(),
+  }).eq('id', step.id).eq('status', 'queued').select('id').maybeSingle();
+  if (failError) throw failError;
+  if (!failed) return null;
+
+  logBackendError('template_run_step_start_refused', {
+    runId: run.id,
+    stepId: step.id,
+    nodeId: step.node_id,
+    attempt: step.attempt,
+    refusal,
+    canRetry,
+    error,
+  });
+  await notifyTemplateRunStepRefused(client, { runId: run.id, stepId: step.id, userId: run.user_id, canRetry });
+  return { status: 'failed', error: message };
+}
+
 async function advanceTemplateRun(client: SupabaseClient, runId: string, userId: string) {
   let state = await loadRunState(client, runId, userId);
   if (
@@ -1135,6 +1282,14 @@ async function advanceTemplateRun(client: SupabaseClient, runId: string, userId:
     || state.run.status === 'needs_attention'
     || state.run.status === 'collecting_inputs'
   ) return state;
+  if (await followStartedSteps(client, state)) {
+    // What became of those generations is known already, and is recorded
+    // before anything is started after them. The rows are read again whether
+    // this pass moved them or another pass had.
+    state = await loadRunState(client, runId, userId);
+    await refreshGenerationSteps(client, state);
+    state = await loadRunState(client, runId, userId);
+  }
   let graph = await hydrateRunGraph(client, state);
   for (const node of topologicalNodes(graph)) {
     const step = state.latestSteps.get(node.id);
@@ -1282,6 +1437,11 @@ async function advanceTemplateRun(client: SupabaseClient, runId: string, userId:
           status: retryAsNextAttempt ? 'queued' : stepStatus,
           error: failure.message,
         });
+      } else {
+        // The database would not start this row. Either another pass has it,
+        // or it will never be started: the two are told apart from the rows.
+        const refused = await endRefusedStep(client, state.run, step, error);
+        if (refused) graph = updateNodeRunState(graph, node.id, refused);
       }
     }
   }

@@ -1564,6 +1564,36 @@ export async function notifyTemplateRunStopped(
   });
 }
 
+/**
+ * Tells the person a step of their template run could not be started.
+ *
+ * A step whose generation fails is announced with that generation. This step
+ * has none: the database refused to start it before any credits were held,
+ * so nothing else will say that the run is waiting on the person here. It
+ * leads to the run, where the step is retried, or where a new run is started
+ * when a retry would be refused as well. One per step row, and it never
+ * throws: the step has failed whatever becomes of the notification.
+ */
+export async function notifyTemplateRunStepRefused(
+  adminSupabase: SupabaseClient,
+  params: { runId: string; stepId: string; userId: string; canRetry: boolean },
+) {
+  return createMobileNotificationSafely({
+    adminSupabase,
+    userId: params.userId,
+    type: 'generation_failed',
+    category: 'generation',
+    title: 'A step in your template run could not start',
+    body: params.canRetry
+      ? 'A problem on our side stopped it. Open the run to retry the step.'
+      : 'A problem on our side stopped it. Open the run to start a new one.',
+    deepLink: buildMobileNotificationDeepLink({ kind: 'templateRun', runId: params.runId }),
+    objectType: 'template_run',
+    objectId: params.runId,
+    dedupeKey: `template-run:${params.runId}:step:${params.stepId}:refused`,
+  });
+}
+
 export async function notifyMobileCreditPurchase(
   adminSupabase: SupabaseClient,
   params: { userId: string; credits: number | null; transactionId?: string | null }
