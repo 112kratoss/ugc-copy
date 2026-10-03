@@ -6,12 +6,12 @@ Updated 2026-10-03 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/canvas-approval-audit-7f`, incorporating main `f6a3d3b12f4af0ac7325e1661cda7d894c35855c` (completion/recovery PR #292); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/canvas-approval-audit-7f`, incorporating main `f1ec34dc7c46ce6f404bb968e2a4c85c308cb85e` (canvas persistence PR #293); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-Current branch: `codex/canvas-approval-audit-7f`, incorporating main f6a3d3b1.
+Current branch: `codex/canvas-approval-audit-7f`, incorporating main f1ec34dc.
 7B publication fix is released: exact-main Quality 37093085015 and release
 37093737713 passed; independent live build/feed/admin/webhook checks pass on
 34e8387f. Read `backend-section-07-publication-release-2026-10-03.md`.
@@ -31,7 +31,9 @@ so the durable job retries and reconnects the same generation. Seven actual SQL
 cases pass, including a committed write with lost reply, full real-node execution,
 partial refunds, backpressure and pure GET. Existing focused 65 tests pass.
 Read `backend-section-07-canvas-persistence-2026-10-03.md`. Runtime/test/CI changes
-are in PR #293, head cce105f3, with Quality 37095664257 running. Types/lint pass.
+passed PR Quality 37095664257 in all four jobs. PR #293 merged as f1ec34dc
+at 10:23:37 IST, after mobile store release 37095865012 completed successfully.
+Exact-main Quality 37098042595 is running; standard release/live checks pending.
 No new whole
 obligation is closed: ledger remains 22 passed, 26 untested, two failed, three external. WORKFLOW-02 now records the
 reproduced, unreleased canvas defects as failed; no obligation was added.
@@ -43,12 +45,15 @@ owner/state locks. All 13 actual SQL cases pass, including both rollback points,
 separate-connection concurrency, permissions/owner guards and committed lost
 reply. Runtime/migration/test changes follow 7E; all 13 SQL cases, 67 focused cases,
 app/test types and targeted lint pass. Read
-`backend-section-07-atomic-approval-2026-10-03.md`. Finish checks, preserve 7E
-release ordering, then normal clean-replay/release pipeline. Mobile store
-release 37095865012 is active on f6a3d3b1; do not merge/push main until it finishes.
-Stacked PR #294 (head ba199263) targets the 7E branch for independent 7F CI.
-After the store release completes, merge #293, retarget #294 to main and repeat
-its base-dependent checks. Do not skip exact-main Quality and standard release.
+`backend-section-07-atomic-approval-2026-10-03.md`. PR #294 passed stacked CI
+37096329840 in all four jobs, including clean migration replay and 13 canvas DB
+cases. It now targets main and incorporates f1ec34dc. Squash-merge conflicts in
+handoff/the added fixture were resolved by preserving the verified 7F additions;
+main's tree otherwise exactly matched cce105f3. Updated-main CI is next.
+Preserve 7E release ordering and check mobile releases again before merging 7F.
+Read-only production aggregate SQL on October 3 at 04:23:54 UTC found zero rows
+matching either narrow canvas-failure signature. This does not prove no historical
+occurrence; no production rows were changed. Private query/readback are saved.
 
 The preceding checkpoint follows.
 

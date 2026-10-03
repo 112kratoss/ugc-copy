@@ -4,8 +4,9 @@ Updated 2026-10-03. Current independently checked production:
 `f6a3d3b12f4af0ac7325e1661cda7d894c35855c` (Section 7C/D). Exact-main Quality,
 standard release, protected health and independent public checks pass; see the
 [completion/recovery release](backend-section-07-completion-recovery-release-2026-10-03.md).
-New canvas persistence/approval fixes (#293/#294) are not deployed. A mobile store
-release currently holds main merges; preserve that release before continuing.
+New canvas persistence/approval fixes (#293/#294) are not yet deployed. The
+mobile store release completed successfully; #293 is merged and awaiting the
+standard exact-main release pipeline, while #294 is in updated-main CI.
 Surface inventory baseline remains `5934bd7d`; Section 6L changed no surfaces.
 
 This is the closure ledger for the audit, replacing section numbers as a progress
