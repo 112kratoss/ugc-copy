@@ -59,9 +59,11 @@ function createInboxClient({
         object_type: 'transaction',
         object_id: 'txn-1',
         event_count: 1,
-        is_read: false,
+        is_read: true,
         created_at: '2026-06-22T06:00:00.000Z',
-        updated_at: '2026-06-22T06:01:00.000Z',
+        last_event_at: '2026-06-22T06:01:00.000Z',
+        // Stamped when the alert was read, half an hour after its last event.
+        updated_at: '2026-06-22T06:30:00.000Z',
       }],
       error: listError,
     }),
@@ -70,6 +72,7 @@ function createInboxClient({
     eq: vi.fn(() => unreadQuery),
     ...resolvedQuery({ count: 7, data: null, error: unreadError }),
   };
+  const listSelect = vi.fn<(fields: string) => typeof listQuery>(() => listQuery);
   const updateCalls: Array<{
     values: Record<string, unknown>;
     eqFilters: Array<[string, unknown]>;
@@ -78,6 +81,7 @@ function createInboxClient({
 
   return {
     listQuery,
+    listSelect,
     unreadQuery,
     updateCalls,
     client: {
@@ -90,8 +94,8 @@ function createInboxClient({
       from(table: string) {
         expect(table).toBe('mobile_notifications');
         return {
-          select(_fields: string, options?: Record<string, unknown>) {
-            return options?.head ? unreadQuery : listQuery;
+          select(fields: string, options?: Record<string, unknown>) {
+            return options?.head ? unreadQuery : listSelect(fields);
           },
           update(values: Record<string, unknown>) {
             const call = {
@@ -136,8 +140,43 @@ describe('mobile notification inbox service', () => {
 
     expect(inbox.listQuery.eq).toHaveBeenCalledWith('user_id', 'user-1');
     expect(inbox.listQuery.limit).toHaveBeenCalledWith(80);
-    expect(inbox.listQuery.lt).toHaveBeenCalledWith('updated_at', '2026-06-22T06:02:00.000Z');
+    expect(inbox.listQuery.lt).toHaveBeenCalledWith('last_event_at', '2026-06-22T06:02:00.000Z');
     expect(inbox.unreadQuery.eq).toHaveBeenCalledWith('is_read', false);
+  });
+
+  // Marking an alert read writes its row, and every write stamps updated_at. An
+  // inbox ordered by updated_at lifted each alert to the top as it was read,
+  // aged "Just now".
+  it('orders and ages alerts by their last event, never by the last write to the row', async () => {
+    const inbox = createInboxClient();
+
+    const result = await getMobileNotificationInboxForRoute({
+      before: '2026-06-22T06:02:00.000Z',
+      userSupabase: inbox.client,
+    });
+
+    expect(inbox.listQuery.order.mock.calls).toEqual([
+      ['last_event_at', { ascending: false }],
+      // Settles alerts that share a time, so a page never depends on chance.
+      ['id', { ascending: false }],
+    ]);
+    expect(inbox.listQuery.lt.mock.calls).toEqual([['last_event_at', '2026-06-22T06:02:00.000Z']]);
+
+    const fields = inbox.listSelect.mock.calls[0][0].split(', ');
+    expect(fields).toContain('last_event_at');
+    expect(fields).not.toContain('updated_at');
+
+    expect(result).toMatchObject({
+      ok: true,
+      body: {
+        notifications: [{
+          id: 'notification-1',
+          isRead: true,
+          createdAt: '2026-06-22T06:00:00.000Z',
+          updatedAt: '2026-06-22T06:01:00.000Z',
+        }],
+      },
+    });
   });
 
   it('rejects unauthenticated inbox reads before querying notifications', async () => {
