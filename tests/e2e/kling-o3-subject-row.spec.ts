@@ -27,9 +27,9 @@ const LONG_NAME = 'Protagonist in the crimson raincoat';
 // A name whose handle is wider than a desktop's line by itself, so it has to break.
 const VERY_LONG_NAME = 'The quick brown fox jumps over the lazy dog by the old harbour wall';
 
-/** A subject's handle keeps the letters of its name, capitals too, with underscores for the rest. */
+/** A subject's handle is its name in lower case, with underscores for everything but letters and digits. */
 function handleOf(name: string) {
-  return `@${name.replace(/[^A-Za-z0-9]+/g, '_')}`;
+  return `@${name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`;
 }
 
 const PHONE = { width: 390, height: 844 };
@@ -222,6 +222,6 @@ test.describe('Kling O3 subject card, first line', () => {
   test('a subject whose handle fits beside its name keeps the one line', async ({ page }) => {
     await addSubject(page);
 
-    await expectSubjectLineInItsCard(page, [DESKTOP, PHONE, SMALL_PHONE], '@Subject_1');
+    await expectSubjectLineInItsCard(page, [DESKTOP, PHONE, SMALL_PHONE], '@subject_1');
   });
 });

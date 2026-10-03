@@ -617,7 +617,8 @@ describe('CreateVideoClient Kling video elements', () => {
 
     expect(await screen.findByDisplayValue('Hero creator')).toBeInTheDocument();
     expect(screen.getByText('2/4 images')).toBeInTheDocument();
-    expect(screen.getAllByText('@Hero_creator').length).toBeGreaterThan(0);
+    // A saved subject holds its name, not its handle, so the handle is built on load.
+    expect(screen.getAllByText('@hero_creator').length).toBeGreaterThan(0);
   });
 
   it('shows the named-subjects editor only for Kling O3 and enforces the image range', async () => {
@@ -630,7 +631,7 @@ describe('CreateVideoClient Kling video elements', () => {
     // One subject with zero images is below the 2-image floor.
     expect(screen.getByText(/add at least 2/i)).toBeInTheDocument();
     // The handle chip is derived from the display name for @mentions.
-    expect(screen.getAllByText('@Subject_1').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('@subject_1').length).toBeGreaterThan(0);
   });
 
   it('offers Seedance 2.5 reference video and audio slots with nothing attached', async () => {
@@ -1008,6 +1009,136 @@ describe('CreateVideoClient Kling video elements', () => {
       renameCard(view.container, IMAGE_RENAME, 0, 'Captain');
       await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@captain', '@red_umbrella']));
       expect(promptBox()).toHaveValue('@captain walks past @red_umbrella at dusk');
+    });
+  });
+
+  /**
+   * A Kling O3 subject's @handle is written in lower case, as every other handle
+   * is. It kept the capitals of the subject's name ("@Hero_creator", 2026-10-03),
+   * and the code that reads handles out of a prompt reads lower case only. Typed
+   * the way the card showed it, the handle was not read, and the "@" panel shut at
+   * its first capital. Typed in lower case it was refused as an unknown element,
+   * although that is the spelling the server gives the provider.
+   */
+  describe('Kling O3 subject handles', () => {
+    function subjectFields(container: HTMLElement) {
+      return Array.from(container.querySelectorAll<HTMLInputElement>('input[placeholder="Subject name"]'));
+    }
+
+    /** A subject's card: its name field's nearest ancestor that holds the image picker. */
+    function subjectCard(field: HTMLInputElement) {
+      let card = field.parentElement;
+      while (card && !card.querySelector('input[type="file"]')) {
+        card = card.parentElement;
+      }
+      return card;
+    }
+
+    /** The @handle each subject card shows, in card order. */
+    function subjectHandles(container: HTMLElement) {
+      return subjectFields(container).map((field) => (
+        Array.from(subjectCard(field)?.querySelectorAll('span') ?? [])
+          .find((span) => /^@\w+$/.test(span.textContent ?? ''))?.textContent ?? null
+      ));
+    }
+
+    function promptBox() {
+      return screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/);
+    }
+
+    async function renderWithSubjects(...names: string[]) {
+      const view = render(<CreateVideoClient prefill={{ model: 'kling-o3' }} />);
+      await screen.findByText('Named subjects');
+      for (const name of names) {
+        fireEvent.click(screen.getByText('Add subject'));
+        fireEvent.change(subjectFields(view.container).at(-1)!, { target: { value: name } });
+      }
+      return view;
+    }
+
+    it('writes the handle in lower case, on the card and where the prompt offers it', async () => {
+      const view = await renderWithSubjects('Hero creator');
+
+      expect(subjectHandles(view.container)).toEqual(['@hero_creator']);
+      // Nothing on the page offers the handle in another spelling.
+      expect(screen.queryByText('@Hero_creator')).not.toBeInTheDocument();
+    });
+
+    it('accepts the handle typed by hand', async () => {
+      await renderWithSubjects('Hero creator');
+
+      fireEvent.change(promptBox(), { target: { value: 'A scene with @hero_creator walking' } });
+
+      expect(promptBox()).toHaveValue('A scene with @hero_creator walking');
+      expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+    });
+
+    it('keeps the "@" panel open at a capital letter, and inserts the handle from it', async () => {
+      await renderWithSubjects('Hero creator');
+
+      // The name is "Hero creator", so this is how a creator starts to look for it.
+      fireEvent.change(promptBox(), { target: { value: 'A scene with @H' } });
+
+      const title = await screen.findByText('Insert reference');
+      // The panel is the title's nearest ancestor that holds a reference to pick.
+      let panel = title.parentElement;
+      while (panel && !panel.querySelector('button')) {
+        panel = panel.parentElement;
+      }
+      const suggestion = Array.from(panel?.querySelectorAll('button') ?? [])
+        .find((button) => button.textContent?.includes('@hero_creator'));
+      expect(suggestion).toBeDefined();
+
+      fireEvent.click(suggestion!);
+
+      // What was typed is replaced by the handle as it is written.
+      expect(promptBox()).toHaveValue('A scene with @hero_creator');
+      expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+    });
+
+    it('numbers the later of two subjects whose names differ only by a capital', async () => {
+      const view = await renderWithSubjects('Hero', 'hero');
+
+      // The server reads both names as one handle, so the page must tell them apart itself.
+      expect(subjectHandles(view.container)).toEqual(['@hero', '@hero_2']);
+    });
+
+    it('sends each subject image under the handle the prompt mentions', async () => {
+      const view = await renderWithSubjects('Hero creator');
+      const picker = subjectCard(subjectFields(view.container)[0])?.querySelector<HTMLInputElement>('input[type="file"]');
+      expect(picker).not.toBeNull();
+      fireEvent.change(picker!, {
+        target: {
+          files: [
+            new File(['front'], 'hero-front.png', { type: 'image/png' }),
+            new File(['side'], 'hero-side.png', { type: 'image/png' }),
+          ],
+        },
+      });
+      await screen.findByText('2/4 images');
+
+      const prompt = '@hero_creator lifts the serum and smiles at the camera in a bright studio, slow push in.';
+      fireEvent.change(promptBox(), { target: { value: prompt } });
+      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          '/api/generations',
+          expect.objectContaining({ method: 'POST' })
+        );
+      });
+
+      const postCall = fetchMock.mock.calls.find(([input, init]) => (
+        String(input).includes('/api/generations') && init?.method === 'POST'
+      ));
+      const body = JSON.parse(String(postCall?.[1]?.body));
+      expect(body.prompt).toBe(prompt);
+      expect(body.settings.referenceMode).toBe('subjects');
+      const subjectImages = body.inputs.filter((input: { slot: string }) => input.slot === 'subjectImages');
+      expect(subjectImages.map((input: { handle: string; label: string }) => [input.handle, input.label])).toEqual([
+        ['@hero_creator', 'Hero creator'],
+        ['@hero_creator', 'Hero creator'],
+      ]);
     });
   });
 });

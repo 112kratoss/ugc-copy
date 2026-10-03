@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assignElementHandles,
+  buildSubjectHandles,
   createElementHandleReplacementMap,
+  extractPromptHandles,
+  findUnknownPromptHandles,
+  getMentionQueryAtCaret,
+  insertHandleIntoPrompt,
+  isValidElementHandle,
   replacePromptHandles,
 } from '@/lib/image-elements';
 
@@ -207,5 +213,122 @@ describe('assignElementHandles', () => {
         { id: 'b', displayName: 'Red jacket', handle: null },
       ]))).toEqual(['@red_jacket', '@red_jacket_2']);
     });
+  });
+});
+
+/**
+ * A Kling O3 subject's handle kept the capitals of its name ("@Hero_creator",
+ * 2026-10-03). No other handle has capitals, and the functions that read handles
+ * out of a prompt read lower case only: the handle on the card was one no prompt
+ * could mention, and the lower-case one was refused as unknown.
+ */
+describe('buildSubjectHandles', () => {
+  it('writes a handle in lower case, with an underscore for all but letters and digits', () => {
+    expect(buildSubjectHandles(['Hero creator', 'Subject 2', '  Élan — Paris 2026!  ', 'MAIN_Product-v2']))
+      .toEqual(['@hero_creator', '@subject_2', '@lan_paris_2026', '@main_product_v2']);
+  });
+
+  it('builds the handle an element card builds from the same name', () => {
+    const names = ['Hero creator', 'Red JACKET', 'Élan — Paris 2026!'];
+
+    expect(buildSubjectHandles(names))
+      .toEqual(handles(assignElementHandles(names.map((displayName) => ({ displayName })))));
+  });
+
+  it('builds only handles that the prompt is read for', () => {
+    const subjectHandles = buildSubjectHandles(['Hero creator', 'Subject 1', 'HERO', '', 'नायक लाल रेनकोट में', 'X']);
+    expect(subjectHandles).toHaveLength(6);
+
+    for (const handle of subjectHandles) {
+      expect(isValidElementHandle(handle), handle).toBe(true);
+
+      // Mentioned in a prompt it is read whole, and it is not an unknown element.
+      const prompt = `A scene with ${handle} walking, then ${handle}.`;
+      expect(extractPromptHandles(prompt), handle).toEqual([handle]);
+      expect(findUnknownPromptHandles(prompt, subjectHandles), handle).toEqual([]);
+
+      // While it is typed, each letter keeps the "@" panel open.
+      for (let length = 1; length <= handle.length; length += 1) {
+        const typed = `A scene with ${handle.slice(0, length)}`;
+        expect(getMentionQueryAtCaret(typed, typed.length), typed).toEqual({
+          query: handle.slice(1, length),
+          replaceStart: 13,
+          replaceEnd: typed.length,
+        });
+      }
+    }
+  });
+
+  it('numbers the later of two subjects that give the same handle', () => {
+    // Names that differ only by a capital are one handle, as they are to the server.
+    expect(buildSubjectHandles(['Hero', 'hero', 'Lead', 'HERO!'])).toEqual(['@hero', '@hero_2', '@lead', '@hero_3']);
+    // A number that another subject's name already gives is passed over.
+    expect(buildSubjectHandles(['Hero 2', 'Hero', 'Hero'])).toEqual(['@hero_2', '@hero', '@hero_3']);
+  });
+
+  it('calls a subject by its place when its name has nothing a handle can hold', () => {
+    expect(buildSubjectHandles(['', '   ', 'नायक लाल रेनकोट में', '???']))
+      .toEqual(['@subject_1', '@subject_2', '@subject_3', '@subject_4']);
+    // Beside a subject that is named that, it is numbered like any other pair.
+    expect(buildSubjectHandles(['Subject 2', ''])).toEqual(['@subject_2', '@subject_2_2']);
+  });
+
+  it('keeps the handle of a subject while another one is removed', () => {
+    // The handles are built from the names each time, so the number of the second
+    // "Hero" must not depend on where its card stands.
+    expect(buildSubjectHandles(['Hero', 'Lead', 'Hero'])).toEqual(['@hero', '@lead', '@hero_2']);
+    expect(buildSubjectHandles(['Hero', 'Hero'])).toEqual(['@hero', '@hero_2']);
+  });
+});
+
+describe('extractPromptHandles', () => {
+  it('reads each handle a prompt mentions once, in the order they come', () => {
+    expect(extractPromptHandles('@lead walks past @prop_2, then (@lead) turns.\n@rival waits'))
+      .toEqual(['@lead', '@prop_2', '@rival']);
+  });
+
+  it('reads no handle in an address or in a word that only contains "@"', () => {
+    expect(extractPromptHandles('write to studio@example.com, or a@b')).toEqual([]);
+  });
+
+  it('reads no handle in a word with a capital, which is how a prompt names an account or a brand', () => {
+    // A handle is lower case, so "@Nike" is left as the text it is. Read as a
+    // handle it would be an unknown element, and prompts already saved in
+    // templates and remixes would be refused for it.
+    expect(extractPromptHandles('A runner in the style of @Nike, shot for @MrBeast')).toEqual([]);
+    expect(findUnknownPromptHandles('A runner in the style of @Nike', ['@hero'])).toEqual([]);
+  });
+});
+
+describe('getMentionQueryAtCaret', () => {
+  it('reads the mention being typed at the caret', () => {
+    expect(getMentionQueryAtCaret('A scene with @her', 17)).toEqual({ query: 'her', replaceStart: 13, replaceEnd: 17 });
+    // "@" alone is a mention with nothing typed yet.
+    expect(getMentionQueryAtCaret('@', 1)).toEqual({ query: '', replaceStart: 0, replaceEnd: 1 });
+    // The caret can stand inside the prompt.
+    expect(getMentionQueryAtCaret('Open on @her in the rain', 12)).toEqual({ query: 'her', replaceStart: 8, replaceEnd: 12 });
+  });
+
+  it('reads none where the caret is not at the end of a mention', () => {
+    expect(getMentionQueryAtCaret('A scene with @hero walking', 26)).toBeNull();
+    expect(getMentionQueryAtCaret('A scene with @her-', 18)).toBeNull();
+    // An address is not a mention.
+    expect(getMentionQueryAtCaret('write to studio@her', 19)).toBeNull();
+  });
+
+  it('reads a mention typed with capitals, as a name is', () => {
+    // The panel this opens also finds a reference by its name, and "Hero creator"
+    // starts with a capital. It shut at the "H".
+    expect(getMentionQueryAtCaret('A scene with @H', 15)).toEqual({ query: 'H', replaceStart: 13, replaceEnd: 15 });
+    expect(getMentionQueryAtCaret('A scene with @Hero_Creator', 26))
+      .toEqual({ query: 'Hero_Creator', replaceStart: 13, replaceEnd: 26 });
+  });
+
+  it('lets the handle picked from the panel replace what was typed, capitals and all', () => {
+    const typed = 'A scene with @Hero walking';
+    const mention = getMentionQueryAtCaret(typed, 18);
+
+    expect(insertHandleIntoPrompt(typed, '@hero_creator', 18, 18, mention))
+      .toEqual({ prompt: 'A scene with @hero_creator walking', caretIndex: 26 });
   });
 });

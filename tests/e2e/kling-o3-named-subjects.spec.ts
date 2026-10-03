@@ -106,6 +106,30 @@ async function reloadPastDevServerReloads(page: Page) {
   }
 }
 
+/**
+ * Runs `steps` on a page that has one subject called `name`, and runs them again
+ * from the top when a dev server reload (see above) interrupts them. A subject
+ * with no images is not saved, and a prompt never is, so such a reload empties
+ * both and the steps have to start over.
+ */
+async function withNamedSubject(page: Page, name: string, steps: () => Promise<void>) {
+  await expect(async () => {
+    const nameField = page.getByPlaceholder('Subject name');
+    if (await nameField.count() === 0) {
+      await page.getByRole('button', { name: 'Add subject' }).click({ timeout: 5_000 });
+    }
+    await nameField.fill(name, { timeout: 5_000 });
+    await steps();
+  }).toPass({ timeout: 30_000 });
+}
+
+/** The panel that typing "@" in the prompt opens: its title and the references to insert. */
+function mentionPanel(page: Page) {
+  return page
+    .getByText('Insert reference', { exact: true })
+    .locator('xpath=ancestor::div[contains(@class,"rounded-[20px]")][1]');
+}
+
 test.describe('Kling O3 named subjects', () => {
   test.beforeEach(async ({ context }) => {
     await context.addCookies([
@@ -132,7 +156,7 @@ test.describe('Kling O3 named subjects', () => {
     // The handle now shows in two places: the subjects editor's own chip and the
     // @-mention quick-insert row beside the prompt, which O3 reaches now that its
     // reference capacity is no longer reported as zero.
-    await expect(page.getByText('@Hero_creator').first()).toBeVisible();
+    await expect(page.getByText('@hero_creator', { exact: true }).first()).toBeVisible();
 
     await attachSubjectImages(page, ['hero-front.png', 'hero-side.png']);
 
@@ -159,8 +183,48 @@ test.describe('Kling O3 named subjects', () => {
     // The handle now shows in two places: the subjects editor's own chip and the
     // @-mention quick-insert row beside the prompt, which O3 reaches now that its
     // reference capacity is no longer reported as zero.
-    await expect(page.getByText('@Hero_creator').first()).toBeVisible();
+    await expect(page.getByText('@hero_creator', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('2/4 images')).toBeVisible();
+  });
+
+  // A subject's handle kept the capitals of its name ("@Hero_creator"), and the
+  // prompt reads handles in lower case only. Typed as its card showed it the
+  // handle was not read, and typed in lower case it was refused (2026-10-03).
+  test('reads a subject handle typed into the prompt as its card shows it', async ({ page }) => {
+    await page.goto('/create-video?model=kling-o3');
+    const prompt = page.getByPlaceholder(/^Describe the .* scene/);
+
+    await withNamedSubject(page, 'Hero creator', async () => {
+      await expect(page.getByText('@hero_creator', { exact: true }).first()).toBeVisible({ timeout: 5_000 });
+
+      // Half typed, the handle keeps the "@" panel open with the subject in it.
+      await prompt.fill('A scene with @hero');
+      await expect(mentionPanel(page).getByRole('button', { name: /@hero_creator/ })).toBeVisible({ timeout: 5_000 });
+
+      // Typed in full, it is a mention the prompt knows. The character count shows
+      // that the page has taken the new prompt in, so a missing warning means none.
+      await prompt.fill('A scene with @hero_creator walking');
+      await expect(page.getByText('34/2500')).toBeVisible({ timeout: 5_000 });
+      await expect(page.getByText(/^Unknown element mention/)).toHaveCount(0);
+    });
+  });
+
+  // The "@" panel also finds a reference by its name, and a name starts with a
+  // capital. The panel shut at the first capital typed after "@".
+  test('keeps the "@" panel open at a capital letter and inserts the handle from it', async ({ page }) => {
+    await page.goto('/create-video?model=kling-o3');
+    const prompt = page.getByPlaceholder(/^Describe the .* scene/);
+
+    await withNamedSubject(page, 'Hero creator', async () => {
+      await prompt.fill('A scene with @H');
+      const suggestion = mentionPanel(page).getByRole('button', { name: /@hero_creator/ });
+      await expect(suggestion).toBeVisible({ timeout: 5_000 });
+
+      // Picking the subject replaces what was typed with the handle as it is written.
+      await suggestion.click();
+      await expect(prompt).toHaveValue('A scene with @hero_creator', { timeout: 5_000 });
+      await expect(page.getByText(/^Unknown element mention/)).toHaveCount(0);
+    });
   });
 
   test('forgets subjects once the last one is removed', async ({ page }) => {

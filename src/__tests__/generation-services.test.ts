@@ -4159,6 +4159,54 @@ describe('generation services', () => {
     expect((providerBody as unknown as { input?: Record<string, unknown> })?.input?.image_urls).toBeUndefined();
   });
 
+  it('gives the provider each Kling O3 subject under the handle the creator page built', async () => {
+    // The provider matches a prompt's "@name" to elements[].name, and the prompt
+    // goes to it as written. So the handle the page shows and the prompt mentions
+    // has to be the name sent, letter for letter. A handle this service had to
+    // rewrite ("@Hero_creator" to "hero_creator", 2026-10-03) was one name in
+    // the prompt and another in elements.
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    const { buildSubjectHandles } = await import('@/lib/image-elements');
+    let providerBody: { input?: { prompt?: string; elements?: Array<{ name: string }> } } | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-o3-subjects-2' } }),
+      } as Response;
+    });
+
+    // Two names that differ only by a capital, and one with nothing a handle can hold.
+    const names = ['Hero creator', 'hero creator', 'नायक'];
+    const handles = buildSubjectHandles(names);
+    const prompt = `${handles[0]} greets ${handles[1]} while ${handles[2]} looks on.`;
+
+    const { supabase } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt,
+      model: 'kling-o3',
+      duration: 5,
+      aspectRatio: '16:9',
+      resolution: '720p',
+      sound: false,
+      klingSubjects: names.map((displayName, index) => ({
+        handle: handles[index],
+        displayName,
+        images: [
+          { url: `https://cdn.example.com/subject-${index}-front.jpg` },
+          { url: `https://cdn.example.com/subject-${index}-side.jpg` },
+        ],
+      })),
+    });
+
+    const sent = providerBody as { input?: { prompt?: string; elements?: Array<{ name: string }> } } | null;
+    expect(sent?.input?.elements?.map((element) => `@${element.name}`)).toEqual(handles);
+    expect(sent?.input?.prompt).toBe(prompt);
+  });
+
   it('rejects Kling O3 subjects with the wrong image count or model', async () => {
     const { startVideoGeneration } = await import('@/lib/generation-services');
     const { supabase } = createSupabaseMock();
