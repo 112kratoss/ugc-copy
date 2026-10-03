@@ -2111,6 +2111,25 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(text).not.toContain('Generation checks');
   });
 
+  // The blocker named "@Nike" and "@example" as unknown elements and held
+  // Generate back, though the server takes both as the text they are (2026-10-03).
+  it('raises no unknown-mention blocker for a word with a capital or for an address', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="image" />);
+    });
+    const typePrompt = (prompt: string) => {
+      const promptInput = tree!.root.findAll((node) => String(node.type) === 'textinput')[0];
+      renderer.act(() => {
+        promptInput.props.onChangeText(prompt);
+      });
+      return collectText(tree!.root).filter((item) => item.includes('Unknown element mention'));
+    };
+
+    expect(typePrompt('A runner beside @missing_reference.')).toEqual(['Unknown element mention: @missing_reference']);
+    expect(typePrompt('A runner in the style of @Nike. Write to studio@example.com.')).toEqual([]);
+  });
+
   it('shows one contextual motion blocker instead of the legacy ready check', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {

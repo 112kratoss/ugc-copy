@@ -16,6 +16,7 @@ import {
   normalizeCatalogSettings,
 } from './generation-model-catalog';
 import {
+  extractPromptHandles,
   hydrateCreationDraftFromRemixSource,
   REMIX_RESTORE_WARNING_MESSAGE,
   type CatalogDraftInputAsset,
@@ -325,8 +326,23 @@ export function getCatalogCreationSectionSummary(draft: CreationDraft, model: Ge
   };
 }
 
-function extractHandles(prompt: string) {
-  return Array.from(new Set(prompt.match(/@[a-z0-9_]+/gi) ?? []));
+/**
+ * The mentions in a draft's prompt that name no reference it holds, read the way
+ * the server reads them. Only an image prompt and a single-shot video prompt are
+ * read: a motion run has no reference a prompt could name and a multi-shot run is
+ * described by its shots, so the server reads no mention in either prompt, and
+ * one refused here would be a prompt it accepts.
+ */
+function unknownPromptMentions(draft: CreationDraft, model: GenerationModelDescriptor) {
+  if (draft.tool === 'motion' || (draft.tool === 'video' && draft.isMultiShot)) return [];
+  const references = draft.tool === 'image'
+    ? draft.references
+    : [
+        ...draft.references,
+        ...(model.id === 'kling-3.0-video' && draft.referenceMode === 'elements' ? draft.referenceVideos : []),
+      ];
+  const knownHandles = references.map((reference) => reference.handle).filter((handle): handle is string => Boolean(handle));
+  return extractPromptHandles(draft.prompt).filter((handle) => !knownHandles.includes(handle));
 }
 
 function validateControls(draft: CreationDraft, model: GenerationModelDescriptor, errors: string[]) {
@@ -495,16 +511,7 @@ export function validateCatalogCreationDraft(
     );
   }
 
-  const references = draft.tool === 'image'
-    ? draft.references
-    : draft.tool === 'video'
-      ? [
-          ...draft.references,
-          ...(model.id === 'kling-3.0-video' && draft.referenceMode === 'elements' ? draft.referenceVideos : []),
-        ]
-      : [];
-  const knownHandles = references.map((reference) => reference.handle).filter((handle): handle is string => Boolean(handle));
-  const unknownHandles = extractHandles(draft.prompt).filter((handle) => !knownHandles.includes(handle));
+  const unknownHandles = unknownPromptMentions(draft, model);
   if (unknownHandles.length > 0) errors.push(`Unknown element mention${unknownHandles.length === 1 ? '' : 's'}: ${unknownHandles.join(', ')}`);
 
   const hasServerQuote = typeof options.quotedCost === 'number' && Number.isFinite(options.quotedCost);

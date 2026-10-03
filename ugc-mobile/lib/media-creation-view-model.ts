@@ -435,6 +435,9 @@ export interface VisibleGenerationCheckMessages {
 
 export const REMIX_RESTORE_WARNING_MESSAGE = 'Some source media could not be restored automatically, so you may need to re-add a few references.';
 
+// The pattern the server reads a prompt's mentions with (src/lib/image-elements.ts).
+// The workspaces cannot import from each other, so this is a copy, and a test in
+// __tests__/media-creation-view-model.test.ts holds the two to the same pattern.
 const HANDLE_PATTERN = /(^|[^\w])(@[a-z0-9_]+)(?=$|[^\w])/g;
 
 function createDraftId(prefix: string, seed: string) {
@@ -482,6 +485,12 @@ function normalizeExistingHandle(value: string | undefined, usedHandles: Set<str
   return handle;
 }
 
+/**
+ * The handles a prompt mentions: each one once, in the order they come. A handle
+ * is lower case and stands apart from the words around it, so "@Nike" and the
+ * "@example" of an address are text. Whatever checks a prompt's mentions reads
+ * them with this, so that it agrees with the server.
+ */
 export function extractPromptHandles(prompt: string): string[] {
   const handles = new Set<string>();
   prompt.replace(HANDLE_PATTERN, (_match, _prefix, handle: string) => {

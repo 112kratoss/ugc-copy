@@ -424,3 +424,125 @@ describe('catalog-backed mobile creation drafts', () => {
     });
   });
 });
+
+/**
+ * The check read a prompt's mentions with a pattern of its own, /@[a-z0-9_]+/gi,
+ * and not the one the server reads a prompt with (HANDLE_PATTERN in
+ * src/lib/image-elements.ts, kept for mobile in lib/media-creation-view-model.ts).
+ * It took a word with a capital ("@Nike") and the end of an address
+ * ("studio@example.com") for mentions, found no reference under either, and
+ * refused a prompt the server accepts as it stands (2026-10-03).
+ */
+describe('the mentions a catalog draft is checked for', () => {
+  const product = {
+    id: 'ref-product',
+    url: 'https://example.com/product.jpg',
+    kind: 'image' as const,
+    fileName: 'product.jpg',
+    displayName: 'Product',
+    handle: '@product',
+  };
+  const validate = (prompt: string) => validateCatalogCreationDraft({
+    ...createDefaultCreationDraft('image'),
+    model: remoteImageModel.id as 'nano-banana-2',
+    prompt,
+    aspectRatio: '2:3',
+    resolution: '2K' as '1K',
+    references: [product],
+  }, remoteImageModel, { credits: 10, quotedCost: 6 });
+
+  it('accepts a mention of a reference the draft holds', () => {
+    expect(validate('Put @product on a marble counter, then (@product) again.'))
+      .toMatchObject({ errors: [], canGenerate: true });
+  });
+
+  it('refuses a mention of a reference the draft does not hold, and names it once', () => {
+    expect(validate('Put @product beside @missing, then @missing again.').errors)
+      .toEqual(['Unknown element mention: @missing']);
+    expect(validate('Swap @lost for @missing.').errors)
+      .toEqual(['Unknown element mentions: @lost, @missing']);
+  });
+
+  it('leaves a word with a capital as the text it is, which is how a prompt names an account or a brand', () => {
+    expect(validate('A runner in the style of @Nike, shot for @MrBeast'))
+      .toMatchObject({ errors: [], canGenerate: true });
+  });
+
+  it('reads no mention in an address or in a word that only contains "@"', () => {
+    expect(validate('write to studio@example.com, or a@b'))
+      .toMatchObject({ errors: [], canGenerate: true });
+  });
+
+  it('names only the mentions the server would refuse too', () => {
+    expect(validate('Put @product beside @missing for @Nike, and write to studio@example.com').errors)
+      .toEqual(['Unknown element mention: @missing']);
+  });
+
+  it('takes a handle the draft holds, written with a capital, for text as the server does', () => {
+    // To the server "@Product" is not the handle "@product": it reads no mention
+    // there and sends the prompt as written. The "@" panel is how a creator gets
+    // the handle right, and it replaces what was typed with the handle it inserts.
+    expect(validate('Put @Product on a marble counter').errors).toEqual([]);
+  });
+
+  // The server reads a run's prompt for mentions when it is an image prompt or a
+  // single-shot video prompt (startImageGeneration and startVideoGeneration in
+  // src/lib/generation-services.ts). It reads none in a motion prompt, and in a
+  // multi-shot run it reads the shots, not the prompt. The check read every
+  // draft's prompt: a motion prompt, where no reference exists to answer a
+  // mention, and the prompt a multi-shot draft keeps behind its shot editor.
+  it('reads none in a motion prompt, which has no reference to name', () => {
+    const motionModel = createTestGenerationModelCatalog().models.find((model) => model.id === 'kling-3.0');
+    if (!motionModel) throw new Error('Expected a motion model fixture.');
+    const draft = applyCatalogModelDefaults({
+      ...createDefaultCreationDraft('motion'),
+      prompt: 'Match the timing of @dancer, eyes to camera.',
+      characterImage: createMediaDraftFromUpload({
+        signedUrl: 'https://cdn.example.com/character.jpg',
+        storagePath: 'uploads/user/character.jpg',
+        mimeType: 'image/jpeg',
+        fileName: 'character.jpg',
+        kind: 'image',
+      }, { displayName: 'Character' }),
+      referenceVideo: createMediaDraftFromUpload({
+        signedUrl: 'https://cdn.example.com/dance.mp4',
+        storagePath: 'uploads/user/dance.mp4',
+        mimeType: 'video/mp4',
+        fileName: 'dance.mp4',
+        kind: 'video',
+        durationSeconds: 8,
+      }, { displayName: 'Dance' }),
+    }, motionModel);
+
+    expect(validateCatalogCreationDraft(draft, motionModel, { credits: 100, quotedCost: 8 }))
+      .toMatchObject({ errors: [], canGenerate: true });
+  });
+
+  it('reads none in the prompt a multi-shot draft keeps but does not show', () => {
+    const baseVideoModel = createTestGenerationModelCatalog().models.find((model) => model.kind === 'video');
+    if (!baseVideoModel) throw new Error('Expected a video model fixture.');
+    const multiShotModel = {
+      ...baseVideoModel,
+      id: 'multi-shot-video',
+      displayName: 'Multi-shot Video',
+      capabilities: { ...baseVideoModel.capabilities, multiShot: true },
+    };
+    // Written as a single shot, then switched: the shot editor takes the prompt's
+    // place on screen, and the server reads the shots.
+    const singleShot = applyCatalogModelDefaults({
+      ...createDefaultCreationDraft('video'),
+      prompt: 'Open on @ghost in the rain.',
+      multiPrompts: [
+        { id: 'shot-1', prompt: 'A street at night.', duration: 5 },
+        { id: 'shot-2', prompt: 'She turns to the camera.', duration: 5 },
+      ],
+    }, multiShotModel);
+    if (singleShot.tool !== 'video') throw new Error('Expected a video draft.');
+    const quote = { credits: 100, quotedCost: 8 };
+
+    expect(validateCatalogCreationDraft(singleShot, multiShotModel, quote).errors)
+      .toEqual(['Unknown element mention: @ghost']);
+    expect(validateCatalogCreationDraft({ ...singleShot, isMultiShot: true }, multiShotModel, quote))
+      .toMatchObject({ errors: [], canGenerate: true });
+  });
+});
