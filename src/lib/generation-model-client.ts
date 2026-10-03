@@ -484,12 +484,14 @@ export function useWebGenerationModelCatalog(options: {
     if (nextCursors[key] === undefined || (options.pickerOpen && nextCursors[key])) void session.loadPage(options.kind ?? null);
   }, [session, options.kind, options.pickerOpen, current, nextCursors, error, retryVersion]);
   const refetch = useCallback(() => { void session.retry().then(() => setRetryVersion(v => v + 1)); }, [session]);
+  // For a caller about to store the revision, such as a workflow run. What this hook returns is as old as the page load or the last picker open.
+  const ensureCurrent = useCallback(() => session.ensureCurrent(selectedKey ? selectedKey.split(',') : []), [session, selectedKey]);
   const selectedIds = selectedKey ? selectedKey.split(',') : [];
   const detailsReady = Boolean(current && selectedIds.every(id => details.some(m => m.id === id)));
   const catalog = useMemo(() => current ? { schemaVersion: 3, revision: current.revision, defaults: current.defaults, models: details } : null, [current, details]);
   return { catalog, current: current, summaries: state.summaries, missingIds: state.missingIds,
     detailsReady, isLoadingModels: Boolean(options.pickerOpen && nextCursors[options.kind ?? 'all'] !== null && !error), error: error, isLoading: !current, isLoadingDetails: state.loadingDetails,
-    revision: current?.revision ?? null, refetch };
+    revision: current?.revision ?? null, refetch, ensureCurrent };
 }
 
 export class WebCatalogRequestError extends Error {

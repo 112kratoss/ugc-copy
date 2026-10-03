@@ -101,6 +101,12 @@ function areAnchoredPopupPositionsEqual(
   );
 }
 
+const MODEL_SETTINGS_NOT_READY_MESSAGE = 'Wait for model settings to load, or choose replacements for unavailable models.';
+
+function describeUnavailableModels(modelIds: string[]) {
+  return `Unavailable models: ${modelIds.join(', ')}. Choose replacements before running; your workflow has been preserved.`;
+}
+
 type UnsavedDecision = 'save' | 'discard' | 'cancel';
 
 function UnsavedChangesDialog({
@@ -208,6 +214,7 @@ export default function CreateWorkflowClient({
     pickerOpen: activeInspectorPanel === 'parameters',
   });
   const modelCatalogRevision = modelCatalog.catalog?.revision ?? null;
+  const ensureCurrentModelCatalog = modelCatalog.ensureCurrent;
   const [edges, setEdges] = useState<WorkflowCanvasEdge[]>(starter.edges.map((edge) => decorateWorkflowEdge(edge)));
   const [changeKey, setChangeKey] = useState(0);
   const [openNodeRunMenuId, setOpenNodeRunMenuId] = useState<string | null>(null);
@@ -221,7 +228,7 @@ export default function CreateWorkflowClient({
   }, []);
 
   useEffect(() => {
-    if (modelCatalog.missingIds.length) setError(`Unavailable models: ${modelCatalog.missingIds.join(', ')}. Choose replacements before running; your workflow has been preserved.`);
+    if (modelCatalog.missingIds.length) setError(describeUnavailableModels(modelCatalog.missingIds));
   }, [modelCatalog.missingIds]);
 
   const authHeaders = useCallback(async () => {
@@ -950,7 +957,7 @@ export default function CreateWorkflowClient({
     }
 
     if (!modelCatalog.detailsReady) {
-      setError(modelCatalog.error?.message ?? 'Wait for model settings to load, or choose replacements for unavailable models.');
+      setError(modelCatalog.error?.message ?? MODEL_SETTINGS_NOT_READY_MESSAGE);
       return;
     }
     setError(null);
@@ -966,11 +973,31 @@ export default function CreateWorkflowClient({
       }
     }
 
+    // The run stores this revision, and the worker prices a step at the active
+    // revision only. The editor's own copy is as old as the page load or the
+    // last opened settings panel, so a tab left open across a catalog release
+    // would start a run whose every generate step is refused. Read the current
+    // revision now, with the canvas models' settings for it: the release can
+    // also have taken one of them away.
+    const catalogCheck = await ensureCurrentModelCatalog();
+    if (!catalogCheck.ready) {
+      setError(
+        catalogCheck.missingIds.length > 0
+          ? describeUnavailableModels(catalogCheck.missingIds)
+          : catalogCheck.revision
+            ? catalogCheck.error?.message ?? MODEL_SETTINGS_NOT_READY_MESSAGE
+            : 'Could not check model settings, so this run was not started. Try again.'
+      );
+      return;
+    }
+
+    // The revision is not part of the intent: the server answers a repeated key
+    // with the run it already has, whatever revision the repeat names. Keyed on
+    // the revision, a retry after a release would be a second, charged run.
     const intentSignature = JSON.stringify({
       canvasId: activeCanvasId,
       nodeId,
       mode,
-      catalogRevision: modelCatalogRevision,
     });
     if (pendingRunIntentRef.current?.signature !== intentSignature) {
       pendingRunIntentRef.current = { signature: intentSignature, key: crypto.randomUUID() };
@@ -987,7 +1014,7 @@ export default function CreateWorkflowClient({
         body: JSON.stringify({
           startNodeId: nodeId,
           mode,
-          catalogRevision: modelCatalogRevision,
+          catalogRevision: catalogCheck.revision,
         }),
       });
       const data = await response.json();
@@ -1015,9 +1042,9 @@ export default function CreateWorkflowClient({
     authHeaders,
     canvasTitle,
     closeContextMenu,
+    ensureCurrentModelCatalog,
     graph,
     hasUnsavedChanges,
-    modelCatalogRevision,
     modelCatalog.detailsReady,
     modelCatalog.error,
     persistCanvas,
