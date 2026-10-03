@@ -1421,6 +1421,7 @@ describe('generation services', () => {
     it('names the generation that holds the key when the first start is still unresolved', async () => {
       const { startImageGeneration } = await import('@/lib/generation-services');
       const {
+        getGenerationStartRefusal,
         getHeldProviderSubmissionGenerationId,
         getInProgressStartGenerationId,
         getPublicGenerationStartFailure,
@@ -1445,6 +1446,8 @@ describe('generation services', () => {
       // For a run worker that repeated its own start: that generation is its
       // step's, and it takes it back.
       expect(getInProgressStartGenerationId(error)).toBe('gen-first');
+      // It is no refusal either: that generation is alive.
+      expect(getGenerationStartRefusal(error)).toBeNull();
       // It is not a held submission: a route answers a held one differently.
       expect(getHeldProviderSubmissionGenerationId(error)).toBeNull();
       expect(getPublicGenerationStartFailure(error).code).not.toBe('submission_pending');
@@ -1457,7 +1460,7 @@ describe('generation services', () => {
 
     it('names no generation when the key belongs to a start that already ended', async () => {
       const { startImageGeneration } = await import('@/lib/generation-services');
-      const { getInProgressStartGenerationId } = await import('@/lib/generation-public-failure');
+      const { getGenerationStartRefusal, getInProgressStartGenerationId } = await import('@/lib/generation-public-failure');
       const { supabase, rpcCalls } = createSupabaseMock([], {
         rpcResults: {
           start_generation: { status: 'key_already_used', generation_id: 'gen-first', remaining_credits: 100, cost: 9 },
@@ -1475,7 +1478,41 @@ describe('generation services', () => {
         message: expect.stringContaining('already used by a failed generation start'),
       });
       expect(getInProgressStartGenerationId(error)).toBeNull();
+      expect(getGenerationStartRefusal(error)).toBe('key_already_used');
       expect(rpcCalls.map((call) => call.fn)).toEqual(['start_generation']);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    // The three answers that refuse a template step for what its row is. A
+    // request hears the same 409 for each; a run worker reads which it was.
+    it.each([
+      ['invalid_template_context', 'Template generation context is invalid.'],
+      ['template_step_already_started', 'This template step has already started.'],
+      ['key_already_used', 'This idempotency key was already used by a failed generation start. Retry with a new key.'],
+    ] as const)('names the answer %s on the 409 of a template step it refuses', async (status, message) => {
+      const { startImageGeneration } = await import('@/lib/generation-services');
+      const { getGenerationStartRefusal, getInProgressStartGenerationId } = await import('@/lib/generation-public-failure');
+      const { supabase, generations, rpcCalls } = createSupabaseMock([], {
+        rpcResults: { start_template_generation: { status, remaining_credits: 100, cost: 9 } },
+      });
+
+      const error = await startImageGeneration({
+        supabase,
+        creditSupabase: supabase,
+        ...replayed(),
+        // As the run worker starts a template step.
+        persistInputMedia: false,
+        privateRecipe: true,
+        templateContext: { runId: 'run-1', stepId: 'step-1', templateId: 'template-1', templateVersionId: 'version-1' },
+      }).catch((caught: unknown) => caught);
+
+      expect(error).toMatchObject({ name: 'GenerationServiceError', status: 409, failureCode: null, message });
+      expect(getGenerationStartRefusal(error)).toBe(status);
+      expect(getInProgressStartGenerationId(error)).toBeNull();
+      expect(JSON.stringify(error)).not.toContain(status);
+      // Nothing was reserved, sent or settled.
+      expect(rpcCalls.map((call) => call.fn)).toEqual(['start_template_generation']);
+      expect(generations).toEqual([]);
       expect(fetch).not.toHaveBeenCalled();
     });
 

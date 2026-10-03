@@ -64,9 +64,11 @@ import {
   GENERATION_PROMPT_BLOCKED_MESSAGE,
   getPublicGenerationStartFailure,
   markGenerationStartInProgress,
+  markGenerationStartRefusal,
   markHeldProviderSubmission,
   markRefundedGenerationStart,
   type GenerationStartFailureCode,
+  type GenerationStartRefusal,
   type PublicGenerationStartFailure,
 } from '@/lib/generation-public-failure';
 import {
@@ -398,6 +400,13 @@ class AmbiguousProviderSubmissionError extends Error {
   }
 }
 
+/** A start the function refused for what its row is: the plain 409 a request answers with, named for a run worker. */
+function refusedGenerationStart(message: string, refusal: GenerationStartRefusal) {
+  const error = new GenerationServiceError(message, 409);
+  markGenerationStartRefusal(error, refusal);
+  return error;
+}
+
 async function startGenerationRecord(
   supabase: SupabaseClient,
   record: Record<string, unknown>,
@@ -471,11 +480,11 @@ async function startGenerationRecord(
   }
 
   if (status === 'invalid_template_context') {
-    throw new GenerationServiceError('Template generation context is invalid.', 409);
+    throw refusedGenerationStart('Template generation context is invalid.', status);
   }
 
   if (status === 'template_step_already_started') {
-    throw new GenerationServiceError('This template step has already started.', 409);
+    throw refusedGenerationStart('This template step has already started.', status);
   }
 
   if (status === 'in_progress') {
@@ -490,9 +499,9 @@ async function startGenerationRecord(
   }
 
   if (status === 'key_already_used') {
-    throw new GenerationServiceError(
+    throw refusedGenerationStart(
       'This idempotency key was already used by a failed generation start. Retry with a new key.',
-      409,
+      status,
     );
   }
 
