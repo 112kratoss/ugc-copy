@@ -231,7 +231,7 @@ export async function patchWorkflowCanvasForRoute({
     submittedUploadLocations = preparedUploads.locations;
   }
 
-  if (baseRevision !== null && normalizedCurrentCanvas.revision > baseRevision) {
+  if (baseRevision !== null && normalizedCurrentCanvas.revision !== baseRevision) {
     await abortPreparedWorkflowUploads(uploadClient, submittedUploadLocations);
     return {
       ok: false,

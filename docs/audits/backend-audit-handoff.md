@@ -22,9 +22,9 @@ three external. Broad workflow matrices remain open.
 19:01:14 IST with no mobile store release active. Exact-main release is next.
 7H PR #310 now targets main. It reproduces stale publication/restore, competing
 restores, publication decreasing revision 6 to 5, and title-only rename without
-baseRevision overwriting newer edits. Candidate revision guards pass 16 actual
+baseRevision overwriting newer edits. Candidate revision guards pass 17 actual
 SQL cases; combined focused tests pass 42 and wider canvas suite passes 120
-(with the 16 SQL cases separately run). Read the canvas-authoring report.
+(with the 17 SQL cases separately run). Read the canvas-authoring report.
 Current-head CI/release remain pending. Existing local changes are preserved.
 
 The preceding checkpoint follows.

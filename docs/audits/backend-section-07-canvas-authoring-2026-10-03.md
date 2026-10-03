@@ -34,7 +34,14 @@ now always guards PATCH updates with either the supplied revision or the revisio
 it read. Existing requests need no new field. Its existing 409/latest-canvas
 response handles lost races; the library already displays non-success errors.
 These before logs are retained in `canvas-rename-before.log` (three fail, thirteen
-prior cases pass). Final combined validation passes 42 cases across six files.
+prior cases pass). Final broader validation passes all 137 cases across 18 canvas files, including
+the 17 actual database cases.
+
+One further actual SQL case reproduces a future baseRevision matching a save
+that commits after the initial read. The stale request then overwrote that save.
+PATCH now requires a supplied revision to equal its initial read, in addition to
+the guarded UPDATE. The retained `canvas-future-revision-before.log` records one
+failure and sixteen passing prior cases. The final database suite has 17 cases.
 
 ## Change and validation
 
@@ -44,9 +51,9 @@ or associated history snapshot is accepted. Ordinary SQL rejection remains 500;
 missing/inaccessible initial records remain 404. Successful requests return the
 persisted row and continue the existing snapshot behavior. No migration is needed.
 
-Sixteen actual database cases pass: the four reproduced races, sequential
+Seventeen actual database cases pass: the four reproduced races, sequential
 publication/restore, save losing to publication or restore, both foreign-identity
-checks, both deletion races, both real trigger-rejected writes, and three title-only rename races. Ten existing
+checks, both deletion races, both real trigger-rejected writes, three title-only rename races, and the future-revision race. Ten existing
 lifecycle service/route cases also pass. App and test typechecks and targeted
 lint pass. CI includes a dedicated authenticated database step after clean
 migration replay. Fixture rows and fault triggers are removed after each case.

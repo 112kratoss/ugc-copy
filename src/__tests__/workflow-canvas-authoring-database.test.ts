@@ -29,7 +29,7 @@ function databaseError(error: unknown) {
 }
 
 /** Execute the authoring services' query chains against real SQL on one connection. */
-function databaseClient(db: Client, beforeWrite?: () => Promise<void>): SupabaseClient {
+function databaseClient(db: Client, beforeWrite?: () => Promise<void>, afterRead?: () => Promise<void>): SupabaseClient {
   return {
     from(table: string) {
       identifier(table);
@@ -59,10 +59,12 @@ function databaseClient(db: Client, beforeWrite?: () => Promise<void>): Supabase
           )).rows;
           return rows;
         }
-        return (await db.query(
+        const rows = (await db.query(
           `select * from public.${table}${where}${orders.length ? ` order by ${orders.join(',')}` : ''}${rowLimit === null ? '' : ` limit ${rowLimit}`}`,
           values,
         )).rows;
+        await afterRead?.();
+        return rows;
       };
       const answer = async (single: boolean, required: boolean) => {
         try {
@@ -234,6 +236,17 @@ describe.skipIf(!connectionString)('canvas authoring with actual authenticated S
     expect.soft(await patchWorkflowCanvasForRoute({ canvasId,userId,supabase:delayedRename,body:{ title:'Delayed rename' } })).toMatchObject({ ok:false,status:409 });
     expect.soft(await saved()).toMatchObject({ revision:5,title:action === 'save' ? 'Newer saved title' : action === 'publish' ? 'Current authoring audit' : 'Historical title',status:action === 'publish' ? 'published' : 'draft' });
     expect(await saved()).toEqual(winningRow);
+    expect(await snapshots()).toHaveLength(2);
+  });
+  it('does not let a future base revision match an intervening save and overwrite it', async () => {
+    let read = false;
+    const delayedSave = databaseClient(owner, undefined, async () => {
+      if (read) return;
+      read = true;
+      expect(await save()).toMatchObject({ ok:true });
+    });
+    expect.soft(await patchWorkflowCanvasForRoute({ canvasId,userId,supabase:delayedSave,body:{ title:'Stale request with future revision',baseRevision:5 } })).toMatchObject({ ok:false,status:409 });
+    expect(await saved()).toMatchObject({ revision:5,title:'Newer saved title',status:'draft' });
     expect(await snapshots()).toHaveLength(2);
   });
   it('publishes and restores sequentially with increasing revisions and persisted snapshots', async () => {
