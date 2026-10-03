@@ -13,6 +13,7 @@ import {
   CircleDollarSign,
   Clock3,
   Image as ImageIcon,
+  ImageOff,
   Loader2,
   LockKeyhole,
   Play,
@@ -21,6 +22,7 @@ import {
   Upload,
   UserRound,
   Video,
+  VideoOff,
 } from 'lucide-react';
 
 import {
@@ -41,8 +43,10 @@ import type {
   TemplateRunStep,
 } from './types';
 import {
+  isRunTerminal,
   isStepAwaitingApproval,
   isStepBusy,
+  isStepCutShort,
   isStepFailed,
   isStepSuccessful,
 } from './types';
@@ -178,7 +182,9 @@ export function TemplateRunStepper({
       id: step.id,
       label: step.label,
       complete: isStepSuccessful(step),
-      active: isStepBusy(step) || isStepAwaitingApproval(step) || isStepFailed(step),
+      // A step the run cut short is drawn like one that was never reached.
+      active: !isStepCutShort(status, step)
+        && (isStepBusy(step) || isStepAwaitingApproval(step) || isStepFailed(step)),
       tone: isStepFailed(step)
         ? 'failed' as const
         : isStepAwaitingApproval(step)
@@ -187,7 +193,8 @@ export function TemplateRunStepper({
     })),
   ];
   const completed = items.filter((item) => item.complete).length;
-  const currentItem = items.find((item) => item.active && !item.complete);
+  // A run that has ended stands nowhere: no step of it is the current one.
+  const currentItem = isRunTerminal(status) ? undefined : items.find((item) => item.active && !item.complete);
 
   return (
     <div>
@@ -382,7 +389,15 @@ export function TemplateSlotUpload({
   );
 }
 
-function StepMedia({ step, mediaRecovery }: { step: TemplateRunStep; mediaRecovery?: { runId: string; token?: string } }) {
+function StepMedia({
+  step,
+  mediaRecovery,
+  runStatus,
+}: {
+  step: TemplateRunStep;
+  mediaRecovery?: { runId: string; token?: string };
+  runStatus?: TemplateRunStatus;
+}) {
   if (step.outputUrl && mediaRecovery) {
     return <TemplateRunMedia {...mediaRecovery} stepId={step.id} kind={step.mediaKind} url={step.outputUrl}
       renditionUrl={step.renditionUrl} previewUrl={step.previewUrl} alt={step.label} />;
@@ -393,6 +408,22 @@ function StepMedia({ step, mediaRecovery }: { step: TemplateRunStep; mediaRecove
   if (step.outputUrl) {
     // eslint-disable-next-line @next/next/no-img-element
     return <img src={step.outputUrl} alt={step.label} className="h-full w-full object-contain" />;
+  }
+  if (runStatus !== undefined && isRunTerminal(runStatus) && !isStepSuccessful(step)) {
+    // Nothing is said about the uploads: those of a run that has ended are deleted.
+    const cutShort = isStepCutShort(runStatus, step);
+    const Icon = !cutShort ? AlertTriangle : step.mediaKind === 'video' ? VideoOff : ImageOff;
+    return (
+      <div className={clsx('flex h-full min-h-52 flex-col items-center justify-center gap-3 px-6 text-center', cutShort ? 'text-zinc-300' : 'text-rose-100')}>
+        <div className={clsx(
+          'flex h-12 w-12 items-center justify-center rounded-2xl border',
+          cutShort ? 'border-white/10 bg-white/[0.04] text-zinc-400' : 'border-rose-300/20 bg-rose-400/10'
+        )}>
+          <Icon className="h-5 w-5" aria-hidden />
+        </div>
+        <span className="text-sm font-bold">{step.kind === 'approval' ? 'Nothing to review' : 'No result was created'}</span>
+      </div>
+    );
   }
   if (isStepFailed(step)) {
     return (
@@ -425,8 +456,14 @@ function StepMedia({ step, mediaRecovery }: { step: TemplateRunStep; mediaRecove
   );
 }
 
-function stepPill(step: TemplateRunStep): { label: string; accent: 'workflow' | 'video' | 'neutral' | 'commerce' } {
+function stepPill(
+  step: TemplateRunStep,
+  runStatus?: TemplateRunStatus,
+): { label: string; accent: 'workflow' | 'video' | 'neutral' | 'commerce' } {
   if (isStepSuccessful(step)) return { label: step.kind === 'approval' ? 'Approved' : 'Complete', accent: 'workflow' };
+  if (isStepCutShort(runStatus, step)) return { label: 'Not finished', accent: 'neutral' };
+  // What is left on a run that has ended failed by itself, and cannot be retried.
+  if (runStatus !== undefined && isRunTerminal(runStatus)) return { label: 'Failed', accent: 'video' };
   if (isStepAwaitingApproval(step)) return { label: 'Review', accent: 'commerce' };
   if (isStepFailed(step)) return { label: 'Needs attention', accent: 'video' };
   if (isStepBusy(step)) return { label: 'In progress', accent: 'video' };
@@ -439,7 +476,7 @@ export function TemplateRunStepCard({
   disabled,
   availableCredits,
   busyAction,
-  retryEnabled = true,
+  runStatus,
   restartHref,
   restartLabel = 'Start a new run',
   onApprove,
@@ -450,25 +487,31 @@ export function TemplateRunStepCard({
   disabled?: boolean;
   availableCredits?: number | null;
   busyAction?: 'approve' | 'retry' | null;
-  retryEnabled?: boolean;
+  /** The status of the step's run. A run that has ended offers nothing to approve or retry. */
+  runStatus?: TemplateRunStatus;
+  /** Where a step that cannot go on sends the person while its run can still continue. */
   restartHref?: string;
   restartLabel?: string;
   onApprove: () => void;
   onRetry: () => void;
 }) {
   const [confirmingRetry, setConfirmingRetry] = useState(false);
-  const status = stepPill(step);
-  const showApprove = isStepAwaitingApproval(step);
-  const isFailed = isStepFailed(step);
+  const status = stepPill(step, runStatus);
+  const runEnded = runStatus !== undefined && isRunTerminal(runStatus);
+  // The run ended before this step did. It is not an error, and is not drawn as one.
+  const cutShort = isStepCutShort(runStatus, step);
+  const showApprove = isStepAwaitingApproval(step) && !runEnded;
+  const isFailed = isStepFailed(step) && !cutShort;
   const isServiceMisconfigured = isFailed && step.failureCode === 'service_misconfigured';
   const requiresNewInput = isFailed && requiresReplacementGenerationInput({
     code: step.failureCode,
     message: step.errorMessage,
   });
   const showRetry = step.canRetry
-    && retryEnabled
+    && !runEnded
     && !requiresNewInput
     && (isStepAwaitingApproval(step) || isFailed);
+  const unfinishedTitle = step.kind === 'approval' ? 'This review was not completed' : 'This generation did not finish';
   const mediaAspect = !step.outputUrl ? '16 / 9' : step.mediaKind === 'video' ? '16 / 10' : '4 / 5';
   const knownRetryCost = step.estimatedRetryCredits !== null ? step.estimatedRetryCredits : null;
   const missingRetryCredits = knownRetryCost !== null && availableCredits !== null && availableCredits !== undefined
@@ -503,7 +546,7 @@ export function TemplateRunStepCard({
           aspectRatio={mediaAspect}
           className="relative rounded-none border-0 border-b border-white/8 md:!aspect-auto md:min-h-72 md:border-b-0 md:border-r"
         >
-          <StepMedia step={step} mediaRecovery={mediaRecovery} />
+          <StepMedia step={step} mediaRecovery={mediaRecovery} runStatus={runStatus} />
           <Pill accent={status.accent} icon={isStepSuccessful(step) ? Check : undefined} className="absolute right-4 top-4">
             {status.label}
           </Pill>
@@ -522,8 +565,21 @@ export function TemplateRunStepCard({
           {isFailed ? (
             <StatusCallout
               tone="danger"
-              title={isServiceMisconfigured ? 'Generation setup needs attention' : 'This generation did not finish'}
-              body={step.errorMessage || 'The generation service did not return a usable result. Retry this step to continue.'}
+              title={isServiceMisconfigured
+                ? 'Generation setup needs attention'
+                : runEnded ? unfinishedTitle : 'This generation did not finish'}
+              body={step.errorMessage || (runEnded
+                ? 'The generation service did not return a usable result.'
+                : 'The generation service did not return a usable result. Retry this step to continue.')}
+              className="mt-5"
+            />
+          ) : cutShort ? (
+            // A person who cancels a run leaves no note on the steps that were waiting.
+            <StatusCallout
+              title={unfinishedTitle}
+              body={step.errorMessage || (runStatus === 'cancelled'
+                ? 'The run was cancelled before this step finished.'
+                : 'The run stopped before this step finished.')}
               className="mt-5"
             />
           ) : step.errorMessage ? (
@@ -534,9 +590,9 @@ export function TemplateRunStepCard({
             <Text variant="bodySm" className="mt-5 text-zinc-300">
               Check the result carefully. Approving continues the workflow; retrying creates a new version of only this step.
             </Text>
-          ) : isFailed ? (
+          ) : isFailed || cutShort ? (
             <Text variant="bodySm" className="mt-5 text-zinc-300">
-              {!retryEnabled
+              {runEnded
                 ? 'This run has ended. Return to the template or workflow canvas to start a fresh run.'
                 : isServiceMisconfigured
                 ? 'Your uploads and earlier work are safe. Ask an administrator to finish the service setup, then retry this step. Credits are only charged when generation can start.'
@@ -616,7 +672,8 @@ export function TemplateRunStepCard({
                   </Button>
                 ) : null}
               </div>
-            ) : isFailed && restartHref ? (
+            ) : isFailed && restartHref && !runEnded ? (
+              // The page of a run that has ended offers the new run once, under its steps.
               <div>
                 <StatusCallout
                   tone="warning"
