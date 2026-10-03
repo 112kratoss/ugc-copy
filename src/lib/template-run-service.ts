@@ -84,6 +84,8 @@ const TEMPLATE_CATALOG_OUTDATED_MESSAGE =
   'This template was published against a model catalog that is no longer available. It cannot generate until its creator republishes it.';
 const TEMPLATE_CANCELLED_MID_GENERATION_MESSAGE =
   'This step was already generating when the run was cancelled, so its credits stay spent.';
+// What a person is told who approves or retries a step of a run that has ended.
+const TEMPLATE_RUN_ENDED_MESSAGE = 'This run has ended. Start a new run to try the template again.';
 // What the person reads on a run the worker could not carry on with.
 export const TEMPLATE_RUN_ABANDONED_MESSAGE =
   'This run stopped because of a problem on our side and could not be resumed. Start a new run to try again.';
@@ -1577,6 +1579,12 @@ export async function approveTemplateRunStep(params: {
   userId: string;
 }): Promise<TemplateRunDto> {
   const { state, step } = await loadOwnedStep(params.adminClient, params.runId, params.stepId, params.userId);
+  // A run that ended keeps a checkpoint waiting when the write that closes its
+  // steps did not land. Approved, it would set going again a run whose uploads
+  // are deleted and whose owner was told it stopped.
+  if (TERMINAL_RUN_STATUSES.has(state.run.status)) {
+    throw new MediaTemplateError(TEMPLATE_RUN_ENDED_MESSAGE, 409, 'RUN_TERMINAL');
+  }
   if (step.kind !== 'approval' || step.status !== 'awaiting_approval' || !step.output_url) {
     throw new MediaTemplateError('This checkpoint is not waiting for approval.', 409, 'APPROVAL_NOT_READY');
   }
@@ -1589,8 +1597,10 @@ export async function approveTemplateRunStep(params: {
   }).eq('id', step.id).eq('status', 'awaiting_approval').select('id').maybeSingle();
   if (error) throw error;
   if (!data) throw new MediaTemplateError('This checkpoint was already handled.', 409, 'APPROVAL_ALREADY_HANDLED');
+  // The run can end between the read above and this write. It then stays ended.
   await params.adminClient.from('template_runs').update({ status: 'processing', error_message: null })
-    .eq('id', state.run.id).neq('status', 'cancelled');
+    .eq('id', state.run.id)
+    .neq('status', 'succeeded').neq('status', 'failed').neq('status', 'cancelled');
   await enqueueTemplateRunJob(params.adminClient, state.run.id);
   const next = await loadRunState(params.adminClient, state.run.id, params.userId);
   return toRunDto(params.adminClient, next);
@@ -1642,11 +1652,7 @@ export async function retryTemplateRunStep(params: {
 }): Promise<TemplateRunDto> {
   const state = await loadRunState(params.adminClient, params.runId, params.userId);
   if (TERMINAL_RUN_STATUSES.has(state.run.status)) {
-    throw new MediaTemplateError(
-      'This run has ended. Start a new run to try the template again.',
-      409,
-      'RUN_TERMINAL',
-    );
+    throw new MediaTemplateError(TEMPLATE_RUN_ENDED_MESSAGE, 409, 'RUN_TERMINAL');
   }
   const step = state.steps.find((candidate) => candidate.id === params.stepId);
   if (!step) throw new MediaTemplateError('Template run step not found.', 404, 'STEP_NOT_FOUND');
@@ -1696,7 +1702,7 @@ export async function retryTemplateRunStep(params: {
       const code = typeof result === 'string' ? result : 'STEP_NOT_RETRYABLE';
       throw new MediaTemplateError(
         code === 'RUN_TERMINAL'
-          ? 'This run has ended. Start a new run to try the template again.'
+          ? TEMPLATE_RUN_ENDED_MESSAGE
           : 'This checkpoint was already handled. Refresh the run before retrying.',
         code === 'RUN_NOT_FOUND' || code === 'STEP_NOT_FOUND' ? 404 : 409,
         code,
