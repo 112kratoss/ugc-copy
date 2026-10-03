@@ -9,6 +9,7 @@ import {
   buildPromptEnhancementRequest,
   createDefaultCreationDraft,
   createMediaDraftFromUpload,
+  extractPromptHandles,
   getCreationReadiness,
   getCreationSectionOrder,
   getCreationSectionSummary,
@@ -878,5 +879,33 @@ describe('media creation view model', () => {
 
     // Gemini Omni declares no frame slots, so it is always reference-shaped.
     expect(videoDraftReferenceMode({ ...base, model: 'gemini-omni-video' as const })).toBe('elements');
+  });
+});
+
+// The same prompts, with the same answers, as the tests of the server's reader
+// (src/__tests__/image-elements.test.ts).
+describe('extractPromptHandles', () => {
+  it('reads each handle a prompt mentions once, in the order they come', () => {
+    expect(extractPromptHandles('@lead walks past @prop_2, then (@lead) turns.\n@rival waits'))
+      .toEqual(['@lead', '@prop_2', '@rival']);
+  });
+
+  it('reads no handle in an address or in a word that only contains "@"', () => {
+    expect(extractPromptHandles('write to studio@example.com, or a@b')).toEqual([]);
+  });
+
+  it('reads no handle in a word with a capital, which is how a prompt names an account or a brand', () => {
+    expect(extractPromptHandles('A runner in the style of @Nike, shot for @MrBeast')).toEqual([]);
+  });
+
+  // The two workspaces cannot import from each other, so the app keeps a copy of
+  // the pattern the server reads a prompt with. A copy that drifts refuses on the
+  // phone a prompt the server accepts, or sends one the server refuses.
+  it('reads with the pattern the server reads with', () => {
+    const patternIn = (file: string) => readFileSync(file, 'utf8').match(/^const HANDLE_PATTERN = (.+);$/m)?.[1];
+    const server = patternIn(join(repoRoot, '..', 'src/lib/image-elements.ts'));
+
+    expect(server).toBeDefined();
+    expect(patternIn(join(repoRoot, 'lib/media-creation-view-model.ts'))).toBe(server);
   });
 });
