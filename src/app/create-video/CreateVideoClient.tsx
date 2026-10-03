@@ -16,6 +16,7 @@ import {
     StudioBackgroundProcessingNotice,
     StudioElementChip,
     StudioElementHandle,
+    StudioElementHandleList,
     StudioGenerationStatus,
     StudioMediaPreviewModal,
     StudioModelNotice,
@@ -350,23 +351,32 @@ function KlingSubjectsEditor({
                             && subject.images.length <= KLING_SUBJECT_MAX_IMAGES;
                         return (
                             <div key={subject.id} className="rounded-[24px] border border-zinc-700/40 bg-black/35 p-3">
-                                <div className="mb-3 flex items-center gap-2">
-                                    <input
-                                        type="text"
-                                        value={subject.displayName}
-                                        disabled={disabled}
-                                        onChange={(event) => updateSubject(subject.id, { displayName: event.target.value })}
-                                        className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none transition focus:border-emerald-500/40"
-                                        placeholder="Subject name"
-                                    />
-                                    <span className="shrink-0 truncate rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1 text-xs font-semibold text-emerald-300">
-                                        {handles[subjectIndex]}
-                                    </span>
+                                {/* The handle is made from the name, so it grows as the name is typed.
+                                    It stays beside the name field while it takes no more than half of
+                                    their line, and leaves the field 10rem on a wide one. A longer handle
+                                    takes the next line, whole. The remove button is outside that pair,
+                                    so it stays at the end of the field's line; its top margin, half of
+                                    what the field's height has over its own, keeps it level with the field. */}
+                                <div className="mb-3 flex items-start gap-2">
+                                    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                                        <input
+                                            type="text"
+                                            value={subject.displayName}
+                                            disabled={disabled}
+                                            onChange={(event) => updateSubject(subject.id, { displayName: event.target.value })}
+                                            className="min-w-[min(50%_-_0.5rem,10rem)] flex-1 rounded-2xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none transition focus:border-emerald-500/40"
+                                            placeholder="Subject name"
+                                        />
+                                        <StudioElementHandle
+                                            handle={handles[subjectIndex]}
+                                            className="rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1 text-xs font-semibold text-emerald-300"
+                                        />
+                                    </div>
                                     <button
                                         type="button"
                                         disabled={disabled}
                                         onClick={() => removeSubject(subject.id)}
-                                        className="shrink-0 rounded-full bg-black/60 p-1.5 text-white transition hover:bg-red-500"
+                                        className="mt-[calc(0.375rem+1px)] shrink-0 rounded-full bg-black/60 p-1.5 text-white transition hover:bg-red-500"
                                         aria-label={`Remove ${subject.displayName}`}
                                     >
                                         <X className="h-3 w-3" />
@@ -3456,8 +3466,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     <div className="mt-2 flex items-center justify-between gap-3 text-xs">
                                         <span className="text-zinc-600">{prompt.length}/2500</span>
                                         {staleElementMentions.length > 0 ? (
-                                            <span className="text-right text-rose-300">
-                                                Unknown element mention{staleElementMentions.length > 1 ? 's' : ''}: {staleElementMentions.join(', ')}
+                                            <span className="min-w-0 text-right text-rose-300">
+                                                Unknown element mention{staleElementMentions.length > 1 ? 's' : ''}:{' '}
+                                                <StudioElementHandleList handles={staleElementMentions} />
                                             </span>
 	                                        ) : activeReferenceMode !== 'elements' && hasKnownElementMentions ? (
 	                                            <span className="text-right text-amber-300">
@@ -3467,8 +3478,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     </div>
                                     {activeMentionQuery ? (
                                         <div className="mt-4 rounded-[20px] border border-white/8 bg-black/35 p-4">
-                                            <div className="flex items-center justify-between gap-3">
-                                                <div>
+                                            <div className="flex flex-wrap items-center justify-between gap-3">
+                                                <div className="min-w-[min(50%_-_0.75rem,10rem)] flex-1">
                                                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
 	                                                        Insert reference
 	                                                    </p>
@@ -3479,9 +3490,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                    </p>
                                                 </div>
                                                 {activeMentionQuery.query ? (
-                                                    <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300">
-                                                        @{activeMentionQuery.query}
-                                                    </span>
+                                                    <StudioElementHandle
+                                                        handle={`@${activeMentionQuery.query}`}
+                                                        className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300"
+                                                    />
                                                 ) : null}
                                             </div>
                                             {mentionSuggestions.length > 0 ? (
@@ -3598,17 +3610,18 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                />
 	                                                {activeShotMentionQuery?.shotId === shot.id && isKlingVideoModel ? (
 	                                                    <div className="mb-4 rounded-[20px] border border-white/8 bg-black/35 p-4">
-	                                                        <div className="flex items-center justify-between gap-3">
-	                                                            <div>
+	                                                        <div className="flex flex-wrap items-center justify-between gap-3">
+	                                                            <div className="min-w-[min(50%_-_0.75rem,10rem)] flex-1">
 	                                                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Insert video element</p>
 	                                                                <p className="mt-1 text-sm text-zinc-400">
 	                                                                    {shotMentionSuggestions.length > 0 ? 'Pick a Kling video handle for this shot.' : 'No matching video elements yet.'}
 	                                                                </p>
 	                                                            </div>
 	                                                            {activeShotMentionQuery.query ? (
-	                                                                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300">
-	                                                                    @{activeShotMentionQuery.query}
-	                                                                </span>
+	                                                                <StudioElementHandle
+	                                                                    handle={`@${activeShotMentionQuery.query}`}
+	                                                                    className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300"
+	                                                                />
 	                                                            ) : null}
 	                                                        </div>
 	                                                        {shotMentionSuggestions.length > 0 ? (

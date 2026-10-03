@@ -12,6 +12,7 @@ import {
     StudioBackgroundProcessingNotice,
     StudioElementChip,
     StudioElementHandle,
+    StudioElementHandleList,
     StudioGenerationStatus,
     StudioMediaPreviewModal,
     StudioModelNotice,
@@ -1408,16 +1409,16 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                             <div className="mt-2 flex items-center justify-between gap-3 text-xs">
                                 <p className="text-zinc-600">{prompt.length}/20000 characters</p>
                                 {staleElementMentions.length > 0 ? (
-                                    <p className="text-right text-rose-300">
+                                    <p className="min-w-0 text-right text-rose-300">
                                         Unknown element mention{staleElementMentions.length > 1 ? 's' : ''}:{' '}
-                                        {staleElementMentions.join(', ')}
+                                        <StudioElementHandleList handles={staleElementMentions} />
                                     </p>
                                 ) : null}
                             </div>
                             {activeMentionQuery ? (
                                 <div className="mt-4 rounded-[20px] border border-white/8 bg-black/35 p-4">
-                                    <div className="flex items-center justify-between gap-3">
-                                        <div>
+                                    <div className="flex flex-wrap items-center justify-between gap-3">
+                                        <div className="min-w-[min(50%_-_0.75rem,10rem)] flex-1">
                                             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
                                                 Insert element
                                             </p>
@@ -1428,9 +1429,10 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                             </p>
                                         </div>
                                         {activeMentionQuery.query ? (
-                                            <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300">
-                                                @{activeMentionQuery.query}
-                                            </span>
+                                            <StudioElementHandle
+                                                handle={`@${activeMentionQuery.query}`}
+                                                className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300"
+                                            />
                                         ) : null}
                                     </div>
                                     {mentionSuggestions.length > 0 ? (
@@ -1783,7 +1785,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         <p className="text-sm text-red-400">{error}</p>
                                     ) : staleElementMentions.length > 0 ? (
                                         <p className="text-sm text-rose-300">
-                                            Resolve the unknown element mention{staleElementMentions.length > 1 ? 's' : ''} before generating: {staleElementMentions.join(', ')}
+                                            Resolve the unknown element mention{staleElementMentions.length > 1 ? 's' : ''} before generating:{' '}
+                                            <StudioElementHandleList handles={staleElementMentions} />
                                         </p>
                                     ) : (
                                         <p className="text-sm text-zinc-500">Your latest image will appear in the workspace as soon as the run finishes.</p>

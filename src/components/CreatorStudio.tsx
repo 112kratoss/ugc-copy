@@ -750,6 +750,33 @@ export function StudioElementChip({
   );
 }
 
+/**
+ * The @handles a sentence names, as "@one, @two".
+ *
+ * In running text a handle is one word that cannot break, so a long one ran
+ * out of its sentence: "Unknown element mention: @..." stood 181px past its
+ * row on a 390px phone for a handle of 68 characters. Here each handle is a
+ * box of its own, no wider than the sentence. It moves to the next line whole
+ * while a line can hold it, and breaks the way StudioElementHandle does only
+ * when none can. The comma is inside the box of the handle before it, because
+ * a browser will start a line with a comma that follows such a box.
+ */
+export function StudioElementHandleList({ handles }: { handles: string[] }) {
+  return (
+    <>
+      {handles.map((handle, index) => (
+        <Fragment key={handle}>
+          {index > 0 ? ' ' : null}
+          <StudioElementHandle
+            handle={index < handles.length - 1 ? `${handle},` : handle}
+            className="inline-block max-w-full"
+          />
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
 export function StudioUploadedMediaPreview({
   mediaType,
   src,
