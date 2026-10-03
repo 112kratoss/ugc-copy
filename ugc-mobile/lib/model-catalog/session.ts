@@ -28,6 +28,15 @@ export type CatalogSessionState<T> = {
   loading: boolean;
   loadingDetails: boolean;
 };
+export type CatalogCurrentCheck = {
+  /** The server's current revision, or null when it could not be read. */
+  revision: string | null;
+  /** Requested models that revision does not list. */
+  missingIds: string[];
+  /** The revision was read and each requested model's details are loaded. */
+  ready: boolean;
+  error: Error | null;
+};
 const STORAGE_KEY = 'model-catalog:transport-v1';
 const BASE = '/api/model-catalog/v1';
 const CACHE_LIMIT = 100;
@@ -51,6 +60,7 @@ export class ModelCatalogSession<T extends CatalogDescriptorIdentity> {
   private pinned = new Set<string>();
   private etag: string | null = null;
   private initialized = false;
+  private refreshError: Error | null = null;
   private activeDetailReads = 0;
   private detailWaiters: Array<() => void> = [];
   private pendingDetailGroups = 0;
@@ -130,6 +140,7 @@ export class ModelCatalogSession<T extends CatalogDescriptorIdentity> {
   }
   refresh = async () =>
     this.run('current', async () => {
+      let failure: Error | null = null;
       this.update({ loading: true, error: null });
       try {
         const result = await this.transport(
@@ -152,13 +163,15 @@ export class ModelCatalogSession<T extends CatalogDescriptorIdentity> {
         else this.update({ current });
         this.persist();
       } catch (error) {
-        this.update({
-          error:
-            error instanceof Error
-              ? error
-              : new Error('Could not refresh models.'),
-        });
+        failure =
+          error instanceof Error
+            ? error
+            : new Error('Could not refresh models.');
+        this.update({ error: failure });
       } finally {
+        // Recorded when the read ends, never reset when one begins: a caller
+        // that waited for this read must find its outcome here.
+        this.refreshError = failure;
         this.update({ loading: false });
       }
     });
@@ -338,6 +351,32 @@ export class ModelCatalogSession<T extends CatalogDescriptorIdentity> {
   retry = async () => {
     this.update({ missingIds: [], error: null });
     await this.refresh();
+  };
+  /**
+   * Re-reads the current revision, then loads these models' details for it.
+   * For a caller about to commit to the revision: a workflow run stores the
+   * one it is started with, and the server prices a step at the active
+   * revision only. The session otherwise reads the revision on entry and when
+   * a picker opens, so a screen left open across a release still holds the
+   * one before it.
+   */
+  ensureCurrent = async (requested: string[]): Promise<CatalogCurrentCheck> => {
+    await this.refresh();
+    const failure = this.refreshError;
+    if (failure)
+      return { revision: null, missingIds: [], ready: false, error: failure };
+    const ids = [...new Set(requested.filter(Boolean))];
+    await this.ensureDetails(ids);
+    const { current, details, missingIds, error } = this.state;
+    const ready =
+      Boolean(current) &&
+      ids.every((id) => details.some((model) => model.id === id));
+    return {
+      revision: current?.revision ?? null,
+      missingIds: missingIds.filter((id) => ids.includes(id)),
+      ready,
+      error: ready ? null : error,
+    };
   };
   /** Keeps the current revision plus the most recent other one, and at most CACHE_LIMIT descriptors. */
   private prune(current: ModelCatalogCurrent) {
