@@ -6,10 +6,24 @@ Updated 2026-10-03 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/assistant-discard-audit-7g`, incorporating main `9416008a4d684e1451b40ddd6bf0fb9f084b87ed` (#294); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/canvas-authoring-audit-7h`, incorporating main `9416008a4d684e1451b40ddd6bf0fb9f084b87ed` (#294); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+Current branch is `codex/canvas-authoring-audit-7h`, based on 7G head 68258ac5.
+7H reproduces four actual SQL races: stale publication, stale restore, competing
+restores, and publication decreasing revision 6 to 5. Both lifecycle updates now
+require their originally read revision and return 409 if it changed. Thirteen DB
+cases, ten lifecycle service/route cases, app/test types and lint pass. Read
+`backend-section-07-canvas-authoring-2026-10-03.md`. WORKFLOW-04 remains failed;
+this finding does not add a new obligation. Existing history remains best effort.
+7F exact-main Quality 37125525853 and 7G updated-main PR Quality 37125585448
+have passed database/browser/mobile jobs; web checks are still running. Release
+sequences and live verification remain pending. Existing local edits are preserved.
+
+The preceding checkpoint follows.
+
 
 Current branch is `codex/assistant-discard-audit-7g`, incorporating main
 9416008a. 7F combined-main PR Quality 37124830807 passed all four jobs. #294

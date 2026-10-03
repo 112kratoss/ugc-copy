@@ -292,6 +292,11 @@ jobs:
         env:
           SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
 
+      - name: Test canvas authoring with real authenticated SQL
+        env:
+          SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: npx vitest run src/__tests__/workflow-canvas-authoring-database.test.ts
+
       - name: Stop isolated Supabase database
         if: always()
         continue-on-error: true
