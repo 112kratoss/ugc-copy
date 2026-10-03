@@ -14,16 +14,18 @@ const ONE_PIXEL_PNG = Buffer.from(
   'base64',
 );
 
-async function attachSubjectImages(page: Page, names: string[]) {
-  // The subjects card owns the only multi-select image input on this screen.
-  await page.locator('label input[type="file"][accept="image/*"][multiple]').first().setInputFiles(
+async function attachSubjectImages(page: Page, names: string[], subject = 0) {
+  // The subject cards own the only multi-select image inputs on this screen, one
+  // to a card. `subject` counts the cards from 0.
+  await page.locator('label input[type="file"][accept="image/*"][multiple]').nth(subject).setInputFiles(
     names.map((name) => ({ name, mimeType: 'image/png', buffer: ONE_PIXEL_PNG })),
   );
 }
 
 /**
- * How many subjects the draft store currently holds. Reads localforage's own
- * layout for `PERSISTED_MEDIA_KEYS.createVideoKlingSubjects` — database
+ * The @handle saved with each subject the draft store currently holds, in card
+ * order. Reads localforage's own layout for
+ * `PERSISTED_MEDIA_KEYS.createVideoKlingSubjects` — database
  * `magicbooklet-persisted-media`, object store `keyvaluepairs` — creating
  * neither, so probing cannot disturb what the app stores.
  *
@@ -33,33 +35,39 @@ async function attachSubjectImages(page: Page, names: string[]) {
  * and the reload tests nothing in particular, while an editor found empty
  * afterwards may simply not have restored *yet*.
  */
-async function countPersistedSubjects(page: Page): Promise<number> {
+async function persistedSubjectHandles(page: Page): Promise<Array<string | null> | 'unknown'> {
   try {
-    return await readPersistedSubjectCount(page);
+    return await readPersistedSubjectHandles(page);
   } catch (error) {
     // A dev server reload (see below) can tear the execution context down
     // mid-read. `expect.poll` re-throws whatever its generator throws, so
     // answer "unknown" and let the next poll ask the fresh document.
     if (error instanceof Error && /Execution context was destroyed|frame was detached/.test(error.message)) {
-      return -1;
+      return 'unknown';
     }
     throw error;
   }
 }
 
-function readPersistedSubjectCount(page: Page): Promise<number> {
+/** How many subjects the draft store currently holds, or -1 while it cannot be read. */
+async function countPersistedSubjects(page: Page): Promise<number> {
+  const handles = await persistedSubjectHandles(page);
+  return handles === 'unknown' ? -1 : handles.length;
+}
+
+function readPersistedSubjectHandles(page: Page): Promise<Array<string | null>> {
   return page.evaluate(async () => {
     const databases = await indexedDB.databases();
-    if (!databases.some((database) => database.name === 'magicbooklet-persisted-media')) return 0;
+    if (!databases.some((database) => database.name === 'magicbooklet-persisted-media')) return [];
 
-    return new Promise<number>((resolve, reject) => {
+    return new Promise<Array<string | null>>((resolve, reject) => {
       const open = indexedDB.open('magicbooklet-persisted-media');
       open.onerror = () => reject(open.error ?? new Error('could not open the persisted media store'));
       open.onsuccess = () => {
         const database = open.result;
         if (!database.objectStoreNames.contains('keyvaluepairs')) {
           database.close();
-          resolve(0);
+          resolve([]);
           return;
         }
         const read = database
@@ -72,7 +80,8 @@ function readPersistedSubjectCount(page: Page): Promise<number> {
         };
         read.onsuccess = () => {
           database.close();
-          resolve(Array.isArray(read.result) ? read.result.length : 0);
+          const subjects: Array<{ handle?: unknown }> = Array.isArray(read.result) ? read.result : [];
+          resolve(subjects.map((subject) => (typeof subject.handle === 'string' ? subject.handle : null)));
         };
       };
     });
@@ -118,9 +127,36 @@ async function withNamedSubject(page: Page, name: string, steps: () => Promise<v
     if (await nameField.count() === 0) {
       await page.getByRole('button', { name: 'Add subject' }).click({ timeout: 5_000 });
     }
-    await nameField.fill(name, { timeout: 5_000 });
+    await nameSubject(page, name);
     await steps();
   }).toPass({ timeout: 30_000 });
+}
+
+/**
+ * Types a subject's name and commits it. A name is a draft while it is typed:
+ * the subject takes it, and its handle and the prompt follow, on Enter or when
+ * the field is left. `subject` counts the cards from 0.
+ */
+async function nameSubject(page: Page, name: string, subject = 0) {
+  const nameField = page.getByPlaceholder('Subject name').nth(subject);
+  await nameField.fill(name, { timeout: 5_000 });
+  await nameField.press('Enter', { timeout: 5_000 });
+}
+
+/** What each subject card shows, in card order: its @handle and how many images it holds. */
+function subjectCards(page: Page): Promise<Array<{ handle: string; images: number }>> {
+  return page.getByPlaceholder('Subject name').evaluateAll((fields) => fields.map((field) => {
+    // A subject's card is its name field's nearest ancestor that holds the image picker.
+    let card = field.parentElement;
+    while (card && !card.querySelector('input[type="file"]')) card = card.parentElement;
+    const pill = Array.from(card?.querySelectorAll('span') ?? []).find((span) => /^@\w+$/.test(span.textContent ?? ''));
+    return { handle: pill?.textContent ?? '', images: card?.querySelectorAll('img').length ?? 0 };
+  }));
+}
+
+/** The @handle each subject card shows, in card order. */
+async function subjectCardHandles(page: Page): Promise<string[]> {
+  return (await subjectCards(page)).map((card) => card.handle);
 }
 
 /** The panel that typing "@" in the prompt opens: its title and the references to insert. */
@@ -165,7 +201,7 @@ test.describe('Kling O3 named subjects', () => {
     // Empty subject is below the documented 2-image floor.
     await expect(page.getByText(/0\/4 images — add at least 2/)).toBeVisible();
 
-    await nameField.fill('Hero creator');
+    await nameSubject(page, 'Hero creator');
     // The @handle is derived from the display name and is what the prompt mentions.
     // The handle now shows in two places: the subjects editor's own chip and the
     // @-mention quick-insert row beside the prompt, which O3 reaches now that its
@@ -184,11 +220,11 @@ test.describe('Kling O3 named subjects', () => {
     await page.goto('/create-video?model=kling-o3');
 
     await page.getByRole('button', { name: 'Add subject' }).click();
-    await page.getByPlaceholder('Subject name').fill('Hero creator');
+    await nameSubject(page, 'Hero creator');
     await attachSubjectImages(page, ['hero-front.png', 'hero-side.png']);
     await expect(page.getByText('2/4 images')).toBeVisible();
     // Reloading before the group reaches storage would prove nothing about it.
-    await expect.poll(() => countPersistedSubjects(page)).toBe(1);
+    await expect.poll(() => persistedSubjectHandles(page)).toEqual(['@hero_creator']);
 
     await reloadPastDevServerReloads(page);
 
@@ -199,6 +235,68 @@ test.describe('Kling O3 named subjects', () => {
     // reference capacity is no longer reported as zero.
     await expect(page.getByText('@hero_creator', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('2/4 images')).toBeVisible();
+  });
+
+  // A subject keeps its handle, and a rename takes the prompt with it. The handle
+  // was built from the subjects' names each time the cards were drawn, so a renamed
+  // subject left its old mention in the prompt as an unknown one (2026-10-03).
+  test('lets the prompt follow a renamed subject, once the new name is entered', async ({ page }) => {
+    await page.goto('/create-video?model=kling-o3');
+    const prompt = page.getByPlaceholder(/^Describe the .* scene/);
+    const nameField = page.getByPlaceholder('Subject name');
+
+    await withNamedSubject(page, 'Hero', async () => {
+      await prompt.fill('A scene with @hero walking', { timeout: 5_000 });
+      await expect(page.getByText('26/2500')).toBeVisible({ timeout: 5_000 });
+
+      // While the new name is typed the subject is still "@hero" to the prompt.
+      await nameField.fill('Villain', { timeout: 5_000 });
+      expect(await subjectCardHandles(page)).toEqual(['@hero']);
+      await expect(prompt).toHaveValue('A scene with @hero walking', { timeout: 5_000 });
+      await expect(page.getByText(/^Unknown element mention/)).toHaveCount(0);
+
+      await nameField.press('Enter', { timeout: 5_000 });
+      await expect(prompt).toHaveValue('A scene with @villain walking', { timeout: 5_000 });
+      expect(await subjectCardHandles(page)).toEqual(['@villain']);
+      await expect(page.getByText(/^Unknown element mention/)).toHaveCount(0);
+    });
+  });
+
+  // Renaming or removing the first of two subjects with one name gave its handle
+  // to the second, so a mention in the prompt named the other subject. The handle
+  // is saved with the subject now: built from the names again after a reload, the
+  // second "Hero" would come back as "@hero".
+  test('keeps the handle of the second of two subjects with one name through a rename and a reload', async ({ page }) => {
+    await page.goto('/create-video?model=kling-o3');
+    const nameFields = page.getByPlaceholder('Subject name');
+
+    // A subject is saved once it has images, so a dev server reload (see above)
+    // brings back the ones that had theirs. These steps make up whatever is
+    // missing, and so can run again from the top after such a reload.
+    await expect(async () => {
+      for (const subject of [0, 1]) {
+        if (await nameFields.count() <= subject) {
+          await page.getByRole('button', { name: 'Add subject' }).click({ timeout: 5_000 });
+        }
+        await nameSubject(page, 'Hero', subject);
+        if ((await subjectCards(page))[subject]?.images === 0) {
+          await attachSubjectImages(page, [`hero-${subject}-front.png`, `hero-${subject}-side.png`], subject);
+        }
+      }
+      await expect.poll(() => persistedSubjectHandles(page), { timeout: 5_000 }).toEqual(['@hero', '@hero_2']);
+      expect(await subjectCardHandles(page)).toEqual(['@hero', '@hero_2']);
+
+      await nameSubject(page, 'Villain', 0);
+      await expect.poll(() => subjectCardHandles(page), { timeout: 5_000 }).toEqual(['@villain', '@hero_2']);
+      await expect.poll(() => persistedSubjectHandles(page), { timeout: 5_000 }).toEqual(['@villain', '@hero_2']);
+    }).toPass({ timeout: 45_000 });
+
+    await reloadPastDevServerReloads(page);
+
+    await expect(nameFields).toHaveCount(2);
+    await expect(nameFields.nth(0)).toHaveValue('Villain');
+    await expect(nameFields.nth(1)).toHaveValue('Hero');
+    expect(await subjectCardHandles(page)).toEqual(['@villain', '@hero_2']);
   });
 
   // A subject's handle kept the capitals of its name ("@Hero_creator"), and the

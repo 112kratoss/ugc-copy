@@ -73,7 +73,7 @@ import {
 } from '@/lib/generation-status-client';
 import {
     assignElementHandles,
-    buildSubjectHandles,
+    assignSubjectHandles,
     createElementHandleReplacementMap,
     createElementId,
     extractPromptHandles,
@@ -257,12 +257,18 @@ type KlingSubjectImageDraft = {
 };
 
 // A Kling O3 named multi-image subject: 2–4 images fused into one identity the
-// prompt references as @handle. Session-only state (no draft persistence yet).
+// prompt references as @handle. The handle is kept with the subject, as an
+// element's is: see assignSubjectHandles.
 type KlingSubjectDraft = {
     id: string;
     displayName: string;
+    handle: string;
     images: KlingSubjectImageDraft[];
 };
+
+// A subject on its way in: a new one, a saved one, or one just renamed, which
+// has given up its handle to take the handle of its new name.
+type KlingSubjectSeed = Omit<KlingSubjectDraft, 'handle'> & { handle?: string | null };
 
 const KLING_SUBJECT_LIMIT = 3;
 const KLING_SUBJECT_MIN_IMAGES = 2;
@@ -270,15 +276,29 @@ const KLING_SUBJECT_MAX_IMAGES = 4;
 
 function KlingSubjectsEditor({
     subjects,
-    handles,
     disabled,
     onChange,
+    onRename,
 }: {
     subjects: KlingSubjectDraft[];
-    handles: string[];
     disabled: boolean;
-    onChange: (next: KlingSubjectDraft[]) => void;
+    onChange: (next: KlingSubjectSeed[]) => void;
+    onRename: (subjectId: string, displayName: string) => void;
 }) {
+    // A name while it is being typed. It becomes the subject's name, and the
+    // handle and the prompt follow it, when the field is left or Enter is pressed.
+    const names = useNameDrafts();
+
+    const commitNameDraft = (subject: KlingSubjectDraft) => {
+        const draftValue = names.takeDraft(subject.id);
+        if (draftValue === undefined) return;
+
+        const trimmed = draftValue.trim();
+        if (!trimmed || trimmed === subject.displayName) return;
+
+        onRename(subject.id, trimmed);
+    };
+
     const addSubject = () => {
         if (subjects.length >= KLING_SUBJECT_LIMIT) return;
         onChange([...subjects, {
@@ -295,6 +315,7 @@ function KlingSubjectsEditor({
     const removeSubject = (subjectId: string) => {
         const subject = subjects.find((candidate) => candidate.id === subjectId);
         subject?.images.forEach((image) => revokeObjectUrl(image.previewUrl));
+        names.dropDraft(subjectId);
         onChange(subjects.filter((candidate) => candidate.id !== subjectId));
     };
 
@@ -337,12 +358,12 @@ function KlingSubjectsEditor({
 
             {subjects.length > 0 && (
                 <div className="mb-4 space-y-3">
-                    {subjects.map((subject, subjectIndex) => {
+                    {subjects.map((subject) => {
                         const imageCountOk = subject.images.length >= KLING_SUBJECT_MIN_IMAGES
                             && subject.images.length <= KLING_SUBJECT_MAX_IMAGES;
                         return (
                             <div key={subject.id} className="rounded-[24px] border border-zinc-700/40 bg-black/35 p-3">
-                                {/* The handle is made from the name, so it grows as the name is typed.
+                                {/* The handle is made from the name, so a long name gives a long handle.
                                     It stays beside the name field while it takes no more than half of
                                     their line, and leaves the field 10rem on a wide one. A longer handle
                                     takes the next line, whole. The remove button is outside that pair,
@@ -352,14 +373,27 @@ function KlingSubjectsEditor({
                                     <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
                                         <input
                                             type="text"
-                                            value={subject.displayName}
+                                            value={names.drafts[subject.id] ?? subject.displayName}
                                             disabled={disabled}
-                                            onChange={(event) => updateSubject(subject.id, { displayName: event.target.value })}
+                                            onChange={(event) => names.setDraft(subject.id, event.target.value)}
+                                            onBlur={() => commitNameDraft(subject)}
+                                            onKeyDown={(event) => {
+                                                if (event.key === 'Enter') {
+                                                    event.preventDefault();
+                                                    commitNameDraft(subject);
+                                                    event.currentTarget.blur();
+                                                }
+
+                                                if (event.key === 'Escape') {
+                                                    names.dropDraft(subject.id);
+                                                    event.currentTarget.blur();
+                                                }
+                                            }}
                                             className="min-w-[min(50%_-_0.5rem,10rem)] flex-1 rounded-2xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none transition focus:border-emerald-500/40"
                                             placeholder="Subject name"
                                         />
                                         <StudioElementHandle
-                                            handle={handles[subjectIndex]}
+                                            handle={subject.handle}
                                             className="rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1 text-xs font-semibold text-emerald-300"
                                         />
                                     </div>
@@ -847,6 +881,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 .map((subject) => ({
                     id: subject.id,
                     displayName: subject.displayName,
+                    handle: subject.handle,
                     images: subject.images.map((image) => ({
                         id: image.id,
                         file: image.file as File,
@@ -854,10 +889,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 }))
         );
     };
-    const commitKlingSubjects = (nextSubjects: KlingSubjectDraft[]) => {
-        setKlingSubjects(nextSubjects);
-        klingSubjectsRef.current = nextSubjects;
-        void persistKlingSubjects(nextSubjects);
+    const commitKlingSubjects = (nextSubjects: KlingSubjectSeed[]) => {
+        // A subject that comes without a handle takes the handle of its name here.
+        // Every other subject keeps the one it has.
+        const subjectsWithHandles = assignSubjectHandles(nextSubjects);
+        setKlingSubjects(subjectsWithHandles);
+        klingSubjectsRef.current = subjectsWithHandles;
+        void persistKlingSubjects(subjectsWithHandles);
+        return subjectsWithHandles;
     };
     const persistSeedanceAssets = async (
         nextElements: VideoElementDraft[] = elementsRef.current,
@@ -963,7 +1002,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             : frameReferenceCount + (isKlingVideoModel ? klingVideoElements.length : 0);
     const klingSubjectsActive = isKlingO3Model && klingSubjects.length > 0;
     const klingSubjectHandles = isKlingO3Model
-        ? buildSubjectHandles(klingSubjects.map((subject) => subject.displayName))
+        ? klingSubjects.map((subject) => subject.handle)
         : [];
     const additionalSettings = useAdditionalCatalogSettings(catalogDescriptor, CATALOG_HANDLED_KEYS);
     const quoteRequest = useMemo(() => modelCatalog.catalog && modelCatalog.detailsReady ? {
@@ -1661,9 +1700,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                }
 
 	                if (savedKlingSubjects.length > 0) {
-	                    setKlingSubjects(savedKlingSubjects.map((subject) => ({
+	                    // A subject saved before handles were kept has none, and takes
+	                    // the handle of its name.
+	                    setKlingSubjects(assignSubjectHandles(savedKlingSubjects.map((subject) => ({
 	                        id: subject.id,
 	                        displayName: subject.displayName,
+	                        handle: subject.handle,
 	                        images: subject.images.map((image) => ({
 	                            id: image.id,
 	                            file: image.file,
@@ -1671,7 +1713,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                            remoteUrl: null,
 	                            storagePath: null,
 	                        })),
-	                    })));
+	                    }))));
 	                }
             } catch (err) {
                 console.error('Error loading persisted video media:', err);
@@ -2070,6 +2112,38 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         }
 
         requestAnimationFrame(() => updateMentionState(prompt));
+    };
+
+    const handleKlingSubjectRename = (subjectId: string, nextDisplayName: string) => {
+        const currentSubjects = klingSubjectsRef.current;
+        const nextSubjects = commitKlingSubjects(
+            currentSubjects.map((subject) => (
+                subject.id === subjectId
+                    // Without its handle, the subject takes the handle of its new name.
+                    ? { ...subject, displayName: nextDisplayName, handle: null }
+                    : subject
+            ))
+        );
+        const replacements = createElementHandleReplacementMap(currentSubjects, nextSubjects);
+        if (replacements.size === 0) {
+            return;
+        }
+
+        setPrompt((currentPrompt) => replacePromptHandles(currentPrompt, replacements));
+        setMultiPrompts((currentPrompts) => currentPrompts.map((shot) => ({
+            ...shot,
+            prompt: replacePromptHandles(shot.prompt, replacements),
+        })));
+        setActiveShotMentionQuery(null);
+        // The rewritten prompt moves the mention at the caret, so it is read again
+        // once the prompt is drawn. It is read from the prompt box, not from the
+        // prompt as it stood here: the creator may have typed into it by then.
+        requestAnimationFrame(() => {
+            const promptBox = promptTextareaRef.current;
+            if (promptBox) {
+                updateMentionState(promptBox.value);
+            }
+        });
     };
 
     const handleElementDraftChange = (elementId: string, nextValue: string) => {
@@ -3662,9 +3736,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                            >
 	                                <KlingSubjectsEditor
 	                                    subjects={klingSubjects}
-	                                    handles={klingSubjectHandles}
 	                                    disabled={isGenerating}
 	                                    onChange={commitKlingSubjects}
+	                                    onRename={handleKlingSubjectRename}
 	                                />
 	                            </motion.div>
 	                        )}

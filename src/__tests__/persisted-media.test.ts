@@ -166,6 +166,47 @@ describe('persisted media storage namespaces', () => {
     expect(await restored[0].images[0].file.text()).toBe('front');
   });
 
+  it('round-trips a named subject with the handle the prompt mentions it by', async () => {
+    const { getPersistedSubjectRecords, setPersistedSubjectRecords } = await import('@/lib/persisted-media');
+
+    // Not the handle its name would give: the subject of the same name before it
+    // was renamed or removed, and this one kept the handle the prompt already uses.
+    await setPersistedSubjectRecords('create-video:kling-subjects', [{
+      id: 'subject-2',
+      displayName: 'Hero',
+      handle: '@hero_2',
+      images: [
+        { id: 'image-1', file: new File(['front'], 'front.png', { type: 'image/png', lastModified: 1 }) },
+        { id: 'image-2', file: new File(['side'], 'side.png', { type: 'image/png', lastModified: 2 }) },
+      ],
+    }]);
+
+    const restored = await getPersistedSubjectRecords('create-video:kling-subjects');
+    expect(restored).toHaveLength(1);
+    expect(restored[0]).toMatchObject({ id: 'subject-2', displayName: 'Hero', handle: '@hero_2' });
+    expect(restored[0].images.map((image) => image.file.name)).toEqual(['front.png', 'side.png']);
+  });
+
+  it('restores a subject saved before handles were kept with no handle', async () => {
+    // What the page wrote until 2026-10: an id, a name and the images. The video
+    // creator builds the handle of such a subject from its name.
+    getStore('magicbooklet-persisted-media').set('create-video:kling-subjects', [{
+      id: 'subject-1',
+      displayName: 'Hero creator',
+      images: [
+        { id: 'image-1', file: { file: new Blob(['front'], { type: 'image/png' }), name: 'front.png', type: 'image/png', lastModified: 1 } },
+        { id: 'image-2', file: { file: new Blob(['side'], { type: 'image/png' }), name: 'side.png', type: 'image/png', lastModified: 2 } },
+      ],
+    }]);
+
+    const { getPersistedSubjectRecords } = await import('@/lib/persisted-media');
+    const restored = await getPersistedSubjectRecords('create-video:kling-subjects');
+
+    expect(restored).toHaveLength(1);
+    expect(restored[0]).toMatchObject({ id: 'subject-1', displayName: 'Hero creator', handle: null });
+    expect(restored[0].images).toHaveLength(2);
+  });
+
   it('drops a subject whose images did not all survive rather than restoring it partially', async () => {
     // A subject is one identity fused from the whole set, so a half-restored
     // group would silently depict something the user never grouped.

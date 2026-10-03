@@ -5,7 +5,7 @@ import { expect, test, type Page } from '@playwright/test';
  *
  * Each named subject has a card that starts with one line: the name field, the
  * subject's @handle in a pill, and the button that removes the subject. The
- * handle is made from the name, so it grows as the name is typed, and the pill
+ * handle is made from the name, so a long name gives a long handle, and the pill
  * could not shrink, so the name field gave up all the room instead. With a name
  * of 35 characters on a 390px phone the field was 26px wide, which is its own
  * padding and border, so nothing typed showed; the remove button stood 26px
@@ -187,7 +187,11 @@ async function addSubject(page: Page, name?: string) {
   await page.getByRole('button', { name: 'Add subject' }).click();
   const field = page.getByPlaceholder('Subject name');
   await expect(field).toHaveValue('Subject 1');
-  if (name) await field.fill(name);
+  if (name) {
+    await field.fill(name);
+    // The subject takes the name, and its handle follows, when Enter is pressed.
+    await field.press('Enter');
+  }
 }
 
 async function expectSubjectLineInItsCard(page: Page, viewports: Array<{ width: number; height: number }>, handle: string) {
