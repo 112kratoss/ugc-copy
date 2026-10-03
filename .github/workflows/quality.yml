@@ -21,6 +21,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      # supabase-migration-future-stamp.test.ts checks the migrations a change
+      # adds, which it finds by comparing this checkout with main. A pull
+      # request's checkout holds only its own merge commit, so main is fetched
+      # here; without it the test falls back to checking every file.
+      - name: Fetch main for the migration stamp check
+        run: git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
