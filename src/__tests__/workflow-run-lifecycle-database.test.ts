@@ -54,7 +54,7 @@ function databaseError(error: unknown) {
 }
 
 /** The PostgREST calls the run worker, the start service and the job queue make, over one connection. */
-function databaseClient(db: Client, afterWrite?: (table: string, updates: Record<string, unknown>) => void): SupabaseClient {
+function databaseClient(db: Client, afterWrite?: (table: string, updates: Record<string, unknown>) => void, afterRpc?: (name: string, data: unknown) => void): SupabaseClient {
   return {
     from(table: string) {
       identifier(table);
@@ -149,6 +149,7 @@ function databaseClient(db: Client, afterWrite?: (table: string, updates: Record
           Object.values(args).map(writable),
         );
         const data = ROW_FUNCTIONS.has(name) ? rows : rows[0].result;
+        afterRpc?.(name, data);
         return { data, error: null };
       } catch (error) {
         return { data: null, error: databaseError(error) };
@@ -419,6 +420,116 @@ describe.skipIf(!connectionString)('canvas execution and billing with real Postg
     expect(active[0].status).toBe('processing');
     expect(await balance()).toBe(initialCredits - active[0].cost);
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps an approval recoverable when its run update fails after the gate write', async () => {
+    await reachApproval();
+    await admin.query(`create function public.audit_canvas_approval_failure() returns trigger language plpgsql as $$
+      begin
+        if new.id = '${runId}'::uuid and old.status = 'awaiting_approval' and new.status = 'processing' then
+          raise exception 'audit approval run update rejected';
+        end if;
+        return new;
+      end $$`);
+    await admin.query(`create trigger audit_canvas_approval_failure before update on public.workflow_canvas_runs
+      for each row execute function public.audit_canvas_approval_failure()`);
+    try {
+      await expect(approve()).rejects.toMatchObject({ message: 'audit approval run update rejected' });
+    } finally {
+      await admin.query('drop trigger audit_canvas_approval_failure on public.workflow_canvas_runs');
+      await admin.query('drop function public.audit_canvas_approval_failure()');
+    }
+    const run = (await admin.query('select status from public.workflow_canvas_runs where id=$1', [runId])).rows[0];
+    const gate = (await admin.query('select status from public.workflow_canvas_run_steps where run_id=$1 and node_id=$2', [runId, approvalId])).rows[0];
+    expect(run.status).toBe('awaiting_approval');
+    expect(gate.status).toBe('awaiting_approval');
+    await approve();
+    await tick();
+    expect(await rows()).toHaveLength(2);
+  });
+
+  it('rolls approval back when inserting the durable wake ticket fails', async () => {
+    await reachApproval();
+    await admin.query(`create function public.audit_canvas_ticket_failure() returns trigger language plpgsql as $$
+      begin
+        if new.run_id = '${runId}'::uuid and new.node_id like 'approval:%' then
+          raise exception 'audit approval ticket rejected';
+        end if;
+        return new;
+      end $$`);
+    await admin.query(`create trigger audit_canvas_ticket_failure before insert on public.workflow_run_step_jobs
+      for each row execute function public.audit_canvas_ticket_failure()`);
+    try {
+      await expect(approve()).rejects.toMatchObject({ message: 'audit approval ticket rejected' });
+      expect((await details()).steps.find(step => step.node_id === approvalId)?.status).toBe('awaiting_approval');
+      expect((await admin.query('select status from public.workflow_canvas_runs where id=$1', [runId])).rows[0].status).toBe('awaiting_approval');
+    } finally {
+      await admin.query('drop trigger audit_canvas_ticket_failure on public.workflow_run_step_jobs');
+      await admin.query('drop function public.audit_canvas_ticket_failure()');
+    }
+    await approve(); await tick();
+    expect(await rows()).toHaveLength(2);
+  });
+
+  async function approvalArgs() {
+    return { p_canvas_id: canvasId, p_run_id: runId, p_user_id: userId,
+      p_step_id: (await details()).steps.find(step => step.node_id === approvalId)!.id };
+  }
+
+  it('serializes concurrent approvals from separate database connections into one ticket', async () => {
+    await reachApproval();
+    const other = new Client({ connectionString, statement_timeout: 10_000 });
+    await other.connect();
+    try {
+      await other.query('set role service_role');
+      const args = await approvalArgs();
+      const results = await Promise.all([
+        client.rpc('approve_workflow_checkpoint', args),
+        databaseClient(other).rpc('approve_workflow_checkpoint', args),
+      ]);
+      expect(results.every(result => result.error === null)).toBe(true);
+      expect(results.map(result => result.data).sort()).toEqual(['STEP_NOT_AWAITING', 'approved']);
+      expect((await admin.query("select id from public.workflow_run_step_jobs where run_id=$1 and node_id like 'approval:%'", [runId])).rows).toHaveLength(1);
+    } finally { await other.end(); }
+    await tick();
+    expect(await rows()).toHaveLength(2);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects direct authenticated approval and a mismatched owner at the internal RPC', async () => {
+    await reachApproval();
+    const args = await approvalArgs();
+    expect((await ownerClient.rpc('approve_workflow_checkpoint', args)).error?.code).toBe('42501');
+    expect((await admin.query("select has_function_privilege('anon','public.approve_workflow_checkpoint(uuid,uuid,uuid,uuid)','EXECUTE') as anon, has_function_privilege('authenticated','public.approve_workflow_checkpoint(uuid,uuid,uuid,uuid)','EXECUTE') as authenticated, has_function_privilege('service_role','public.approve_workflow_checkpoint(uuid,uuid,uuid,uuid)','EXECUTE') as service_role")).rows[0]).toEqual({ anon: false, authenticated: false, service_role: true });
+    expect((await client.rpc('approve_workflow_checkpoint', { ...args, p_user_id: randomUUID() })).data).toBe('RUN_NOT_FOUND');
+    expect((await client.rpc('approve_workflow_checkpoint', { ...args, p_canvas_id: randomUUID() })).data).toBe('RUN_NOT_FOUND');
+    expect((await details()).status).toBe('awaiting_approval');
+    expect(await rows()).toHaveLength(1);
+  });
+
+  it('retains the committed approval ticket when its RPC reply is lost', async () => {
+    await reachApproval();
+    client = databaseClient(worker, undefined, (name, data) => {
+      if (name === 'approve_workflow_checkpoint' && data === 'approved') {
+        throw new Error('audit approval reply lost');
+      }
+    });
+    service.client = client;
+    await expect(approve()).rejects.toMatchObject({ message: 'audit approval reply lost' });
+    await expect(approve()).rejects.toMatchObject({ status: 409 });
+    await tick();
+    expect(await rows()).toHaveLength(2);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not revive a terminal run through a stale approval gate', async () => {
+    await reachApproval();
+    const args = await approvalArgs();
+    await admin.query("update public.workflow_canvas_runs set status='failed',finished_at=now() where id=$1", [runId]);
+    expect((await client.rpc('approve_workflow_checkpoint', args)).data).toBe('RUN_TERMINAL');
+    expect((await admin.query('select status from public.workflow_canvas_runs where id=$1', [runId])).rows[0].status).toBe('failed');
+    expect((await details()).steps.find(step => step.node_id === approvalId)?.status).toBe('awaiting_approval');
+    expect(await rows()).toHaveLength(1);
   });
 
   it('keeps GET read-only while completed source state awaits the queue worker', async () => {
