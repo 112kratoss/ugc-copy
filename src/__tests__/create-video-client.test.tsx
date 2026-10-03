@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateVideoClient from '@/app/create-video/CreateVideoClient';
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
-import type { PersistedImageElementRecord, PersistedSubjectRecord } from '@/lib/persisted-media';
+import type { PersistedImageElementRecord, PersistedMediaRecord, PersistedSubjectRecord } from '@/lib/persisted-media';
 import type { RemixSourceBundle } from '@/lib/remix-source';
 
 const mockPush = vi.fn();
@@ -28,6 +28,18 @@ const setPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
   async (_key: string, _elements: PersistedImageElementRecord[]): Promise<void> => {
     void _key;
     void _elements;
+  }
+));
+const getPersistedMediaRecordsMock = vi.hoisted(() => vi.fn(
+  async (_key: string): Promise<PersistedMediaRecord[]> => {
+    void _key;
+    return [];
+  }
+));
+const setPersistedMediaRecordsMock = vi.hoisted(() => vi.fn(
+  async (_key: string, _records: PersistedMediaRecord[]): Promise<void> => {
+    void _key;
+    void _records;
   }
 ));
 const getPersistedFileMock = vi.hoisted(() => vi.fn(async (_key: string): Promise<File | null> => {
@@ -107,7 +119,7 @@ vi.mock('@/lib/persisted-media', () => ({
   },
   getPersistedFile: getPersistedFileMock,
   getPersistedImageElementRecords: getPersistedImageElementRecordsMock,
-  getPersistedMediaRecords: vi.fn(async () => []),
+  getPersistedMediaRecords: getPersistedMediaRecordsMock,
   // Hydration loads every persisted slot in one Promise.all, so a missing mock
   // here rejects the whole load and silently disables ALL draft restoration.
   getPersistedSubjectRecords: getPersistedSubjectRecordsMock,
@@ -115,7 +127,7 @@ vi.mock('@/lib/persisted-media', () => ({
   removePersistedMedia: vi.fn(async () => undefined),
   setPersistedFile: vi.fn(async () => undefined),
   setPersistedImageElementRecords: setPersistedImageElementRecordsMock,
-  setPersistedMediaRecords: vi.fn(async () => undefined),
+  setPersistedMediaRecords: setPersistedMediaRecordsMock,
   setPersistedSubjectRecords: setPersistedSubjectRecordsMock,
   setPersistedValue: vi.fn(async () => undefined),
 }));
@@ -270,6 +282,9 @@ describe('CreateVideoClient Kling video elements', () => {
     getPersistedFileMock.mockReset();
     getPersistedFileMock.mockResolvedValue(null);
     setPersistedImageElementRecordsMock.mockClear();
+    getPersistedMediaRecordsMock.mockReset();
+    getPersistedMediaRecordsMock.mockResolvedValue([]);
+    setPersistedMediaRecordsMock.mockClear();
 
     let objectUrlSequence = 0;
     URL.createObjectURL = vi.fn((value: Blob) => {
@@ -602,7 +617,8 @@ describe('CreateVideoClient Kling video elements', () => {
 
     expect(await screen.findByDisplayValue('Hero creator')).toBeInTheDocument();
     expect(screen.getByText('2/4 images')).toBeInTheDocument();
-    expect(screen.getAllByText('@Hero_creator').length).toBeGreaterThan(0);
+    // A saved subject holds its name, not its handle, so the handle is built on load.
+    expect(screen.getAllByText('@hero_creator').length).toBeGreaterThan(0);
   });
 
   it('shows the named-subjects editor only for Kling O3 and enforces the image range', async () => {
@@ -615,7 +631,7 @@ describe('CreateVideoClient Kling video elements', () => {
     // One subject with zero images is below the 2-image floor.
     expect(screen.getByText(/add at least 2/i)).toBeInTheDocument();
     // The handle chip is derived from the display name for @mentions.
-    expect(screen.getAllByText('@Subject_1').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('@subject_1').length).toBeGreaterThan(0);
   });
 
   it('offers Seedance 2.5 reference video and audio slots with nothing attached', async () => {
@@ -740,5 +756,389 @@ describe('CreateVideoClient Kling video elements', () => {
     });
     expect(videoElements[0].url).toMatch(/^uploads\/user-1\/.+\.mp4$/);
     expect(videoElements[0].storagePath).toBe(videoElements[0].url);
+  });
+
+  /**
+   * An element's @handle follows its name, on both of this page's reference cards.
+   * A renamed Kling clip kept its old handle (2026-10-02), so the prompt and the
+   * shots went on naming "@video_element_1" until the next page load gave the clip
+   * the handle of its new name. A renamed image reference did take its new handle,
+   * but that card built every handle from the names each time, which moved the
+   * handle of a second reference with the same name and dropped a remix's.
+   */
+  describe('reference handles', () => {
+    const KLING_RENAME = 'Rename video element';
+    const IMAGE_RENAME = 'Rename element';
+    const klingVideoInput = 'input[accept="video/mp4,video/quicktime,.mp4,.mov"]';
+    const imageElementInput = 'input[type="file"][accept="image/*"][multiple]';
+
+    function renameCard(container: HTMLElement, placeholder: string, index: number, nextName: string) {
+      const field = container.querySelectorAll<HTMLInputElement>(`input[placeholder="${placeholder}"]`)[index];
+      fireEvent.change(field, { target: { value: nextName } });
+      fireEvent.keyDown(field, { key: 'Enter' });
+    }
+
+    /** The @handle each card of one kind shows, in card order. */
+    function cardHandles(container: HTMLElement, placeholder: string) {
+      return Array.from(container.querySelectorAll<HTMLInputElement>(`input[placeholder="${placeholder}"]`)).map((field) => {
+        // The card body is the name field's nearest ancestor that holds the Insert button.
+        let card = field.parentElement;
+        while (card && !Array.from(card.querySelectorAll('button')).some((button) => button.textContent?.trim() === 'Insert')) {
+          card = card.parentElement;
+        }
+        return Array.from(card?.querySelectorAll('span') ?? [])
+          .find((span) => /^@\w+$/.test(span.textContent ?? ''))?.textContent ?? null;
+      });
+    }
+
+    function promptBox() {
+      return screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/);
+    }
+
+    function stubRemix(bundle: RemixSourceBundle) {
+      fetchMock.mockImplementation(async (input: RequestInfo | URL) => ({
+        ok: true,
+        json: async () => (String(input).includes('/api/remix-source')
+          ? bundle
+          : { status: 'succeeded', output: 'https://example.com/result.mp4', timing: null }),
+      } as Response));
+    }
+
+    function addKlingClip(container: HTMLElement, name: string) {
+      const input = container.querySelector<HTMLInputElement>(klingVideoInput);
+      expect(input).not.toBeNull();
+      fireEvent.change(input!, { target: { files: [new File(['video-bytes'], name, { type: 'video/mp4' })] } });
+    }
+
+    it('gives a renamed Kling clip the handle of its new name, and the prompt follows', async () => {
+      const view = render(<CreateVideoClient prefill={{}} />);
+      addKlingClip(view.container, 'clip.mp4');
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']));
+
+      fireEvent.change(promptBox(), { target: { value: 'A dancer follows @video_element_1, then @video_element_1 again.' } });
+
+      renameCard(view.container, KLING_RENAME, 0, 'Red jacket');
+
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@red_jacket']));
+      expect(promptBox()).toHaveValue('A dancer follows @red_jacket, then @red_jacket again.');
+      // Nothing on the page still offers the old handle, and the prompt has no stale mention.
+      expect(screen.queryByText('@video_element_1')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+    });
+
+    it('rewrites the mention in every shot prompt when a Kling clip is renamed', async () => {
+      const view = render(<CreateVideoClient prefill={{}} />);
+      addKlingClip(view.container, 'clip.mp4');
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']));
+
+      fireEvent.click(screen.getByText('Multi-Shot'));
+      fireEvent.change(await screen.findByPlaceholderText('Describe shot 1...'), {
+        target: { value: 'Open on @video_element_1 in the rain' },
+      });
+
+      renameCard(view.container, KLING_RENAME, 0, 'Red jacket');
+
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@red_jacket']));
+      expect(screen.getByPlaceholderText('Describe shot 1...')).toHaveValue('Open on @red_jacket in the rain');
+    });
+
+    it('accepts the new handle typed by hand straight after a Kling clip is renamed', async () => {
+      const view = render(<CreateVideoClient prefill={{}} />);
+      addKlingClip(view.container, 'clip.mp4');
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toHaveLength(1));
+
+      renameCard(view.container, KLING_RENAME, 0, 'Red jacket');
+      await waitFor(() => expect(screen.getByDisplayValue('Red jacket')).toBeInTheDocument());
+      fireEvent.change(promptBox(), { target: { value: 'A dancer follows @red_jacket across the stage' } });
+
+      expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+      expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@red_jacket']);
+    });
+
+    it('shows the same Kling clip handles after a reload as before it', async () => {
+      const first = render(<CreateVideoClient prefill={{}} />);
+      addKlingClip(first.container, 'first.mp4');
+      await waitFor(() => expect(cardHandles(first.container, KLING_RENAME)).toHaveLength(1));
+      addKlingClip(first.container, 'second.mp4');
+      await waitFor(() => expect(cardHandles(first.container, KLING_RENAME)).toEqual(['@video_element_1', '@video_element_2']));
+
+      // Two clips with one name: the second takes a numbered handle.
+      renameCard(first.container, KLING_RENAME, 0, 'Dancer');
+      await waitFor(() => expect(cardHandles(first.container, KLING_RENAME)).toEqual(['@dancer', '@video_element_2']));
+      renameCard(first.container, KLING_RENAME, 1, 'Dancer');
+      await waitFor(() => expect(cardHandles(first.container, KLING_RENAME)).toEqual(['@dancer', '@dancer_2']));
+      // Renaming the first frees "@dancer". The second keeps the handle the prompt uses for it.
+      renameCard(first.container, KLING_RENAME, 0, 'Red jacket');
+      await waitFor(() => expect(cardHandles(first.container, KLING_RENAME)).toEqual(['@red_jacket', '@dancer_2']));
+
+      // The reload: the page goes away, and the next one starts from what was saved.
+      const saved = setPersistedMediaRecordsMock.mock.calls
+        .filter(([key]) => key === 'create-video:kling-video-elements')
+        .at(-1)?.[1] ?? [];
+      expect(saved).toHaveLength(2);
+      first.unmount();
+      getPersistedMediaRecordsMock.mockImplementation(async (key: string) => (
+        key === 'create-video:kling-video-elements' ? saved : []
+      ));
+
+      const second = render(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(cardHandles(second.container, KLING_RENAME)).toEqual(['@red_jacket', '@dancer_2']));
+    });
+
+    it('keeps a restored Kling clip handle until its own clip is renamed', async () => {
+      // The handles the original prompt was written with. Neither is the handle its
+      // clip's name would give ("@opening_shot", "@closing_shot").
+      stubRemix({
+        generation: { id: 'gen-1', title: 'Harbour', prompt: '@lead crosses to @rival at dusk', category: 'video', model: 'kling-3.0-video' },
+        result: { mediaType: 'video', url: 'https://example.com/result.mp4' },
+        inputs: {
+          video: {
+            referenceMode: 'elements',
+            startFrame: null,
+            endFrame: null,
+            elements: [],
+            referenceVideos: ['00', '01'].map((index) => ({
+              kind: 'video' as const,
+              storagePath: `generation_inputs/owner-1/gen-1/${index}-kling_video_element.mp4`,
+              sourceGenerationId: 'gen-1',
+              url: `https://signed.example.com/generation_inputs/owner-1/gen-1/${index}-kling_video_element.mp4`,
+            })),
+            referenceAudios: [],
+          },
+        },
+        workflowSettings: {
+          model: 'kling-3.0-video',
+          klingVideoElements: [
+            { id: 'remix-1', displayName: 'Opening shot', handle: '@lead' },
+            { id: 'remix-2', displayName: 'Closing shot', handle: '@rival' },
+          ],
+        },
+        restoreIssues: [],
+      });
+
+      const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@lead', '@rival']));
+      expect(promptBox()).toHaveValue('@lead crosses to @rival at dusk');
+
+      // Renaming the other clip, and adding one, leave "@lead" alone.
+      renameCard(view.container, KLING_RENAME, 1, 'Villain');
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@lead', '@villain']));
+      addKlingClip(view.container, 'third.mp4');
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@lead', '@villain', '@video_element_3']));
+      expect(promptBox()).toHaveValue('@lead crosses to @villain at dusk');
+
+      renameCard(view.container, KLING_RENAME, 0, 'Captain');
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@captain', '@villain', '@video_element_3']));
+      expect(promptBox()).toHaveValue('@captain crosses to @villain at dusk');
+      expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+    });
+
+    it('gives a renamed image reference the handle of its new name, and the prompt follows', async () => {
+      getPersistedImageElementRecordsMock.mockResolvedValue([
+        { id: 'saved-1', displayName: 'Saved product', file: new File(['image'], 'saved.png', { type: 'image/png' }) },
+      ]);
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+      await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@saved_product']));
+
+      fireEvent.change(promptBox(), { target: { value: 'A slow orbit around @saved_product on a plinth' } });
+
+      renameCard(view.container, IMAGE_RENAME, 0, 'Red jacket');
+
+      await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@red_jacket']));
+      expect(promptBox()).toHaveValue('A slow orbit around @red_jacket on a plinth');
+      expect(screen.queryByText('@saved_product')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+    });
+
+    it('shows the same image reference handles after a reload as before it', async () => {
+      getPersistedImageElementRecordsMock.mockResolvedValue([
+        { id: 'saved-1', displayName: 'Dancer', file: new File(['one'], 'one.png', { type: 'image/png' }) },
+      ]);
+      const first = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+      await waitFor(() => expect(cardHandles(first.container, IMAGE_RENAME)).toEqual(['@dancer']));
+
+      // A second reference with the same name takes a numbered handle.
+      const input = first.container.querySelector<HTMLInputElement>(imageElementInput);
+      fireEvent.change(input!, { target: { files: [new File(['two'], 'two.png', { type: 'image/png' })] } });
+      await waitFor(() => expect(cardHandles(first.container, IMAGE_RENAME)).toHaveLength(2));
+      renameCard(first.container, IMAGE_RENAME, 1, 'Dancer');
+      await waitFor(() => expect(cardHandles(first.container, IMAGE_RENAME)).toEqual(['@dancer', '@dancer_2']));
+      // Renaming the first frees "@dancer". The second keeps the handle the prompt uses for it.
+      renameCard(first.container, IMAGE_RENAME, 0, 'Red jacket');
+      await waitFor(() => expect(cardHandles(first.container, IMAGE_RENAME)).toEqual(['@red_jacket', '@dancer_2']));
+
+      const saved = setPersistedImageElementRecordsMock.mock.calls.at(-1)?.[1] ?? [];
+      expect(saved).toHaveLength(2);
+      first.unmount();
+      getPersistedImageElementRecordsMock.mockResolvedValue(saved);
+
+      const second = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+      await waitFor(() => expect(cardHandles(second.container, IMAGE_RENAME)).toEqual(['@red_jacket', '@dancer_2']));
+    });
+
+    it('keeps a restored image reference handle until its own reference is renamed', async () => {
+      stubRemix({
+        generation: { id: 'gen-1', title: 'Harbour', prompt: '@lead walks past @prop at dusk', category: 'video', model: 'seedance-2-5' },
+        result: { mediaType: 'video', url: 'https://example.com/result.mp4' },
+        inputs: {
+          video: {
+            referenceMode: 'elements',
+            startFrame: null,
+            endFrame: null,
+            elements: [
+              { id: 'remix-1', displayName: 'Hero shot', handle: '@lead', url: 'https://signed.example.com/lead.png', storagePath: 'generation_inputs/owner-1/gen-1/00.png', sourceGenerationId: 'gen-1' },
+              { id: 'remix-2', displayName: 'Umbrella', handle: '@prop', url: 'https://signed.example.com/prop.png', storagePath: 'generation_inputs/owner-1/gen-1/01.png', sourceGenerationId: 'gen-1' },
+            ],
+            referenceVideos: [],
+            referenceAudios: [],
+          },
+        },
+        workflowSettings: { model: 'seedance-2-5' },
+        restoreIssues: [],
+      });
+
+      const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+      await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@lead', '@prop']));
+      expect(promptBox()).toHaveValue('@lead walks past @prop at dusk');
+      expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+
+      renameCard(view.container, IMAGE_RENAME, 1, 'Red umbrella');
+      await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@lead', '@red_umbrella']));
+      expect(promptBox()).toHaveValue('@lead walks past @red_umbrella at dusk');
+
+      renameCard(view.container, IMAGE_RENAME, 0, 'Captain');
+      await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@captain', '@red_umbrella']));
+      expect(promptBox()).toHaveValue('@captain walks past @red_umbrella at dusk');
+    });
+  });
+
+  /**
+   * A Kling O3 subject's @handle is written in lower case, as every other handle
+   * is. It kept the capitals of the subject's name ("@Hero_creator", 2026-10-03),
+   * and the code that reads handles out of a prompt reads lower case only. Typed
+   * the way the card showed it, the handle was not read, and the "@" panel shut at
+   * its first capital. Typed in lower case it was refused as an unknown element,
+   * although that is the spelling the server gives the provider.
+   */
+  describe('Kling O3 subject handles', () => {
+    function subjectFields(container: HTMLElement) {
+      return Array.from(container.querySelectorAll<HTMLInputElement>('input[placeholder="Subject name"]'));
+    }
+
+    /** A subject's card: its name field's nearest ancestor that holds the image picker. */
+    function subjectCard(field: HTMLInputElement) {
+      let card = field.parentElement;
+      while (card && !card.querySelector('input[type="file"]')) {
+        card = card.parentElement;
+      }
+      return card;
+    }
+
+    /** The @handle each subject card shows, in card order. */
+    function subjectHandles(container: HTMLElement) {
+      return subjectFields(container).map((field) => (
+        Array.from(subjectCard(field)?.querySelectorAll('span') ?? [])
+          .find((span) => /^@\w+$/.test(span.textContent ?? ''))?.textContent ?? null
+      ));
+    }
+
+    function promptBox() {
+      return screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/);
+    }
+
+    async function renderWithSubjects(...names: string[]) {
+      const view = render(<CreateVideoClient prefill={{ model: 'kling-o3' }} />);
+      await screen.findByText('Named subjects');
+      for (const name of names) {
+        fireEvent.click(screen.getByText('Add subject'));
+        fireEvent.change(subjectFields(view.container).at(-1)!, { target: { value: name } });
+      }
+      return view;
+    }
+
+    it('writes the handle in lower case, on the card and where the prompt offers it', async () => {
+      const view = await renderWithSubjects('Hero creator');
+
+      expect(subjectHandles(view.container)).toEqual(['@hero_creator']);
+      // Nothing on the page offers the handle in another spelling.
+      expect(screen.queryByText('@Hero_creator')).not.toBeInTheDocument();
+    });
+
+    it('accepts the handle typed by hand', async () => {
+      await renderWithSubjects('Hero creator');
+
+      fireEvent.change(promptBox(), { target: { value: 'A scene with @hero_creator walking' } });
+
+      expect(promptBox()).toHaveValue('A scene with @hero_creator walking');
+      expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+    });
+
+    it('keeps the "@" panel open at a capital letter, and inserts the handle from it', async () => {
+      await renderWithSubjects('Hero creator');
+
+      // The name is "Hero creator", so this is how a creator starts to look for it.
+      fireEvent.change(promptBox(), { target: { value: 'A scene with @H' } });
+
+      const title = await screen.findByText('Insert reference');
+      // The panel is the title's nearest ancestor that holds a reference to pick.
+      let panel = title.parentElement;
+      while (panel && !panel.querySelector('button')) {
+        panel = panel.parentElement;
+      }
+      const suggestion = Array.from(panel?.querySelectorAll('button') ?? [])
+        .find((button) => button.textContent?.includes('@hero_creator'));
+      expect(suggestion).toBeDefined();
+
+      fireEvent.click(suggestion!);
+
+      // What was typed is replaced by the handle as it is written.
+      expect(promptBox()).toHaveValue('A scene with @hero_creator');
+      expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+    });
+
+    it('numbers the later of two subjects whose names differ only by a capital', async () => {
+      const view = await renderWithSubjects('Hero', 'hero');
+
+      // The server reads both names as one handle, so the page must tell them apart itself.
+      expect(subjectHandles(view.container)).toEqual(['@hero', '@hero_2']);
+    });
+
+    it('sends each subject image under the handle the prompt mentions', async () => {
+      const view = await renderWithSubjects('Hero creator');
+      const picker = subjectCard(subjectFields(view.container)[0])?.querySelector<HTMLInputElement>('input[type="file"]');
+      expect(picker).not.toBeNull();
+      fireEvent.change(picker!, {
+        target: {
+          files: [
+            new File(['front'], 'hero-front.png', { type: 'image/png' }),
+            new File(['side'], 'hero-side.png', { type: 'image/png' }),
+          ],
+        },
+      });
+      await screen.findByText('2/4 images');
+
+      const prompt = '@hero_creator lifts the serum and smiles at the camera in a bright studio, slow push in.';
+      fireEvent.change(promptBox(), { target: { value: prompt } });
+      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          '/api/generations',
+          expect.objectContaining({ method: 'POST' })
+        );
+      });
+
+      const postCall = fetchMock.mock.calls.find(([input, init]) => (
+        String(input).includes('/api/generations') && init?.method === 'POST'
+      ));
+      const body = JSON.parse(String(postCall?.[1]?.body));
+      expect(body.prompt).toBe(prompt);
+      expect(body.settings.referenceMode).toBe('subjects');
+      const subjectImages = body.inputs.filter((input: { slot: string }) => input.slot === 'subjectImages');
+      expect(subjectImages.map((input: { handle: string; label: string }) => [input.handle, input.label])).toEqual([
+        ['@hero_creator', 'Hero creator'],
+        ['@hero_creator', 'Hero creator'],
+      ]);
+    });
   });
 });

@@ -308,15 +308,40 @@ describe('template run catalog pinning', () => {
     const { run, steps } = seedTemplateRun();
     const db = createFakeSupabase({ runs: [run], steps, generations: [] });
     const conflict = Object.assign(new Error('duplicate start'), { status: 409 });
-    mocks.executeWorkflowRunnableNode.mockRejectedValue(conflict);
+    // The conflict is another worker's start landing first: by the time this
+    // worker hears of it, the row is that worker's.
+    mocks.executeWorkflowRunnableNode.mockImplementation(async (params: { templateContext: { stepId: string } }) => {
+      const taken = steps.find((step) => step.id === params.templateContext.stepId)!;
+      Object.assign(taken, { status: 'processing', generation_id: `generation-of-${taken.id}` });
+      throw conflict;
+    });
 
     const { syncTemplateRun } = await import('@/lib/template-run-service');
     const dto = await syncTemplateRun({ adminClient: db.client, runId: 'run-1', userId: 'user-1' });
 
-    expect(db.writes.filter((write) => (
-      write.table === 'template_run_steps' && write.payload.status === 'failed'
-    ))).toHaveLength(0);
-    expect(dto.status).toBe('queued');
+    // Nothing is written to a step the other worker has.
+    expect(db.writes.filter((write) => write.table === 'template_run_steps')).toHaveLength(0);
+    expect(dto.steps.filter((step) => step.status === 'processing')).toHaveLength(2);
+    expect(dto.status).toBe('processing');
+  });
+
+  it('fails a step whose start conflicts while no worker has it, instead of leaving the run waiting', async () => {
+    const { run, steps } = seedTemplateRun();
+    const db = createFakeSupabase({ runs: [run], steps, generations: [] });
+    // The row is still in line and has no generation: the conflict is the
+    // database refusing this row, and it would refuse it on every later pass.
+    mocks.executeWorkflowRunnableNode.mockRejectedValue(Object.assign(new Error('refused start'), { status: 409 }));
+
+    const { syncTemplateRun } = await import('@/lib/template-run-service');
+    const dto = await syncTemplateRun({ adminClient: db.client, runId: 'run-1', userId: 'user-1' });
+
+    const failedSteps = dto.steps.filter((step) => step.status === 'failed');
+    expect(failedSteps).toHaveLength(2);
+    for (const step of failedSteps) {
+      expect(step.errorMessage).toMatch(/could not be started because of a problem on our side/i);
+      expect(step.canRetry).toBe(true);
+    }
+    expect(dto.status).toBe('needs_attention');
   });
 });
 

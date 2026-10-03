@@ -14,7 +14,9 @@ import {
     GeneratorPageHeader,
     MediaStudioShell,
     StudioBackgroundProcessingNotice,
+    StudioElementChip,
     StudioElementHandle,
+    StudioElementHandleList,
     StudioGenerationStatus,
     StudioMediaPreviewModal,
     StudioModelNotice,
@@ -69,16 +71,14 @@ import {
     waitForNextGenerationStatusPoll,
 } from '@/lib/generation-status-client';
 import {
-    buildElementHandle,
+    assignElementHandles,
+    buildSubjectHandles,
     createElementHandleReplacementMap,
     createElementId,
     extractPromptHandles,
     findUnknownPromptHandles,
     getMentionQueryAtCaret,
     insertHandleIntoPrompt,
-    isValidElementHandle,
-    normalizeElementDisplayName,
-    reconcileElementDescriptors,
     replacePromptHandles,
     type ImageElementDescriptor,
 } from '@/lib/image-elements';
@@ -188,6 +188,7 @@ type VideoElementDraft = ImageElementDescriptor & {
 type VideoElementSeed = {
     id?: string;
     displayName?: string;
+    handle?: string | null;
     file: File | null;
     previewUrl: string;
     providerUrl?: string | null;
@@ -265,18 +266,6 @@ const KLING_SUBJECT_LIMIT = 3;
 const KLING_SUBJECT_MIN_IMAGES = 2;
 const KLING_SUBJECT_MAX_IMAGES = 4;
 
-function buildKlingSubjectHandle(displayName: string, index: number, used: Set<string>): string {
-    const base = displayName.trim().replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-    let handle = `@${base || `subject_${index + 1}`}`;
-    let suffix = 2;
-    while (used.has(handle)) {
-        handle = `@${base || `subject_${index + 1}`}_${suffix}`;
-        suffix += 1;
-    }
-    used.add(handle);
-    return handle;
-}
-
 function KlingSubjectsEditor({
     subjects,
     handles,
@@ -351,23 +340,32 @@ function KlingSubjectsEditor({
                             && subject.images.length <= KLING_SUBJECT_MAX_IMAGES;
                         return (
                             <div key={subject.id} className="rounded-[24px] border border-zinc-700/40 bg-black/35 p-3">
-                                <div className="mb-3 flex items-center gap-2">
-                                    <input
-                                        type="text"
-                                        value={subject.displayName}
-                                        disabled={disabled}
-                                        onChange={(event) => updateSubject(subject.id, { displayName: event.target.value })}
-                                        className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none transition focus:border-emerald-500/40"
-                                        placeholder="Subject name"
-                                    />
-                                    <span className="shrink-0 truncate rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1 text-xs font-semibold text-emerald-300">
-                                        {handles[subjectIndex]}
-                                    </span>
+                                {/* The handle is made from the name, so it grows as the name is typed.
+                                    It stays beside the name field while it takes no more than half of
+                                    their line, and leaves the field 10rem on a wide one. A longer handle
+                                    takes the next line, whole. The remove button is outside that pair,
+                                    so it stays at the end of the field's line; its top margin, half of
+                                    what the field's height has over its own, keeps it level with the field. */}
+                                <div className="mb-3 flex items-start gap-2">
+                                    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                                        <input
+                                            type="text"
+                                            value={subject.displayName}
+                                            disabled={disabled}
+                                            onChange={(event) => updateSubject(subject.id, { displayName: event.target.value })}
+                                            className="min-w-[min(50%_-_0.5rem,10rem)] flex-1 rounded-2xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none transition focus:border-emerald-500/40"
+                                            placeholder="Subject name"
+                                        />
+                                        <StudioElementHandle
+                                            handle={handles[subjectIndex]}
+                                            className="rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1 text-xs font-semibold text-emerald-300"
+                                        />
+                                    </div>
                                     <button
                                         type="button"
                                         disabled={disabled}
                                         onClick={() => removeSubject(subject.id)}
-                                        className="shrink-0 rounded-full bg-black/60 p-1.5 text-white transition hover:bg-red-500"
+                                        className="mt-[calc(0.375rem+1px)] shrink-0 rounded-full bg-black/60 p-1.5 text-white transition hover:bg-red-500"
                                         aria-label={`Remove ${subject.displayName}`}
                                     >
                                         <X className="h-3 w-3" />
@@ -456,9 +454,10 @@ type PromptMentionCandidate = {
 };
 
 function hydrateVideoElements(seeds: VideoElementSeed[]): VideoElementDraft[] {
-    const baseElements = seeds.map((seed, index) => ({
+    return assignElementHandles(seeds).map((seed) => ({
         id: seed.id ?? createElementId(),
-        displayName: normalizeElementDisplayName(seed.displayName, index + 1),
+        displayName: seed.displayName,
+        handle: seed.handle,
         file: seed.file,
         previewUrl: seed.previewUrl,
         providerUrl: seed.providerUrl ?? null,
@@ -471,36 +470,6 @@ function hydrateVideoElements(seeds: VideoElementSeed[]): VideoElementDraft[] {
             ...seed.seedanceAsset,
         }),
     }));
-
-    const reconciled = reconcileElementDescriptors(baseElements.map((element) => ({
-        id: element.id,
-        displayName: element.displayName,
-    })));
-    const byId = new Map(baseElements.map((element) => [element.id, element]));
-
-    return reconciled.map((element) => {
-        const existing = byId.get(element.id);
-        if (!existing) {
-            return {
-                id: element.id,
-                displayName: element.displayName,
-                handle: element.handle,
-                file: null,
-                previewUrl: '',
-                providerUrl: null,
-                storagePath: null,
-                source: 'upload' as const,
-                sourceGenerationId: null,
-                seedanceAsset: createSeedanceAssetMetadata({ assetType: 'Image' }),
-            };
-        }
-
-        return {
-            ...existing,
-            displayName: element.displayName,
-            handle: element.handle,
-        };
-    });
 }
 
 function hydrateSeedanceMediaReferences(
@@ -526,37 +495,18 @@ function hydrateSeedanceMediaReferences(
 }
 
 function hydrateKlingVideoElements(seeds: KlingVideoElementSeed[]): KlingVideoElementDraft[] {
-    const usedHandles = new Set<string>();
-
-    return seeds.map((seed, index) => {
-        const displayName = normalizeElementDisplayName(
-            typeof seed.displayName === 'string' ? seed.displayName : undefined,
-            index + 1
-        );
-        const normalizedHandle = typeof seed.handle === 'string' && isValidElementHandle(seed.handle)
-            ? seed.handle
-            : null;
-        const handle = normalizedHandle && !usedHandles.has(normalizedHandle)
-            ? normalizedHandle
-            : buildElementHandle(displayName, usedHandles, index + 1);
-
-        if (normalizedHandle && handle === normalizedHandle) {
-            usedHandles.add(handle);
-        }
-
-        return {
-            id: typeof seed.id === 'string' && seed.id.trim() ? seed.id : createElementId(),
-            displayName,
-            handle,
-            file: seed.file,
-            previewUrl: seed.previewUrl,
-            providerUrl: seed.providerUrl ?? null,
-            storagePath: seed.storagePath ?? null,
-            source: seed.source ?? 'upload',
-            sourceGenerationId: seed.sourceGenerationId ?? null,
-            durationSeconds: typeof seed.durationSeconds === 'number' ? seed.durationSeconds : null,
-        };
-    });
+    return assignElementHandles(seeds).map((seed) => ({
+        id: typeof seed.id === 'string' && seed.id.trim() ? seed.id : createElementId(),
+        displayName: seed.displayName,
+        handle: seed.handle,
+        file: seed.file,
+        previewUrl: seed.previewUrl,
+        providerUrl: seed.providerUrl ?? null,
+        storagePath: seed.storagePath ?? null,
+        source: seed.source ?? 'upload',
+        sourceGenerationId: seed.sourceGenerationId ?? null,
+        durationSeconds: typeof seed.durationSeconds === 'number' ? seed.durationSeconds : null,
+    }));
 }
 
 function isSupportedKlingVideoFile(file: File): boolean {
@@ -819,6 +769,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             .map((element) => ({
                 id: element.id,
                 displayName: element.displayName,
+                handle: element.handle,
                 file: element.file as File,
             }));
 
@@ -873,6 +824,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 .map((element) => ({
                     id: element.id,
                     displayName: element.displayName,
+                    handle: element.handle,
                     durationSeconds: element.durationSeconds ?? null,
                     file: element.file as File,
                 }))
@@ -1008,11 +960,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             ? elements.length + referenceVideos.length + referenceAudios.length + preparedAudioIds.length + characterIds.length + (combinesFrameWithReferences && (startImageUrl || startImageFile) ? 1 : 0)
             : frameReferenceCount + (isKlingVideoModel ? klingVideoElements.length : 0);
     const klingSubjectsActive = isKlingO3Model && klingSubjects.length > 0;
-    const klingSubjectHandles = (() => {
-        if (!isKlingO3Model) return [] as string[];
-        const used = new Set<string>();
-        return klingSubjects.map((subject, index) => buildKlingSubjectHandle(subject.displayName, index, used));
-    })();
+    const klingSubjectHandles = isKlingO3Model
+        ? buildSubjectHandles(klingSubjects.map((subject) => subject.displayName))
+        : [];
     const additionalSettings = useAdditionalCatalogSettings(catalogDescriptor, CATALOG_HANDLED_KEYS);
     const quoteRequest = useMemo(() => modelCatalog.catalog && modelCatalog.detailsReady ? {
         kind: 'video' as const,
@@ -1641,6 +1591,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     commitElements(hydrateVideoElements(savedElements.map((element) => ({
                         id: element.id,
                         displayName: element.displayName,
+                        handle: element.handle,
                         file: element.file,
                         previewUrl: URL.createObjectURL(element.file),
                         source: 'upload',
@@ -1682,6 +1633,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                        savedKlingVideoElements.map((element) => ({
 	                            id: element.id,
 	                            displayName: element.displayName,
+	                            handle: element.handle,
 	                            durationSeconds: element.durationSeconds ?? null,
 	                            file: element.file,
 	                            previewUrl: URL.createObjectURL(element.file),
@@ -2066,7 +2018,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         const nextElements = hydrateVideoElements(
             currentElements.map((element) => (
                 element.id === elementId
-                    ? { ...element, displayName: nextDisplayName }
+                    // Without its handle, the element takes the handle of its new name.
+                    ? { ...element, displayName: nextDisplayName, handle: null }
                     : element
             ))
         );
@@ -2091,7 +2044,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         const nextElements = hydrateKlingVideoElements(
             currentElements.map((element) => (
                 element.id === elementId
-                    ? { ...element, displayName: nextDisplayName }
+                    // Without its handle, the element takes the handle of its new name.
+                    ? { ...element, displayName: nextDisplayName, handle: null }
                     : element
             ))
         );
@@ -3470,15 +3424,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                            {promptMentionCandidates.length > 0 ? (
 	                                                <div className="flex flex-wrap gap-2">
 	                                                    {promptMentionCandidates.map((candidate) => (
-	                                                        <button
+	                                                        <StudioElementChip
 	                                                            key={`${candidate.kind}-${candidate.id}`}
-	                                                            type="button"
-	                                                            onClick={() => handleInsertPromptHandle(candidate.handle)}
-	                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
-	                                                        >
-	                                                            <span className="text-zinc-400">{candidate.displayName}</span>
-	                                                            <span className={candidate.kind === 'video' ? 'text-emerald-300' : 'text-sky-300'}>{candidate.handle}</span>
-	                                                        </button>
+	                                                            displayName={candidate.displayName}
+	                                                            handle={candidate.handle}
+	                                                            handleClassName={candidate.kind === 'video' ? 'text-emerald-300' : 'text-sky-300'}
+	                                                            onInsert={() => handleInsertPromptHandle(candidate.handle)}
+	                                                        />
 	                                                    ))}
 	                                                </div>
                                             ) : (
@@ -3501,8 +3453,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     <div className="mt-2 flex items-center justify-between gap-3 text-xs">
                                         <span className="text-zinc-600">{prompt.length}/2500</span>
                                         {staleElementMentions.length > 0 ? (
-                                            <span className="text-right text-rose-300">
-                                                Unknown element mention{staleElementMentions.length > 1 ? 's' : ''}: {staleElementMentions.join(', ')}
+                                            <span className="min-w-0 text-right text-rose-300">
+                                                Unknown element mention{staleElementMentions.length > 1 ? 's' : ''}:{' '}
+                                                <StudioElementHandleList handles={staleElementMentions} />
                                             </span>
 	                                        ) : activeReferenceMode !== 'elements' && hasKnownElementMentions ? (
 	                                            <span className="text-right text-amber-300">
@@ -3512,8 +3465,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     </div>
                                     {activeMentionQuery ? (
                                         <div className="mt-4 rounded-[20px] border border-white/8 bg-black/35 p-4">
-                                            <div className="flex items-center justify-between gap-3">
-                                                <div>
+                                            <div className="flex flex-wrap items-center justify-between gap-3">
+                                                <div className="min-w-[min(50%_-_0.75rem,10rem)] flex-1">
                                                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
 	                                                        Insert reference
 	                                                    </p>
@@ -3524,23 +3477,22 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                    </p>
                                                 </div>
                                                 {activeMentionQuery.query ? (
-                                                    <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300">
-                                                        @{activeMentionQuery.query}
-                                                    </span>
+                                                    <StudioElementHandle
+                                                        handle={`@${activeMentionQuery.query}`}
+                                                        className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300"
+                                                    />
                                                 ) : null}
                                             </div>
                                             {mentionSuggestions.length > 0 ? (
                                                 <div className="mt-3 flex flex-wrap gap-2">
 	                                                    {mentionSuggestions.map((candidate) => (
-	                                                        <button
+	                                                        <StudioElementChip
 	                                                            key={`${candidate.kind}-${candidate.id}`}
-	                                                            type="button"
-	                                                            onClick={() => handleInsertPromptHandle(candidate.handle)}
-	                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
-	                                                        >
-	                                                            <span className="text-zinc-400">{candidate.displayName}</span>
-	                                                            <span className={candidate.kind === 'video' ? 'text-emerald-300' : 'text-sky-300'}>{candidate.handle}</span>
-	                                                        </button>
+	                                                            displayName={candidate.displayName}
+	                                                            handle={candidate.handle}
+	                                                            handleClassName={candidate.kind === 'video' ? 'text-emerald-300' : 'text-sky-300'}
+	                                                            onInsert={() => handleInsertPromptHandle(candidate.handle)}
+	                                                        />
 	                                                    ))}
                                                 </div>
                                             ) : null}
@@ -3645,31 +3597,30 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                />
 	                                                {activeShotMentionQuery?.shotId === shot.id && isKlingVideoModel ? (
 	                                                    <div className="mb-4 rounded-[20px] border border-white/8 bg-black/35 p-4">
-	                                                        <div className="flex items-center justify-between gap-3">
-	                                                            <div>
+	                                                        <div className="flex flex-wrap items-center justify-between gap-3">
+	                                                            <div className="min-w-[min(50%_-_0.75rem,10rem)] flex-1">
 	                                                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Insert video element</p>
 	                                                                <p className="mt-1 text-sm text-zinc-400">
 	                                                                    {shotMentionSuggestions.length > 0 ? 'Pick a Kling video handle for this shot.' : 'No matching video elements yet.'}
 	                                                                </p>
 	                                                            </div>
 	                                                            {activeShotMentionQuery.query ? (
-	                                                                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300">
-	                                                                    @{activeShotMentionQuery.query}
-	                                                                </span>
+	                                                                <StudioElementHandle
+	                                                                    handle={`@${activeShotMentionQuery.query}`}
+	                                                                    className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300"
+	                                                                />
 	                                                            ) : null}
 	                                                        </div>
 	                                                        {shotMentionSuggestions.length > 0 ? (
 	                                                            <div className="mt-3 flex flex-wrap gap-2">
 	                                                                {shotMentionSuggestions.map((element) => (
-	                                                                    <button
+	                                                                    <StudioElementChip
 	                                                                        key={element.id}
-	                                                                        type="button"
-	                                                                        onClick={() => handleInsertShotHandle(shot.id, element.handle)}
-	                                                                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
-	                                                                    >
-	                                                                        <span className="text-zinc-400">{element.displayName}</span>
-	                                                                        <span className="text-emerald-300">{element.handle}</span>
-	                                                                    </button>
+	                                                                        displayName={element.displayName}
+	                                                                        handle={element.handle}
+	                                                                        handleClassName="text-emerald-300"
+	                                                                        onInsert={() => handleInsertShotHandle(shot.id, element.handle)}
+	                                                                    />
 	                                                                ))}
 	                                                            </div>
 	                                                        ) : null}
@@ -3826,7 +3777,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                    </div>
 	                                                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2">
 	                                                        <StudioElementHandle handle={element.handle} className="text-xs font-semibold text-emerald-300" />
-	                                                        <div className="flex shrink-0 items-center gap-1.5">
+	                                                        <div className="flex flex-wrap items-center gap-1.5">
 	                                                            <button
 	                                                                type="button"
 	                                                                onClick={() => {

@@ -14,6 +14,7 @@ import {
   persistGeneratedOutputList,
   type SyncableGenerationRecord,
 } from '@/lib/generation-services';
+import { jobErrorMessage } from '@/lib/job-error-message';
 
 export const GENERATION_OUTPUT_IMPORT_BATCH_LIMIT = 4;
 // Admission deadline, not an interruption of an import already persisting.
@@ -141,7 +142,7 @@ export async function processGenerationOutputImportJobs(params: {
         id: job.id,
         lockedBy: params.lockedBy,
         succeeded: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: jobErrorMessage(error),
         retryDelaySeconds: retryDelay(job.attempt_count),
       });
       if (outcome === 'exhausted') summary.exhausted += 1;

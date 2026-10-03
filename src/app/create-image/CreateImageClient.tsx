@@ -10,7 +10,9 @@ import {
     GeneratorPageHeader,
     MediaStudioShell,
     StudioBackgroundProcessingNotice,
+    StudioElementChip,
     StudioElementHandle,
+    StudioElementHandleList,
     StudioGenerationStatus,
     StudioMediaPreviewModal,
     StudioModelNotice,
@@ -43,15 +45,13 @@ import {
     setPersistedImageElementRecords,
 } from '@/lib/persisted-media';
 import {
-    buildElementHandle,
+    assignElementHandles,
     createElementHandleReplacementMap,
     createElementId,
     extractPromptHandles,
     findUnknownPromptHandles,
     getMentionQueryAtCaret,
     insertHandleIntoPrompt,
-    isValidElementHandle,
-    normalizeElementDisplayName,
     replacePromptHandles,
     type ImageElementDescriptor,
     type PersistedImageElementDraft,
@@ -147,29 +147,17 @@ async function clearLegacyPersistedImageElements() {
 }
 
 function hydrateImageElements(seeds: ImageElementSeed[]): ImageElementDraft[] {
-    const usedHandles = new Set<string>();
-
-    return seeds.map((seed, index) => {
-        const displayName = normalizeElementDisplayName(seed.displayName, index + 1);
-        const preferredHandle =
-            typeof seed.handle === 'string' && isValidElementHandle(seed.handle) && !usedHandles.has(seed.handle)
-                ? seed.handle
-                : buildElementHandle(displayName, usedHandles, index + 1);
-
-        usedHandles.add(preferredHandle);
-
-        return {
-            id: seed.id ?? createElementId(),
-            displayName,
-            handle: preferredHandle,
-            file: seed.file ?? null,
-            previewUrl: seed.previewUrl,
-            providerUrl: seed.providerUrl ?? null,
-            storagePath: seed.storagePath ?? null,
-            source: seed.source ?? 'upload',
-            sourceGenerationId: seed.sourceGenerationId ?? null,
-        };
-    });
+    return assignElementHandles(seeds).map((seed) => ({
+        id: seed.id ?? createElementId(),
+        displayName: seed.displayName,
+        handle: seed.handle,
+        file: seed.file ?? null,
+        previewUrl: seed.previewUrl,
+        providerUrl: seed.providerUrl ?? null,
+        storagePath: seed.storagePath ?? null,
+        source: seed.source ?? 'upload',
+        sourceGenerationId: seed.sourceGenerationId ?? null,
+    }));
 }
 
 export interface CreateImagePrefill {
@@ -304,6 +292,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             .map((element) => ({
                 id: element.id,
                 displayName: element.displayName,
+                handle: element.handle,
                 file: element.file as File,
             }));
 
@@ -480,6 +469,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                     clampedRecords.map((element) => ({
                         id: element.id,
                         displayName: element.displayName,
+                        handle: element.handle,
                         file: element.file,
                         previewUrl: URL.createObjectURL(element.file),
                         source: 'upload',
@@ -617,7 +607,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         const nextElements = hydrateImageElements(
             currentElements.map((element) => (
                 element.id === elementId
-                    ? { ...element, displayName: nextDisplayName }
+                    // Without its handle, the element takes the handle of its new name.
+                    ? { ...element, displayName: nextDisplayName, handle: null }
                     : element
             ))
         );
@@ -1389,15 +1380,13 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     {elements.length > 0 ? (
                                         <div className="flex flex-wrap gap-2">
                                             {elements.map((element) => (
-                                                <button
+                                                <StudioElementChip
                                                     key={element.id}
-                                                    type="button"
-                                                    onClick={() => handleInsertElementHandle(element.handle)}
-                                                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
-                                                >
-                                                    <span className="text-zinc-400">{element.displayName}</span>
-                                                    <span className="text-sky-300">{element.handle}</span>
-                                                </button>
+                                                    displayName={element.displayName}
+                                                    handle={element.handle}
+                                                    handleClassName="text-sky-300"
+                                                    onInsert={() => handleInsertElementHandle(element.handle)}
+                                                />
                                             ))}
                                         </div>
                                     ) : (
@@ -1420,16 +1409,16 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                             <div className="mt-2 flex items-center justify-between gap-3 text-xs">
                                 <p className="text-zinc-600">{prompt.length}/20000 characters</p>
                                 {staleElementMentions.length > 0 ? (
-                                    <p className="text-right text-rose-300">
+                                    <p className="min-w-0 text-right text-rose-300">
                                         Unknown element mention{staleElementMentions.length > 1 ? 's' : ''}:{' '}
-                                        {staleElementMentions.join(', ')}
+                                        <StudioElementHandleList handles={staleElementMentions} />
                                     </p>
                                 ) : null}
                             </div>
                             {activeMentionQuery ? (
                                 <div className="mt-4 rounded-[20px] border border-white/8 bg-black/35 p-4">
-                                    <div className="flex items-center justify-between gap-3">
-                                        <div>
+                                    <div className="flex flex-wrap items-center justify-between gap-3">
+                                        <div className="min-w-[min(50%_-_0.75rem,10rem)] flex-1">
                                             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
                                                 Insert element
                                             </p>
@@ -1440,23 +1429,22 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                             </p>
                                         </div>
                                         {activeMentionQuery.query ? (
-                                            <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300">
-                                                @{activeMentionQuery.query}
-                                            </span>
+                                            <StudioElementHandle
+                                                handle={`@${activeMentionQuery.query}`}
+                                                className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300"
+                                            />
                                         ) : null}
                                     </div>
                                     {mentionSuggestions.length > 0 ? (
                                         <div className="mt-3 flex flex-wrap gap-2">
                                             {mentionSuggestions.map((element) => (
-                                                <button
+                                                <StudioElementChip
                                                     key={element.id}
-                                                    type="button"
-                                                    onClick={() => handleInsertElementHandle(element.handle)}
-                                                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
-                                                >
-                                                    <span className="text-zinc-400">{element.displayName}</span>
-                                                    <span className="text-sky-300">{element.handle}</span>
-                                                </button>
+                                                    displayName={element.displayName}
+                                                    handle={element.handle}
+                                                    handleClassName="text-sky-300"
+                                                    onInsert={() => handleInsertElementHandle(element.handle)}
+                                                />
                                             ))}
                                         </div>
                                     ) : null}
@@ -1797,7 +1785,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         <p className="text-sm text-red-400">{error}</p>
                                     ) : staleElementMentions.length > 0 ? (
                                         <p className="text-sm text-rose-300">
-                                            Resolve the unknown element mention{staleElementMentions.length > 1 ? 's' : ''} before generating: {staleElementMentions.join(', ')}
+                                            Resolve the unknown element mention{staleElementMentions.length > 1 ? 's' : ''} before generating:{' '}
+                                            <StudioElementHandleList handles={staleElementMentions} />
                                         </p>
                                     ) : (
                                         <p className="text-sm text-zinc-500">Your latest image will appear in the workspace as soon as the run finishes.</p>

@@ -720,7 +720,7 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
                     mediaRecovery={{ runId: run.id, token: session?.access_token }}
                     disabled={isBusy}
                     availableCredits={credits}
-                    retryEnabled={!isRunTerminal(run.status)}
+                    runStatus={run.status}
                     busyAction={busyAction?.stepId === step.id
                       ? busyAction.type === 'retrying'
                         ? 'retry'

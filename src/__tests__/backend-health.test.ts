@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { collectBackendHealth } from '@/lib/backend-health';
 import { BACKEND_ENVIRONMENT_REQUIREMENTS } from '@/lib/backend-environment';
 import { BACKEND_JOB_REGISTRY } from '@/lib/backend-jobs';
+import { MAX_COMPLETION_ATTEMPTS } from '@/lib/generation-completion-job-policy';
 
 type QueryResult = {
   data: unknown[] | null;
@@ -237,6 +238,26 @@ const COMPLETE_BACKEND_ENVIRONMENT = {
   APPLE_SIGN_IN_PRIVATE_KEY: 'apple-private-key',
   ANDROID_APP_SHA256_FINGERPRINTS: 'AA:BB',
 } satisfies NodeJS.ProcessEnv;
+
+/**
+ * Every registered job succeeded two minutes before the 10:00 these tests check
+ * at, so no job rule has anything to report and an issue list can be asserted
+ * whole.
+ */
+function recentSuccessfulRunOfEveryJob(): QueryResult {
+  return {
+    error: null,
+    data: BACKEND_JOB_REGISTRY.map((job) => ({
+      job_name: job.name,
+      status: 'succeeded',
+      started_at: '2026-06-21T09:58:00.000Z',
+      finished_at: '2026-06-21T09:58:01.000Z',
+      duration_ms: 1000,
+      skip_reason: null,
+      error_message: null,
+    })),
+  };
+}
 
 describe('collectBackendHealth', () => {
   it('returns ok when scheduled jobs recently succeeded and no generations are stalled', async () => {
@@ -1591,6 +1612,256 @@ describe('collectBackendHealth', () => {
       expect.objectContaining({ code: 'GENERATION_COMPLETION_QUEUE_FAILED', severity: 'degraded' }),
       expect.objectContaining({ code: 'GENERATION_COMPLETION_QUEUE_STALE_PENDING', severity: 'degraded' }),
     ]));
+  });
+
+  it('degrades for an open completion job reclaimed past the attempt cap while its lock stays fresh', async () => {
+    // A job whose processing throws before anything closes it stays
+    // `processing`. Each sweep, ten minutes apart, reclaims it once its lock is
+    // 300 seconds old, stamps `locked_at = now()` and adds an attempt. This one
+    // was last closed after its fourth attempt (07:48, hence the old
+    // `next_attempt_at`), claimed for its fifth at 07:58 and reclaimed at each
+    // of the twelve sweeps since.
+    //
+    // Its lock is two minutes old, well inside the ten-minute stale-lock
+    // threshold, and inside the 300-second lease the queue-age probe filters
+    // on. That probe would find no row, which is the empty answer the fixture
+    // gives it by default.
+    const db = createClient({
+      backend_job_runs: recentSuccessfulRunOfEveryJob(),
+      generation_completion_jobs: {
+        error: null,
+        data: [
+          {
+            status: 'processing',
+            created_at: '2026-06-21T07:27:00.000Z',
+            next_attempt_at: '2026-06-21T07:56:00.000Z',
+            locked_at: '2026-06-21T09:58:00.000Z',
+            attempt_count: 17,
+          },
+        ],
+      },
+      generations: [
+        { error: null, data: [] },
+        { error: null, data: [] },
+        { error: null, data: [] },
+      ],
+    });
+
+    const health = await collectBackendHealth(db.client as never, new Date('2026-06-21T10:00:00.000Z'));
+
+    expect(health.issues).toEqual([
+      {
+        severity: 'degraded',
+        code: 'GENERATION_COMPLETION_QUEUE_OVER_ATTEMPT_CAP',
+        message: expect.stringContaining('highest attempt count 17'),
+      },
+    ]);
+    expect(health.status).toBe('degraded');
+    expect(health.completionQueue).toMatchObject({
+      status: 'degraded',
+      processingCount: 1,
+      staleProcessingCount: 0,
+      overAttemptCapCount: 1,
+      highestOpenAttemptCount: 17,
+      oldestProcessingLockedAt: '2026-06-21T09:58:00.000Z',
+    });
+  });
+
+  it('leaves a completion job on its last allowed attempt alone', async () => {
+    // The claim that starts the final attempt is what brings the count to the
+    // cap, so a job at the cap is being worked on, not stuck.
+    const db = createClient({
+      backend_job_runs: recentSuccessfulRunOfEveryJob(),
+      generation_completion_jobs: {
+        error: null,
+        data: [
+          {
+            status: 'processing',
+            created_at: '2026-06-21T09:10:00.000Z',
+            next_attempt_at: '2026-06-21T09:56:00.000Z',
+            locked_at: '2026-06-21T09:58:00.000Z',
+            attempt_count: MAX_COMPLETION_ATTEMPTS,
+          },
+          {
+            status: 'pending',
+            created_at: '2026-06-21T09:20:00.000Z',
+            next_attempt_at: '2026-06-21T10:06:00.000Z',
+            locked_at: null,
+            attempt_count: MAX_COMPLETION_ATTEMPTS - 1,
+          },
+        ],
+      },
+      generations: [
+        { error: null, data: [] },
+        { error: null, data: [] },
+        { error: null, data: [] },
+      ],
+    });
+
+    const health = await collectBackendHealth(db.client as never, new Date('2026-06-21T10:00:00.000Z'));
+
+    expect(health.issues).toEqual([]);
+    expect(health.status).toBe('ok');
+    expect(health.completionQueue).toMatchObject({
+      status: 'ok',
+      attemptCap: MAX_COMPLETION_ATTEMPTS,
+      pendingCount: 1,
+      processingCount: 1,
+      overAttemptCapCount: 0,
+      highestOpenAttemptCount: MAX_COMPLETION_ATTEMPTS,
+    });
+  });
+
+  it('counts every open completion job past the attempt cap, pending or processing', async () => {
+    const db = createClient({
+      backend_job_runs: recentSuccessfulRunOfEveryJob(),
+      generation_completion_jobs: {
+        error: null,
+        data: [
+          {
+            status: 'processing',
+            created_at: '2026-06-21T09:00:00.000Z',
+            next_attempt_at: '2026-06-21T09:46:00.000Z',
+            locked_at: '2026-06-21T09:58:00.000Z',
+            attempt_count: MAX_COMPLETION_ATTEMPTS + 1,
+          },
+          // Not something a claim or a finish leaves behind: a row put back to
+          // pending by hand with its attempts still on it. Its next unsuccessful
+          // finish closes it at once, so it is past the cap all the same.
+          {
+            status: 'pending',
+            created_at: '2026-06-21T08:00:00.000Z',
+            next_attempt_at: '2026-06-21T10:06:00.000Z',
+            locked_at: null,
+            attempt_count: MAX_COMPLETION_ATTEMPTS + 4,
+          },
+          {
+            status: 'pending',
+            created_at: '2026-06-21T09:50:00.000Z',
+            next_attempt_at: '2026-06-21T10:02:00.000Z',
+            locked_at: null,
+            attempt_count: 2,
+          },
+        ],
+      },
+      generations: [
+        { error: null, data: [] },
+        { error: null, data: [] },
+        { error: null, data: [] },
+      ],
+    });
+
+    const health = await collectBackendHealth(db.client as never, new Date('2026-06-21T10:00:00.000Z'));
+
+    expect(health.issues).toEqual([
+      {
+        severity: 'degraded',
+        code: 'GENERATION_COMPLETION_QUEUE_OVER_ATTEMPT_CAP',
+        message: `2 open generation completion job(s) are past the ${MAX_COMPLETION_ATTEMPTS}-attempt cap (highest attempt count ${MAX_COMPLETION_ATTEMPTS + 4}): a job is closed once it has used ${MAX_COMPLETION_ATTEMPTS} attempts, so these are being reclaimed without ever being closed.`,
+      },
+    ]);
+    expect(health.completionQueue).toMatchObject({
+      status: 'degraded',
+      pendingCount: 2,
+      processingCount: 1,
+      overAttemptCapCount: 2,
+      highestOpenAttemptCount: MAX_COMPLETION_ATTEMPTS + 4,
+    });
+  });
+
+  it('does not count a closed completion job as past the attempt cap', async () => {
+    // A job that looped and was then closed kept the attempts it had used. It is
+    // a failed job now, and reported as one.
+    const db = createClient({
+      backend_job_runs: recentSuccessfulRunOfEveryJob(),
+      generation_completion_jobs: {
+        error: null,
+        data: [
+          {
+            status: 'failed',
+            created_at: '2026-06-21T07:27:00.000Z',
+            next_attempt_at: '2026-06-21T09:58:00.000Z',
+            locked_at: null,
+            attempt_count: 17,
+          },
+        ],
+      },
+      generations: [
+        { error: null, data: [] },
+        { error: null, data: [] },
+        { error: null, data: [] },
+      ],
+    });
+
+    const health = await collectBackendHealth(db.client as never, new Date('2026-06-21T10:00:00.000Z'));
+
+    expect(health.issues.map((issue) => issue.code)).toEqual(['GENERATION_COMPLETION_QUEUE_FAILED']);
+    expect(health.completionQueue).toMatchObject({
+      failedCount: 1,
+      overAttemptCapCount: 0,
+      highestOpenAttemptCount: null,
+    });
+  });
+
+  it('reads completion job attempts inside the existing queue sample', async () => {
+    // The sample is the 200 oldest unresolved rows, and failed rows stay in it
+    // until they are pruned. Here 200 of them, from the day before, fill it. The
+    // 201st row only proves the cap was hit and is dropped before anything is
+    // counted, though it is a looping job. Health says the sample was cut short
+    // instead of presenting it as the queue.
+    const failedYesterday = Array.from({ length: 200 }, (_, index) => {
+      const closedAt = new Date(Date.parse('2026-06-20T09:00:00.000Z') + index * 1000).toISOString();
+      return {
+        status: 'failed',
+        created_at: closedAt,
+        next_attempt_at: closedAt,
+        locked_at: null,
+        attempt_count: MAX_COMPLETION_ATTEMPTS,
+      };
+    });
+    const db = createClient({
+      backend_job_runs: recentSuccessfulRunOfEveryJob(),
+      generation_completion_jobs: {
+        error: null,
+        data: [
+          ...failedYesterday,
+          {
+            status: 'processing',
+            created_at: '2026-06-21T07:27:00.000Z',
+            next_attempt_at: '2026-06-21T07:56:00.000Z',
+            locked_at: '2026-06-21T09:58:00.000Z',
+            attempt_count: 17,
+          },
+        ],
+      },
+      generations: [
+        { error: null, data: [] },
+        { error: null, data: [] },
+        { error: null, data: [] },
+      ],
+    });
+
+    const health = await collectBackendHealth(db.client as never, new Date('2026-06-21T10:00:00.000Z'));
+
+    const sampledRead = db.builders.generation_completion_jobs[0];
+    expect(sampledRead.select).toHaveBeenCalledWith('status,created_at,next_attempt_at,locked_at,attempt_count');
+    expect(sampledRead.in).toHaveBeenCalledWith('status', ['pending', 'processing', 'failed']);
+    expect(sampledRead.order).toHaveBeenCalledWith('created_at', { ascending: true });
+    expect(sampledRead.limit).toHaveBeenCalledWith(201);
+    expect(health.completionQueue).toMatchObject({
+      failedCount: 200,
+      processingCount: 0,
+      overAttemptCapCount: 0,
+      highestOpenAttemptCount: null,
+    });
+    expect(health.issues).toEqual([
+      {
+        severity: 'warning',
+        code: 'HEALTH_SAMPLE_TRUNCATED',
+        message: expect.stringContaining('generation_completion_jobs'),
+      },
+      expect.objectContaining({ code: 'GENERATION_COMPLETION_QUEUE_FAILED', severity: 'degraded' }),
+    ]);
   });
 
   it('degrades when pending generations have no provider task id after the attach window', async () => {

@@ -4,7 +4,7 @@ import { validateAndCompileTemplateGraph } from '@/lib/template-graph-compiler';
 import { createTemplateReadyStarterGraph } from '@/lib/workflow-canvas';
 
 type Row = Record<string, unknown>;
-type Filter = { op: 'eq' | 'neq' | 'in'; column: string; value: unknown };
+type Filter = { op: 'eq' | 'neq' | 'in' | 'lt'; column: string; value: unknown };
 type DatabaseError = { code?: string; message: string };
 type Answer<T> = { data: T | null; error: DatabaseError | null };
 
@@ -127,6 +127,8 @@ export function createTemplateRunDatabase(options: { credits?: number } = {}) {
     profiles: [profile],
   };
   const rpcCalls: Array<{ fn: string; args: Row; status: string | null; error: string | null }> = [];
+  /** The uploads storage was asked to delete. */
+  const removedInputs: string[] = [];
   /** What the next ticks meet. Tests flip these between ticks. */
   const conditions = {
     /** Our own gate in front of the provider turns the submission away. */
@@ -137,6 +139,11 @@ export function createTemplateRunDatabase(options: { credits?: number } = {}) {
     startUnavailable: false,
     /** A single generation cannot be read back. The worker loads a run's generations as a list. */
     generationUnreadable: false,
+    /**
+     * The writes the database refuses. A refused write changes nothing and is
+     * answered with an error, which supabase-js hands back and does not throw.
+     */
+    writeRefused: null as ((table: string, values: Row) => boolean) | null,
   };
   const now = () => new Date().toISOString();
   const answer = (status: string, extra: Row = {}): Answer<Row> => ({ data: { status, ...extra }, error: null });
@@ -352,6 +359,8 @@ export function createTemplateRunDatabase(options: { credits?: number } = {}) {
     const matches = (row: Row) => filters.every((filter) => {
       if (filter.op === 'eq') return row[filter.column] === filter.value;
       if (filter.op === 'neq') return row[filter.column] !== filter.value;
+      // Timestamps here are ISO strings in UTC, so text order is time order.
+      if (filter.op === 'lt') return String(row[filter.column]) < String(filter.value);
       return Array.isArray(filter.value) && filter.value.includes(row[filter.column]);
     });
 
@@ -389,6 +398,11 @@ export function createTemplateRunDatabase(options: { credits?: number } = {}) {
     // A query runs once, when it is awaited, the way PostgREST runs it.
     const execute = (): Answer<Row[]> => {
       if (result) return result;
+      const written = insert ?? (update ? [update] : []);
+      if (written.some((values) => conditions.writeRefused?.(table, values))) {
+        result = { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } };
+        return result;
+      }
       if (insert) {
         result = insertRows(insert);
       } else {
@@ -433,6 +447,7 @@ export function createTemplateRunDatabase(options: { credits?: number } = {}) {
       },
       eq: filter('eq'),
       neq: filter('neq'),
+      lt: filter('lt'),
       in: filter('in'),
       order(column: string, orderOptions?: { ascending?: boolean }) {
         orders.push({ column, ascending: orderOptions?.ascending !== false });
@@ -452,7 +467,10 @@ export function createTemplateRunDatabase(options: { credits?: number } = {}) {
     rpc,
     storage: {
       from: () => ({
-        remove: async () => ({ error: null }),
+        remove: async (paths: string[]) => {
+          removedInputs.push(...paths);
+          return { error: null };
+        },
         download: async () => ({ data: null, error: null }),
         createSignedUrls: async (paths: string[]) => ({
           data: paths.map((path) => ({ path, signedUrl: `https://storage.test/${path}`, error: null })),
@@ -470,6 +488,7 @@ export function createTemplateRunDatabase(options: { credits?: number } = {}) {
     client,
     conditions,
     rpcCalls,
+    removedInputs,
     run,
     generations: tables.generations,
     steps: tables.template_run_steps,

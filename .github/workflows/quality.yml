@@ -266,6 +266,22 @@ jobs:
         env:
           SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
 
+      # A step of its own for the same reason, and one more: the processor's
+      # sweep looks at every template run still in progress, and this file
+      # moves the sweep's clock forward.
+      - name: Test template run recovery with real queue SQL
+        run: npx vitest run src/__tests__/template-run-job-exhaustion-database.test.ts
+        env:
+          SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+
+      # A step of its own for the same reason as the two above, and one more:
+      # its cases for two passes on one step hold the run's row from a second
+      # connection while the processor runs.
+      - name: Test template run steps the database will not start with real start SQL
+        run: npx vitest run src/__tests__/template-run-step-refused-start-database.test.ts
+        env:
+          SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+
       - name: Test canvas lifecycle with real execution and settlement SQL
         run: npx vitest run src/__tests__/workflow-run-lifecycle-database.test.ts
         env:

@@ -11,7 +11,15 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { startImageGeneration, startVideoGeneration, type TemplateGenerationContext } from '@/lib/generation-services';
 import { validateAndCompileTemplateGraph } from '@/lib/template-graph-compiler';
 import { processTemplateRunJobs } from '@/lib/template-run-jobs-processor';
-import { approveTemplateRunStep, cancelTemplateRun, getTemplateRun, retryTemplateRunStep, syncTemplateRun } from '@/lib/template-run-service';
+import {
+  abandonTemplateRun,
+  approveTemplateRunStep,
+  cancelTemplateRun,
+  getTemplateRun,
+  retryTemplateRunStep,
+  syncTemplateRun,
+  TEMPLATE_RUN_ABANDONED_MESSAGE,
+} from '@/lib/template-run-service';
 import { createTemplateReadyStarterGraph } from '@/lib/workflow-canvas';
 
 // The provider key and the callback settings are read when the generation
@@ -114,6 +122,7 @@ function databaseClient(db: Client, startAnswers: string[], beforeWrite?: (table
       const filters: string[] = [];
       const values: unknown[] = [];
       const orders: string[] = [];
+      let limit: number | null = null;
       let insert: Record<string, unknown> | null = null;
       let update: Record<string, unknown> | null = null;
 
@@ -136,7 +145,7 @@ function databaseClient(db: Client, startAnswers: string[], beforeWrite?: (table
           )).rows;
         }
         return (await db.query(
-          `select * from public.${table}${where}${orders.length ? ` order by ${orders.join(',')}` : ''}`,
+          `select * from public.${table}${where}${orders.length ? ` order by ${orders.join(',')}` : ''}${limit === null ? '' : ` limit ${limit}`}`,
           values,
         )).rows;
       };
@@ -169,6 +178,12 @@ function databaseClient(db: Client, startAnswers: string[], beforeWrite?: (table
         },
         eq: compare('='),
         neq: compare('<>'),
+        // The job processor's sweep reads the runs in progress with these two.
+        lt: compare('<'),
+        limit(count: number) {
+          limit = Math.trunc(count);
+          return query;
+        },
         in(column: string, value: unknown[]) {
           values.push(value);
           filters.push(`${identifier(column)}=any($${values.length})`);
@@ -511,6 +526,30 @@ describe.skipIf(!connectionString || crashWorker)('template run step starts the 
     expect(await generations()).toEqual([]);
   });
 
+  it('closes no step of a run that could not be cancelled, and cancels it when asked again', async () => {
+    const stepsByStatus = async () => (await admin.query(
+      'select status, count(*)::int as steps from public.template_run_steps where run_id=$1 group by status order by status',
+      [runId],
+    )).rows;
+    // The database answers the write that cancels the run with an error,
+    // which PostgREST hands back and does not throw.
+    const refusingRunWrites = databaseClient(worker, [], async (table) => {
+      if (table === 'template_runs') throw new Error('canceling statement due to statement timeout');
+    });
+
+    await expect(cancelTemplateRun(refusingRunWrites, runId, userId))
+      .rejects.toMatchObject({ message: 'canceling statement due to statement timeout' });
+
+    // Closing its steps would leave the run in line with nothing left to run.
+    expect((await admin.query('select status from public.template_runs where id=$1', [runId])).rows[0].status).toBe('queued');
+    expect(await stepsByStatus()).toEqual([{ status: 'queued', steps: 5 }]);
+
+    expect((await cancelTemplateRun(client, runId, userId)).status).toBe('cancelled');
+    expect(await stepsByStatus()).toEqual([{ status: 'cancelled', steps: 5 }]);
+    expect(await credits()).toBe(STARTING_CREDITS);
+    expect(await generations()).toEqual([]);
+  });
+
   async function finishImagesAndAwaitApproval() {
     providerHasRoom();
     await tick();
@@ -605,6 +644,182 @@ describe.skipIf(!connectionString || crashWorker)('template run step starts the 
     await expect(approveTemplateRunStep({ adminClient: client, runId, stepId: gates[0].id, userId })).rejects.toMatchObject({ status: 409 });
     expect(await credits()).toBe(STARTING_CREDITS - spent);
     expect(await generations()).toHaveLength(2);
+  });
+
+  /**
+   * A client on which no write to the run's steps lands: the database answers
+   * each with an error, which PostgREST hands back and does not throw.
+   */
+  function losingStepWrites() {
+    return databaseClient(worker, [], async (table) => {
+      if (table === 'template_run_steps') throw new Error('canceling statement due to statement timeout');
+    });
+  }
+  /** Every row of this run an approval could write: the run, its steps and its ticket. */
+  async function runRows() {
+    const rows = async (sql: string) => (await admin.query(sql, [runId])).rows;
+    return {
+      run: await rows('select * from public.template_runs where id=$1'),
+      steps: await rows('select * from public.template_run_steps where run_id=$1 order by node_id, attempt'),
+      ticket: await rows('select * from public.template_run_jobs where run_id=$1'),
+    };
+  }
+  const stepStatuses = (rows: Awaited<ReturnType<typeof runRows>>) => (
+    rows.steps.map((step) => `${step.kind}/${step.media_kind}: ${step.status}`).sort()
+  );
+  const WAITING_ON_AN_ENDED_RUN = [
+    'approval/image: awaiting_approval',
+    'approval/image: awaiting_approval',
+    'generation/image: succeeded',
+    'generation/image: succeeded',
+    'generation/video: queued',
+  ];
+  /** Approves both checkpoints and makes one call of the worker with a provider that would accept the video. */
+  async function approveBothAndRunTheWorker(gates: Array<{ id: string }>) {
+    const answers = [];
+    for (const gate of gates) {
+      answers.push(await approveTemplateRunStep({ adminClient: client, runId, stepId: gate.id, userId }).then(
+        (run) => ({ status: 200, code: null, runStatus: run.status }),
+        (error: { status?: number; code?: string }) => ({ status: error.status, code: error.code, runStatus: null }),
+      ));
+    }
+    providerHasRoom();
+    vi.mocked(fetch).mockClear();
+    const pass = await processTemplateRunJobs({ client, lockedBy: `ended-run-approval-${runId}` });
+    return { answers, pass };
+  }
+  const REFUSED_AS_ENDED = { status: 409, code: 'RUN_TERMINAL', runStatus: null };
+  /** The processor claims whichever job is due. Another run's job would be worked on by these cases. */
+  async function expectNoOtherRunWaiting() {
+    const otherJobs = await admin.query(
+      "select count(*)::int as waiting from public.template_run_jobs where run_id<>$1 and status in ('pending','processing')",
+      [runId],
+    );
+    expect(otherJobs.rows[0].waiting).toBe(0);
+  }
+  /** Holds a client at its first write to the run's steps until it is released. */
+  function heldAtFirstStepWrite() {
+    let release!: () => void;
+    let arrive!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const reached = new Promise<void>(resolve => { arrive = resolve; });
+    let paused = false;
+    return {
+      release,
+      reached,
+      beforeWrite: async (table: string) => {
+        if (table !== 'template_run_steps' || paused) return;
+        paused = true;
+        arrive();
+        await held;
+      },
+    };
+  }
+
+  it('refuses the checkpoints a cancelled run keeps when the write that closes its steps is lost', async () => {
+    await expectNoOtherRunWaiting();
+    const { gates, spent } = await finishImagesAndAwaitApproval();
+    const cancelled = await cancelTemplateRun(losingStepWrites(), runId, userId);
+    expect(cancelled.status).toBe('cancelled');
+    const before = await runRows();
+    expect(stepStatuses(before)).toEqual(WAITING_ON_AN_ENDED_RUN);
+
+    const { answers, pass } = await approveBothAndRunTheWorker(gates);
+
+    expect(answers).toEqual([REFUSED_AS_ENDED, REFUSED_AS_ENDED]);
+    expect(await runRows()).toEqual(before);
+    expect(pass).toMatchObject({ claimed: 0, adopted: 0, abandoned: 0 });
+    expect(providerCalls()).toBe(0);
+    expect(await credits()).toBe(STARTING_CREDITS - spent);
+    expect(await generations()).toHaveLength(2);
+  });
+
+  it('refuses the checkpoints a run the worker gave up on keeps, so that no worker starts its video', async () => {
+    await expectNoOtherRunWaiting();
+    const { gates, spent } = await finishImagesAndAwaitApproval();
+    // The pass that put the checkpoints up for review failed before it wrote
+    // the run's progress, and so did every pass after it for the give-up time.
+    await admin.query("update public.template_runs set status='processing' where id=$1", [runId]);
+    expect(await abandonTemplateRun({
+      client: losingStepWrites(),
+      runId,
+      userId,
+      idleBefore: new Date(Date.now() + 60_000).toISOString(),
+    })).toBe(true);
+    const before = await runRows();
+    expect(before.run[0]).toMatchObject({ status: 'failed', input_storage_paths: {} });
+    expect(before.run[0].completed_at).not.toBeNull();
+    expect(before.run[0].inputs_deleted_at).not.toBeNull();
+    expect(stepStatuses(before)).toEqual(WAITING_ON_AN_ENDED_RUN);
+    // The person was told that the run stopped.
+    expect((await admin.query('select title from public.mobile_notifications where user_id=$1', [userId])).rows)
+      .toEqual([{ title: 'Your template run stopped' }]);
+
+    const { answers, pass } = await approveBothAndRunTheWorker(gates);
+
+    expect(answers).toEqual([REFUSED_AS_ENDED, REFUSED_AS_ENDED]);
+    expect(await runRows()).toEqual(before);
+    // Approved, the two checkpoints would let the video start on a run that has stopped.
+    expect(pass).toMatchObject({ claimed: 0, adopted: 0, abandoned: 0 });
+    expect(providerCalls()).toBe(0);
+    expect(await credits()).toBe(STARTING_CREDITS - spent);
+    expect(await generations()).toHaveLength(2);
+  });
+
+  it('leaves a run ended that the worker gave up on while an approval was being written', async () => {
+    await expectNoOtherRunWaiting();
+    const { gates, spent } = await finishImagesAndAwaitApproval();
+    await admin.query("update public.template_runs set status='processing' where id=$1", [runId]);
+    const second = new Client({ connectionString, statement_timeout: 10_000 });
+    await second.connect();
+    const approving = heldAtFirstStepWrite();
+    const ending = heldAtFirstStepWrite();
+    try {
+      await second.query('set role service_role');
+      // The approval reads the run as in progress and is held as it goes to write its checkpoint.
+      const approval = approveTemplateRunStep({
+        adminClient: databaseClient(second, [], approving.beforeWrite), runId, stepId: gates[0].id, userId,
+      }).then(value => ({ value, error: null }), error => ({ value: null, error }));
+      await approving.reached;
+      // The sweep ends the run and is held as it goes to close the run's steps.
+      const abandoned = abandonTemplateRun({
+        client: databaseClient(worker, [], ending.beforeWrite),
+        runId,
+        userId,
+        idleBefore: new Date(Date.now() + 60_000).toISOString(),
+      });
+      await ending.reached;
+      approving.release();
+      const outcome = await approval;
+      ending.release();
+      expect(await abandoned).toBe(true);
+
+      // The checkpoint was written before the approval could know. The run stays ended.
+      expect(outcome.error).toBeNull();
+      expect(outcome.value?.status).toBe('failed');
+      const after = await runRows();
+      expect(after.run[0]).toMatchObject({ status: 'failed', error_message: TEMPLATE_RUN_ABANDONED_MESSAGE });
+      expect(after.steps.find((step) => step.id === gates[0].id)).toMatchObject({ status: 'succeeded' });
+      expect(stepStatuses(after)).toEqual([
+        'approval/image: cancelled',
+        'approval/image: succeeded',
+        'generation/image: succeeded',
+        'generation/image: succeeded',
+        'generation/video: cancelled',
+      ]);
+      providerHasRoom();
+      vi.mocked(fetch).mockClear();
+      expect(await processTemplateRunJobs({ client, lockedBy: `ended-run-approval-${runId}` }))
+        .toMatchObject({ claimed: 0, adopted: 0, abandoned: 0 });
+      expect(await runRows()).toEqual(after);
+      expect(providerCalls()).toBe(0);
+      expect(await credits()).toBe(STARTING_CREDITS - spent);
+      expect(await generations()).toHaveLength(2);
+    } finally {
+      approving.release();
+      ending.release();
+      await second.end();
+    }
   });
 
   it('cancel after settled images retains the successful work and rejects retry', async () => {

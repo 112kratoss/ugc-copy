@@ -130,8 +130,9 @@ const START_IN_PROGRESS_GENERATION_ID = '__magicbookletStartInProgressGeneration
  *
  * A request answers with the error itself and its client retries. A run worker
  * made both starts, so that generation belongs to its own step: it reads the
- * mark and takes the generation back. The 409s that carry no mark
- * (`key_already_used`, a changed catalog) never resolve.
+ * mark and takes the generation back. The other 409s (a start the function
+ * refused, which carries `markGenerationStartRefusal`, and a changed catalog)
+ * never resolve.
  *
  * Non-enumerable for the same reason as the held-submission metadata.
  */
@@ -150,6 +151,56 @@ export function getInProgressStartGenerationId(error: unknown): string | null {
   if (!error || typeof error !== 'object') return null;
   const value = (error as Record<string, unknown>)[START_IN_PROGRESS_GENERATION_ID];
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/**
+ * The answers of the start functions that refuse a start for what its row is.
+ * Nothing was reserved, and the same row is refused again however often it is
+ * asked: `invalid_template_context` (the run has ended, or the step row is
+ * not one this start fits), `template_step_already_started` (the row has a
+ * generation this start does not match) and `key_already_used` (the request
+ * key belongs to a start that is over).
+ */
+export type GenerationStartRefusal =
+  | 'invalid_template_context'
+  | 'template_step_already_started'
+  | 'key_already_used';
+
+const GENERATION_START_REFUSALS = new Set<GenerationStartRefusal>([
+  'invalid_template_context',
+  'template_step_already_started',
+  'key_already_used',
+]);
+
+const START_REFUSAL = '__magicbookletStartRefusal';
+
+/**
+ * Marks an error from a start the database refused outright with the answer
+ * it gave. All three reach a caller as the same 409.
+ *
+ * A request answers with the error itself. A run worker has to tell them
+ * apart from the 409 of a start that is still in progress, and from each
+ * other: a template step refused for its request key or its generation can be
+ * retried as a new attempt, which is a new row with a new key, and one
+ * refused for its context is refused as a new attempt too.
+ *
+ * Non-enumerable for the same reason as the held-submission metadata.
+ */
+export function markGenerationStartRefusal(error: unknown, refusal: GenerationStartRefusal): void {
+  if (!error || typeof error !== 'object') return;
+  Object.defineProperty(error, START_REFUSAL, {
+    value: refusal,
+    enumerable: false,
+    configurable: true,
+    writable: false,
+  });
+}
+
+/** What the start function answered when it refused the start, when the error carries it. */
+export function getGenerationStartRefusal(error: unknown): GenerationStartRefusal | null {
+  if (!error || typeof error !== 'object') return null;
+  const value = (error as Record<string, unknown>)[START_REFUSAL];
+  return GENERATION_START_REFUSALS.has(value as GenerationStartRefusal) ? value as GenerationStartRefusal : null;
 }
 
 function recordValue(error: unknown, keys: string[]): unknown {

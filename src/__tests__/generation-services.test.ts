@@ -1421,6 +1421,7 @@ describe('generation services', () => {
     it('names the generation that holds the key when the first start is still unresolved', async () => {
       const { startImageGeneration } = await import('@/lib/generation-services');
       const {
+        getGenerationStartRefusal,
         getHeldProviderSubmissionGenerationId,
         getInProgressStartGenerationId,
         getPublicGenerationStartFailure,
@@ -1445,6 +1446,8 @@ describe('generation services', () => {
       // For a run worker that repeated its own start: that generation is its
       // step's, and it takes it back.
       expect(getInProgressStartGenerationId(error)).toBe('gen-first');
+      // It is no refusal either: that generation is alive.
+      expect(getGenerationStartRefusal(error)).toBeNull();
       // It is not a held submission: a route answers a held one differently.
       expect(getHeldProviderSubmissionGenerationId(error)).toBeNull();
       expect(getPublicGenerationStartFailure(error).code).not.toBe('submission_pending');
@@ -1457,7 +1460,7 @@ describe('generation services', () => {
 
     it('names no generation when the key belongs to a start that already ended', async () => {
       const { startImageGeneration } = await import('@/lib/generation-services');
-      const { getInProgressStartGenerationId } = await import('@/lib/generation-public-failure');
+      const { getGenerationStartRefusal, getInProgressStartGenerationId } = await import('@/lib/generation-public-failure');
       const { supabase, rpcCalls } = createSupabaseMock([], {
         rpcResults: {
           start_generation: { status: 'key_already_used', generation_id: 'gen-first', remaining_credits: 100, cost: 9 },
@@ -1475,7 +1478,41 @@ describe('generation services', () => {
         message: expect.stringContaining('already used by a failed generation start'),
       });
       expect(getInProgressStartGenerationId(error)).toBeNull();
+      expect(getGenerationStartRefusal(error)).toBe('key_already_used');
       expect(rpcCalls.map((call) => call.fn)).toEqual(['start_generation']);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    // The three answers that refuse a template step for what its row is. A
+    // request hears the same 409 for each; a run worker reads which it was.
+    it.each([
+      ['invalid_template_context', 'Template generation context is invalid.'],
+      ['template_step_already_started', 'This template step has already started.'],
+      ['key_already_used', 'This idempotency key was already used by a failed generation start. Retry with a new key.'],
+    ] as const)('names the answer %s on the 409 of a template step it refuses', async (status, message) => {
+      const { startImageGeneration } = await import('@/lib/generation-services');
+      const { getGenerationStartRefusal, getInProgressStartGenerationId } = await import('@/lib/generation-public-failure');
+      const { supabase, generations, rpcCalls } = createSupabaseMock([], {
+        rpcResults: { start_template_generation: { status, remaining_credits: 100, cost: 9 } },
+      });
+
+      const error = await startImageGeneration({
+        supabase,
+        creditSupabase: supabase,
+        ...replayed(),
+        // As the run worker starts a template step.
+        persistInputMedia: false,
+        privateRecipe: true,
+        templateContext: { runId: 'run-1', stepId: 'step-1', templateId: 'template-1', templateVersionId: 'version-1' },
+      }).catch((caught: unknown) => caught);
+
+      expect(error).toMatchObject({ name: 'GenerationServiceError', status: 409, failureCode: null, message });
+      expect(getGenerationStartRefusal(error)).toBe(status);
+      expect(getInProgressStartGenerationId(error)).toBeNull();
+      expect(JSON.stringify(error)).not.toContain(status);
+      // Nothing was reserved, sent or settled.
+      expect(rpcCalls.map((call) => call.fn)).toEqual(['start_template_generation']);
+      expect(generations).toEqual([]);
       expect(fetch).not.toHaveBeenCalled();
     });
 
@@ -4120,6 +4157,54 @@ describe('generation services', () => {
       },
     });
     expect((providerBody as unknown as { input?: Record<string, unknown> })?.input?.image_urls).toBeUndefined();
+  });
+
+  it('gives the provider each Kling O3 subject under the handle the creator page built', async () => {
+    // The provider matches a prompt's "@name" to elements[].name, and the prompt
+    // goes to it as written. So the handle the page shows and the prompt mentions
+    // has to be the name sent, letter for letter. A handle this service had to
+    // rewrite ("@Hero_creator" to "hero_creator", 2026-10-03) was one name in
+    // the prompt and another in elements.
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    const { buildSubjectHandles } = await import('@/lib/image-elements');
+    let providerBody: { input?: { prompt?: string; elements?: Array<{ name: string }> } } | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-o3-subjects-2' } }),
+      } as Response;
+    });
+
+    // Two names that differ only by a capital, and one with nothing a handle can hold.
+    const names = ['Hero creator', 'hero creator', 'नायक'];
+    const handles = buildSubjectHandles(names);
+    const prompt = `${handles[0]} greets ${handles[1]} while ${handles[2]} looks on.`;
+
+    const { supabase } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt,
+      model: 'kling-o3',
+      duration: 5,
+      aspectRatio: '16:9',
+      resolution: '720p',
+      sound: false,
+      klingSubjects: names.map((displayName, index) => ({
+        handle: handles[index],
+        displayName,
+        images: [
+          { url: `https://cdn.example.com/subject-${index}-front.jpg` },
+          { url: `https://cdn.example.com/subject-${index}-side.jpg` },
+        ],
+      })),
+    });
+
+    const sent = providerBody as { input?: { prompt?: string; elements?: Array<{ name: string }> } } | null;
+    expect(sent?.input?.elements?.map((element) => `@${element.name}`)).toEqual(handles);
+    expect(sent?.input?.prompt).toBe(prompt);
   });
 
   it('rejects Kling O3 subjects with the wrong image count or model', async () => {

@@ -282,6 +282,19 @@ when the customer opens selection or uses Retry. Quotes and normal generation
 starts continue rejecting a stale revision. Public historical descriptors never
 authorize historical purchases; trusted template pins remain a separate path.
 
+The web workflow editor makes one more check, immediately before it starts a
+canvas run. A run stores the revision it is started with, and its steps are
+priced later by the run worker, which can only end a step whose revision is no
+longer the active one; it has no way to ask the page to refresh. So the editor
+reads `/current` again, loads its canvas models' descriptors for that revision,
+and does not start the run when one of them is gone or the revision cannot be
+read. That closes the case of a tab left open across a release. It cannot close
+the minute around a publication: `/current` may answer with the previous
+revision for the cache lifetimes above, and each server instance keeps the
+active release it prices against for up to 60 seconds, so a run started in that
+minute, or a release published while a run is in progress, can still end a step
+with the changed-catalog message.
+
 Pickers progressively read summaries while open. Selected/default descriptors
 load independently of list pages. Workflows request groups of eight with at most
 two detail requests in flight. Persistence retains at most 100 descriptors across

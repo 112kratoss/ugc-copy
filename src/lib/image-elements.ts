@@ -13,14 +13,14 @@ export interface PersistedImageElementDraft {
 
 const HANDLE_PATTERN = /(^|[^\w])(@[a-z0-9_]+)(?=$|[^\w])/g;
 
-function toHandleBase(value: string): string {
+function toHandleBase(value: string, fallback = 'element'): string {
   const normalized = value
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
 
-  return normalized.length > 0 ? normalized : 'element';
+  return normalized.length > 0 ? normalized : fallback;
 }
 
 export function createElementId(): string {
@@ -59,20 +59,71 @@ export function buildElementHandle(
   return nextHandle;
 }
 
-export function reconcileElementDescriptors<T extends { id: string; displayName: string }>(
+/**
+ * Gives each reference element on a creator card its @handle.
+ *
+ * A handle follows its element's name: it is built from the name when the
+ * element is added, and again when it is renamed (the caller passes the renamed
+ * element without a handle). Nothing else changes it, because the prompt
+ * mentions it: not another element being added, renamed or removed, and not a
+ * reload or a remix, which pass back the handles they saved.
+ *
+ * The handles being kept are set aside first, so a new handle never takes one
+ * that another element holds.
+ */
+export function assignElementHandles<T extends { displayName?: string | null; handle?: string | null }>(
   elements: T[]
 ): Array<T & { displayName: string; handle: string }> {
   const usedHandles = new Set<string>();
+  const keptHandles = elements.map((element) => {
+    const handle = element.handle;
+    if (typeof handle !== 'string' || !isValidElementHandle(handle) || usedHandles.has(handle)) {
+      return null;
+    }
+
+    usedHandles.add(handle);
+    return handle;
+  });
 
   return elements.map((element, index) => {
-    const displayName = normalizeElementDisplayName(element.displayName, index + 1);
-    const handle = buildElementHandle(displayName, usedHandles, index + 1);
+    const displayName = normalizeElementDisplayName(element.displayName ?? undefined, index + 1);
 
     return {
       ...element,
       displayName,
-      handle,
+      handle: keptHandles[index] ?? buildElementHandle(displayName, usedHandles, index + 1),
     };
+  });
+}
+
+/**
+ * The @handles of the Kling O3 named subjects, in the order of their cards.
+ *
+ * A subject's handle is written like every other handle, in lower case: the
+ * prompt is read for lower-case handles only, and the server gives the provider
+ * the subject under its handle in lower case, which the mention in the prompt
+ * has to match. A handle that kept the capitals of its name ("@Hero_creator")
+ * was one spelling on the card and another everywhere it was used.
+ *
+ * Unlike an element's, a subject's handle is not kept with it. These are built
+ * from the names each time the cards are drawn, so the number of a second
+ * subject with the same name counts the handles taken, not its place: removing
+ * another subject must not change it.
+ */
+export function buildSubjectHandles(displayNames: string[]): string[] {
+  const usedHandles = new Set<string>();
+
+  return displayNames.map((displayName, index) => {
+    const base = toHandleBase(displayName, `subject_${index + 1}`);
+    let handle = `@${base}`;
+    let suffix = 2;
+    while (usedHandles.has(handle)) {
+      handle = `@${base}_${suffix}`;
+      suffix += 1;
+    }
+
+    usedHandles.add(handle);
+    return handle;
   });
 }
 
@@ -108,12 +159,20 @@ export function replacePromptHandles(prompt: string, replacements: Map<string, s
   });
 }
 
+/**
+ * The mention being typed at the caret: the "@" and what follows it.
+ *
+ * Capitals count here, though a handle has none. The panel this opens also finds
+ * a reference by its name, and a name starts with a capital: at "@H" it has to
+ * stay open for a subject called "Hero creator". The pages compare the query in
+ * lower case, and the reference picked replaces what was typed with its handle.
+ */
 export function getMentionQueryAtCaret(
   prompt: string,
   caretIndex: number
 ): { query: string; replaceStart: number; replaceEnd: number } | null {
   const beforeCaret = prompt.slice(0, caretIndex);
-  const match = beforeCaret.match(/(^|[^\w])@([a-z0-9_]*)$/);
+  const match = beforeCaret.match(/(^|[^\w])@([A-Za-z0-9_]*)$/);
 
   if (!match) {
     return null;

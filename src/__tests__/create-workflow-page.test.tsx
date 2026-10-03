@@ -377,6 +377,11 @@ describe('CreateWorkflowPage', () => {
     graph: WorkflowCanvasRecord['graph'];
   }>;
   let lastRunRequest: { canvasId: string; mode: string; startNodeId: string; catalogRevision?: string | null } | null;
+  // What the catalog routes answer. A test moves these to play a release that
+  // is published after the page has loaded.
+  let publishedCatalogRevision: string;
+  let modelsRemovedFromCatalog: string[];
+  let currentRevisionReadFails: boolean;
   let orderedCanvasIds: string[];
   let nextCanvasIdNumber: number;
   let nextShareIdNumber: number;
@@ -423,6 +428,9 @@ describe('CreateWorkflowPage', () => {
       user: { id: 'user-1' },
     };
     lastRunRequest = null;
+    publishedCatalogRevision = workflowCatalog.revision;
+    modelsRemovedFromCatalog = [];
+    currentRevisionReadFails = false;
     const secondGraph = createStarterGraph();
     secondGraph.nodes = secondGraph.nodes.map((node, index) => (
       index === 0
@@ -476,11 +484,18 @@ describe('CreateWorkflowPage', () => {
 
       if (url.includes('/api/model-catalog/v1/') && method === 'GET') {
         const parsed = new URL(url, 'http://localhost');
+        if (parsed.pathname.endsWith('/current') && currentRevisionReadFails) {
+          return new Response(JSON.stringify({ code: 'CATALOG_UNAVAILABLE', error: 'Could not load model settings. Please retry.' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+        }
+        // Pages and details are immutable per revision: they answer for the
+        // revision that was asked for, as the real routes do.
+        const requestedRevision = parsed.searchParams.get('revision') ?? publishedCatalogRevision;
+        const requestedIds = (parsed.searchParams.get('ids') ?? '').split(',');
         const body = parsed.pathname.endsWith('/current')
-          ? { transportVersion: 1, descriptorSchemaVersion: 3, revision: workflowCatalog.revision, defaults: workflowCatalog.defaults, counts: Object.fromEntries(['image', 'video', 'motion'].map(kind => [kind, workflowCatalog.models.filter(model => model.kind === kind).length])) }
+          ? { transportVersion: 1, descriptorSchemaVersion: 3, revision: publishedCatalogRevision, defaults: workflowCatalog.defaults, counts: Object.fromEntries(['image', 'video', 'motion'].map(kind => [kind, workflowCatalog.models.filter(model => model.kind === kind).length])) }
           : parsed.pathname.endsWith('/models')
-            ? { transportVersion: 1, revision: workflowCatalog.revision, models: workflowCatalog.models.map(model => ({ id: model.id, kind: model.kind, displayName: model.displayName, description: model.description, badge: model.badge ?? null, recommended: model.recommended, sortOrder: model.sortOrder })), nextCursor: null }
-            : { transportVersion: 1, descriptorSchemaVersion: 3, revision: workflowCatalog.revision, models: workflowCatalog.models.filter(model => (parsed.searchParams.get('ids') ?? '').split(',').includes(model.id)), missingIds: [] };
+            ? { transportVersion: 1, revision: requestedRevision, models: workflowCatalog.models.map(model => ({ id: model.id, kind: model.kind, displayName: model.displayName, description: model.description, badge: model.badge ?? null, recommended: model.recommended, sortOrder: model.sortOrder })), nextCursor: null }
+            : { transportVersion: 1, descriptorSchemaVersion: 3, revision: requestedRevision, models: workflowCatalog.models.filter(model => requestedIds.includes(model.id) && !modelsRemovedFromCatalog.includes(model.id)), missingIds: requestedIds.filter(id => modelsRemovedFromCatalog.includes(id)) };
         return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
       }
 
@@ -1106,6 +1121,143 @@ describe('CreateWorkflowPage', () => {
     const runHeaders = new Headers(fetchMock.mock.calls[runIndex]?.[1]?.headers);
     expect(runHeaders.get('Idempotency-Key')).toMatch(/^[0-9a-f-]{36}$/i);
     expect(screen.queryByText(/unsaved changes/i)).not.toBeInTheDocument();
+  });
+
+  // A run stores the catalog revision it is started with, and the worker
+  // refuses to price a step at any revision but the active one. A tab that was
+  // open when a release was published still holds the revision it loaded.
+  describe('catalog revision at run start', () => {
+    const RELEASED_REVISION = 'release-published-after-the-page-loaded';
+
+    // The catalog session keeps its revision in localStorage, so a revision one
+    // test publishes would otherwise be where the next test's page starts.
+    beforeEach(() => window.localStorage.clear());
+    afterEach(() => window.localStorage.clear());
+
+    function catalogReads(endpoint: 'current' | 'details', revision?: string) {
+      return vi.mocked(fetch).mock.calls.filter(([input]) => {
+        const url = new URL(String(input), 'http://localhost');
+        return url.pathname === `/api/model-catalog/v1/${endpoint}`
+          && (revision === undefined || url.searchParams.get('revision') === revision);
+      });
+    }
+
+    function runPosts() {
+      return vi.mocked(fetch).mock.calls.filter(([input, init]) => (
+        String(input).endsWith('/api/workflow-canvases/canvas-1/run') && init?.method === 'POST'
+      ));
+    }
+
+    // The page asks for a revision's model details only once that revision has
+    // reached the editor, so the request shows which revision the page holds.
+    async function renderPageHoldingRevision(revision: string) {
+      await renderLoadedPage();
+      await waitFor(() => {
+        expect(catalogReads('details', revision).length).toBeGreaterThan(0);
+      }, { timeout: 5_000 });
+    }
+
+    async function clickRunBranch() {
+      const promptNodeId = canvasesById['canvas-1'].graph.nodes[0]?.id;
+      fireEvent.click(await screen.findByTestId(`node-run-menu-${promptNodeId}`, {}, { timeout: 5_000 }));
+      fireEvent.click(await screen.findByTestId(`node-run-branch-${promptNodeId}`, {}, { timeout: 5_000 }));
+      return promptNodeId;
+    }
+
+    it('starts the run at the revision the catalog has now, not the one the page loaded with', async () => {
+      await renderPageHoldingRevision(workflowCatalog.revision);
+
+      publishedCatalogRevision = RELEASED_REVISION;
+      const promptNodeId = await clickRunBranch();
+
+      await waitFor(() => {
+        expect(lastRunRequest).not.toBeNull();
+      }, { timeout: 5_000 });
+      expect(lastRunRequest).toEqual({
+        canvasId: 'canvas-1',
+        mode: 'branch',
+        startNodeId: promptNodeId,
+        catalogRevision: RELEASED_REVISION,
+      });
+      // The canvas's models were read from the new release before the run started.
+      expect(catalogReads('details', RELEASED_REVISION).length).toBeGreaterThan(0);
+    }, 15_000);
+
+    it('does not start a run when the release took away a model the canvas uses', async () => {
+      await renderPageHoldingRevision(workflowCatalog.revision);
+      const imageModel = String(
+        canvasesById['canvas-1'].graph.nodes.find((node) => node.type === 'image-generate')?.data.model,
+      );
+
+      publishedCatalogRevision = RELEASED_REVISION;
+      modelsRemovedFromCatalog = [imageModel];
+      await clickRunBranch();
+
+      await waitFor(() => {
+        expect(lastRunRequest !== null || screen.queryByText(/unavailable models/i) !== null).toBe(true);
+      }, { timeout: 5_000 });
+      expect(lastRunRequest).toBeNull();
+      expect(screen.getByText(
+        `Unavailable models: ${imageModel}. Choose replacements before running; your workflow has been preserved.`,
+      )).toBeInTheDocument();
+    }, 15_000);
+
+    it('does not start a run while the current revision cannot be read, and starts it once it can', async () => {
+      await renderPageHoldingRevision(workflowCatalog.revision);
+
+      currentRevisionReadFails = true;
+      await clickRunBranch();
+
+      await waitFor(() => {
+        expect(lastRunRequest !== null || screen.queryByText(/could not check model settings/i) !== null).toBe(true);
+      }, { timeout: 5_000 });
+      expect(lastRunRequest).toBeNull();
+      expect(screen.getByText(
+        'Could not check model settings, so this run was not started. Try again.',
+      )).toBeInTheDocument();
+
+      currentRevisionReadFails = false;
+      await clickRunBranch();
+
+      await waitFor(() => {
+        expect(lastRunRequest?.catalogRevision).toBe(workflowCatalog.revision);
+      }, { timeout: 5_000 });
+      expect(screen.queryByText(/could not check model settings/i)).not.toBeInTheDocument();
+    }, 15_000);
+
+    it('repeats an unanswered run under the same key when a release lands before the retry', async () => {
+      await renderPageHoldingRevision(workflowCatalog.revision);
+      const fetchMock = vi.mocked(fetch);
+      const answer = fetchMock.getMockImplementation()!;
+      let runAnswersToLose = 1;
+      fetchMock.mockImplementation(async (input, init) => {
+        if (
+          runAnswersToLose > 0
+          && String(input).endsWith('/api/workflow-canvases/canvas-1/run')
+          && init?.method === 'POST'
+        ) {
+          runAnswersToLose -= 1;
+          // The request may have reached the server. Its answer never arrived.
+          throw new TypeError('Failed to fetch');
+        }
+        return answer(input, init);
+      });
+
+      await clickRunBranch();
+      expect(await screen.findByText('Failed to fetch', {}, { timeout: 5_000 })).toBeInTheDocument();
+
+      publishedCatalogRevision = RELEASED_REVISION;
+      await clickRunBranch();
+      await waitFor(() => {
+        expect(lastRunRequest).not.toBeNull();
+      }, { timeout: 5_000 });
+
+      expect(runPosts()).toHaveLength(2);
+      const [unanswered, repeated] = runPosts();
+      expect(JSON.parse(String(repeated[1]?.body)).catalogRevision).toBe(RELEASED_REVISION);
+      expect(new Headers(repeated[1]?.headers).get('Idempotency-Key'))
+        .toBe(new Headers(unanswered[1]?.headers).get('Idempotency-Key'));
+    }, 15_000);
   });
 
   it('deletes a node directly from the hover control', async () => {

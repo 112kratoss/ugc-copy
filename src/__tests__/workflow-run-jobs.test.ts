@@ -306,6 +306,27 @@ describe('workflow run step worker', () => {
     expect(finish?.args.p_error).toBe('node exploded');
     expect(finish?.args.p_retry_delay_seconds).toBe(120);
   });
+
+  it('records what the database said when a write is refused mid-advance', async () => {
+    // supabase-js answers a refused write with a plain object, not an Error,
+    // and the runner's helpers throw it as it is. last_error is the only place
+    // the reason is kept, and String() of that object is "[object Object]".
+    const client = createFakeClient({ claimed: [makeJob()] });
+    const advanceRun = vi.fn().mockRejectedValue({ message: 'connection reset', code: '08006' });
+
+    const summary = await processWorkflowRunStepJobs({
+      supabase: client as never,
+      lockedBy: 'worker-A',
+      nowMs: NOW,
+      advanceRun: advanceRun as never,
+    });
+
+    expect(summary.advanced).toBe(0);
+    const finish = client.rpcCalls.find((call) => call.fn === 'finish_workflow_run_step_job');
+    expect(finish?.args.p_succeeded).toBe(false);
+    expect(finish?.args.p_error).toBe('connection reset (code 08006)');
+    expect(finish?.args.p_retry_delay_seconds).toBe(60);
+  });
 });
 
 describe('stalled workflow run adoption', () => {

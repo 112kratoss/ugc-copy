@@ -22,7 +22,7 @@ vi.mock('@/lib/generation-services', () => ({
   persistGeneratedOutputList: (...args: unknown[]) => mocks.persistList(...args),
 }));
 
-function clientWithGeneration(status = 'processing') {
+function clientWithGeneration(status = 'processing', loadError: unknown = null) {
   const row = {
     id: 'generation-1',
     user_id: 'user-1',
@@ -38,7 +38,7 @@ function clientWithGeneration(status = 'processing') {
   const query = {
     select: vi.fn(() => query),
     eq: vi.fn(() => query),
-    single: vi.fn(async () => ({ data: row, error: null })),
+    single: vi.fn(async () => (loadError ? { data: null, error: loadError } : { data: row, error: null })),
   };
   return { from: vi.fn(() => query), rpc: vi.fn() };
 }
@@ -162,6 +162,32 @@ describe('generation output import processor', () => {
     }));
     expect(summary.retried).toBe(1);
     expect(mocks.notify).not.toHaveBeenCalled();
+  });
+
+  it('records what the database said when the generation cannot be read', async () => {
+    // supabase-js answers a failed query with a plain object, not an Error,
+    // and the loader throws it as it is.
+    mocks.finish.mockResolvedValue('retry_scheduled');
+    const { processGenerationOutputImportJobs } = await import(
+      '@/lib/generation-output-import-jobs-processor'
+    );
+    const summary = await processGenerationOutputImportJobs({
+      client: clientWithGeneration('processing', {
+        code: '57014',
+        details: null,
+        hint: null,
+        message: 'canceling statement due to statement timeout',
+      }) as never,
+      lockedBy: 'import-worker',
+    });
+
+    expect(mocks.finish).toHaveBeenCalledWith(expect.objectContaining({
+      succeeded: false,
+      error: 'canceling statement due to statement timeout (code 57014)',
+      retryDelaySeconds: 60,
+    }));
+    expect(summary.retried).toBe(1);
+    expect(mocks.persistOne).not.toHaveBeenCalled();
   });
 
   it('uses the list importer for multi-output provider results', async () => {

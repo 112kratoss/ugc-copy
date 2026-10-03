@@ -9,11 +9,14 @@ import {
   CircleUserRound,
   Download,
   Image as ImageIcon,
+  ImageOff,
   Play,
   RefreshCw,
   ShieldCheck,
+  TriangleAlert,
   Upload,
   Video,
+  VideoOff,
 } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Linking, Pressable, View } from 'react-native';
@@ -43,12 +46,16 @@ import {
   createTemplateRunIdempotencyKey,
   isSafeTemplateResultUrl,
   isTemplateRunPolling,
-  isTemplateRunStepAwaitingApproval,
   isTemplateRunStepFailed,
   isTemplateRunStepSuccessful,
   isTemplateRunTerminal,
   prioritizeTemplateRunSteps,
+  templateRunStepNeedsNewRun,
   templateRunStepNeedsReplacementInput,
+  templateRunStepOutcome,
+  templateRunStepPlaceholderLabel,
+  templateRunStepPlaceholderMark,
+  templateRunStepStatusLabel,
   templateRunProgress,
   templateRunStageLabel,
   totalTemplateEstimate,
@@ -811,12 +818,19 @@ function RunStepCard({
   onApprove: () => void;
 }) {
   const theme = useAppTheme();
-  const successful = isTemplateRunStepSuccessful(step);
+  const outcome = templateRunStepOutcome(runStatus, step);
+  const successful = outcome === 'complete';
   const failed = isTemplateRunStepFailed(step);
-  const awaitingApproval = isTemplateRunStepAwaitingApproval(step);
+  // The run ended before this step did. It is not an error, and is not drawn as one.
+  const notFinished = outcome === 'not_finished';
+  const awaitingApproval = outcome === 'review';
   const needsReplacementInput = templateRunStepNeedsReplacementInput(step);
-  const serviceMisconfigured = failed && step.failureCode === 'service_misconfigured';
   const canRetry = canRetryTemplateRunStep(runStatus, step);
+  // Its advice is to retry, which only a failed step that can be retried can follow.
+  const serviceMisconfigured = outcome === 'needs_attention' && canRetry && step.failureCode === 'service_misconfigured';
+  // The step failed for good while its run can still continue: the card's one way on is the template.
+  const needsNewRun = templateRunStepNeedsNewRun(runStatus, step);
+  const mark = templateRunStepPlaceholderMark(runStatus, step);
   const confirmRetry = () => {
     const cost = step.estimatedRetryCredits === null ? 'the current generation rate' : `${step.estimatedRetryCredits} credits`;
     const balance = credits === null ? '' : ` You currently have ${formatCreditAmount(credits)} credits.`;
@@ -844,11 +858,8 @@ function RunStepCard({
       if (retry) onRetry();
     });
   };
-  const statusLabel = successful ? (step.kind === 'approval' ? 'Approved' : 'Complete')
-    : awaitingApproval ? 'Review'
-      : failed ? 'Needs attention'
-        : step.status.replaceAll('_', ' ');
-  const statusAccent = successful ? 'workflow' : awaitingApproval || failed ? 'amber' : undefined;
+  const statusAccent = successful ? 'workflow' : awaitingApproval || (failed && !notFinished) ? 'amber' : undefined;
+  const NotFinishedIcon = step.mediaKind === 'video' ? VideoOff : ImageOff;
 
   return (
     <View style={{ gap: 10 }}>
@@ -857,25 +868,20 @@ function RunStepCard({
           {step.kind === 'approval' ? <ShieldCheck size={appTheme.icon.default} color={theme.colors.primary} /> : step.mediaKind === 'video' ? <Video size={appTheme.icon.default} color={theme.colors.video} /> : <ImageIcon size={appTheme.icon.default} color={theme.colors.image} />}
           <AppText variant="cardTitle">{step.label}</AppText>
         </View>
-        <Pill label={statusLabel} accent={statusAccent} />
+        <Pill label={templateRunStepStatusLabel(runStatus, step)} accent={statusAccent} />
       </View>
       {step.outputUrl ? (
         <MediaPreview url={step.mediaKind === 'video' ? step.renditionUrl || step.outputUrl : step.outputUrl} kind={step.mediaKind} height={step.mediaKind === 'video' ? 300 : 390} />
       ) : (
         <View style={{ minHeight: 220, borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: theme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-          {failed ? <RefreshCw size={appTheme.icon.hero} color={theme.colors.danger} /> : <ActivityIndicator size="large" color={theme.colors.primary} />}
-          <AppText variant="bodySm" color="muted">
-            {needsReplacementInput
-              ? 'This upload needs to be replaced'
-              : serviceMisconfigured
-                ? 'Service setup must be completed first'
-                : failed
-                  ? 'This step can be retried'
-                  : 'Waiting for output'}
-          </AppText>
+          {mark === 'no_output' ? <NotFinishedIcon size={appTheme.icon.hero} color={theme.colors.muted} />
+            : mark === 'warning' ? <TriangleAlert size={appTheme.icon.hero} color={theme.colors.danger} />
+              : mark === 'retry' ? <RefreshCw size={appTheme.icon.hero} color={theme.colors.danger} />
+                : <ActivityIndicator size="large" color={theme.colors.primary} />}
+          <AppText variant="bodySm" color="muted">{templateRunStepPlaceholderLabel(runStatus, step)}</AppText>
         </View>
       )}
-      {step.errorMessage ? <AppText variant="caption" color="danger">{step.errorMessage}</AppText> : null}
+      {step.errorMessage ? <AppText variant="caption" color={notFinished ? 'muted' : 'danger'}>{step.errorMessage}</AppText> : null}
       {needsReplacementInput ? (
         <StatusBlock
           title="A new upload is required"
@@ -906,9 +912,9 @@ function RunStepCard({
           onPress={confirmRetry}
         />
       ) : null}
-      {needsReplacementInput ? (
+      {needsReplacementInput || needsNewRun ? (
         <SecondaryButton
-          label="Start with new inputs"
+          label={needsReplacementInput ? 'Start with new inputs' : 'Return to template'}
           onPress={() => router.push(`/templates/${encodeURIComponent(restartTemplateId)}` as never)}
         />
       ) : null}

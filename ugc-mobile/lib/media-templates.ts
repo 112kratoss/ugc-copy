@@ -316,6 +316,87 @@ export function canRetryTemplateRunStep(status: TemplateRunStatus, step: Templat
     && (isTemplateRunStepAwaitingApproval(step) || isTemplateRunStepFailed(step));
 }
 
+/**
+ * What a step's card has to say. The first four belong to a run that can still
+ * continue. Nothing on a run that has ended can be approved, retried or waited
+ * for, so a step there is complete, failed, or not finished.
+ */
+export type TemplateRunStepOutcome =
+  | 'complete'
+  | 'review'
+  | 'needs_attention'
+  | 'in_progress'
+  | 'failed'
+  | 'not_finished';
+
+export function templateRunStepOutcome(runStatus: TemplateRunStatus, step: TemplateRunStep): TemplateRunStepOutcome {
+  if (isTemplateRunStepSuccessful(step)) return 'complete';
+  if (isTemplateRunTerminal(runStatus)) {
+    // The server stores the steps an ending run cut short as `cancelled`, the
+    // status isTemplateRunStepFailed counts as a failure. A step that failed by
+    // itself keeps `failed` and its own message.
+    return ['failed', 'error'].includes(step.status.toLowerCase()) ? 'failed' : 'not_finished';
+  }
+  if (isTemplateRunStepAwaitingApproval(step)) return 'review';
+  if (isTemplateRunStepFailed(step)) return 'needs_attention';
+  return 'in_progress';
+}
+
+/**
+ * Whether nothing on a step's card can move it on although its run can still
+ * continue: the step failed and the server refuses it a retry (the run's model
+ * catalog release is gone, or the template does not let a review be retried).
+ * A step whose upload must be replaced has its own way out.
+ */
+export function templateRunStepNeedsNewRun(runStatus: TemplateRunStatus, step: TemplateRunStep) {
+  return templateRunStepOutcome(runStatus, step) === 'needs_attention'
+    && !templateRunStepNeedsReplacementInput(step)
+    && !canRetryTemplateRunStep(runStatus, step);
+}
+
+/** The text of the pill beside a step's name. */
+export function templateRunStepStatusLabel(runStatus: TemplateRunStatus, step: TemplateRunStep) {
+  switch (templateRunStepOutcome(runStatus, step)) {
+    case 'complete': return step.kind === 'approval' ? 'Approved' : 'Complete';
+    case 'review': return 'Review';
+    case 'needs_attention': return 'Needs attention';
+    case 'failed': return 'Failed';
+    case 'not_finished': return 'Not finished';
+    default: return step.status.replaceAll('_', ' ');
+  }
+}
+
+/** The line in the box a step shows while it has no output to draw. */
+export function templateRunStepPlaceholderLabel(runStatus: TemplateRunStatus, step: TemplateRunStep) {
+  switch (templateRunStepOutcome(runStatus, step)) {
+    case 'failed':
+    case 'not_finished':
+      return 'No output';
+    case 'needs_attention':
+      if (templateRunStepNeedsReplacementInput(step)) return 'This upload needs to be replaced';
+      // Asked before the cause: both lines below go with a Retry button.
+      if (templateRunStepNeedsNewRun(runStatus, step)) return 'This step cannot be retried';
+      if (step.failureCode === 'service_misconfigured') return 'Service setup must be completed first';
+      return 'This step can be retried';
+    default:
+      return 'Waiting for output';
+  }
+}
+
+/** The mark drawn over that line. */
+export type TemplateRunStepPlaceholderMark = 'waiting' | 'retry' | 'warning' | 'no_output';
+
+export function templateRunStepPlaceholderMark(runStatus: TemplateRunStatus, step: TemplateRunStep): TemplateRunStepPlaceholderMark {
+  switch (templateRunStepOutcome(runStatus, step)) {
+    case 'not_finished': return 'no_output';
+    case 'failed': return 'warning';
+    // The retry mark is for a step that can be retried. A failed step is not
+    // always one: the server can refuse it a retry, and so does a bad upload.
+    case 'needs_attention': return canRetryTemplateRunStep(runStatus, step) ? 'retry' : 'warning';
+    default: return 'waiting';
+  }
+}
+
 export function prioritizeTemplateRunSteps(steps: TemplateRunStep[]) {
   const priority = (step: TemplateRunStep) => {
     if (isTemplateRunStepFailed(step) || isTemplateRunStepAwaitingApproval(step)) return 0;

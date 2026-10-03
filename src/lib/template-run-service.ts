@@ -1,5 +1,5 @@
 import 'server-only';
-import { logBackendError } from '@/lib/backend-logger';
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -12,6 +12,7 @@ import {
 } from '@/lib/generation-services';
 import { syncGenerationStatuses } from '@/lib/generation-status-sync';
 import {
+  getGenerationStartRefusal,
   getPublicGenerationStartFailure,
   normalizeGenerationStartFailureCode,
   requiresReplacementGenerationInput,
@@ -58,7 +59,11 @@ import {
 } from '@/lib/upload-finalization';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { resolveTemplateRunMedia, type TemplateMediaGeneration } from '@/lib/template-run-media-delivery';
-import { notifyRunStepStartFailure } from '@/lib/run-step-start-failure-notification';
+import { notifyTemplateRunStepRefused, notifyTemplateRunStopped } from '@/lib/mobile-notifications';
+import {
+  notifyRunStepGenerationFailed,
+  notifyRunStepStartFailure,
+} from '@/lib/run-step-start-failure-notification';
 import {
   getIncomingEdges,
   getNodeById,
@@ -79,6 +84,25 @@ const TEMPLATE_CATALOG_OUTDATED_MESSAGE =
   'This template was published against a model catalog that is no longer available. It cannot generate until its creator republishes it.';
 const TEMPLATE_CANCELLED_MID_GENERATION_MESSAGE =
   'This step was already generating when the run was cancelled, so its credits stay spent.';
+// What a person is told who approves or retries a step of a run that has ended.
+const TEMPLATE_RUN_ENDED_MESSAGE = 'This run has ended. Start a new run to try the template again.';
+// What the person reads on a run the worker could not carry on with.
+export const TEMPLATE_RUN_ABANDONED_MESSAGE =
+  'This run stopped because of a problem on our side and could not be resumed. Start a new run to try again.';
+// Without a note of its own, a cancelled step is drawn with the retry advice
+// a failed one gets, which nobody can follow in a run that has ended.
+const TEMPLATE_ABANDONED_STEP_MESSAGE = 'This step was not finished because the run stopped.';
+const TEMPLATE_ABANDONED_MID_GENERATION_MESSAGE =
+  'This step was still generating when the run stopped, so its credits stay spent.';
+// What the person reads on a step the database refused to start. A row that
+// was ever started follows its generation and is not started again, so a step
+// that gets this never held credits.
+const TEMPLATE_STEP_REFUSED_MESSAGE =
+  'This step could not be started because of a problem on our side. No credits were used for it. Retry it to continue.';
+// A retry is a new row for the same node, and this one would be refused as a
+// new row too.
+const TEMPLATE_STEP_REFUSED_FOR_GOOD_MESSAGE =
+  'This step could not be started because of a problem on our side, and retrying it will not help. No credits were used for it. Start a new run to try again.';
 const MAX_IDEMPOTENCY_KEY_LENGTH = 256;
 const ACTIVE_GENERATION_STATUSES = new Set(['pending', 'waiting', 'processing']);
 const TERMINAL_RUN_STATUSES = new Set<TemplateRunStatus>(['succeeded', 'failed', 'cancelled']);
@@ -295,12 +319,14 @@ async function loadRunGenerations(client: SupabaseClient, runId: string): Promis
   return new Map(((data ?? []) as unknown as GenerationRow[]).map((row) => [row.id, row]));
 }
 
+type StepGeneration = Pick<GenerationRow, 'id' | 'status' | 'created_at' | 'template_run_id'>;
+
 /** The generation a step row was started with. A step row has at most one. */
 async function loadStepGeneration(client: SupabaseClient, stepId: string) {
-  const { data, error } = await client.from('generations').select('id, status')
+  const { data, error } = await client.from('generations').select('id, status, created_at, template_run_id')
     .eq('template_run_step_id', stepId).maybeSingle();
   if (error) throw error;
-  return data as Pick<GenerationRow, 'id' | 'status'> | null;
+  return data as StepGeneration | null;
 }
 
 async function loadRunState(client: SupabaseClient, runId: string, userId: string): Promise<RunState> {
@@ -990,7 +1016,10 @@ function rawSourceOutput(state: RunState, graph: WorkflowCanvasGraph, sourceNode
   return null;
 }
 
-async function refreshGenerationSteps(client: SupabaseClient, state: RunState) {
+async function refreshGenerationSteps(
+  client: SupabaseClient,
+  state: Pick<RunState, 'latestSteps' | 'generations'>,
+) {
   const updates: PromiseLike<unknown>[] = [];
   for (const step of state.latestSteps.values()) {
     if (step.kind !== 'generation' || !step.generation_id || step.status !== 'processing') continue;
@@ -1116,6 +1145,138 @@ async function updateRunProgress(client: SupabaseClient, state: RunState) {
   }).eq('id', state.run.id).neq('status', 'cancelled');
 }
 
+/**
+ * Puts a step that is in line behind the generation its row was started with,
+ * as a step that is processing is. Returns whether this call moved it:
+ * another pass may have taken the row first.
+ */
+async function followStepGeneration(
+  client: SupabaseClient,
+  run: Pick<TemplateRunRow, 'id' | 'user_id'>,
+  step: TemplateRunStepRow,
+  generation: Pick<GenerationRow, 'id' | 'status' | 'created_at'>,
+) {
+  const { data, error } = await client.from('template_run_steps').update({
+    status: 'processing',
+    generation_id: generation.id,
+    error_message: null,
+    started_at: step.started_at ?? generation.created_at,
+    finished_at: null,
+  }).eq('id', step.id).eq('status', 'queued').select('id').maybeSingle();
+  if (error) throw error;
+  if (!data) return false;
+  logBackendWarning('template_run_step_followed_its_generation', {
+    runId: run.id,
+    stepId: step.id,
+    nodeId: step.node_id,
+    generationId: generation.id,
+    generationStatus: generation.status,
+  });
+  // The step is about to fail with this generation's reason. Whoever put the
+  // row back in line may never have said that it failed; one that was
+  // announced then is not announced twice.
+  if (generation.status === 'failed') {
+    await notifyRunStepGenerationFailed({ client, generationId: generation.id, userId: run.user_id });
+  }
+  return true;
+}
+
+/**
+ * Takes the steps that are in line but were already started out of the line.
+ * Returns whether there were any.
+ *
+ * The database keeps one generation per step row and never starts a row
+ * twice. Asked to, it answers that the step has already started or that its
+ * request key is used, or it replays the start it made. The row would stay in
+ * line for good: the run shows as running, and a result the person paid for
+ * is never shown. So such a row is not started. It follows its generation and
+ * takes its result or its failure, and a step that fails this way is retried
+ * by hand as its next attempt, like any other.
+ *
+ * The worker leaves no row like this. An edit by hand does, and so does a
+ * pass that lost its lease and wrote over the pass that had taken the row.
+ */
+async function followStartedSteps(client: SupabaseClient, state: RunState) {
+  const startedWith = new Map<string, GenerationRow>();
+  for (const generation of state.generations.values()) {
+    if (generation.template_run_step_id) startedWith.set(generation.template_run_step_id, generation);
+  }
+  let found = false;
+  for (const step of state.latestSteps.values()) {
+    const generation = step.kind === 'generation' && step.status === 'queued' ? startedWith.get(step.id) : null;
+    if (!generation) continue;
+    found = true;
+    await followStepGeneration(client, state.run, step, generation);
+  }
+  return found;
+}
+
+/**
+ * Decides what a start the database refused (a 409) means for the step, and
+ * returns where the step stands now if this call moved it.
+ *
+ * The loser of two passes on one row gets this answer while the other pass
+ * has the row: the row is no longer in line, and what that pass wrote stands.
+ * A pass whose run was ended under it gets it too, and whatever ended the run
+ * deals with its steps. Nothing is written in either case.
+ *
+ * A row that is still in line was refused for what it is, and is refused
+ * again on every later pass while its run shows as running. If it turns out
+ * to have a generation of its own, it follows that. With nothing behind it,
+ * the step fails here, where the person can see it, and they are told.
+ */
+async function endRefusedStep(
+  client: SupabaseClient,
+  run: Pick<TemplateRunRow, 'id' | 'user_id'>,
+  step: TemplateRunStepRow,
+  error: unknown,
+): Promise<{ status: 'failed'; error: string } | { status: 'processing'; generationId: string } | null> {
+  const [current, row] = await Promise.all([
+    client.from('template_runs').select('status').eq('id', run.id).maybeSingle(),
+    client.from('template_run_steps').select('status').eq('id', step.id).maybeSingle(),
+  ]);
+  if (current.error) throw current.error;
+  if (row.error) throw row.error;
+  const runStatus = (current.data as Pick<TemplateRunRow, 'status'> | null)?.status;
+  if (!runStatus || TERMINAL_RUN_STATUSES.has(runStatus)) return null;
+  if ((row.data as Pick<TemplateRunStepRow, 'status'> | null)?.status !== 'queued') return null;
+
+  const generation = await loadStepGeneration(client, step.id);
+  if (generation && generation.template_run_id === run.id) {
+    return await followStepGeneration(client, run, step, generation)
+      ? { status: 'processing', generationId: generation.id }
+      : null;
+  }
+
+  const refusal = getGenerationStartRefusal(error);
+  // A retry is a new row with a new request key, which is what a row refused
+  // for its key or for the generation on it needs. A row refused for its
+  // context would be refused as a new row too.
+  const canRetry = step.can_retry && refusal !== 'invalid_template_context';
+  const message = canRetry ? TEMPLATE_STEP_REFUSED_MESSAGE : TEMPLATE_STEP_REFUSED_FOR_GOOD_MESSAGE;
+  const { data: failed, error: failError } = await client.from('template_run_steps').update({
+    status: 'failed',
+    can_retry: canRetry,
+    error_message: message,
+    output_snapshot: failureSnapshot(step, 'provider_rejected'),
+    finished_at: new Date().toISOString(),
+  }).eq('id', step.id).eq('status', 'queued').select('id').maybeSingle();
+  if (failError) throw failError;
+  if (!failed) return null;
+
+  logBackendError('template_run_step_start_refused', {
+    runId: run.id,
+    stepId: step.id,
+    nodeId: step.node_id,
+    attempt: step.attempt,
+    refusal,
+    canRetry,
+    error,
+  });
+  await notifyTemplateRunStepRefused(client, { runId: run.id, stepId: step.id, userId: run.user_id, canRetry });
+  return { status: 'failed', error: message };
+}
+
 async function advanceTemplateRun(client: SupabaseClient, runId: string, userId: string) {
   let state = await loadRunState(client, runId, userId);
   if (
@@ -1123,6 +1284,14 @@ async function advanceTemplateRun(client: SupabaseClient, runId: string, userId:
     || state.run.status === 'needs_attention'
     || state.run.status === 'collecting_inputs'
   ) return state;
+  if (await followStartedSteps(client, state)) {
+    // What became of those generations is known already, and is recorded
+    // before anything is started after them. The rows are read again whether
+    // this pass moved them or another pass had.
+    state = await loadRunState(client, runId, userId);
+    await refreshGenerationSteps(client, state);
+    state = await loadRunState(client, runId, userId);
+  }
   let graph = await hydrateRunGraph(client, state);
   for (const node of topologicalNodes(graph)) {
     const step = state.latestSteps.get(node.id);
@@ -1270,6 +1439,11 @@ async function advanceTemplateRun(client: SupabaseClient, runId: string, userId:
           status: retryAsNextAttempt ? 'queued' : stepStatus,
           error: failure.message,
         });
+      } else {
+        // The database would not start this row. Either another pass has it,
+        // or it will never be started: the two are told apart from the rows.
+        const refused = await endRefusedStep(client, state.run, step, error);
+        if (refused) graph = updateNodeRunState(graph, node.id, refused);
       }
     }
   }
@@ -1278,21 +1452,37 @@ async function advanceTemplateRun(client: SupabaseClient, runId: string, userId:
   return loadRunState(client, runId, userId);
 }
 
-async function cleanupTemplateRunInputs(client: SupabaseClient, state: RunState) {
-  if (state.run.inputs_deleted_at || !['succeeded', 'failed', 'cancelled'].includes(state.run.status)) return state;
-  const paths = Object.values(asStoragePaths(state.run.input_storage_paths))
-    .map((value) => templateInputObjectPath(value, state.run.user_id)).filter(Boolean);
+/**
+ * Deletes a finished run's uploads. False when storage did not let them go,
+ * or the run could not be told they are gone: the run keeps their paths.
+ */
+async function removeTemplateRunInputs(
+  client: SupabaseClient,
+  run: Pick<TemplateRunRow, 'id' | 'user_id' | 'input_storage_paths'>,
+) {
+  const paths = Object.values(asStoragePaths(run.input_storage_paths))
+    .map((value) => templateInputObjectPath(value, run.user_id)).filter(Boolean);
   if (paths.length) {
     const { error } = await client.storage.from(TEMPLATE_INPUT_BUCKET).remove(paths);
     if (error) {
-      logBackendError('failed_to_clean_up_template_inputs', { error: error });
-      return state;
+      logBackendError('failed_to_clean_up_template_inputs', { runId: run.id, error: error });
+      return false;
     }
   }
-  await client.from('template_runs').update({
+  const { error: recordError } = await client.from('template_runs').update({
     input_storage_paths: {},
     inputs_deleted_at: new Date().toISOString(),
-  }).eq('id', state.run.id);
+  }).eq('id', run.id);
+  if (recordError) {
+    logBackendError('failed_to_clean_up_template_inputs', { runId: run.id, error: recordError });
+    return false;
+  }
+  return true;
+}
+
+async function cleanupTemplateRunInputs(client: SupabaseClient, state: RunState) {
+  if (state.run.inputs_deleted_at || !['succeeded', 'failed', 'cancelled'].includes(state.run.status)) return state;
+  if (!await removeTemplateRunInputs(client, state.run)) return state;
   return loadRunState(client, state.run.id, state.run.user_id);
 }
 
@@ -1396,6 +1586,12 @@ export async function approveTemplateRunStep(params: {
   userId: string;
 }): Promise<TemplateRunDto> {
   const { state, step } = await loadOwnedStep(params.adminClient, params.runId, params.stepId, params.userId);
+  // A run that ended keeps a checkpoint waiting when the write that closes its
+  // steps did not land. Approved, it would set going again a run whose uploads
+  // are deleted and whose owner was told it stopped.
+  if (TERMINAL_RUN_STATUSES.has(state.run.status)) {
+    throw new MediaTemplateError(TEMPLATE_RUN_ENDED_MESSAGE, 409, 'RUN_TERMINAL');
+  }
   if (step.kind !== 'approval' || step.status !== 'awaiting_approval' || !step.output_url) {
     throw new MediaTemplateError('This checkpoint is not waiting for approval.', 409, 'APPROVAL_NOT_READY');
   }
@@ -1408,8 +1604,10 @@ export async function approveTemplateRunStep(params: {
   }).eq('id', step.id).eq('status', 'awaiting_approval').select('id').maybeSingle();
   if (error) throw error;
   if (!data) throw new MediaTemplateError('This checkpoint was already handled.', 409, 'APPROVAL_ALREADY_HANDLED');
+  // The run can end between the read above and this write. It then stays ended.
   await params.adminClient.from('template_runs').update({ status: 'processing', error_message: null })
-    .eq('id', state.run.id).neq('status', 'cancelled');
+    .eq('id', state.run.id)
+    .neq('status', 'succeeded').neq('status', 'failed').neq('status', 'cancelled');
   await enqueueTemplateRunJob(params.adminClient, state.run.id);
   const next = await loadRunState(params.adminClient, state.run.id, params.userId);
   return toRunDto(params.adminClient, next);
@@ -1461,11 +1659,7 @@ export async function retryTemplateRunStep(params: {
 }): Promise<TemplateRunDto> {
   const state = await loadRunState(params.adminClient, params.runId, params.userId);
   if (TERMINAL_RUN_STATUSES.has(state.run.status)) {
-    throw new MediaTemplateError(
-      'This run has ended. Start a new run to try the template again.',
-      409,
-      'RUN_TERMINAL',
-    );
+    throw new MediaTemplateError(TEMPLATE_RUN_ENDED_MESSAGE, 409, 'RUN_TERMINAL');
   }
   const step = state.steps.find((candidate) => candidate.id === params.stepId);
   if (!step) throw new MediaTemplateError('Template run step not found.', 404, 'STEP_NOT_FOUND');
@@ -1515,7 +1709,7 @@ export async function retryTemplateRunStep(params: {
       const code = typeof result === 'string' ? result : 'STEP_NOT_RETRYABLE';
       throw new MediaTemplateError(
         code === 'RUN_TERMINAL'
-          ? 'This run has ended. Start a new run to try the template again.'
+          ? TEMPLATE_RUN_ENDED_MESSAGE
           : 'This checkpoint was already handled. Refresh the run before retrying.',
         code === 'RUN_NOT_FOUND' || code === 'STEP_NOT_FOUND' ? 404 : 409,
         code,
@@ -1561,23 +1755,103 @@ export async function cancelTemplateRun(client: SupabaseClient, runId: string, u
       state = await loadRunState(client, runId, userId);
     }
     const now = new Date().toISOString();
-    await client.from('template_runs').update({
+    // A run that could not be cancelled keeps its steps: closing them would
+    // leave it in progress with nothing left to run. The person can ask again.
+    const { error: cancelError } = await client.from('template_runs').update({
       status: 'cancelled',
       completed_at: now,
       error_message: null,
     }).eq('id', state.run.id).eq('user_id', userId);
-    await client.from('template_run_steps').update({
+    if (cancelError) throw cancelError;
+    // From here the run is cancelled whatever becomes of its steps, so a
+    // write the database refuses is logged and the person is still answered.
+    const { error: waitingError } = await client.from('template_run_steps').update({
       status: 'cancelled',
       finished_at: now,
     }).eq('run_id', state.run.id).in('status', ['queued', 'awaiting_approval']);
+    if (waitingError) logBackendError('template_run_cancel_cleanup_failed', { runId, error: waitingError });
     // There is no provider-side cancellation, so in-flight work keeps running
     // and keeps its charge — say so instead of pretending it stopped.
-    await client.from('template_run_steps').update({
+    const { error: generatingError } = await client.from('template_run_steps').update({
       status: 'cancelled',
       finished_at: now,
       error_message: TEMPLATE_CANCELLED_MID_GENERATION_MESSAGE,
     }).eq('run_id', state.run.id).eq('status', 'processing');
+    if (generatingError) logBackendError('template_run_cancel_cleanup_failed', { runId, error: generatingError });
   }
   const cancelledState = await loadRunState(client, runId, userId);
   return toRunDto(client, await cleanupTemplateRunInputs(client, cancelledState));
+}
+
+/**
+ * Ends a run the worker could not get through one pass of for the give-up
+ * time, and tells the person. The job processor's sweep calls it for a run
+ * that has no live ticket left.
+ *
+ * It reads nothing a pass reads first: a run whose stored graph cannot be
+ * read, which is one of the ways a run gets here, is ended like any other.
+ *
+ * `idleBefore` is when the give-up time began. The run is ended only if
+ * nothing has written it since: a pass that worked, the person and another
+ * sweep each move `updated_at` past it. Returns whether this call ended it.
+ */
+export async function abandonTemplateRun(params: {
+  client: SupabaseClient;
+  runId: string;
+  userId: string;
+  idleBefore: string;
+  /** What the run's last pass failed with, for the operator's log. */
+  lastError?: string | null;
+}): Promise<boolean> {
+  const { client, runId, userId } = params;
+  const now = new Date().toISOString();
+  const { data: ended, error } = await client.from('template_runs').update({
+    status: 'failed',
+    completed_at: now,
+    error_message: TEMPLATE_RUN_ABANDONED_MESSAGE,
+  }).eq('id', runId).eq('user_id', userId)
+    .in('status', ['queued', 'processing'])
+    .lt('updated_at', params.idleBefore)
+    .select('id, user_id, input_storage_paths')
+    .maybeSingle();
+  if (error) throw error;
+  if (!ended) return false;
+
+  // The run has ended. What follows tidies it, and none of it undoes that.
+  try {
+    // A generation that finished while no pass could record it is what its
+    // step shows: its result, or its failure, whose credits its own
+    // settlement has returned.
+    const [steps, generations] = await Promise.all([
+      loadRunSteps(client, runId),
+      loadRunGenerations(client, runId),
+    ]);
+    await refreshGenerationSteps(client, { latestSteps: latestStepsByNode(steps), generations });
+    // A write the database refuses is answered with an error, not thrown. It
+    // is logged here, and the rest of the tidying still runs.
+    const { error: waitingError } = await client.from('template_run_steps').update({
+      status: 'cancelled',
+      finished_at: now,
+      error_message: TEMPLATE_ABANDONED_STEP_MESSAGE,
+    }).eq('run_id', runId).in('status', ['queued', 'awaiting_approval']);
+    if (waitingError) logBackendError('template_run_abandon_cleanup_failed', { runId, error: waitingError });
+    // What is still processing is with the provider, which cannot be told to
+    // stop, and keeps its charge.
+    const { error: generatingError } = await client.from('template_run_steps').update({
+      status: 'cancelled',
+      finished_at: now,
+      error_message: TEMPLATE_ABANDONED_MID_GENERATION_MESSAGE,
+    }).eq('run_id', runId).eq('status', 'processing');
+    if (generatingError) logBackendError('template_run_abandon_cleanup_failed', { runId, error: generatingError });
+    await removeTemplateRunInputs(
+      client,
+      ended as unknown as Pick<TemplateRunRow, 'id' | 'user_id' | 'input_storage_paths'>,
+    );
+  } catch (cleanupError) {
+    logBackendError('template_run_abandon_cleanup_failed', { runId, error: cleanupError });
+  }
+
+  logBackendError('template_run_abandoned', { runId, userId, lastError: params.lastError ?? null });
+  await notifyTemplateRunStopped(client, { runId, userId });
+  return true;
 }

@@ -10,6 +10,7 @@ import {
   BACKEND_JOB_SCHEDULER,
   type BackendJobDefinition,
 } from '@/lib/backend-jobs';
+import { MAX_COMPLETION_ATTEMPTS } from '@/lib/generation-completion-job-policy';
 import {
   GENERATION_MODEL_CATALOG_V1_SCHEMA_VERSION,
 } from '@/lib/generation-model-catalog';
@@ -60,6 +61,7 @@ type GenerationCompletionQueueRow = {
   created_at: string | null;
   next_attempt_at: string | null;
   locked_at: string | null;
+  attempt_count: number | null;
 };
 
 type MediaRenditionRow = {
@@ -181,11 +183,17 @@ export type BackendCompletionQueueHealth = {
   status: BackendHealthStatus;
   stalePendingAfterMinutes: number;
   staleProcessingAfterMinutes: number;
+  /** Attempts a job may use before it is closed as failed. */
+  attemptCap: number;
   pendingCount: number;
   processingCount: number;
   failedCount: number;
   staleDuePendingCount: number;
   staleProcessingCount: number;
+  /** Pending or processing jobs whose attempt count is already above the cap. */
+  overAttemptCapCount: number;
+  /** Highest attempt count among pending and processing jobs; every claim adds one. Null when none is open. */
+  highestOpenAttemptCount: number | null;
   oldestDuePendingNextAttemptAt: string | null;
   oldestProcessingLockedAt: string | null;
   oldestFailedCreatedAt: string | null;
@@ -771,6 +779,16 @@ function buildCompletionQueueHealth(
     row.locked_at
     && minutesSince(row.locked_at, now) > COMPLETION_QUEUE_STALE_PROCESSING_AFTER_MINUTES
   ));
+  // Every claim adds an attempt, and finishing a job that has used the cap
+  // closes it as failed. An open job above the cap was therefore claimed again
+  // without being closed: its processing throws, or its worker dies, before the
+  // finish call. Each of those reclaims also stamps a new lock, which keeps the
+  // job under the stale-lock threshold above, and out of the queue-age probe
+  // except between its lease running out and the next sweep. Its attempt count
+  // is the one thing that keeps moving.
+  const openAttemptCounts = [...pendingRows, ...processingRows].map((row) => row.attempt_count ?? 0);
+  const overAttemptCapCount = openAttemptCounts.filter((count) => count > MAX_COMPLETION_ATTEMPTS).length;
+  const highestOpenAttemptCount = openAttemptCounts.length > 0 ? Math.max(...openAttemptCounts) : null;
   const oldestDuePending = sortByTimestamp(duePendingRows, (row) => row.next_attempt_at)[0] ?? null;
   const oldestProcessing = sortByTimestamp(processingRows, (row) => row.locked_at)[0] ?? null;
   const oldestFailed = sortByTimestamp(failedRows, (row) => row.created_at)[0] ?? null;
@@ -800,16 +818,27 @@ function buildCompletionQueueHealth(
     });
   }
 
+  if (overAttemptCapCount > 0) {
+    issues.push({
+      severity: 'degraded',
+      code: 'GENERATION_COMPLETION_QUEUE_OVER_ATTEMPT_CAP',
+      message: `${overAttemptCapCount} open generation completion job(s) are past the ${MAX_COMPLETION_ATTEMPTS}-attempt cap (highest attempt count ${highestOpenAttemptCount}): a job is closed once it has used ${MAX_COMPLETION_ATTEMPTS} attempts, so these are being reclaimed without ever being closed.`,
+    });
+  }
+
   return {
     health: {
       status: issues.length > 0 ? 'degraded' : 'ok',
       stalePendingAfterMinutes: COMPLETION_QUEUE_STALE_PENDING_AFTER_MINUTES,
       staleProcessingAfterMinutes: COMPLETION_QUEUE_STALE_PROCESSING_AFTER_MINUTES,
+      attemptCap: MAX_COMPLETION_ATTEMPTS,
       pendingCount: pendingRows.length,
       processingCount: processingRows.length,
       failedCount: failedRows.length,
       staleDuePendingCount: staleDuePendingRows.length,
       staleProcessingCount: staleProcessingRows.length,
+      overAttemptCapCount,
+      highestOpenAttemptCount,
       oldestDuePendingNextAttemptAt: oldestDuePending?.next_attempt_at ?? null,
       oldestProcessingLockedAt: oldestProcessing?.locked_at ?? null,
       oldestFailedCreatedAt: oldestFailed?.created_at ?? null,
@@ -1305,7 +1334,7 @@ export async function collectBackendHealth(
       .limit(50),
     client
       .from('generation_completion_jobs')
-      .select('status,created_at,next_attempt_at,locked_at')
+      .select('status,created_at,next_attempt_at,locked_at,attempt_count')
       .in('status', ['pending', 'processing', 'failed'])
       .order('created_at', { ascending: true })
       .limit(COMPLETION_QUEUE_SAMPLE_LIMIT + 1),
