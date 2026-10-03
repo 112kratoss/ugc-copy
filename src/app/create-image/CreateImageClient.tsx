@@ -10,6 +10,7 @@ import {
     GeneratorPageHeader,
     MediaStudioShell,
     StudioBackgroundProcessingNotice,
+    StudioElementChip,
     StudioElementHandle,
     StudioGenerationStatus,
     StudioMediaPreviewModal,
@@ -1378,15 +1379,13 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     {elements.length > 0 ? (
                                         <div className="flex flex-wrap gap-2">
                                             {elements.map((element) => (
-                                                <button
+                                                <StudioElementChip
                                                     key={element.id}
-                                                    type="button"
-                                                    onClick={() => handleInsertElementHandle(element.handle)}
-                                                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
-                                                >
-                                                    <span className="text-zinc-400">{element.displayName}</span>
-                                                    <span className="text-sky-300">{element.handle}</span>
-                                                </button>
+                                                    displayName={element.displayName}
+                                                    handle={element.handle}
+                                                    handleClassName="text-sky-300"
+                                                    onInsert={() => handleInsertElementHandle(element.handle)}
+                                                />
                                             ))}
                                         </div>
                                     ) : (
@@ -1437,15 +1436,13 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     {mentionSuggestions.length > 0 ? (
                                         <div className="mt-3 flex flex-wrap gap-2">
                                             {mentionSuggestions.map((element) => (
-                                                <button
+                                                <StudioElementChip
                                                     key={element.id}
-                                                    type="button"
-                                                    onClick={() => handleInsertElementHandle(element.handle)}
-                                                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
-                                                >
-                                                    <span className="text-zinc-400">{element.displayName}</span>
-                                                    <span className="text-sky-300">{element.handle}</span>
-                                                </button>
+                                                    displayName={element.displayName}
+                                                    handle={element.handle}
+                                                    handleClassName="text-sky-300"
+                                                    onInsert={() => handleInsertElementHandle(element.handle)}
+                                                />
                                             ))}
                                         </div>
                                     ) : null}
