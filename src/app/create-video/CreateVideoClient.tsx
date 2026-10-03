@@ -1072,21 +1072,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const knownElementMentions = extractPromptHandles(prompt).filter((handle) => elementHandles.includes(handle));
     const knownKlingVideoMentions = extractPromptHandles(prompt).filter((handle) => klingVideoHandles.includes(handle));
     const staleElementMentions = findUnknownPromptHandles(prompt, knownPromptHandles);
-    const multiShotUnknownKlingVideoMentions = isKlingVideoModel && currentIsMultiShot
-        ? Array.from(new Set(multiPrompts.flatMap((shot) => findUnknownPromptHandles(shot.prompt, klingVideoHandles))))
-        : [];
-    const hasKnownElementMentions = knownElementMentions.length > 0;
-    const hasKnownKlingVideoMentions = knownKlingVideoMentions.length > 0;
-    const hasInactiveElementMentions = !canUseVideoElements && hasKnownElementMentions;
-    const promptMentionCandidates: PromptMentionCandidate[] = [
-        ...(canUseVideoElements
-            ? elements.map((element) => ({
-                id: element.id,
-                displayName: element.displayName,
-                handle: element.handle,
-                kind: 'image' as const,
-            }))
-            : []),
+    // What a shot prompt can mention: the references a multi-shot run sends with its
+    // shots, which are Kling 3.0's video elements and Kling O3's named subjects. Image
+    // references are not among them, because a multi-shot run does not send them. The
+    // "@" panel under a shot, the check of the shot prompts before a run and a shot's
+    // Enhance button all read this one list, so what the panel offers is what the
+    // check accepts and what the enhancer is told to keep.
+    const shotMentionCandidates: PromptMentionCandidate[] = [
         ...(isKlingVideoModel
             ? klingVideoElements.map((element) => ({
                 id: element.id,
@@ -1104,6 +1096,27 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             }))
             : []),
     ];
+    // The two models whose shot prompts take mentions. The server reads the shot
+    // prompts of the same two for unknown ones (unknownShotHandles in generation-services.ts).
+    const shotPromptsTakeMentions = isKlingVideoModel || isKlingO3Model;
+    const shotMentionHandles = shotMentionCandidates.map((candidate) => candidate.handle);
+    const multiShotUnknownMentions = shotPromptsTakeMentions && currentIsMultiShot
+        ? Array.from(new Set(multiPrompts.flatMap((shot) => findUnknownPromptHandles(shot.prompt, shotMentionHandles))))
+        : [];
+    const hasKnownElementMentions = knownElementMentions.length > 0;
+    const hasKnownKlingVideoMentions = knownKlingVideoMentions.length > 0;
+    const hasInactiveElementMentions = !canUseVideoElements && hasKnownElementMentions;
+    const promptMentionCandidates: PromptMentionCandidate[] = [
+        ...(canUseVideoElements
+            ? elements.map((element) => ({
+                id: element.id,
+                displayName: element.displayName,
+                handle: element.handle,
+                kind: 'image' as const,
+            }))
+            : []),
+        ...shotMentionCandidates,
+    ];
     const mentionSuggestions = activeMentionQuery
         ? promptMentionCandidates.filter((candidate) => {
             const normalizedQuery = activeMentionQuery.query.toLowerCase();
@@ -1115,17 +1128,20 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             );
         })
         : [];
-    const shotMentionSuggestions = activeShotMentionQuery && isKlingVideoModel
-        ? klingVideoElements.filter((element) => {
+    const shotMentionSuggestions = activeShotMentionQuery && shotPromptsTakeMentions
+        ? shotMentionCandidates.filter((candidate) => {
             const normalizedQuery = activeShotMentionQuery.query.toLowerCase();
             if (!normalizedQuery) return true;
 
             return (
-                element.handle.toLowerCase().includes(`@${normalizedQuery}`) ||
-                element.displayName.toLowerCase().includes(normalizedQuery)
+                candidate.handle.toLowerCase().includes(`@${normalizedQuery}`) ||
+                candidate.displayName.toLowerCase().includes(normalizedQuery)
             );
         })
         : [];
+    const shotMentionPanelCopy = isKlingO3Model
+        ? { title: 'Insert subject', pick: 'Pick a named subject for this shot.', none: 'No matching subjects yet.' }
+        : { title: 'Insert video element', pick: 'Pick a Kling video handle for this shot.', none: 'No matching video elements yet.' };
     const showKlingVideoElementEditor = isKlingVideoModel;
     const showElementEditor = !currentIsMultiShot && canUseVideoElements;
     const showFramesEditor = supportsStartFrame || supportsEndFrame;
@@ -1209,10 +1225,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         hasStartImage: Boolean(startImageFile || startImageUrl),
         hasEndImage: Boolean(endImageFile || endImageUrl),
         hasReferenceVideo: hasReferenceVideoForRun,
-        elementReferences: isKlingVideoModel && klingVideoElements.length > 0
-            ? klingVideoElements.map((element) => ({
-                handle: element.handle,
-                displayName: element.displayName,
+        elementReferences: shotMentionCandidates.length > 0
+            ? shotMentionCandidates.map((candidate) => ({
+                handle: candidate.handle,
+                displayName: candidate.displayName,
             }))
             : undefined,
     });
@@ -2633,8 +2649,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return;
         }
 
-        if (currentIsMultiShot && multiShotUnknownKlingVideoMentions.length > 0) {
-            setError(`Unknown element mention${multiShotUnknownKlingVideoMentions.length > 1 ? 's' : ''}: ${multiShotUnknownKlingVideoMentions.join(', ')}`);
+        if (currentIsMultiShot && multiShotUnknownMentions.length > 0) {
+            setError(`Unknown element mention${multiShotUnknownMentions.length > 1 ? 's' : ''}: ${multiShotUnknownMentions.join(', ')}`);
             return;
         }
 
@@ -3596,13 +3612,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                    placeholder={`Describe shot ${index + 1}...`}
 	                                                    className="mb-4 min-h-[100px] w-full resize-none rounded-2xl border border-white/10 bg-black/50 p-4 text-sm text-white outline-none focus:border-[#ff7a59]/50"
 	                                                />
-	                                                {activeShotMentionQuery?.shotId === shot.id && isKlingVideoModel ? (
+	                                                {activeShotMentionQuery?.shotId === shot.id && shotPromptsTakeMentions ? (
 	                                                    <div className="mb-4 rounded-[20px] border border-white/8 bg-black/35 p-4">
 	                                                        <div className="flex flex-wrap items-center justify-between gap-3">
 	                                                            <div className="min-w-[min(50%_-_0.75rem,10rem)] flex-1">
-	                                                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Insert video element</p>
+	                                                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">{shotMentionPanelCopy.title}</p>
 	                                                                <p className="mt-1 text-sm text-zinc-400">
-	                                                                    {shotMentionSuggestions.length > 0 ? 'Pick a Kling video handle for this shot.' : 'No matching video elements yet.'}
+	                                                                    {shotMentionSuggestions.length > 0 ? shotMentionPanelCopy.pick : shotMentionPanelCopy.none}
 	                                                                </p>
 	                                                            </div>
 	                                                            {activeShotMentionQuery.query ? (
@@ -3614,13 +3630,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                        </div>
 	                                                        {shotMentionSuggestions.length > 0 ? (
 	                                                            <div className="mt-3 flex flex-wrap gap-2">
-	                                                                {shotMentionSuggestions.map((element) => (
+	                                                                {shotMentionSuggestions.map((candidate) => (
 	                                                                    <StudioElementChip
-	                                                                        key={element.id}
-	                                                                        displayName={element.displayName}
-	                                                                        handle={element.handle}
-	                                                                        handleClassName="text-emerald-300"
-	                                                                        onInsert={() => handleInsertShotHandle(shot.id, element.handle)}
+	                                                                        key={`${candidate.kind}-${candidate.id}`}
+	                                                                        displayName={candidate.displayName}
+	                                                                        handle={candidate.handle}
+	                                                                        handleClassName={candidate.kind === 'video' ? 'text-emerald-300' : 'text-sky-300'}
+	                                                                        onInsert={() => handleInsertShotHandle(shot.id, candidate.handle)}
 	                                                                    />
 	                                                                ))}
 	                                                            </div>

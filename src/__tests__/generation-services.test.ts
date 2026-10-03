@@ -4207,6 +4207,69 @@ describe('generation services', () => {
     expect(sent?.input?.prompt).toBe(prompt);
   });
 
+  it('reads a Kling O3 shot prompt for the subjects of its run, and refuses one it does not have', async () => {
+    // A multi-shot run sends its subjects with the shots, and each shot prompt may
+    // mention them. This is the check the creator page has to pass before it uploads
+    // the subject images: the page's own check of a shot prompt names the same handles.
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    type ProviderBody = {
+      input?: {
+        customize_multi_shots?: boolean;
+        multi_prompt?: Array<{ prompt: string; duration: number }>;
+        elements?: Array<{ name: string }>;
+      };
+    };
+    let providerBody: ProviderBody | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-o3-subject-shots-1' } }),
+      } as Response;
+    });
+
+    const { supabase } = createSupabaseMock();
+    const run = (shotPrompts: string[]) => startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: '',
+      model: 'kling-o3',
+      isMultiShot: true,
+      aspectRatio: '16:9',
+      resolution: '720p',
+      sound: false,
+      multiPrompts: shotPrompts.map((prompt, index) => ({ id: `shot-${index + 1}`, prompt, duration: 3 })),
+      klingSubjects: [{
+        handle: '@hero_creator',
+        displayName: 'Hero creator',
+        images: [
+          { url: 'https://cdn.example.com/hero-front.jpg' },
+          { url: 'https://cdn.example.com/hero-side.jpg' },
+        ],
+      }],
+    });
+
+    // One letter short in the second shot.
+    await expect(run([
+      'Open on @hero_creator in the rain.',
+      'Cut closer while @hero_creatr turns.',
+    ])).rejects.toThrow('Unknown element mention: @hero_creatr');
+    expect(providerBody).toBeNull();
+
+    await run([
+      'Open on @hero_creator in the rain.',
+      'Cut closer while @hero_creator turns.',
+    ]);
+    const sent = providerBody as ProviderBody | null;
+    expect(sent?.input?.customize_multi_shots).toBe(true);
+    expect(sent?.input?.multi_prompt).toEqual([
+      { prompt: 'Open on @hero_creator in the rain.', duration: 3 },
+      { prompt: 'Cut closer while @hero_creator turns.', duration: 3 },
+    ]);
+    expect(sent?.input?.elements?.map((element) => element.name)).toEqual(['hero_creator']);
+  });
+
   it('rejects Kling O3 subjects with the wrong image count or model', async () => {
     const { startVideoGeneration } = await import('@/lib/generation-services');
     const { supabase } = createSupabaseMock();
