@@ -349,6 +349,32 @@ describe('CreateImageClient element handles', () => {
     expect(cardHandles(view.container)).toEqual(['@red_jacket']);
   });
 
+  it('keeps the "@" panel open at a capital letter, and inserts the handle from it', async () => {
+    const view = render(<CreateImageClient prefill={{}} />);
+    await waitFor(() => expect(cardHandles(view.container)).toEqual(['@restored_product']));
+
+    // The element is called "Restored product", so this is how a creator starts to
+    // look for it. The panel shut at the capital (2026-10-03).
+    const promptBox = screen.getByPlaceholderText(promptPlaceholder);
+    fireEvent.change(promptBox, { target: { value: 'A portrait of @R' } });
+
+    const title = await screen.findByText('Insert element');
+    // The panel is the title's nearest ancestor that holds an element to pick.
+    let panel = title.parentElement;
+    while (panel && !panel.querySelector('button')) {
+      panel = panel.parentElement;
+    }
+    const suggestion = Array.from(panel?.querySelectorAll('button') ?? [])
+      .find((button) => button.textContent?.includes('@restored_product'));
+    expect(suggestion).toBeDefined();
+
+    fireEvent.click(suggestion!);
+
+    // What was typed is replaced by the handle as it is written.
+    expect(promptBox).toHaveValue('A portrait of @restored_product');
+    expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+  });
+
   it('shows the same handles after a reload as before it', async () => {
     const first = render(<CreateImageClient prefill={{}} />);
     await waitFor(() => expect(cardHandles(first.container)).toEqual(['@restored_product']));

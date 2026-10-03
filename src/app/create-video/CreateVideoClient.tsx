@@ -72,6 +72,7 @@ import {
 } from '@/lib/generation-status-client';
 import {
     assignElementHandles,
+    buildSubjectHandles,
     createElementHandleReplacementMap,
     createElementId,
     extractPromptHandles,
@@ -264,18 +265,6 @@ type KlingSubjectDraft = {
 const KLING_SUBJECT_LIMIT = 3;
 const KLING_SUBJECT_MIN_IMAGES = 2;
 const KLING_SUBJECT_MAX_IMAGES = 4;
-
-function buildKlingSubjectHandle(displayName: string, index: number, used: Set<string>): string {
-    const base = displayName.trim().replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-    let handle = `@${base || `subject_${index + 1}`}`;
-    let suffix = 2;
-    while (used.has(handle)) {
-        handle = `@${base || `subject_${index + 1}`}_${suffix}`;
-        suffix += 1;
-    }
-    used.add(handle);
-    return handle;
-}
 
 function KlingSubjectsEditor({
     subjects,
@@ -971,11 +960,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             ? elements.length + referenceVideos.length + referenceAudios.length + preparedAudioIds.length + characterIds.length + (combinesFrameWithReferences && (startImageUrl || startImageFile) ? 1 : 0)
             : frameReferenceCount + (isKlingVideoModel ? klingVideoElements.length : 0);
     const klingSubjectsActive = isKlingO3Model && klingSubjects.length > 0;
-    const klingSubjectHandles = (() => {
-        if (!isKlingO3Model) return [] as string[];
-        const used = new Set<string>();
-        return klingSubjects.map((subject, index) => buildKlingSubjectHandle(subject.displayName, index, used));
-    })();
+    const klingSubjectHandles = isKlingO3Model
+        ? buildSubjectHandles(klingSubjects.map((subject) => subject.displayName))
+        : [];
     const additionalSettings = useAdditionalCatalogSettings(catalogDescriptor, CATALOG_HANDLED_KEYS);
     const quoteRequest = useMemo(() => modelCatalog.catalog && modelCatalog.detailsReady ? {
         kind: 'video' as const,
