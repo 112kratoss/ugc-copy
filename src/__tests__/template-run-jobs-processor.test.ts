@@ -102,6 +102,31 @@ describe('durable template run processor', () => {
     expect(result.retried).toBe(1);
   });
 
+  it('records what the database said when a read is refused mid-run', async () => {
+    // supabase-js answers a failed query with a plain object, not an Error,
+    // and the run service throws it as it is.
+    mocks.sync.mockRejectedValue({
+      code: '57014',
+      details: null,
+      hint: null,
+      message: 'canceling statement due to statement timeout',
+    });
+    mocks.finish.mockResolvedValue('retry_scheduled');
+    const { processTemplateRunJobs } = await import('@/lib/template-run-jobs-processor');
+
+    const result = await processTemplateRunJobs({
+      client: { rpc: vi.fn() } as never,
+      lockedBy: 'worker-1',
+    });
+
+    expect(mocks.finish).toHaveBeenCalledWith(expect.objectContaining({
+      succeeded: false,
+      error: 'canceling statement due to statement timeout (code 57014)',
+      retryDelaySeconds: 60,
+    }));
+    expect(result.retried).toBe(1);
+  });
+
   it('does not finish work after losing its database lease', async () => {
     mocks.sync.mockResolvedValue({ status: 'succeeded' });
     mocks.heartbeat.mockResolvedValue(false);

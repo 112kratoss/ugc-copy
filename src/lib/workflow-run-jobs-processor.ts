@@ -2,6 +2,7 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendError } from '@/lib/backend-logger';
+import { jobErrorMessage } from '@/lib/job-error-message';
 import {
   MAX_WORKFLOW_RUN_STEP_ATTEMPTS,
   WORKFLOW_RUN_STEP_CONCURRENCY,
@@ -42,10 +43,6 @@ export type WorkflowRunStepProcessSummary = {
 };
 
 type AdvanceWorkflowRun = typeof advanceWorkflowRunOnce;
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function isRunUnfinished(status: string | null | undefined): boolean {
   return status === 'processing';
@@ -224,7 +221,7 @@ async function processOne(params: {
       id: job.id,
       lockedBy,
       succeeded: false,
-      error: errorMessage(error),
+      error: jobErrorMessage(error),
       retryDelaySeconds: getWorkflowRunStepRetryDelaySeconds(job.attempt),
     }).catch((finishError) => {
       logBackendError('workflow_run_step_finish_failed', { error: finishError, jobId: job.id });

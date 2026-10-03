@@ -3,6 +3,7 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendError } from '@/lib/backend-logger';
+import { jobErrorMessage } from '@/lib/job-error-message';
 import {
   claimTemplateRunJobs,
   deferTemplateRunJob,
@@ -97,7 +98,7 @@ async function processOne(params: {
       id: params.job.id,
       lockedBy: params.lockedBy,
       succeeded: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: jobErrorMessage(error),
       retryDelaySeconds: retryDelaySeconds(params.job.attempt_count),
     }).catch((finishError) => {
       logBackendError('template_run_job_finish_failed', { jobId: params.job.id, error: finishError });
