@@ -17,6 +17,7 @@ import {
     StudioElementChip,
     StudioElementHandle,
     StudioElementHandleList,
+    StudioElementHandleText,
     StudioGenerationStatus,
     StudioMediaPreviewModal,
     StudioModelNotice,
@@ -3458,8 +3459,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                 <StudioElementHandleList handles={staleElementMentions} />
                                             </span>
 	                                        ) : activeReferenceMode !== 'elements' && hasKnownElementMentions ? (
-	                                            <span className="text-right text-amber-300">
-	                                                Switch to Reusable references to use {knownElementMentions.join(', ')}.
+	                                            <span className="min-w-0 text-right text-amber-300">
+	                                                <StudioElementHandleText text={`Switch to Reusable references to use ${knownElementMentions.join(', ')}.`} />
 	                                            </span>
                                         ) : null}
                                     </div>
@@ -4598,7 +4599,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     ) : referenceLimitMessage ? (
                                         <p className="text-sm text-red-400">{referenceLimitMessage}</p>
                                     ) : error ? (
-                                        <p className="text-sm text-red-400">{error}</p>
+                                        // The error can name a handle, and can print a subject's name or
+                                        // whatever the server answered. A handle gets its own box; any other
+                                        // word that no line can hold breaks where the line ends.
+                                        <p className="text-sm text-red-400 [overflow-wrap:anywhere]">
+                                            <StudioElementHandleText text={error} />
+                                        </p>
                                     ) : quoteState.status === 'error' ? (
                                         <p className="text-sm text-amber-300">{quoteUi.message}</p>
                                     ) : (
