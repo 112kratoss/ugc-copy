@@ -46,7 +46,7 @@ refines the workflow portion of MAP-02 without closing that repository-wide row.
 | Template downstream execution | 7C two actual image/video start/settlement completion cases | Real node-input executor and Storage/provider transport; 7D adds two actual process-death/restart checkpoints |
 | Template publication | 7B committed activation/lost-reply regression | Successful and rejected live Storage publication, stale revisions, enable/disable races, orphan reconciliation |
 | Template input sign/finalize/start | Existing ownership and upload reservation code; source reviewed | Actual Storage upload/replacement/expiry, lost reply and owned run-state transitions |
-| Canvas run start/approval/read | Prior ownership/start admission and recent upstream retry fixes | Full actual SQL canvas execution, partial failure, duplicate start, recovery and billing matrix |
+| Canvas run start/approval/read | 7E actual SQL image/approval/video execution, duplicate start, partial refunds, pure GET, backpressure and failed/lost step-write recovery | Actual provider/Storage, concurrent approval and canvas process-death matrix |
 | Canvas collection/detail/history/restore/publish | Export inventory and existing service tests | Cross-user, stale revision and concurrent write/restore behavior at SQL/HTTP boundaries |
 | Share create/preview/import | Owned source lookup, sanitized snapshot, private draft insertion and existing unit route tests | Actual user-role SQL, stale share/source lifecycle and duplicate import semantics |
 | Assistant message/proposal/apply/discard/state | Owned proposal/canvas reads and atomic revision-guarded apply RPC; existing unit tests | Actual role/revision/concurrency matrix and provider-free proposal fixtures |

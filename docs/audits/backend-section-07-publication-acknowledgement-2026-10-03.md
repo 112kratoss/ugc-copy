@@ -1,8 +1,8 @@
 # Section 7B — publication assets after a lost activation reply
 
 Date: October 3, 2026. Candidate baseline: 7c304082 (Section 7A). This is a
-scoped correctness fix; CI, release and actual Storage transport verification
-remain pending. WORKFLOW-04 and MEDIA-08/09 remain open.
+scoped correctness fix, deployed and independently smoke-checked. Actual Storage
+transport verification remains pending. See the companion publication release report. WORKFLOW-04 and MEDIA-08/09 remain open.
 
 ## Failure and change
 
