@@ -287,29 +287,12 @@ function KlingSubjectsEditor({
 }) {
     // A name while it is being typed. It becomes the subject's name, and the
     // handle and the prompt follow it, when the field is left or Enter is pressed.
-    // The ref holds the same drafts for the handlers: Escape drops a draft and
-    // leaves the field in one event, and leaving the field must find it gone.
-    const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
-    const nameDraftsRef = useRef<Record<string, string>>({});
-
-    const setNameDraft = (subjectId: string, value: string | null) => {
-        if (value === null && !(subjectId in nameDraftsRef.current)) return;
-
-        const nextDrafts = { ...nameDraftsRef.current };
-        if (value === null) {
-            delete nextDrafts[subjectId];
-        } else {
-            nextDrafts[subjectId] = value;
-        }
-        nameDraftsRef.current = nextDrafts;
-        setNameDrafts(nextDrafts);
-    };
+    const names = useNameDrafts();
 
     const commitNameDraft = (subject: KlingSubjectDraft) => {
-        const draftValue = nameDraftsRef.current[subject.id];
+        const draftValue = names.takeDraft(subject.id);
         if (draftValue === undefined) return;
 
-        setNameDraft(subject.id, null);
         const trimmed = draftValue.trim();
         if (!trimmed || trimmed === subject.displayName) return;
 
@@ -332,7 +315,7 @@ function KlingSubjectsEditor({
     const removeSubject = (subjectId: string) => {
         const subject = subjects.find((candidate) => candidate.id === subjectId);
         subject?.images.forEach((image) => revokeObjectUrl(image.previewUrl));
-        setNameDraft(subjectId, null);
+        names.dropDraft(subjectId);
         onChange(subjects.filter((candidate) => candidate.id !== subjectId));
     };
 
@@ -390,9 +373,9 @@ function KlingSubjectsEditor({
                                     <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
                                         <input
                                             type="text"
-                                            value={nameDrafts[subject.id] ?? subject.displayName}
+                                            value={names.drafts[subject.id] ?? subject.displayName}
                                             disabled={disabled}
-                                            onChange={(event) => setNameDraft(subject.id, event.target.value)}
+                                            onChange={(event) => names.setDraft(subject.id, event.target.value)}
                                             onBlur={() => commitNameDraft(subject)}
                                             onKeyDown={(event) => {
                                                 if (event.key === 'Enter') {
@@ -402,7 +385,7 @@ function KlingSubjectsEditor({
                                                 }
 
                                                 if (event.key === 'Escape') {
-                                                    setNameDraft(subject.id, null);
+                                                    names.dropDraft(subject.id);
                                                     event.currentTarget.blur();
                                                 }
                                             }}
