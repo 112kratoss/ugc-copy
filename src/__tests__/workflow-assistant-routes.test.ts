@@ -282,7 +282,9 @@ function createWorkflowSupabaseMock() {
           },
           update(values: Record<string, unknown>) {
             const filters: Record<string, unknown> = {};
+            let changed: typeof assistantProposals = [];
             const executeUpdate = async () => {
+              changed = [];
               assistantProposals = assistantProposals.map((proposal) => {
                 const matches =
                   (filters.id === undefined || proposal.id === filters.id) &&
@@ -290,18 +292,21 @@ function createWorkflowSupabaseMock() {
                   (filters.user_id === undefined || proposal.user_id === filters.user_id) &&
                   (filters.status === undefined || proposal.status === filters.status);
 
-                return matches
-                  ? {
-                      ...proposal,
-                      ...values,
-                    }
-                  : proposal;
+                if (!matches) return proposal;
+                const updated = { ...proposal, ...values };
+                changed.push(updated);
+                return updated;
               });
 
               return { error: null };
             };
 
             const query = {
+              select() { return query; },
+              async maybeSingle() {
+                await executeUpdate();
+                return { data: changed[0] ?? null, error: null };
+              },
               eq(column: string, value: unknown) {
                 filters[column] = value;
                 return query;
