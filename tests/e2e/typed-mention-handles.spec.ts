@@ -262,6 +262,16 @@ test.describe('handles typed after "@"', () => {
     await expectTypedHandlesInTheirCard(page, shot, 'Insert video element', { unknown: false, resolve: false });
   });
 
+  test('a Kling O3 shot prompt keeps a typed handle inside its panel', async ({ page }) => {
+    await page.goto('/create-video?model=kling-o3');
+    await page.getByRole('button', { name: 'Multi-Shot', exact: true }).click();
+    const shot = page.getByPlaceholder('Describe shot 1...');
+    await expect(shot).toBeVisible();
+
+    // The same panel under the title it has on Kling O3, where it offers the named subjects.
+    await expectTypedHandlesInTheirCard(page, shot, 'Insert subject', { unknown: false, resolve: false });
+  });
+
   test('the image creator keeps a typed handle inside its prompt card', async ({ page }) => {
     await page.goto('/create-image?model=nano-banana-2');
     const prompt = page.getByPlaceholder('Describe the image you want to create...');

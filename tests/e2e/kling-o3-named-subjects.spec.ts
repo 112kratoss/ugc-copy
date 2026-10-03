@@ -130,6 +130,20 @@ function mentionPanel(page: Page) {
     .locator('xpath=ancestor::div[contains(@class,"rounded-[20px]")][1]');
 }
 
+/** The panel that typing "@" in a shot prompt opens: its title and the subjects to insert. */
+function shotMentionPanel(page: Page) {
+  return page
+    .getByText('Insert subject', { exact: true })
+    .locator('xpath=ancestor::div[contains(@class,"rounded-[20px]")][1]');
+}
+
+/** Switches to shot prompts. A dev server reload puts the page back on its single prompt. */
+async function showShotPrompts(page: Page) {
+  if (await page.getByPlaceholder('Describe shot 1...').count() === 0) {
+    await page.getByRole('button', { name: 'Multi-Shot', exact: true }).click({ timeout: 5_000 });
+  }
+}
+
 test.describe('Kling O3 named subjects', () => {
   test.beforeEach(async ({ context }) => {
     await context.addCookies([
@@ -224,6 +238,59 @@ test.describe('Kling O3 named subjects', () => {
       await suggestion.click();
       await expect(prompt).toHaveValue('A scene with @hero_creator', { timeout: 5_000 });
       await expect(page.getByText(/^Unknown element mention/)).toHaveCount(0);
+    });
+  });
+
+  // The subject card says "mention its @handle in the prompt or shot prompts", but
+  // a shot prompt offered nothing at "@". Its panel opened for Kling 3.0's video
+  // elements only, and the row of handles to click is on the single prompt's card,
+  // which multi-shot mode does not show (2026-10-03).
+  test('offers a subject under a shot prompt at "@" and inserts the handle from it', async ({ page }) => {
+    await page.goto('/create-video?model=kling-o3');
+    const shot = page.getByPlaceholder('Describe shot 1...');
+
+    await withNamedSubject(page, 'Hero creator', async () => {
+      await showShotPrompts(page);
+
+      // The name is "Hero creator", so this is how a creator starts to look for it.
+      await shot.fill('Open on @H', { timeout: 5_000 });
+      const suggestion = shotMentionPanel(page).getByRole('button', { name: /@hero_creator/ });
+      await expect(suggestion).toBeVisible({ timeout: 5_000 });
+
+      // Picking the subject replaces what was typed with the handle as it is written.
+      await suggestion.click();
+      await expect(shot).toHaveValue('Open on @hero_creator', { timeout: 5_000 });
+    });
+  });
+
+  // The page read shot prompts for unknown mentions on Kling 3.0 only. On Kling O3
+  // a mistyped handle got as far as the server, which refuses it, after the run
+  // had uploaded every subject image.
+  test('stops a run at an unknown mention in a shot prompt', async ({ page }) => {
+    // Generate stays disabled without a price, and this suite's server cannot quote one.
+    await page.route('**/api/generation-models/quote', async (route) => {
+      const asked = route.request().postDataJSON() as { modelId: string; catalogRevision: string };
+      await route.fulfill({
+        json: { modelId: asked.modelId, catalogRevision: asked.catalogRevision, normalizedSettings: {}, costCredits: 10 },
+      });
+    });
+    await page.goto('/create-video?model=kling-o3');
+
+    await withNamedSubject(page, 'Hero creator', async () => {
+      // A run needs two images of each subject. With them the subject is saved, so a
+      // dev server reload brings it back as it was, and it needs no second pair.
+      if (await page.getByText(/^[24]\/4 images$/).count() === 0) {
+        await attachSubjectImages(page, ['hero-front.png', 'hero-side.png']);
+      }
+      await showShotPrompts(page);
+
+      // One letter short.
+      await page.getByPlaceholder('Describe shot 1...').fill('Open on @hero_creatr in the rain', { timeout: 5_000 });
+      await page.getByRole('button', { name: 'Generate Video' }).click({ timeout: 5_000 });
+
+      // The words the server refuses the run with. Past this check the run starts
+      // to upload, and the line under the button would be about that instead.
+      await expect(page.getByText('Unknown element mention: @hero_creatr', { exact: true })).toBeVisible({ timeout: 5_000 });
     });
   });
 

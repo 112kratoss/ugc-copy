@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CreateVideoClient from '@/app/create-video/CreateVideoClient';
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import type { PersistedImageElementRecord, PersistedMediaRecord, PersistedSubjectRecord } from '@/lib/persisted-media';
+import type { EnhancerContext } from '@/lib/prompt-enhancer';
 import type { RemixSourceBundle } from '@/lib/remix-source';
 
 const mockPush = vi.fn();
@@ -18,6 +19,10 @@ const modelCatalogState = vi.hoisted(() => ({
   summaries: [] as Array<{ id: string; kind: string; displayName: string; description: string }>,
 }));
 const temporaryUploadMock = vi.hoisted(() => vi.fn());
+// What each Enhance button on the page was last given: its prompt, and what the enhancer is told about the run.
+const enhanceButtonPropsMock = vi.hoisted(() => vi.fn((_props: { prompt: string; context?: EnhancerContext }) => {
+  void _props;
+}));
 const getPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
   async (_key: string): Promise<PersistedImageElementRecord[]> => {
     void _key;
@@ -94,7 +99,10 @@ vi.mock('@/components/AuthProvider', () => ({
 }));
 
 vi.mock('@/components/EnhancePromptButton', () => ({
-  default: () => null,
+  default: (props: { prompt: string; context?: EnhancerContext }) => {
+    enhanceButtonPropsMock(props);
+    return null;
+  },
 }));
 
 vi.mock('@/components/PublicShareButton', () => ({
@@ -254,6 +262,40 @@ function chooseModel(container: HTMLElement, displayName: string) {
   fireEvent.click(screen.getByRole('option', { name: new RegExp(displayName) }));
 }
 
+/** The "@" panel under a shot prompt, or null while it is shut. */
+function shotMentionPanel(shot = 1) {
+  // The panel stands right under the prompt box. While it is shut the duration
+  // row is there instead, and that row has no line of text.
+  const below = screen.getByPlaceholderText(`Describe shot ${shot}...`).nextElementSibling;
+  return below?.querySelector('p') ? below : null;
+}
+
+/** What that panel says and offers: its title, its line of help, and each @handle to pick. */
+function shotMentionPanelState(shot = 1) {
+  const panel = shotMentionPanel(shot);
+  if (!panel) {
+    return null;
+  }
+
+  const [title, help] = Array.from(panel.querySelectorAll('p')).map((line) => line.textContent?.trim() ?? '');
+  return {
+    title,
+    help,
+    offers: Array.from(panel.querySelectorAll('button')).map((button) => (
+      Array.from(button.querySelectorAll('span')).map((span) => span.textContent ?? '').find((text) => text.startsWith('@')) ?? ''
+    )),
+  };
+}
+
+/**
+ * The run panel's line when Generate refuses a prompt for a mention, as one
+ * sentence. A handle in it stands in a box of its own, so the sentence is the
+ * text of the whole line and not of one node.
+ */
+async function unknownMentionLine() {
+  return (await screen.findByText(/^Unknown element mention/)).textContent;
+}
+
 describe('CreateVideoClient Kling video elements', () => {
   const originalCreateObjectURL = URL.createObjectURL;
   const originalRevokeObjectURL = URL.revokeObjectURL;
@@ -265,6 +307,7 @@ describe('CreateVideoClient Kling video elements', () => {
     mockUpdateCredits.mockClear();
     generationCatalogRefetchMock.mockClear();
     quoteRequestMock.mockClear();
+    enhanceButtonPropsMock.mockClear();
     modelCatalogState.missingIds = [];
     modelCatalogState.error = null;
     modelCatalogState.summaries = [];
@@ -348,6 +391,22 @@ describe('CreateVideoClient Kling video elements', () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+
+  /** The run the page posted to start a generation, or undefined when it posted none. */
+  function postedRun() {
+    const call = fetchMock.mock.calls.find(([input, init]) => (
+      String(input).includes('/api/generations') && init?.method === 'POST'
+    ));
+    return call ? JSON.parse(String(call[1]?.body)) : undefined;
+  }
+
+  /** What the Enhance button of one shot was last given. */
+  function shotEnhanceButton(shotIndex: number) {
+    return enhanceButtonPropsMock.mock.calls
+      .map(([props]) => props)
+      .filter((props) => props.context?.shotIndex === shotIndex)
+      .at(-1);
+  }
 
   it('excludes motion generations when resuming a pending video run', async () => {
     render(<CreateVideoClient prefill={{}} />);
@@ -842,6 +901,86 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(screen.getByPlaceholderText('Describe shot 1...')).toHaveValue('Open on @red_jacket in the rain');
     });
 
+    // What a Kling 3.0 shot prompt does with its clips' handles: it offers them at "@",
+    // reads the shots for them before a run, and tells Enhance about them. A Kling O3
+    // shot prompt does the same with its subjects (see "Kling O3 subject handles").
+    it('offers a Kling clip under a shot prompt at "@", and inserts the handle picked', async () => {
+      const view = render(<CreateVideoClient prefill={{}} />);
+      addKlingClip(view.container, 'clip.mp4');
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']));
+
+      fireEvent.click(screen.getByText('Multi-Shot'));
+      const shot = await screen.findByPlaceholderText('Describe shot 1...');
+      expect(shotMentionPanelState()).toBeNull();
+
+      // The clip is called "Video element 1", so this is how a creator starts to look for it.
+      fireEvent.change(shot, { target: { value: 'Open on @V' } });
+
+      expect(shotMentionPanelState()).toEqual({
+        title: 'Insert video element',
+        help: 'Pick a Kling video handle for this shot.',
+        offers: ['@video_element_1'],
+      });
+
+      fireEvent.click(shotMentionPanel()!.querySelector('button')!);
+
+      expect(shot).toHaveValue('Open on @video_element_1');
+      expect(shotMentionPanelState()).toBeNull();
+    });
+
+    it('stops a multi-shot run at a mention no Kling clip has, before the clip is uploaded', async () => {
+      const view = render(<CreateVideoClient prefill={{}} />);
+      addKlingClip(view.container, 'clip.mp4');
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']));
+
+      fireEvent.click(screen.getByText('Multi-Shot'));
+      // One letter short.
+      fireEvent.change(await screen.findByPlaceholderText('Describe shot 1...'), {
+        target: { value: 'Open on @video_elemnt_1 in the rain, slow push in.' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+
+      expect(await unknownMentionLine()).toBe('Unknown element mention: @video_elemnt_1');
+      expect(temporaryUploadMock).not.toHaveBeenCalled();
+      expect(postedRun()).toBeUndefined();
+    });
+
+    it('sends a multi-shot run whose shot mentions its Kling clip', async () => {
+      const view = render(<CreateVideoClient prefill={{}} />);
+      addKlingClip(view.container, 'clip.mp4');
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']));
+
+      fireEvent.click(screen.getByText('Multi-Shot'));
+      fireEvent.change(await screen.findByPlaceholderText('Describe shot 1...'), {
+        target: { value: 'Open on @video_element_1 in the rain, slow push in.' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+
+      await waitFor(() => expect(postedRun()).toBeDefined());
+      const run = postedRun();
+      expect(run.settings).toMatchObject({ isMultiShot: true });
+      expect(run.shots).toEqual([{ prompt: 'Open on @video_element_1 in the rain, slow push in.', duration: 5 }]);
+      expect(
+        run.inputs
+          .filter((input: { slot: string }) => input.slot === 'videoElements')
+          .map((input: { handle: string }) => input.handle)
+      ).toEqual(['@video_element_1']);
+      expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+    });
+
+    it("tells a shot's Enhance button about the Kling clips", async () => {
+      const view = render(<CreateVideoClient prefill={{}} />);
+      addKlingClip(view.container, 'clip.mp4');
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']));
+
+      fireEvent.click(screen.getByText('Multi-Shot'));
+      await screen.findByPlaceholderText('Describe shot 1...');
+
+      expect(shotEnhanceButton(0)?.context?.elementReferences).toEqual([
+        { handle: '@video_element_1', displayName: 'Video element 1' },
+      ]);
+    });
+
     it('accepts the new handle typed by hand straight after a Kling clip is renamed', async () => {
       const view = render(<CreateVideoClient prefill={{}} />);
       addKlingClip(view.container, 'clip.mp4');
@@ -1139,6 +1278,135 @@ describe('CreateVideoClient Kling video elements', () => {
         ['@hero_creator', 'Hero creator'],
         ['@hero_creator', 'Hero creator'],
       ]);
+    });
+
+    /**
+     * A shot prompt takes a subject's handle the way the single prompt does. The
+     * subject card says "mention its @handle in the prompt or shot prompts", but
+     * in multi-shot mode nothing offered the handle: the "@" panel under a shot
+     * opened for Kling 3.0's video elements only, and the row of handles to click
+     * belongs to the single prompt's card. A mistyped handle went unnoticed too.
+     * The page read shot prompts for unknown mentions on Kling 3.0 only, so a Kling
+     * O3 run uploaded every subject image before the server refused it. And the
+     * Enhance button of a shot was not told the subjects, so the enhancer had no
+     * handle to keep (2026-10-03).
+     */
+    describe('in a shot prompt', () => {
+      async function renderShotsWithSubjects(...names: string[]) {
+        const view = await renderWithSubjects(...names);
+        fireEvent.click(screen.getByText('Multi-Shot'));
+        await screen.findByPlaceholderText('Describe shot 1...');
+        return view;
+      }
+
+      function shotBox(shot = 1) {
+        return screen.getByPlaceholderText(`Describe shot ${shot}...`);
+      }
+
+      /** Gives the first subject the two images a run needs. */
+      async function attachSubjectImages(container: HTMLElement) {
+        const picker = subjectCard(subjectFields(container)[0])?.querySelector<HTMLInputElement>('input[type="file"]');
+        expect(picker).not.toBeNull();
+        fireEvent.change(picker!, {
+          target: {
+            files: [
+              new File(['front'], 'hero-front.png', { type: 'image/png' }),
+              new File(['side'], 'hero-side.png', { type: 'image/png' }),
+            ],
+          },
+        });
+        await screen.findByText('2/4 images');
+      }
+
+      it('offers the subjects under a shot prompt at "@", and finds one by its name', async () => {
+        await renderShotsWithSubjects('Hero creator', 'Serum bottle');
+        expect(shotMentionPanelState()).toBeNull();
+
+        fireEvent.change(shotBox(), { target: { value: 'Open on @' } });
+
+        expect(shotMentionPanelState()).toEqual({
+          title: 'Insert subject',
+          help: 'Pick a named subject for this shot.',
+          offers: ['@hero_creator', '@serum_bottle'],
+        });
+
+        // The name is "Hero creator", so this is how a creator starts to look for it.
+        fireEvent.change(shotBox(), { target: { value: 'Open on @H' } });
+
+        expect(shotMentionPanelState()?.offers).toEqual(['@hero_creator']);
+      });
+
+      it('inserts the handle picked in place of what was typed', async () => {
+        await renderShotsWithSubjects('Hero creator');
+
+        fireEvent.change(shotBox(), { target: { value: 'Open on @H' } });
+        expect(shotMentionPanelState()?.offers).toEqual(['@hero_creator']);
+
+        fireEvent.click(shotMentionPanel()!.querySelector('button')!);
+
+        expect(shotBox()).toHaveValue('Open on @hero_creator');
+        expect(shotMentionPanelState()).toBeNull();
+      });
+
+      it('says so when no subject matches what was typed', async () => {
+        await renderShotsWithSubjects('Hero creator');
+
+        fireEvent.change(shotBox(), { target: { value: 'Open on @z' } });
+
+        expect(shotMentionPanelState()).toEqual({
+          title: 'Insert subject',
+          help: 'No matching subjects yet.',
+          offers: [],
+        });
+      });
+
+      it('stops a run at a mention no subject has, before any subject image is uploaded', async () => {
+        const view = await renderShotsWithSubjects('Hero creator');
+        await attachSubjectImages(view.container);
+
+        fireEvent.change(shotBox(), { target: { value: 'Open on @hero_creator in the rain, slow push in.' } });
+        fireEvent.click(screen.getByText('Add New Shot'));
+        // One letter short, in the second shot.
+        fireEvent.change(await screen.findByPlaceholderText('Describe shot 2...'), {
+          target: { value: 'Cut closer while @hero_creatr turns to the camera.' },
+        });
+        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+
+        // The words the server refuses the run with, said before anything is sent.
+        expect(await unknownMentionLine()).toBe('Unknown element mention: @hero_creatr');
+        expect(temporaryUploadMock).not.toHaveBeenCalled();
+        expect(postedRun()).toBeUndefined();
+      });
+
+      it('sends a run whose shots mention its subjects', async () => {
+        const view = await renderShotsWithSubjects('Hero creator');
+        await attachSubjectImages(view.container);
+
+        fireEvent.change(shotBox(), { target: { value: 'Open on @hero_creator in the rain, slow push in.' } });
+        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+
+        await waitFor(() => expect(postedRun()).toBeDefined());
+        const run = postedRun();
+        expect(run.settings).toMatchObject({ isMultiShot: true, referenceMode: 'subjects' });
+        expect(run.shots).toEqual([{ prompt: 'Open on @hero_creator in the rain, slow push in.', duration: 5 }]);
+        expect(
+          run.inputs
+            .filter((input: { slot: string }) => input.slot === 'subjectImages')
+            .map((input: { handle: string }) => input.handle)
+        ).toEqual(['@hero_creator', '@hero_creator']);
+        expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+      });
+
+      it("tells a shot's Enhance button about the subjects, so the enhancer keeps their handles", async () => {
+        await renderShotsWithSubjects('Hero creator');
+
+        fireEvent.change(shotBox(), { target: { value: 'Open on @hero_creator in the rain' } });
+
+        expect(shotEnhanceButton(0)?.prompt).toBe('Open on @hero_creator in the rain');
+        expect(shotEnhanceButton(0)?.context?.elementReferences).toEqual([
+          { handle: '@hero_creator', displayName: 'Hero creator' },
+        ]);
+      });
     });
   });
 });
