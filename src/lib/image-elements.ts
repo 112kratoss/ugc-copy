@@ -59,19 +59,39 @@ export function buildElementHandle(
   return nextHandle;
 }
 
-export function reconcileElementDescriptors<T extends { id: string; displayName: string }>(
+/**
+ * Gives each reference element on a creator card its @handle.
+ *
+ * A handle follows its element's name: it is built from the name when the
+ * element is added, and again when it is renamed (the caller passes the renamed
+ * element without a handle). Nothing else changes it, because the prompt
+ * mentions it: not another element being added, renamed or removed, and not a
+ * reload or a remix, which pass back the handles they saved.
+ *
+ * The handles being kept are set aside first, so a new handle never takes one
+ * that another element holds.
+ */
+export function assignElementHandles<T extends { displayName?: string | null; handle?: string | null }>(
   elements: T[]
 ): Array<T & { displayName: string; handle: string }> {
   const usedHandles = new Set<string>();
+  const keptHandles = elements.map((element) => {
+    const handle = element.handle;
+    if (typeof handle !== 'string' || !isValidElementHandle(handle) || usedHandles.has(handle)) {
+      return null;
+    }
+
+    usedHandles.add(handle);
+    return handle;
+  });
 
   return elements.map((element, index) => {
-    const displayName = normalizeElementDisplayName(element.displayName, index + 1);
-    const handle = buildElementHandle(displayName, usedHandles, index + 1);
+    const displayName = normalizeElementDisplayName(element.displayName ?? undefined, index + 1);
 
     return {
       ...element,
       displayName,
-      handle,
+      handle: keptHandles[index] ?? buildElementHandle(displayName, usedHandles, index + 1),
     };
   });
 }

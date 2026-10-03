@@ -43,15 +43,13 @@ import {
     setPersistedImageElementRecords,
 } from '@/lib/persisted-media';
 import {
-    buildElementHandle,
+    assignElementHandles,
     createElementHandleReplacementMap,
     createElementId,
     extractPromptHandles,
     findUnknownPromptHandles,
     getMentionQueryAtCaret,
     insertHandleIntoPrompt,
-    isValidElementHandle,
-    normalizeElementDisplayName,
     replacePromptHandles,
     type ImageElementDescriptor,
     type PersistedImageElementDraft,
@@ -147,29 +145,17 @@ async function clearLegacyPersistedImageElements() {
 }
 
 function hydrateImageElements(seeds: ImageElementSeed[]): ImageElementDraft[] {
-    const usedHandles = new Set<string>();
-
-    return seeds.map((seed, index) => {
-        const displayName = normalizeElementDisplayName(seed.displayName, index + 1);
-        const preferredHandle =
-            typeof seed.handle === 'string' && isValidElementHandle(seed.handle) && !usedHandles.has(seed.handle)
-                ? seed.handle
-                : buildElementHandle(displayName, usedHandles, index + 1);
-
-        usedHandles.add(preferredHandle);
-
-        return {
-            id: seed.id ?? createElementId(),
-            displayName,
-            handle: preferredHandle,
-            file: seed.file ?? null,
-            previewUrl: seed.previewUrl,
-            providerUrl: seed.providerUrl ?? null,
-            storagePath: seed.storagePath ?? null,
-            source: seed.source ?? 'upload',
-            sourceGenerationId: seed.sourceGenerationId ?? null,
-        };
-    });
+    return assignElementHandles(seeds).map((seed) => ({
+        id: seed.id ?? createElementId(),
+        displayName: seed.displayName,
+        handle: seed.handle,
+        file: seed.file ?? null,
+        previewUrl: seed.previewUrl,
+        providerUrl: seed.providerUrl ?? null,
+        storagePath: seed.storagePath ?? null,
+        source: seed.source ?? 'upload',
+        sourceGenerationId: seed.sourceGenerationId ?? null,
+    }));
 }
 
 export interface CreateImagePrefill {
@@ -304,6 +290,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             .map((element) => ({
                 id: element.id,
                 displayName: element.displayName,
+                handle: element.handle,
                 file: element.file as File,
             }));
 
@@ -480,6 +467,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                     clampedRecords.map((element) => ({
                         id: element.id,
                         displayName: element.displayName,
+                        handle: element.handle,
                         file: element.file,
                         previewUrl: URL.createObjectURL(element.file),
                         source: 'upload',
@@ -617,7 +605,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         const nextElements = hydrateImageElements(
             currentElements.map((element) => (
                 element.id === elementId
-                    ? { ...element, displayName: nextDisplayName }
+                    // Without its handle, the element takes the handle of its new name.
+                    ? { ...element, displayName: nextDisplayName, handle: null }
                     : element
             ))
         );

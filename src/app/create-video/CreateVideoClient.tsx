@@ -69,16 +69,13 @@ import {
     waitForNextGenerationStatusPoll,
 } from '@/lib/generation-status-client';
 import {
-    buildElementHandle,
+    assignElementHandles,
     createElementHandleReplacementMap,
     createElementId,
     extractPromptHandles,
     findUnknownPromptHandles,
     getMentionQueryAtCaret,
     insertHandleIntoPrompt,
-    isValidElementHandle,
-    normalizeElementDisplayName,
-    reconcileElementDescriptors,
     replacePromptHandles,
     type ImageElementDescriptor,
 } from '@/lib/image-elements';
@@ -188,6 +185,7 @@ type VideoElementDraft = ImageElementDescriptor & {
 type VideoElementSeed = {
     id?: string;
     displayName?: string;
+    handle?: string | null;
     file: File | null;
     previewUrl: string;
     providerUrl?: string | null;
@@ -456,9 +454,10 @@ type PromptMentionCandidate = {
 };
 
 function hydrateVideoElements(seeds: VideoElementSeed[]): VideoElementDraft[] {
-    const baseElements = seeds.map((seed, index) => ({
+    return assignElementHandles(seeds).map((seed) => ({
         id: seed.id ?? createElementId(),
-        displayName: normalizeElementDisplayName(seed.displayName, index + 1),
+        displayName: seed.displayName,
+        handle: seed.handle,
         file: seed.file,
         previewUrl: seed.previewUrl,
         providerUrl: seed.providerUrl ?? null,
@@ -471,36 +470,6 @@ function hydrateVideoElements(seeds: VideoElementSeed[]): VideoElementDraft[] {
             ...seed.seedanceAsset,
         }),
     }));
-
-    const reconciled = reconcileElementDescriptors(baseElements.map((element) => ({
-        id: element.id,
-        displayName: element.displayName,
-    })));
-    const byId = new Map(baseElements.map((element) => [element.id, element]));
-
-    return reconciled.map((element) => {
-        const existing = byId.get(element.id);
-        if (!existing) {
-            return {
-                id: element.id,
-                displayName: element.displayName,
-                handle: element.handle,
-                file: null,
-                previewUrl: '',
-                providerUrl: null,
-                storagePath: null,
-                source: 'upload' as const,
-                sourceGenerationId: null,
-                seedanceAsset: createSeedanceAssetMetadata({ assetType: 'Image' }),
-            };
-        }
-
-        return {
-            ...existing,
-            displayName: element.displayName,
-            handle: element.handle,
-        };
-    });
 }
 
 function hydrateSeedanceMediaReferences(
@@ -526,37 +495,18 @@ function hydrateSeedanceMediaReferences(
 }
 
 function hydrateKlingVideoElements(seeds: KlingVideoElementSeed[]): KlingVideoElementDraft[] {
-    const usedHandles = new Set<string>();
-
-    return seeds.map((seed, index) => {
-        const displayName = normalizeElementDisplayName(
-            typeof seed.displayName === 'string' ? seed.displayName : undefined,
-            index + 1
-        );
-        const normalizedHandle = typeof seed.handle === 'string' && isValidElementHandle(seed.handle)
-            ? seed.handle
-            : null;
-        const handle = normalizedHandle && !usedHandles.has(normalizedHandle)
-            ? normalizedHandle
-            : buildElementHandle(displayName, usedHandles, index + 1);
-
-        if (normalizedHandle && handle === normalizedHandle) {
-            usedHandles.add(handle);
-        }
-
-        return {
-            id: typeof seed.id === 'string' && seed.id.trim() ? seed.id : createElementId(),
-            displayName,
-            handle,
-            file: seed.file,
-            previewUrl: seed.previewUrl,
-            providerUrl: seed.providerUrl ?? null,
-            storagePath: seed.storagePath ?? null,
-            source: seed.source ?? 'upload',
-            sourceGenerationId: seed.sourceGenerationId ?? null,
-            durationSeconds: typeof seed.durationSeconds === 'number' ? seed.durationSeconds : null,
-        };
-    });
+    return assignElementHandles(seeds).map((seed) => ({
+        id: typeof seed.id === 'string' && seed.id.trim() ? seed.id : createElementId(),
+        displayName: seed.displayName,
+        handle: seed.handle,
+        file: seed.file,
+        previewUrl: seed.previewUrl,
+        providerUrl: seed.providerUrl ?? null,
+        storagePath: seed.storagePath ?? null,
+        source: seed.source ?? 'upload',
+        sourceGenerationId: seed.sourceGenerationId ?? null,
+        durationSeconds: typeof seed.durationSeconds === 'number' ? seed.durationSeconds : null,
+    }));
 }
 
 function isSupportedKlingVideoFile(file: File): boolean {
@@ -819,6 +769,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             .map((element) => ({
                 id: element.id,
                 displayName: element.displayName,
+                handle: element.handle,
                 file: element.file as File,
             }));
 
@@ -873,6 +824,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 .map((element) => ({
                     id: element.id,
                     displayName: element.displayName,
+                    handle: element.handle,
                     durationSeconds: element.durationSeconds ?? null,
                     file: element.file as File,
                 }))
@@ -1641,6 +1593,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     commitElements(hydrateVideoElements(savedElements.map((element) => ({
                         id: element.id,
                         displayName: element.displayName,
+                        handle: element.handle,
                         file: element.file,
                         previewUrl: URL.createObjectURL(element.file),
                         source: 'upload',
@@ -1682,6 +1635,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                        savedKlingVideoElements.map((element) => ({
 	                            id: element.id,
 	                            displayName: element.displayName,
+	                            handle: element.handle,
 	                            durationSeconds: element.durationSeconds ?? null,
 	                            file: element.file,
 	                            previewUrl: URL.createObjectURL(element.file),
@@ -2066,7 +2020,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         const nextElements = hydrateVideoElements(
             currentElements.map((element) => (
                 element.id === elementId
-                    ? { ...element, displayName: nextDisplayName }
+                    // Without its handle, the element takes the handle of its new name.
+                    ? { ...element, displayName: nextDisplayName, handle: null }
                     : element
             ))
         );
@@ -2091,7 +2046,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         const nextElements = hydrateKlingVideoElements(
             currentElements.map((element) => (
                 element.id === elementId
-                    ? { ...element, displayName: nextDisplayName }
+                    // Without its handle, the element takes the handle of its new name.
+                    ? { ...element, displayName: nextDisplayName, handle: null }
                     : element
             ))
         );

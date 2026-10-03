@@ -22,12 +22,20 @@ interface StoredMediaFile {
 export interface PersistedImageElementRecord {
   id: string;
   displayName: string;
+  /**
+   * The @handle the prompt mentions this element by, saved so a reload shows
+   * the same one. Built again from the name it could differ, when two elements
+   * share a name. Null on a record saved before handles were kept.
+   */
+  handle?: string | null;
   file: File;
 }
 
 export interface PersistedMediaRecord {
   id: string;
   displayName: string;
+  /** As on an image element. Only a Kling video element has one. */
+  handle?: string | null;
   file: File;
   durationSeconds: number | null;
 }
@@ -46,12 +54,14 @@ export interface PersistedSubjectRecord {
 interface StoredImageElementRecord {
   id: string;
   displayName: string;
+  handle?: string | null;
   file: StoredMediaFile | File | Blob;
 }
 
 interface StoredMediaRecord {
   id: string;
   displayName: string;
+  handle?: string | null;
   durationSeconds?: number | null;
   file: StoredMediaFile | File | Blob;
 }
@@ -197,7 +207,7 @@ export async function getPersistedImageElementRecords(key: string): Promise<Pers
   if (!Array.isArray(value)) return [];
 
   return value
-    .map((item, index) => {
+    .map((item, index): PersistedImageElementRecord | null => {
       if (!isStoredImageElementRecord(item)) {
         return null;
       }
@@ -210,6 +220,7 @@ export async function getPersistedImageElementRecords(key: string): Promise<Pers
       return {
         id: item.id,
         displayName: item.displayName,
+        handle: typeof item.handle === 'string' ? item.handle : null,
         file: restoredFile,
       } satisfies PersistedImageElementRecord;
     })
@@ -230,6 +241,7 @@ export async function setPersistedImageElementRecords(
     elements.map((element) => ({
       id: element.id,
       displayName: element.displayName,
+      handle: element.handle ?? null,
       file: toStoredMediaFile(element.file),
     }))
   );
@@ -300,7 +312,7 @@ export async function getPersistedMediaRecords(key: string): Promise<PersistedMe
   if (!Array.isArray(value)) return [];
 
   return value
-    .map((item, index) => {
+    .map((item, index): PersistedMediaRecord | null => {
       if (!isStoredMediaRecord(item)) {
         return null;
       }
@@ -313,6 +325,7 @@ export async function getPersistedMediaRecords(key: string): Promise<PersistedMe
       return {
         id: item.id,
         displayName: item.displayName,
+        handle: typeof item.handle === 'string' ? item.handle : null,
         durationSeconds: typeof item.durationSeconds === 'number' ? item.durationSeconds : null,
         file: restoredFile,
       } satisfies PersistedMediaRecord;
@@ -334,6 +347,7 @@ export async function setPersistedMediaRecords(
     records.map((record) => ({
       id: record.id,
       displayName: record.displayName,
+      handle: record.handle ?? null,
       durationSeconds: typeof record.durationSeconds === 'number' ? record.durationSeconds : null,
       file: toStoredMediaFile(record.file),
     }))
