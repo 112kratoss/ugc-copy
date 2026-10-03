@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applyPromptEnhancementSafeguards,
+  applyPromptEnhancementSafeguardsWithMetadata,
   buildEnhancerSystemPrompt,
   buildPromptEnhancementArtifacts,
   buildPromptStrategyGuidance,
@@ -436,5 +437,98 @@ describe('prompt enhancer strategy', () => {
     expect(guidance).toContain('If primaryModel is veo-3.1');
     expect(guidance).toContain('creator-led commercial realism');
     expect(guidance).toContain('one scene with explicit subject, action, context, camera, and ambience');
+  });
+});
+
+/**
+ * The safeguards read a prompt's mentions with a pattern of their own,
+ * /@[\p{L}\p{N}_-]+/gu, and not the one the server reads a prompt with
+ * (extractPromptHandles in src/lib/image-elements.ts). Theirs ran a handle on
+ * through a hyphen and through the letters of any script, took the end of an
+ * address for a mention, and counted a handle once for each time it was written.
+ * So "@product-style" and "@productを" did not mention "@product" to them, though
+ * they do to a generation, and "studio@product.example" did (2026-10-03).
+ */
+describe('the mentions the enhancement safeguards read', () => {
+  const product = { elementReferences: [{ handle: '@product', displayName: 'Product' }] };
+  const lockedProduct = { ...product, elementEnhancementMode: 'append-only' as const };
+  const restoring = (enhanced: string, handles: string) =>
+    `${enhanced} Preserve the named reference elements ${handles} exactly as referenced.`;
+  const codes = (result: { appliedSafeguards: Array<{ code: string }> }) =>
+    result.appliedSafeguards.map((safeguard) => safeguard.code);
+
+  it('restores a handle the enhancement dropped, where the prompt joined a word to it with a hyphen', () => {
+    const enhanced = 'A premium still with stylised lighting on a marble vanity.';
+
+    expect(applyPromptEnhancementSafeguards('Show @product-style lighting on a marble vanity', enhanced, product))
+      .toBe(restoring(enhanced, '@product'));
+  });
+
+  it('restores a handle the enhancement dropped, where another script follows it without a space', () => {
+    // Japanese sets the particle straight after the word: "put @product on the marble vanity".
+    const enhanced = '大理石の洗面台に置かれた上質な商品写真。';
+
+    expect(applyPromptEnhancementSafeguards('@productを大理石の洗面台に置く', enhanced, product))
+      .toBe(restoring(enhanced, '@product'));
+  });
+
+  it.each([
+    'A @product-inspired still on a marble vanity.',
+    '机の上の@productを柔らかい光で撮る。',
+  ])('adds nothing where the enhanced prompt kept the handle and joined a word to it: %s', (enhanced) => {
+    expect(applyPromptEnhancementSafeguardsWithMetadata('Place @product on a marble vanity', enhanced, product))
+      .toEqual({ enhancedPrompt: enhanced, appliedSafeguards: [] });
+  });
+
+  it('reads no mention in an address, so it writes none the author did not', () => {
+    const enhanced = 'A clean studio poster with booking details.';
+
+    expect(applyPromptEnhancementSafeguardsWithMetadata(
+      'A studio poster, mail studio@product.example for bookings',
+      enhanced,
+      product
+    )).toEqual({ enhancedPrompt: enhanced, appliedSafeguards: [] });
+  });
+
+  it('names a restored handle once, however often the prompt mentioned it', () => {
+    const enhanced = 'A premium still on a marble vanity, lit from the left.';
+
+    expect(applyPromptEnhancementSafeguards(
+      'Place @product on a marble vanity, then light @product from the left',
+      enhanced,
+      product
+    )).toBe(restoring(enhanced, '@product'));
+  });
+
+  describe('in a prompt whose named elements are locked', () => {
+    it('reverts for the handle that was removed, where the prompt joined a word to it', () => {
+      const result = applyPromptEnhancementSafeguardsWithMetadata(
+        'Show @product-style lighting',
+        'A premium still with stylised lighting.',
+        lockedProduct
+      );
+
+      expect(result.enhancedPrompt).toBe('Show @product-style lighting');
+      expect(codes(result)).toEqual(['append_only_handle_preserved']);
+    });
+
+    it('reverts a prompt that holds an address for its changed opening, not for a handle it never held', () => {
+      const result = applyPromptEnhancementSafeguardsWithMetadata(
+        'Poster, mail studio@product.example',
+        'A clean studio poster with booking details.',
+        lockedProduct
+      );
+
+      expect(result.enhancedPrompt).toBe('Poster, mail studio@product.example');
+      expect(codes(result)).toEqual(['append_only_opening_preserved']);
+    });
+
+    it('keeps what was added where the added words run on from the handle', () => {
+      // The opening is intact and a generation still reads "@product" here.
+      const enhanced = 'Soft daylight on @product-centred framing with a crisp finish.';
+
+      expect(applyPromptEnhancementSafeguardsWithMetadata('Soft daylight on @product', enhanced, lockedProduct))
+        .toEqual({ enhancedPrompt: enhanced, appliedSafeguards: [] });
+    });
   });
 });

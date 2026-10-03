@@ -533,4 +533,38 @@ describe('/api/enhance-prompt route', () => {
     const data = await response.json();
     expect(data.enhancedPrompt).toBe(originalPrompt);
   });
+
+  it('restores a named handle the compiled enhancement dropped, where the prompt joined a word to it with a hyphen', async () => {
+    // What the mobile creator and the web video creator send: named references
+    // and no locked mode. The plan the provider returns names no handle, so the
+    // compiled prompt has none, and "@serum-style" has to be read as "@serum".
+    const { POST } = await import('@/app/api/enhance-prompt/route');
+    const response = await POST(
+      new Request('http://localhost/api/enhance-prompt', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+        },
+        body: JSON.stringify({
+          medium: 'image',
+          selectedModel: 'nano-banana-pro',
+          prompt: 'Show @serum-style packaging in a bright studio',
+          context: {
+            referenceImageCount: 1,
+            elementReferences: [{ handle: '@serum', displayName: 'Serum bottle' }],
+          },
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.enhancedPrompt).toContain('a premium product poster');
+    expect(data.enhancedPrompt).toMatch(/ Preserve the named reference elements @serum exactly as referenced\.$/);
+    expect(data.appliedSafeguards).toContainEqual({
+      code: 'restored_named_handles',
+      message: 'Restored missing named reference handles after enhancement.',
+    });
+  });
 });

@@ -102,6 +102,7 @@ import {
     type GenerationTiming,
 } from '@/lib/generation-timing';
 import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
+import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
 import {
     inspectPromptQuality,
@@ -661,8 +662,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [klingVideoElements, setKlingVideoElements] = useState<KlingVideoElementDraft[]>([]);
     const [klingSubjects, setKlingSubjects] = useState<KlingSubjectDraft[]>([]);
     const klingSubjectsRef = useRef<KlingSubjectDraft[]>([]);
-    const [elementNameDrafts, setElementNameDrafts] = useState<Record<string, string>>({});
-    const [klingVideoNameDrafts, setKlingVideoNameDrafts] = useState<Record<string, string>>({});
+    const elementNames = useNameDrafts();
+    const klingVideoNames = useNameDrafts();
     const [startImageFile, setStartImageFile] = useState<File | null>(null);
     const [startImageUrl, setStartImageUrl] = useState<string | null>(null);
     const [startFrameDescriptor, setStartFrameDescriptor] = useState<RemixMediaAssetDescriptor | null>(null);
@@ -2007,15 +2008,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             currentElements.filter((element) => element.id !== elementId)
         );
 
-        setElementNameDrafts((prev) => {
-            if (!(elementId in prev)) {
-                return prev;
-            }
-
-            const nextDrafts = { ...prev };
-            delete nextDrafts[elementId];
-            return nextDrafts;
-        });
+        elementNames.dropDraft(elementId);
         commitElements(nextElements);
         await persistVideoElements(nextElements);
         await persistSeedanceAssets(nextElements, referenceVideosRef.current, referenceAudiosRef.current);
@@ -2044,15 +2037,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         const nextElements = hydrateKlingVideoElements(
             currentElements.filter((element) => element.id !== elementId)
         );
-        setKlingVideoNameDrafts((prev) => {
-            if (!(elementId in prev)) {
-                return prev;
-            }
-
-            const nextDrafts = { ...prev };
-            delete nextDrafts[elementId];
-            return nextDrafts;
-        });
+        klingVideoNames.dropDraft(elementId);
         commitKlingVideoElements(nextElements);
         await persistKlingVideoElements(nextElements);
     };
@@ -2179,30 +2164,18 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     };
 
     const handleElementDraftChange = (elementId: string, nextValue: string) => {
-        setElementNameDrafts((prev) => ({
-            ...prev,
-            [elementId]: nextValue,
-        }));
+        elementNames.setDraft(elementId, nextValue);
     };
 
     const handleKlingVideoDraftChange = (elementId: string, nextValue: string) => {
-        setKlingVideoNameDrafts((prev) => ({
-            ...prev,
-            [elementId]: nextValue,
-        }));
+        klingVideoNames.setDraft(elementId, nextValue);
     };
 
     const commitElementDraft = async (elementId: string) => {
-        const draftValue = elementNameDrafts[elementId];
+        const draftValue = elementNames.takeDraft(elementId);
         if (draftValue === undefined) return;
 
         const trimmed = draftValue.trim();
-        setElementNameDrafts((prev) => {
-            const nextDrafts = { ...prev };
-            delete nextDrafts[elementId];
-            return nextDrafts;
-        });
-
         if (!trimmed) return;
 
         const currentElement = elementsRef.current.find((element) => element.id === elementId);
@@ -2214,16 +2187,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     };
 
     const commitKlingVideoDraft = async (elementId: string) => {
-        const draftValue = klingVideoNameDrafts[elementId];
+        const draftValue = klingVideoNames.takeDraft(elementId);
         if (draftValue === undefined) return;
 
         const trimmed = draftValue.trim();
-        setKlingVideoNameDrafts((prev) => {
-            const nextDrafts = { ...prev };
-            delete nextDrafts[elementId];
-            return nextDrafts;
-        });
-
         if (!trimmed) return;
 
         const currentElement = klingVideoElementsRef.current.find((element) => element.id === elementId);
@@ -3856,7 +3823,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                        </label>
 	                                                        <input
 	                                                            type="text"
-	                                                            value={klingVideoNameDrafts[element.id] ?? element.displayName}
+	                                                            value={klingVideoNames.drafts[element.id] ?? element.displayName}
 	                                                            onChange={(event) => handleKlingVideoDraftChange(element.id, event.target.value)}
 	                                                            onBlur={() => void commitKlingVideoDraft(element.id)}
 	                                                            onKeyDown={(event) => {
@@ -3867,15 +3834,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                                }
 
 	                                                                if (event.key === 'Escape') {
-	                                                                    setKlingVideoNameDrafts((prev) => {
-	                                                                        if (!(element.id in prev)) {
-	                                                                            return prev;
-	                                                                        }
-
-	                                                                        const nextDrafts = { ...prev };
-	                                                                        delete nextDrafts[element.id];
-	                                                                        return nextDrafts;
-	                                                                    });
+	                                                                    klingVideoNames.dropDraft(element.id);
 	                                                                    event.currentTarget.blur();
 	                                                                }
 	                                                            }}
@@ -4132,7 +4091,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                         </label>
                                                         <input
                                                             type="text"
-                                                            value={elementNameDrafts[element.id] ?? element.displayName}
+                                                            value={elementNames.drafts[element.id] ?? element.displayName}
                                                             onChange={(event) => handleElementDraftChange(element.id, event.target.value)}
                                                             onBlur={() => void commitElementDraft(element.id)}
                                                             onKeyDown={(event) => {
@@ -4143,15 +4102,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                                 }
 
                                                                 if (event.key === 'Escape') {
-                                                                    setElementNameDrafts((prev) => {
-                                                                        if (!(element.id in prev)) {
-                                                                            return prev;
-                                                                        }
-
-                                                                        const nextDrafts = { ...prev };
-                                                                        delete nextDrafts[element.id];
-                                                                        return nextDrafts;
-                                                                    });
+                                                                    elementNames.dropDraft(element.id);
                                                                     event.currentTarget.blur();
                                                                 }
                                                             }}
