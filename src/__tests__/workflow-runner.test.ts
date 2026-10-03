@@ -52,10 +52,6 @@ const startVideoGenerationMock = vi.fn(async (..._args: unknown[]): Promise<Star
   };
 });
 const syncGenerationStatusesMock = vi.fn(async () => undefined);
-const enqueueWorkflowRunStepJobMock = vi.fn(async (..._args: unknown[]) => {
-  void _args;
-  return 'approval-job-1';
-});
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => createServiceClientMock(),
@@ -82,9 +78,6 @@ vi.mock('@/lib/generation-model-catalog-store', () => ({
     quoteGenerationModelMock(input),
 }));
 
-vi.mock('@/lib/workflow-run-jobs', () => ({
-  enqueueWorkflowRunStepJob: (...args: unknown[]) => enqueueWorkflowRunStepJobMock(...args),
-}));
 
 type RunnerTestState = {
   run: {
@@ -293,6 +286,14 @@ function createAwaitingApprovalState(): RunnerTestState & {
 
 function createSupabaseMock(state: RunnerTestState) {
   const mock = {
+    rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+      if (name !== 'approve_workflow_checkpoint') throw new Error(`Unexpected RPC: ${name}`);
+      const step = state.steps.find(candidate => candidate.id === args.p_step_id)!;
+      step.status = 'succeeded';
+      step.output_snapshot = { ...step.output_snapshot, outputUrl: step.output_snapshot?.pendingOutputUrl };
+      state.run.status = 'processing';
+      return { data: 'approved', error: null };
+    }),
     from(table: string) {
       if (table === 'workflow_canvas_runs') {
         return {
@@ -1224,9 +1225,9 @@ describe('workflow-runner recovery', () => {
       }),
     });
     expect(startVideoGenerationMock).not.toHaveBeenCalled();
-    expect(enqueueWorkflowRunStepJobMock).toHaveBeenCalledWith(expect.anything(), {
-      runId: state.run.id,
-      nodeId: `approval:${state.approvalNodeId}`,
+    expect(supabase.rpc).toHaveBeenCalledWith('approve_workflow_checkpoint', {
+      p_canvas_id: state.run.canvas_id, p_run_id: state.run.id,
+      p_step_id: 'step-approval', p_user_id: state.run.user_id,
     });
     expect(run.steps?.find((step) => step.node_id === state.videoNodeId)).toMatchObject({
       status: 'queued',
@@ -1249,7 +1250,7 @@ describe('workflow-runner recovery', () => {
     })).rejects.toThrow('Workflow run not found.');
 
     expect(state.steps.find((step) => step.id === 'step-approval')).toEqual(stepBefore);
-    expect(enqueueWorkflowRunStepJobMock).not.toHaveBeenCalled();
+    expect(supabase.rpc).not.toHaveBeenCalled();
   });
 
   it('dedupes concurrent recovery polls for the same run', async () => {

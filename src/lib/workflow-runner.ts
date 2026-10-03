@@ -1,8 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createHash } from 'node:crypto';
 import { createServiceClient, resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
-import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
-import { enqueueWorkflowRunStepJob } from '@/lib/workflow-run-jobs';
+import { logBackendWarning } from '@/lib/backend-logger';
 import {
   startImageGeneration,
   startCatalogGeneration,
@@ -1521,7 +1520,7 @@ export async function approveWorkflowRunStep(params: {
   // Authorize with the request-scoped client before crossing into the
   // service-role mutation boundary. The service client is never used to
   // discover which run a caller owns.
-  const { run, graph, steps } = await loadWorkflowRunState({
+  const { graph, steps } = await loadWorkflowRunState({
     supabase: ownerSupabase,
     canvasId,
     runId,
@@ -1548,33 +1547,23 @@ export async function approveWorkflowRunStep(params: {
     throw new WorkflowRunApprovalError('The approval preview is no longer available.', 409);
   }
 
-  const approvedAt = new Date().toISOString();
-  await updateRunStep(mutationSupabase, run.id, step.id, {
-    status: 'succeeded',
-    output_snapshot: {
-      ...outputSnapshot,
-      outputUrl: pendingOutputUrl,
-      approvedAt,
-    },
-    error_message: null,
-    finished_at: approvedAt,
+  // The owner-scoped read above authorizes the action. The internal RPC checks
+  // the current gate again under locks and commits its run and ticket together.
+  const approval = await mutationSupabase.rpc('approve_workflow_checkpoint', {
+    p_canvas_id: canvasId,
+    p_run_id: runId,
+    p_step_id: stepId,
+    p_user_id: userId,
   });
-  await updateWorkflowRun(mutationSupabase, run, {
-    status: 'processing',
-    finished_at: null,
-  });
-
-  try {
-    await enqueueWorkflowRunStepJob(mutationSupabase, {
-      runId,
-      // This is a run ticket, not an execution selector. Namespacing prevents
-      // collision if the approval gate itself was the original start node.
-      nodeId: `approval:${step.node_id}`,
-    });
-  } catch (error) {
-    // No provider work starts here. The stalled-run adopter is the durable
-    // fallback if enqueue fails after the approval update commits.
-    logBackendError('workflow_approval_enqueue_failed', { error, runId, stepId });
+  if (approval.error) throw approval.error;
+  if (approval.data !== 'approved') {
+    if (approval.data === 'RUN_NOT_FOUND' || approval.data === 'STEP_NOT_FOUND') {
+      throw new WorkflowRunApprovalError('Approval step not found.', 404);
+    }
+    if (approval.data === 'NOT_APPROVAL_STEP') {
+      throw new WorkflowRunApprovalError('The selected step is not an approval checkpoint.', 400);
+    }
+    throw new WorkflowRunApprovalError('This approval step is no longer available for review.', 409);
   }
 
   return getWorkflowRunDetails({

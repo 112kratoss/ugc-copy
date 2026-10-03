@@ -6,31 +6,39 @@ Updated 2026-10-03 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/canvas-lifecycle-audit-7e`, incorporating main `f6a3d3b12f4af0ac7325e1661cda7d894c35855c` (completion/recovery PR #292); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/canvas-approval-audit-7f`, incorporating main `6df13e5d8673f9996b8d94dffc854d96ee8d3e57` (#307); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-Current branch: `codex/canvas-lifecycle-audit-7e`, incorporating main f6a3d3b1.
-7B publication fix is released: exact-main Quality 37093085015 and release
-37093737713 passed; independent live build/feed/admin/webhook checks pass on
-34e8387f. Read `backend-section-07-publication-release-2026-10-03.md`.
+Current branch: `codex/canvas-approval-audit-7f`, incorporating main 6df13e5d.
+7E PR #293 deployed as f1ec34dc: exact-main Quality 37098042595 and standard
+release 37098645999 passed; release completed 10:38:17 IST October 3.
+7F PR #294 passed updated-main Quality 37098113173 on 02dccd2b, but main later
+advanced through #295–307, including canvas busy/catalog and template termination
+fixes. Those changes are now incorporated cleanly. The combined local actual SQL
+suite passes 14 cases; focused/type/lint checks are being finalized before fresh
+CI. Do not reuse the older green check to certify the newer combined tree.
 
-7C/D PR #292 passed final PR Quality 37093549114 (all four jobs: 6,670 web,
-2,913 mobile, 24 browser, 1,960 SQL, 146 DB cases with two harness skips).
-It merged as f6a3d3b12f4af0ac7325e1661cda7d894c35855c at 09:29:05 IST.
-No mobile release was active. Exact-main Quality 37095001982 is running;
-standard release and independent live checks remain pending.
+The earlier #292 completion/worker-recovery release remains verified as f6a3d3b1:
+exact-main 37095001982, release 37095645751, independent public checks. See
+`backend-section-07-completion-recovery-release-2026-10-03.md`.
 
-7E now reproduces a canvas persistence failure: after provider acceptance,
-a rejected step-link write marks the run failed while the generation keeps its
-8-credit hold. The candidate separates persistence from execution error handling,
-so the durable job retries and reconnects the same generation. Seven actual SQL
-cases pass, including a committed write with lost reply, full real-node execution,
-partial refunds, backpressure and pure GET. Existing focused 65 tests pass.
-Read `backend-section-07-canvas-persistence-2026-10-03.md`. Runtime/test/CI changes
-are local; finish types/lint, review, then PR and standard release. No new whole
-obligation is closed: ledger remains 22 passed, 27 untested, one failed, three external.
+The 7F function commits checkpoint approval, run continuation and queue wake in
+one transaction. Actual SQL reproduces the old half-approved strand; rollback,
+concurrent approval, owner/role restrictions and lost acknowledgement pass.
+Read `backend-section-07-atomic-approval-2026-10-03.md`. No historical rows were
+rewritten. Read-only production aggregate SQL at 04:23:54 UTC found zero current
+rows matching either narrow canvas-failure signature. Private query/readback are
+saved. A later private callback-order probe passes processing/succeeded/failed
+callbacks arriving before link-write recovery, with no duplicate charge.
+
+No mobile store release is currently active; check again before every merge.
+PR #294 targets main. Complete current-head CI, exact-main Quality and the normal
+production release, then independent live checks. Broader WORKFLOW-02/03/04 are
+still open. Ledger: 22 passed, 26 untested, two failed, three external; the unreleased
+approval defect keeps WORKFLOW-02 failed. Existing local receipt/Section 1 edits
+and private evidence are untouched.
 
 The preceding checkpoint follows.
 

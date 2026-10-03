@@ -1,8 +1,12 @@
 # Backend audit completion checklist
 
-Updated 2026-10-03. Current independently checked production: `24194f1d232af37fca43628bcfd07c74928c8296` (contains Section 6R); its later release run failed protected build-ID verification despite subsequent public-boundary checks passing.
-Section 6N deployed as `149b9edc`; later product/notification changes are incorporated
-in the audit checkout, not automatically credited as full audit coverage.
+Updated 2026-10-03. Current independently checked production:
+`f6a3d3b12f4af0ac7325e1661cda7d894c35855c` (Section 7C/D). Exact-main Quality,
+standard release, protected health and independent public checks pass; see the
+[completion/recovery release](backend-section-07-completion-recovery-release-2026-10-03.md).
+New canvas persistence/approval fixes (#293/#294) are not yet deployed. The
+mobile store release completed successfully; #293 is merged and awaiting the
+standard exact-main release pipeline, while #294 is in updated-main CI.
 Surface inventory baseline remains `5934bd7d`; Section 6L changed no surfaces.
 
 This is the closure ledger for the audit, replacing section numbers as a progress
@@ -11,8 +15,11 @@ unequal effort and risk. Do not turn their pass count into a percentage of backe
 safety or an ETA. New findings attach to these obligations; changes in scope must
 be recorded explicitly instead of silently adding another lettered batch.
 
-Current ledger: **53 obligations — 22 passed, 27 untested, 1 failed, 3 external**.
+Current ledger: **53 obligations — 22 passed, 26 untested, 2 failed, 3 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
+WORKFLOW-02 moved from untested to failed after the reproduced 7E/7F defects; no
+new obligation was added. Releasing these fixes will not by itself complete its
+remaining behavioral matrix.
 
 Status meanings: **passed** has evidence for the stated scope; **failed** has a
 reproduction and remains open; **untested** lacks complete evidence for this
@@ -97,9 +104,9 @@ coverage includes shared helpers that do not end in `service.ts`.
 | GEN-04 | Genuine provider/edge delivery, replay and lost-response behavior | external | Provider-controlled fixture/event evidence remains absent; no paid generation as an incidental probe |
 | GEN-05 | Remaining catalog/quote/admission/model verification and generation lifecycle behaviors | untested | Review the 19 assigned API routes and shared quota/cost paths; reuse existing certificates where applicable |
 | WORKFLOW-01 | Canvas/child/run-step ownership and start admission fixes | passed | [Workflow ownership](backend-section-02-workflow-release-2026-09-27.md), [RPC admission](backend-section-03-rpc-release-2026-09-27.md) |
-| WORKFLOW-02 | Execute, partially fail, restart, retry, approve and cancel runs | untested | Real DB/worker transitions across canvas and template runners |
-| WORKFLOW-03 | Billing conservation and idempotency across retry/cancel/recovery | untested | Couple step/run transitions to actual credit ledger fixtures |
-| WORKFLOW-04 | Template publication, sharing/import, assistant proposal application and input ownership | untested | Review remaining methods across 31 assigned routes with cross-user and stale-version cases |
+| WORKFLOW-02 | Execute, partially fail, restart, retry, approve and cancel runs | failed | [7E](backend-section-07-canvas-persistence-2026-10-03.md) reproduces accepted-task loss from a failed link write; [7F](backend-section-07-atomic-approval-2026-10-03.md) reproduces stranded partial approval. Candidate fixes pass actual SQL locally but remain unreleased. Template completion/worker death evidence is in [7C/D](backend-section-07-completion-recovery-release-2026-10-03.md); broader canvas recovery remains open |
+| WORKFLOW-03 | Billing conservation and idempotency across retry/cancel/recovery | untested | 7A/7C/D template SQL evidence and 7E/7F real canvas image/video holds, refunds, retries and duplicate settlement are recorded; remaining interruption and provider/Storage cases stay open |
+| WORKFLOW-04 | Template publication, sharing/import, assistant proposal application and input ownership | untested | [7B publication fix released](backend-section-07-publication-release-2026-10-03.md); [36-method inventory](backend-section-07-method-matrix-2026-10-03.md) records remaining actual Storage, cross-user, stale-version and authoring cases |
 | MEDIA-01 | Cleanup retry/concurrency and allocation-failure source cancellation | passed | [6H release](backend-section-06-staging-cleanup-release-2026-10-01.md) |
 | MEDIA-02 | Published dead-owner cleanup and inherited reader protection | passed | [6J release](backend-section-06-staging-locks-release-2026-10-01.md); no claim about legacy scratch |
 | MEDIA-03 | Sequential crash reclamation under a bounded filesystem | passed | [6K probe](backend-section-06-disk-pressure-2026-10-01.md): five killed owners on 2 MiB tmpfs followed by successful staging |
@@ -138,10 +145,9 @@ provider obligations. Passing an inventory check cannot close a behavioral row.
    reclamations at 128 and inspects past preserved entries while retaining all
    lock/marker authority checks. Enumeration is linear rather than time-bounded;
    metadata accumulation and latency remain MEDIA-07/OPS-03 obligations.
-2. Resolve MEDIA-06/07 by defining capacity and ownership across all scratch
-   writers. Section 6M verifies four disk-failure recovery cases without a code
-   change; shared admission remains open. The 6K concurrent probe rejects a
-   plain free-space preflight as a reservation mechanism.
+2. MEDIA-06 passes its cooperating-writer scope under the 6R release. MEDIA-07
+   still requires verified legacy environment retirement after the 6S metadata
+   fix; unknown legacy files must not be deleted speculatively.
 3. Continue WORKFLOW-02/03/04, then SOCIAL and JOB gates, while finishing MAP-02
    and reconciling earlier domain evidence. Keep provider/operator rows visible.
 4. Finish OPS-02/03 and the remaining auth/commerce follow-ups before sign-off.
