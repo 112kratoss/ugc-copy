@@ -19,7 +19,7 @@ import {
   TemplateRunStepper,
   TemplateSlotUpload,
 } from '@/components/templates/TemplatePrimitives';
-import { shouldPollTemplateRun, type MediaTemplate, type TemplateRunStep } from '@/components/templates/types';
+import { isStepCutShort, shouldPollTemplateRun, type MediaTemplate, type TemplateRunStep } from '@/components/templates/types';
 
 const template: MediaTemplate = {
   id: 'template-1',
@@ -136,7 +136,10 @@ describe('template web primitives', () => {
 
     render(<TemplateRunStepCard step={step} availableCredits={20} onApprove={vi.fn()} onRetry={onRetry} />);
 
+    expect(screen.getByText('Needs attention')).toBeInTheDocument();
     expect(screen.getByText('No result was created')).toBeInTheDocument();
+    // True while the run can continue: its uploads are deleted when it ends.
+    expect(screen.getByText('Your uploads and completed steps are still saved.')).toBeInTheDocument();
     expect(screen.getByText('The generation provider timed out.')).toBeInTheDocument();
     expect(screen.getByText(/Earlier completed steps are safe/)).toBeInTheDocument();
     expect(screen.getByText('8 credits')).toBeInTheDocument();
@@ -187,17 +190,17 @@ describe('template web primitives', () => {
     expect(screen.getByRole('link', { name: 'Add 5 credits to retry' })).toHaveAttribute('href', '/pricing');
   });
 
-  it('does not offer retry on a terminal run and sends the creator back to the canvas', () => {
+  it('keeps the restart on a step that cannot be retried while the run can continue', () => {
     const step: TemplateRunStep = {
-      id: '77777777-7777-4777-8777-777777777777',
+      id: '78787878-7878-4878-8878-787878787878',
       kind: 'generation',
       mediaKind: 'image',
       status: 'failed',
       label: 'Final image',
       outputUrl: null,
-      errorMessage: 'This generation step could not be started.',
-      failureCode: null,
-      canRetry: true,
+      errorMessage: 'This template was published against a model catalog that is no longer available.',
+      failureCode: 'provider_rejected',
+      canRetry: false,
       estimatedRetryCredits: 8,
     };
 
@@ -205,7 +208,7 @@ describe('template web primitives', () => {
       <TemplateRunStepCard
         step={step}
         availableCredits={20}
-        retryEnabled={false}
+        runStatus="needs_attention"
         restartHref="/create-workflow?template=template-1"
         restartLabel="Back to workflow canvas"
         onApprove={vi.fn()}
@@ -213,13 +216,151 @@ describe('template web primitives', () => {
       />
     );
 
+    expect(screen.getByText('Needs attention')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Retry step/ })).not.toBeInTheDocument();
-    expect(screen.getByText(/This run has ended/)).toBeInTheDocument();
     expect(screen.getByText('This step cannot be retried')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to workflow canvas' })).toHaveAttribute(
       'href',
       '/create-workflow?template=template-1'
     );
+  });
+
+  describe('a step of a run that has ended', () => {
+    const endedStep = (overrides: Partial<TemplateRunStep> = {}): TemplateRunStep => ({
+      id: '77777777-7777-4777-8777-777777777777',
+      kind: 'generation',
+      mediaKind: 'image',
+      status: 'cancelled',
+      label: 'Final image',
+      outputUrl: null,
+      errorMessage: null,
+      failureCode: null,
+      canRetry: false,
+      estimatedRetryCredits: 8,
+      ...overrides,
+    });
+    // The page hands every card the way to a new run, whether the run has ended or not.
+    const renderCard = (step: TemplateRunStep, runStatus: 'cancelled' | 'failed') => render(
+      <TemplateRunStepCard
+        step={step}
+        availableCredits={20}
+        runStatus={runStatus}
+        restartHref="/templates/rider-transformation/create"
+        onApprove={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+    const expectNothingToActOn = () => {
+      expect(screen.queryByRole('button')).not.toBeInTheDocument();
+      expect(screen.queryByRole('link')).not.toBeInTheDocument();
+      expect(screen.queryByText('Needs attention')).not.toBeInTheDocument();
+      expect(screen.queryByText(/still saved/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Retry this step/)).not.toBeInTheDocument();
+      expect(screen.queryByText('This step cannot be retried')).not.toBeInTheDocument();
+      expect(screen.getByText(/This run has ended/)).toBeInTheDocument();
+    };
+
+    it('says a step the person cancelled before it ran was not finished, and raises no alert', () => {
+      renderCard(endedStep(), 'cancelled');
+
+      expect(screen.getByText('Not finished')).toBeInTheDocument();
+      expect(screen.getByText('No result was created')).toBeInTheDocument();
+      expect(screen.getByText('This generation did not finish')).toBeInTheDocument();
+      expect(screen.getByText('The run was cancelled before this step finished.')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expectNothingToActOn();
+    });
+
+    it('keeps the note of a step we stopped, and says the run stopped when there is none', () => {
+      const note = 'This step was still generating when the run stopped, so its credits stay spent.';
+      const { unmount } = renderCard(endedStep({ errorMessage: note }), 'failed');
+
+      expect(screen.getByText('Not finished')).toBeInTheDocument();
+      expect(screen.getByText('This generation did not finish')).toBeInTheDocument();
+      expect(screen.getByText(note)).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expectNothingToActOn();
+      unmount();
+
+      // A step the server did not get to cancel keeps the status it had.
+      renderCard(endedStep({ status: 'queued' }), 'failed');
+      expect(screen.getByText('Not finished')).toBeInTheDocument();
+      expect(screen.getByText('The run stopped before this step finished.')).toBeInTheDocument();
+      expectNothingToActOn();
+    });
+
+    it('does not call a review step a generation', () => {
+      const review = endedStep({ kind: 'approval', label: 'Review portrait' });
+      const { container, unmount } = renderCard(review, 'cancelled');
+
+      expect(screen.getByText('Not finished')).toBeInTheDocument();
+      expect(screen.getByText('Nothing to review')).toBeInTheDocument();
+      expect(screen.getByText('This review was not completed')).toBeInTheDocument();
+      expect(screen.queryByText('No result was created')).not.toBeInTheDocument();
+      expect(container).not.toHaveTextContent(/generation/i);
+      expectNothingToActOn();
+      unmount();
+
+      // The picture that was waiting for the person's review is still shown.
+      renderCard({ ...review, status: 'awaiting_approval', outputUrl: 'https://cdn.example.com/portrait.jpg', canRetry: true }, 'cancelled');
+      expect(screen.getByRole('img', { name: 'Review portrait' })).toHaveAttribute('src', 'https://cdn.example.com/portrait.jpg');
+      expect(screen.getByText('Not finished')).toBeInTheDocument();
+      expect(screen.getByText('This review was not completed')).toBeInTheDocument();
+      expect(screen.queryByText('Nothing to review')).not.toBeInTheDocument();
+      expectNothingToActOn();
+    });
+
+    it('says a step that had failed by itself failed, with its own message as an alert', () => {
+      const failed = endedStep({
+        status: 'failed',
+        errorMessage: 'This generation step could not be started.',
+        failureCode: 'provider_unavailable',
+        canRetry: true,
+      });
+      const { unmount } = renderCard(failed, 'cancelled');
+
+      expect(screen.getByText('Failed')).toBeInTheDocument();
+      expect(screen.queryByText('Not finished')).not.toBeInTheDocument();
+      expect(screen.getByText('No result was created')).toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent('This generation did not finish');
+      expect(screen.getByRole('alert')).toHaveTextContent('This generation step could not be started.');
+      expectNothingToActOn();
+      unmount();
+
+      // With no message of its own it still does not suggest a retry.
+      const withoutMessage = renderCard({ ...failed, errorMessage: null }, 'failed');
+      expect(screen.getByText('Failed')).toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent('The generation service did not return a usable result.');
+      expectNothingToActOn();
+      withoutMessage.unmount();
+
+      // A review step that failed is not called a generation either.
+      const { container } = renderCard({
+        ...failed,
+        kind: 'approval',
+        label: 'Review portrait',
+        errorMessage: 'This step is missing a required workflow input.',
+      }, 'failed');
+      expect(screen.getByText('Failed')).toBeInTheDocument();
+      expect(screen.getByText('Nothing to review')).toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent('This review was not completed');
+      expect(container).not.toHaveTextContent(/generation/i);
+      expectNothingToActOn();
+    });
+
+    it('leaves the restart of an upload that must be replaced to the page', () => {
+      renderCard(endedStep({
+        status: 'failed',
+        errorMessage: 'The generation model could not read one of the uploads. Start a new run with a clear JPEG, PNG, or WebP image at least 256×256 px.',
+        failureCode: 'invalid_input_media',
+        canRetry: true,
+      }), 'failed');
+
+      expect(screen.getByText('Failed')).toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent('could not read one of the uploads');
+      expect(screen.queryByText('Use a new input to continue')).not.toBeInTheDocument();
+      expectNothingToActOn();
+    });
   });
 
   it('does not offer a paid retry when the input itself must be replaced', () => {
@@ -272,6 +413,41 @@ describe('template web primitives', () => {
       'aria-valuetext',
       '2 of 3 steps complete. Current step: Animate'
     );
+  });
+
+  it('draws the progress of a run that has ended without a current step, and only a failure in red', () => {
+    const step = (id: string, status: string, label: string): TemplateRunStep => ({
+      id, kind: 'generation', mediaKind: 'image', status, label, outputUrl: null, errorMessage: null, failureCode: null, canRetry: false, estimatedRetryCredits: null,
+    });
+    const steps = [
+      step('step-1', 'succeeded', 'Portrait'),
+      step('step-2', 'failed', 'Scene'),
+      step('step-3', 'cancelled', 'Animate'),
+      // A step the server did not get to cancel.
+      step('step-4', 'queued', 'Final cut'),
+    ];
+    const { unmount } = render(<TemplateRunStepper status="cancelled" steps={steps} />);
+
+    expect(screen.getByText('Cancelled')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'Template progress' })).toHaveAttribute('aria-valuetext', '2 of 5 steps complete');
+    expect(screen.getByTitle('Portrait')).toHaveClass('bg-emerald-400');
+    expect(screen.getByTitle('Scene')).toHaveClass('bg-rose-400');
+    for (const label of ['Animate', 'Final cut']) {
+      expect(screen.getByTitle(label), label).toHaveClass('bg-white/10');
+      expect(screen.getByTitle(label), label).not.toHaveClass('bg-rose-400');
+      expect(screen.getByTitle(label), label).not.toHaveClass('bg-sky-400');
+    }
+    unmount();
+
+    // While the run can continue, the same failure is where it stands.
+    render(<TemplateRunStepper status="needs_attention" steps={steps} />);
+    expect(screen.getByText('Current: Scene')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'Template progress' })).toHaveAttribute(
+      'aria-valuetext',
+      '2 of 5 steps complete. Current step: Scene'
+    );
+    expect(screen.getByTitle('Scene')).toHaveClass('bg-rose-400');
+    expect(screen.getByTitle('Final cut')).toHaveClass('bg-sky-400');
   });
 
   it('turns technical action failures into actionable recovery copy', () => {
@@ -400,6 +576,35 @@ describe('template web normalization', () => {
     expect(shouldPollTemplateRun(makeRun('processing'))).toBe(true);
     expect(shouldPollTemplateRun(makeRun('needs_attention'))).toBe(false);
     expect(shouldPollTemplateRun(makeRun('failed'))).toBe(false);
+  });
+
+  it('counts a step as cut short only when its run has ended and it neither finished nor failed', () => {
+    const step = (status: string): TemplateRunStep => ({
+      id: '56565656-5656-4565-8565-565656565656',
+      kind: 'generation',
+      mediaKind: 'image',
+      status,
+      label: 'Final image',
+      outputUrl: null,
+      errorMessage: null,
+      failureCode: null,
+      canRetry: false,
+      estimatedRetryCredits: null,
+    });
+
+    for (const runStatus of ['cancelled', 'failed'] as const) {
+      // `cancelled` is what the server stores; the rest are steps it did not get to.
+      for (const status of ['cancelled', 'queued', 'processing', 'awaiting_approval']) {
+        expect(isStepCutShort(runStatus, step(status)), `${status} step of a ${runStatus} run`).toBe(true);
+      }
+      for (const status of ['failed', 'error', 'succeeded', 'approved']) {
+        expect(isStepCutShort(runStatus, step(status)), `${status} step of a ${runStatus} run`).toBe(false);
+      }
+    }
+    for (const runStatus of ['queued', 'processing', 'awaiting_approval', 'needs_attention', undefined] as const) {
+      expect(isStepCutShort(runStatus, step('cancelled')), `cancelled step of a ${runStatus} run`).toBe(false);
+      expect(isStepCutShort(runStatus, step('queued')), `queued step of a ${runStatus} run`).toBe(false);
+    }
   });
 });
 

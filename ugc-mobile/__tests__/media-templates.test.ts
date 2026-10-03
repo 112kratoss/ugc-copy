@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -16,8 +19,12 @@ import {
   templateRunStepNeedsReplacementInput,
   templateRunProgress,
   templateRunStageLabel,
+  templateRunStepOutcome,
+  templateRunStepPlaceholderLabel,
+  templateRunStepStatusLabel,
   totalTemplateEstimate,
 } from '../lib/media-templates';
+import type { TemplateRunStatus, TemplateRunStep } from '../lib/types';
 
 const templateFixture = {
   id: 'template-1',
@@ -166,6 +173,100 @@ describe('media template view model', () => {
     expect(canRetryTemplateRunStep('needs_attention', run.steps[2])).toBe(false);
     expect(canRetryTemplateRunStep('failed', { ...run.steps[2], failureCode: 'provider_busy' })).toBe(false);
     expect(canRetryTemplateRunStep('needs_attention', { ...run.steps[2], failureCode: 'provider_busy' })).toBe(true);
+  });
+
+  describe('a step of a run that has ended', () => {
+    const step = (overrides: Partial<TemplateRunStep> = {}): TemplateRunStep => ({
+      id: 'step',
+      kind: 'generation',
+      mediaKind: 'image',
+      status: 'cancelled',
+      label: 'Final image',
+      outputUrl: null,
+      errorMessage: null,
+      failureCode: null,
+      canRetry: false,
+      estimatedRetryCredits: 12,
+      ...overrides,
+    });
+    const describeStep = (runStatus: TemplateRunStatus, value: TemplateRunStep) => ({
+      outcome: templateRunStepOutcome(runStatus, value),
+      pill: templateRunStepStatusLabel(runStatus, value),
+      box: templateRunStepPlaceholderLabel(runStatus, value),
+    });
+
+    it.each(['cancelled', 'failed'] as const)('reads as not finished when a %s run cut it short', (runStatus) => {
+      // What the server stores for a step that was queued, was waiting for the
+      // person's review, or was still generating when the run ended.
+      expect(describeStep(runStatus, step())).toEqual({ outcome: 'not_finished', pill: 'Not finished', box: 'No output' });
+      expect(describeStep(runStatus, step({ kind: 'approval', label: 'Review final image' })))
+        .toEqual({ outcome: 'not_finished', pill: 'Not finished', box: 'No output' });
+      expect(describeStep(runStatus, step({ errorMessage: 'This step was not finished because the run stopped.' })).pill)
+        .toBe('Not finished');
+    });
+
+    it('reads as failed when it had failed by itself before the run ended', () => {
+      const failed = step({ status: 'failed', errorMessage: 'The generation provider is temporarily unavailable.', failureCode: 'provider_unavailable', canRetry: true });
+
+      expect(describeStep('cancelled', failed)).toEqual({ outcome: 'failed', pill: 'Failed', box: 'No output' });
+      expect(describeStep('failed', { ...failed, status: 'error' })).toEqual({ outcome: 'failed', pill: 'Failed', box: 'No output' });
+      // The retry it could have had is gone with the run.
+      expect(canRetryTemplateRunStep('cancelled', failed)).toBe(false);
+    });
+
+    it('never promises a retry, a review or more waiting', () => {
+      // Steps the server did not get to cancel keep the status they had.
+      const leftovers = [
+        step({ status: 'queued' }),
+        step({ status: 'processing' }),
+        step({ kind: 'approval', status: 'awaiting_approval', outputUrl: '/generated/scene.jpg', canRetry: true }),
+        step({ status: 'failed', failureCode: 'invalid_input_media', canRetry: true }),
+        step({ status: 'failed', failureCode: 'service_misconfigured', canRetry: true }),
+      ];
+      for (const runStatus of ['cancelled', 'failed'] as const) {
+        for (const leftover of leftovers) {
+          const described = describeStep(runStatus, leftover);
+          expect(['failed', 'not_finished']).toContain(described.outcome);
+          expect(['Failed', 'Not finished']).toContain(described.pill);
+          expect(described.box).toBe('No output');
+        }
+      }
+    });
+
+    it('keeps the wording of a finished step', () => {
+      expect(describeStep('cancelled', step({ status: 'succeeded', outputUrl: '/generated/scene.jpg' })).pill).toBe('Complete');
+      expect(describeStep('failed', step({ kind: 'approval', status: 'succeeded', outputUrl: '/generated/scene.jpg' })).pill).toBe('Approved');
+      expect(describeStep('succeeded', step({ status: 'succeeded' })).outcome).toBe('complete');
+    });
+
+    it('is where the run screen takes its words from', () => {
+      // A source assertion, as active-generations-invalidation.test.ts makes of
+      // the same screen: rendering it would boot the native chain for two strings.
+      const screen = readFileSync(path.resolve(__dirname, '../components/media-template-screens.tsx'), 'utf8');
+
+      expect(screen).toContain('templateRunStepStatusLabel(runStatus, step)');
+      expect(screen).toContain('templateRunStepPlaceholderLabel(runStatus, step)');
+      for (const wording of ['Needs attention', 'Not finished', 'This step can be retried', 'Waiting for output', 'No output']) {
+        expect(screen, wording).not.toContain(wording);
+      }
+      // Whether a step can be approved is the outcome's answer too: asking the
+      // step alone would offer it on a run that has ended.
+      expect(screen).toContain("outcome === 'review'");
+      expect(screen).not.toContain('isTemplateRunStepAwaitingApproval');
+    });
+
+    it('leaves a run that can still continue as it was', () => {
+      const failed = step({ status: 'failed', failureCode: 'provider_unavailable', canRetry: true });
+
+      expect(describeStep('needs_attention', failed)).toEqual({ outcome: 'needs_attention', pill: 'Needs attention', box: 'This step can be retried' });
+      expect(describeStep('needs_attention', { ...failed, failureCode: 'invalid_input_media' }).box).toBe('This upload needs to be replaced');
+      expect(describeStep('needs_attention', { ...failed, failureCode: 'service_misconfigured' }).box).toBe('Service setup must be completed first');
+      expect(describeStep('awaiting_approval', step({ kind: 'approval', status: 'awaiting_approval', outputUrl: '/generated/scene.jpg' })))
+        .toMatchObject({ outcome: 'review', pill: 'Review' });
+      expect(describeStep('processing', step({ status: 'processing' }))).toEqual({ outcome: 'in_progress', pill: 'processing', box: 'Waiting for output' });
+      expect(describeStep('queued', step({ status: 'queued' }))).toEqual({ outcome: 'in_progress', pill: 'queued', box: 'Waiting for output' });
+      expect(describeStep('processing', step({ kind: 'approval', status: 'awaiting_approval' })).box).toBe('Waiting for output');
+    });
   });
 
   it('creates bounded action-specific idempotency keys', () => {

@@ -112,6 +112,17 @@ export function isStepFailed(step: TemplateRunStep): boolean {
   return ['failed', 'error', 'cancelled'].includes(step.status.toLowerCase());
 }
 
+/**
+ * A step its run ended before it could finish. The server stores such a step
+ * as `cancelled`, which `isStepFailed` counts as a failure; it did not fail,
+ * and nothing on a run that has ended can be approved, retried or waited for.
+ * A step that failed by itself keeps `failed` and its own message.
+ */
+export function isStepCutShort(runStatus: TemplateRunStatus | undefined, step: TemplateRunStep): boolean {
+  if (runStatus === undefined || !isRunTerminal(runStatus) || isStepSuccessful(step)) return false;
+  return !['failed', 'error'].includes(step.status.toLowerCase());
+}
+
 export function isStepAwaitingApproval(step: TemplateRunStep): boolean {
   return step.kind === 'approval'
     && ['awaiting_approval', 'waiting_for_approval', 'ready', 'pending_approval'].includes(step.status.toLowerCase());
