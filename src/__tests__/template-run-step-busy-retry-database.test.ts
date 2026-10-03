@@ -526,6 +526,30 @@ describe.skipIf(!connectionString || crashWorker)('template run step starts the 
     expect(await generations()).toEqual([]);
   });
 
+  it('closes no step of a run that could not be cancelled, and cancels it when asked again', async () => {
+    const stepsByStatus = async () => (await admin.query(
+      'select status, count(*)::int as steps from public.template_run_steps where run_id=$1 group by status order by status',
+      [runId],
+    )).rows;
+    // The database answers the write that cancels the run with an error,
+    // which PostgREST hands back and does not throw.
+    const refusingRunWrites = databaseClient(worker, [], async (table) => {
+      if (table === 'template_runs') throw new Error('canceling statement due to statement timeout');
+    });
+
+    await expect(cancelTemplateRun(refusingRunWrites, runId, userId))
+      .rejects.toMatchObject({ message: 'canceling statement due to statement timeout' });
+
+    // Closing its steps would leave the run in line with nothing left to run.
+    expect((await admin.query('select status from public.template_runs where id=$1', [runId])).rows[0].status).toBe('queued');
+    expect(await stepsByStatus()).toEqual([{ status: 'queued', steps: 5 }]);
+
+    expect((await cancelTemplateRun(client, runId, userId)).status).toBe('cancelled');
+    expect(await stepsByStatus()).toEqual([{ status: 'cancelled', steps: 5 }]);
+    expect(await credits()).toBe(STARTING_CREDITS);
+    expect(await generations()).toEqual([]);
+  });
+
   async function finishImagesAndAwaitApproval() {
     providerHasRoom();
     await tick();

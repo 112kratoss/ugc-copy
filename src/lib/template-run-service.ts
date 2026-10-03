@@ -1452,7 +1452,10 @@ async function advanceTemplateRun(client: SupabaseClient, runId: string, userId:
   return loadRunState(client, runId, userId);
 }
 
-/** Deletes a finished run's uploads. False when storage did not let them go, and the run keeps their paths. */
+/**
+ * Deletes a finished run's uploads. False when storage did not let them go,
+ * or the run could not be told they are gone: the run keeps their paths.
+ */
 async function removeTemplateRunInputs(
   client: SupabaseClient,
   run: Pick<TemplateRunRow, 'id' | 'user_id' | 'input_storage_paths'>,
@@ -1462,14 +1465,18 @@ async function removeTemplateRunInputs(
   if (paths.length) {
     const { error } = await client.storage.from(TEMPLATE_INPUT_BUCKET).remove(paths);
     if (error) {
-      logBackendError('failed_to_clean_up_template_inputs', { error: error });
+      logBackendError('failed_to_clean_up_template_inputs', { runId: run.id, error: error });
       return false;
     }
   }
-  await client.from('template_runs').update({
+  const { error: recordError } = await client.from('template_runs').update({
     input_storage_paths: {},
     inputs_deleted_at: new Date().toISOString(),
   }).eq('id', run.id);
+  if (recordError) {
+    logBackendError('failed_to_clean_up_template_inputs', { runId: run.id, error: recordError });
+    return false;
+  }
   return true;
 }
 
@@ -1748,22 +1755,29 @@ export async function cancelTemplateRun(client: SupabaseClient, runId: string, u
       state = await loadRunState(client, runId, userId);
     }
     const now = new Date().toISOString();
-    await client.from('template_runs').update({
+    // A run that could not be cancelled keeps its steps: closing them would
+    // leave it in progress with nothing left to run. The person can ask again.
+    const { error: cancelError } = await client.from('template_runs').update({
       status: 'cancelled',
       completed_at: now,
       error_message: null,
     }).eq('id', state.run.id).eq('user_id', userId);
-    await client.from('template_run_steps').update({
+    if (cancelError) throw cancelError;
+    // From here the run is cancelled whatever becomes of its steps, so a
+    // write the database refuses is logged and the person is still answered.
+    const { error: waitingError } = await client.from('template_run_steps').update({
       status: 'cancelled',
       finished_at: now,
     }).eq('run_id', state.run.id).in('status', ['queued', 'awaiting_approval']);
+    if (waitingError) logBackendError('template_run_cancel_cleanup_failed', { runId, error: waitingError });
     // There is no provider-side cancellation, so in-flight work keeps running
     // and keeps its charge — say so instead of pretending it stopped.
-    await client.from('template_run_steps').update({
+    const { error: generatingError } = await client.from('template_run_steps').update({
       status: 'cancelled',
       finished_at: now,
       error_message: TEMPLATE_CANCELLED_MID_GENERATION_MESSAGE,
     }).eq('run_id', state.run.id).eq('status', 'processing');
+    if (generatingError) logBackendError('template_run_cancel_cleanup_failed', { runId, error: generatingError });
   }
   const cancelledState = await loadRunState(client, runId, userId);
   return toRunDto(client, await cleanupTemplateRunInputs(client, cancelledState));
@@ -1813,18 +1827,22 @@ export async function abandonTemplateRun(params: {
       loadRunGenerations(client, runId),
     ]);
     await refreshGenerationSteps(client, { latestSteps: latestStepsByNode(steps), generations });
-    await client.from('template_run_steps').update({
+    // A write the database refuses is answered with an error, not thrown. It
+    // is logged here, and the rest of the tidying still runs.
+    const { error: waitingError } = await client.from('template_run_steps').update({
       status: 'cancelled',
       finished_at: now,
       error_message: TEMPLATE_ABANDONED_STEP_MESSAGE,
     }).eq('run_id', runId).in('status', ['queued', 'awaiting_approval']);
+    if (waitingError) logBackendError('template_run_abandon_cleanup_failed', { runId, error: waitingError });
     // What is still processing is with the provider, which cannot be told to
     // stop, and keeps its charge.
-    await client.from('template_run_steps').update({
+    const { error: generatingError } = await client.from('template_run_steps').update({
       status: 'cancelled',
       finished_at: now,
       error_message: TEMPLATE_ABANDONED_MID_GENERATION_MESSAGE,
     }).eq('run_id', runId).eq('status', 'processing');
+    if (generatingError) logBackendError('template_run_abandon_cleanup_failed', { runId, error: generatingError });
     await removeTemplateRunInputs(
       client,
       ended as unknown as Pick<TemplateRunRow, 'id' | 'user_id' | 'input_storage_paths'>,
