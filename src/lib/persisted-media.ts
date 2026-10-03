@@ -48,6 +48,8 @@ export interface PersistedMediaRecord {
 export interface PersistedSubjectRecord {
   id: string;
   displayName: string;
+  /** As on an image element. Null on a subject saved before handles were kept. */
+  handle?: string | null;
   images: Array<{ id: string; file: File }>;
 }
 
@@ -69,6 +71,7 @@ interface StoredMediaRecord {
 interface StoredSubjectRecord {
   id: string;
   displayName: string;
+  handle?: string | null;
   images: Array<{ id: string; file: StoredMediaFile | File | Blob }>;
 }
 
@@ -77,7 +80,6 @@ export const PERSISTED_MEDIA_KEYS = {
   createMotionReferenceVideo: 'create-motion:reference-video',
   createImageElements: 'create-image:elements',
   createVideoElements: 'create-video:elements',
-  createVideoReferenceMode: 'create-video:reference-mode',
   createImageReferences: 'create-image:reference-images',
   createImageElementDrafts: 'create-image:element-drafts',
   createVideoStartImage: 'create-video:start-image',
@@ -252,7 +254,7 @@ export async function getPersistedSubjectRecords(key: string): Promise<Persisted
   if (!Array.isArray(value)) return [];
 
   return value
-    .map((item, index) => {
+    .map((item, index): PersistedSubjectRecord | null => {
       if (!isStoredSubjectRecord(item)) {
         return null;
       }
@@ -279,6 +281,7 @@ export async function getPersistedSubjectRecords(key: string): Promise<Persisted
       return {
         id: item.id,
         displayName: item.displayName,
+        handle: typeof item.handle === 'string' ? item.handle : null,
         images,
       } satisfies PersistedSubjectRecord;
     })
@@ -299,6 +302,7 @@ export async function setPersistedSubjectRecords(
     subjects.map((subject) => ({
       id: subject.id,
       displayName: subject.displayName,
+      handle: subject.handle ?? null,
       images: subject.images.map((image) => ({
         id: image.id,
         file: toStoredMediaFile(image.file),

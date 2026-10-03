@@ -17,6 +17,7 @@ import {
     StudioElementChip,
     StudioElementHandle,
     StudioElementHandleList,
+    StudioElementHandleText,
     StudioGenerationStatus,
     StudioMediaPreviewModal,
     StudioModelNotice,
@@ -72,7 +73,7 @@ import {
 } from '@/lib/generation-status-client';
 import {
     assignElementHandles,
-    buildSubjectHandles,
+    assignSubjectHandles,
     createElementHandleReplacementMap,
     createElementId,
     extractPromptHandles,
@@ -101,6 +102,7 @@ import {
     type GenerationTiming,
 } from '@/lib/generation-timing';
 import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
+import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
 import {
     inspectPromptQuality,
@@ -255,12 +257,18 @@ type KlingSubjectImageDraft = {
 };
 
 // A Kling O3 named multi-image subject: 2–4 images fused into one identity the
-// prompt references as @handle. Session-only state (no draft persistence yet).
+// prompt references as @handle. The handle is kept with the subject, as an
+// element's is: see assignSubjectHandles.
 type KlingSubjectDraft = {
     id: string;
     displayName: string;
+    handle: string;
     images: KlingSubjectImageDraft[];
 };
+
+// A subject on its way in: a new one, a saved one, or one just renamed, which
+// has given up its handle to take the handle of its new name.
+type KlingSubjectSeed = Omit<KlingSubjectDraft, 'handle'> & { handle?: string | null };
 
 const KLING_SUBJECT_LIMIT = 3;
 const KLING_SUBJECT_MIN_IMAGES = 2;
@@ -268,15 +276,29 @@ const KLING_SUBJECT_MAX_IMAGES = 4;
 
 function KlingSubjectsEditor({
     subjects,
-    handles,
     disabled,
     onChange,
+    onRename,
 }: {
     subjects: KlingSubjectDraft[];
-    handles: string[];
     disabled: boolean;
-    onChange: (next: KlingSubjectDraft[]) => void;
+    onChange: (next: KlingSubjectSeed[]) => void;
+    onRename: (subjectId: string, displayName: string) => void;
 }) {
+    // A name while it is being typed. It becomes the subject's name, and the
+    // handle and the prompt follow it, when the field is left or Enter is pressed.
+    const names = useNameDrafts();
+
+    const commitNameDraft = (subject: KlingSubjectDraft) => {
+        const draftValue = names.takeDraft(subject.id);
+        if (draftValue === undefined) return;
+
+        const trimmed = draftValue.trim();
+        if (!trimmed || trimmed === subject.displayName) return;
+
+        onRename(subject.id, trimmed);
+    };
+
     const addSubject = () => {
         if (subjects.length >= KLING_SUBJECT_LIMIT) return;
         onChange([...subjects, {
@@ -293,6 +315,7 @@ function KlingSubjectsEditor({
     const removeSubject = (subjectId: string) => {
         const subject = subjects.find((candidate) => candidate.id === subjectId);
         subject?.images.forEach((image) => revokeObjectUrl(image.previewUrl));
+        names.dropDraft(subjectId);
         onChange(subjects.filter((candidate) => candidate.id !== subjectId));
     };
 
@@ -335,12 +358,12 @@ function KlingSubjectsEditor({
 
             {subjects.length > 0 && (
                 <div className="mb-4 space-y-3">
-                    {subjects.map((subject, subjectIndex) => {
+                    {subjects.map((subject) => {
                         const imageCountOk = subject.images.length >= KLING_SUBJECT_MIN_IMAGES
                             && subject.images.length <= KLING_SUBJECT_MAX_IMAGES;
                         return (
                             <div key={subject.id} className="rounded-[24px] border border-zinc-700/40 bg-black/35 p-3">
-                                {/* The handle is made from the name, so it grows as the name is typed.
+                                {/* The handle is made from the name, so a long name gives a long handle.
                                     It stays beside the name field while it takes no more than half of
                                     their line, and leaves the field 10rem on a wide one. A longer handle
                                     takes the next line, whole. The remove button is outside that pair,
@@ -350,14 +373,27 @@ function KlingSubjectsEditor({
                                     <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
                                         <input
                                             type="text"
-                                            value={subject.displayName}
+                                            value={names.drafts[subject.id] ?? subject.displayName}
                                             disabled={disabled}
-                                            onChange={(event) => updateSubject(subject.id, { displayName: event.target.value })}
+                                            onChange={(event) => names.setDraft(subject.id, event.target.value)}
+                                            onBlur={() => commitNameDraft(subject)}
+                                            onKeyDown={(event) => {
+                                                if (event.key === 'Enter') {
+                                                    event.preventDefault();
+                                                    commitNameDraft(subject);
+                                                    event.currentTarget.blur();
+                                                }
+
+                                                if (event.key === 'Escape') {
+                                                    names.dropDraft(subject.id);
+                                                    event.currentTarget.blur();
+                                                }
+                                            }}
                                             className="min-w-[min(50%_-_0.5rem,10rem)] flex-1 rounded-2xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none transition focus:border-emerald-500/40"
                                             placeholder="Subject name"
                                         />
                                         <StudioElementHandle
-                                            handle={handles[subjectIndex]}
+                                            handle={subject.handle}
                                             className="rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1 text-xs font-semibold text-emerald-300"
                                         />
                                     </div>
@@ -609,8 +645,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [klingVideoElements, setKlingVideoElements] = useState<KlingVideoElementDraft[]>([]);
     const [klingSubjects, setKlingSubjects] = useState<KlingSubjectDraft[]>([]);
     const klingSubjectsRef = useRef<KlingSubjectDraft[]>([]);
-    const [elementNameDrafts, setElementNameDrafts] = useState<Record<string, string>>({});
-    const [klingVideoNameDrafts, setKlingVideoNameDrafts] = useState<Record<string, string>>({});
+    const elementNames = useNameDrafts();
+    const klingVideoNames = useNameDrafts();
     const [startImageFile, setStartImageFile] = useState<File | null>(null);
     const [startImageUrl, setStartImageUrl] = useState<string | null>(null);
     const [startFrameDescriptor, setStartFrameDescriptor] = useState<RemixMediaAssetDescriptor | null>(null);
@@ -845,6 +881,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 .map((subject) => ({
                     id: subject.id,
                     displayName: subject.displayName,
+                    handle: subject.handle,
                     images: subject.images.map((image) => ({
                         id: image.id,
                         file: image.file as File,
@@ -852,10 +889,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 }))
         );
     };
-    const commitKlingSubjects = (nextSubjects: KlingSubjectDraft[]) => {
-        setKlingSubjects(nextSubjects);
-        klingSubjectsRef.current = nextSubjects;
-        void persistKlingSubjects(nextSubjects);
+    const commitKlingSubjects = (nextSubjects: KlingSubjectSeed[]) => {
+        // A subject that comes without a handle takes the handle of its name here.
+        // Every other subject keeps the one it has.
+        const subjectsWithHandles = assignSubjectHandles(nextSubjects);
+        setKlingSubjects(subjectsWithHandles);
+        klingSubjectsRef.current = subjectsWithHandles;
+        void persistKlingSubjects(subjectsWithHandles);
+        return subjectsWithHandles;
     };
     const persistSeedanceAssets = async (
         nextElements: VideoElementDraft[] = elementsRef.current,
@@ -961,7 +1002,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             : frameReferenceCount + (isKlingVideoModel ? klingVideoElements.length : 0);
     const klingSubjectsActive = isKlingO3Model && klingSubjects.length > 0;
     const klingSubjectHandles = isKlingO3Model
-        ? buildSubjectHandles(klingSubjects.map((subject) => subject.displayName))
+        ? klingSubjects.map((subject) => subject.handle)
         : [];
     const additionalSettings = useAdditionalCatalogSettings(catalogDescriptor, CATALOG_HANDLED_KEYS);
     const quoteRequest = useMemo(() => modelCatalog.catalog && modelCatalog.detailsReady ? {
@@ -1071,21 +1112,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const knownElementMentions = extractPromptHandles(prompt).filter((handle) => elementHandles.includes(handle));
     const knownKlingVideoMentions = extractPromptHandles(prompt).filter((handle) => klingVideoHandles.includes(handle));
     const staleElementMentions = findUnknownPromptHandles(prompt, knownPromptHandles);
-    const multiShotUnknownKlingVideoMentions = isKlingVideoModel && currentIsMultiShot
-        ? Array.from(new Set(multiPrompts.flatMap((shot) => findUnknownPromptHandles(shot.prompt, klingVideoHandles))))
-        : [];
-    const hasKnownElementMentions = knownElementMentions.length > 0;
-    const hasKnownKlingVideoMentions = knownKlingVideoMentions.length > 0;
-    const hasInactiveElementMentions = !canUseVideoElements && hasKnownElementMentions;
-    const promptMentionCandidates: PromptMentionCandidate[] = [
-        ...(canUseVideoElements
-            ? elements.map((element) => ({
-                id: element.id,
-                displayName: element.displayName,
-                handle: element.handle,
-                kind: 'image' as const,
-            }))
-            : []),
+    // What a shot prompt can mention: the references a multi-shot run sends with its
+    // shots, which are Kling 3.0's video elements and Kling O3's named subjects. Image
+    // references are not among them, because a multi-shot run does not send them. The
+    // "@" panel under a shot, the check of the shot prompts before a run and a shot's
+    // Enhance button all read this one list, so what the panel offers is what the
+    // check accepts and what the enhancer is told to keep.
+    const shotMentionCandidates: PromptMentionCandidate[] = [
         ...(isKlingVideoModel
             ? klingVideoElements.map((element) => ({
                 id: element.id,
@@ -1103,6 +1136,27 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             }))
             : []),
     ];
+    // The two models whose shot prompts take mentions. The server reads the shot
+    // prompts of the same two for unknown ones (unknownShotHandles in generation-services.ts).
+    const shotPromptsTakeMentions = isKlingVideoModel || isKlingO3Model;
+    const shotMentionHandles = shotMentionCandidates.map((candidate) => candidate.handle);
+    const multiShotUnknownMentions = shotPromptsTakeMentions && currentIsMultiShot
+        ? Array.from(new Set(multiPrompts.flatMap((shot) => findUnknownPromptHandles(shot.prompt, shotMentionHandles))))
+        : [];
+    const hasKnownElementMentions = knownElementMentions.length > 0;
+    const hasKnownKlingVideoMentions = knownKlingVideoMentions.length > 0;
+    const hasInactiveElementMentions = !canUseVideoElements && hasKnownElementMentions;
+    const promptMentionCandidates: PromptMentionCandidate[] = [
+        ...(canUseVideoElements
+            ? elements.map((element) => ({
+                id: element.id,
+                displayName: element.displayName,
+                handle: element.handle,
+                kind: 'image' as const,
+            }))
+            : []),
+        ...shotMentionCandidates,
+    ];
     const mentionSuggestions = activeMentionQuery
         ? promptMentionCandidates.filter((candidate) => {
             const normalizedQuery = activeMentionQuery.query.toLowerCase();
@@ -1114,17 +1168,20 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             );
         })
         : [];
-    const shotMentionSuggestions = activeShotMentionQuery && isKlingVideoModel
-        ? klingVideoElements.filter((element) => {
+    const shotMentionSuggestions = activeShotMentionQuery && shotPromptsTakeMentions
+        ? shotMentionCandidates.filter((candidate) => {
             const normalizedQuery = activeShotMentionQuery.query.toLowerCase();
             if (!normalizedQuery) return true;
 
             return (
-                element.handle.toLowerCase().includes(`@${normalizedQuery}`) ||
-                element.displayName.toLowerCase().includes(normalizedQuery)
+                candidate.handle.toLowerCase().includes(`@${normalizedQuery}`) ||
+                candidate.displayName.toLowerCase().includes(normalizedQuery)
             );
         })
         : [];
+    const shotMentionPanelCopy = isKlingO3Model
+        ? { title: 'Insert subject', pick: 'Pick a named subject for this shot.', none: 'No matching subjects yet.' }
+        : { title: 'Insert video element', pick: 'Pick a Kling video handle for this shot.', none: 'No matching video elements yet.' };
     const showKlingVideoElementEditor = isKlingVideoModel;
     const showElementEditor = !currentIsMultiShot && canUseVideoElements;
     const showFramesEditor = supportsStartFrame || supportsEndFrame;
@@ -1208,10 +1265,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         hasStartImage: Boolean(startImageFile || startImageUrl),
         hasEndImage: Boolean(endImageFile || endImageUrl),
         hasReferenceVideo: hasReferenceVideoForRun,
-        elementReferences: isKlingVideoModel && klingVideoElements.length > 0
-            ? klingVideoElements.map((element) => ({
-                handle: element.handle,
-                displayName: element.displayName,
+        elementReferences: shotMentionCandidates.length > 0
+            ? shotMentionCandidates.map((candidate) => ({
+                handle: candidate.handle,
+                displayName: candidate.displayName,
             }))
             : undefined,
     });
@@ -1643,9 +1700,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                }
 
 	                if (savedKlingSubjects.length > 0) {
-	                    setKlingSubjects(savedKlingSubjects.map((subject) => ({
+	                    // A subject saved before handles were kept has none, and takes
+	                    // the handle of its name.
+	                    setKlingSubjects(assignSubjectHandles(savedKlingSubjects.map((subject) => ({
 	                        id: subject.id,
 	                        displayName: subject.displayName,
+	                        handle: subject.handle,
 	                        images: subject.images.map((image) => ({
 	                            id: image.id,
 	                            file: image.file,
@@ -1653,7 +1713,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                            remoteUrl: null,
 	                            storagePath: null,
 	                        })),
-	                    })));
+	                    }))));
 	                }
             } catch (err) {
                 console.error('Error loading persisted video media:', err);
@@ -1931,15 +1991,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             currentElements.filter((element) => element.id !== elementId)
         );
 
-        setElementNameDrafts((prev) => {
-            if (!(elementId in prev)) {
-                return prev;
-            }
-
-            const nextDrafts = { ...prev };
-            delete nextDrafts[elementId];
-            return nextDrafts;
-        });
+        elementNames.dropDraft(elementId);
         commitElements(nextElements);
         await persistVideoElements(nextElements);
         await persistSeedanceAssets(nextElements, referenceVideosRef.current, referenceAudiosRef.current);
@@ -1968,15 +2020,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         const nextElements = hydrateKlingVideoElements(
             currentElements.filter((element) => element.id !== elementId)
         );
-        setKlingVideoNameDrafts((prev) => {
-            if (!(elementId in prev)) {
-                return prev;
-            }
-
-            const nextDrafts = { ...prev };
-            delete nextDrafts[elementId];
-            return nextDrafts;
-        });
+        klingVideoNames.dropDraft(elementId);
         commitKlingVideoElements(nextElements);
         await persistKlingVideoElements(nextElements);
     };
@@ -2070,31 +2114,51 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         requestAnimationFrame(() => updateMentionState(prompt));
     };
 
+    const handleKlingSubjectRename = (subjectId: string, nextDisplayName: string) => {
+        const currentSubjects = klingSubjectsRef.current;
+        const nextSubjects = commitKlingSubjects(
+            currentSubjects.map((subject) => (
+                subject.id === subjectId
+                    // Without its handle, the subject takes the handle of its new name.
+                    ? { ...subject, displayName: nextDisplayName, handle: null }
+                    : subject
+            ))
+        );
+        const replacements = createElementHandleReplacementMap(currentSubjects, nextSubjects);
+        if (replacements.size === 0) {
+            return;
+        }
+
+        setPrompt((currentPrompt) => replacePromptHandles(currentPrompt, replacements));
+        setMultiPrompts((currentPrompts) => currentPrompts.map((shot) => ({
+            ...shot,
+            prompt: replacePromptHandles(shot.prompt, replacements),
+        })));
+        setActiveShotMentionQuery(null);
+        // The rewritten prompt moves the mention at the caret, so it is read again
+        // once the prompt is drawn. It is read from the prompt box, not from the
+        // prompt as it stood here: the creator may have typed into it by then.
+        requestAnimationFrame(() => {
+            const promptBox = promptTextareaRef.current;
+            if (promptBox) {
+                updateMentionState(promptBox.value);
+            }
+        });
+    };
+
     const handleElementDraftChange = (elementId: string, nextValue: string) => {
-        setElementNameDrafts((prev) => ({
-            ...prev,
-            [elementId]: nextValue,
-        }));
+        elementNames.setDraft(elementId, nextValue);
     };
 
     const handleKlingVideoDraftChange = (elementId: string, nextValue: string) => {
-        setKlingVideoNameDrafts((prev) => ({
-            ...prev,
-            [elementId]: nextValue,
-        }));
+        klingVideoNames.setDraft(elementId, nextValue);
     };
 
     const commitElementDraft = async (elementId: string) => {
-        const draftValue = elementNameDrafts[elementId];
+        const draftValue = elementNames.takeDraft(elementId);
         if (draftValue === undefined) return;
 
         const trimmed = draftValue.trim();
-        setElementNameDrafts((prev) => {
-            const nextDrafts = { ...prev };
-            delete nextDrafts[elementId];
-            return nextDrafts;
-        });
-
         if (!trimmed) return;
 
         const currentElement = elementsRef.current.find((element) => element.id === elementId);
@@ -2106,16 +2170,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     };
 
     const commitKlingVideoDraft = async (elementId: string) => {
-        const draftValue = klingVideoNameDrafts[elementId];
+        const draftValue = klingVideoNames.takeDraft(elementId);
         if (draftValue === undefined) return;
 
         const trimmed = draftValue.trim();
-        setKlingVideoNameDrafts((prev) => {
-            const nextDrafts = { ...prev };
-            delete nextDrafts[elementId];
-            return nextDrafts;
-        });
-
         if (!trimmed) return;
 
         const currentElement = klingVideoElementsRef.current.find((element) => element.id === elementId);
@@ -2632,18 +2690,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return;
         }
 
-        if (currentIsMultiShot && multiShotUnknownKlingVideoMentions.length > 0) {
-            setError(`Unknown element mention${multiShotUnknownKlingVideoMentions.length > 1 ? 's' : ''}: ${multiShotUnknownKlingVideoMentions.join(', ')}`);
+        if (currentIsMultiShot && multiShotUnknownMentions.length > 0) {
+            setError(`Unknown element mention${multiShotUnknownMentions.length > 1 ? 's' : ''}: ${multiShotUnknownMentions.join(', ')}`);
             return;
         }
 
         if (!currentIsMultiShot && hasInactiveElementMentions) {
             setError(videoElementSupport.reason || 'Reusable references are not available in this video mode.');
-            return;
-        }
-
-        if (!currentIsMultiShot && activeReferenceMode !== 'elements' && hasKnownElementMentions) {
-            setError('Switch to Reusable references to use @mentions in the video prompt.');
             return;
         }
 
@@ -3457,10 +3510,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                 Unknown element mention{staleElementMentions.length > 1 ? 's' : ''}:{' '}
                                                 <StudioElementHandleList handles={staleElementMentions} />
                                             </span>
-	                                        ) : activeReferenceMode !== 'elements' && hasKnownElementMentions ? (
-	                                            <span className="text-right text-amber-300">
-	                                                Switch to Reusable references to use {knownElementMentions.join(', ')}.
-	                                            </span>
                                         ) : null}
                                     </div>
                                     {activeMentionQuery ? (
@@ -3595,13 +3644,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                    placeholder={`Describe shot ${index + 1}...`}
 	                                                    className="mb-4 min-h-[100px] w-full resize-none rounded-2xl border border-white/10 bg-black/50 p-4 text-sm text-white outline-none focus:border-[#ff7a59]/50"
 	                                                />
-	                                                {activeShotMentionQuery?.shotId === shot.id && isKlingVideoModel ? (
+	                                                {activeShotMentionQuery?.shotId === shot.id && shotPromptsTakeMentions ? (
 	                                                    <div className="mb-4 rounded-[20px] border border-white/8 bg-black/35 p-4">
 	                                                        <div className="flex flex-wrap items-center justify-between gap-3">
 	                                                            <div className="min-w-[min(50%_-_0.75rem,10rem)] flex-1">
-	                                                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Insert video element</p>
+	                                                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">{shotMentionPanelCopy.title}</p>
 	                                                                <p className="mt-1 text-sm text-zinc-400">
-	                                                                    {shotMentionSuggestions.length > 0 ? 'Pick a Kling video handle for this shot.' : 'No matching video elements yet.'}
+	                                                                    {shotMentionSuggestions.length > 0 ? shotMentionPanelCopy.pick : shotMentionPanelCopy.none}
 	                                                                </p>
 	                                                            </div>
 	                                                            {activeShotMentionQuery.query ? (
@@ -3613,13 +3662,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                        </div>
 	                                                        {shotMentionSuggestions.length > 0 ? (
 	                                                            <div className="mt-3 flex flex-wrap gap-2">
-	                                                                {shotMentionSuggestions.map((element) => (
+	                                                                {shotMentionSuggestions.map((candidate) => (
 	                                                                    <StudioElementChip
-	                                                                        key={element.id}
-	                                                                        displayName={element.displayName}
-	                                                                        handle={element.handle}
-	                                                                        handleClassName="text-emerald-300"
-	                                                                        onInsert={() => handleInsertShotHandle(shot.id, element.handle)}
+	                                                                        key={`${candidate.kind}-${candidate.id}`}
+	                                                                        displayName={candidate.displayName}
+	                                                                        handle={candidate.handle}
+	                                                                        handleClassName={candidate.kind === 'video' ? 'text-emerald-300' : 'text-sky-300'}
+	                                                                        onInsert={() => handleInsertShotHandle(shot.id, candidate.handle)}
 	                                                                    />
 	                                                                ))}
 	                                                            </div>
@@ -3687,9 +3736,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                            >
 	                                <KlingSubjectsEditor
 	                                    subjects={klingSubjects}
-	                                    handles={klingSubjectHandles}
 	                                    disabled={isGenerating}
 	                                    onChange={commitKlingSubjects}
+	                                    onRename={handleKlingSubjectRename}
 	                                />
 	                            </motion.div>
 	                        )}
@@ -3748,7 +3797,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                        </label>
 	                                                        <input
 	                                                            type="text"
-	                                                            value={klingVideoNameDrafts[element.id] ?? element.displayName}
+	                                                            value={klingVideoNames.drafts[element.id] ?? element.displayName}
 	                                                            onChange={(event) => handleKlingVideoDraftChange(element.id, event.target.value)}
 	                                                            onBlur={() => void commitKlingVideoDraft(element.id)}
 	                                                            onKeyDown={(event) => {
@@ -3759,15 +3808,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                                }
 
 	                                                                if (event.key === 'Escape') {
-	                                                                    setKlingVideoNameDrafts((prev) => {
-	                                                                        if (!(element.id in prev)) {
-	                                                                            return prev;
-	                                                                        }
-
-	                                                                        const nextDrafts = { ...prev };
-	                                                                        delete nextDrafts[element.id];
-	                                                                        return nextDrafts;
-	                                                                    });
+	                                                                    klingVideoNames.dropDraft(element.id);
 	                                                                    event.currentTarget.blur();
 	                                                                }
 	                                                            }}
@@ -4024,7 +4065,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                         </label>
                                                         <input
                                                             type="text"
-                                                            value={elementNameDrafts[element.id] ?? element.displayName}
+                                                            value={elementNames.drafts[element.id] ?? element.displayName}
                                                             onChange={(event) => handleElementDraftChange(element.id, event.target.value)}
                                                             onBlur={() => void commitElementDraft(element.id)}
                                                             onKeyDown={(event) => {
@@ -4035,15 +4076,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                                 }
 
                                                                 if (event.key === 'Escape') {
-                                                                    setElementNameDrafts((prev) => {
-                                                                        if (!(element.id in prev)) {
-                                                                            return prev;
-                                                                        }
-
-                                                                        const nextDrafts = { ...prev };
-                                                                        delete nextDrafts[element.id];
-                                                                        return nextDrafts;
-                                                                    });
+                                                                    elementNames.dropDraft(element.id);
                                                                     event.currentTarget.blur();
                                                                 }
                                                             }}
@@ -4598,7 +4631,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     ) : referenceLimitMessage ? (
                                         <p className="text-sm text-red-400">{referenceLimitMessage}</p>
                                     ) : error ? (
-                                        <p className="text-sm text-red-400">{error}</p>
+                                        // The error can name a handle, and can print a subject's name or
+                                        // whatever the server answered. A handle gets its own box; any other
+                                        // word that no line can hold breaks where the line ends.
+                                        <p className="text-sm text-red-400 [overflow-wrap:anywhere]">
+                                            <StudioElementHandleText text={error} />
+                                        </p>
                                     ) : quoteState.status === 'error' ? (
                                         <p className="text-sm text-amber-300">{quoteUi.message}</p>
                                     ) : (

@@ -4159,6 +4159,46 @@ describe('generation services', () => {
     expect((providerBody as unknown as { input?: Record<string, unknown> })?.input?.image_urls).toBeUndefined();
   });
 
+  it('gives the provider a Kling O3 subject under the handle it kept, not the one its name would give', async () => {
+    // The page keeps a subject's handle while another subject is renamed or
+    // removed. The second of two subjects called "Hero" stays "@hero_2" when the
+    // first is removed, and that is how the prompt mentions it.
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: { input?: { prompt?: string; elements?: Array<{ name: string }> } } | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-o3-subjects-3' } }),
+      } as Response;
+    });
+
+    const { supabase } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: '@hero_2 walks on alone.',
+      model: 'kling-o3',
+      duration: 5,
+      aspectRatio: '16:9',
+      resolution: '720p',
+      sound: false,
+      klingSubjects: [{
+        handle: '@hero_2',
+        displayName: 'Hero',
+        images: [
+          { url: 'https://cdn.example.com/second-front.jpg' },
+          { url: 'https://cdn.example.com/second-side.jpg' },
+        ],
+      }],
+    });
+
+    const sent = providerBody as { input?: { prompt?: string; elements?: Array<{ name: string }> } } | null;
+    expect(sent?.input?.elements?.map((element) => element.name)).toEqual(['hero_2']);
+    expect(sent?.input?.prompt).toBe('@hero_2 walks on alone.');
+  });
+
   it('gives the provider each Kling O3 subject under the handle the creator page built', async () => {
     // The provider matches a prompt's "@name" to elements[].name, and the prompt
     // goes to it as written. So the handle the page shows and the prompt mentions
@@ -4166,7 +4206,7 @@ describe('generation services', () => {
     // rewrite ("@Hero_creator" to "hero_creator", 2026-10-03) was one name in
     // the prompt and another in elements.
     const { startVideoGeneration } = await import('@/lib/generation-services');
-    const { buildSubjectHandles } = await import('@/lib/image-elements');
+    const { assignSubjectHandles } = await import('@/lib/image-elements');
     let providerBody: { input?: { prompt?: string; elements?: Array<{ name: string }> } } | null = null;
     vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
       providerBody = JSON.parse(String(init?.body));
@@ -4178,7 +4218,7 @@ describe('generation services', () => {
 
     // Two names that differ only by a capital, and one with nothing a handle can hold.
     const names = ['Hero creator', 'hero creator', 'नायक'];
-    const handles = buildSubjectHandles(names);
+    const handles = assignSubjectHandles(names.map((displayName) => ({ displayName }))).map((subject) => subject.handle);
     const prompt = `${handles[0]} greets ${handles[1]} while ${handles[2]} looks on.`;
 
     const { supabase } = createSupabaseMock();
@@ -4205,6 +4245,69 @@ describe('generation services', () => {
     const sent = providerBody as { input?: { prompt?: string; elements?: Array<{ name: string }> } } | null;
     expect(sent?.input?.elements?.map((element) => `@${element.name}`)).toEqual(handles);
     expect(sent?.input?.prompt).toBe(prompt);
+  });
+
+  it('reads a Kling O3 shot prompt for the subjects of its run, and refuses one it does not have', async () => {
+    // A multi-shot run sends its subjects with the shots, and each shot prompt may
+    // mention them. This is the check the creator page has to pass before it uploads
+    // the subject images: the page's own check of a shot prompt names the same handles.
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    type ProviderBody = {
+      input?: {
+        customize_multi_shots?: boolean;
+        multi_prompt?: Array<{ prompt: string; duration: number }>;
+        elements?: Array<{ name: string }>;
+      };
+    };
+    let providerBody: ProviderBody | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-o3-subject-shots-1' } }),
+      } as Response;
+    });
+
+    const { supabase } = createSupabaseMock();
+    const run = (shotPrompts: string[]) => startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: '',
+      model: 'kling-o3',
+      isMultiShot: true,
+      aspectRatio: '16:9',
+      resolution: '720p',
+      sound: false,
+      multiPrompts: shotPrompts.map((prompt, index) => ({ id: `shot-${index + 1}`, prompt, duration: 3 })),
+      klingSubjects: [{
+        handle: '@hero_creator',
+        displayName: 'Hero creator',
+        images: [
+          { url: 'https://cdn.example.com/hero-front.jpg' },
+          { url: 'https://cdn.example.com/hero-side.jpg' },
+        ],
+      }],
+    });
+
+    // One letter short in the second shot.
+    await expect(run([
+      'Open on @hero_creator in the rain.',
+      'Cut closer while @hero_creatr turns.',
+    ])).rejects.toThrow('Unknown element mention: @hero_creatr');
+    expect(providerBody).toBeNull();
+
+    await run([
+      'Open on @hero_creator in the rain.',
+      'Cut closer while @hero_creator turns.',
+    ]);
+    const sent = providerBody as ProviderBody | null;
+    expect(sent?.input?.customize_multi_shots).toBe(true);
+    expect(sent?.input?.multi_prompt).toEqual([
+      { prompt: 'Open on @hero_creator in the rain.', duration: 3 },
+      { prompt: 'Cut closer while @hero_creator turns.', duration: 3 },
+    ]);
+    expect(sent?.input?.elements?.map((element) => element.name)).toEqual(['hero_creator']);
   });
 
   it('rejects Kling O3 subjects with the wrong image count or model', async () => {
