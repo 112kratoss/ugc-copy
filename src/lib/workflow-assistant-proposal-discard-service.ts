@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { logBackendError } from '@/lib/backend-logger';
+
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import type { WorkflowCanvasGraph } from '@/lib/workflow-canvas';
@@ -88,6 +90,10 @@ export async function discardWorkflowAssistantProposalForRoute({
     return proposalNotFoundResult();
   }
 
+  if (proposal.status !== 'ready') {
+    return { ok: false, status: 409, body: { error: 'Only ready proposals can be discarded.' } };
+  }
+
   const discardedAt = now();
   const discardResult = await supabase
     .from('workflow_canvas_assistant_proposals')
@@ -96,20 +102,26 @@ export async function discardWorkflowAssistantProposalForRoute({
       discarded_at: discardedAt,
     })
     .eq('id', proposalId)
-    .eq('user_id', userId);
+    .eq('canvas_id', canvasId)
+    .eq('user_id', userId)
+    .eq('status', 'ready')
+    .select('id, canvas_id, base_revision, status, summary, diff, proposed_graph, created_at, applied_at, discarded_at')
+    .maybeSingle();
 
   if (discardResult.error && isMissingWorkflowCanvasAssistantSchemaError(discardResult.error)) {
     return setupRequiredResult();
   }
 
+  if (discardResult.error) {
+    logBackendError('failed_to_discard_workflow_assistant_proposal', { error: discardResult.error });
+    return { ok: false, status: 500, body: { error: 'Failed to discard assistant proposal.' } };
+  }
+  if (!discardResult.data) {
+    return { ok: false, status: 409, body: { error: 'This proposal is no longer available to discard.' } };
+  }
+
   return {
     ok: true,
-    body: {
-      proposal: {
-        ...proposal,
-        status: 'discarded',
-        discarded_at: discardedAt,
-      },
-    },
+    body: { proposal: normalizeAssistantProposalRecord(discardResult.data as AssistantProposalRow) },
   };
 }

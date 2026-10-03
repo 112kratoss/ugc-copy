@@ -6,10 +6,28 @@ Updated 2026-10-03 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/canvas-approval-audit-7f`, incorporating main `6df13e5d8673f9996b8d94dffc854d96ee8d3e57` (#307); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/assistant-discard-audit-7g`, incorporating main `6df13e5d8673f9996b8d94dffc854d96ee8d3e57` (#307); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+Current branch is now `codex/assistant-discard-audit-7g`, based on 7F head
+bc0a0f34. 7F fresh combined-main Quality 37124830807 is running. Local combined
+checks passed 14 database cases, 105 focused cases, app/test types and lint.
+Independent live checks pass on descendant 7d6a6d11 containing the 7E fix.
+Later production release 37124633899 for 6df13e5d passed.
+
+7G reproduces three assistant discard failures with actual authenticated SQL:
+already-applied overwrite, apply committing after the discard read, and a
+rejected write reported as success. The fix conditionally updates only ready
+owned proposals, reports errors/conflicts, and returns the written row. Seven
+DB cases, nine focused tests, app/test types and lint pass. Read
+`backend-section-07-assistant-discard-2026-10-03.md`. This is separate from 7F;
+prepare its own PR and complete both CI/release sequences without dropping the
+new upstream workflow changes. WORKFLOW-04 remains open with these new failures.
+
+The preceding checkpoint follows.
+
 
 Current branch: `codex/canvas-approval-audit-7f`, incorporating main 6df13e5d.
 7E PR #293 deployed as f1ec34dc: exact-main Quality 37098042595 and standard

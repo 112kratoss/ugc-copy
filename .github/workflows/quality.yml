@@ -287,6 +287,11 @@ jobs:
         env:
           SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
 
+      - name: Test assistant proposal transitions with real authenticated SQL
+        run: npx vitest run src/__tests__/workflow-assistant-transitions-database.test.ts
+        env:
+          SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+
       - name: Stop isolated Supabase database
         if: always()
         continue-on-error: true
