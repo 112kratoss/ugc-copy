@@ -77,6 +77,90 @@ export function planMigrations({ migrationFiles, appliedMigrations, candidates =
   return { pending, outOfOrder: outOfOrder ?? null, latestAppliedLocalVersion };
 }
 
+const migrationVersionPattern = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/;
+
+/**
+ * How far ahead of the clock a version may read before it counts as
+ * future-dated. It covers two machines disagreeing about the time and nothing
+ * more: the versions that broke a release were hours ahead.
+ */
+export const CLOCK_SKEW_ALLOWANCE_MS = 5 * 60 * 1000;
+
+/**
+ * The instant a version names. A version is the UTC time its migration was
+ * written, YYYYMMDDHHMMSS: what `date -u +%Y%m%d%H%M%S` prints.
+ *
+ * `Date.UTC` carries an out-of-range field over instead of rejecting it, and
+ * the history needs that: four applied migrations are numbered `...106000` to
+ * `...109000`, minute 60 to 90.
+ */
+export function migrationVersionTime(version) {
+  const match = migrationVersionPattern.exec(version);
+  if (!match) {
+    throw new Error(`Migration version ${version} is not YYYYMMDDHHMMSS.`);
+  }
+
+  const [year, month, day, hour, minute, second] = match.slice(1).map(Number);
+  return Date.UTC(year, month - 1, day, hour, minute, second);
+}
+
+/** The version a migration written at `date` carries. */
+export function migrationVersionAt(date) {
+  return date.toISOString().replace(/\D/g, '').slice(0, 14);
+}
+
+/**
+ * The migrations whose version is ahead of `now` by more than the allowance.
+ *
+ * The version is the only ordering key. Once a future-dated migration is
+ * applied, `planMigrations` refuses every migration stamped with the real time
+ * before then as out of order, and goes on refusing it after that time has
+ * passed.
+ */
+export function findFutureDatedMigrations(
+  migrations,
+  { now, allowanceMs = CLOCK_SKEW_ALLOWANCE_MS },
+) {
+  return migrations
+    .map((migration) => ({
+      ...migration,
+      aheadMs: migrationVersionTime(migration.version) - now.getTime(),
+    }))
+    .filter((migration) => migration.aheadMs > allowanceMs);
+}
+
+function formatAhead(aheadMs) {
+  const seconds = Math.round(aheadMs / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days > 0) {
+    return `${days}d ${hours % 24}h`;
+  }
+  if (hours > 0) {
+    return `${hours}h ${minutes % 60}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds % 60}s`;
+  }
+  return `${seconds}s`;
+}
+
+/** What the release and the pull request check both say about them. */
+export function describeFutureDatedMigrations(futureDated, now) {
+  const files = futureDated
+    .map(({ fileName, aheadMs }) => `${fileName} (${formatAhead(aheadMs)} ahead)`)
+    .join(', ');
+
+  return (
+    `${files}. The UTC clock reads ${migrationVersionAt(now)}. ` +
+    'Migrations are ordered by this stamp alone, so once a future-dated one is applied the ' +
+    'release refuses every migration stamped with the real time before then as out of order. ' +
+    'Restamp with `date -u +%Y%m%d%H%M%S`, never local time.'
+  );
+}
+
 async function main() {
   const accessToken = process.env.SUPABASE_ACCESS_TOKEN?.trim();
   const projectRef = process.env.SUPABASE_PROJECT_REF?.trim();
@@ -124,6 +208,17 @@ async function main() {
 
   if (outOfOrder) {
     throw new Error(`Refusing to apply out-of-order migration ${outOfOrder.fileName}.`);
+  }
+
+  // Only what is still pending is checked, and before any of it is applied: a
+  // version production already has cannot be taken back, so refusing it would
+  // hold every release for nothing.
+  const now = new Date();
+  const futureDated = findFutureDatedMigrations(pending, { now });
+  if (futureDated.length > 0) {
+    throw new Error(
+      `Refusing to apply future-dated migration ${describeFutureDatedMigrations(futureDated, now)}`,
+    );
   }
 
   if (pending.length === 0) {
