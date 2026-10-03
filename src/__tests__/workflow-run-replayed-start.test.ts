@@ -119,6 +119,8 @@ function createRunDatabase() {
     credits: 500,
     /** Step writes that link a generation and are refused, as a lost connection would. */
     stepLinkWritesToRefuse: 0,
+    /** What the database says when it refuses one. */
+    stepLinkWriteError: 'connection reset',
     /** Task attaches that are refused, as an unreachable database would. */
     attachesToRefuse: 0,
   };
@@ -141,7 +143,7 @@ function createRunDatabase() {
       if (!update) return { rows, error: null };
       if (table === 'workflow_canvas_run_steps' && update.generation_id && state.stepLinkWritesToRefuse > 0) {
         state.stepLinkWritesToRefuse -= 1;
-        return { rows: [], error: { message: 'connection reset' } };
+        return { rows: [], error: { message: state.stepLinkWriteError } };
       }
       for (const row of rows) Object.assign(row, update);
       return { rows, error: null };
@@ -605,6 +607,114 @@ describe('how a step that took its generation back ends', () => {
     expect(database.generations).toHaveLength(1);
     expect(database.starts()).toBe(2);
     expect(tasksRequested()).toBe(1);
+    expect(history.sent).toEqual([]);
+  });
+});
+
+describe('a workflow run step that could not be written after its start succeeded', () => {
+  // The start service has returned: the credits are held, the provider has the
+  // task and the task is on the generation. Only the step write that records
+  // it is missing. What the database says when it refuses that write is not
+  // the provider's answer, so it must not decide how the step ends. The first
+  // three are words the start-failure classifier does not know and reads as a
+  // refusal: while the write shared the start's catch, they failed the step
+  // and the run over a render that was running and paid for. The last two it
+  // reads as an outage.
+  const REFUSED_WRITES = [
+    'connection reset',
+    'JWT expired',
+    'duplicate key value violates unique constraint',
+    'canceling statement due to statement timeout',
+    'TypeError: fetch failed',
+  ];
+
+  /** A start that succeeded in full, and the tick that could not write its step. */
+  async function afterTheStepWriteWasRefused(message: string) {
+    providerAccepts('task-1');
+    const database = createRunDatabase();
+    const client = connect(database);
+    database.state.stepLinkWritesToRefuse = 1;
+    database.state.stepLinkWriteError = message;
+
+    // The tick fails with what the database said, so its durable job is retried.
+    await expect(advance(client)).rejects.toMatchObject({ message });
+    return { database, client };
+  }
+
+  it.each(REFUSED_WRITES)('fails the tick, not the step, when the database says "%s"', async (message) => {
+    const { database, client } = await afterTheStepWriteWasRefused(message);
+
+    // The step is still in line as the worker found it, with no note of a
+    // refusal, and nothing after it has been given up on.
+    expect(database.imageStep).toMatchObject({
+      status: 'queued',
+      generation_id: null,
+      error_message: null,
+      started_at: null,
+      finished_at: null,
+    });
+    expect(database.gateStep).toMatchObject({ status: 'queued', finished_at: null });
+    expect(database.run).toMatchObject({ status: 'processing', finished_at: null });
+    // The render is running and paid for once, and nobody was told it failed.
+    expect(database.generations).toEqual([expect.objectContaining({
+      id: 'gen-1',
+      status: 'processing',
+      prediction_id: 'task-1',
+      refunded: false,
+      client_request_key_hash: database.stepKey,
+    })]);
+    expect(database.state.credits).toBe(488);
+    expect(history.sent).toEqual([]);
+
+    const run = await advance(client);
+
+    // The retried tick repeats the start under the same key and is answered
+    // with that generation and its task. Nothing was lost but the link, so
+    // there is no held note to show and nothing was taken back.
+    expect(database.imageStep).toMatchObject({
+      status: 'processing',
+      generation_id: 'gen-1',
+      output_snapshot: { predictionId: 'task-1' },
+      error_message: null,
+      started_at: expect.any(String),
+      finished_at: null,
+    });
+    expect(database.gateStep).toMatchObject({ status: 'queued', finished_at: null });
+    expect(run.status).toBe('processing');
+    expect(database.run).toMatchObject({ status: 'processing', finished_at: null });
+    expect(database.generations).toHaveLength(1);
+    expect(database.state.credits).toBe(488);
+    expect(database.starts()).toBe(2);
+    expect(tasksRequested()).toBe(1);
+    expect(relinksLogged()).toEqual([]);
+    expect(history.sent).toEqual([]);
+  });
+
+  it('delivers the render once the retried tick has written the step', async () => {
+    const { database, client } = await afterTheStepWriteWasRefused('connection reset');
+    await advance(client);
+
+    // What the output import does when the provider's callback arrives.
+    Object.assign(database.generations[0], {
+      status: 'succeeded',
+      output_url: 'generated_images/user-1/render.png',
+    });
+
+    const run = await advance(client);
+
+    expect(database.imageStep).toMatchObject({
+      status: 'succeeded',
+      generation_id: 'gen-1',
+      error_message: null,
+      output_snapshot: { outputUrl: expect.stringContaining('user-1/render.png') },
+    });
+    expect(database.gateStep).toMatchObject({ status: 'awaiting_approval' });
+    expect(run.status).toBe('awaiting_approval');
+    // One generation, one provider task, one charge, and no failure announced.
+    expect(database.generations).toHaveLength(1);
+    expect(database.starts()).toBe(2);
+    expect(tasksRequested()).toBe(1);
+    expect(database.state.credits).toBe(488);
     expect(history.sent).toEqual([]);
   });
 });

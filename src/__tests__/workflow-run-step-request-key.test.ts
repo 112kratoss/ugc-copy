@@ -67,7 +67,9 @@ type Row = Record<string, unknown>;
 type Filter = { op: 'eq' | 'in'; column: string; value: unknown };
 
 const STEP_KINDS = ['voiceover-generate', 'sound-effects-generate', 'motion-generate'] as const;
-type StepKind = (typeof STEP_KINDS)[number];
+// An image step and a video step have always carried the key.
+const GENERATION_STEP_KINDS = ['image-generate', 'video-generate', ...STEP_KINDS] as const;
+type StepKind = (typeof GENERATION_STEP_KINDS)[number];
 
 const ACTIVE = ['pending', 'waiting', 'processing'];
 const STARTING_CREDITS = 500;
@@ -640,6 +642,52 @@ describe.each(STEP_KINDS)('a %s step of a workflow run', (kind) => {
 
     // The repeated start is answered with the first one's generation and task.
     // Nothing was lost but the link, so there is no held note to show.
+    expect(database.step).toMatchObject({
+      status: 'processing',
+      generation_id: 'gen-1',
+      output_snapshot: { predictionId: 'task-1' },
+      error_message: null,
+      finished_at: null,
+    });
+    expect(run.status).toBe('processing');
+    expect(relinksLogged()).toEqual([]);
+    expectOneGenerationToHaveBeenBought(database);
+    expect(tasksRequested()).toBe(1);
+    expect(errorsLogged()).toEqual([]);
+  });
+});
+
+// The same loss with the worker still alive: the start succeeded in full and
+// the database refused the step write that records it. The retried tick can
+// only take the generation back because the start carries the key, so this
+// runs for every kind of step that starts a generation.
+describe.each(GENERATION_STEP_KINDS)('a %s step that could not be written after its start succeeded', (kind) => {
+  it('keeps the generation its start bought and takes it back on the retried tick', async () => {
+    providerAccepts();
+    const database = createRunDatabase(kind);
+    const client = connect(database);
+    database.state.stepLinkWritesToRefuse = 1;
+
+    // What the database said is not the provider refusing the start: the tick
+    // fails, so its job is retried, and the step stays in line as the worker
+    // found it.
+    await expect(advance(client)).rejects.toMatchObject({ message: 'connection reset' });
+    expect(database.step).toMatchObject({
+      status: 'queued',
+      generation_id: null,
+      error_message: null,
+      finished_at: null,
+    });
+    expect(database.run).toMatchObject({ status: 'processing', finished_at: null });
+    expect(database.generations).toEqual([expect.objectContaining({
+      id: 'gen-1',
+      status: 'processing',
+      prediction_id: 'task-1',
+    })]);
+
+    const run = await advance(client);
+
+    // The retried tick's start is answered with that generation and its task.
     expect(database.step).toMatchObject({
       status: 'processing',
       generation_id: 'gen-1',
