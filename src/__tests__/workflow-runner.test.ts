@@ -883,9 +883,10 @@ describe('workflow-runner recovery', () => {
   // credits are held. Its code for a model that has left the catalog is
   // MODEL_UNAVAILABLE, and the public classifier takes the word "unavailable"
   // for a provider outage: read that way the step stays queued and is tried
-  // again on every tick until the run's 24-hour limit, though no later tick
-  // can find the model. The classifier does end the other two, with the copy
-  // for a request the provider refused.
+  // again on every tick for as long as a busy provider is waited on, though no
+  // later tick can find the model, and then ends under the note for an outage.
+  // The classifier does end the other two, with the copy for a request the
+  // provider refused.
   it.each([
     [
       'its model has left the published catalog',
@@ -1637,4 +1638,453 @@ describe('workflow-runner: a step follows its generation', () => {
       expect(syncGenerationStatusesMock).not.toHaveBeenCalled();
     },
   );
+});
+
+// A start the provider, or our own gate in front of it, is too busy for is a
+// scheduling condition, so the step stays queued and the run's job brings the
+// worker back to start it again. That wait had no end of its own: the only
+// limit was the run's 24 hours, and the job comes back every minute. Each try
+// that gets as far as the credit hold returns the credits and leaves a failed
+// generation in the creator's library. The classifier also reads any error
+// that says "unavailable" as an outage, including ones no later try can get
+// past.
+describe('workflow-runner: a step the provider keeps turning away', () => {
+  const MINUTE = 60_000;
+  // How long a run's job keeps coming back for an unfinished run.
+  const RUN_LIFETIME_MINUTES = 24 * 60;
+  const FIRST_REFUSAL = Date.parse('2026-04-01T10:05:00.000Z');
+  const BUSY = { status: 429, failureCode: 'provider_busy', message: 'provider capacity is full' };
+  const BUSY_NOTE = getPublicGenerationStartFailure(BUSY).message;
+  const DOWN = { status: 503, message: 'Service Unavailable' };
+  const DOWN_NOTE = getPublicGenerationStartFailure(DOWN).message;
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    // Back to the implementations the mocks were created with.
+    startVideoGenerationMock.mockReset();
+    syncGenerationStatusesMock.mockReset();
+    quoteGenerationModelMock.mockReset();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(FIRST_REFUSAL);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    quoteGenerationModelMock.mockReset();
+  });
+
+  const iso = (time: number) => new Date(time).toISOString();
+
+  function videoStep(state: RunnerTestState) {
+    const step = state.steps.find((candidate) => candidate.id === 'step-video');
+    if (!step) throw new Error('No stored video step');
+    return step;
+  }
+
+  async function loadRunner(state: RunnerTestState) {
+    const supabase = createSupabaseMock(state);
+    const runner = await import('@/lib/workflow-runner');
+    const advance = () => runner.advanceWorkflowRunOnce({
+      supabase: supabase as never,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    });
+    return {
+      advance,
+      read: () => runner.getWorkflowRunDetails({
+        supabase: supabase as never,
+        userId: state.run.user_id,
+        canvasId: state.run.canvas_id,
+        runId: state.run.id,
+      }),
+      window: runner.WORKFLOW_RUN_STEP_BUSY_RETRY_WINDOW_MS,
+      /** One tick a minute, as the run's job is deferred, until the run ends or its lifetime is up. */
+      async tickUntilTheRunEnds() {
+        let run = await advance();
+        for (let minute = 1; run.status === 'processing' && minute < RUN_LIFETIME_MINUTES; minute += 1) {
+          vi.advanceTimersByTime(MINUTE);
+          run = await advance();
+        }
+        return run;
+      },
+    };
+  }
+
+  /** The worker's record of giving a step up, as the structured logger wrote it. */
+  function waitEndedWarnings() {
+    return vi.mocked(console.warn).mock.calls
+      .map(([line]) => String(line))
+      .filter((line) => line.includes('workflow_run_step_busy_wait_ended'))
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  }
+
+  it('ends a step that is turned away as busy on every tick, once the retry window has passed', async () => {
+    const state = createQueuedWorkflowState();
+    startVideoGenerationMock.mockRejectedValue(BUSY);
+    const { tickUntilTheRunEnds, window } = await loadRunner(state);
+
+    const run = await tickUntilTheRunEnds();
+
+    // Not still in the queue when the run's own 24 hours run out.
+    expect(videoStep(state)).toMatchObject({
+      status: 'failed',
+      generation_id: null,
+      error_message: BUSY_NOTE,
+      started_at: expect.any(String),
+      finished_at: iso(FIRST_REFUSAL + window),
+    });
+    expect(run.status).toBe('failed');
+    expect(run.steps.find((step) => step.id === 'step-video')).toMatchObject({
+      status: 'failed',
+      error_message: BUSY_NOTE,
+    });
+    expect(state.run).toMatchObject({ status: 'failed', finished_at: iso(FIRST_REFUSAL + window) });
+  });
+
+  it('stops starting the step: a try a minute for the window and the one that ended it, not one for every minute of the run', async () => {
+    const state = createQueuedWorkflowState();
+    startVideoGenerationMock.mockRejectedValue(BUSY);
+    const { tickUntilTheRunEnds, advance, window } = await loadRunner(state);
+
+    await tickUntilTheRunEnds();
+
+    expect(startVideoGenerationMock).toHaveBeenCalledTimes(window / MINUTE + 1);
+
+    // Nothing is left for a later tick to try.
+    vi.advanceTimersByTime(MINUTE);
+    await advance();
+    expect(startVideoGenerationMock).toHaveBeenCalledTimes(window / MINUTE + 1);
+  });
+
+  it('gives a step thirty minutes, well inside the run’s own lifetime', async () => {
+    const { window } = await loadRunner(createQueuedWorkflowState());
+
+    // The time the template worker gives its steps. A change here changes how
+    // long a creator waits and how many refused generations a step can leave
+    // in their library.
+    expect(window).toBe(30 * MINUTE);
+    expect(window).toBeLessThan(RUN_LIFETIME_MINUTES * MINUTE);
+  });
+
+  it('tries the step for the whole window and gives it up on the first refusal after it', async () => {
+    const state = createQueuedWorkflowState();
+    startVideoGenerationMock.mockRejectedValue(BUSY);
+    const { advance, window } = await loadRunner(state);
+
+    await advance();
+    vi.setSystemTime(FIRST_REFUSAL + window - 1);
+    const waiting = await advance();
+
+    expect(waiting.status).toBe('processing');
+    expect(state.run).toMatchObject({ status: 'processing', finished_at: null });
+    expect(videoStep(state)).toMatchObject({
+      status: 'queued',
+      generation_id: null,
+      error_message: BUSY_NOTE,
+      started_at: null,
+      finished_at: null,
+    });
+
+    vi.setSystemTime(FIRST_REFUSAL + window);
+    const ended = await advance();
+
+    expect(ended.status).toBe('failed');
+    expect(videoStep(state)).toMatchObject({
+      status: 'failed',
+      error_message: BUSY_NOTE,
+      finished_at: iso(FIRST_REFUSAL + window),
+    });
+    // The step is tried on the tick that gives it up: only a refusal ends it.
+    expect(startVideoGenerationMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps the time of the first refusal on the step and does not move it on a later one', async () => {
+    const state = createQueuedWorkflowState();
+    startVideoGenerationMock.mockRejectedValue(BUSY);
+    const { advance, read } = await loadRunner(state);
+
+    await advance();
+    expect(videoStep(state).output_snapshot).toEqual({ busySince: iso(FIRST_REFUSAL) });
+
+    // Moved to the latest refusal, the window would never run out.
+    vi.advanceTimersByTime(10 * MINUTE);
+    await advance();
+    expect(videoStep(state).output_snapshot).toEqual({ busySince: iso(FIRST_REFUSAL) });
+    expect(videoStep(state)).toMatchObject({ status: 'queued', error_message: BUSY_NOTE });
+
+    // Whoever reads the run sees a step that is waiting, as before.
+    const seen = (await read()).steps.find((step) => step.id === 'step-video');
+    expect(seen).toMatchObject({ status: 'queued', generation_id: null, error_message: BUSY_NOTE });
+  });
+
+  it('starts the step when the provider takes it inside the window, and forgets the wait', async () => {
+    const state = createQueuedWorkflowState();
+    startVideoGenerationMock.mockRejectedValueOnce(BUSY).mockRejectedValueOnce(BUSY);
+    const { advance, window } = await loadRunner(state);
+
+    await advance();
+    vi.advanceTimersByTime(MINUTE);
+    await advance();
+    vi.setSystemTime(FIRST_REFUSAL + window - MINUTE);
+    const run = await advance();
+
+    expect(run.status).toBe('processing');
+    expect(videoStep(state)).toMatchObject({
+      status: 'processing',
+      generation_id: 'gen-video',
+      error_message: null,
+      started_at: iso(FIRST_REFUSAL + window - MINUTE),
+      finished_at: null,
+    });
+    expect(videoStep(state).output_snapshot).toEqual({ predictionId: 'pred-video', cost: 30 });
+    expect(startVideoGenerationMock).toHaveBeenCalledTimes(3);
+    expect(waitEndedWarnings()).toEqual([]);
+  });
+
+  it('does not end the wait on a read: only a refusal the worker meets does', async () => {
+    const state = createQueuedWorkflowState();
+    startVideoGenerationMock.mockRejectedValue(BUSY);
+    const { advance, read, window } = await loadRunner(state);
+
+    await advance();
+    vi.setSystemTime(FIRST_REFUSAL + 2 * window);
+    const stepsBefore = structuredClone(state.steps);
+    const run = await read();
+
+    expect(run.status).toBe('processing');
+    expect(run.steps.find((step) => step.id === 'step-video')).toMatchObject({ status: 'queued' });
+    expect(state.steps).toEqual(stepsBefore);
+    expect(startVideoGenerationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives a step that was already waiting under the busy note a full window from its next refusal', async () => {
+    const state = createQueuedWorkflowState();
+    // As the worker left it before this limit: a note and no time on the step.
+    Object.assign(videoStep(state), { error_message: BUSY_NOTE, output_snapshot: null });
+    startVideoGenerationMock.mockRejectedValue(BUSY);
+    const { advance, window } = await loadRunner(state);
+
+    const run = await advance();
+
+    expect(run.status).toBe('processing');
+    expect(videoStep(state)).toMatchObject({
+      status: 'queued',
+      output_snapshot: { busySince: iso(FIRST_REFUSAL) },
+      finished_at: null,
+    });
+
+    vi.setSystemTime(FIRST_REFUSAL + window);
+    expect((await advance()).status).toBe('failed');
+  });
+
+  it('keeps whatever else the step’s snapshot holds while it waits', async () => {
+    const state = createQueuedWorkflowState();
+    Object.assign(videoStep(state), { output_snapshot: { cost: 30 } });
+    startVideoGenerationMock.mockRejectedValue(BUSY);
+    const { advance } = await loadRunner(state);
+
+    await advance();
+
+    expect(videoStep(state).output_snapshot).toEqual({ cost: 30, busySince: iso(FIRST_REFUSAL) });
+  });
+
+  it.each([
+    ['is not a time', 'some time yesterday'],
+    ['is empty', ''],
+    ['is not text', FIRST_REFUSAL - 24 * 60 * MINUTE],
+  ])('starts the window from this refusal when the stored start %s', async (_case, storedStart) => {
+    const state = createQueuedWorkflowState();
+    Object.assign(videoStep(state), { error_message: BUSY_NOTE, output_snapshot: { busySince: storedStart } });
+    startVideoGenerationMock.mockRejectedValue(BUSY);
+    const { advance, window } = await loadRunner(state);
+
+    const run = await advance();
+
+    // Neither given up on sight nor left with a start nothing can be measured from.
+    expect(run.status).toBe('processing');
+    expect(videoStep(state)).toMatchObject({ status: 'queued', error_message: BUSY_NOTE });
+    expect(videoStep(state).output_snapshot).toEqual({ busySince: iso(FIRST_REFUSAL) });
+
+    vi.setSystemTime(FIRST_REFUSAL + window);
+    expect((await advance()).status).toBe('failed');
+  });
+
+  it('ends a step the provider is down for, with the note for an outage', async () => {
+    const state = createQueuedWorkflowState();
+    startVideoGenerationMock.mockRejectedValue(DOWN);
+    const { tickUntilTheRunEnds, window } = await loadRunner(state);
+
+    const run = await tickUntilTheRunEnds();
+
+    expect(run.status).toBe('failed');
+    expect(videoStep(state)).toMatchObject({
+      status: 'failed',
+      error_message: DOWN_NOTE,
+      finished_at: iso(FIRST_REFUSAL + window),
+    });
+    expect(DOWN_NOTE).toContain('temporarily unavailable');
+  });
+
+  // No later try gets past these, and each is read as an outage for the word
+  // "unavailable" in its text. They are thrown before any credits are held.
+  it.each([
+    ['a release with a default it does not list', 'Published web default imagen-4 is unavailable.'],
+    ['a catalog revision no release has', 'Generation model catalog revision catalog-rev-1 is unavailable.'],
+    ['a price that cannot be worked out', 'Pricing duration is unavailable.'],
+  ])('stops asking after the window when the error is one of ours that only says "unavailable": %s', async (_case, message) => {
+    const state = createQueuedWorkflowState();
+    quoteGenerationModelMock.mockImplementation(() => {
+      throw new Error(message);
+    });
+    const { tickUntilTheRunEnds, window } = await loadRunner(state);
+
+    const run = await tickUntilTheRunEnds();
+
+    expect(run.status).toBe('failed');
+    expect(videoStep(state)).toMatchObject({
+      status: 'failed',
+      generation_id: null,
+      error_message: DOWN_NOTE,
+      finished_at: iso(FIRST_REFUSAL + window),
+    });
+    expect(quoteGenerationModelMock).toHaveBeenCalledTimes(window / MINUTE + 1);
+    expect(startVideoGenerationMock).not.toHaveBeenCalled();
+    // What the error really said is kept for whoever reads the log.
+    expect(waitEndedWarnings()).toEqual([expect.objectContaining({ errorMessage: message })]);
+  });
+
+  it('measures one window across busy and unavailable refusals, and ends with the last one’s note', async () => {
+    const state = createQueuedWorkflowState();
+    startVideoGenerationMock.mockRejectedValueOnce(BUSY).mockRejectedValue(DOWN);
+    const { advance, window } = await loadRunner(state);
+
+    await advance();
+    expect(videoStep(state)).toMatchObject({ status: 'queued', error_message: BUSY_NOTE });
+
+    vi.advanceTimersByTime(MINUTE);
+    await advance();
+    expect(videoStep(state)).toMatchObject({
+      status: 'queued',
+      error_message: DOWN_NOTE,
+      output_snapshot: { busySince: iso(FIRST_REFUSAL) },
+    });
+
+    vi.setSystemTime(FIRST_REFUSAL + window);
+    const run = await advance();
+
+    expect(run.status).toBe('failed');
+    expect(videoStep(state)).toMatchObject({ status: 'failed', error_message: DOWN_NOTE });
+  });
+
+  it('ends the step at once on a refusal that waiting cannot change, whatever is left of the window', async () => {
+    const state = createQueuedWorkflowState();
+    const refused = { message: 'The request was not accepted.' };
+    startVideoGenerationMock.mockRejectedValueOnce(BUSY).mockRejectedValueOnce(refused);
+    const { advance } = await loadRunner(state);
+
+    await advance();
+    vi.advanceTimersByTime(MINUTE);
+    const run = await advance();
+
+    expect(run.status).toBe('failed');
+    expect(videoStep(state)).toMatchObject({
+      status: 'failed',
+      error_message: getPublicGenerationStartFailure(refused).message,
+      finished_at: iso(FIRST_REFUSAL + MINUTE),
+    });
+    // That is not the wait running out, and it is not recorded as one.
+    expect(waitEndedWarnings()).toEqual([]);
+  });
+
+  // A generation that is still live outranks the clock: the window only ever
+  // ends a step that has nothing running for it.
+  it('links a submission the provider may have accepted, though the window has passed', async () => {
+    const state = createQueuedWorkflowState();
+    const ambiguous = new Error('provider response timed out');
+    markHeldProviderSubmission(ambiguous, 'gen-held-video');
+    startVideoGenerationMock.mockRejectedValueOnce(BUSY).mockRejectedValueOnce(ambiguous);
+    const { advance, window } = await loadRunner(state);
+
+    await advance();
+    vi.setSystemTime(FIRST_REFUSAL + window);
+    const run = await advance();
+
+    expect(run.status).toBe('processing');
+    expect(videoStep(state)).toMatchObject({
+      status: 'processing',
+      generation_id: 'gen-held-video',
+      error_message: expect.stringContaining('credits stay reserved'),
+      finished_at: null,
+    });
+    expect(videoStep(state).output_snapshot).toEqual({ submissionPending: true });
+  });
+
+  it('takes back the generation its own earlier start left unresolved, though the window has passed', async () => {
+    const state = createQueuedWorkflowState();
+    startVideoGenerationMock
+      .mockRejectedValueOnce(BUSY)
+      .mockRejectedValueOnce(await earlierStartStillUnresolved('gen-earlier-video'));
+    const { advance, window } = await loadRunner(state);
+
+    await advance();
+    vi.setSystemTime(FIRST_REFUSAL + window);
+    const run = await advance();
+
+    expect(run.status).toBe('processing');
+    expect(videoStep(state)).toMatchObject({
+      status: 'processing',
+      generation_id: 'gen-earlier-video',
+      finished_at: null,
+    });
+    expect(videoStep(state).output_snapshot).toEqual({ submissionPending: true });
+  });
+
+  it('still ends a step the catalog refuses at once, in the middle of a wait', async () => {
+    const state = createQueuedWorkflowState();
+    startVideoGenerationMock.mockRejectedValueOnce(BUSY);
+    const { advance } = await loadRunner(state);
+    const { CatalogError } = await import('@/lib/generation-model-catalog');
+
+    await advance();
+    quoteGenerationModelMock.mockImplementationOnce(() => {
+      throw new CatalogError('This model is no longer available.', 'MODEL_UNAVAILABLE', 409);
+    });
+    vi.advanceTimersByTime(MINUTE);
+    const run = await advance();
+
+    expect(run.status).toBe('failed');
+    expect(videoStep(state)).toMatchObject({
+      status: 'failed',
+      error_message: expect.stringMatching(/no longer available.*choose another model/i),
+    });
+    expect(startVideoGenerationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('records that it gave the step up, with when the wait began and what the last refusal said', async () => {
+    const state = createQueuedWorkflowState();
+    startVideoGenerationMock.mockRejectedValue(BUSY);
+    const { advance, window } = await loadRunner(state);
+
+    await advance();
+    vi.advanceTimersByTime(MINUTE);
+    await advance();
+    expect(waitEndedWarnings()).toEqual([]);
+
+    vi.setSystemTime(FIRST_REFUSAL + window + MINUTE);
+    await advance();
+
+    expect(waitEndedWarnings()).toEqual([expect.objectContaining({
+      level: 'warn',
+      runId: 'run-1',
+      stepId: 'step-video',
+      nodeId: state.videoNodeId,
+      failureCode: 'provider_busy',
+      busySince: iso(FIRST_REFUSAL),
+      waitedMs: window + MINUTE,
+      errorMessage: 'provider capacity is full',
+    })]);
+  });
 });

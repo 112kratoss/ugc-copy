@@ -306,7 +306,8 @@ describe('a canvas run step whose model the catalog no longer offers', () => {
     const run = await db.advance();
 
     // Read as a provider outage, the step would stay `queued` under that note
-    // and be tried again on every tick until the run's 24-hour limit.
+    // and be tried again on every tick for as long as a busy provider is
+    // waited on.
     expectStepEnded(db, run, CHOOSE_ANOTHER_MODEL);
 
     // A later tick finds nothing to try: the step and what it says are as they were.

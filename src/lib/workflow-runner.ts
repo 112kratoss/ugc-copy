@@ -1164,7 +1164,8 @@ const CATALOG_REFUSAL_MESSAGES: Record<CatalogError['code'], string> = {
  * kept from the public classifier, which reads errors met on the way to the
  * provider and takes the word "unavailable" for an outage. The catalog's code
  * for a model it no longer lists is MODEL_UNAVAILABLE, so that step would be
- * left queued and tried again on every tick until the run's 24-hour limit.
+ * left queued and tried again on every tick for as long as a busy provider is
+ * waited on, and would end under the note for an outage.
  * `provider_rejected` is the code that ends a step, and the one the template
  * worker records for the same refusal.
  */
@@ -1174,6 +1175,32 @@ function getRunStepStartFailure(error: unknown): PublicGenerationStartFailure {
   }
 
   return getPublicGenerationStartFailure(error);
+}
+
+/**
+ * How long a step is started again while the provider, or our own gate in
+ * front of it, turns it away as busy or unavailable. The run's job can bring
+ * the worker back every minute, and each try that gets as far as the credit
+ * hold returns the credits and leaves a failed generation in the creator's
+ * library, so the wait has to end long before the run's own 24 hours do. The
+ * public classifier also reads any error that says "unavailable" as an
+ * outage, and some of those no later try can get past. After the window the
+ * step fails with the note of its last refusal, and running it again starts a
+ * new wait. The template worker gives its steps the same time
+ * (`STEP_BUSY_RETRY_WINDOW_MS`).
+ */
+export const WORKFLOW_RUN_STEP_BUSY_RETRY_WINDOW_MS = 30 * 60 * 1000;
+
+/**
+ * When a step that is waiting on a busy provider was first turned away. The
+ * time is kept in the step's output snapshot: `hydrateRunSteps` rewrites that
+ * only for a step with a generation, which a waiting step never has, and a
+ * step that starts replaces it.
+ */
+function stepBusySince(step: HydratedRunStep): number | null {
+  const since = step.output_snapshot?.busySince;
+  const time = typeof since === 'string' ? Date.parse(since) : Number.NaN;
+  return Number.isFinite(time) ? time : null;
 }
 
 async function advanceWorkflowRunProgress(params: {
@@ -1312,20 +1339,32 @@ async function advanceWorkflowRunProgress(params: {
       // service names it on the error. No other 409 names one, and those
       // never resolve, so they still end the step below.
       const earlierGenerationId = getInProgressStartGenerationId(error);
+      const refusedAt = Date.now();
+      const busySince = failure.code === 'provider_busy' || failure.code === 'provider_unavailable'
+        ? stepBusySince(queuedStep) ?? refusedAt
+        : null;
 
-      if (failure.code === 'provider_busy' || failure.code === 'provider_unavailable') {
+      if (busySince !== null && refusedAt - busySince < WORKFLOW_RUN_STEP_BUSY_RETRY_WINDOW_MS) {
         // Admission/backpressure is a scheduling condition, not a failed
         // workflow node. Leave the immutable step queued; the durable run job
-        // defers without spending an attempt and retries after backoff.
-        hydratedSteps[stepIndex] = {
+        // defers without spending an attempt and retries after backoff. The
+        // time of the first refusal stays on the step: the wait is measured
+        // from it, and a later refusal must not move it.
+        const waitingStep: HydratedRunStep = {
           ...queuedStep,
+          output_snapshot: {
+            ...queuedStep.output_snapshot,
+            busySince: new Date(busySince).toISOString(),
+          },
           error_message: failure.message,
         };
+        hydratedSteps[stepIndex] = waitingStep;
         workingGraph = updateNodeRunState(workingGraph, node.id, {
           status: 'queued',
           error: failure.message,
         });
         await updateRunStep(supabase, run.id, queuedStep.id, {
+          output_snapshot: waitingStep.output_snapshot,
           error_message: failure.message,
         });
         continue;
@@ -1370,6 +1409,23 @@ async function advanceWorkflowRunProgress(params: {
           finished_at: null,
         });
         continue;
+      }
+
+      if (busySince !== null) {
+        // The provider was still busy when the wait ran out. The step ends
+        // below like any other refused start, under the note of this last
+        // refusal. What the error itself said is kept here: the note is the
+        // same whether the provider was down or the error was one of ours
+        // that only reads like an outage.
+        logBackendWarning('workflow_run_step_busy_wait_ended', {
+          runId: run.id,
+          stepId: queuedStep.id,
+          nodeId: node.id,
+          failureCode: failure.code,
+          busySince: new Date(busySince).toISOString(),
+          waitedMs: refusedAt - busySince,
+          error,
+        });
       }
 
       // The step ends here, and no request is waiting to carry the reason, so

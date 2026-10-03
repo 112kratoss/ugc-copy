@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { approveWorkflowRunStep, executeWorkflowRun, getWorkflowRunDetails } from '@/lib/workflow-runner';
+import { approveWorkflowRunStep, executeWorkflowRun, getWorkflowRunDetails, WORKFLOW_RUN_STEP_BUSY_RETRY_WINDOW_MS } from '@/lib/workflow-runner';
 import { processWorkflowRunStepJobs } from '@/lib/workflow-run-jobs-processor';
 import { createCanvasEdge, createWorkflowNode, normalizeWorkflowGraph, type WorkflowCanvasGraph, type ImageGenerateNodeData, type VideoGenerateNodeData } from '@/lib/workflow-canvas';
 
@@ -434,5 +434,43 @@ describe.skipIf(!connectionString)('canvas execution and billing with real Postg
     expect(await snapshot()).toEqual(before);
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(await balance()).toBe(initialCredits - image.cost);
+  });
+
+  it('gives a step up when the provider is still busy after the retry window, closes the ticket and returns every hold', async () => {
+    await start();
+    vi.mocked(fetch).mockImplementation(async () => json({ msg: 'Too many requests' }, 429));
+    const storedStep = async () => (await admin.query('select status,generation_id,output_snapshot,error_message,finished_at from public.workflow_canvas_run_steps where run_id=$1 and node_id=$2', [runId, imageId])).rows[0];
+    const notifications = async () => (await admin.query('select type,dedupe_key from public.mobile_notifications where user_id=$1', [userId])).rows;
+    const startedAt = Date.now();
+    expect((await tick()).deferred).toBe(1);
+    const waiting = await storedStep();
+    expect(waiting).toMatchObject({ status: 'queued', generation_id: null, finished_at: null });
+    // The time of the first refusal is on the row, where the next tick reads it.
+    const busySince = Date.parse(waiting.output_snapshot.busySince);
+    expect(busySince).toBeGreaterThanOrEqual(startedAt);
+    expect(busySince).toBeLessThanOrEqual(Date.now());
+    expect((await tick()).deferred).toBe(1);
+    expect((await storedStep()).output_snapshot).toEqual(waiting.output_snapshot);
+    expect(await notifications()).toEqual([]);
+    // The whole window goes by: the first refusal is now that long ago.
+    await admin.query("update public.workflow_canvas_run_steps set output_snapshot=jsonb_set(output_snapshot,'{busySince}',to_jsonb($3::text)) where run_id=$1 and node_id=$2", [runId, imageId, new Date(busySince - WORKFLOW_RUN_STEP_BUSY_RETRY_WINDOW_MS).toISOString()]);
+    expect(await tick()).toMatchObject({ claimed: 1, advanced: 1, deferred: 0 });
+    expect(await storedStep()).toMatchObject({ status: 'failed', generation_id: null, error_message: expect.stringContaining('busy') });
+    expect((await storedStep()).finished_at).not.toBeNull();
+    const run = await details();
+    expect(run.status).toBe('failed');
+    expect(run.steps.find(step => step.node_id === approvalId)?.status).toBe('blocked');
+    expect(run.steps.find(step => step.node_id === videoId)?.status).toBe('blocked');
+    // The run's ticket is finished, so nothing brings the worker back, and another tick starts nothing.
+    expect((await admin.query('select status,attempt from public.workflow_run_step_jobs where run_id=$1', [runId])).rows).toEqual([{ status: 'succeeded', attempt: 1 }]);
+    await tick();
+    // Each of the three tries held credits on a generation of its own and returned them.
+    const generations = await rows();
+    expect(generations).toHaveLength(3);
+    expect(generations.every(row => row.status === 'failed' && row.refunded)).toBe(true);
+    expect(await balance()).toBe(initialCredits);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    // Only the try that ended the step is announced.
+    expect(await notifications()).toEqual([{ type: 'generation_failed', dedupe_key: `generation:${generations[2].id}:failed` }]);
   });
 });

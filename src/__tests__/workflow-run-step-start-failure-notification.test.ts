@@ -18,7 +18,7 @@ import {
   normalizeWorkflowGraph,
   type TextInputNodeData,
 } from '@/lib/workflow-canvas';
-import { advanceWorkflowRunOnce } from '@/lib/workflow-runner';
+import { advanceWorkflowRunOnce, WORKFLOW_RUN_STEP_BUSY_RETRY_WINDOW_MS } from '@/lib/workflow-runner';
 
 // The provider key and the callback settings are read when the generation
 // modules load.
@@ -48,6 +48,9 @@ vi.mock('@/lib/generation-model-catalog-store', async (importOriginal) => ({
     costCredits: 12,
   }),
 }));
+
+const MINUTE = 60_000;
+const WINDOW_MINUTES = WORKFLOW_RUN_STEP_BUSY_RETRY_WINDOW_MS / MINUTE;
 
 type Row = Record<string, unknown>;
 type Filter = { op: 'eq' | 'in'; column: string; value: unknown };
@@ -281,6 +284,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   service.client = null;
@@ -402,6 +406,55 @@ describe('a workflow run step the provider refuses at start', () => {
     expect(database.generations.map((row) => row.id)).toEqual(['gen-1', 'gen-2', 'gen-3']);
     expect(history.sent.map((row) => row.dedupe_key)).toEqual(['generation:gen-3:failed']);
     expect(database.step.status).toBe('failed');
+  });
+
+  it.each([
+    ['the provider says it is busy', providerIsBusy, {}],
+    ['our own gate turns the submission away', providerRefuses, { admissionRefused: true }],
+  ] as const)('tells the creator once when it gives a step up because %s for the whole window', async (_reason, provider, options) => {
+    const firstRefusal = Date.parse('2026-10-02T10:01:00.000Z');
+    const givenUpAt = new Date(firstRefusal + WORKFLOW_RUN_STEP_BUSY_RETRY_WINDOW_MS).toISOString();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(firstRefusal);
+    provider();
+    const database = createRunDatabase('image', options);
+    const history = createMobileNotificationHistory();
+    const client = connect(database, history);
+
+    // The run's job brings the worker back once a minute for as long as the
+    // run is unfinished. Three windows tell a wait that ends from one that
+    // does not.
+    const run = await withCapturedLog(async () => {
+      let latest = await advance(client);
+      for (let minute = 1; latest.status === 'processing' && minute < 3 * WINDOW_MINUTES; minute += 1) {
+        vi.advanceTimersByTime(MINUTE);
+        latest = await advance(client);
+      }
+      return latest;
+    });
+
+    // Every try held credits on a generation of its own and returned them: a
+    // try a minute for the window, and the one that ended the step.
+    expect(database.generations).toHaveLength(WINDOW_MINUTES + 1);
+    expect(database.settlements()).toHaveLength(WINDOW_MINUTES + 1);
+    expect(database.generations.every((row) => row.status === 'failed' && row.refunded === true)).toBe(true);
+    expect(run.status).toBe('failed');
+    expect(database.run).toMatchObject({ status: 'failed', finished_at: givenUpAt });
+    expect(database.step).toMatchObject({
+      status: 'failed',
+      generation_id: null,
+      error_message: 'The generation provider is busy right now. Please retry this step shortly.',
+      finished_at: givenUpAt,
+    });
+    // The step has failed now, and nobody is still watching the run.
+    // Only the try that ended it is announced, not the ones before it.
+    expect(history.sent.map((row) => row.dedupe_key)).toEqual([`generation:gen-${WINDOW_MINUTES + 1}:failed`]);
+    expect(history.sent[0]).toMatchObject({
+      user_id: 'user-1',
+      type: 'generation_failed',
+      title: 'Your image failed',
+      deep_link: `/viewer?source=studio-creations&initialId=gen-${WINDOW_MINUTES + 1}`,
+    });
   });
 
   it('sends nothing for a submission the provider may have accepted', async () => {
