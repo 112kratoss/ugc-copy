@@ -18,6 +18,7 @@ import {
   getHeldProviderSubmissionGenerationId,
   getInProgressStartGenerationId,
   getPublicGenerationStartFailure,
+  type PublicGenerationStartFailure,
 } from '@/lib/generation-public-failure';
 import { syncGenerationStatuses } from '@/lib/generation-status-sync';
 import { notifyRunStepStartFailure } from '@/lib/run-step-start-failure-notification';
@@ -65,7 +66,7 @@ import {
 } from '@/lib/generation-model-catalog-store';
 import { buildUnifiedGenerationQuoteInput, type UnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
 import type { CatalogGenerationInputAsset } from '@/lib/generation-model-adapters';
-import type { CatalogPrimitive, GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
+import { CatalogError, type CatalogPrimitive, type GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 
 export interface WorkflowRunExecutionResult {
   runId: string;
@@ -1146,6 +1147,35 @@ export async function executeWorkflowRun(params: {
   };
 }
 
+/**
+ * What a step says when the model catalog turns it away. The catalog does
+ * that before any credits are held: the step's model has left it, it has
+ * moved on from the revision the run was priced at, or a setting the step
+ * asks for is gone. Only a change to the workflow gets the step started.
+ */
+const CATALOG_REFUSAL_MESSAGES: Record<CatalogError['code'], string> = {
+  MODEL_UNAVAILABLE: 'This model is no longer available. Choose another model for this step, then run it again.',
+  CATALOG_CHANGED: 'Model settings have changed since this workflow was opened. Reload the page to refresh them, then run it again.',
+  INVALID_MODEL_SETTINGS: 'Some model settings for this step are no longer available. Update them, then run it again.',
+};
+
+/**
+ * Why a step could not start. A refusal by the catalog is answered here and
+ * kept from the public classifier, which reads errors met on the way to the
+ * provider and takes the word "unavailable" for an outage. The catalog's code
+ * for a model it no longer lists is MODEL_UNAVAILABLE, so that step would be
+ * left queued and tried again on every tick until the run's 24-hour limit.
+ * `provider_rejected` is the code that ends a step, and the one the template
+ * worker records for the same refusal.
+ */
+function getRunStepStartFailure(error: unknown): PublicGenerationStartFailure {
+  if (error instanceof CatalogError) {
+    return { code: 'provider_rejected', message: CATALOG_REFUSAL_MESSAGES[error.code] };
+  }
+
+  return getPublicGenerationStartFailure(error);
+}
+
 async function advanceWorkflowRunProgress(params: {
   supabase: SupabaseClient;
   canvasId: string;
@@ -1273,7 +1303,7 @@ async function advanceWorkflowRunProgress(params: {
         clientRequestKeyHash: workflowGenerationIdempotencyHash(run.id, node.id),
       });
     } catch (error) {
-      const failure = getPublicGenerationStartFailure(error);
+      const failure = getRunStepStartFailure(error);
       const heldGenerationId = getHeldProviderSubmissionGenerationId(error);
       // A start the worker repeats carries the same request key, so it can
       // find the generation its first try reserved still active with no

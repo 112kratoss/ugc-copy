@@ -527,7 +527,11 @@ export async function loadGenerationModelOperationByRevision({
   const descriptor = snapshot.catalog.models.find((model) => model.id === modelId);
   const operation = snapshot.operations.get(modelId);
   if (!descriptor || !operation) {
-    throw new Error(`Model ${modelId} is unavailable in catalog revision ${revision}.`);
+    // The catalog's own refusal, in the class and words the quote uses for a
+    // model the catalog no longer lists, so a run worker ends the step on it.
+    // A bare error that says "unavailable" reads as a provider outage to the
+    // public classifier, and the step would wait for a model that is gone.
+    throw new CatalogError('This model is no longer available.', 'MODEL_UNAVAILABLE', 409);
   }
   return { catalog: snapshot.catalog, operation, releaseId: snapshot.releaseId };
 }

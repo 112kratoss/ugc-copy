@@ -879,6 +879,110 @@ describe('workflow-runner recovery', () => {
     expect(relinkWarnings(warn)).toEqual([]);
   });
 
+  // The quote turns these away in the catalog's own error class, before any
+  // credits are held. Its code for a model that has left the catalog is
+  // MODEL_UNAVAILABLE, and the public classifier takes the word "unavailable"
+  // for a provider outage: read that way the step stays queued and is tried
+  // again on every tick until the run's 24-hour limit, though no later tick
+  // can find the model. The classifier does end the other two, with the copy
+  // for a request the provider refused.
+  it.each([
+    [
+      'its model has left the published catalog',
+      { message: 'This model is no longer available.', code: 'MODEL_UNAVAILABLE', status: 409 },
+      /no longer available.*choose another model/i,
+    ],
+    [
+      'its model has no published configuration',
+      { message: 'This model is not configured for generation.', code: 'MODEL_UNAVAILABLE', status: 409 },
+      /no longer available.*choose another model/i,
+    ],
+    [
+      'the catalog has moved on from the revision the run was priced at',
+      { message: 'The model catalog has changed. Refresh settings before generating.', code: 'CATALOG_CHANGED', status: 409 },
+      /model settings have changed.*reload the page/i,
+    ],
+    [
+      'a setting it uses has been withdrawn',
+      { message: 'Some model settings are no longer available.', code: 'INVALID_MODEL_SETTINGS', status: 422 },
+      /model settings for this step.*update them/i,
+    ],
+  ] as const)('ends a step the catalog refuses and says what to change: %s', async (_case, refusal, remedy) => {
+    const state = createQueuedWorkflowState();
+    const supabase = createSupabaseMock(state);
+    // From the module registry the runner loads from: `instanceof` is what the
+    // worker tests, and beforeEach has reset the registry.
+    const { CatalogError } = await import('@/lib/generation-model-catalog');
+    quoteGenerationModelMock.mockImplementationOnce(() => {
+      throw new CatalogError(refusal.message, refusal.code, refusal.status);
+    });
+
+    const { advanceWorkflowRunOnce } = await import('@/lib/workflow-runner');
+    const advance = () => advanceWorkflowRunOnce({
+      supabase: supabase as never,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    });
+    const run = await advance();
+
+    expect(run.status).toBe('failed');
+    expect(state.run).toMatchObject({ status: 'failed', finished_at: expect.any(String) });
+    const ended = {
+      status: 'failed',
+      generation_id: null,
+      error_message: expect.stringMatching(remedy),
+      started_at: expect.any(String),
+      finished_at: expect.any(String),
+    };
+    expect(run.steps?.find((step) => step.node_id === state.videoNodeId)).toMatchObject(ended);
+    expect(state.steps.find((step) => step.id === 'step-video')).toMatchObject(ended);
+    // Neither the note a busy provider leaves nor the one for a request the
+    // provider refused: the provider was never asked.
+    expect(state.steps.find((step) => step.id === 'step-video')?.error_message)
+      .not.toMatch(/provider|temporarily|shortly|template inputs/i);
+    expect(startVideoGenerationMock).not.toHaveBeenCalled();
+
+    // Nothing is left for a later tick to try.
+    await advance();
+    expect(quoteGenerationModelMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('still waits when the catalog could not be read at all', async () => {
+    const state = createQueuedWorkflowState();
+    const supabase = createSupabaseMock(state);
+    // The database behind the catalog did not answer. That passes, unlike a
+    // refusal the catalog made, so the step keeps its place in the queue.
+    quoteGenerationModelMock.mockImplementationOnce(() => {
+      throw Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' });
+    });
+
+    const { advanceWorkflowRunOnce } = await import('@/lib/workflow-runner');
+    const advance = () => advanceWorkflowRunOnce({
+      supabase: supabase as never,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    });
+    const run = await advance();
+
+    expect(run.status).toBe('processing');
+    expect(state.run).toMatchObject({ status: 'processing', finished_at: null });
+    expect(state.steps.find((step) => step.id === 'step-video')).toMatchObject({
+      status: 'queued',
+      generation_id: null,
+      error_message: expect.stringContaining('temporarily unavailable'),
+      finished_at: null,
+    });
+
+    // The next tick quotes again, and this time the catalog answers.
+    await advance();
+    expect(quoteGenerationModelMock).toHaveBeenCalledTimes(2);
+    expect(startVideoGenerationMock).toHaveBeenCalledTimes(1);
+    expect(state.steps.find((step) => step.id === 'step-video')).toMatchObject({
+      status: 'processing',
+      generation_id: 'gen-video',
+    });
+  });
+
   it('continues from the immutable run snapshot when the source canvas changes', async () => {
     const state = createQueuedWorkflowState();
     state.graph = normalizeWorkflowGraph({
