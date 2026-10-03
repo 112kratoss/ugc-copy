@@ -6,10 +6,29 @@ Updated 2026-10-03 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/assistant-discard-audit-7g`, incorporating main `9416008a4d684e1451b40ddd6bf0fb9f084b87ed` (#294); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/canvas-authoring-audit-7h`, incorporating main `17dfbbc5bb8bf27c0e03f4871c60453feaea577a` (#308); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+Current branch is `codex/canvas-authoring-audit-7h` (#310), incorporating 7G.
+7F is deployed as 9416008a: exact-main Quality 37125525853, standard release
+37126198484 and independent exact-SHA/feed/admin/webhook checks pass. Release
+completed October 3 at 19:00:10 IST. Read the atomic-approval release report.
+WORKFLOW-02 returns to untested; ledger is 22 passed, 26 untested, two failed,
+three external. Broad workflow matrices remain open.
+
+7G PR #308 passed updated-main Quality 37125585448 and merged as 17dfbbc5 at
+19:01:14 IST with no mobile store release active. Exact-main release is next.
+7H PR #310 now targets main. It reproduces stale publication/restore, competing
+restores, publication decreasing revision 6 to 5, and title-only rename without
+baseRevision overwriting newer edits. Candidate revision guards pass 17 actual
+SQL cases; combined focused tests pass 42 and wider canvas suite passes 120
+(with the 17 SQL cases separately run). Read the canvas-authoring report.
+Current-head CI/release remain pending. Existing local changes are preserved.
+
+The preceding checkpoint follows.
+
 
 Current branch is `codex/assistant-discard-audit-7g`, incorporating main
 9416008a. 7F combined-main PR Quality 37124830807 passed all four jobs. #294

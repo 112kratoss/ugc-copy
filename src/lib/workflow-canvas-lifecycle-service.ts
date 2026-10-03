@@ -36,7 +36,7 @@ type WorkflowCanvasLifecycleResult =
   }
   | {
     ok: false;
-    status: 404 | 500;
+    status: 404 | 409 | 500;
     body: { error: string };
   };
 
@@ -152,9 +152,18 @@ export async function publishWorkflowCanvasForRoute({
     })
     .eq('id', canvasId)
     .eq('user_id', userId)
+    .eq('revision', currentCanvas.revision)
     .select('id, title, graph, created_at, updated_at, revision, status, published_at')
-    .single();
+    .maybeSingle();
   const publishedCanvas = publishedData as WorkflowCanvasRow | null;
+
+  if (!error && !publishedCanvas) {
+    return {
+      ok: false,
+      status: 409,
+      body: { error: 'Workflow canvas has newer changes. Reload it and try again.' },
+    };
+  }
 
   if (error || !publishedCanvas) {
     logBackendError('failed_to_publish_workflow_canvas', { error: error });
@@ -234,9 +243,18 @@ export async function restoreWorkflowCanvasHistoryForRoute({
     })
     .eq('id', canvasId)
     .eq('user_id', userId)
+    .eq('revision', currentCanvas.revision)
     .select('id, title, graph, created_at, updated_at, revision, status, published_at')
-    .single();
+    .maybeSingle();
   const restoredCanvas = restoredData as WorkflowCanvasRow | null;
+
+  if (!error && !restoredCanvas) {
+    return {
+      ok: false,
+      status: 409,
+      body: { error: 'Workflow canvas has newer changes. Reload it and try again.' },
+    };
+  }
 
   if (error || !restoredCanvas) {
     logBackendError('failed_to_restore_workflow_canvas_history', { error: error });

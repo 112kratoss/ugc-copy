@@ -43,6 +43,7 @@ function createQuery(result: QueryResult, call: QueryCall) {
       return query;
     },
     single: vi.fn(async () => result),
+    maybeSingle: vi.fn(async () => result),
     then<TResult1 = QueryResult, TResult2 = never>(
       onfulfilled?: ((value: QueryResult) => TResult1 | PromiseLike<TResult1>) | null,
       onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
@@ -208,7 +209,7 @@ describe('workflow canvas lifecycle service', () => {
         published_at: '2026-06-23T00:00:00.000Z',
         revision: 5,
       },
-      filters: [['id', 'canvas-1'], ['user_id', 'user-1']],
+      filters: [['id', 'canvas-1'], ['user_id', 'user-1'], ['revision', 4]],
     });
     expect(supabase.insertCalls).toEqual([{
       table: 'workflow_canvas_history',
@@ -302,7 +303,7 @@ describe('workflow canvas lifecycle service', () => {
         revision: 8,
         status: 'draft',
       },
-      filters: [['id', 'canvas-1'], ['user_id', 'user-1']],
+      filters: [['id', 'canvas-1'], ['user_id', 'user-1'], ['revision', 7]],
     });
     expect(supabase.insertCalls[0]).toMatchObject({
       table: 'workflow_canvas_history',
