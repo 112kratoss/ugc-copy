@@ -15,9 +15,10 @@ unequal effort and risk. Do not turn their pass count into a percentage of backe
 safety or an ETA. New findings attach to these obligations; changes in scope must
 be recorded explicitly instead of silently adding another lettered batch.
 
-Current ledger: **53 obligations — 22 passed, 26 untested, 2 failed, 3 external**.
+Current ledger: **53 obligations — 22 passed, 25 untested, 3 failed, 3 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
-WORKFLOW-02 moved from untested to failed after the reproduced 7E/7F defects; no
+WORKFLOW-02 and WORKFLOW-04 moved from untested to failed after the reproduced
+7E/7F canvas and 7G assistant-discard defects; no
 new obligation was added. Releasing these fixes will not by itself complete its
 remaining behavioral matrix.
 
@@ -106,7 +107,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | WORKFLOW-01 | Canvas/child/run-step ownership and start admission fixes | passed | [Workflow ownership](backend-section-02-workflow-release-2026-09-27.md), [RPC admission](backend-section-03-rpc-release-2026-09-27.md) |
 | WORKFLOW-02 | Execute, partially fail, restart, retry, approve and cancel runs | failed | [7E](backend-section-07-canvas-persistence-2026-10-03.md) reproduces accepted-task loss from a failed link write; [7F](backend-section-07-atomic-approval-2026-10-03.md) reproduces stranded partial approval. Candidate fixes pass actual SQL locally but remain unreleased. Template completion/worker death evidence is in [7C/D](backend-section-07-completion-recovery-release-2026-10-03.md); broader canvas recovery remains open |
 | WORKFLOW-03 | Billing conservation and idempotency across retry/cancel/recovery | untested | 7A/7C/D template SQL evidence and 7E/7F real canvas image/video holds, refunds, retries and duplicate settlement are recorded; remaining interruption and provider/Storage cases stay open |
-| WORKFLOW-04 | Template publication, sharing/import, assistant proposal application and input ownership | untested | [7B publication fix released](backend-section-07-publication-release-2026-10-03.md); [36-method inventory](backend-section-07-method-matrix-2026-10-03.md) records remaining actual Storage, cross-user, stale-version and authoring cases |
+| WORKFLOW-04 | Template publication, sharing/import, assistant proposal application and input ownership | failed | [7G](backend-section-07-assistant-discard-2026-10-03.md) reproduces applied-state overwrite and false discard success; candidate verified locally, unreleased. [7B publication fix released](backend-section-07-publication-release-2026-10-03.md); [36-method inventory](backend-section-07-method-matrix-2026-10-03.md) records remaining actual Storage, cross-user, stale-version and authoring cases |
 | MEDIA-01 | Cleanup retry/concurrency and allocation-failure source cancellation | passed | [6H release](backend-section-06-staging-cleanup-release-2026-10-01.md) |
 | MEDIA-02 | Published dead-owner cleanup and inherited reader protection | passed | [6J release](backend-section-06-staging-locks-release-2026-10-01.md); no claim about legacy scratch |
 | MEDIA-03 | Sequential crash reclamation under a bounded filesystem | passed | [6K probe](backend-section-06-disk-pressure-2026-10-01.md): five killed owners on 2 MiB tmpfs followed by successful staging |

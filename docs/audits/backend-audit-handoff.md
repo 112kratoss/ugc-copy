@@ -6,10 +6,36 @@ Updated 2026-10-03 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/canvas-approval-audit-7f`, incorporating main `6df13e5d8673f9996b8d94dffc854d96ee8d3e57` (#307); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/assistant-discard-audit-7g`, incorporating main `9416008a4d684e1451b40ddd6bf0fb9f084b87ed` (#294); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+Current branch is `codex/assistant-discard-audit-7g`, incorporating main
+9416008a. 7F combined-main PR Quality 37124830807 passed all four jobs. #294
+merged at 18:44:56 IST with no mobile store release active. Exact-main Quality
+37125525853 is running; standard release/live checks remain pending. Local combined
+checks passed 14 database cases, 105 focused cases, app/test types and lint.
+Independent live checks pass on descendant 7d6a6d11 containing the 7E fix.
+Later production release 37124633899 for 6df13e5d passed.
+
+7G reproduces three assistant discard failures with actual authenticated SQL:
+already-applied overwrite, apply committing after the discard read, and a
+rejected write reported as success. The fix conditionally updates only ready
+owned proposals, reports errors/conflicts, and returns the written row. Seven
+DB cases, nine focused tests, app/test types and lint pass. Read
+`backend-section-07-assistant-discard-2026-10-03.md`. This is separate from 7F;
+PR #308 now targets main, incorporating 9416008a. A route-test fixture needed
+its update projection brought in line with the new persisted-row response; all
+20 route/rate-limit cases then passed. Updated-main CI is next. Preserve both
+release sequences. WORKFLOW-04 remains failed with the unreleased discard defects.
+Ledger: 22 passed, 25 untested, three failed, three external.
+Three private SQL controls additionally pass for stale assistant apply, history
+insert rollback and competing proposals at the same revision. The next source
+leads (not validated findings) are in private `next-authoring-boundaries.md`.
+
+The preceding checkpoint follows.
+
 
 Current branch: `codex/canvas-approval-audit-7f`, incorporating main 6df13e5d.
 7E PR #293 deployed as f1ec34dc: exact-main Quality 37098042595 and standard

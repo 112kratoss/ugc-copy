@@ -98,13 +98,15 @@ function createSupabaseMock({
               filters.push({ phase: 'update', column, value });
               return query;
             },
-            then(resolve: (value: { error: null | { code: string; message: string } }) => void) {
+            select() { return query; },
+            async maybeSingle() {
               updates.push(payload);
-              resolve({
+              return {
+                data: missingSchemaOnUpdate ? null : { ...proposal, ...payload },
                 error: missingSchemaOnUpdate
                   ? { code: '42P01', message: 'workflow_canvas_assistant_proposals missing' }
                   : null,
-              });
+              };
             },
           };
           return query;
