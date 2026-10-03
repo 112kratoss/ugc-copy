@@ -50,9 +50,11 @@ import {
   isTemplateRunStepSuccessful,
   isTemplateRunTerminal,
   prioritizeTemplateRunSteps,
+  templateRunStepNeedsNewRun,
   templateRunStepNeedsReplacementInput,
   templateRunStepOutcome,
   templateRunStepPlaceholderLabel,
+  templateRunStepPlaceholderMark,
   templateRunStepStatusLabel,
   templateRunProgress,
   templateRunStageLabel,
@@ -823,9 +825,12 @@ function RunStepCard({
   const notFinished = outcome === 'not_finished';
   const awaitingApproval = outcome === 'review';
   const needsReplacementInput = templateRunStepNeedsReplacementInput(step);
-  // Its advice is to retry, which only a run that can continue offers.
-  const serviceMisconfigured = outcome === 'needs_attention' && step.failureCode === 'service_misconfigured';
   const canRetry = canRetryTemplateRunStep(runStatus, step);
+  // Its advice is to retry, which only a failed step that can be retried can follow.
+  const serviceMisconfigured = outcome === 'needs_attention' && canRetry && step.failureCode === 'service_misconfigured';
+  // The step failed for good while its run can still continue: the card's one way on is the template.
+  const needsNewRun = templateRunStepNeedsNewRun(runStatus, step);
+  const mark = templateRunStepPlaceholderMark(runStatus, step);
   const confirmRetry = () => {
     const cost = step.estimatedRetryCredits === null ? 'the current generation rate' : `${step.estimatedRetryCredits} credits`;
     const balance = credits === null ? '' : ` You currently have ${formatCreditAmount(credits)} credits.`;
@@ -869,10 +874,9 @@ function RunStepCard({
         <MediaPreview url={step.mediaKind === 'video' ? step.renditionUrl || step.outputUrl : step.outputUrl} kind={step.mediaKind} height={step.mediaKind === 'video' ? 300 : 390} />
       ) : (
         <View style={{ minHeight: 220, borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: theme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-          {/* The retry mark is for a step that can be retried, which no step of an ended run can. */}
-          {notFinished ? <NotFinishedIcon size={appTheme.icon.hero} color={theme.colors.muted} />
-            : outcome === 'failed' ? <TriangleAlert size={appTheme.icon.hero} color={theme.colors.danger} />
-              : failed ? <RefreshCw size={appTheme.icon.hero} color={theme.colors.danger} />
+          {mark === 'no_output' ? <NotFinishedIcon size={appTheme.icon.hero} color={theme.colors.muted} />
+            : mark === 'warning' ? <TriangleAlert size={appTheme.icon.hero} color={theme.colors.danger} />
+              : mark === 'retry' ? <RefreshCw size={appTheme.icon.hero} color={theme.colors.danger} />
                 : <ActivityIndicator size="large" color={theme.colors.primary} />}
           <AppText variant="bodySm" color="muted">{templateRunStepPlaceholderLabel(runStatus, step)}</AppText>
         </View>
@@ -908,9 +912,9 @@ function RunStepCard({
           onPress={confirmRetry}
         />
       ) : null}
-      {needsReplacementInput ? (
+      {needsReplacementInput || needsNewRun ? (
         <SecondaryButton
-          label="Start with new inputs"
+          label={needsReplacementInput ? 'Start with new inputs' : 'Return to template'}
           onPress={() => router.push(`/templates/${encodeURIComponent(restartTemplateId)}` as never)}
         />
       ) : null}

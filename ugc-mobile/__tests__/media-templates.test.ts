@@ -16,15 +16,17 @@ import {
   normalizeMediaTemplateListResponse,
   normalizeTemplateRunResponse,
   prioritizeTemplateRunSteps,
+  templateRunStepNeedsNewRun,
   templateRunStepNeedsReplacementInput,
   templateRunProgress,
   templateRunStageLabel,
   templateRunStepOutcome,
   templateRunStepPlaceholderLabel,
+  templateRunStepPlaceholderMark,
   templateRunStepStatusLabel,
   totalTemplateEstimate,
 } from '../lib/media-templates';
-import type { TemplateRunStatus, TemplateRunStep } from '../lib/types';
+import type { TemplateRunFailureCode, TemplateRunStatus, TemplateRunStep } from '../lib/types';
 
 const templateFixture = {
   id: 'template-1',
@@ -175,20 +177,21 @@ describe('media template view model', () => {
     expect(canRetryTemplateRunStep('needs_attention', { ...run.steps[2], failureCode: 'provider_busy' })).toBe(true);
   });
 
+  const step = (overrides: Partial<TemplateRunStep> = {}): TemplateRunStep => ({
+    id: 'step',
+    kind: 'generation',
+    mediaKind: 'image',
+    status: 'cancelled',
+    label: 'Final image',
+    outputUrl: null,
+    errorMessage: null,
+    failureCode: null,
+    canRetry: false,
+    estimatedRetryCredits: 12,
+    ...overrides,
+  });
+
   describe('a step of a run that has ended', () => {
-    const step = (overrides: Partial<TemplateRunStep> = {}): TemplateRunStep => ({
-      id: 'step',
-      kind: 'generation',
-      mediaKind: 'image',
-      status: 'cancelled',
-      label: 'Final image',
-      outputUrl: null,
-      errorMessage: null,
-      failureCode: null,
-      canRetry: false,
-      estimatedRetryCredits: 12,
-      ...overrides,
-    });
     const describeStep = (runStatus: TemplateRunStatus, value: TemplateRunStep) => ({
       outcome: templateRunStepOutcome(runStatus, value),
       pill: templateRunStepStatusLabel(runStatus, value),
@@ -246,9 +249,17 @@ describe('media template view model', () => {
 
       expect(screen).toContain('templateRunStepStatusLabel(runStatus, step)');
       expect(screen).toContain('templateRunStepPlaceholderLabel(runStatus, step)');
-      for (const wording of ['Needs attention', 'Not finished', 'This step can be retried', 'Waiting for output', 'No output']) {
+      for (const wording of ['Needs attention', 'Not finished', 'This step can be retried', 'This step cannot be retried', 'Waiting for output', 'No output']) {
         expect(screen, wording).not.toContain(wording);
       }
+      // The mark over those words and the way out of a step that cannot go on
+      // are answers of the same helpers: decided in the screen from "it failed",
+      // they promised a retry the step did not have.
+      expect(screen).toContain('templateRunStepPlaceholderMark(runStatus, step)');
+      expect(screen).toContain('templateRunStepNeedsNewRun(runStatus, step)');
+      // The retry mark is drawn for that answer, and the way out is a button on the card.
+      expect(screen).toContain("mark === 'retry' ? <RefreshCw");
+      expect(screen).toMatch(/needsNewRun \? \(\s*<SecondaryButton/);
       // Whether a step can be approved is the outcome's answer too: asking the
       // step alone would offer it on a run that has ended.
       expect(screen).toContain("outcome === 'review'");
@@ -266,6 +277,96 @@ describe('media template view model', () => {
       expect(describeStep('processing', step({ status: 'processing' }))).toEqual({ outcome: 'in_progress', pill: 'processing', box: 'Waiting for output' });
       expect(describeStep('queued', step({ status: 'queued' }))).toEqual({ outcome: 'in_progress', pill: 'queued', box: 'Waiting for output' });
       expect(describeStep('processing', step({ kind: 'approval', status: 'awaiting_approval' })).box).toBe('Waiting for output');
+    });
+  });
+
+  describe('a failed step of a run that can still continue', () => {
+    const card = (runStatus: TemplateRunStatus, value: TemplateRunStep) => ({
+      box: templateRunStepPlaceholderLabel(runStatus, value),
+      mark: templateRunStepPlaceholderMark(runStatus, value),
+      retry: canRetryTemplateRunStep(runStatus, value),
+      newRun: templateRunStepNeedsNewRun(runStatus, value),
+    });
+    const failed = (overrides: Partial<TemplateRunStep> = {}) => step({ status: 'failed', canRetry: true, ...overrides });
+
+    it('does not promise a retry to a step that cannot have one', () => {
+      // What the worker writes on a step whose pinned catalog release is gone:
+      // failed for good, in a run it leaves at needs_attention.
+      const catalogGone = failed({
+        failureCode: 'provider_rejected',
+        canRetry: false,
+        errorMessage: 'This template was published against a model catalog that is no longer available. It cannot generate until its creator republishes it.',
+      });
+      // A review step the template does not let people retry, failed for want of its input.
+      const review = failed({ kind: 'approval', canRetry: false, errorMessage: 'This step is missing a required workflow input.' });
+
+      for (const value of [catalogGone, review]) {
+        expect(card('needs_attention', value)).toEqual({
+          box: 'This step cannot be retried', mark: 'warning', retry: false, newRun: true,
+        });
+      }
+      // The pill is the one every failed step of such a run has.
+      expect(templateRunStepStatusLabel('needs_attention', catalogGone)).toBe('Needs attention');
+    });
+
+    it('keeps the retry mark, and only the retry, on a step that can be retried', () => {
+      expect(card('needs_attention', failed({ failureCode: 'provider_unavailable' })))
+        .toEqual({ box: 'This step can be retried', mark: 'retry', retry: true, newRun: false });
+      expect(card('needs_attention', failed({ failureCode: 'service_misconfigured' })))
+        .toEqual({ box: 'Service setup must be completed first', mark: 'retry', retry: true, newRun: false });
+    });
+
+    it('never advises a retry the step cannot have', () => {
+      expect(card('needs_attention', failed({ failureCode: 'service_misconfigured', canRetry: false })))
+        .toEqual({ box: 'This step cannot be retried', mark: 'warning', retry: false, newRun: true });
+    });
+
+    it('leaves a step whose upload must be replaced to its own way out', () => {
+      // "Start with new inputs" is its button. It cannot be retried, so the retry mark is not its mark.
+      for (const canRetry of [true, false]) {
+        expect(card('needs_attention', failed({ failureCode: 'invalid_input_media', canRetry })))
+          .toEqual({ box: 'This upload needs to be replaced', mark: 'warning', retry: false, newRun: false });
+      }
+    });
+
+    it('gives every failed step exactly one way forward, and promises a retry only where there is one', () => {
+      const runStatuses: TemplateRunStatus[] = [
+        'collecting_inputs', 'queued', 'processing', 'awaiting_approval', 'needs_attention', 'succeeded', 'failed', 'cancelled',
+      ];
+      const failureCodes: (TemplateRunFailureCode | null)[] = [
+        null, 'insufficient_credits', 'invalid_input_media', 'service_misconfigured', 'provider_busy', 'provider_unavailable', 'provider_rejected',
+      ];
+      let stuck = 0;
+      for (const runStatus of runStatuses) {
+        for (const kind of ['generation', 'approval'] as const) {
+          for (const status of ['queued', 'processing', 'awaiting_approval', 'succeeded', 'failed', 'error', 'cancelled']) {
+            for (const failureCode of failureCodes) {
+              for (const canRetry of [true, false]) {
+                const value = step({ kind, status, failureCode, canRetry });
+                const described = card(runStatus, value);
+                const context = JSON.stringify({ runStatus, kind, status, failureCode, canRetry });
+
+                const promisesRetry = described.mark === 'retry'
+                  || ['This step can be retried', 'Service setup must be completed first'].includes(described.box);
+                if (promisesRetry) expect(described.retry, context).toBe(true);
+                expect(described.box === 'This step cannot be retried', context).toBe(described.newRun);
+
+                if (templateRunStepOutcome(runStatus, value) === 'needs_attention') {
+                  const waysForward = [described.retry, templateRunStepNeedsReplacementInput(value), described.newRun];
+                  expect(waysForward.filter(Boolean), context).toHaveLength(1);
+                  if (described.newRun) stuck += 1;
+                } else {
+                  // A step that is waiting, under review or done needs no way out,
+                  // and a run that has ended offers the new run once, under its steps.
+                  expect(described.newRun, context).toBe(false);
+                }
+              }
+            }
+          }
+        }
+      }
+      // The sweep reached the steps this is about.
+      expect(stuck).toBeGreaterThan(0);
     });
   });
 
