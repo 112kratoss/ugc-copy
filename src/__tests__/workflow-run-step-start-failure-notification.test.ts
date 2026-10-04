@@ -55,11 +55,20 @@ const WINDOW_MINUTES = WORKFLOW_RUN_STEP_BUSY_RETRY_WINDOW_MS / MINUTE;
 type Row = Record<string, unknown>;
 type Filter = { op: 'eq' | 'in'; column: string; value: unknown };
 
-/** What the start settlement answers, whatever the row said before it. */
+/**
+ * What the start settlement answers. `failed` is the function's own answer: the
+ * credits are returned, or `already_failed` for a row that had them back. The
+ * other two are answered whatever the row said before.
+ */
 type StartSettlement = 'failed' | 'already_failed' | 'unavailable';
+
+/** What one settlement call meets: no database, or a database whose answer is lost after it wrote. */
+type SettlementFault = 'unreachable' | 'answer-lost';
 
 type RunDatabaseOptions = {
   settlement?: StartSettlement;
+  /** What the first settlement calls meet, one for each call. The calls after them go through. */
+  settlementFaults?: SettlementFault[];
   /** The credit hold is refused: nothing is reserved and no generation exists. */
   insufficientCredits?: boolean;
   /** Our own gate in front of the provider turns the submission away. */
@@ -111,6 +120,7 @@ function createRunDatabase(kind: 'image' | 'video' | 'voiceover', options: RunDa
     generations: [],
   };
   const rpcCalls: Array<{ fn: string; args: Row }> = [];
+  const settlementFaults = [...(options.settlementFaults ?? [])];
 
   function matching(table: string, filters: Filter[]) {
     return (tables[table] ?? []).filter((row) => filters.every((filter) => (
@@ -193,11 +203,16 @@ function createRunDatabase(kind: 'image' | 'video' | 'voiceover', options: RunDa
     if (fn === 'settle_generation_start_failed') {
       const settlement = options.settlement ?? 'failed';
       if (settlement === 'unavailable') return { data: null, error: { message: 'settlement unavailable' } };
+      const fault = settlementFaults.shift();
+      if (fault === 'unreachable') return { data: null, error: { message: 'settlement unavailable' } };
       const generation = tables.generations.find((row) => row.id === args.p_generation_id);
       if (!generation) return { data: { status: 'missing' }, error: null };
+      // As the function does: credits that are back already are not returned again.
+      const status = settlement === 'failed' && generation.refunded ? 'already_failed' : settlement;
       Object.assign(generation, { status: 'failed', refunded: true, client_request_key_hash: null });
+      if (fault === 'answer-lost') return { data: null, error: { message: 'connection reset' } };
       return {
-        data: { status: settlement, generation_id: generation.id, refunded: true, remaining_credits: 100 },
+        data: { status, generation_id: generation.id, refunded: true, remaining_credits: 100 },
         error: null,
       };
     }
@@ -474,9 +489,10 @@ describe('a workflow run step the provider refuses at start', () => {
   });
 
   it.each([
-    ['had already returned the credits', 'already_failed'],
-    ['could not be reached', 'unavailable'],
-  ] as const)('sends nothing when the settlement %s', async (_outcome, settlement) => {
+    // Answered, so asking again would change nothing.
+    ['had already returned the credits', 'already_failed', 1],
+    ['could not be reached in any of its three tries', 'unavailable', 3],
+  ] as const)('sends nothing when the settlement %s', async (_outcome, settlement, calls) => {
     providerRefuses();
     const database = createRunDatabase('image', { settlement });
     const history = createMobileNotificationHistory();
@@ -484,9 +500,29 @@ describe('a workflow run step the provider refuses at start', () => {
     await withCapturedLog(() => advance(connect(database, history)));
 
     // Only a settlement that released the hold itself is announced from here.
-    expect(database.settlements()).toHaveLength(1);
+    expect(database.settlements()).toHaveLength(calls);
     expect(database.step.status).toBe('failed');
     expect(history.started).toEqual([]);
+  });
+
+  it.each([
+    ['could not be reached at the first try', 'unreachable'],
+    ['went through at the first try and lost its answer on the way back', 'answer-lost'],
+  ] as const)('tells the creator once when the settlement %s', async (_outcome, fault) => {
+    providerRefuses();
+    const database = createRunDatabase('image', { settlementFaults: [fault] });
+    const history = createMobileNotificationHistory();
+
+    const run = await withCapturedLog(() => advance(connect(database, history)));
+
+    // The second try got an answer, and this start is what returned the
+    // credits, whichever of its two tries wrote that down. Nothing else will
+    // tell the creator the run stopped here.
+    expect(database.settlements()).toHaveLength(2);
+    expect(database.generations).toEqual([expect.objectContaining({ id: 'gen-1', status: 'failed', refunded: true })]);
+    expect(run.status).toBe('failed');
+    expect(database.step.status).toBe('failed');
+    expect(history.sent.map((row) => row.dedupe_key)).toEqual(['generation:gen-1:failed']);
   });
 
   it('sends nothing for a step that failed before any credits were held', async () => {

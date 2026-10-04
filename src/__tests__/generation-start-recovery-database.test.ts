@@ -22,6 +22,7 @@ describe.skipIf(!connectionString)(
     let start: typeof import('@/lib/generation-services').startImageGeneration;
     let idempotent: typeof import('@/lib/generation-start-idempotency').withGenerationStartIdempotency;
     let publicFailure: typeof import('@/lib/generation-services').getPublicGenerationStartFailure;
+    let refundedStart: typeof import('@/lib/generation-public-failure').getRefundedStartGenerationId;
     let releaseProvider: (() => void) | undefined;
     let markerFault:
       | 'error'
@@ -32,6 +33,10 @@ describe.skipIf(!connectionString)(
       | undefined;
     let persistentMarkerFault = false;
     let markerCalls = 0;
+    // The same faults, met by the settlement that refunds a refused start.
+    let settlementFault: typeof markerFault;
+    let persistentSettlementFault = false;
+    let settlementCalls = 0;
 
     beforeEach(async () => {
       expect(['localhost', '127.0.0.1']).toContain(
@@ -50,6 +55,9 @@ describe.skipIf(!connectionString)(
       ({ withGenerationStartIdempotency: idempotent } = await import(
         '@/lib/generation-start-idempotency'
       ));
+      ({ getRefundedStartGenerationId: refundedStart } = await import(
+        '@/lib/generation-public-failure'
+      ));
       provider = vi.fn<typeof fetch>().mockImplementation(async () =>
         Response.json({
           code: 200,
@@ -64,6 +72,9 @@ describe.skipIf(!connectionString)(
       markerFault = undefined;
       persistentMarkerFault = false;
       markerCalls = 0;
+      settlementFault = undefined;
+      persistentSettlementFault = false;
+      settlementCalls = 0;
       await pool.query(
         "insert into auth.users(id,email,aud,role,created_at) values($1,$2,'authenticated','authenticated',now())",
         [userId, `${userId}@example.invalid`],
@@ -117,19 +128,28 @@ describe.skipIf(!connectionString)(
             ].includes(name)
           )
             throw new Error(`Unexpected RPC ${name}`);
-          const fault =
-            name === 'mark_generation_submission_unknown'
-              ? markerFault
+          const marks = name === 'mark_generation_submission_unknown';
+          const settles =
+            name === 'settle_generation_start_failed' ||
+            name === 'settle_template_generation_start_failed';
+          const what = settles ? 'settlement' : 'marker';
+          const fault = marks
+            ? markerFault
+            : settles
+              ? settlementFault
               : undefined;
-          if (name === 'mark_generation_submission_unknown') markerCalls++;
-          if (fault && !persistentMarkerFault) markerFault = undefined;
+          if (marks) markerCalls++;
+          if (settles) settlementCalls++;
+          if (fault && marks && !persistentMarkerFault) markerFault = undefined;
+          if (fault && settles && !persistentSettlementFault)
+            settlementFault = undefined;
           if (fault === 'error')
             return {
               data: null,
-              error: new Error('synthetic marker write failure'),
+              error: new Error(`synthetic ${what} write failure`),
             };
           if (fault === 'throw')
-            throw new Error('synthetic marker transport failure');
+            throw new Error(`synthetic ${what} transport failure`);
           if (fault === 'empty') return { data: null, error: null };
           if (fault === 'unknown')
             return { data: { status: 'unexpected' }, error: null };
@@ -152,7 +172,9 @@ describe.skipIf(!connectionString)(
             if (fault === 'lost-response')
               return {
                 data: null,
-                error: new Error('synthetic response lost after marker commit'),
+                error: new Error(
+                  `synthetic response lost after ${what} commit`,
+                ),
               };
             return { data: rows[0].result, error: null };
           } catch (error) {
@@ -524,6 +546,65 @@ describe.skipIf(!connectionString)(
         });
         expect(await credits()).toBe(380);
         expect(provider).toHaveBeenCalledTimes(1);
+      });
+      it.each(['error', 'throw', 'empty', 'unknown', 'lost-response'] as const)(
+        `retries a transient settlement %s and refunds a refused start once (template: ${template})`,
+        async (fault) => {
+          const input = template ? await templateInput() : undefined;
+          settlementFault = fault;
+          provider.mockImplementation(async () =>
+            Response.json({ code: 422, msg: 'Invalid request' }),
+          );
+          const error = await (input ? start(input) : submit()).catch(
+            (error: unknown) => error,
+          );
+          const [generation] = await rows();
+          expect(generation).toMatchObject({
+            status: 'failed',
+            refunded: true,
+            prediction_id: null,
+            client_request_key_hash: null,
+          });
+          expect(settlementCalls).toBe(2);
+          // One refund of 120, whichever of the two calls wrote it.
+          expect(await credits()).toBe(500);
+          // This start released the hold, so a run worker may announce it.
+          expect(refundedStart(error)).toBe(generation.id);
+          expect(provider).toHaveBeenCalledTimes(1);
+        },
+      );
+      it(`keeps the hold for the reaper through a persistent settlement outage (template: ${template})`, async () => {
+        const input = template ? await templateInput() : undefined;
+        settlementFault = 'error';
+        persistentSettlementFault = true;
+        provider.mockImplementation(async () =>
+          Response.json({ code: 422, msg: 'Invalid request' }),
+        );
+        const error = await (input ? start(input) : submit()).catch(
+          (error: unknown) => error,
+        );
+        const [generation] = await rows();
+        expect(generation).toMatchObject({
+          status: 'pending',
+          refunded: false,
+          prediction_id: null,
+        });
+        expect(generation.client_request_key_hash).not.toBeNull();
+        expect(settlementCalls).toBe(3);
+        expect(await credits()).toBe(380);
+        expect(refundedStart(error)).toBeNull();
+        expect(error).toMatchObject({ message: 'Invalid request' });
+        // What the reaper asks for 45 minutes on: the hold is still there to
+        // be returned, and is returned once.
+        settlementFault = undefined;
+        const reaped = await client.rpc(
+          template
+            ? 'settle_template_generation_start_failed'
+            : 'settle_generation_start_failed',
+          { p_generation_id: generation.id, p_error_message: 'Timed out.' },
+        );
+        expect(reaped.data).toMatchObject({ status: 'failed' });
+        expect(await credits()).toBe(500);
       });
     }
 
