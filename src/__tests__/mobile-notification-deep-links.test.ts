@@ -35,6 +35,7 @@ describe('the links the server writes into notifications', () => {
     expect({
       generation: buildMobileNotificationDeepLink({ kind: 'generation', generationId: 'generation-1' }),
       templateRun: buildMobileNotificationDeepLink({ kind: 'templateRun', runId: 'run-1' }),
+      workflowCanvas: buildMobileNotificationDeepLink({ kind: 'workflowCanvas', canvasId: 'canvas-1' }),
       showcasePost: buildMobileNotificationDeepLink({ kind: 'showcasePost', postId: 'post-1' }),
       marketplaceResource: buildMobileNotificationDeepLink({ kind: 'marketplaceResource', resourceId: 'resource-1' }),
       creatorProfile: buildMobileNotificationDeepLink({ kind: 'creatorProfile', username: 'batman' }),
@@ -42,6 +43,7 @@ describe('the links the server writes into notifications', () => {
     }).toEqual({
       generation: deepLinks.generation,
       templateRun: deepLinks.templateRun,
+      workflowCanvas: deepLinks.workflowCanvas,
       showcasePost: deepLinks.showcasePost,
       marketplaceResource: deepLinks.marketplaceResource,
       creatorProfile: deepLinks.creatorProfile,
@@ -75,6 +77,7 @@ describe('the links the server writes into notifications', () => {
     )).toEqual({
       generation: '/creations?generation=generation-1',
       templateRun: '/template-runs/run-1',
+      workflowCanvas: '/create-workflow?canvas=canvas-1',
       showcasePost: '/showcase/post-1',
       marketplaceResource: '/marketplace/resource-1',
       creatorProfile: '/creators/batman',
@@ -84,5 +87,16 @@ describe('the links the server writes into notifications', () => {
     });
     // A run has its own page on the web, so its link needs no translation.
     expect(fs.existsSync(path.resolve('src/app/template-runs/[runId]/page.tsx'))).toBe(true);
+  });
+
+  it('sends a workflow run to the canvas on the web and to Alerts in the app', () => {
+    // The app has no canvas and opens only the routes on its own list, so the
+    // link is the Alerts route the app already opens, with the canvas on it.
+    const link = buildMobileNotificationDeepLink({ kind: 'workflowCanvas', canvasId: 'a canvas/1' });
+
+    expect(link.split('?')[0]).toBe(deepLinks.notifications);
+    expect(resolveWebNotificationPath(link)).toBe('/create-workflow?canvas=a%20canvas%2F1');
+    // The page at that address opens the canvas its `canvas` parameter names.
+    expect(fs.readFileSync(path.resolve('src/app/create-workflow/page.tsx'), 'utf8')).toContain('resolvedSearchParams.canvas');
   });
 });

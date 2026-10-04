@@ -9,6 +9,13 @@ const DEFAULT_PRUNE_WINDOW_MINUTES = 5;
 
 export const MAX_WORKFLOW_RUN_STEP_ATTEMPTS = 5;
 
+// How long a run may stay unfinished before the queue stops polling it. The
+// generation reaper in the generation-completions job is what eventually closes
+// an orphaned provider task, which then hydrates the workflow step as failed --
+// so this only has to outlast the slowest legitimate generation, not guess at
+// terminal state on the run's behalf.
+export const WORKFLOW_RUN_MAX_LIFETIME_SECONDS = 24 * 60 * 60;
+
 // Deliberately lower than generation completions' 4. A workflow step can start
 // a provider generation and drags the whole runner graph into memory with it,
 // and until F14 splits the queues this shares one 300s invocation with every

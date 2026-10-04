@@ -25,7 +25,11 @@ vi.mock('expo-constants', () => ({
   default: { easConfig: { projectId: 'project-1' }, expoConfig: { version: '1.0.0' } },
 }));
 
-const { navigateToNotificationDeepLink, syncLastNotificationResponse } = await import('../lib/notifications');
+const {
+  deepLinkTargetsAlertsScreen,
+  navigateToNotificationDeepLink,
+  syncLastNotificationResponse,
+} = await import('../lib/notifications');
 
 /**
  * Every destination the server writes into a notification, one line per kind.
@@ -48,6 +52,32 @@ beforeEach(() => {
 describe('every destination the server writes into a notification', () => {
   it.each(Object.entries(serverDeepLinks))('opens: %s', (_kind, link) => {
     expect(navigateToNotificationDeepLink(link)).toBe(true);
+    expect(routerMocks.push).toHaveBeenCalledTimes(1);
+    expect(routerMocks.push).toHaveBeenCalledWith(link);
+  });
+});
+
+describe('a workflow run link', () => {
+  // The canvas is on the web only. The server writes the Alerts route with the
+  // canvas on it, which the web turns into the canvas and every installed
+  // build of the app takes for the screen the alert is read on.
+  const link = serverDeepLinks.workflowCanvas;
+
+  it('is the Alerts screen, so a tap in the list goes nowhere else', () => {
+    expect(deepLinkTargetsAlertsScreen(link)).toBe(true);
+  });
+
+  it('is where a tapped push for a stopped run lands', async () => {
+    lastResponse.current = {
+      notification: {
+        request: {
+          identifier: 'push-2',
+          content: { data: { notificationId: 'notification-2', deepLink: link } },
+        },
+      },
+    };
+
+    await expect(syncLastNotificationResponse()).resolves.toBe(true);
     expect(routerMocks.push).toHaveBeenCalledTimes(1);
     expect(routerMocks.push).toHaveBeenCalledWith(link);
   });
