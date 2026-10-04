@@ -152,6 +152,19 @@ jobs:
           REVENUECAT_REST_API_KEY: ci-placeholder-revenuecat-key
           REVENUECAT_WEBHOOK_AUTH_TOKEN: ci-placeholder-revenuecat-webhook-token
 
+      # A failed test leaves its trace in test-results/ (trace: 'retain-on-failure'
+      # in playwright.config.ts) and the runner is gone when the job ends. Kept for
+      # a week, the next failure can be read instead of guessed at. The run uses
+      # the placeholder values above, so a trace holds no secret.
+      - name: Upload the traces of failed tests
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: e2e-test-results-attempt-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
   mobile:
     name: Mobile app
     runs-on: ubuntu-latest
