@@ -23,8 +23,12 @@ function stripComments(source: string) {
     .replace(/(^|[^:\\])\/\/.*$/gm, '$1');
 }
 
-/** Every way the app makes an expo-video player. */
-const PLAYER_CONSTRUCTION = /\b(?:useVideoPlayer|createVideoPlayer|useViewerVideoPlayer)\(/g;
+/**
+ * Every way the app makes an expo-video player, and the one way it gives a
+ * source to a player made empty (Android's preview player, which gets its clip
+ * once its view has a surface).
+ */
+const PLAYER_CONSTRUCTION = /(?<!function )\b(?:useVideoPlayer|createVideoPlayer|useViewerVideoPlayer|useVideoSourceAfterSurface)\(/g;
 const CACHED_SOURCE = /\buseCaching:\s*true\b|\bcachedVideoSource\(/;
 
 /** The text of a call's first argument, given the index of its opening parenthesis. */
@@ -82,6 +86,13 @@ describe('video player cache coverage', () => {
       .toEqual({ players: 1, uncached: 0 });
     expect(countVideoPlayers('const own = useViewerVideoPlayer(lent ? null : { ...source, useCaching: true }, (instance) => {});'))
       .toEqual({ players: 1, uncached: 0 });
+    expect(countVideoPlayers('const surface = useVideoSourceAfterSurface(afterSurface ? cachedVideoSource(source) : null, player);'))
+      .toEqual({ players: 1, uncached: 0 });
+    expect(countVideoPlayers('const surface = useVideoSourceAfterSurface(afterSurface ? source : null, player);'))
+      .toEqual({ players: 1, uncached: 1 });
+    // A hook's own definition makes nothing.
+    expect(countVideoPlayers('export function useVideoSourceAfterSurface(source: VideoSource, player: VideoPlayer) {}'))
+      .toEqual({ players: 0, uncached: 0 });
     // Caching named only in a comment or in a later argument does not count.
     expect(countVideoPlayers('// useCaching: true\nconst player = useVideoPlayer(source, () => ({ useCaching: true }));'))
       .toEqual({ players: 1, uncached: 1 });
