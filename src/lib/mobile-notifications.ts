@@ -204,6 +204,39 @@ function isDeviceNotRegistered(details: unknown) {
   return isRecord(details) && details.error === 'DeviceNotRegistered';
 }
 
+/**
+ * What Expo says about a message that sending it again cannot change: the
+ * device is gone, the project's push credentials are wrong, or the message
+ * itself is. Its documentation gives `MessageRateExceeded` the opposite advice
+ * ("slowly retry sending messages"), so that one, `ExpoError`, `ProviderError`
+ * and any refusal that names no reason are left for the retry job.
+ */
+const PERMANENT_EXPO_PUSH_ERRORS = new Set([
+  'DeviceNotRegistered',
+  'InvalidCredentials',
+  'MismatchSenderId',
+  'MessageTooBig',
+  'DeveloperError',
+]);
+
+function isPermanentExpoPushRefusal(details: unknown) {
+  return isRecord(details) && typeof details.error === 'string' && PERMANENT_EXPO_PUSH_ERRORS.has(details.error);
+}
+
+/**
+ * How a failed send is filed, by whether a later attempt could go through.
+ *
+ * The retry job, and the partial index it reads, take failed sends whose
+ * `receipt_status` is `error` while they have attempts left. A send that
+ * cannot succeed is filed `stale` instead, the status a delivery already takes
+ * once nothing more will be heard about it. That keeps it out of the queue
+ * under any version of the job's query, and leaves `attempt_count` saying how
+ * many requests were really made.
+ */
+function failedSendReceiptStatus(worthRetrying: boolean) {
+  return worthRetrying ? 'error' : 'stale';
+}
+
 function getErrorMessage(error: unknown, fallback: string) {
   if (error instanceof ExpoPushRetryError) {
     return getErrorMessage(error.cause, error.message || fallback);
@@ -691,10 +724,9 @@ async function createAggregatedMobileNotification({
  *
  * Live rows only. No code reads `disabled_at`: its use is working out
  * afterwards when a token stopped receiving pushes. A dead token goes on
- * collecting `DeviceNotRegistered` for every push still on its way to it —
- * each receipt arrives on its own, and a send Expo refuses is tried twice more
- * by the retry job — so an unfiltered update moved that time, and `updated_at`
- * with it, forward to each of those runs.
+ * collecting `DeviceNotRegistered` for every push still on its way to it, each
+ * receipt arriving on its own, so an unfiltered update moved that time, and
+ * `updated_at` with it, forward to each of those runs.
  */
 async function retireUnregisteredPushTokens(
   adminSupabase: SupabaseClient,
@@ -788,7 +820,11 @@ async function sendMobilePushForNotification(
         deliveries.push({
           ...delivery,
           send_status: 'error',
-          receipt_status: 'error',
+          // A request Expo turned down is not tried twice here, and a later
+          // one would be the same request. One it never answered is filed as
+          // before: its attempts are spent, which already keeps the retry job
+          // from it.
+          receipt_status: failedSendReceiptStatus(!isRefusedExpoPushRequest(outcome.failure)),
           receipt_checked_at: pushedAt,
           receipt_message: 'Push send failed before a receipt was created.',
           provider_message: providerMessage,
@@ -816,7 +852,7 @@ async function sendMobilePushForNotification(
       deliveries.push({
         ...delivery,
         send_status: 'error',
-        receipt_status: 'error',
+        receipt_status: failedSendReceiptStatus(!isPermanentExpoPushRefusal(result.details)),
         receipt_checked_at: pushedAt,
         receipt_error_code: isRecord(result.details) ? normalizeOptionalString(result.details.error) : null,
         receipt_message: result.message,
@@ -1091,6 +1127,38 @@ export async function processPendingMobilePushReceipts(
   };
 }
 
+/**
+ * The id of the live token row on which `userId` holds `expoPushToken`, or
+ * null when there is none.
+ *
+ * A retry goes to the token string kept on the delivery, ten or twenty minutes
+ * after the first attempt. By then a sign-out or a newer token on that phone
+ * may have retired the row, or another account may have registered the same
+ * token, which leaves it live for that account only: one token is live on at
+ * most one row. Asking by account and token, not by the delivery's `token_id`,
+ * is asking exactly that, and it covers a delivery whose token row was deleted
+ * (`token_id` null) with the same rule.
+ */
+async function findLivePushTokenId(
+  adminSupabase: SupabaseClient,
+  userId: string,
+  expoPushToken: string,
+): Promise<string | null> {
+  const { data, error } = await adminSupabase
+    .from('mobile_push_tokens')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('expo_push_token', expoPushToken)
+    .eq('is_active', true)
+    .maybeSingle();
+
+  if (error) {
+    throw new MobileNotificationError('Failed to load push token for push retry.', 500);
+  }
+
+  return isRecord(data) ? rowString(data, 'id') : null;
+}
+
 async function processRetryableMobilePushDeliveries(
   adminSupabase: SupabaseClient,
   {
@@ -1110,7 +1178,7 @@ async function processRetryableMobilePushDeliveries(
 
   const { data, error } = await adminSupabase
     .from('mobile_push_deliveries')
-    .select('id, notification_id, user_id, token_id, expo_push_token, platform, attempt_count')
+    .select('id, notification_id, user_id, expo_push_token, attempt_count')
     .eq('send_status', 'error')
     .eq('receipt_status', 'error')
     .is('push_ticket_id', null)
@@ -1124,6 +1192,7 @@ async function processRetryableMobilePushDeliveries(
 
   const deliveries = (data ?? []) as DeliveryRow[];
   let retriedCount = 0;
+  let skippedCount = 0;
   let resentCount = 0;
   let retryFailedCount = 0;
   let disabledTokenCount = 0;
@@ -1132,7 +1201,6 @@ async function processRetryableMobilePushDeliveries(
     const deliveryId = rowString(delivery, 'id');
     const notificationId = rowString(delivery, 'notification_id');
     const userId = rowString(delivery, 'user_id');
-    const tokenId = rowString(delivery, 'token_id');
     const expoPushToken = rowString(delivery, 'expo_push_token');
     const priorAttemptCount = rowNumber(delivery, 'attempt_count', 0);
 
@@ -1162,6 +1230,24 @@ async function processRetryableMobilePushDeliveries(
     }
 
     const notification = toMobileNotificationRecord(notificationData as NotificationRow);
+
+    // Asked last, so that nothing but the request stands between the answer
+    // and the send. A delivery it will not send is closed, not passed over:
+    // left open, it would go out late the day the token row came back to life.
+    const liveTokenId = await findLivePushTokenId(adminSupabase, userId, expoPushToken);
+    if (!liveTokenId) {
+      skippedCount += 1;
+      await adminSupabase
+        .from('mobile_push_deliveries')
+        .update({
+          receipt_status: failedSendReceiptStatus(false),
+          receipt_checked_at: nowIso,
+          receipt_message: 'Not retried: the push token is no longer active for this account.',
+        })
+        .eq('id', deliveryId);
+      continue;
+    }
+
     const remainingAttempts = DEFAULT_EXPO_PUSH_MAX_ATTEMPTS - priorAttemptCount;
     retriedCount += 1;
 
@@ -1206,6 +1292,7 @@ async function processRetryableMobilePushDeliveries(
       await adminSupabase
         .from('mobile_push_deliveries')
         .update({
+          receipt_status: failedSendReceiptStatus(!isPermanentExpoPushRefusal(result.details)),
           receipt_error_code: isRecord(result.details) ? normalizeOptionalString(result.details.error) : null,
           receipt_message: result.message,
           provider_message: result.message,
@@ -1215,8 +1302,8 @@ async function processRetryableMobilePushDeliveries(
         })
         .eq('id', deliveryId);
 
-      if (isDeviceNotRegistered(result.details) && tokenId) {
-        disabledTokenCount += await retireUnregisteredPushTokens(adminSupabase, [tokenId], nowIso);
+      if (isDeviceNotRegistered(result.details)) {
+        disabledTokenCount += await retireUnregisteredPushTokens(adminSupabase, [liveTokenId], nowIso);
       }
     } catch (error) {
       retryFailedCount += 1;
@@ -1224,6 +1311,7 @@ async function processRetryableMobilePushDeliveries(
       await adminSupabase
         .from('mobile_push_deliveries')
         .update({
+          receipt_status: failedSendReceiptStatus(!isRefusedExpoPushRequest(error)),
           provider_message: getErrorMessage(error, 'Expo push retry failed.'),
           provider_details: toProviderErrorDetails(error),
           attempt_count: Math.min(DEFAULT_EXPO_PUSH_MAX_ATTEMPTS, priorAttemptCount + attemptCount),
@@ -1236,6 +1324,7 @@ async function processRetryableMobilePushDeliveries(
   return {
     retryableCount: deliveries.length,
     retriedCount,
+    retrySkippedCount: skippedCount,
     resentCount,
     retryFailedCount,
     retryDisabledTokenCount: disabledTokenCount,

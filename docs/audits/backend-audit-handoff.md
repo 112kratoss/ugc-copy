@@ -6,32 +6,40 @@ Updated 2026-10-04 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/share-import-audit-7i`, incorporating main `3befe071092beb75436b2135af94626cb8b2042b` (#310); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/assistant-apply-audit-7j`, incorporating main `f1a6e7b7710b7278f42220d9acd346f642c5ab4b` (#329); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-Current branch is `codex/share-import-audit-7i`, incorporating main 3befe071.
-7H #310 passed PR Quality 37160265406 and exact-main Quality 37160881520 on
-attempt 2. First main E2E lost its post-composer execution context during navigation;
-the unchanged failed-job rerun passed. Logs retained. Standard production release
-37161742833 passed at 04:58:57 IST. Independent exact-SHA/feed/admin/webhook
-checks pass. Read the canvas-authoring release report. No mobile store
-run was active before the October 4 04:40:07 IST merge.
+7I #319 is merged as ee722e6e (05:12:03 IST October 4), with no active mobile
+store run immediately before merge. PR Quality 37162022173 passed all four jobs.
+Exact-main 37162603068 failed the Kling O3 browser geometry case; web/mobile/DB
+passed. Logs are preserved; do not call that run green. Main subsequently advanced
+through #320–329. Descendant f1a6e7b7 passed exact-main Quality 37189287821 and
+standard release 37189710120 at 14:15:17 IST. Independent exact-SHA/feed/admin/
+webhook checks pass. Read the share-import release report. WORKFLOW-04 returns
+to untested: ledger 22 passed, 27 untested, one failed, three external.
 
-7I reproduces two successful share imports counted as one with actual service-role,
-authenticated and rate-limit SQL. Repeated imports intentionally make independent
-copies; deletion intentionally retains the immutable share. The candidate introduces
-a service-only atomic increment RPC and returns its persisted value. Eight actual
-SQL cases and 35 total focused cases pass; app/test types and lint pass, including the added SQL controls. Read the share-import-count
-report. This migration is only applied on isolated port 55322; CI/release pending.
-Its counter remains best effort separate from copy/history; no exact-once promise.
+7J adds ten permanent actual SQL apply controls to the existing seven discard
+cases, with service-level graph/publication/history checks, concurrent same/different
+proposals, stale revisions, actual history-trigger rollback, observed commit plus
+lost acknowledgement, foreign/anonymous identity and no-op application. All 17
+pass; combined service/route checks pass 34, test types and lint pass. No runtime
+or migration change. These local changes await candidate CI. The original fixture
+assertion mismatch and passing logs are preserved. Existing CI already runs the file.
+Read `backend-section-07-assistant-apply-2026-10-04.md`.
 
-7G is live in independently checked descendant ea49b373 (release 37157112250).
-The separate discard release report is prepared. Ledger remains 22 passed,
-26 untested, two failed, three external because WORKFLOW-04 now includes the
-unreleased 7I counter race. No scope rows were added. Preserve unrelated receipt
-and Section 1 edits, private evidence, and prior browser failure logs.
+MAP-02 now has a reviewed JSON/report for the earlier 152 no-JS-caller functions:
+85 catalog bindings, nine source/operator callers, 34 actual SQL call statements,
+24 without a current caller located. Two comment-only false positives were removed;
+one shell SQL caller was located. Local grants inspected. No function/grant removed,
+no whole MAP/DB obligation closed. Raw evidence stays in `.audit-evidence/backend-map-02/`.
+
+The checkout incorporates current main f1a6e7b7, including the new UTC migration
+stamp instruction in AGENTS.md. Preserve the unrelated receipt/Section 1 edits
+and private evidence. Finish the 7J candidate checks/PR, then continue the broader
+workflow/method/Storage matrix. Provider/operator and compatibility gates remain
+open; do not call the full audit complete from these scoped tests.
 
 The preceding checkpoint follows.
 

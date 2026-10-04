@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { applyWorkflowAssistantProposalForRoute } from '@/lib/workflow-assistant-proposal-apply-service';
 import { discardWorkflowAssistantProposalForRoute } from '@/lib/workflow-assistant-proposal-discard-service';
 import { createStarterGraph } from '@/lib/workflow-canvas';
 
@@ -27,8 +28,12 @@ function databaseError(error: unknown) {
   };
 }
 
-/** The PostgREST calls the run worker, the start service and the job queue make, over one connection. */
-function databaseClient(db: Client, beforeWrite?: () => Promise<void>): SupabaseClient {
+/** Execute the assistant services' query shapes using real SQL and the connection's role. */
+function databaseClient(
+  db: Client,
+  beforeWrite?: () => Promise<void>,
+  rpcHooks: { before?: () => Promise<void>; after?: () => Promise<void> } = {},
+): SupabaseClient {
   return {
     from(table: string) {
       identifier(table);
@@ -118,11 +123,13 @@ function databaseClient(db: Client, beforeWrite?: () => Promise<void>): Supabase
       identifier(name);
       const call = `public.${name}(${Object.keys(args).map((key, index) => `${identifier(key)}=>$${index + 1}`).join(',')})`;
       try {
+        await rpcHooks.before?.();
         const { rows } = await db.query(
           ROW_FUNCTIONS.has(name) ? `select * from ${call}` : `select ${call} as result`,
           Object.values(args).map(writable),
         );
         const data = ROW_FUNCTIONS.has(name) ? rows : rows[0].result;
+        await rpcHooks.after?.();
         return { data, error: null };
       } catch (error) {
         return { data: null, error: databaseError(error) };
@@ -163,6 +170,9 @@ describe.skipIf(!connectionString)('assistant proposal transitions with actual a
     await admin.query('delete from public.workflow_canvases where id=$1', [canvasId]);
     await admin.query('delete from auth.users where id=$1', [userId]);
   });
+  const applyService = () => applyWorkflowAssistantProposalForRoute({ canvasId, proposalId, userId, supabase: client });
+  const canvas = async () => (await admin.query('select graph,viewport,revision,status from public.workflow_canvases where id=$1', [canvasId])).rows[0];
+  const history = async () => (await admin.query('select graph,revision from public.workflow_canvas_history where canvas_id=$1', [canvasId])).rows;
   const discard = () => discardWorkflowAssistantProposalForRoute({ canvasId,proposalId,userId,supabase:client });
   const saved = async () => (await admin.query('select status,applied_at,discarded_at from public.workflow_canvas_assistant_proposals where id=$1',[proposalId])).rows[0];
   async function apply() {
@@ -209,6 +219,125 @@ describe.skipIf(!connectionString)('assistant proposal transitions with actual a
     await owner.query("select set_config('request.jwt.claim.sub',$1,false)",[randomUUID()]);
     expect(await discard()).toMatchObject({ ok:false,status:404 });
     expect(await saved()).toMatchObject({ status:'ready',discarded_at:null });
+  });
+  it('rejects stale apply without overwriting newer canvas content', async () => {
+    await admin.query("update public.workflow_canvases set revision=5,title='Newer edit' where id=$1",[canvasId]);
+    expect(await apply()).toBe('conflict');
+    expect((await admin.query('select revision,title from public.workflow_canvases where id=$1',[canvasId])).rows[0]).toEqual({ revision:5,title:'Newer edit' });
+    expect(await saved()).toMatchObject({ status:'discarded',applied_at:null });
+  });
+  it('rolls graph and proposal back if writing apply history fails', async () => {
+    const before = await canvas();
+    await admin.query(`create function public.audit_apply_history_failure() returns trigger language plpgsql as $$
+      begin if new.canvas_id='${canvasId}'::uuid then raise exception 'audit history rejected'; end if; return new; end $$`);
+    await admin.query('create trigger audit_apply_history_failure before insert on public.workflow_canvas_history for each row execute function public.audit_apply_history_failure()');
+    try {
+      const result = await databaseClient(other).rpc('apply_workflow_canvas_assistant_proposal',{ p_canvas_id:canvasId,p_proposal_id:proposalId,p_merged_graph:{ ...graph,viewport:{ x:125,y:50,zoom:1 } } });
+      expect(result.error?.message).toBe('audit history rejected');
+      expect(await canvas()).toEqual(before);
+      expect(await history()).toEqual([]);
+      expect((await admin.query('select revision from public.workflow_canvases where id=$1',[canvasId])).rows[0].revision).toBe(4);
+      expect(await saved()).toMatchObject({ status:'ready',applied_at:null });
+    } finally {
+      await admin.query('drop trigger audit_apply_history_failure on public.workflow_canvas_history');
+      await admin.query('drop function public.audit_apply_history_failure()');
+    }
+    expect(await apply()).toBe('applied');
+  });
+  it('serializes different ready proposals sharing one base revision', async () => {
+    const second = randomUUID();
+    await admin.query("insert into public.workflow_canvas_assistant_proposals(id,canvas_id,user_id,base_revision,status,summary,diff,proposed_graph) values($1,$2,$3,4,'ready','Other proposal','{}'::jsonb,$4)",[second,canvasId,userId,JSON.stringify(graph)]);
+    const results = await Promise.all([
+      databaseClient(owner).rpc('apply_workflow_canvas_assistant_proposal',{ p_canvas_id:canvasId,p_proposal_id:proposalId,p_merged_graph:{ ...graph,viewport:{ x:125,y:50,zoom:1 } } }),
+      databaseClient(other).rpc('apply_workflow_canvas_assistant_proposal',{ p_canvas_id:canvasId,p_proposal_id:second,p_merged_graph:{ ...graph,viewport:{ x:250,y:100,zoom:1 } } }),
+    ]);
+    expect(results.every(row=>row.error===null)).toBe(true);
+    expect(results.map(row=>row.data.outcome).sort()).toEqual(['applied','conflict']);
+    expect((await admin.query('select revision from public.workflow_canvases where id=$1',[canvasId])).rows[0].revision).toBe(5);
+    expect((await admin.query('select id from public.workflow_canvas_history where canvas_id=$1',[canvasId])).rows).toHaveLength(1);
+  });
+  it('applies the service-normalized graph, publication state and history together', async () => {
+    const proposed = { ...graph, viewport: { x: 250, y: 100, zoom: 1 } };
+    await admin.query("update public.workflow_canvases set status='published',published_at=now() where id=$1", [canvasId]);
+    await admin.query('update public.workflow_canvas_assistant_proposals set proposed_graph=$2 where id=$1', [proposalId, JSON.stringify(proposed)]);
+    expect(await applyService()).toMatchObject({ ok: true, body: { canvas: { revision: 5, status: 'draft' }, proposal: { status: 'applied' } } });
+    const persisted = await canvas();
+    expect(persisted.viewport).toEqual(proposed.viewport);
+    expect(persisted.graph.viewport).toEqual(proposed.viewport);
+    expect(await history()).toEqual([{ graph: persisted.graph, revision: 5 }]);
+    const first = await saved();
+    expect(first.applied_at).not.toBeNull();
+    expect(await applyService()).toMatchObject({ ok: false, status: 409 });
+    expect(await saved()).toEqual(first);
+    expect(await history()).toHaveLength(1);
+  });
+  it('rejects a save committed after service reads without replacing the newer graph', async () => {
+    const newer = { ...graph, viewport: { x: 800, y: 300, zoom: 2 } };
+    client = databaseClient(owner, undefined, { before: async () => {
+      await admin.query('update public.workflow_canvases set graph=$2,revision=5 where id=$1', [canvasId, JSON.stringify(newer)]);
+    } });
+    expect(await applyService()).toMatchObject({ ok: false, status: 409, body: { canvas: { revision: 5 } } });
+    expect(await canvas()).toMatchObject({ graph: JSON.parse(JSON.stringify(newer)), revision: 5 });
+    expect(await saved()).toMatchObject({ status: 'discarded', applied_at: null });
+    expect(await history()).toEqual([]);
+  });
+  it('does not apply twice after the committed SQL acknowledgement is lost', async () => {
+    await admin.query('update public.workflow_canvas_assistant_proposals set proposed_graph=$2 where id=$1', [proposalId, JSON.stringify({ ...graph, viewport: { x: 250, y: 100, zoom: 1 } })]);
+    client = databaseClient(owner, undefined, { after: async () => {
+      // Independent connection observes the commit before the response is lost.
+      expect(await saved()).toMatchObject({ status: 'applied' });
+      expect((await canvas()).revision).toBe(5);
+      throw new Error('audit SQL acknowledgement lost');
+    } });
+    expect(await applyService()).toMatchObject({ ok: false, status: 500 });
+    const committed = await canvas();
+    const firstProposal = await saved();
+    client = databaseClient(owner);
+    expect(await applyService()).toMatchObject({ ok: false, status: 409 });
+    expect(await canvas()).toEqual(committed);
+    expect(await saved()).toEqual(firstProposal);
+    expect(await history()).toHaveLength(1);
+  });
+  it('serializes two direct requests for the same proposal into one application', async () => {
+    const args = { p_canvas_id: canvasId, p_proposal_id: proposalId, p_merged_graph: { ...graph, viewport: { x: 125, y: 50, zoom: 1 } } };
+    const results = await Promise.all([
+      databaseClient(owner).rpc('apply_workflow_canvas_assistant_proposal', args),
+      databaseClient(other).rpc('apply_workflow_canvas_assistant_proposal', args),
+    ]);
+    expect(results.every(result => result.error === null)).toBe(true);
+    expect(results.map(result => result.data.outcome).sort()).toEqual(['applied', 'proposal_not_ready']);
+    expect((await canvas()).revision).toBe(5);
+    expect(await history()).toHaveLength(1);
+  });
+  it('denies another authenticated identity at both service and direct SQL boundaries', async () => {
+    await owner.query("select set_config('request.jwt.claim.sub',$1,false)", [randomUUID()]);
+    expect(await applyService()).toMatchObject({ ok: false, status: 404 });
+    const direct = await client.rpc('apply_workflow_canvas_assistant_proposal', { p_canvas_id: canvasId, p_proposal_id: proposalId, p_merged_graph: graph });
+    expect(direct.error).toBeNull();
+    expect(direct.data).toEqual({ outcome: 'not_found' });
+    expect(await saved()).toMatchObject({ status: 'ready', applied_at: null });
+    expect((await canvas()).revision).toBe(4);
+    expect(await history()).toEqual([]);
+  });
+  it('denies an anonymous direct SQL apply even with an owner subject claim', async () => {
+    await owner.query('set role anon');
+    try {
+      const result = await client.rpc('apply_workflow_canvas_assistant_proposal', { p_canvas_id: canvasId, p_proposal_id: proposalId, p_merged_graph: graph });
+      expect(result.error?.code).toBe('42501');
+      expect(await saved()).toMatchObject({ status: 'ready', applied_at: null });
+      expect((await canvas()).revision).toBe(4);
+    } finally {
+      await owner.query('set role authenticated');
+    }
+  });
+  it('marks an unchanged graph applied without creating a fake revision or history entry', async () => {
+    const before = await canvas();
+    const result = await client.rpc('apply_workflow_canvas_assistant_proposal', { p_canvas_id: canvasId, p_proposal_id: proposalId, p_merged_graph: before.graph });
+    expect(result.error).toBeNull();
+    expect(result.data.outcome).toBe('applied');
+    expect(await canvas()).toEqual(before);
+    expect(await history()).toEqual([]);
+    expect(await saved()).toMatchObject({ status: 'applied', discarded_at: null });
   });
   it('discards a ready proposal and prevents its later application', async () => {
     expect(await discard()).toMatchObject({ ok:true });

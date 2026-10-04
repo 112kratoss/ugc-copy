@@ -2400,7 +2400,14 @@ export async function startVideoGeneration(params: {
           { templateAssetScope: templateAssetScope(templateContext) },
         )
       : [];
-  const totalReferenceImageCount = resolvedReferenceImageUrls.length;
+  // The reference pictures the provider is sent. They arrive as one list (`references`,
+  // `imageUrls`) or, from the creators, as named elements with a list of their own.
+  // The checks below and four provider branches used to read the first kind only, so a
+  // named picture was described in the prompt, kept as an input, and never sent.
+  const providerReferenceImageUrls = resolvedReferenceImageUrls.length > 0
+    ? resolvedReferenceImageUrls
+    : resolvedElementImageUrls;
+  const totalReferenceImageCount = providerReferenceImageUrls.length;
 
   if (totalReferenceImageCount > 0 && !videoElementSupport.enabled) {
     throw new GenerationServiceError(
@@ -2435,7 +2442,7 @@ export async function startVideoGeneration(params: {
   }
 
   if (model === 'wan-2.7' && (
-    resolvedReferenceImageUrls.length
+    totalReferenceImageCount
     + resolvedReferenceVideoUrls.length
     + resolvedReferenceAudioUrls.length
   ) > 5) {
@@ -2453,7 +2460,7 @@ export async function startVideoGeneration(params: {
     throw new GenerationServiceError('Gemini Omni supports one reference video per run.', 400);
   }
 
-  if (model === 'gemini-omni-video' && resolvedReferenceImageUrls.length + (resolvedReferenceVideoUrls.length * 2) > 7) {
+  if (model === 'gemini-omni-video' && totalReferenceImageCount + (resolvedReferenceVideoUrls.length * 2) > 7) {
     throw new GenerationServiceError('Gemini Omni supports seven reference slots; a video uses two slots.', 400);
   }
   if (model === 'gemini-omni-video' && normalizedPreparedAudioIds.length > 3) {
@@ -2462,7 +2469,7 @@ export async function startVideoGeneration(params: {
   if (model === 'gemini-omni-video' && normalizedCharacterIds.length > 3) {
     throw new GenerationServiceError('Gemini Omni supports up to 3 prepared character references.', 400);
   }
-  if (model === 'gemini-omni-video' && resolvedReferenceImageUrls.length + (resolvedReferenceVideoUrls.length * 2) + normalizedCharacterIds.length > 7) {
+  if (model === 'gemini-omni-video' && totalReferenceImageCount + (resolvedReferenceVideoUrls.length * 2) + normalizedCharacterIds.length > 7) {
     throw new GenerationServiceError('Gemini Omni supports seven reference slots; videos use two and characters use one.', 400);
   }
 
@@ -2629,6 +2636,14 @@ export async function startVideoGeneration(params: {
     : frameImageUrls.length > 0
       ? 'frames'
       : normalizedReferenceMode;
+  // The recipe has a word of its own for a run whose only references are named pictures:
+  // 'elements', which a remix and a bundle's description read. It is the word such a run
+  // stored before its pictures were counted, so counting them does not change it.
+  const onlyNamedReferencePictures = resolvedElementImageUrls.length > 0
+    && resolvedReferenceImageUrls.length === 0
+    && resolvedReferenceVideoUrls.length === 0
+    && resolvedReferenceAudioUrls.length === 0;
+  const recipeReferenceMode = onlyNamedReferencePictures ? 'elements' : effectiveReferenceMode;
 
   assertGenerationRequest(
     (selectedModel.aspectRatios as readonly string[]).includes(aspectRatio),
@@ -2673,10 +2688,6 @@ export async function startVideoGeneration(params: {
     let endpoint = 'https://api.kie.ai/api/v1/jobs/createTask';
     let body: Record<string, unknown>;
     let providerModelId = resolveProviderModelId(runtimeConfig, 'default', selectedModel.apiModelId || mode);
-    const referenceImageUrls = resolvedReferenceImageUrls;
-    const providerReferenceImageUrls = referenceImageUrls.length > 0
-      ? referenceImageUrls
-      : resolvedElementImageUrls;
     const requestedMode = mode;
     const providerMode = mode;
 
@@ -2862,8 +2873,8 @@ export async function startVideoGeneration(params: {
           generate_audio: soundEnabled,
         };
 
-        if (referenceImageUrls.length > 0) {
-          input.input_urls = referenceImageUrls;
+        if (providerReferenceImageUrls.length > 0) {
+          input.input_urls = providerReferenceImageUrls;
         } else if (frameImageUrls.length > 0) {
           input.input_urls = frameImageUrls;
         }
@@ -3001,11 +3012,11 @@ export async function startVideoGeneration(params: {
         model: providerModelId,
         aspect_ratio: aspectRatio,
         resolution,
-        generationType: referenceImageUrls.length > 0
+        generationType: providerReferenceImageUrls.length > 0
           ? 'REFERENCE_2_VIDEO'
           : (frameImageUrls.length > 0 ? 'FIRST_AND_LAST_FRAMES_2_VIDEO' : 'TEXT_2_VIDEO'),
-        ...(referenceImageUrls.length > 0
-          ? { imageUrls: referenceImageUrls }
+        ...(providerReferenceImageUrls.length > 0
+          ? { imageUrls: providerReferenceImageUrls }
           : (frameImageUrls.length > 0 ? { imageUrls: frameImageUrls } : {})),
       };
     } else {
@@ -3051,7 +3062,7 @@ export async function startVideoGeneration(params: {
           : undefined,
         resolution,
         fixedLens,
-        referenceMode: effectiveReferenceMode,
+        referenceMode: recipeReferenceMode,
         ...(providerReferenceImageUrls.length > 0
           ? { referenceImageUrls: providerReferenceImageUrls }
           : {}),
@@ -3140,7 +3151,8 @@ export async function startVideoGeneration(params: {
     const startFrameSourceUrl = resolvedStartImageUrl || resolvedLegacyImageUrls[0] || null;
     const endFrameSourceUrl = resolvedEndImageUrl || resolvedLegacyImageUrls[1] || null;
 
-    if (effectiveReferenceMode === 'frames' && startFrameSourceUrl) {
+    // Wan 2.7 is sent a first frame beside its references, so a remix needs it kept there too.
+    if ((effectiveReferenceMode === 'frames' || model === 'wan-2.7') && startFrameSourceUrl) {
       videoInputCandidates.push({
         mediaType: 'image',
         role: 'start_frame',
