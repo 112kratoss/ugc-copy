@@ -1061,6 +1061,13 @@ function IdentityCreationScreen({
       if (!remixResolvedRef.current && remixHydrationKeyRef.current === generationId) {
         remixHydrationKeyRef.current = null;
       }
+      // A cancelled run never reaches its `finally`, so it hands the busy state
+      // back here. The next run sets it again in this same commit when it does
+      // restore. When it returns early instead (the saved draft was read again
+      // and is one to resume) nothing else would ever clear it. Unlike the key
+      // above, this does not look at `remixResolvedRef`: on a device the draft
+      // is back, and marked resolved, before this cleanup runs.
+      setIsRestoringRemix(false);
     };
   }, [api, catalog, loadCatalogDetails, draftsHydrated, initialTool, remixSource?.generationId, remixSource?.postId, remixRetry, user]);
 
