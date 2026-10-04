@@ -2803,7 +2803,13 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
     expect(authState.api.startVideoGeneration).toHaveBeenCalledTimes(1);
     expect(collectText(tree!.root)).toContain('Your video');
-    expect(tree!.root.find((node) => String(node.type) === 'media-preview' && node.props.url === 'https://cdn.example.com/output.mp4').props.kind).toBe('video');
+    // Letterboxed: the whole result, across its column. As a 4:5 card of its
+    // height it was 384pt wide in a 366pt column (see media-preview.test).
+    expect(tree!.root.find((node) => String(node.type) === 'media-preview' && node.props.url === 'https://cdn.example.com/output.mp4').props).toMatchObject({
+      kind: 'video',
+      height: 480,
+      letterbox: true,
+    });
     renderer.act(() => {
       findPressableByText(tree!.root, 'Post to feed').props.onPress();
     });

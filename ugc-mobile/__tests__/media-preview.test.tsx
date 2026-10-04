@@ -95,9 +95,12 @@ function exhaustImageLoad(tree: renderer.ReactTestRenderer) {
 }
 
 // Yoga sizes a box that has an aspect ratio and a height from the height, and
-// never reads its `width: '100%'`. In the reference details sheet that made a
-// 300pt preview 240pt wide against the left edge of a 362pt column, and a 72pt
-// reference tile's clip 57.6pt wide against the left of the tile (2026-10-04).
+// never reads its `width: '100%'`. Every preview given a height was therefore
+// four fifths of it wide, wherever it sat (measured 2026-10-04): the reference
+// details preview 240pt against the left of a 362pt column, a template's
+// poster 344pt beside a demo clip that spanned all 369pt, and the generation
+// result 384pt in a 366pt column, which put it flush with the right edge of a
+// 402pt phone and 42dp past the edge of a 360dp one.
 // The layout engine does not run here, so these hold the style that avoids it;
 // the layout itself is checked on a device.
 describe('MediaPreview frame', () => {
@@ -140,12 +143,51 @@ describe('MediaPreview frame', () => {
     renderer.act(() => tree.unmount());
   });
 
-  it.each(['image', 'video'] as const)('leaves every other %s preview as the 4:5 card it was', (kind) => {
+  // The rule itself, whatever the fit: a height never meets the ratio.
+  it.each(['image', 'video'] as const)('gives a %s with a height the full width without letterbox too, cropped to fill', (kind) => {
     const tree = mount(<MediaPreview url="https://cdn/result" kind={kind} height={480} />);
     const { style, contentFit } = mediaNode(tree).props;
-    expect(style).toMatchObject({ width: '100%', aspectRatio: 4 / 5, height: 480 });
+    expect(style).toMatchObject({ width: '100%', height: 480 });
+    expect(style).not.toHaveProperty('aspectRatio');
     expect(style.backgroundColor).not.toBe(mediaColors.mediaGround);
     if (kind === 'image') expect(contentFit).toBe('cover');
+    renderer.act(() => tree.unmount());
+  });
+
+  it.each([true, false])('holds a preview with nothing to show to the same frame (letterbox %s)', (letterbox) => {
+    const tree = mount(<MediaPreview url={null} kind="image" height={430} letterbox={letterbox} />);
+    const frame = tree.root.findByType('view' as never).props.style;
+    expect(frame).toMatchObject({ width: '100%', height: 430 });
+    expect(frame).not.toHaveProperty('aspectRatio');
+    renderer.act(() => tree.unmount());
+  });
+
+  it('holds a picture that failed to the same frame without letterbox', () => {
+    const tree = mount(<MediaPreview url="https://cdn/gone.webp" kind="image" height={430} />);
+    exhaustImageLoad(tree);
+    const [frame] = tree.root.findByType('pressable' as never).props.style({ pressed: false });
+    expect(frame).toMatchObject({ width: '100%', height: 430 });
+    expect(frame).not.toHaveProperty('aspectRatio');
+    renderer.act(() => tree.unmount());
+  });
+
+  // The marketplace and unlock screens pass no height: with no height there is
+  // nothing for the ratio to be overridden by, and the card takes its width.
+  it.each(['image', 'video'] as const)('keeps a %s with no height as a 4:5 card of its container’s width', (kind) => {
+    const tree = mount(<MediaPreview url="https://cdn/post" kind={kind} />);
+    const { style, contentFit } = mediaNode(tree).props;
+    expect(style).toMatchObject({ width: '100%', aspectRatio: 4 / 5 });
+    expect(style.height).toBeUndefined();
+    expect(style.backgroundColor).not.toBe(mediaColors.mediaGround);
+    if (kind === 'image') expect(contentFit).toBe('cover');
+    renderer.act(() => tree.unmount());
+  });
+
+  it('keeps a preview with nothing to show and no height as the same 4:5 card', () => {
+    const tree = mount(<MediaPreview url={undefined} />);
+    const frame = tree.root.findByType('view' as never).props.style;
+    expect(frame).toMatchObject({ width: '100%', aspectRatio: 4 / 5 });
+    expect(frame.height).toBeUndefined();
     renderer.act(() => tree.unmount());
   });
 });

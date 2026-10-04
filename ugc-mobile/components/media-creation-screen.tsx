@@ -4092,7 +4092,9 @@ function GenerationWorkspace({
         <ScrollView contentContainerStyle={{ flexGrow: 1, padding: 18, paddingBottom: safeAreaInsets.bottom + 18, gap: 18 }}>
           {succeeded && outputUrl ? (
             <>
-              <MediaPreview url={outputUrl} kind={previewKind} height={480} radius={26} nativeControls={previewKind === 'video'} />
+              {/* The whole result, whatever its shape: cropping it to fill
+                  would hide part of what was just made. */}
+              <MediaPreview url={outputUrl} kind={previewKind} height={480} radius={26} nativeControls={previewKind === 'video'} letterbox />
               <View style={{ gap: 10 }}>
                 {generationId ? <PrimaryButton label="Post to feed" onPress={onPost} /> : null}
                 {/* Generative AI asks for controls like Edit, Undo, Retry or

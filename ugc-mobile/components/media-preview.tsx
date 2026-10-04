@@ -33,13 +33,13 @@ export function MediaPreview({
 }: {
   url: string | null | undefined;
   kind?: 'image' | 'video' | null;
+  /** A frame this tall and as wide as its container. Without it, a 4:5 card of the container's width. */
   height?: number;
   radius?: number;
   nativeControls?: boolean;
   /**
-   * Show the whole picture or clip, centred on black bands in a frame as wide
-   * as its container. Without it the preview is a 4:5 card that crops a picture
-   * to fill.
+   * Show the whole picture or clip, centred on black bands. Without it a
+   * picture is cropped to fill the frame.
    */
   letterbox?: boolean;
   /** A fresh link for a video whose own has stopped working. */
@@ -53,7 +53,7 @@ export function MediaPreview({
   const imageFailed = failedUrl === sourceKey;
 
   if (!url) {
-    return <MediaFallback height={height} radius={radius} letterbox={letterbox} label="No media" />;
+    return <MediaFallback height={height} radius={radius} label="No media" />;
   }
 
   if (kind === 'video') {
@@ -65,7 +65,6 @@ export function MediaPreview({
       <MediaFallback
         height={height}
         radius={radius}
-        letterbox={letterbox}
         label="Preview unavailable"
         onRetry={() => {
           setFailedUrl(null);
@@ -83,7 +82,7 @@ export function MediaPreview({
       contentFit={letterbox ? 'contain' : 'cover'}
       onError={() => setFailedUrl(sourceKey)}
       style={{
-        ...previewFrame(height, letterbox),
+        ...previewFrame(height),
         borderRadius: radius,
         borderWidth: 1,
         borderColor: theme.colors.border,
@@ -98,15 +97,16 @@ export function MediaPreview({
 }
 
 /**
- * The box a preview fills. A letterboxed preview with a height leaves the 4:5
- * ratio out. Given a ratio and a height together, Yoga takes the width from the
- * height (300 gives 240) and never reads `width: '100%'`, so the box sits
- * against the left edge of anything wider than that.
+ * The box a preview fills: its container's width at the given height, or a 4:5
+ * card of that width when no height is given. The ratio and a height never go
+ * together. Given both, Yoga takes the width from the height (300 gives 240)
+ * and never reads `width: '100%'`, so the box sits against the left edge of a
+ * wider column and runs past the edge of a narrower one.
  */
-function previewFrame(height: number | undefined, letterbox: boolean) {
-  return letterbox && height !== undefined
-    ? { width: '100%' as const, height }
-    : { width: '100%' as const, aspectRatio: 4 / 5, height };
+function previewFrame(height: number | undefined) {
+  return height === undefined
+    ? { width: '100%' as const, aspectRatio: 4 / 5 }
+    : { width: '100%' as const, height };
 }
 
 type StableMediaImageProps = {
@@ -431,7 +431,6 @@ function MediaFallback({
   renewing = false,
   retrying = false,
   fill = false,
-  letterbox = false,
 }: {
   height?: number;
   radius: number;
@@ -441,16 +440,15 @@ function MediaFallback({
   renewing?: boolean;
   /** A silent retry is loading behind this plate. */
   retrying?: boolean;
-  /** Cover the parent instead of taking a 4:5 frame of its width: the plate over a retrying image. */
+  /** Cover the parent instead of taking the preview's own frame: the plate over a retrying image. */
   fill?: boolean;
-  /** Stand in for a letterboxed preview: the same frame, so nothing moves when the picture fails. */
-  letterbox?: boolean;
 }) {
   const theme = useAppTheme();
   const frameStyle = {
+    // The frame the picture would have had, so nothing around it moves when it fails.
     ...(fill
       ? { position: 'absolute' as const, inset: 0 }
-      : { ...previewFrame(height, letterbox), borderWidth: 1, borderColor: theme.colors.border }),
+      : { ...previewFrame(height), borderWidth: 1, borderColor: theme.colors.border }),
     borderRadius: radius,
     backgroundColor: theme.colors.surfaceInset,
     alignItems: 'center' as const,
@@ -526,7 +524,7 @@ function VideoPreview({
       nativeControls={nativeControls}
       resolveRetryUrl={resolveRetryUrl}
       style={{
-        ...previewFrame(height, letterbox),
+        ...previewFrame(height),
         borderRadius: radius,
         // The player contains its clip, and the view without controls is
         // transparent, so this colour is the bands either side of the clip.
