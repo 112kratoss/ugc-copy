@@ -1440,6 +1440,23 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 const restoredVideoInputs = bundle.inputs.video;
                 const restoredSeedanceAssets = settings?.seedanceAssets ?? null;
 
+                // Kling O3's named subjects come back under the handles the prompt
+                // was written with. A picture is sent again as the file the run
+                // kept: the server reads who may use that file from its path.
+                setKlingSubjects(assignSubjectHandles((restoredVideoInputs?.subjects ?? []).map((subject) => ({
+                    id: `subject-${crypto.randomUUID()}`,
+                    displayName: subject.displayName,
+                    handle: subject.handle,
+                    images: subject.images.flatMap((image) => image.url ? [{
+                        id: `subject-image-${crypto.randomUUID()}`,
+                        // No file of the creator's own: the card draws the kept one.
+                        file: null,
+                        previewUrl: '',
+                        remoteUrl: image.url,
+                        storagePath: image.storagePath ?? null,
+                    }] : []),
+                }))));
+
                 if (isSeedance2VideoModelId(nextModelId)) {
                     const elementSupport = getVideoElementSupport(nextModelId, {
                         mode: nextMode,

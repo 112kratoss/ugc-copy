@@ -5,7 +5,7 @@ import CreateVideoClient from '@/app/create-video/CreateVideoClient';
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import type { PersistedImageElementRecord, PersistedMediaRecord, PersistedSubjectRecord } from '@/lib/persisted-media';
 import type { EnhancerContext } from '@/lib/prompt-enhancer';
-import type { RemixSourceBundle } from '@/lib/remix-source';
+import type { RemixResolvedSubject, RemixSourceBundle } from '@/lib/remix-source';
 
 const mockPush = vi.fn();
 const mockUpdateCredits = vi.fn();
@@ -400,6 +400,16 @@ describe('CreateVideoClient Kling video elements', () => {
       String(input).includes('/api/generations') && init?.method === 'POST'
     ));
     return call ? JSON.parse(String(call[1]?.body)) : undefined;
+  }
+
+  /** Answers the page's remix request with this bundle, and every other request as a finished run. */
+  function stubRemix(bundle: RemixSourceBundle) {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => ({
+      ok: true,
+      json: async () => (String(input).includes('/api/remix-source')
+        ? bundle
+        : { status: 'succeeded', output: 'https://example.com/result.mp4', timing: null }),
+    } as Response));
   }
 
   /** What the Enhance button of one shot was last given. */
@@ -877,15 +887,6 @@ describe('CreateVideoClient Kling video elements', () => {
 
     function promptBox() {
       return screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/);
-    }
-
-    function stubRemix(bundle: RemixSourceBundle) {
-      fetchMock.mockImplementation(async (input: RequestInfo | URL) => ({
-        ok: true,
-        json: async () => (String(input).includes('/api/remix-source')
-          ? bundle
-          : { status: 'succeeded', output: 'https://example.com/result.mp4', timing: null }),
-      } as Response));
     }
 
     function addKlingClip(container: HTMLElement, name: string) {
@@ -1686,6 +1687,198 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(shotEnhanceButton(0)?.context?.elementReferences).toEqual([
           { handle: '@hero_creator', displayName: 'Hero creator' },
         ]);
+      });
+    });
+
+    /**
+     * A remix of a run that used named subjects brings the subjects back. A run
+     * kept nothing of its subjects, so its remix restored the prompt with its
+     * mentions and no subject card, and the line under the prompt read "Unknown
+     * element mention: @hero" until the creator built a subject of that name
+     * again (2026-10-03).
+     *
+     * A subject comes back under the handle the prompt was written with, which is
+     * not always the handle its name would give, and with the pictures the run
+     * kept of it.
+     */
+    describe('restored by a remix', () => {
+      const KEPT = 'generation_inputs/owner-1/gen-1';
+      const keptImage = (file: string, label: string): RemixResolvedSubject['images'][number] => ({
+        kind: 'image',
+        label,
+        storagePath: `${KEPT}/${file}`,
+        sourceGenerationId: null,
+        url: `https://signed.example.com/${KEPT}/${file}`,
+      });
+      // Neither handle is the one its subject's name would give ("@hero_creator",
+      // "@serum_bottle"): the creator renamed nothing, the prompt was written this way.
+      const SUBJECTS: RemixResolvedSubject[] = [
+        {
+          handle: '@lead',
+          displayName: 'Hero creator',
+          images: ['00', '01', '02'].map((place) => keptImage(`${place}-subject_image.png`, 'Hero creator')),
+        },
+        {
+          handle: '@bottle',
+          displayName: 'Serum bottle',
+          images: ['03', '04'].map((place) => keptImage(`${place}-subject_image.png`, 'Serum bottle')),
+        },
+      ];
+      const PROMPT = '@lead lifts @bottle and smiles at the camera in a bright studio, slow push in.';
+
+      function subjectRun(overrides: {
+        prompt?: string;
+        subjects?: RemixResolvedSubject[];
+        workflowSettings?: Record<string, unknown>;
+        restoreIssues?: string[];
+      } = {}): RemixSourceBundle {
+        return {
+          generation: { id: 'gen-1', title: 'Serum launch', prompt: overrides.prompt ?? PROMPT, category: 'video', model: 'kling-o3' },
+          result: { mediaType: 'video', url: 'https://example.com/result.mp4' },
+          inputs: {
+            video: {
+              referenceMode: 'elements',
+              startFrame: null,
+              endFrame: null,
+              elements: [],
+              referenceVideos: [],
+              referenceAudios: [],
+              subjects: overrides.subjects ?? SUBJECTS,
+            },
+          },
+          workflowSettings: { model: 'kling-o3', referenceMode: 'elements', ...overrides.workflowSettings },
+          restoreIssues: overrides.restoreIssues ?? [],
+        };
+      }
+
+      /** The pictures on each subject card, in card order. */
+      function subjectPictures(container: HTMLElement) {
+        return subjectFields(container).map((field) => (
+          Array.from(subjectCard(field)?.querySelectorAll('img') ?? []).map((picture) => picture.getAttribute('src'))
+        ));
+      }
+
+      function renderRemix(bundle: RemixSourceBundle) {
+        stubRemix(bundle);
+        return render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+      }
+
+      it('brings each subject back with its name, its pictures and the handle the prompt mentions', async () => {
+        const view = renderRemix(subjectRun());
+
+        await waitFor(() => expect(subjectHandles(view.container)).toEqual(['@lead', '@bottle']));
+        expect(subjectFields(view.container).map((field) => field.value)).toEqual(['Hero creator', 'Serum bottle']);
+        expect(subjectPictures(view.container)).toEqual([
+          ['00', '01', '02'].map((place) => `https://signed.example.com/${KEPT}/${place}-subject_image.png`),
+          ['03', '04'].map((place) => `https://signed.example.com/${KEPT}/${place}-subject_image.png`),
+        ]);
+        expect(subjectCard(subjectFields(view.container)[0])).toHaveTextContent('3/4 images');
+        expect(subjectCard(subjectFields(view.container)[1])).toHaveTextContent('2/4 images');
+        expect(promptBox()).toHaveValue(PROMPT);
+        expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+      });
+
+      it('sends a restored picture as the file the run kept, and uploads nothing', async () => {
+        const view = renderRemix(subjectRun());
+        await waitFor(() => expect(subjectHandles(view.container)).toEqual(['@lead', '@bottle']));
+
+        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+
+        await waitFor(() => expect(postedRun()).toBeDefined());
+        const run = postedRun();
+        expect(run.modelId).toBe('kling-o3');
+        expect(run.prompt).toBe(PROMPT);
+        expect(run.sourceGenerationId).toBe('gen-1');
+        expect(run.settings.referenceMode).toBe('subjects');
+        // The server reads who may use a kept file from its path, so the path is what is sent.
+        expect(
+          run.inputs
+            .filter((input: { slot: string }) => input.slot === 'subjectImages')
+            .map((input: { handle: string; label: string; url: string; storagePath: string }) => (
+              [input.handle, input.label, input.url, input.storagePath]
+            ))
+        ).toEqual([
+          ['@lead', 'Hero creator', `${KEPT}/00-subject_image.png`, `${KEPT}/00-subject_image.png`],
+          ['@lead', 'Hero creator', `${KEPT}/01-subject_image.png`, `${KEPT}/01-subject_image.png`],
+          ['@lead', 'Hero creator', `${KEPT}/02-subject_image.png`, `${KEPT}/02-subject_image.png`],
+          ['@bottle', 'Serum bottle', `${KEPT}/03-subject_image.png`, `${KEPT}/03-subject_image.png`],
+          ['@bottle', 'Serum bottle', `${KEPT}/04-subject_image.png`, `${KEPT}/04-subject_image.png`],
+        ]);
+        expect(temporaryUploadMock).not.toHaveBeenCalled();
+      });
+
+      it('keeps a restored handle until its own subject is renamed', async () => {
+        const view = renderRemix(subjectRun());
+        await waitFor(() => expect(subjectHandles(view.container)).toEqual(['@lead', '@bottle']));
+
+        // Renaming the other subject, and adding one, leave "@lead" alone.
+        nameSubject(view.container, 1, 'Glass vial');
+        await waitFor(() => expect(subjectHandles(view.container)).toEqual(['@lead', '@glass_vial']));
+        fireEvent.click(screen.getByText('Add subject'));
+        await waitFor(() => expect(subjectHandles(view.container)).toEqual(['@lead', '@glass_vial', '@subject_3']));
+        expect(promptBox()).toHaveValue('@lead lifts @glass_vial and smiles at the camera in a bright studio, slow push in.');
+
+        nameSubject(view.container, 0, 'Captain');
+        await waitFor(() => expect(subjectHandles(view.container)).toEqual(['@captain', '@glass_vial', '@subject_3']));
+        expect(promptBox()).toHaveValue('@captain lifts @glass_vial and smiles at the camera in a bright studio, slow push in.');
+        expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+      });
+
+      it('brings the subjects of a multi-shot run back for its shots to mention', async () => {
+        const shots = [
+          { id: 'shot-1', prompt: 'Open on @lead in the rain, slow push in.', duration: 5 },
+          { id: 'shot-2', prompt: 'Cut closer while @lead lifts @bottle to the light.', duration: 5 },
+        ];
+        const view = renderRemix(subjectRun({
+          // A multi-shot run is saved under the prompt of its first shot.
+          prompt: shots[0].prompt,
+          workflowSettings: { isMultiShot: true, multiPrompts: shots },
+        }));
+
+        await waitFor(() => expect(subjectHandles(view.container)).toEqual(['@lead', '@bottle']));
+        expect(screen.getByPlaceholderText('Describe shot 2...')).toHaveValue(shots[1].prompt);
+
+        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+
+        await waitFor(() => expect(postedRun()).toBeDefined());
+        const run = postedRun();
+        expect(run.shots).toEqual(shots.map(({ prompt, duration }) => ({ prompt, duration })));
+        expect(
+          run.inputs
+            .filter((input: { slot: string }) => input.slot === 'subjectImages')
+            .map((input: { handle: string }) => input.handle)
+        ).toEqual(['@lead', '@lead', '@lead', '@bottle', '@bottle']);
+        expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+      });
+
+      it('brings a subject back without a picture the server could not hand over, and says some media is missing', async () => {
+        const [lead, bottle] = SUBJECTS;
+        const view = renderRemix(subjectRun({
+          subjects: [
+            lead,
+            { ...bottle, images: [bottle.images[0], { ...bottle.images[1], url: null }] },
+          ],
+          restoreIssues: ['video-subject:Serum bottle'],
+        }));
+
+        // The card and its handle are there, so the prompt's mention still names a subject.
+        await waitFor(() => expect(subjectHandles(view.container)).toEqual(['@lead', '@bottle']));
+        expect(subjectPictures(view.container)[1]).toEqual([`https://signed.example.com/${KEPT}/03-subject_image.png`]);
+        expect(subjectCard(subjectFields(view.container)[1])).toHaveTextContent('1/4 images — add at least 2');
+        expect(screen.getByText(/Some source media could not be restored automatically/)).toBeInTheDocument();
+        expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+      });
+
+      // A run made before subjects were kept, or one whose creator shared no
+      // inputs: the bundle has the prompt and no subject. The line under the
+      // prompt says which mention has nothing behind it, as it does for any
+      // other reference a remix could not bring back.
+      it('brings back no subject from a run that kept none, and names the mentions left without one', async () => {
+        const view = renderRemix(subjectRun({ subjects: [] }));
+
+        await waitFor(() => expect(promptBox()).toHaveValue(PROMPT));
+        expect(await unknownMentionLine()).toBe('Unknown element mentions: @lead, @bottle');
+        expect(subjectFields(view.container)).toHaveLength(0);
       });
     });
   });

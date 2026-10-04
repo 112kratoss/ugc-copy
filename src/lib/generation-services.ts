@@ -38,7 +38,11 @@ import {
   type VideoModelId,
   type VoiceoverModelId,
 } from '@/lib/models';
-import { normalizeRemixMediaAssetDescriptor, type RemixMediaAssetDescriptor } from '@/lib/remix-source';
+import {
+  normalizeRemixMediaAssetDescriptor,
+  type KlingSubjectDescriptor,
+  type RemixMediaAssetDescriptor,
+} from '@/lib/remix-source';
 import {
   hasSeedanceAssetCollections,
   isSeedance2VideoModelId,
@@ -50,6 +54,7 @@ import {
   collectImageInputCandidates,
   collectReferenceMediaCandidates,
   collectSeedanceAssetCandidates,
+  collectSubjectImageCandidates,
   persistGenerationInputMedia,
   type PersistGenerationInputCandidate,
   type ReferenceMediaDescriptor,
@@ -2998,6 +3003,17 @@ export async function startVideoGeneration(params: {
               })),
             }
           : {}),
+        // What the run used of each named subject. Its pictures are kept below;
+        // this says how many there were, so a run that kept fewer can be told.
+        ...(resolvedKlingSubjects.length > 0
+          ? {
+              klingSubjects: resolvedKlingSubjects.map((subject) => ({
+                handle: subject.handle,
+                displayName: subject.displayName,
+                images: subject.images.map((image) => ({ storagePath: image.storagePath })),
+              })) satisfies KlingSubjectDescriptor[],
+            }
+          : {}),
         ...(hasSeedanceAssetCollections(seedanceAssets)
           ? { seedanceAssets }
           : {}),
@@ -3092,6 +3108,14 @@ export async function startVideoGeneration(params: {
           provider: 'kling',
           elementIndex: index,
         },
+      });
+    }
+    // A named subject's pictures, each with the handle the prompt mentions the
+    // subject by: what a remix of the run restores its subjects from.
+    for (const candidate of collectSubjectImageCandidates({ subjects: resolvedKlingSubjects })) {
+      videoInputCandidates.push({
+        ...candidate,
+        sortOrder: inputSortOrder++,
       });
     }
     const seedanceAssetCandidates = collectSeedanceAssetCandidates({

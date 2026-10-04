@@ -181,6 +181,55 @@ describe('generation paywall helpers', () => {
     expect(hasRecoverableGenerationRemixInputs({ ...source, creationMode: null })).toBe(false);
   });
 
+  // A Kling O3 run keeps the pictures of its named subjects, and its settings
+  // say which subjects it used. A recipe made from a run sells remix access when
+  // the run has inputs a remix can restore, and a buyer's remix restores them
+  // only through such a recipe. Not counted, a subject run's recipe sold none.
+  it('counts the named subjects of a Kling O3 run as inputs a remix can restore', () => {
+    const source = {
+      category: 'video',
+      model: 'kling-o3',
+      prompt: '@lead lifts @bottle and smiles at the camera.',
+      workflowSettings: {
+        model: 'kling-o3',
+        aspectRatio: '16:9',
+        duration: 5,
+        resolution: '720p',
+        referenceMode: 'elements',
+        klingSubjects: [
+          {
+            handle: '@lead',
+            displayName: 'Hero creator',
+            images: [{ storagePath: 'uploads/user-1/hero-front.png' }, { storagePath: 'uploads/user-1/hero-side.png' }],
+          },
+          {
+            handle: '@bottle',
+            displayName: 'Serum bottle',
+            images: [{ storagePath: 'uploads/user-1/bottle-front.png' }, { storagePath: 'uploads/user-1/bottle-side.png' }],
+          },
+        ] as unknown[] | undefined,
+      },
+    };
+
+    expect(hasRecoverableGenerationRemixInputs(source)).toBe(true);
+    const prefill = buildGenerationPaywallPrefill(source);
+    expect(prefill).toMatchObject({ allowRemix: true, resourceKinds: ['prompt', 'notes', 'remix'] });
+    expect(prefill?.notesMarkdown).toContain('Inputs: 2 named subjects');
+
+    // A subject with no staged picture has nothing a remix could restore.
+    expect(hasRecoverableGenerationRemixInputs({
+      ...source,
+      workflowSettings: {
+        ...source.workflowSettings,
+        klingSubjects: [{ handle: '@lead', displayName: 'Hero creator', images: [{ storagePath: null }] }],
+      },
+    })).toBe(false);
+    // Nor has a run that recorded no subject, as one made before they were kept.
+    const before = { ...source, workflowSettings: { ...source.workflowSettings, klingSubjects: undefined } };
+    expect(hasRecoverableGenerationRemixInputs(before)).toBe(false);
+    expect(buildGenerationPaywallPrefill(before)?.notesMarkdown).not.toContain('named subject');
+  });
+
   it('returns null when a generation has no usable prompt, notes, or remix inputs', () => {
     expect(
       buildGenerationPaywallPrefill({

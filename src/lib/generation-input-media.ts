@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 
 import {
+  isValidElementHandle,
   normalizeSubmittedElementDescriptors,
   type ImageElementDescriptor,
 } from '@/lib/image-elements';
@@ -12,7 +13,13 @@ import {
   isAllowlistedRemoteMediaUrl,
   openAllowlistedRemoteMedia,
 } from '@/lib/remote-media-security';
-import { motionInputDescriptors, normalizeRemixMediaAssetDescriptor, type RemixMediaAssetDescriptor } from '@/lib/remix-source';
+import {
+  klingSubjectDescriptors,
+  motionInputDescriptors,
+  normalizeRemixMediaAssetDescriptor,
+  type RemixMediaAssetDescriptor,
+  type RemixResolvedSubject,
+} from '@/lib/remix-source';
 import type { SeedanceAssetCollections, SeedanceAssetMetadata } from '@/lib/seedance-assets';
 import {
   getCanonicalStoredMediaLocation,
@@ -40,7 +47,11 @@ type GenerationInputMediaRole =
   | 'reference_video'
   | 'reference_audio'
   | 'character_image'
-  | 'motion_reference_video';
+  | 'motion_reference_video'
+  // One picture of a Kling O3 named subject. It has a role of its own because a
+  // subject's pictures are one identity under one handle: read as reference
+  // images, they would be restored as so many plain references of one name.
+  | 'subject_image';
 
 export interface GenerationInputMediaItem {
   id: string;
@@ -95,6 +106,7 @@ const INPUT_MEDIA_WORKFLOW_KEYS = new Set([
   'referenceVideoUrls',
   'referenceAudioUrls',
   'klingVideoElements',
+  'klingSubjects',
   'seedanceAssets',
   'characterImage',
   'referenceVideo',
@@ -465,6 +477,7 @@ function getDefaultInputLabel(role: string, index: number): string {
   if (role === 'reference_audio') return 'Reference audio';
   if (role === 'character_image') return 'Character image';
   if (role === 'motion_reference_video') return 'Motion reference video';
+  if (role === 'subject_image') return 'Subject image';
   return `Reference image ${index + 1}`;
 }
 
@@ -730,6 +743,25 @@ function getSeedanceSourceUrl(asset: SeedanceAssetMetadata | undefined): string 
   return typeof asset?.sourceUrl === 'string' && asset.sourceUrl.trim() ? asset.sourceUrl : null;
 }
 
+/**
+ * What is kept beside a subject picture: the subject it belongs to, and the
+ * place of the subject in the run and of the picture in the subject, both
+ * counted from 0. A remix puts the subjects back together from these.
+ */
+function subjectImageMetadata(
+  subject: { handle: string; displayName: string },
+  subjectIndex: number,
+  imageIndex: number,
+): Record<string, unknown> {
+  return {
+    handle: subject.handle,
+    displayName: subject.displayName,
+    provider: 'kling',
+    subjectIndex,
+    imageIndex,
+  };
+}
+
 async function resolveDescriptorLegacyItem(params: {
   supabase: SupabaseClient;
   generationId: string;
@@ -865,6 +897,25 @@ export async function buildLegacyGenerationInputMedia(params: {
     urlMode,
   });
   if (endFrame) items.push(endFrame);
+
+  // A Kling O3 run's named subjects, one item per picture. A picture is signed
+  // from the path it was staged under, which holds it to the owner's prefix.
+  for (const [subjectIndex, subject] of klingSubjectDescriptors(params.workflowSettings).entries()) {
+    for (const [imageIndex, image] of subject.images.entries()) {
+      items.push(createLegacyInputItem({
+        generationId: params.generationId,
+        mediaType: 'image',
+        role: 'subject_image',
+        label: subject.displayName,
+        url: urlMode === 'signed' && image.storagePath
+          ? await resolveLegacyStorageUrl(params.supabase, image.storagePath, params.ownerUserId)
+          : null,
+        storagePath: image.storagePath,
+        sortOrder: sortOrder++,
+        metadata: subjectImageMetadata(subject, subjectIndex, imageIndex),
+      }));
+    }
+  }
 
   const preparedSources = new Set<string>();
 
@@ -1047,6 +1098,39 @@ export function toRemixAssetDescriptor(
   };
 }
 
+/**
+ * The Kling O3 named subjects among a run's inputs, as a remix restores them:
+ * one per handle, in the order the run used them, each with its pictures in
+ * order. `items` come in the order the run kept them.
+ */
+export function toRemixSubjects(items: GenerationInputMediaItem[]): RemixResolvedSubject[] {
+  const subjects: RemixResolvedSubject[] = [];
+
+  for (const item of items) {
+    if (item.mediaType !== 'image' || item.role !== 'subject_image') continue;
+    const metadata = item.metadata ?? {};
+    const handle = typeof metadata.handle === 'string' ? metadata.handle : '';
+    if (!isValidElementHandle(handle)) continue;
+
+    const image = toRemixAssetDescriptor(item);
+    const subject = subjects.find((candidate) => candidate.handle === handle);
+    if (subject) {
+      subject.images.push(image);
+    } else {
+      subjects.push({
+        handle,
+        displayName: normalizeLabel(
+          typeof metadata.displayName === 'string' ? metadata.displayName : item.label,
+          handle.slice(1)
+        ),
+        images: [image],
+      });
+    }
+  }
+
+  return subjects;
+}
+
 export function collectImageInputCandidates(params: {
   resolvedImageUrls: string[];
   elements: ImageElementDescriptor[];
@@ -1070,6 +1154,39 @@ export function collectImageInputCandidates(params: {
         : null,
     };
   });
+}
+
+/**
+ * The pictures of a Kling O3 run's named subjects, as inputs to keep.
+ *
+ * A subject goes to the provider as two to four pictures under one handle, and
+ * the prompt mentions it by that handle. Each picture is kept with the handle
+ * and the name of its subject, so a remix of the run can restore the subjects
+ * the prompt was written with.
+ *
+ * `imageUrls` is what the provider was given for each of `images`, in order.
+ */
+export function collectSubjectImageCandidates(params: {
+  subjects: Array<{
+    handle: string;
+    displayName: string;
+    images: Array<{ url: string; storagePath?: string | null }>;
+    imageUrls: string[];
+  }>;
+}): PersistGenerationInputCandidate[] {
+  return params.subjects.flatMap((subject, subjectIndex) => (
+    subject.images.map((image, imageIndex) => ({
+      mediaType: 'image',
+      role: 'subject_image',
+      label: subject.displayName,
+      sourceUrl: subject.imageUrls[imageIndex] ?? null,
+      // As for frames: with no staged path given, the picture as submitted names
+      // the caller's own object when it is a storage path or storage URL.
+      sourceStoragePath: image.storagePath ?? image.url,
+      sourceGenerationId: null,
+      metadata: subjectImageMetadata(subject, subjectIndex, imageIndex),
+    } satisfies PersistGenerationInputCandidate))
+  ));
 }
 
 export function collectSeedanceAssetCandidates(params: {

@@ -4369,4 +4369,205 @@ describe('generation services', () => {
       }],
     })).rejects.toThrow(/replace reference images and frames/);
   });
+
+  // A run sent its named subjects to the provider and kept nothing of them, so
+  // a remix of it restored the prompt and no subject (2026-10-03).
+  it('keeps each Kling O3 subject picture with the handle, the name and the place of its subject', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    vi.mocked(fetch).mockImplementation(async () => ({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-o3-subjects-kept-1' } }),
+    }) as Response);
+
+    const { supabase, generations, inputMediaRows, uploads } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      // Neither handle is the one its subject's name would give.
+      prompt: '@lead lifts @bottle and smiles at the camera.',
+      model: 'kling-o3',
+      duration: 5,
+      aspectRatio: '16:9',
+      resolution: '720p',
+      sound: false,
+      klingSubjects: [
+        {
+          handle: '@lead',
+          displayName: 'Hero creator',
+          images: ['front', 'side', 'back'].map((view) => ({
+            url: `https://signed.example.com/hero-${view}.png`,
+            storagePath: `uploads/user-1/hero-${view}.png`,
+          })),
+        },
+        {
+          handle: '@bottle',
+          displayName: 'Serum bottle',
+          images: ['front', 'side'].map((view) => ({
+            url: `https://signed.example.com/bottle-${view}.png`,
+            storagePath: `uploads/user-1/bottle-${view}.png`,
+          })),
+        },
+      ],
+    });
+
+    expect(inputMediaRows.map((row) => [row.media_type, row.role, row.label, row.storage_path])).toEqual([
+      ['image', 'subject_image', 'Hero creator', 'generation_inputs/user-1/gen-1/00-subject_image.png'],
+      ['image', 'subject_image', 'Hero creator', 'generation_inputs/user-1/gen-1/01-subject_image.png'],
+      ['image', 'subject_image', 'Hero creator', 'generation_inputs/user-1/gen-1/02-subject_image.png'],
+      ['image', 'subject_image', 'Serum bottle', 'generation_inputs/user-1/gen-1/03-subject_image.png'],
+      ['image', 'subject_image', 'Serum bottle', 'generation_inputs/user-1/gen-1/04-subject_image.png'],
+    ]);
+    expect(uploads).toContainEqual({ bucket: 'generation_inputs', filePath: 'user-1/gen-1/04-subject_image.png' });
+    expect(inputMediaRows.map((row) => row.metadata)).toEqual([
+      expect.objectContaining({ handle: '@lead', displayName: 'Hero creator', subjectIndex: 0, imageIndex: 0, sourceStoragePath: 'uploads/user-1/hero-front.png' }),
+      expect.objectContaining({ handle: '@lead', displayName: 'Hero creator', subjectIndex: 0, imageIndex: 1, sourceStoragePath: 'uploads/user-1/hero-side.png' }),
+      expect.objectContaining({ handle: '@lead', displayName: 'Hero creator', subjectIndex: 0, imageIndex: 2, sourceStoragePath: 'uploads/user-1/hero-back.png' }),
+      expect.objectContaining({ handle: '@bottle', displayName: 'Serum bottle', subjectIndex: 1, imageIndex: 0, sourceStoragePath: 'uploads/user-1/bottle-front.png' }),
+      expect.objectContaining({ handle: '@bottle', displayName: 'Serum bottle', subjectIndex: 1, imageIndex: 1, sourceStoragePath: 'uploads/user-1/bottle-side.png' }),
+    ]);
+    // The run's settings say what it used, so a run that kept less than that can be told.
+    expect(generations[0].workflow_settings?.klingSubjects).toEqual([
+      {
+        handle: '@lead',
+        displayName: 'Hero creator',
+        images: ['front', 'side', 'back'].map((view) => ({ storagePath: `uploads/user-1/hero-${view}.png` })),
+      },
+      {
+        handle: '@bottle',
+        displayName: 'Serum bottle',
+        images: ['front', 'side'].map((view) => ({ storagePath: `uploads/user-1/bottle-${view}.png` })),
+      },
+    ]);
+  });
+
+  it('records nothing of a Kling O3 subject for a template run, whose recipe is private', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: { input?: { elements?: Array<{ name: string }> } } | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-o3-subjects-template-1' } }),
+      } as Response;
+    });
+
+    const { supabase, generations, inputMediaRows, rpcCalls, uploads } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'v'.repeat(64),
+      prompt: '@lead smiles at the camera.',
+      model: 'kling-o3',
+      duration: 5,
+      aspectRatio: '16:9',
+      resolution: '720p',
+      sound: false,
+      klingSubjects: [{
+        handle: '@lead',
+        displayName: 'Hero creator',
+        images: ['front', 'side'].map((view) => ({
+          url: `https://signed.example.com/hero-${view}.png`,
+          storagePath: `uploads/user-1/hero-${view}.png`,
+        })),
+      }],
+      privateRecipe: true,
+      persistInputMedia: false,
+      templateContext: { runId: 'run-1', stepId: 'step-video-1' },
+    });
+
+    // The subject still reaches the provider.
+    expect((providerBody as { input?: { elements?: Array<{ name: string }> } } | null)?.input?.elements?.map((element) => element.name)).toEqual(['lead']);
+    expect(generations[0].workflow_settings).toEqual({});
+    expect(JSON.stringify(rpcCalls)).not.toMatch(/klingSubjects|hero-front|Hero creator|@lead/);
+    expect(inputMediaRows).toEqual([]);
+    expect(uploads).toEqual([]);
+  });
+
+  // A remix restores a subject picture as the creator's kept file, by its path.
+  // That path fails the ownership check, and who may use the file is decided
+  // from the path: the provider is sent the copy made for the caller.
+  it('sends the provider the caller’s own copy of a remixed Kling O3 subject picture', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: { input?: { elements?: Array<{ name: string; element_input_urls: string[] }> } } | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-o3-subjects-remix-1' } }),
+      } as Response;
+    });
+
+    const keptByCreator = (place: number) => `generation_inputs/user-2/gen-9/0${place}-subject_image.png`;
+    const copyForCaller = (source: string) => (
+      `https://project.supabase.co/storage/v1/object/sign/${source.replace('user-2/gen-9', 'user-1/remix-imports/gen-9')}?token=copy`
+    );
+    // The mock is the file's own: other tests have called it by now.
+    sharedImportMocks.importSharedGenerationInputMedia.mockClear();
+    sharedImportMocks.importSharedGenerationInputMedia.mockImplementation((async ({ source }: { source: string }) => ({
+      outcome: 'imported',
+      storagePath: source.replace('user-2/gen-9', 'user-1/remix-imports/gen-9'),
+      signedUrl: copyForCaller(source),
+    })) as never);
+
+    try {
+      const { supabase } = createSupabaseMock();
+      await startVideoGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: '@lead smiles at the camera.',
+        model: 'kling-o3',
+        duration: 5,
+        aspectRatio: '16:9',
+        resolution: '720p',
+        sound: false,
+        klingSubjects: [{
+          handle: '@lead',
+          displayName: 'Hero creator',
+          images: [0, 1].map((place) => ({ url: keptByCreator(place), storagePath: keptByCreator(place) })),
+        }],
+      });
+    } finally {
+      sharedImportMocks.importSharedGenerationInputMedia.mockImplementation(async () => ({ outcome: 'not-eligible' as const }));
+    }
+
+    expect(sharedImportMocks.importSharedGenerationInputMedia).toHaveBeenCalledTimes(2);
+    expect(sharedImportMocks.importSharedGenerationInputMedia).toHaveBeenCalledWith({ source: keptByCreator(0), viewerUserId: 'user-1' });
+    expect(sharedImportMocks.importSharedGenerationInputMedia).toHaveBeenCalledWith({ source: keptByCreator(1), viewerUserId: 'user-1' });
+    expect((providerBody as { input?: { elements?: Array<{ name: string; element_input_urls: string[] }> } } | null)?.input?.elements).toEqual([
+      expect.objectContaining({
+        name: 'lead',
+        element_input_urls: [copyForCaller(keptByCreator(0)), copyForCaller(keptByCreator(1))],
+      }),
+    ]);
+  });
+
+  it('refuses a Kling O3 subject picture that belongs to someone who shared nothing', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    const { supabase, rpcCalls } = createSupabaseMock();
+
+    await expect(startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: '@lead smiles at the camera.',
+      model: 'kling-o3',
+      duration: 5,
+      aspectRatio: '16:9',
+      resolution: '720p',
+      sound: false,
+      klingSubjects: [{
+        handle: '@lead',
+        displayName: 'Hero creator',
+        images: [0, 1].map((place) => ({
+          url: `generation_inputs/user-2/gen-9/0${place}-subject_image.png`,
+          storagePath: `generation_inputs/user-2/gen-9/0${place}-subject_image.png`,
+        })),
+      }],
+    })).rejects.toThrow('Media references must belong to the authenticated user.');
+    expect(rpcCalls.map((call) => call.fn)).not.toContain('start_generation');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
 });

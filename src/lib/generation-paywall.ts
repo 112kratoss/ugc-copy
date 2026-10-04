@@ -12,7 +12,12 @@ import {
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 import type { GenerationInputMediaItem, GenerationInputMediaType } from '@/lib/generation-input-media';
-import { isMotionGeneration, motionInputDescriptors, normalizeRemixMediaAssetDescriptor } from '@/lib/remix-source';
+import {
+  isMotionGeneration,
+  klingSubjectDescriptors,
+  motionInputDescriptors,
+  normalizeRemixMediaAssetDescriptor,
+} from '@/lib/remix-source';
 
 export interface GenerationPaywallPrefill {
   resourceKinds: PostResourceKind[];
@@ -226,6 +231,13 @@ function countRecoverableDescriptors(value: unknown): number {
   return normalizeSubmittedElementDescriptors(value).filter((element) => element.storagePath || element.sourceGenerationId).length;
 }
 
+/** The named subjects of a Kling O3 run that have a staged picture a remix could restore. */
+function countRecoverableSubjects(workflowSettings: Record<string, unknown>): number {
+  return klingSubjectDescriptors(workflowSettings)
+    .filter((subject) => subject.images.some((image) => image.storagePath))
+    .length;
+}
+
 function getSavedReferenceKindCounts(
   inputMedia: GenerationInputMediaItem[] | null | undefined
 ): Partial<Record<GenerationInputMediaType, number>> {
@@ -259,6 +271,7 @@ export function hasRecoverableGenerationRemixInputs(source: GenerationPaywallPre
     return (
       countRecoverableDescriptors(workflowSettings.elements) > 0 ||
       countRecoverableDescriptors(workflowSettings.klingVideoElements) > 0 ||
+      countRecoverableSubjects(workflowSettings) > 0 ||
       hasRecoverableDescriptor(workflowSettings.startFrame, 'image') ||
       hasRecoverableDescriptor(workflowSettings.endFrame, 'image')
     );
@@ -316,6 +329,7 @@ function buildVideoNotes(modelLabel: string | null, workflowSettings: Record<str
     ? workflowSettings.referenceVideoUrls.filter((value) => typeof value === 'string' && value.trim().length > 0).length
     : 0;
   const klingVideoElementCount = countRecoverableDescriptors(workflowSettings.klingVideoElements);
+  const namedSubjectCount = countRecoverableSubjects(workflowSettings);
   const referenceAudioCount = Array.isArray(workflowSettings.referenceAudioUrls)
     ? workflowSettings.referenceAudioUrls.filter((value) => typeof value === 'string' && value.trim().length > 0).length
     : 0;
@@ -365,6 +379,7 @@ function buildVideoNotes(modelLabel: string | null, workflowSettings: Record<str
   const inputLabels = [
     formatListCount(frameCount, 'saved frame', 'saved frames'),
     formatListCount(namedReferenceCount, 'named reference', 'named references'),
+    formatListCount(namedSubjectCount, 'named subject', 'named subjects'),
     formatListCount(referenceVideoCount + klingVideoElementCount, 'video reference', 'video references'),
     formatListCount(referenceAudioCount, 'audio reference', 'audio references'),
   ].filter((value): value is string => Boolean(value));

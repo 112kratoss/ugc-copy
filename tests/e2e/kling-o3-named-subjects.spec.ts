@@ -392,6 +392,67 @@ test.describe('Kling O3 named subjects', () => {
     });
   });
 
+  // A remix of a run that used named subjects brought back its prompt and no
+  // subject: a run kept nothing of them. The mentions in the prompt then named
+  // nothing, and Generate refused the prompt until the creator had built a subject
+  // of each name again (2026-10-04).
+  test('brings the subjects of a remixed run back under the handles its prompt mentions', async ({ page }) => {
+    const kept = 'generation_inputs/0b9f6c2e-51d7-4c3a-9e84-2f6a1d7c5b90/7c1e4a58-93bd-4f06-8a27-d5e0b6f3a914';
+    const picture = (place: string, label: string) => ({
+      kind: 'image',
+      label,
+      storagePath: `${kept}/${place}-subject_image.png`,
+      sourceGenerationId: null,
+      url: `https://example.supabase.co/storage/v1/object/sign/${kept}/${place}-subject_image.png?token=placeholder`,
+    });
+    const prompt = '@lead lifts @bottle and smiles at the camera in a bright studio, slow push in.';
+    // What /api/remix-source answers for a run with two subjects. Neither handle is
+    // the one its subject's name would give ("@hero_creator", "@serum_bottle").
+    await page.route('**/api/remix-source*', (route) => route.fulfill({
+      json: {
+        generation: { id: 'gen-1', title: 'Serum launch', prompt, category: 'video', model: 'kling-o3' },
+        result: null,
+        inputs: {
+          video: {
+            referenceMode: 'elements',
+            startFrame: null,
+            endFrame: null,
+            elements: [],
+            referenceVideos: [],
+            referenceAudios: [],
+            subjects: [
+              { handle: '@lead', displayName: 'Hero creator', images: ['00', '01', '02'].map((place) => picture(place, 'Hero creator')) },
+              { handle: '@bottle', displayName: 'Serum bottle', images: ['03', '04'].map((place) => picture(place, 'Serum bottle')) },
+            ],
+          },
+        },
+        workflowSettings: { model: 'kling-o3', aspectRatio: '16:9', duration: 5, resolution: '720p', referenceMode: 'elements' },
+        restoreIssues: [],
+      },
+    }));
+    // The kept pictures load from storage. Answer them here so the page stays offline.
+    await page.route('https://example.supabase.co/storage/v1/object/sign/**', (route) => (
+      route.fulfill({ contentType: 'image/png', body: ONE_PIXEL_PNG })
+    ));
+
+    await page.goto('/create-video?remix=gen-1&remixPost=post-1');
+
+    // A dev server reload makes the page ask for the remix again, so every check
+    // below finds the same restore however often the page started over.
+    await expect.poll(() => subjectCards(page)).toEqual([
+      { handle: '@lead', images: 3 },
+      { handle: '@bottle', images: 2 },
+    ]);
+    await expect(page.getByPlaceholder('Subject name').nth(0)).toHaveValue('Hero creator');
+    await expect(page.getByPlaceholder('Subject name').nth(1)).toHaveValue('Serum bottle');
+    await expect(page.getByPlaceholder(/^Describe the .* scene/)).toHaveValue(prompt);
+    // Each card draws the pictures the run kept, from the links the remix was given.
+    await expect.poll(() => page.locator('img[src*="subject_image"]').evaluateAll((pictures) => (
+      pictures.map((drawn) => (drawn as HTMLImageElement).naturalWidth > 0)
+    ))).toEqual([true, true, true, true, true]);
+    await expect(page.getByText(/Unknown element mention/)).toHaveCount(0);
+  });
+
   test('forgets subjects once the last one is removed', async ({ page }) => {
     await page.goto('/create-video?model=kling-o3');
 

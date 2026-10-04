@@ -11,7 +11,7 @@ import {
   toRepairCandidates,
 } from '@/lib/generation-input-media-repair';
 import { normalizeUploadIntentPath } from '@/lib/media-upload-staging-paths';
-import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
+import type { GenerationInputMediaItem, PersistGenerationInputCandidate } from '@/lib/generation-input-media';
 
 const NOW = new Date('2026-08-03T12:00:00.000Z');
 
@@ -293,6 +293,68 @@ describe('repairMissingGenerationInputMedia', () => {
       last_error: null,
     });
     expect(double.repairUpserts[0].repaired_at).toBeTruthy();
+  });
+
+  // A Kling O3 run names its subjects' staged pictures in its settings. When
+  // keeping them failed outright, those staged files are the only copy, and the
+  // repair has to rebuild each picture with the subject it belongs to: a remix
+  // of the repaired run restores its subjects from that.
+  it('rebuilds the pictures of a Kling O3 subject run with the subject each belongs to', async () => {
+    const subjectGeneration = {
+      ...generation,
+      category: 'video',
+      model: 'kling-o3',
+      workflow_settings: {
+        model: 'kling-o3',
+        klingSubjects: [{
+          handle: '@lead',
+          displayName: 'Hero creator',
+          images: [{ storagePath: 'uploads/user-1/abc-hero-front.png' }, { storagePath: 'uploads/user-1/def-hero-side.png' }],
+        }],
+      },
+    };
+    // The reclaim sweep leaves both staged files alone while the run reads them.
+    expect(extractUploadsPathsFromWorkflowSettings(subjectGeneration.workflow_settings)).toEqual([
+      'user-1/abc-hero-front.png',
+      'user-1/def-hero-side.png',
+    ]);
+
+    const rowsByGeneration = new Map<string, Array<{ id: string; metadata: Record<string, unknown> | null }>>();
+    rowsByGeneration.set('gen-1', []);
+    const double = repairClientDouble({ generations: [subjectGeneration], rowsByGeneration });
+    const persisted: PersistGenerationInputCandidate[] = [];
+
+    // The run's settings are read by the real builder: what it makes of them is the point.
+    const summary = await repairMissingGenerationInputMedia(double.client, {
+      now: NOW,
+      dependencies: {
+        persistGenerationInputMedia: vi.fn(async ({ candidates }: { candidates: PersistGenerationInputCandidate[] }) => {
+          persisted.push(...candidates);
+          rowsByGeneration.set('gen-1', candidates.map((candidate, index) => ({
+            id: `row-${index}`,
+            metadata: { sourceStoragePath: candidate.sourceStoragePath },
+          })));
+        }),
+      },
+    });
+
+    expect(summary).toMatchObject({ attempted: 1, completed: 1, failed: 0 });
+    expect(persisted).toEqual([
+      expect.objectContaining({
+        mediaType: 'image',
+        role: 'subject_image',
+        label: 'Hero creator',
+        sourceStoragePath: 'uploads/user-1/abc-hero-front.png',
+        metadata: { handle: '@lead', displayName: 'Hero creator', provider: 'kling', subjectIndex: 0, imageIndex: 0 },
+      }),
+      expect.objectContaining({
+        mediaType: 'image',
+        role: 'subject_image',
+        label: 'Hero creator',
+        sourceStoragePath: 'uploads/user-1/def-hero-side.png',
+        metadata: { handle: '@lead', displayName: 'Hero creator', provider: 'kling', subjectIndex: 0, imageIndex: 1 },
+      }),
+    ]);
   });
 
   it('rolls back rows before objects when the durable set is incomplete', async () => {
