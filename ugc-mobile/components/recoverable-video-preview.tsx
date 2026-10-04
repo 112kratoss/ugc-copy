@@ -1,14 +1,16 @@
 import { useVideoPlayer, VideoView, type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
 import { useIsFocused } from '@react-navigation/native';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { ActivityIndicator, Platform, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { SecondaryButton } from '@/components/ui';
 import { useNativePreviewPlayback } from '@/lib/use-native-preview-playback';
 import { cachedVideoSource } from '@/lib/media-source';
 import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
+import { useVideoHasBeenReady } from '@/lib/use-video-has-been-ready';
 import { useVideoSourceAfterSurface } from '@/lib/use-video-source-after-surface';
+import { mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
 type VideoPreviewProps = {
@@ -122,6 +124,20 @@ function VideoPreviewAttempt({
   }, [isFocused, player]);
   const [status, setStatus] = useState<VideoPlayerStatus>(player.status);
   const timedOut = useVideoLoadDeadline(player, status);
+  const hasBeenReady = useVideoHasBeenReady(player);
+  const failed = timedOut || status === 'error';
+  // Android's controller shows itself on any paused player, loaded or not: a
+  // play button exactly over the spinner, "00:00 · 00:00" under it, and its bar
+  // still up beneath the retry card. iOS draws its controls only once there is
+  // something to play. So on Android the player is covered until its clip can
+  // play, and again once the attempt has failed.
+  //
+  // Covered, and otherwise left exactly as it is. Mounting the player late, or
+  // mounting it without its controls and turning them on at ready (a different
+  // native view on Android), gives the decoder a new surface just as its first
+  // frames arrive, and a paused clip that loses its first frame that way never
+  // draws another.
+  const covered = Platform.OS === 'android' && nativeControls && (failed || !hasBeenReady);
 
   useEffect(() => {
     const subscription = player.addListener('statusChange', event => setStatus(event.status));
@@ -153,14 +169,20 @@ function VideoPreviewAttempt({
           buttonOptions={SINGLE_CLIP_BUTTONS}
           contentFit={contentFit}
           style={{ width: '100%', height: '100%' }}
+          importantForAccessibility={covered ? 'no-hide-descendants' : undefined}
         />
       </View>
+      {covered ? (
+        // The frame's own ground over the player. Being painted is also what
+        // makes it take the touches, so the controls under it cannot be pressed.
+        <View style={{ position: 'absolute', inset: 0, backgroundColor: StyleSheet.flatten(style)?.backgroundColor ?? mediaColors.mediaGround }} />
+      ) : null}
       {!timedOut && (status === 'loading' || status === 'idle') ? (
         <View pointerEvents="none" style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
           <ActivityIndicator accessibilityLabel="Loading video" color={theme.colors.primary} />
         </View>
       ) : null}
-      {timedOut || status === 'error' ? (
+      {failed ? (
         <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
           <View style={{ backgroundColor: theme.colors.panel, borderRadius: 20, padding: 20, gap: 12 }}>
             <Text accessibilityRole="alert" style={{ color: theme.colors.text, fontSize: 16, textAlign: 'center' }}>
