@@ -71,10 +71,15 @@ async function handleProfileValidatePOST(
       );
     }
 
+    const body: unknown = await request.json().catch(() => null);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return NextResponse.json({ error: 'Invalid profile payload.' }, { status: 400 });
+    }
+
     const validation = await dependencies.validateProfileSubmission(
       adminSupabase,
       user.id,
-      await request.json(),
+      body,
     );
 
     if (!validation.ok) {

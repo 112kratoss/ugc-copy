@@ -164,9 +164,14 @@ export async function patchProfileRouteResult({
       );
     }
 
+    const body: unknown = await request.json().catch(() => null);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return createProfileRouteResult(request, { error: 'Invalid profile payload.' }, 400);
+    }
+
     const result = await resolvedDependencies.updateProfileForRoute({
       userId: user.id,
-      body: await request.json(),
+      body,
       client: resolvedDependencies.createServiceClient,
     });
 

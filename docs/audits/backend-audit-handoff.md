@@ -6,10 +6,41 @@ Updated 2026-10-04 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/social-lifecycle-audit-8d`, incorporating main `7116126d2a9dd1b4919a7dc554ec9640fc37d036` (#338); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/social-coverage-audit-8e`, incorporating main `7116126d2a9dd1b4919a7dc554ec9640fc37d036` (#338); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+8C #338 is fully released as 7116126d. Exact-main Quality 37207818947 and
+standard release 37208546610 pass (release 14:18:52 UTC). Independent exact live
+SHA/feed/admin/webhook pass. Both function digests match clean replay; ledger
+version 20261004141520. Four production rollback checks pass, separate fixture
+cleanup and follows-across-blocks readbacks are zero. Security groups unchanged;
+only function schema fingerprints changed. Read the follow/block release report.
+
+8D #339 passed all four PR Quality jobs (37208266763), then merged as
+6808cd7c4fd1345c8f436bc1a3c15e33f3fbfae7 at 15:53:46 UTC October 4.
+No mobile store release was active immediately before merge. Exact-main Quality
+37214724770 is running; browser, mobile and database pass, web build remains.
+Standard release and independent live checks follow. No migration in 8D.
+
+8E reproduces malformed/null JSON returning 500 on PATCH /api/profile and
+POST /api/profile/validate through actual local Next HTTP (four failures/eight
+controls pass). Both adapters now return 400 for malformed/non-object payloads.
+After-fix HTTP 12/12, PostgREST profile/contact 7/7, focused web 67/67 and mobile
+contract 123/123 pass, with types/lint. Permanent adapter baseline: ten failed,
+ten passed; real HTTP confirms malformed/null failures (other primitive cases
+are unit boundary coverage). No migration or mobile runtime change. See the
+profile/contact report; candidate PR/CI/release next. Full audit remains open.
+
+New read-only follow-up closes JOB-04: the original report (created September 27
+12:35:19.186226 UTC) is dismissed, reviewed October 1 05:09:36.862171 UTC with a
+reviewer. Both queues now empty, latest watchdog 37203705619 passes. No audit
+mutation. See moderation-queue follow-up report. The explicit HTTP method map
+records 162 routes/186 methods but does not close MAP-02. New evidence/docs are
+local for the next documentation batch; do not restart PR CI just to record them.
+Ledger: 23 passed, 25 untested, three failed, two external. SOCIAL-04 is failed
+until 8E is released; broader profile/creator coverage remains open.
 
 8B #337 is released as e5bc769b. Exact-main Quality 37201725874 and release
 37202416554 pass (release 12:35:38 UTC). Independent live SHA/feed/admin/webhook

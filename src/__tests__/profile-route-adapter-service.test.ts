@@ -1,3 +1,4 @@
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -135,6 +136,20 @@ describe('profile route adapter service', () => {
       },
       client: createServiceClient,
     });
+  });
+
+  it.each(['{', 'null', '[]', '"profile"', '42'])('rejects invalid profile request %s before domain work', async (body) => {
+    const result = await patchProfileRouteResult({
+      request: new Request('http://localhost/api/profile', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body,
+      }),
+      dependencies: { createUserClient, createServiceClient, updateProfileForRoute },
+    });
+    const contract = mobileApiContract.profileInvalidPayload;
+    expect(result.status).toBe(contract.status);
+    expect(result.body).toEqual(contract.response);
+    expect(result.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(updateProfileForRoute).not.toHaveBeenCalled();
   });
 
   it('refuses to let a guest claim a username', async () => {

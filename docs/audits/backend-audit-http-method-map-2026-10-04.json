@@ -1,0 +1,2961 @@
+{
+  "summary": {
+    "commit": "3720477850ad85335693ca8aec5dc4ab0a75efcb",
+    "capturedAt": "2026-10-04T14:12:52.003Z",
+    "routes": 162,
+    "explicitMethods": 186,
+    "byArea": {
+      "AUTH": {
+        "routes": 6,
+        "methods": 8
+      },
+      "SOCIAL": {
+        "routes": 35,
+        "methods": 45
+      },
+      "PAY": {
+        "routes": 15,
+        "methods": 16
+      },
+      "OPS": {
+        "routes": 5,
+        "methods": 5
+      },
+      "JOB": {
+        "routes": 23,
+        "methods": 24
+      },
+      "GEN": {
+        "routes": 19,
+        "methods": 24
+      },
+      "MARKET": {
+        "routes": 20,
+        "methods": 20
+      },
+      "MEDIA": {
+        "routes": 8,
+        "methods": 8
+      },
+      "WORKFLOW": {
+        "routes": 31,
+        "methods": 36
+      }
+    },
+    "unresolved": [],
+    "missingBaselineRoutes": []
+  },
+  "caveats": [
+    "Explicit exported methods only; framework-generated HEAD/OPTIONS are not counted.",
+    "This maps exports to existing gates and does not prove method behavior.",
+    "Imported modules and initializer expressions are locators, not transitive call proof."
+  ],
+  "routes": [
+    {
+      "file": "src/app/api/account/merge/prepare/route.ts",
+      "route": "/api/account/merge/prepare",
+      "closureGate": "AUTH-GATE",
+      "area": "AUTH",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 7,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/account-merge-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/account/merge/route.ts",
+      "route": "/api/account/merge",
+      "closureGate": "AUTH-GATE",
+      "area": "AUTH",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 7,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/account-merge-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/account/route.ts",
+      "route": "/api/account",
+      "closureGate": "AUTH-GATE",
+      "area": "AUTH",
+      "methods": [
+        {
+          "method": "DELETE",
+          "line": 8,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/account-deletion-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/admin/contact/route.ts",
+      "route": "/api/admin/contact",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "variable",
+          "initializer": "createAdminContactTriageRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/admin-content-moderation-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/admin/moderation/generations/route.ts",
+      "route": "/api/admin/moderation/generations",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "variable",
+          "initializer": "createAdminGenerationModerationRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/admin-content-moderation-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/admin/moderation/post-reports/route.ts",
+      "route": "/api/admin/moderation/post-reports",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "variable",
+          "initializer": "createAdminPostReportRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/admin-moderation-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/admin/moderation/posts/route.ts",
+      "route": "/api/admin/moderation/posts",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "variable",
+          "initializer": "createAdminPostModerationRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/admin-moderation-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/admin/moderation/subject-reports/route.ts",
+      "route": "/api/admin/moderation/subject-reports",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "variable",
+          "initializer": "createAdminSubjectReportRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/admin-moderation-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/admin/payouts/route.ts",
+      "route": "/api/admin/payouts",
+      "closureGate": "PAY-GATE",
+      "area": "PAY",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "variable",
+          "initializer": "createAdminPayoutRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/admin-payout-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/admin/session/route.ts",
+      "route": "/api/admin/session",
+      "closureGate": "AUTH-GATE",
+      "area": "AUTH",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "variable",
+          "initializer": "createAdminSessionRouteHandlers()"
+        },
+        {
+          "method": "DELETE",
+          "line": 5,
+          "form": "variable",
+          "initializer": "createAdminSessionRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/admin-auth-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/admin/users/credits/route.ts",
+      "route": "/api/admin/users/credits",
+      "closureGate": "PAY-GATE",
+      "area": "PAY",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "variable",
+          "initializer": "createAdminCreditRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/admin-credit-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/admin/users/sanctions/route.ts",
+      "route": "/api/admin/users/sanctions",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "variable",
+          "initializer": "createAdminUserSanctionRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/admin-user-sanction-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/app-version/route.ts",
+      "route": "/api/app-version",
+      "closureGate": "OPS-GATE",
+      "area": "OPS",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "@/lib/app-version-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/contact/route.ts",
+      "route": "/api/contact",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "@/lib/contact-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/content-preferences/route.ts",
+      "route": "/api/content-preferences",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 2,
+          "form": "variable",
+          "initializer": "contentPreferencesResponse"
+        },
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "variable",
+          "initializer": "contentPreferencesResponse"
+        }
+      ],
+      "imports": [
+        "@/lib/nsfw-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/creator/payouts/route.ts",
+      "route": "/api/creator/payouts",
+      "closureGate": "PAY-GATE",
+      "area": "PAY",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createCreatorPayoutsRouteHandlers()"
+        },
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createCreatorPayoutsRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/creator-payouts-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/creators/[username]/route.ts",
+      "route": "/api/creators/[username]",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/creator-profile-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/credits/welcome/claim/route.ts",
+      "route": "/api/credits/welcome/claim",
+      "closureGate": "PAY-GATE",
+      "area": "PAY",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "@/lib/onboarding-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/credits/welcome/route.ts",
+      "route": "/api/credits/welcome",
+      "closureGate": "PAY-GATE",
+      "area": "PAY",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "@/lib/onboarding-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/cron/account-deletion-resweeps/route.ts",
+      "route": "/api/cron/account-deletion-resweeps",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 7,
+          "form": "variable",
+          "initializer": "createBackendJobTriggerRouteHandlers({\n  failureMessage: 'Failed to process account deletion cleanup.',\n  runJob: runAccountDeletionResweepsBackendJob,\n})"
+        }
+      ],
+      "imports": [
+        "@/lib/backend-job-executions",
+        "@/lib/backend-job-trigger-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/cron/backend-alert-delivery/route.ts",
+      "route": "/api/cron/backend-alert-delivery",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 7,
+          "form": "variable",
+          "initializer": "createBackendJobTriggerRouteHandlers({\n  failureMessage: 'Failed to deliver backend alerts.',\n  runJob: runBackendAlertDeliveryJob,\n})"
+        }
+      ],
+      "imports": [
+        "@/lib/backend-job-executions",
+        "@/lib/backend-job-trigger-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/cron/backend-jobs/route.ts",
+      "route": "/api/cron/backend-jobs",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 5,
+          "form": "variable",
+          "initializer": "createBackendJobsRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/backend-jobs-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/cron/feed-maintenance/route.ts",
+      "route": "/api/cron/feed-maintenance",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 7,
+          "form": "variable",
+          "initializer": "createBackendJobTriggerRouteHandlers({\n  failureMessage: 'Failed to maintain feed personalization data.',\n  runJob: runFeedMaintenanceBackendJob,\n})"
+        }
+      ],
+      "imports": [
+        "@/lib/backend-job-executions",
+        "@/lib/backend-job-trigger-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/cron/generation-completions/route.ts",
+      "route": "/api/cron/generation-completions",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 7,
+          "form": "variable",
+          "initializer": "createBackendJobTriggerRouteHandlers({\n  failureMessage: 'Failed to process generation completions.',\n  runJob: runGenerationCompletionsBackendJob,\n})"
+        }
+      ],
+      "imports": [
+        "@/lib/backend-job-executions",
+        "@/lib/backend-job-trigger-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/cron/generation-model-verification/route.ts",
+      "route": "/api/cron/generation-model-verification",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 7,
+          "form": "variable",
+          "initializer": "createBackendJobTriggerRouteHandlers({\n  failureMessage: 'Failed to verify generation model providers.',\n  runJob: runGenerationModelVerificationBackendJob,\n})"
+        }
+      ],
+      "imports": [
+        "@/lib/backend-job-executions",
+        "@/lib/backend-job-trigger-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/cron/media-preview-repair/route.ts",
+      "route": "/api/cron/media-preview-repair",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 7,
+          "form": "variable",
+          "initializer": "createBackendJobTriggerRouteHandlers({\n  failureMessage: 'Failed to repair media previews.',\n  runJob: runMediaPreviewRepairBackendJob,\n})"
+        }
+      ],
+      "imports": [
+        "@/lib/backend-job-executions",
+        "@/lib/backend-job-trigger-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/cron/media-upload-reclaim/route.ts",
+      "route": "/api/cron/media-upload-reclaim",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 7,
+          "form": "variable",
+          "initializer": "createBackendJobTriggerRouteHandlers({\n  failureMessage: 'Failed to reclaim staged media uploads.',\n  runJob: runMediaUploadReclaimBackendJob,\n})"
+        }
+      ],
+      "imports": [
+        "@/lib/backend-job-executions",
+        "@/lib/backend-job-trigger-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/cron/mobile-push-receipts/route.ts",
+      "route": "/api/cron/mobile-push-receipts",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 7,
+          "form": "variable",
+          "initializer": "createBackendJobTriggerRouteHandlers({\n  failureMessage: 'Failed to process mobile push receipts.',\n  runJob: runMobilePushReceiptsBackendJob,\n})"
+        }
+      ],
+      "imports": [
+        "@/lib/backend-job-executions",
+        "@/lib/backend-job-trigger-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/cron/operational-data-retention/route.ts",
+      "route": "/api/cron/operational-data-retention",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 7,
+          "form": "variable",
+          "initializer": "createBackendJobTriggerRouteHandlers({\n  failureMessage: 'Failed to prune operational backend data.',\n  runJob: runOperationalDataRetentionBackendJob,\n})"
+        }
+      ],
+      "imports": [
+        "@/lib/backend-job-executions",
+        "@/lib/backend-job-trigger-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/cron/referral-rewards/route.ts",
+      "route": "/api/cron/referral-rewards",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 7,
+          "form": "variable",
+          "initializer": "createBackendJobTriggerRouteHandlers({\n  failureMessage: 'Failed to reconcile referral rewards.',\n  runJob: runReferralRewardReconciliationBackendJob,\n})"
+        }
+      ],
+      "imports": [
+        "@/lib/backend-job-executions",
+        "@/lib/backend-job-trigger-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/cron/showcase-media-revocations/route.ts",
+      "route": "/api/cron/showcase-media-revocations",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 7,
+          "form": "variable",
+          "initializer": "createBackendJobTriggerRouteHandlers({\n  failureMessage: 'Failed to revoke unexposed showcase media.',\n  runJob: runShowcaseMediaRevocationsBackendJob,\n})"
+        }
+      ],
+      "imports": [
+        "@/lib/backend-job-executions",
+        "@/lib/backend-job-trigger-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/cron/workflow-run-steps/route.ts",
+      "route": "/api/cron/workflow-run-steps",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 7,
+          "form": "variable",
+          "initializer": "createBackendJobTriggerRouteHandlers({\n  failureMessage: 'Failed to process workflow run steps.',\n  runJob: runWorkflowRunStepsBackendJob,\n})"
+        }
+      ],
+      "imports": [
+        "@/lib/backend-job-executions",
+        "@/lib/backend-job-trigger-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/enhance-prompt/route.ts",
+      "route": "/api/enhance-prompt",
+      "closureGate": "GEN-GATE",
+      "area": "GEN",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 6,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/api-cache",
+        "@/lib/prompt-enhancement-route-adapter-service",
+        "@/lib/provider-fetch"
+      ]
+    },
+    {
+      "file": "src/app/api/fx/route.ts",
+      "route": "/api/fx",
+      "closureGate": "OPS-GATE",
+      "area": "OPS",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "@/lib/fx-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/generate-image/route.ts",
+      "route": "/api/generate-image",
+      "closureGate": "GEN-GATE",
+      "area": "GEN",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 7,
+          "form": "variable",
+          "initializer": "createGenerationRouteHandlers({\n  getGenerationForRoute: getImageGenerationForRoute,\n  postGenerationForRoute: postImageGenerationForRoute,\n})"
+        },
+        {
+          "method": "POST",
+          "line": 7,
+          "form": "variable",
+          "initializer": "createGenerationRouteHandlers({\n  getGenerationForRoute: getImageGenerationForRoute,\n  postGenerationForRoute: postImageGenerationForRoute,\n})"
+        }
+      ],
+      "imports": [
+        "@/lib/image-generation-route-service",
+        "@/lib/generation-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/generate-video/route.ts",
+      "route": "/api/generate-video",
+      "closureGate": "GEN-GATE",
+      "area": "GEN",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 7,
+          "form": "variable",
+          "initializer": "createGenerationRouteHandlers({\n  getGenerationForRoute: getVideoGenerationForRoute,\n  postGenerationForRoute: postVideoGenerationForRoute,\n})"
+        },
+        {
+          "method": "POST",
+          "line": 7,
+          "form": "variable",
+          "initializer": "createGenerationRouteHandlers({\n  getGenerationForRoute: getVideoGenerationForRoute,\n  postGenerationForRoute: postVideoGenerationForRoute,\n})"
+        }
+      ],
+      "imports": [
+        "@/lib/video-generation-route-service",
+        "@/lib/generation-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/generate/route.ts",
+      "route": "/api/generate",
+      "closureGate": "GEN-GATE",
+      "area": "GEN",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 7,
+          "form": "variable",
+          "initializer": "createGenerationRouteHandlers({\n  getGenerationForRoute: getMotionGenerationForRoute,\n  postGenerationForRoute: postMotionGenerationForRoute,\n})"
+        },
+        {
+          "method": "POST",
+          "line": 7,
+          "form": "variable",
+          "initializer": "createGenerationRouteHandlers({\n  getGenerationForRoute: getMotionGenerationForRoute,\n  postGenerationForRoute: postMotionGenerationForRoute,\n})"
+        }
+      ],
+      "imports": [
+        "@/lib/motion-generation-route-service",
+        "@/lib/generation-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/generation-models/quote/route.ts",
+      "route": "/api/generation-models/quote",
+      "closureGate": "GEN-GATE",
+      "area": "GEN",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/generation-model-quote-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/generation-models/route.ts",
+      "route": "/api/generation-models",
+      "closureGate": "GEN-GATE",
+      "area": "GEN",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/generation-model-catalog-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/generations/[id]/archive/route.ts",
+      "route": "/api/generations/[id]/archive",
+      "closureGate": "GEN-GATE",
+      "area": "GEN",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/generation-lifecycle-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/generations/[id]/restore-media/route.ts",
+      "route": "/api/generations/[id]/restore-media",
+      "closureGate": "GEN-GATE",
+      "area": "GEN",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 8,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/generation-restore-media-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/generations/[id]/restore/route.ts",
+      "route": "/api/generations/[id]/restore",
+      "closureGate": "GEN-GATE",
+      "area": "GEN",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/generation-lifecycle-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/generations/[id]/route.ts",
+      "route": "/api/generations/[id]",
+      "closureGate": "GEN-GATE",
+      "area": "GEN",
+      "methods": [
+        {
+          "method": "DELETE",
+          "line": 7,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/generation-lifecycle-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/generations/route.ts",
+      "route": "/api/generations",
+      "closureGate": "GEN-GATE",
+      "area": "GEN",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 7,
+          "form": "function"
+        },
+        {
+          "method": "POST",
+          "line": 10,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/generation-route-adapter-service",
+        "@/lib/owner-generations-route-adapter-service",
+        "@/lib/unified-generation-route-service"
+      ]
+    },
+    {
+      "file": "src/app/api/marketplace/assets/[assetId]/import/route.ts",
+      "route": "/api/marketplace/assets/[assetId]/import",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/marketplace-asset-import-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/marketplace/assets/[assetId]/unlock-with-credits/route.ts",
+      "route": "/api/marketplace/assets/[assetId]/unlock-with-credits",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/credit-unlock-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/marketplace/assets/route.ts",
+      "route": "/api/marketplace/assets",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/marketplace-asset-save-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/marketplace/order/route.ts",
+      "route": "/api/marketplace/order",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/marketplace-order-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/marketplace/resources/[resourceId]/route.ts",
+      "route": "/api/marketplace/resources/[resourceId]",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/marketplace-resource-detail-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/marketplace/resources/route.ts",
+      "route": "/api/marketplace/resources",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/marketplace-resource-list-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/marketplace/sales/export/route.ts",
+      "route": "/api/marketplace/sales/export",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/marketplace-sales-export-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/marketplace/verify/route.ts",
+      "route": "/api/marketplace/verify",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/marketplace-verify-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/me/unlocks/[unlockId]/file-url/route.ts",
+      "route": "/api/me/unlocks/[unlockId]/file-url",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createViewerUnlockFileUrlRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/viewer-unlock-detail-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/me/unlocks/[unlockId]/route.ts",
+      "route": "/api/me/unlocks/[unlockId]",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createViewerUnlockDetailRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/viewer-unlock-detail-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/me/unlocks/route.ts",
+      "route": "/api/me/unlocks",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createViewerUnlocksRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/viewer-unlocks-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/media/route.ts",
+      "route": "/api/media",
+      "closureGate": "MEDIA-GATE",
+      "area": "MEDIA",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 6,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/post-media-route-adapter-service",
+        "@/lib/media-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/mobile/commerce/restore/route.ts",
+      "route": "/api/mobile/commerce/restore",
+      "closureGate": "PAY-GATE",
+      "area": "PAY",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 7,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/mobile-commerce-restore-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/mobile/commerce/revenuecat-webhook/route.ts",
+      "route": "/api/mobile/commerce/revenuecat-webhook",
+      "closureGate": "PAY-GATE",
+      "area": "PAY",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "@/lib/revenuecat-webhook-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/mobile/commerce/sync/route.ts",
+      "route": "/api/mobile/commerce/sync",
+      "closureGate": "PAY-GATE",
+      "area": "PAY",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 7,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/mobile-commerce-sync-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/mobile/media-diagnostics/route.ts",
+      "route": "/api/mobile/media-diagnostics",
+      "closureGate": "OPS-GATE",
+      "area": "OPS",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "@/lib/mobile-media-diagnostics-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/mobile/notifications/preferences/route.ts",
+      "route": "/api/mobile/notifications/preferences",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 4,
+          "form": "variable",
+          "initializer": "createMobileNotificationPreferencesRouteHandlers()"
+        },
+        {
+          "method": "PATCH",
+          "line": 4,
+          "form": "variable",
+          "initializer": "createMobileNotificationPreferencesRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/mobile-notification-preferences-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/mobile/notifications/read-all/route.ts",
+      "route": "/api/mobile/notifications/read-all",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 7,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/mobile-notification-read-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/mobile/notifications/read/route.ts",
+      "route": "/api/mobile/notifications/read",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 7,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/mobile-notification-read-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/mobile/notifications/register/route.ts",
+      "route": "/api/mobile/notifications/register",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 7,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/mobile-push-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/mobile/notifications/route.ts",
+      "route": "/api/mobile/notifications",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 7,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/mobile-notification-list-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/mobile/notifications/unregister/route.ts",
+      "route": "/api/mobile/notifications/unregister",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 7,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/mobile-push-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/mobile/playback-metrics/route.ts",
+      "route": "/api/mobile/playback-metrics",
+      "closureGate": "OPS-GATE",
+      "area": "OPS",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "@/lib/mobile-playback-metrics-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/model-catalog/v1/current/route.ts",
+      "route": "/api/model-catalog/v1/current",
+      "closureGate": "GEN-GATE",
+      "area": "GEN",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createModelCatalogRouteHandler('current')"
+        }
+      ],
+      "imports": [
+        "@/lib/model-catalog-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/model-catalog/v1/details/route.ts",
+      "route": "/api/model-catalog/v1/details",
+      "closureGate": "GEN-GATE",
+      "area": "GEN",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createModelCatalogRouteHandler('details')"
+        }
+      ],
+      "imports": [
+        "@/lib/model-catalog-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/model-catalog/v1/models/[id]/route.ts",
+      "route": "/api/model-catalog/v1/models/[id]",
+      "closureGate": "GEN-GATE",
+      "area": "GEN",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createModelCatalogRouteHandler('detail')"
+        }
+      ],
+      "imports": [
+        "@/lib/model-catalog-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/model-catalog/v1/models/route.ts",
+      "route": "/api/model-catalog/v1/models",
+      "closureGate": "GEN-GATE",
+      "area": "GEN",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createModelCatalogRouteHandler('models')"
+        }
+      ],
+      "imports": [
+        "@/lib/model-catalog-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/moderation/blocks/[userId]/route.ts",
+      "route": "/api/moderation/blocks/[userId]",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "DELETE",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createUserBlockRouteHandlers()"
+        },
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createUserBlockRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/moderation-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/moderation/reports/route.ts",
+      "route": "/api/moderation/reports",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/moderation-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/onboarding/events/route.ts",
+      "route": "/api/onboarding/events",
+      "closureGate": "AUTH-GATE",
+      "area": "AUTH",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "@/lib/onboarding-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/onboarding/state/route.ts",
+      "route": "/api/onboarding/state",
+      "closureGate": "AUTH-GATE",
+      "area": "AUTH",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 6,
+          "form": "function"
+        },
+        {
+          "method": "PATCH",
+          "line": 10,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "@/lib/onboarding-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/ops/backend-alerts/route.ts",
+      "route": "/api/ops/backend-alerts",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 6,
+          "form": "variable",
+          "initializer": "createProtectedOpsRouteHandlers({\n  collect: collectBackendAlerts,\n  failureLogMessage: 'backend_alerts_failed',\n  failureResponseError: 'Failed to collect backend alerts.',\n})"
+        }
+      ],
+      "imports": [
+        "@/lib/backend-alerts",
+        "@/lib/ops-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/ops/backend-costs/route.ts",
+      "route": "/api/ops/backend-costs",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 6,
+          "form": "variable",
+          "initializer": "createProtectedOpsRouteHandlers({\n  collect: collectBackendCostReport,\n  failureLogMessage: 'backend_cost_report_failed',\n  failureResponseError: 'Failed to collect backend cost report.',\n})"
+        }
+      ],
+      "imports": [
+        "@/lib/backend-cost-report",
+        "@/lib/ops-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/ops/backend-dashboard/route.ts",
+      "route": "/api/ops/backend-dashboard",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 6,
+          "form": "variable",
+          "initializer": "createProtectedOpsRouteHandlers({\n  collect: collectBackendOpsDashboard,\n  failureLogMessage: 'backend_dashboard_failed',\n  failureResponseError: 'Failed to collect backend dashboard.',\n})"
+        }
+      ],
+      "imports": [
+        "@/lib/backend-ops-dashboard",
+        "@/lib/ops-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/ops/backend-health/route.ts",
+      "route": "/api/ops/backend-health",
+      "closureGate": "JOB-GATE",
+      "area": "JOB",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 6,
+          "form": "variable",
+          "initializer": "createProtectedOpsRouteHandlers({\n  collect: (client) => collectBackendHealth(client, undefined, process.env),\n  failureLogMessage: 'backend_health_failed',\n  failureResponseError: 'Failed to collect backend health.',\n})"
+        }
+      ],
+      "imports": [
+        "@/lib/backend-health",
+        "@/lib/ops-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/posts/[postId]/archive/route.ts",
+      "route": "/api/posts/[postId]/archive",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/post-lifecycle-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/posts/[postId]/report/route.ts",
+      "route": "/api/posts/[postId]/report",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/post-report-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/posts/[postId]/resource-bundle/file-url/route.ts",
+      "route": "/api/posts/[postId]/resource-bundle/file-url",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/post-resource-file-url-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/posts/[postId]/resource-bundle/order/route.ts",
+      "route": "/api/posts/[postId]/resource-bundle/order",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/post-resource-bundle-order-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/posts/[postId]/resource-bundle/route.ts",
+      "route": "/api/posts/[postId]/resource-bundle",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createPostResourceBundleRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/post-resource-bundle-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/posts/[postId]/resource-bundle/unlock-free/route.ts",
+      "route": "/api/posts/[postId]/resource-bundle/unlock-free",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/post-resource-bundle-free-unlock-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/posts/[postId]/resource-bundle/unlock-with-credits/route.ts",
+      "route": "/api/posts/[postId]/resource-bundle/unlock-with-credits",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/credit-unlock-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/posts/[postId]/resource-bundle/verify/route.ts",
+      "route": "/api/posts/[postId]/resource-bundle/verify",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/post-resource-bundle-verify-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/posts/[postId]/restore/route.ts",
+      "route": "/api/posts/[postId]/restore",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/post-lifecycle-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/posts/[postId]/reveal/route.ts",
+      "route": "/api/posts/[postId]/reveal",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 2,
+          "form": "variable",
+          "initializer": "revealNsfwPostResponse"
+        }
+      ],
+      "imports": [
+        "@/lib/nsfw-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/posts/[postId]/route.ts",
+      "route": "/api/posts/[postId]",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "DELETE",
+          "line": 9,
+          "form": "variable",
+          "initializer": "createOwnerPostRouteHandlers()"
+        },
+        {
+          "method": "GET",
+          "line": 9,
+          "form": "variable",
+          "initializer": "createOwnerPostRouteHandlers()"
+        },
+        {
+          "method": "PATCH",
+          "line": 9,
+          "form": "variable",
+          "initializer": "createOwnerPostRouteHandlers()"
+        },
+        {
+          "method": "PUT",
+          "line": 9,
+          "form": "variable",
+          "initializer": "createOwnerPostRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/owner-post-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/posts/resource-files/finalize/route.ts",
+      "route": "/api/posts/resource-files/finalize",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/post-resource-file-direct-upload-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/posts/resource-files/route.ts",
+      "route": "/api/posts/resource-files",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/post-resource-file-upload-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/posts/resource-files/sign/route.ts",
+      "route": "/api/posts/resource-files/sign",
+      "closureGate": "MARKET-GATE",
+      "area": "MARKET",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/post-resource-file-direct-upload-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/posts/route.ts",
+      "route": "/api/posts",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 9,
+          "form": "variable",
+          "initializer": "createPostsRouteHandlers()"
+        },
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "variable",
+          "initializer": "createPostsRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/posts-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/profile/follow/notify/route.ts",
+      "route": "/api/profile/follow/notify",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 7,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/profile-follow-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/profile/follow/route.ts",
+      "route": "/api/profile/follow",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 4,
+          "form": "variable",
+          "initializer": "createProfileFollowRouteHandlers()"
+        },
+        {
+          "method": "POST",
+          "line": 4,
+          "form": "variable",
+          "initializer": "createProfileFollowRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/profile-follow-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/profile/media/cleanup/route.ts",
+      "route": "/api/profile/media/cleanup",
+      "closureGate": "MEDIA-GATE",
+      "area": "MEDIA",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/profile-media-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/profile/media/sign/route.ts",
+      "route": "/api/profile/media/sign",
+      "closureGate": "MEDIA-GATE",
+      "area": "MEDIA",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/profile-media-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/profile/route.ts",
+      "route": "/api/profile",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createProfileRouteHandlers()"
+        },
+        {
+          "method": "PATCH",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createProfileRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/profile-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/profile/share/route.ts",
+      "route": "/api/profile/share",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/profile-share-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/profile/validate/route.ts",
+      "route": "/api/profile/validate",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/profile-validate-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/razorpay/order/route.ts",
+      "route": "/api/razorpay/order",
+      "closureGate": "PAY-GATE",
+      "area": "PAY",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "@/lib/razorpay-credit-order-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/razorpay/verify/route.ts",
+      "route": "/api/razorpay/verify",
+      "closureGate": "PAY-GATE",
+      "area": "PAY",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "@/lib/razorpay-credit-verify-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/razorpay/webhook/route.ts",
+      "route": "/api/razorpay/webhook",
+      "closureGate": "PAY-GATE",
+      "area": "PAY",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "@/lib/razorpay-webhook-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/referrals/claim/route.ts",
+      "route": "/api/referrals/claim",
+      "closureGate": "PAY-GATE",
+      "area": "PAY",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "variable",
+          "initializer": "claimReferralResponse"
+        }
+      ],
+      "imports": [
+        "@/lib/referral-route-service"
+      ]
+    },
+    {
+      "file": "src/app/api/referrals/link/route.ts",
+      "route": "/api/referrals/link",
+      "closureGate": "PAY-GATE",
+      "area": "PAY",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createReferralLinkResponse"
+        }
+      ],
+      "imports": [
+        "@/lib/referral-route-service"
+      ]
+    },
+    {
+      "file": "src/app/api/referrals/me/route.ts",
+      "route": "/api/referrals/me",
+      "closureGate": "PAY-GATE",
+      "area": "PAY",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "variable",
+          "initializer": "getReferralOverviewResponse"
+        }
+      ],
+      "imports": [
+        "@/lib/referral-route-service"
+      ]
+    },
+    {
+      "file": "src/app/api/referrals/visit/route.ts",
+      "route": "/api/referrals/visit",
+      "closureGate": "PAY-GATE",
+      "area": "PAY",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "variable",
+          "initializer": "recordReferralVisitResponse"
+        }
+      ],
+      "imports": [
+        "@/lib/referral-route-service"
+      ]
+    },
+    {
+      "file": "src/app/api/remix-source/route.ts",
+      "route": "/api/remix-source",
+      "closureGate": "GEN-GATE",
+      "area": "GEN",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/remix-source-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/search/route.ts",
+      "route": "/api/search",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "@/lib/public-search-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/security/csp-report/route.ts",
+      "route": "/api/security/csp-report",
+      "closureGate": "OPS-GATE",
+      "area": "OPS",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "@/lib/csp-report-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/seedance-assets/route.ts",
+      "route": "/api/seedance-assets",
+      "closureGate": "GEN-GATE",
+      "area": "GEN",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createSeedanceAssetRouteHandlers()"
+        },
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createSeedanceAssetRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/seedance-asset-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/showcase/feed/events/route.ts",
+      "route": "/api/showcase/feed/events",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "@/lib/showcase-feed-events-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/showcase/feed/route.ts",
+      "route": "/api/showcase/feed",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 6,
+          "form": "function"
+        },
+        {
+          "method": "HEAD",
+          "line": 12,
+          "form": "variable",
+          "initializer": "GET"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/showcase-feed-route-adapter-service",
+        "@/lib/regional-identity-admission"
+      ]
+    },
+    {
+      "file": "src/app/api/showcase/posts/[postId]/comments/[commentId]/route.ts",
+      "route": "/api/showcase/posts/[postId]/comments/[commentId]",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "DELETE",
+          "line": 4,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/post-comments-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/showcase/posts/[postId]/comments/route.ts",
+      "route": "/api/showcase/posts/[postId]/comments",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 4,
+          "form": "function"
+        },
+        {
+          "method": "POST",
+          "line": 8,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/post-comments-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/showcase/posts/[postId]/route.ts",
+      "route": "/api/showcase/posts/[postId]",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/showcase-post-detail-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/showcase/preview/route.ts",
+      "route": "/api/showcase/preview",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createShowcasePreviewRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/showcase-preview-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/showcase/publish/route.ts",
+      "route": "/api/showcase/publish",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/showcase-publish-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/showcase/remix/route.ts",
+      "route": "/api/showcase/remix",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/showcase-remix-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/showcase/save/route.ts",
+      "route": "/api/showcase/save",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/showcase-save-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/showcase/saved-media/route.ts",
+      "route": "/api/showcase/saved-media",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/showcase-saved-media-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/showcase/saved-state/route.ts",
+      "route": "/api/showcase/saved-state",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/showcase-saved-state-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/showcase/share/route.ts",
+      "route": "/api/showcase/share",
+      "closureGate": "SOCIAL-GATE",
+      "area": "SOCIAL",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/showcase-share-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/source-tools/route.ts",
+      "route": "/api/source-tools",
+      "closureGate": "GEN-GATE",
+      "area": "GEN",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/source-tools-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/template-runs/[id]/approval-steps/[stepId]/approve/route.ts",
+      "route": "/api/template-runs/[id]/approval-steps/[stepId]/approve",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "variable",
+          "initializer": "createTemplateRunStepApprovalRouteHandlers({ scheduleAfter: after })"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/media-template-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/template-runs/[id]/cancel/route.ts",
+      "route": "/api/template-runs/[id]/cancel",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createTemplateRunCancelRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/media-template-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/template-runs/[id]/inputs/finalize/route.ts",
+      "route": "/api/template-runs/[id]/inputs/finalize",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createTemplateRunInputFinalizeRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/media-template-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/template-runs/[id]/inputs/sign/route.ts",
+      "route": "/api/template-runs/[id]/inputs/sign",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createTemplateRunInputSignRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/media-template-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/template-runs/[id]/route.ts",
+      "route": "/api/template-runs/[id]",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createTemplateRunRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/media-template-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/template-runs/[id]/start/route.ts",
+      "route": "/api/template-runs/[id]/start",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "variable",
+          "initializer": "createTemplateRunStartRouteHandlers({ scheduleAfter: after })"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/media-template-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/template-runs/[id]/steps/[stepId]/retry/route.ts",
+      "route": "/api/template-runs/[id]/steps/[stepId]/retry",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "variable",
+          "initializer": "createTemplateRunStepRetryRouteHandlers({ scheduleAfter: after })"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/media-template-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/templates/[id]/disable/route.ts",
+      "route": "/api/templates/[id]/disable",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createMediaTemplateDisableRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/media-template-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/templates/[id]/publish/route.ts",
+      "route": "/api/templates/[id]/publish",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "variable",
+          "initializer": "createMediaTemplatePublishRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/media-template-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/templates/[id]/route.ts",
+      "route": "/api/templates/[id]",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createMediaTemplateDetailRouteHandlers()"
+        },
+        {
+          "method": "PATCH",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createMediaTemplateDetailRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/media-template-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/templates/[id]/runs/route.ts",
+      "route": "/api/templates/[id]/runs",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createMediaTemplateRunsRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/media-template-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/templates/[id]/test/route.ts",
+      "route": "/api/templates/[id]/test",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createMediaTemplateRunsRouteHandlers({ isTest: true })"
+        }
+      ],
+      "imports": [
+        "@/lib/media-template-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/templates/mine/route.ts",
+      "route": "/api/templates/mine",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createOwnedMediaTemplatesRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/media-template-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/templates/route.ts",
+      "route": "/api/templates",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createMediaTemplatesRouteHandlers()"
+        },
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createMediaTemplatesRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/media-template-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/templates/validate/route.ts",
+      "route": "/api/templates/validate",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createMediaTemplateValidationRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/media-template-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/uploads/finalize/route.ts",
+      "route": "/api/uploads/finalize",
+      "closureGate": "MEDIA-GATE",
+      "area": "MEDIA",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "@/lib/upload-finalize-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/uploads/media/read-url/route.ts",
+      "route": "/api/uploads/media/read-url",
+      "closureGate": "MEDIA-GATE",
+      "area": "MEDIA",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/temporary-media-read-url-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/uploads/media/sign/route.ts",
+      "route": "/api/uploads/media/sign",
+      "closureGate": "MEDIA-GATE",
+      "area": "MEDIA",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/temporary-media-upload-sign-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/uploads/workflow-asset/read-url/route.ts",
+      "route": "/api/uploads/workflow-asset/read-url",
+      "closureGate": "MEDIA-GATE",
+      "area": "MEDIA",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/workflow-asset-read-url-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/uploads/workflow-asset/sign/route.ts",
+      "route": "/api/uploads/workflow-asset/sign",
+      "closureGate": "MEDIA-GATE",
+      "area": "MEDIA",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/workflow-asset-upload-sign-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/webhooks/kie/route.ts",
+      "route": "/api/webhooks/kie",
+      "closureGate": "GEN-GATE",
+      "area": "GEN",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 11,
+          "form": "variable",
+          "initializer": "createKieWebhookRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/kie-webhook-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/workflow-blueprint/route.ts",
+      "route": "/api/workflow-blueprint",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 5,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/workflow-blueprint-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/workflow-canvases/[id]/assistant/messages/route.ts",
+      "route": "/api/workflow-canvases/[id]/assistant/messages",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/workflow-assistant-message-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/workflow-canvases/[id]/assistant/proposals/[proposalId]/apply/route.ts",
+      "route": "/api/workflow-canvases/[id]/assistant/proposals/[proposalId]/apply",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/workflow-assistant-proposal-apply-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/workflow-canvases/[id]/assistant/proposals/[proposalId]/discard/route.ts",
+      "route": "/api/workflow-canvases/[id]/assistant/proposals/[proposalId]/discard",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 7,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/workflow-assistant-proposal-discard-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/workflow-canvases/[id]/assistant/route.ts",
+      "route": "/api/workflow-canvases/[id]/assistant",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createWorkflowAssistantStateRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/workflow-assistant-state-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/workflow-canvases/[id]/history/[entryId]/restore/route.ts",
+      "route": "/api/workflow-canvases/[id]/history/[entryId]/restore",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/workflow-canvas-lifecycle-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/workflow-canvases/[id]/history/route.ts",
+      "route": "/api/workflow-canvases/[id]/history",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/workflow-canvas-lifecycle-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/workflow-canvases/[id]/publish/route.ts",
+      "route": "/api/workflow-canvases/[id]/publish",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/workflow-canvas-lifecycle-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/workflow-canvases/[id]/route.ts",
+      "route": "/api/workflow-canvases/[id]",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "DELETE",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createWorkflowCanvasRouteHandlers()"
+        },
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createWorkflowCanvasRouteHandlers()"
+        },
+        {
+          "method": "PATCH",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createWorkflowCanvasRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/workflow-canvas-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/workflow-canvases/[id]/run/route.ts",
+      "route": "/api/workflow-canvases/[id]/run",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/workflow-run-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/workflow-canvases/[id]/runs/[runId]/approval-steps/[stepId]/approve/route.ts",
+      "route": "/api/workflow-canvases/[id]/runs/[runId]/approval-steps/[stepId]/approve",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/workflow-run-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/workflow-canvases/[id]/runs/[runId]/route.ts",
+      "route": "/api/workflow-canvases/[id]/runs/[runId]",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/workflow-run-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/workflow-canvases/[id]/share/route.ts",
+      "route": "/api/workflow-canvases/[id]/share",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/workflow-share-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/workflow-canvases/route.ts",
+      "route": "/api/workflow-canvases",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createWorkflowCanvasCollectionRouteHandlers()"
+        },
+        {
+          "method": "POST",
+          "line": 3,
+          "form": "variable",
+          "initializer": "createWorkflowCanvasCollectionRouteHandlers()"
+        }
+      ],
+      "imports": [
+        "@/lib/workflow-canvas-collection-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/workflow-shares/[shareId]/import/route.ts",
+      "route": "/api/workflow-shares/[shareId]/import",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "POST",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/workflow-share-route-adapter-service"
+      ]
+    },
+    {
+      "file": "src/app/api/workflow-shares/[shareId]/route.ts",
+      "route": "/api/workflow-shares/[shareId]",
+      "closureGate": "WORKFLOW-GATE",
+      "area": "WORKFLOW",
+      "methods": [
+        {
+          "method": "GET",
+          "line": 9,
+          "form": "function"
+        }
+      ],
+      "imports": [
+        "next/server",
+        "@/lib/workflow-share-route-adapter-service"
+      ]
+    }
+  ]
+}
