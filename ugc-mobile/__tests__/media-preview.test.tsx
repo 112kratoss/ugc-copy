@@ -63,8 +63,9 @@ vi.mock('lucide-react-native', () => ({
   ImageOff: (props: MockProps) => React.createElement('image-off', props),
 }));
 
-import { StableMediaImage } from '../components/media-preview';
+import { MediaPreview, StableMediaImage } from '../components/media-preview';
 import { decodedImageAspectRatio } from '../lib/decoded-image-aspect-ratio';
+import { mediaColors } from '../lib/theme';
 import { clearMediaDiagnosticsForTests, readMediaDiagnostics } from '../lib/media-diagnostics';
 import {
   MEDIA_AUTO_RETRY_BASE_DELAY_MS,
@@ -92,6 +93,62 @@ function exhaustImageLoad(tree: renderer.ReactTestRenderer) {
   }
   throw new Error('image load never latched failure — is the retry policy unbounded?');
 }
+
+// Yoga sizes a box that has an aspect ratio and a height from the height, and
+// never reads its `width: '100%'`. In the reference details sheet that made a
+// 300pt preview 240pt wide against the left edge of a 362pt column, and a 72pt
+// reference tile's clip 57.6pt wide against the left of the tile (2026-10-04).
+// The layout engine does not run here, so these hold the style that avoids it;
+// the layout itself is checked on a device.
+describe('MediaPreview frame', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const mount = (element: React.ReactElement) => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(element); });
+    return tree;
+  };
+  const mediaNode = (tree: renderer.ReactTestRenderer) => tree.root
+    .findAll((node) => String(node.type) === 'image' || String(node.type) === 'video-preview')[0];
+
+  it.each(['image', 'video'] as const)('gives a letterboxed %s the full width at its height, on black, with no ratio to narrow it', (kind) => {
+    const tree = mount(<MediaPreview url="https://cdn/reference" kind={kind} height={300} letterbox />);
+    const { style } = mediaNode(tree).props;
+    expect(style).toMatchObject({ width: '100%', height: 300, backgroundColor: mediaColors.mediaGround });
+    expect(style).not.toHaveProperty('aspectRatio');
+    renderer.act(() => tree.unmount());
+  });
+
+  it('shows a letterboxed picture whole instead of cropping it to fill', () => {
+    const tree = mount(<MediaPreview url="https://cdn/reference.webp" kind="image" height={300} letterbox />);
+    expect(mediaNode(tree).props.contentFit).toBe('contain');
+    renderer.act(() => tree.unmount());
+  });
+
+  it('keeps a failed letterboxed picture in the same frame, so nothing around it moves', () => {
+    const tree = mount(<MediaPreview url="https://cdn/gone.webp" kind="image" height={300} letterbox />);
+    exhaustImageLoad(tree);
+    const [frame] = tree.root.findByType('pressable' as never).props.style({ pressed: false });
+    expect(frame).toMatchObject({ width: '100%', height: 300 });
+    expect(frame).not.toHaveProperty('aspectRatio');
+    renderer.act(() => tree.unmount());
+  });
+
+  it.each(['image', 'video'] as const)('leaves every other %s preview as the 4:5 card it was', (kind) => {
+    const tree = mount(<MediaPreview url="https://cdn/result" kind={kind} height={480} />);
+    const { style, contentFit } = mediaNode(tree).props;
+    expect(style).toMatchObject({ width: '100%', aspectRatio: 4 / 5, height: 480 });
+    expect(style.backgroundColor).not.toBe(mediaColors.mediaGround);
+    if (kind === 'image') expect(contentFit).toBe('cover');
+    renderer.act(() => tree.unmount());
+  });
+});
 
 describe('StableMediaImage', () => {
   it('makes native decoded dimensions available to the zoom without swallowing onLoad', () => {

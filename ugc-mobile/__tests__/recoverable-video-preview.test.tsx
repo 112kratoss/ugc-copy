@@ -91,6 +91,12 @@ it('preserves lightbox autoplay', () => {
   mount(true);
   expect(state.players[0].play).toHaveBeenCalledOnce();
 });
+// Android showed previous and next on the reference details player, one of them
+// dead, because expo-video applies its documented defaults only once the prop
+// is set (2026-10-04).
+it('asks for no previous or next button, as each of these players holds one clip', () => {
+  expect(mount().root.findByType('video' as never).props.buttonOptions).toEqual({ showPrevious: false, showNext: false });
+});
 // On Android an uncached looping player downloads its clip again for every
 // repeat it buffers: five times for a paused 12s reference clip (2026-10-02).
 it('reads a network clip through the video cache so its loops are not downloaded again', () => {

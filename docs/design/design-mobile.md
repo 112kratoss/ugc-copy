@@ -522,6 +522,7 @@ Create is a prompt-first single page for Image, Video and Motion, not a wizard.
   - The first-time path is prompt, then generate.
   - References are optional, except Motion's required character image and reference motion video, which come before the prompt.
   - Upload guidance says what is accepted and why.
+  - Reference details shows the whole reference, picture or clip, centred across the sheet on black bands (`MediaPreview` with `letterbox`), because it is what the model is given. A clip in a reference tile is centred the same way.
 - **Models:** pickers explain each model's benefit in plain words. Prompt enhancement never looks like the primary action.
 - **After generating:** the screen offers Post to feed (once there is a generation), Open Alerts, and Back to creator. It may also ask to turn on notifications. Progress survives leaving the screen and can be found in Alerts.
 

@@ -3681,7 +3681,8 @@ function ReferenceDetailsOverlay({
               <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
             </Pressable>
           </View>
-          <MediaPreview url={media.url} kind={media.kind === 'video' ? 'video' : 'image'} height={300} radius={22} />
+          {/* The whole reference, centred across the sheet: it is what the model is given, so none of it is cropped away. */}
+          <MediaPreview url={media.url} kind={media.kind === 'video' ? 'video' : 'image'} height={300} radius={22} letterbox />
           <View style={{ gap: 7 }}>
             <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>Reference name</Text>
             <TextInput
@@ -4841,6 +4842,9 @@ function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: numb
           height={height}
           radius={16}
           nativeControls={false}
+          // Fills the tile, with the clip centred in it. A 4:5 card of this
+          // height is narrower than a square tile and sits against its left edge.
+          letterbox
           resolveRetryUrl={resolveRetryUrl}
         />
       )}
