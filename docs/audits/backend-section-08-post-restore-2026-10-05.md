@@ -48,8 +48,11 @@ connect, then passed after Docker was restarted. That infrastructure failure is
 preserved separately from the product reproduction.
 
 Clean migration replay and all 1,970 SQL assertions across 92 files pass.
-Current production migration plan, PR CI and standard release verification
-remain pending. Private evidence is under
+Fresh production ledger planning finds only this migration pending and no
+ordering conflict. Five bounded production rollback controls reproduce the
+permission defect (three pass/two fail), followed by separate zero-fixture
+readback; the local after-fix rehearsal passes five/five. PR #345 CI and
+standard release verification remain pending. Private evidence is under
 `.audit-evidence/backend-social/post-lifecycle-*` and `post-restore-*`.
 SOCIAL-01 is failed until release; broader visibility/lifecycle coverage remains
 open. Historical recipe status alone cannot attribute this race or justify

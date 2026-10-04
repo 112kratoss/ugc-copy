@@ -78,7 +78,7 @@ async function handleShowcaseSavePOST(
       return NextResponse.json({ error: 'Failed to update save status' }, { status: 500 });
     }
 
-    const { generationId, postId, shouldSave, sourceSurface } = await request.json();
+    const { generationId, postId, shouldSave, sourceSurface } = (await request.json().catch(() => null)) ?? {};
     const referenceId = typeof postId === 'string' ? postId : generationId;
     const requestedSaveState = typeof shouldSave === 'boolean' ? shouldSave : null;
     const hasTargetSaveState = requestedSaveState !== null;

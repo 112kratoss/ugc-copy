@@ -6,10 +6,34 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/post-restore-audit-8f`, incorporating main `61620d00f5461f6fa86e19a7336b690bd20fe480` (#341); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/social-input-audit-8g`, incorporating main `94d1bf0c3b3304790125d43bafca78216557534c` (#345); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+8G grouped malformed-input audit: 28 actual local Next requests across fourteen
+social routes reproduced thirteen 500 responses on seven endpoints. Five JSON
+adapters plus post-report/form parsing now return their client errors. All 28
+HTTP controls pass afterward; 69 focused web/130 mobile contract cases and types/
+lint pass. Permanent regressions failed 13/14 before. Read social-inputs report.
+No migration/mobile runtime change. Candidate PR/CI/release next. Dev server is
+stopped and fixtures removed. Ledger: 23 passed, 24 untested, four failed, two
+external (SOCIAL-01/02/04 and MEDIA-07 failed). Full scope remains open.
+
+
+8E is released and independently verified on descendant 644a0e3d, which retains
+both adapters unchanged. Its own release 37229182326 and main CI 37228400582
+passed; live descendant release 37230192044 and CI 37229440421 passed. Read the
+profile/contact release report. SOCIAL-04 returns to untested.
+
+8F #345 passed all PR CI 37228631674 and merged as
+94d1bf0c3b3304790125d43bafca78216557534c at October 4 20:03:03 UTC.
+No mobile store release was active immediately before merge. Main Quality
+37230606348 is running; standard release and restore-release/verify.cjs next.
+That verifier checks the intended grant delta, five rollback controls, cleanup,
+function digests and advisors. Ledger: 23 passed, 26 untested, two failed,
+two external. Full audit remains open.
+
 
 October 5 continuation: 8E #341 passed all four PR CI jobs 37215420224 and
 merged as 61620d00f5461f6fa86e19a7336b690bd20fe480 at October 4 19:28:26 UTC.
@@ -24,10 +48,16 @@ local 55322 (not its migration ledger) and clean replay 55332. All 1,970
 pgTAP assertions across 92 files pass after replay, including the new ten.
 After removing the redundant service demotion, all four PostgREST cases pass.
 The new pgTAP role test failed 5/10 before. Fifteen focused tests, types/lint pass.
-Next finish current production plan/rollback evidence,
-PR CI and release. Supabase MCP tools disappeared in this continuation; no
-management token is present in process env. Prior read-only production confirmed
-missing service grant before connector loss; do not claim production fix verified.
+8F is PR #345, head 1880023e; Quality 37228631674 is running. Fresh production
+ledger planning finds only 8F pending and no ordering conflict. Five bounded
+production rollback controls reproduce the missing grant (three pass/two fail);
+separate cleanup readback is zero. Local after-fix rehearsal passes five/five.
+Production advisors/fingerprints are saved before release. Supabase MCP tools
+disappeared, but existing CLI login works: private restore-release/management.cjs
+uses only its documented Keychain entry, keeps credentials in memory and verifies
+the project identity before queries. No new plugin connection is needed.
+Next finish PR checks, then mobile-store idle check immediately before merge,
+exact-main Quality, standard release and independent production checks.
 Read backend-section-08-post-restore-2026-10-05.md. Full scope remains active.
 
 

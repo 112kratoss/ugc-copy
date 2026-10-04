@@ -58,7 +58,7 @@ async function handleShowcaseRemixPOST(
       return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
     }
 
-    const { generationId, postId } = await request.json() as { generationId?: unknown; postId?: unknown };
+    const { generationId, postId } = ((await request.json().catch(() => null)) ?? {}) as { generationId?: unknown; postId?: unknown };
     const referenceId = typeof postId === 'string' ? postId : generationId;
 
     if (!referenceId || typeof referenceId !== 'string') {

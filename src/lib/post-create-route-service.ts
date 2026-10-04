@@ -101,7 +101,12 @@ export async function createOwnerPostForRoute({
   }
 
   const resolvedDependencies = resolveDependencies(dependencies);
-  const formData = await readFormData();
+  let formData: FormData;
+  try {
+    formData = await readFormData();
+  } catch {
+    return { ok: false, status: 400, body: { error: 'Invalid post form data.' } };
+  }
   const sourceToolCatalog = await resolvedDependencies.listSourceToolsCatalog();
   const preparedSubmission = await resolvedDependencies.preparePostCreationSubmission({
     formData,

@@ -1727,5 +1727,56 @@
     "response": {
       "error": "Invalid profile payload."
     }
-  }
+  },
+  "socialInputErrors": [
+    {
+      "operation": "shareCreatorProfile",
+      "status": 400,
+      "response": {
+        "error": "Missing creator username"
+      }
+    },
+    {
+      "operation": "shareShowcasePost",
+      "status": 400,
+      "response": {
+        "error": "Missing post ID"
+      }
+    },
+    {
+      "operation": "publishGeneration",
+      "status": 400,
+      "response": {
+        "error": "Missing generation ID"
+      }
+    },
+    {
+      "operation": "remixShowcasePost",
+      "status": 400,
+      "response": {
+        "error": "Missing post ID"
+      }
+    },
+    {
+      "operation": "saveShowcasePost",
+      "status": 400,
+      "response": {
+        "error": "Missing post ID"
+      }
+    },
+    {
+      "operation": "reportPost",
+      "status": 400,
+      "response": {
+        "error": "Choose a valid report reason."
+      }
+    },
+    {
+      "operation": "createPost",
+      "status": 400,
+      "response": {
+        "error": "Invalid post form data."
+      }
+    }
+  ]
 }

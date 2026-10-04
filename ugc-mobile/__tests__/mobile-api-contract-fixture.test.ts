@@ -593,3 +593,18 @@ it.each(['updateProfile', 'validateProfile'] as const)('preserves %s invalid-pay
     status: failure.status, message: failure.response.error, details: failure.response,
   });
 });
+
+
+it.each(mobileApiContract.socialInputErrors)('preserves $operation input failures as client errors', async (failure) => {
+  const operation = [...successCases, ...extendedOperationCases].find(item => item.key === failure.operation);
+  expect(operation).toBeDefined();
+  const fetcher = vi.fn(async () => jsonResponse(failure.response, failure.status));
+  const api = createApiClient({
+    baseUrl: 'https://magicbooklet.test', getAccessToken: async () => 'token-1',
+    fetcher: fetcher as unknown as typeof fetch,
+  });
+  await expect(operation!.call(api)).rejects.toMatchObject({
+    status: failure.status, message: failure.response.error, details: failure.response,
+  });
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
