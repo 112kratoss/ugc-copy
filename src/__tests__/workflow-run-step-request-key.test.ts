@@ -165,6 +165,8 @@ function createRunDatabase(kind: StepKind) {
     stepLinkWritesToRefuse: 0,
     /** Task attaches that are refused, as an unreachable database would. */
     attachesToRefuse: 0,
+    /** Start settlements (the refund of a refused start) that are refused the same way. */
+    settlementsToRefuse: 0,
   };
 
   function matching(table: string, filters: Filter[]) {
@@ -305,6 +307,10 @@ function createRunDatabase(kind: StepKind) {
     }
 
     if (fn === 'settle_generation_start_failed') {
+      if (state.settlementsToRefuse > 0) {
+        state.settlementsToRefuse -= 1;
+        return { data: null, error: { message: 'database unavailable' } };
+      }
       const row = generation(args.p_generation_id);
       if (!row) return { data: { status: 'missing' }, error: null };
       if (row.prediction_id) return { data: { status: 'provider_task_attached', generation_id: row.id }, error: null };
@@ -457,6 +463,105 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   service.client = null;
+});
+
+// The key is also what a refund that goes missing leaves behind. A start the
+// provider turns away is refunded on the spot, which takes the key off the
+// refused generation. When that refund is not written, the generation keeps
+// the key, and the step's next start finds it in the way. Every kind of step
+// returns those credits through the same settlement.
+describe.each(GENERATION_STEP_KINDS)('a %s step turned away as busy whose refund is not written at once', (kind) => {
+  it('starts again on the next tick when the refund went through on a second try', async () => {
+    providerIsBusy();
+    const database = createRunDatabase(kind);
+    const client = connect(database);
+    database.state.settlementsToRefuse = 1;
+
+    const first = await advance(client);
+
+    // The same ending as a refund that was written at the first try.
+    expect(first.status).toBe('processing');
+    expect(database.generations).toEqual([expect.objectContaining({
+      id: 'gen-1',
+      status: 'failed',
+      refunded: true,
+      client_request_key_hash: null,
+    })]);
+    expect(database.state.credits).toBe(STARTING_CREDITS);
+    expect(database.step).toMatchObject({
+      status: 'queued',
+      generation_id: null,
+      error_message: expect.stringContaining('busy'),
+    });
+
+    providerAccepts();
+    const run = await advance(client);
+
+    // The step is not tied to the generation the provider refused. It is
+    // started again, and that start is the only one paid for.
+    expect(database.generations).toHaveLength(2);
+    expect(database.generations[1]).toMatchObject({
+      id: 'gen-2',
+      status: 'processing',
+      refunded: false,
+      client_request_key_hash: database.stepKey,
+    });
+    expect(database.state.credits).toBe(STARTING_CREDITS - Number(database.generations[1].cost));
+    // No held note either: nothing about this step is waiting on the provider's word.
+    expect(database.step).toMatchObject({ status: 'processing', generation_id: 'gen-2', error_message: null });
+    expect(database.step.output_snapshot).not.toHaveProperty('submissionPending');
+    expect(run.status).toBe('processing');
+    expect(tasksRequested()).toBe(2);
+    expect(relinksLogged()).toEqual([]);
+    expect(errorsLogged()).toEqual([]);
+  });
+
+  it('buys no second generation while a refund that could not be written at all still holds its credits', async () => {
+    providerIsBusy();
+    const database = createRunDatabase(kind);
+    const client = connect(database);
+    database.state.settlementsToRefuse = 3;
+
+    await advance(client);
+
+    // Three tries, none written: the refused generation keeps its hold and the key.
+    expect(database.state.settlementsToRefuse).toBe(0);
+    expect(database.generations).toEqual([expect.objectContaining({
+      id: 'gen-1',
+      status: 'pending',
+      prediction_id: null,
+      refunded: false,
+      client_request_key_hash: database.stepKey,
+    })]);
+    expect(database.step).toMatchObject({ status: 'queued', generation_id: null });
+    expect(errorsLogged()).toEqual(['generation_start_failure_settlement_failed']);
+
+    providerAccepts();
+    const run = await advance(client);
+
+    // The key still names that generation, and nothing on its row tells it
+    // from a submission the provider may have taken. The step follows it, so
+    // the credits are held once and the provider is not asked again.
+    expect(database.step).toMatchObject({ status: 'processing', generation_id: 'gen-1', finished_at: null });
+    expect(run.status).toBe('processing');
+    expectOneGenerationToHaveBeenBought(database);
+    expect(tasksRequested()).toBe(1);
+
+    // What the reaper does 45 minutes after the start: release the hold.
+    const settled = await client.rpc('settle_generation_start_failed', {
+      p_generation_id: 'gen-1',
+      p_error_message: 'The generation provider is temporarily unavailable. Please retry this step shortly.',
+    });
+    expect(settled.data).toMatchObject({ status: 'failed' });
+
+    const ended = await advance(client);
+
+    expect(database.step).toMatchObject({ status: 'failed', generation_id: 'gen-1' });
+    expect(ended.status).toBe('failed');
+    expect(database.state.credits).toBe(STARTING_CREDITS);
+    expect(database.generations).toHaveLength(1);
+    expect(tasksRequested()).toBe(1);
+  });
 });
 
 describe.each(STEP_KINDS)('a %s step of a workflow run', (kind) => {

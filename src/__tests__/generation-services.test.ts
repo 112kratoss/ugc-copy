@@ -5,6 +5,7 @@ import {
   createMobileNotificationHistory,
   withMobileNotificationHistory,
 } from '@/__tests__/fixtures/mobile-notification-history';
+import type { BackendLogRecord } from '@/lib/backend-logger';
 
 // Foreign references stay rejected by default; individual tests opt into an
 // authorized shared-media import.
@@ -36,12 +37,26 @@ type GenerationRow = {
   submission_unknown_at?: string | null;
 };
 
+/**
+ * One way a single call of an RPC goes wrong: it answers with an error and
+ * writes nothing, the client cannot reach the database at all, it answers
+ * with nothing, it answers with a status nobody knows, or it writes and its
+ * answer is lost on the way back.
+ */
+type RpcFault = 'error' | 'throw' | 'empty' | 'unknown' | 'lost-response';
+
 type SupabaseMockOptions = {
   generationInsertErrors?: Error[];
   generationUpdateErrors?: Error[];
   sharedGenerations?: GenerationRow[];
   /** Force a named RPC to fail, for testing fallback paths. */
   rpcErrors?: Record<string, { message: string }>;
+  /**
+   * Make the first calls of a named RPC go wrong, one fault for each call.
+   * The calls after them go through. Only the two start settlements write
+   * before a `lost-response`.
+   */
+  rpcFaults?: Record<string, RpcFault[]>;
   /** Force a named RPC to return a specific payload, for testing race outcomes. */
   rpcResults?: Record<string, unknown>;
 };
@@ -53,6 +68,7 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
   const generationInsertErrors = [...(options.generationInsertErrors ?? [])];
   const generationUpdateErrors = [...(options.generationUpdateErrors ?? [])];
+  const rpcFaults = new Map(Object.entries(options.rpcFaults ?? {}).map(([fn, faults]) => [fn, [...faults]]));
 
   const supabase = {
     rpc: vi.fn(async (fn: string, args: Record<string, unknown>) => {
@@ -62,6 +78,12 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
       if (forcedError) {
         return { data: null, error: forcedError };
       }
+
+      const fault = rpcFaults.get(fn)?.shift();
+      if (fault === 'error') return { data: null, error: { message: `${fn} could not be written` } };
+      if (fault === 'throw') throw new TypeError('fetch failed');
+      if (fault === 'empty') return { data: null, error: null };
+      if (fault === 'unknown') return { data: { status: 'unexpected' }, error: null };
 
       if (options.rpcResults && Object.hasOwn(options.rpcResults, fn)) {
         return { data: options.rpcResults[fn], error: null };
@@ -197,6 +219,7 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
         row.refunded = true;
         row.error_message = typeof args.p_error_message === 'string' ? args.p_error_message : null;
         row.client_request_key_hash = null;
+        if (fault === 'lost-response') return { data: null, error: { message: 'connection reset' } };
         return {
           data: {
             status: alreadyRefunded ? 'already_failed' : 'failed',
@@ -1989,6 +2012,185 @@ describe('generation services', () => {
     expect(rpcCalls.map((call) => call.fn)).not.toContain('settle_generation_start_failed');
     expect(generations[0].status).toBe('pending');
     expect(generations[0].refunded).toBeFalsy();
+  });
+
+  // A refused start is refunded by one database function, and by another for
+  // a template step. Both are safe to call again: they return the credits only
+  // while the row says they are still held.
+  describe.each([
+    {
+      start: 'a creation',
+      templateContext: undefined,
+      settlementRpc: 'settle_generation_start_failed',
+      isSettlementFailure: (record: BackendLogRecord) => record.msg === 'generation_start_failure_settlement_failed',
+    },
+    {
+      start: 'a template step',
+      templateContext: { runId: 'run-1', stepId: 'step-image-1' },
+      settlementRpc: 'settle_template_generation_start_failed',
+      // The template start reports its refund under the same name. The
+      // settlement's own error is what tells a refund that failed apart.
+      isSettlementFailure: (record: BackendLogRecord) => (
+        record.msg === 'template_generation_start_failed_after_reservation'
+        && typeof record.settlementError === 'string'
+      ),
+    },
+  ])('the refund of $start the provider turned away', ({ templateContext, settlementRpc, isSettlementFailure }) => {
+    const REQUEST_KEY = 'e'.repeat(64);
+
+    /** Starts an image the provider says it is too busy for, over a database that meets `options`. */
+    async function startRefusedAsBusy(options: SupabaseMockOptions) {
+      const { startImageGeneration } = await import('@/lib/generation-services');
+      const { getRefundedStartGenerationId } = await import('@/lib/generation-public-failure');
+      const { setBackendLogSink } = await import('@/lib/backend-logger');
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      vi.mocked(fetch).mockImplementation(async () => new Response(JSON.stringify({ msg: 'Too many requests' }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+      const logged: BackendLogRecord[] = [];
+      const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
+      const { supabase, generations, rpcCalls } = createSupabaseMock([], options);
+
+      try {
+        const refusal = await startImageGeneration({
+          supabase,
+          creditSupabase: supabase,
+          userId: 'user-1',
+          clientRequestKeyHash: REQUEST_KEY,
+          prompt: 'A ceramic mug on a linen cloth.',
+          model: 'nano-banana-2',
+          ...(templateContext ? { templateContext, privateRecipe: true, persistInputMedia: false } : {}),
+        }).catch((error: unknown) => error);
+
+        return {
+          refusal,
+          generation: generations[0],
+          settlements: rpcCalls.filter((call) => call.fn === settlementRpc),
+          /** The generation a run worker would announce as failed, if this start named one. */
+          announced: getRefundedStartGenerationId(refusal),
+          settlementFailures: logged.filter(isSettlementFailure),
+          retries: logged.filter((record) => record.msg === 'generation_start_failure_settlement_retried'),
+        };
+      } finally {
+        restoreLogSink();
+      }
+    }
+
+    it.each([
+      ['answered with an error', 'error'],
+      ['could not be reached', 'throw'],
+      ['answered with nothing', 'empty'],
+      ['answered with a status nobody knows', 'unknown'],
+    ] as const)('is tried again when the first settlement %s', async (_outcome, fault) => {
+      const refused = await startRefusedAsBusy({ rpcFaults: { [settlementRpc]: [fault] } });
+
+      expect(refused.settlements).toHaveLength(2);
+      expect(refused.settlements[1]).toEqual(refused.settlements[0]);
+      // The hold is released and the request key is free, so the same start
+      // can be made again instead of finding this generation still in the way.
+      expect(refused.generation).toMatchObject({
+        status: 'failed',
+        prediction_id: null,
+        refunded: true,
+        client_request_key_hash: null,
+      });
+      // The second try released the hold, so this start may be announced.
+      expect(refused.announced).toBe('gen-1');
+      expect(refused.settlementFailures).toEqual([]);
+      expect(refused.retries).toEqual([expect.objectContaining({
+        level: 'warn',
+        generationId: 'gen-1',
+        attempts: 2,
+        settlementStatus: 'failed',
+      })]);
+      // What the caller hears is still the provider's refusal.
+      expect(refused.refusal).toMatchObject({ status: 429, message: 'Too many requests' });
+    });
+
+    it('counts the refund as its own when the first settlement landed and only its answer was lost', async () => {
+      const refused = await startRefusedAsBusy({ rpcFaults: { [settlementRpc]: ['lost-response'] } });
+
+      // The second call finds the credits returned already. Between two tries
+      // of one call, the first try is what returned them.
+      expect(refused.settlements).toHaveLength(2);
+      expect(refused.generation).toMatchObject({ status: 'failed', refunded: true, client_request_key_hash: null });
+      expect(refused.announced).toBe('gen-1');
+      expect(refused.settlementFailures).toEqual([]);
+      expect(refused.retries).toEqual([expect.objectContaining({ attempts: 2, settlementStatus: 'already_failed' })]);
+    });
+
+    it('does not count a refund that something else had made first as its own', async () => {
+      const refused = await startRefusedAsBusy({
+        rpcResults: { [settlementRpc]: { status: 'already_failed', generation_id: 'gen-1', refunded: true } },
+      });
+
+      // Answered at once, with no try of this call before it that could have
+      // done it. Whatever returned the credits says so itself.
+      expect(refused.settlements).toHaveLength(1);
+      expect(refused.announced).toBeNull();
+      expect(refused.settlementFailures).toEqual([]);
+      expect(refused.retries).toEqual([]);
+    });
+
+    it.each([
+      // A callback gave the generation a task: the provider is running it.
+      'provider_task_attached',
+      'already_succeeded',
+      // The row is gone, or the account, and the hold with it.
+      'missing',
+      'profile_not_found',
+      // The call itself was wrong.
+      'invalid_request',
+      'invalid_template_context',
+    ])('stops at the answer %s, which a second call would only repeat', async (status) => {
+      const refused = await startRefusedAsBusy({
+        rpcResults: { [settlementRpc]: { status, generation_id: 'gen-1' } },
+      });
+
+      expect(refused.settlements).toHaveLength(1);
+      // Nothing was returned by this call, so there is nothing to announce.
+      expect(refused.announced).toBeNull();
+      expect(refused.settlementFailures).toHaveLength(1);
+      expect(refused.refusal).toMatchObject({ status: 429, message: 'Too many requests' });
+    });
+
+    it('gives up after three tries and leaves the hold as it is, for the reaper', async () => {
+      const refused = await startRefusedAsBusy({
+        rpcErrors: { [settlementRpc]: { message: 'database unavailable' } },
+      });
+
+      expect(refused.settlements).toHaveLength(3);
+      expect(refused.generation).toMatchObject({
+        status: 'pending',
+        prediction_id: null,
+        client_request_key_hash: REQUEST_KEY,
+      });
+      expect(refused.generation.refunded).toBeFalsy();
+      expect(refused.announced).toBeNull();
+      // Reported once, with what the last try met.
+      expect(refused.settlementFailures).toEqual([expect.objectContaining({
+        level: 'error',
+        generationId: 'gen-1',
+        attempts: 3,
+      })]);
+      expect(JSON.stringify(refused.settlementFailures)).toContain('database unavailable');
+      expect(refused.retries).toEqual([]);
+      expect(refused.refusal).toMatchObject({ status: 429, message: 'Too many requests' });
+    });
+
+    it('still answers with the provider’s refusal when every settlement throws', async () => {
+      const refused = await startRefusedAsBusy({ rpcFaults: { [settlementRpc]: ['throw', 'throw', 'throw'] } });
+
+      // The settlement is the second thing to go wrong. The first is what the
+      // caller has to hear about.
+      expect(refused.refusal).toMatchObject({ status: 429, message: 'Too many requests' });
+      expect(refused.settlements).toHaveLength(3);
+      expect(refused.generation).toMatchObject({ status: 'pending', client_request_key_hash: REQUEST_KEY });
+      expect(refused.announced).toBeNull();
+      expect(refused.settlementFailures).toEqual([expect.objectContaining({ generationId: 'gen-1', attempts: 3 })]);
+      expect(JSON.stringify(refused.settlementFailures)).toContain('fetch failed');
+    });
   });
 
   it('uses the backend client to mark backend-reserved image starts failed when provider submission fails', async () => {
