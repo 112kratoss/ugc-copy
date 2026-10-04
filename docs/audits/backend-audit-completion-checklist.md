@@ -1,7 +1,7 @@
 # Backend audit completion checklist
 
 Updated 2026-10-05. Current independently checked production:
-`6808cd7c4fd1345c8f436bc1a3c15e33f3fbfae7`, including Section 8D.
+`94d1bf0c3b3304790125d43bafca78216557534c`, including Section 8F.
 Exact-main Quality, standard release, function digests and live checks pass; see
 [save-counter release and repair](backend-section-08-save-counters-release-2026-10-04.md).
 The nine historical count mismatches were reconciled; independent readback is zero.
@@ -16,11 +16,11 @@ unequal effort and risk. Do not turn their pass count into a percentage of backe
 safety or an ETA. New findings attach to these obligations; changes in scope must
 be recorded explicitly instead of silently adding another lettered batch.
 
-Current ledger: **53 obligations — 23 passed, 24 untested, 4 failed, 2 external**.
+Current ledger: **53 obligations — 23 passed, 25 untested, 3 failed, 2 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
 WORKFLOW-02 and WORKFLOW-04 remain untested after their scoped fixes shipped.
 SOCIAL-02 had returned to untested after 8B; the new 8G finding reopens it.
-SOCIAL-01 is failed for 8F; SOCIAL-02/04 are failed for the 8G input errors.
+SOCIAL-01 returns to untested after the verified 8F release; SOCIAL-02/04 remain failed for the 8G input errors.
 SOCIAL-03 returns to untested after the scoped 8D release. MEDIA-07 remains failed
 for legacy retirement.
 No new obligation was added; these fixes do not complete the broader matrices.
@@ -80,7 +80,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | AUTH-06 | CAPTCHA/rate configuration rollout compatible with installed clients | untested | Hosted configuration plus old/new client behavior, not configuration presence alone |
 | DB-01 | Scoped workflow parent, financial, notification, social and projection ownership fixes | passed | [Section 2 ledger](backend-section-02-tables-2026-09-27.md) and its linked release records |
 | DB-02 | Identified client-callable workflow RPC admission bypass | passed | [Section 3 release](backend-section-03-rpc-release-2026-09-27.md) |
-| DB-03 | Remaining invoker/definer behavior, constraints and trigger invariants across mapped objects | untested | Resolve SQL-only call chains; positive/negative role and ownership fixtures for uncovered behavior |
+| DB-03 | Remaining invoker/definer behavior, constraints and trigger invariants across mapped objects | untested | [Invoker helper review](backend-section-08-invoker-helper-review-2026-10-05.md) finds no further defect in explicit public-qualified calls; immutable revision direct/cascade controls pass. Remaining SQL-only call chains and positive/negative role and ownership fixtures stay open |
 | DB-04 | Realtime visibility and revocation behavior | untested | Actual subscription and lifecycle changes, including already-open connections |
 | DB-05 | Deferred compatibility grant removal | untested | Verify supported clients before the separate rollout; do not remove grants merely to close this row |
 
@@ -126,8 +126,8 @@ coverage includes shared helpers that do not end in `service.ts`.
 
 | ID | Obligation and closure evidence | Status | Evidence / next action |
 | --- | --- | --- | --- |
-| SOCIAL-01 | Post/feed/search visibility, archive/restore/reveal and pagination | failed | [8F restore](backend-section-08-post-restore-2026-10-05.md): service-role quality-helper permission and delayed archive overwrite reproduced; candidate passes four actual PostgREST cases. Clean replay/CI/release pending; remaining visibility matrix stays open |
-| SOCIAL-02 | Comments, follows, saves, sharing and notifications across identities/lifecycle | failed | [8G malformed input](backend-section-08-social-inputs-2026-10-05.md) reproduces share/save/remix 500s; local fix passes, release pending.  [8A](backend-section-08-follow-retries-2026-10-04.md) reproduces concurrent follow retry returning 500 despite the saved intent; three actual PostgREST controls pass and [8A release is verified](backend-section-08-follow-retries-release-2026-10-04.md). [8B](backend-section-08-save-counters-2026-10-04.md) reproduces save-count drift after deletion/concurrent toggle; 12 SQL controls pass and [8B release/repair is verified](backend-section-08-save-counters-release-2026-10-04.md). [8D](backend-section-08-comment-lifecycle-2026-10-04.md) adds 11 SQL lifecycle controls. Remaining mutation/retry and cross-user behavior; reuse scoped Section 2 ownership evidence |
+| SOCIAL-01 | Post/feed/search visibility, archive/restore/reveal and pagination | untested | [8F restore](backend-section-08-post-restore-2026-10-05.md): service-role quality-helper permission and delayed archive overwrite reproduced; candidate passes four actual PostgREST cases. [8F release verified](backend-section-08-post-restore-release-2026-10-05.md), including five production rollback controls and the exact grant delta; remaining visibility matrix stays open |
+| SOCIAL-02 | Comments, follows, saves, sharing and notifications across identities/lifecycle | failed | [8G malformed input](backend-section-08-social-inputs-2026-10-05.md) reproduces share/save/remix 500s; local fix passes, release pending.  [8A](backend-section-08-follow-retries-2026-10-04.md) reproduces concurrent follow retry returning 500 despite the saved intent; three actual PostgREST controls pass and [8A release is verified](backend-section-08-follow-retries-release-2026-10-04.md). [8B](backend-section-08-save-counters-2026-10-04.md) reproduces save-count drift after deletion/concurrent toggle; 12 SQL controls pass and [8B release/repair is verified](backend-section-08-save-counters-release-2026-10-04.md). [8D](backend-section-08-comment-lifecycle-2026-10-04.md) adds 11 SQL lifecycle controls. [8H share controls](backend-section-08-share-boundaries-2026-10-05.md): thirteen actual PostgREST/SQL cases and ten actual HTTP assertions pass. Remaining mutation/retry and cross-user behavior; reuse scoped Section 2 ownership evidence |
 | SOCIAL-03 | Moderation/report/block propagation and admin sanctions | untested | [8C](backend-section-08-follow-block-race-2026-10-04.md) reproduces an uncommitted follow surviving a block; six SQL cases pass after serialization; [8C release is verified](backend-section-08-follow-block-release-2026-10-04.md). [8D](backend-section-08-comment-lifecycle-2026-10-04.md) reproduces whole-thread reads across creator blocks; [8D release is verified](backend-section-08-comment-lifecycle-release-2026-10-04.md). Remaining moderation and visibility behavior stays open |
 | SOCIAL-04 | Profile, creator and contact surfaces | failed | [8G profile sharing](backend-section-08-social-inputs-2026-10-05.md) reproduces malformed/null request 500s; local fix passes, release pending.  [8E profile/contact](backend-section-08-profile-contact-2026-10-04.md): malformed/null profile requests reproduce HTTP 500; candidate returns 400, twelve actual HTTP and seven PostgREST checks pass. [8E release verified](backend-section-08-profile-contact-release-2026-10-05.md); [13 creator HTTP controls](backend-section-08-creator-visibility-2026-10-04.md) pass. Profile media, share events, request byte limits and remaining method behavior stay open |
 | JOB-01 | Scheduler and all 12 jobs: lease contention, expiry, duplicate dispatch and retry | untested | Per-job fixture matrix from the surface map; existing generation cases apply only to that job |

@@ -6,17 +6,46 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/social-input-audit-8g`, incorporating main `94d1bf0c3b3304790125d43bafca78216557534c` (#345); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/social-share-audit-8h`, based on main `44864e5667eb6a9ed7d81bcc6faa5138590a8767` (#346); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+8H share controls: thirteen actual PostgREST/SQL tests and ten assertions across
+six real Next HTTP requests pass; no new runtime defect. Caller attribution,
+visibility, both block directions, concurrent counters and deletion behavior are
+covered within the share-boundaries report's limits. Types/lint pass. Tests/docs
+only; no migration. The local server is stopped and fixtures removed.
+
+8F is released and independently verified on exact SHA 94d1bf0c. Main Quality
+37230606348 and standard release 37231227200 pass (release 20:17:02 UTC October 4).
+Five production rollback controls pass, cleanup is zero, function bodies match,
+and the canonical schema query proves only the one service grant changed.
+108 individual security advisor findings unchanged. See the 8F release report.
+The initial expected-grant digest calculation failed; canonical query excluding
+exactly the added grant reconstructs all baseline digests and resolves the check.
+
+8G #346 passed all four PR CI jobs, merged 44864e5667eb6a9ed7d81bcc6faa5138590a8767
+at October 4 20:57:31 UTC with mobile-store idle immediately before merge.
+Exact-main Quality 37234106785 is running; standard release/live checks next.
+Current ledger: 23 passed, 25 untested, three failed, two external. Full scope open.
+
+Earlier checkpoints follow; current status above supersedes their running states.
+
+Invoker helper follow-up: 327 functions/118 triggers reviewed for explicit
+public-qualified calls under invoker rights. Only remaining candidate is an
+immutable revision helper; service direct UPDATE is denied, and actual service
+bundle deletion preserves the detached revision. No new defect. Read the
+invoker-helper-review report; broader SQL call-chain coverage remains open.
 
 8G grouped malformed-input audit: 28 actual local Next requests across fourteen
 social routes reproduced thirteen 500 responses on seven endpoints. Five JSON
 adapters plus post-report/form parsing now return their client errors. All 28
 HTTP controls pass afterward; 69 focused web/130 mobile contract cases and types/
 lint pass. Permanent regressions failed 13/14 before. Read social-inputs report.
-No migration/mobile runtime change. Candidate PR/CI/release next. Dev server is
+No migration/mobile runtime change. PR #346 head cbd0df38, Quality 37231029795
+is running. Finish checks, mobile-store idle check before merge, exact-main
+Quality and standard release. Dev server is
 stopped and fixtures removed. Ledger: 23 passed, 24 untested, four failed, two
 external (SOCIAL-01/02/04 and MEDIA-07 failed). Full scope remains open.
 
