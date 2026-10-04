@@ -200,6 +200,15 @@ export async function updateCreatorFollowForRoute({
         following_id: followingId,
       });
       if (insertError) {
+        // Another request can record the same intent after our initial read.
+        // Confirm its row before treating the unique conflict as a successful
+        // retry; the request that inserted it owns notification scheduling.
+        if (insertError.code === '23505') {
+          const concurrentFollow = await loadFollowRecord(resolvedClient, followerId, followingId);
+          if (!concurrentFollow.error && concurrentFollow.data) {
+            return { ok: true, body: { following: true } };
+          }
+        }
         return { ok: false, status: 500, body: { error: 'Failed to follow creator.' } };
       }
 

@@ -37,7 +37,7 @@ function createClient({
     },
     error: null,
   }));
-  const insertFollow = vi.fn(async (value: { follower_id: string; following_id: string }) => {
+  const insertFollow = vi.fn(async (value: { follower_id: string; following_id: string }): Promise<{ error: { code: string; message: string } | null }> => {
     followRows.push(value);
     return { error: null };
   });
@@ -169,6 +169,34 @@ describe('profile follow service', () => {
       body: { following: true },
     });
     expect(client.rpc).not.toHaveBeenCalled();
+    expect(notifyCreatorFollowedMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts a concurrent duplicate only after confirming the same follow exists', async () => {
+    const client = createClient();
+    const insert = client.insertFollow.getMockImplementation()!;
+    client.insertFollow.mockImplementationOnce(async value => {
+      await insert(value);
+      return { error: { code: '23505', message: 'duplicate follow' } };
+    });
+    const result = await updateCreatorFollowForRoute({
+      adminSupabase: client.client, followerId: 'follower-1',
+      body: { followingId: 'creator-1', following: true },
+    });
+    expect(result).toEqual({ ok: true, body: { following: true } });
+    expect(client.followRows).toEqual([{ follower_id: 'follower-1', following_id: 'creator-1' }]);
+    expect(notifyCreatorFollowedMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['23505', '23503', '57014'])('does not claim follow success for an unconfirmed insert error %s', async code => {
+    const client = createClient();
+    client.insertFollow.mockResolvedValueOnce({ error: { code, message: 'insert refused' } });
+    const result = await updateCreatorFollowForRoute({
+      adminSupabase: client.client, followerId: 'follower-1',
+      body: { followingId: 'creator-1', following: true },
+    });
+    expect(result).toMatchObject({ ok: false, status: 500 });
+    expect(client.followRows).toEqual([]);
     expect(notifyCreatorFollowedMock).not.toHaveBeenCalled();
   });
 
