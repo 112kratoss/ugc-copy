@@ -112,7 +112,7 @@ describe('archiveOwnerPostForRoute', () => {
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 
-  it('archives owned active posts and demotes the recipe, leaving generation exposure to the posts trigger', async () => {
+  it('archives owned active posts and leaves recipe and generation exposure to the posts triggers', async () => {
     const client = createClient();
 
     const result = await archiveOwnerPostForRoute({
@@ -139,16 +139,6 @@ describe('archiveOwnerPostForRoute', () => {
           ['is', 'archived_at', null],
         ],
         selectColumns: 'id, generation_id',
-      },
-      {
-        table: 'post_resource_bundles',
-        values: { status: 'draft' },
-        filters: [
-          ['eq', 'post_id', 'post-1'],
-          ['eq', 'owner_user_id', 'user-1'],
-          ['eq', 'status', 'published'],
-        ],
-        selectColumns: null,
       },
     ]);
     expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
