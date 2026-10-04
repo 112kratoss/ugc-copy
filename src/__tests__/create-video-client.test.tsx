@@ -2,7 +2,8 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateVideoClient from '@/app/create-video/CreateVideoClient';
-import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
+import { VIDEO_MODELS } from '@/lib/client-generation-models';
+import { buildGenerationModelCatalog, type GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import type { PersistedImageElementRecord, PersistedMediaRecord, PersistedSubjectRecord } from '@/lib/persisted-media';
 // For "references saved on another model": the registry the page reads, the server's
 // catalog and its quote function, and what hands the one to the other in the browser.
@@ -344,23 +345,25 @@ describe('CreateVideoClient Kling video elements', () => {
     }) as typeof URL.createObjectURL;
     URL.revokeObjectURL = vi.fn() as typeof URL.revokeObjectURL;
     vi.spyOn(document, 'createElement').mockImplementation(((tagName: string) => {
-      if (tagName === 'video') {
-        const previewVideo = originalCreateElement('video') as HTMLVideoElement;
-        Object.defineProperty(previewVideo, 'duration', {
+      // jsdom loads no media, so the page would wait for a length that never comes.
+      // Here a clip is 4.2 seconds long and a track 6.5.
+      if (tagName === 'video' || tagName === 'audio') {
+        const previewMedia = originalCreateElement(tagName) as HTMLMediaElement;
+        Object.defineProperty(previewMedia, 'duration', {
           configurable: true,
-          get: () => 4.2,
+          get: () => (tagName === 'video' ? 4.2 : 6.5),
         });
-        Object.defineProperty(previewVideo, 'src', {
+        Object.defineProperty(previewMedia, 'src', {
           configurable: true,
           get: () => 'blob:kling-video',
           set: () => {
             setTimeout(() => {
-              previewVideo.onloadedmetadata?.(new Event('loadedmetadata'));
+              previewMedia.onloadedmetadata?.(new Event('loadedmetadata'));
             }, 0);
           },
         });
-        previewVideo.load = vi.fn();
-        return previewVideo;
+        previewMedia.load = vi.fn();
+        return previewMedia;
       }
 
       return originalCreateElement(tagName);
@@ -790,6 +793,179 @@ describe('CreateVideoClient Kling video elements', () => {
 
     expect((await screen.findAllByText('Reusable image references')).length).toBeGreaterThan(0);
     expect(screen.queryByText(/takes either frames or references/i)).toBeNull();
+  });
+
+  /**
+   * The clip and track panel is drawn for the models that take a reference clip or
+   * a track, and the run sends what the panel holds. The page kept its own list of
+   * those models, and MiniMax H3 was not on it (2026-10-04): the model takes three
+   * clips and three tracks, its catalog entry says so and the server sends them,
+   * and a creator had no place to attach one. A clip saved on another model was
+   * counted by the quote and left out of the run.
+   *
+   * This file's catalog hook hands the page no descriptor, so the page reads its
+   * built-in table here, as it does before the catalog has loaded.
+   */
+  describe('reference clips and tracks', () => {
+    const clipInput = 'input[type="file"][accept="video/*"]';
+    const trackInput = 'input[type="file"][accept="audio/*"]';
+    const runPrompt = 'A dancer crosses a bright studio in the rhythm of the reference clip, slow push in.';
+
+    /** The panel's heading, or null where the page draws no clip and track panel. */
+    function panelHeading() {
+      return screen.queryByRole('heading', { name: /^Video( and audio)? references$/ });
+    }
+
+    /** What the run sent of one kind: its clips, or its tracks. */
+    function postedInputs(slot: 'videoReferences' | 'audioReferences') {
+      return (postedRun()?.inputs ?? []).filter((input: { slot: string }) => input.slot === slot);
+    }
+
+    async function generate(modelName: string) {
+      fireEvent.change(screen.getByPlaceholderText(`Describe the ${modelName} scene in rich cinematic detail...`), {
+        target: { value: runPrompt },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+      await waitFor(() => expect(postedRun()).toBeDefined());
+    }
+
+    it('gives MiniMax H3 the panel, with a button for a clip and a button for a track', async () => {
+      render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
+
+      expect(await screen.findByRole('heading', { name: 'Video and audio references' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Add video' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Add audio' })).toBeEnabled();
+      // Three of each, which is what the model takes.
+      expect(screen.getByText('Add up to 3 short clips as motion and framing guidance.')).toBeInTheDocument();
+      expect(screen.getByText('Add up to 3 audio clips for beat, voice, or dialogue timing guidance.')).toBeInTheDocument();
+    });
+
+    it('sends the clip and the track attached on MiniMax H3, and tells the quote about both', async () => {
+      const view = render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
+      await screen.findByRole('heading', { name: 'Video and audio references' });
+      const clip = new File(['video-bytes'], 'walk.mp4', { type: 'video/mp4' });
+      const track = new File(['audio-bytes'], 'voice.mp3', { type: 'audio/mpeg' });
+
+      fireEvent.change(view.container.querySelector<HTMLInputElement>(clipInput)!, { target: { files: [clip] } });
+      expect(await screen.findByText('Video reference 1')).toBeInTheDocument();
+      expect(screen.getByText('4.2s clip')).toBeInTheDocument();
+      fireEvent.change(view.container.querySelector<HTMLInputElement>(trackInput)!, { target: { files: [track] } });
+      expect(await screen.findByText('Audio reference 1')).toBeInTheDocument();
+      // A track's card says how long it is. Only the Seedance 2 family prepares assets.
+      expect(screen.getByText('6.5s track')).toBeInTheDocument();
+      expect(screen.queryByText('Uses URL fallback until prepared')).toBeNull();
+
+      // The quote prices a MiniMax H3 run by the seconds of its clips, so it is told each length.
+      await waitFor(() => {
+        const request = quoteRequestMock.mock.calls.at(-1)?.[0];
+        expect(request?.modelId).toBe('minimax-h3');
+        expect(request?.settings?.referenceMode).toBe('elements');
+        expect(request?.inputCounts).toMatchObject({ videos: 1, audios: 1 });
+        expect(request?.inputMetadata?.slots?.videoReferences).toEqual({ count: 1, durationsSeconds: [4.2] });
+        expect(request?.inputMetadata?.slots?.audioReferences).toEqual({ count: 1, durationsSeconds: [6.5] });
+      });
+
+      await generate('MiniMax H3');
+
+      expect(temporaryUploadMock).toHaveBeenCalledWith(clip);
+      expect(temporaryUploadMock).toHaveBeenCalledWith(track);
+      expect(postedRun().modelId).toBe('minimax-h3');
+      expect(postedRun().settings.referenceMode).toBe('elements');
+      expect(postedInputs('videoReferences')).toEqual([expect.objectContaining({
+        kind: 'video',
+        url: 'https://signed.example.com/uploads/user-1/walk.mp4',
+        label: 'Video reference 1',
+        durationSeconds: 4.2,
+      })]);
+      expect(postedInputs('audioReferences')).toEqual([expect.objectContaining({
+        kind: 'audio',
+        url: 'https://signed.example.com/uploads/user-1/voice.mp3',
+        label: 'Audio reference 1',
+      })]);
+    });
+
+    it('shows MiniMax H3 a clip saved on another model, and sends it', async () => {
+      // A saved clip stays with the draft when the model changes. The quote counted it
+      // on MiniMax H3 while the page had no card to show it or take it off.
+      const savedClip = new File(['video-bytes'], 'camera-move.mp4', { type: 'video/mp4' });
+      getPersistedMediaRecordsMock.mockImplementation(async (key: string) => (
+        key === 'create-video:reference-videos'
+          ? [{ id: 'saved-clip', displayName: 'Camera move', durationSeconds: 5, file: savedClip }]
+          : []
+      ));
+      render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
+
+      expect(await screen.findByText('Camera move')).toBeInTheDocument();
+      expect(screen.getByText('5.0s clip')).toBeInTheDocument();
+      await waitFor(() => {
+        expect(quoteRequestMock.mock.calls.at(-1)?.[0]?.inputMetadata?.slots?.videoReferences)
+          .toEqual({ count: 1, durationsSeconds: [5] });
+      });
+
+      await generate('MiniMax H3');
+
+      expect(postedInputs('videoReferences')).toEqual([expect.objectContaining({
+        url: 'https://signed.example.com/uploads/user-1/camera-move.mp4',
+        label: 'Camera move',
+        durationSeconds: 5,
+      })]);
+    });
+
+    it('keeps the note about prepared assets on a Seedance 2.5 track', async () => {
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      await screen.findByRole('heading', { name: 'Video and audio references' });
+
+      fireEvent.change(view.container.querySelector<HTMLInputElement>(trackInput)!, {
+        target: { files: [new File(['audio-bytes'], 'voice.mp3', { type: 'audio/mpeg' })] },
+      });
+
+      expect(await screen.findByText('Uses URL fallback until prepared')).toBeInTheDocument();
+      expect(screen.queryByText('6.5s track')).toBeNull();
+    });
+
+    /**
+     * What each model's catalog entry takes, read from the slots the server
+     * publishes. Kling 3.0's clips are named video elements, a slot of their own
+     * with a panel of their own, so they are not counted here.
+     */
+    const publishedCatalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
+    function publishedLimit(modelId: string, slotKey: 'videoReferences' | 'audioReferences') {
+      const entry = publishedCatalog.models.find((model) => model.id === modelId);
+      return (entry?.inputModes ?? [])
+        .flatMap((mode) => mode.slots)
+        .find((slot) => slot.key === slotKey)?.max ?? 0;
+    }
+
+    it.each(Object.values(VIDEO_MODELS).map((model) => [model.displayName, model.id] as const))(
+      '%s: has a place for a clip and for a track exactly where its catalog entry takes one',
+      async (displayName, modelId) => {
+        const takesClips = publishedLimit(modelId, 'videoReferences') > 0;
+        const takesTracks = publishedLimit(modelId, 'audioReferences') > 0;
+        const view = render(<CreateVideoClient prefill={{ model: modelId }} />);
+        await screen.findByPlaceholderText(`Describe the ${displayName} scene in rich cinematic detail...`);
+
+        expect(panelHeading()?.textContent ?? null).toBe(
+          takesTracks ? 'Video and audio references' : takesClips ? 'Video references' : null
+        );
+        expect(Boolean(screen.queryByRole('button', { name: 'Add video' }))).toBe(takesClips);
+        expect(Boolean(view.container.querySelector(clipInput))).toBe(takesClips);
+        expect(Boolean(screen.queryByRole('button', { name: 'Add audio' }))).toBe(takesTracks);
+        expect(Boolean(view.container.querySelector(trackInput))).toBe(takesTracks);
+      }
+    );
+
+    it('checks that table against models of every kind', () => {
+      // A table that held no model with a clip, or none without, would prove nothing.
+      const ids = Object.keys(VIDEO_MODELS);
+      expect(ids.filter((id) => publishedLimit(id, 'audioReferences') > 0)).toContain('minimax-h3');
+      expect(ids.filter((id) => publishedLimit(id, 'videoReferences') > 0 && publishedLimit(id, 'audioReferences') === 0))
+        .toEqual(['gemini-omni-video']);
+      expect(ids.filter((id) => publishedLimit(id, 'videoReferences') === 0)).toEqual(expect.arrayContaining([
+        'kling-3.0-video',
+        'kling-o3',
+        'seedance-1.5-pro',
+      ]));
+    });
   });
 
   it('submits uploaded Kling video elements with handles', async () => {
