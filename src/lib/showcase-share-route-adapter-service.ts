@@ -69,7 +69,9 @@ async function handleShowcaseSharePOST(
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
   try {
-    const payloadResult = dependencies.parseShowcaseSharePayloadForRoute(await request.json());
+    const payloadResult = dependencies.parseShowcaseSharePayloadForRoute(
+      (await request.json().catch(() => null)) ?? {},
+    );
     if (!payloadResult.ok) {
       return NextResponse.json(payloadResult.body, { status: payloadResult.status });
     }

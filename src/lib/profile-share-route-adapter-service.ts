@@ -67,7 +67,9 @@ async function handleProfileSharePOST(
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
   try {
-    const payloadResult = dependencies.parseProfileSharePayloadForRoute(await request.json());
+    const payloadResult = dependencies.parseProfileSharePayloadForRoute(
+      (await request.json().catch(() => null)) ?? {},
+    );
     if (!payloadResult.ok) {
       return NextResponse.json(payloadResult.body, { status: payloadResult.status });
     }

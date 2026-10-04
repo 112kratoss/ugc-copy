@@ -89,7 +89,7 @@ async function handleShowcasePublishPOST(
       return NextResponse.json({ error: 'Failed to check showcase publish limits.' }, { status: 500 });
     }
 
-    const requestBody = await request.json() as Partial<ShowcasePublishRequestBody>;
+    const requestBody = ((await request.json().catch(() => null)) ?? {}) as Partial<ShowcasePublishRequestBody>;
     if (!requestBody.generationId) {
       return NextResponse.json({ error: 'Missing generation ID' }, { status: 400 });
     }

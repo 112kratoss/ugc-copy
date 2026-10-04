@@ -89,7 +89,7 @@ export async function submitPostReportForRoute({
   createAdminSupabase: () => SupabaseClient;
   invalidateFeedCache?: typeof invalidateShowcaseFeedCache;
 }): Promise<PostReportRouteResult> {
-  const body = normalizeBody(await readBody());
+  const body = normalizeBody(await readBody().catch(() => null));
   const reason = normalizeReason(body.reason);
   if (!reason) {
     return { ok: false, status: 400, body: { error: 'Choose a valid report reason.' } };
