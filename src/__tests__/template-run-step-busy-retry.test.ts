@@ -293,6 +293,39 @@ describe('template run steps the provider turns away as busy', () => {
     expect(run.status).toBe('processing');
   });
 
+  it('wait as the next attempt of the step when the refund of the refused start went through on a second try', async () => {
+    const database = connect(createTemplateRunDatabase({ credits: STARTING_CREDITS }));
+    providerIsBusy();
+    database.conditions.settlementsRefusedForEachStart = 1;
+
+    const run = await tick(database);
+
+    // The same ending as a refund written at the first try: the refused
+    // attempts are over with their credits back, and each step is in line
+    // as its next attempt instead of following a generation nobody will run.
+    expect(database.imageAttempts().map((attempts) => attempts.map((step) => [
+      step.attempt, step.status, database.generationOf(step)?.status ?? null,
+    ]))).toEqual([
+      [[0, 'failed', 'failed'], [1, 'queued', null]],
+      [[0, 'failed', 'failed'], [1, 'queued', null]],
+    ]);
+    expect(database.rpcCalls.filter((entry) => entry.fn === 'settle_template_generation_start_failed').map((entry) => (
+      entry.status ?? entry.error
+    ))).toEqual(['settlement unavailable', 'failed', 'settlement unavailable', 'failed']);
+    expect(database.credits()).toBe(STARTING_CREDITS);
+    expect(run.status).toBe('queued');
+
+    providerHasRoom();
+    const started = await tick(database);
+
+    expect(providerCalls()).toBe(2);
+    expect(database.imageSteps().map((step) => [step.attempt, step.status, database.generationOf(step)?.status])).toEqual([
+      [1, 'processing', 'processing'],
+      [1, 'processing', 'processing'],
+    ]);
+    expect(started.status).toBe('processing');
+  });
+
   it('follow a refused generation that still holds its credits, and never start a second one beside it', async () => {
     const database = connect(createTemplateRunDatabase({ credits: STARTING_CREDITS }));
     providerIsBusy();

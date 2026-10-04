@@ -219,4 +219,53 @@ describe('startVideoGenerationForRoute', () => {
       persistInputMedia: false,
     }));
   });
+
+  // In references mode the start reads `imageUrls` as reference pictures on Wan 2.7, the
+  // one model that takes a first frame beside them. Handed the frame there as well, it
+  // sent the frame as the reference and left the named picture out (2026-10-04).
+  it('hands a first frame over as a frame only when the run has references', async () => {
+    startVideoGenerationMock.mockResolvedValueOnce({
+      predictionId: 'task-video-wan-first-frame',
+      generationId: 'gen-video-wan-first-frame',
+      remainingCredits: 80,
+      cost: 120,
+    });
+    const userClient = createClientMock();
+    const adminClient = createClientMock();
+
+    await startVideoGenerationForRoute({
+      request: new Request('http://localhost/api/generate-video', {
+        headers: { 'idempotency-key': 'video-wan-first-frame-1' },
+      }),
+      body: {
+        prompt: '@lead walks along the harbour at dusk.',
+        model: 'wan-2.7',
+        duration: 5,
+        aspectRatio: '16:9',
+        resolution: '1080p',
+        referenceMode: 'elements',
+        elements: [{
+          id: 'reference-1',
+          displayName: 'Hero shot',
+          handle: '@lead',
+          storagePath: 'uploads/user-1/lead.png',
+          sourceGenerationId: null,
+        }],
+        elementImageUrls: ['https://example.com/lead.png'],
+        startImageUrl: 'https://example.com/first-frame.png',
+        catalogRevision,
+      },
+      userId: 'user-1',
+      supabase: userClient.client,
+      adminSupabase: adminClient.client,
+    });
+
+    expect(startVideoGenerationMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      model: 'wan-2.7',
+      referenceMode: 'elements',
+      elementImageUrls: ['https://example.com/lead.png'],
+      startImageUrl: 'https://example.com/first-frame.png',
+      imageUrls: [],
+    }));
+  });
 });

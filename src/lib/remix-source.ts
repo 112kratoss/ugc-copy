@@ -1,4 +1,4 @@
-import type { ImageElementDescriptor } from '@/lib/image-elements';
+import { isValidElementHandle, type ImageElementDescriptor } from '@/lib/image-elements';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import type { ShowcaseItemCategory } from '@/lib/showcase';
 
@@ -24,6 +24,16 @@ interface RemixImageElementDescriptor extends ImageElementDescriptor {
 
 export interface RemixResolvedImageElement extends RemixImageElementDescriptor {
   url: string | null;
+}
+
+/**
+ * A Kling O3 named subject as a remix restores it: the handle its prompt
+ * mentions it by, its name, and its pictures in the order the run used them.
+ */
+export interface RemixResolvedSubject {
+  handle: string;
+  displayName: string;
+  images: RemixResolvedAsset[];
 }
 
 interface RemixSourceGeneration {
@@ -53,6 +63,8 @@ export interface RemixSourceBundle {
       elements: RemixResolvedImageElement[];
       referenceVideos?: RemixResolvedAsset[];
       referenceAudios?: RemixResolvedAsset[];
+      /** Kling O3 named subjects. Their pictures are not among `elements`. */
+      subjects?: RemixResolvedSubject[];
     };
     motion?: {
       characterImage: RemixResolvedAsset | null;
@@ -121,6 +133,46 @@ export function motionInputDescriptors(workflowSettings: Record<string, unknown>
     referenceVideo: normalizeRemixMediaAssetDescriptor(workflowSettings.referenceVideo, 'video')
       ?? catalogInputSlotDescriptor(workflowSettings, 'referenceVideo', 'video'),
   };
+}
+
+/**
+ * What a run's settings record of a Kling O3 named subject (`klingSubjects`):
+ * the handle its prompt mentions it by, its name, and where each of its
+ * pictures was staged, in order.
+ */
+export interface KlingSubjectDescriptor {
+  handle: string;
+  displayName: string;
+  images: { storagePath: string | null }[];
+}
+
+/** The named subjects a run's settings record. An entry whose handle no prompt could mention is left out. */
+export function klingSubjectDescriptors(workflowSettings: Record<string, unknown>): KlingSubjectDescriptor[] {
+  const subjects: unknown[] = Array.isArray(workflowSettings.klingSubjects) ? workflowSettings.klingSubjects : [];
+
+  return subjects.flatMap((subject): KlingSubjectDescriptor[] => {
+    if (typeof subject !== 'object' || subject === null) {
+      return [];
+    }
+
+    const { handle, displayName, images } = subject as Record<string, unknown>;
+    if (typeof handle !== 'string' || !isValidElementHandle(handle)) {
+      return [];
+    }
+
+    return [{
+      handle,
+      displayName: (typeof displayName === 'string' && displayName.trim()) || handle.slice(1),
+      images: (Array.isArray(images) ? images : []).flatMap((image) => {
+        if (typeof image !== 'object' || image === null) {
+          return [];
+        }
+
+        const storagePath = (image as { storagePath?: unknown }).storagePath;
+        return [{ storagePath: typeof storagePath === 'string' && storagePath ? storagePath : null }];
+      }),
+    }];
+  });
 }
 
 export function hasCreatorEditedPromptDuringRemix(

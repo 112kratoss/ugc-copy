@@ -57,7 +57,7 @@ vi.mock('@/lib/post-resource-bundles-server', () => ({
 }));
 
 import { buildCatalogInputMediaCandidates } from '@/lib/catalog-input-media-candidates';
-import { collectReferenceMediaCandidates } from '@/lib/generation-input-media';
+import { collectReferenceMediaCandidates, collectSubjectImageCandidates } from '@/lib/generation-input-media';
 import { loadRemixSourceBundle, RemixSourceError } from '@/lib/remix-source-server';
 
 const LOCKED_PROMPT = 'The prompt a buyer pays for';
@@ -487,5 +487,181 @@ describe('a recipe with a reference clip sent as a plain URL', () => {
       durationSeconds: 9.4,
     }]);
     expect(bundle.restoreIssues.filter((issue) => issue.startsWith('input-media-not-kept'))).toEqual([]);
+  });
+});
+
+// A Kling O3 run takes named subjects: two to four pictures of one person or
+// product, under an @handle the prompt mentions. A run kept nothing of them, so
+// a remix of it restored the prompt and no subject (2026-10-03).
+describe('a Kling O3 run with named subjects', () => {
+  const OWNER_ACCESS = { allowed: true, basis: 'owner', post: null, includeSharedInputMedia: true, recipeEntitled: false };
+  const PUBLIC_ACCESS = { allowed: true, basis: 'public', post: EXPOSED_POST, includeSharedInputMedia: false, recipeEntitled: false };
+  // Neither handle is the one its subject's name would give.
+  const DECLARED_SUBJECTS = [
+    {
+      handle: '@lead',
+      displayName: 'Hero creator',
+      images: [{ storagePath: 'uploads/creator-1/hero-front.png' }, { storagePath: 'uploads/creator-1/hero-side.png' }],
+    },
+    {
+      handle: '@bottle',
+      displayName: 'Serum bottle',
+      images: [{ storagePath: 'uploads/creator-1/bottle-front.png' }, { storagePath: 'uploads/creator-1/bottle-side.png' }],
+    },
+  ];
+
+  // The round trip for a run started now: the rows the video start keeps for
+  // its subjects, read back the way loadGenerationInputMediaMap returns them.
+  const KEPT_PICTURES = collectSubjectImageCandidates({
+    subjects: DECLARED_SUBJECTS.map((subject) => ({
+      ...subject,
+      images: subject.images.map((image) => ({ url: image.storagePath, storagePath: image.storagePath })),
+      imageUrls: subject.images.map((image) => `https://provider.example/${image.storagePath}`),
+    })),
+  }).map((candidate, sortOrder) => ({
+    id: `row-${sortOrder}`,
+    generationId: 'gen-1',
+    mediaType: candidate.mediaType,
+    role: candidate.role,
+    label: candidate.label ?? '',
+    url: `https://signed.example/kept-${sortOrder}.png`,
+    storagePath: `generation_inputs/creator-1/gen-1/0${sortOrder}-${candidate.role}.png`,
+    sourceGenerationId: candidate.sourceGenerationId ?? null,
+    sortOrder,
+    metadata: { ...candidate.metadata, sourceStoragePath: candidate.sourceStoragePath ?? null },
+  }));
+  const RESTORED_SUBJECTS = [
+    {
+      handle: '@lead',
+      displayName: 'Hero creator',
+      images: [0, 1].map((sortOrder) => ({
+        kind: 'image',
+        label: 'Hero creator',
+        storagePath: `generation_inputs/creator-1/gen-1/0${sortOrder}-subject_image.png`,
+        sourceGenerationId: null,
+        url: `https://signed.example/kept-${sortOrder}.png`,
+      })),
+    },
+    {
+      handle: '@bottle',
+      displayName: 'Serum bottle',
+      images: [2, 3].map((sortOrder) => ({
+        kind: 'image',
+        label: 'Serum bottle',
+        storagePath: `generation_inputs/creator-1/gen-1/0${sortOrder}-subject_image.png`,
+        sourceGenerationId: null,
+        url: `https://signed.example/kept-${sortOrder}.png`,
+      })),
+    },
+  ];
+
+  beforeEach(async () => {
+    // The recipe is read by the real builder here: what it declares is the point.
+    const actual = await vi.importActual<typeof import('@/lib/generation-input-media')>('@/lib/generation-input-media');
+    mocks.buildLegacyGenerationInputMedia.mockImplementation(actual.buildLegacyGenerationInputMedia);
+    mocks.resolveRemixAccess.mockResolvedValue(OWNER_ACCESS);
+    mocks.generation = {
+      ...mocks.generation,
+      category: 'video',
+      model: 'kling-o3',
+      prompt: '@lead lifts @bottle and smiles at the camera.',
+      workflow_settings: { model: 'kling-o3', referenceMode: 'elements', klingSubjects: DECLARED_SUBJECTS },
+    };
+    mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', KEPT_PICTURES]]));
+  });
+
+  it('restores each subject with its handle, its name and its pictures, in the order the run used them', async () => {
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.inputs.video?.subjects).toEqual(RESTORED_SUBJECTS);
+    // A subject's pictures are one identity, not four references: they are not
+    // handed to a creator that would attach them as plain reference images.
+    expect(bundle.inputs.video?.elements).toEqual([]);
+    expect(bundle.restoreIssues.filter((issue) => issue.startsWith('input-media-not-kept') || issue.startsWith('video-subject'))).toEqual([]);
+  });
+
+  it('says some media is missing when the run kept fewer pictures than its subjects had', async () => {
+    mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', KEPT_PICTURES.slice(0, 3)]]));
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.inputs.video?.subjects?.map((subject) => [subject.handle, subject.images.length])).toEqual([
+      ['@lead', 2],
+      ['@bottle', 1],
+    ]);
+    expect(bundle.restoreIssues).toContain('input-media-not-kept:image');
+  });
+
+  it('names the subject whose picture has no link to hand over', async () => {
+    mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', [
+      ...KEPT_PICTURES.slice(0, 3),
+      { ...KEPT_PICTURES[3], url: null },
+    ]]]));
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.inputs.video?.subjects?.[1].images.map((image) => image.url)).toEqual(['https://signed.example/kept-2.png', null]);
+    expect(bundle.restoreIssues).toContain('video-subject:Serum bottle');
+    expect(bundle.restoreIssues).not.toContain('video-subject:Hero creator');
+  });
+
+  // No copy of the pictures was made (keeping them failed outright): the owner's
+  // remix reads them from where the run's settings say they were staged.
+  it('restores the subjects from the run’s settings when no copy of their pictures was kept', async () => {
+    mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map());
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.inputs.video?.subjects).toEqual(DECLARED_SUBJECTS.map((subject) => ({
+      handle: subject.handle,
+      displayName: subject.displayName,
+      images: subject.images.map((image) => ({
+        kind: 'image',
+        label: subject.displayName,
+        storagePath: image.storagePath,
+        sourceGenerationId: null,
+        url: 'https://signed.example/upload',
+      })),
+    })));
+  });
+
+  it('restores no subject for a run that recorded none', async () => {
+    // A run made before subjects were kept: its prompt mentions them and nothing else does.
+    mocks.generation = { ...mocks.generation, workflow_settings: { model: 'kling-o3', referenceMode: 'elements' } };
+    mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map());
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.generation.prompt).toBe('@lead lifts @bottle and smiles at the camera.');
+    expect(bundle.inputs.video?.subjects).toEqual([]);
+    expect(bundle.restoreIssues.filter((issue) => issue.startsWith('input-media-not-kept') || issue.startsWith('video-subject'))).toEqual([]);
+  });
+
+  it('keeps the subjects out of a remix the creator did not share the run’s inputs with', async () => {
+    mocks.resolveRemixAccess.mockResolvedValue(PUBLIC_ACCESS);
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.generation.prompt).toBe('@lead lifts @bottle and smiles at the camera.');
+    expect(bundle.inputs.video).toBeUndefined();
+    expect(bundle.workflowSettings).toEqual({ model: 'kling-o3', referenceMode: 'elements' });
+    expect(JSON.stringify(bundle)).not.toMatch(/hero-front|subject_image|Hero creator/);
+    expect(mocks.loadGenerationInputMediaMap).not.toHaveBeenCalled();
+  });
+
+  it('restores the subjects of a bought recipe from the post the gate verified, with the settings still stripped', async () => {
+    mocks.resolveRemixAccess.mockResolvedValue({ ...PUBLIC_ACCESS, basis: 'unlocked', recipeEntitled: true });
+    mocks.loadGenerationRecipeRemixInputMediaByPostId.mockResolvedValue(KEPT_PICTURES);
+
+    const bundle = await loadRemixSourceBundle(request('post-client'), 'gen-1', { postId: 'post-client' });
+
+    expect(mocks.loadGenerationRecipeRemixInputMediaByPostId).toHaveBeenCalledWith(expect.objectContaining({
+      postId: 'post-verified',
+      generationId: 'gen-1',
+      viewerUserId: 'viewer-1',
+    }));
+    expect(bundle.inputs.video?.subjects).toEqual(RESTORED_SUBJECTS);
+    expect(bundle.workflowSettings).toEqual({ model: 'kling-o3', referenceMode: 'elements' });
+    expect(mocks.loadGenerationInputMediaMap).not.toHaveBeenCalled();
   });
 });

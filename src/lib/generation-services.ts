@@ -38,7 +38,11 @@ import {
   type VideoModelId,
   type VoiceoverModelId,
 } from '@/lib/models';
-import { normalizeRemixMediaAssetDescriptor, type RemixMediaAssetDescriptor } from '@/lib/remix-source';
+import {
+  normalizeRemixMediaAssetDescriptor,
+  type KlingSubjectDescriptor,
+  type RemixMediaAssetDescriptor,
+} from '@/lib/remix-source';
 import {
   hasSeedanceAssetCollections,
   isSeedance2VideoModelId,
@@ -50,6 +54,7 @@ import {
   collectImageInputCandidates,
   collectReferenceMediaCandidates,
   collectSeedanceAssetCandidates,
+  collectSubjectImageCandidates,
   persistGenerationInputMedia,
   type PersistGenerationInputCandidate,
   type ReferenceMediaDescriptor,
@@ -128,6 +133,7 @@ import {
 import { summarizeMediaToolError } from '@/lib/media-tool-error';
 
 const PROVIDER_TASK_ATTACH_ATTEMPTS = 3;
+const START_FAILURE_SETTLEMENT_ATTEMPTS = 3;
 
 interface DialogueTurnInput {
   text: string;
@@ -562,6 +568,94 @@ async function markGenerationProviderStarted(
   throw new GenerationServiceError('Failed to attach provider task to generation.', 500);
 }
 
+/**
+ * What a start settlement answers when asking again would change nothing.
+ * `provider_task_attached` is a generation a callback has given a task in the
+ * meantime: the provider is running it, and its hold stands.
+ * `already_succeeded` has delivered. `missing` and `profile_not_found` are a
+ * row or an account that is gone, and the hold with it. The last two are a
+ * call that was wrong to begin with.
+ */
+const FINAL_START_SETTLEMENT_REFUSALS = new Set([
+  'provider_task_attached',
+  'already_succeeded',
+  'missing',
+  'profile_not_found',
+  'invalid_request',
+  'invalid_template_context',
+]);
+
+type RefusedStartSettlement = {
+  /** The hold is released, by this call or by something before it. */
+  settled: boolean;
+  /** This call released the hold itself. */
+  releasedHold: boolean;
+  /** What the database answered last, when it answered. */
+  status: string | null;
+  attempts: number;
+  /** What the last try met in place of an answer. */
+  error: unknown;
+};
+
+/**
+ * Returns the credits of a start the provider refused. `settle` is one call
+ * of the start's settlement function, and is made again while the database
+ * gives no answer.
+ *
+ * Both settlement functions lock the generation and return its credits only
+ * while the row says they are still held, so a repeated call cannot refund
+ * twice: it answers `already_failed`. On a first try that is a row something
+ * else had refunded. After a try that got no answer it is this call's own
+ * refund, written by the try whose answer was lost, and it counts as released
+ * here: a run worker announces the failure from that.
+ *
+ * Never throws. The caller is about to rethrow the error that refused the
+ * start, and a failed settlement must not take its place.
+ */
+async function settleRefusedGenerationStart(
+  generationId: string,
+  settle: () => PromiseLike<{ data: unknown; error: unknown }>,
+): Promise<RefusedStartSettlement> {
+  let status: string | null = null;
+  let error: unknown = null;
+  let unanswered = false;
+
+  for (let attempt = 1; attempt <= START_FAILURE_SETTLEMENT_ATTEMPTS; attempt += 1) {
+    status = null;
+    error = null;
+    try {
+      const result = await settle();
+      if (result.error) {
+        error = result.error;
+      } else {
+        status = isRecord(result.data) && typeof result.data.status === 'string' ? result.data.status : null;
+      }
+    } catch (settlementError) {
+      error = settlementError;
+    }
+
+    if (status === 'failed' || status === 'already_failed') {
+      if (attempt > 1) {
+        logBackendWarning('generation_start_failure_settlement_retried', {
+          generationId,
+          attempts: attempt,
+          settlementStatus: status,
+        });
+      }
+      return { settled: true, releasedHold: status === 'failed' || unanswered, status, attempts: attempt, error: null };
+    }
+
+    if (status !== null && FINAL_START_SETTLEMENT_REFUSALS.has(status)) {
+      return { settled: false, releasedHold: false, status, attempts: attempt, error: null };
+    }
+
+    // No answer, or one nobody knows: the write may have landed all the same.
+    unanswered = true;
+  }
+
+  return { settled: false, releasedHold: false, status, attempts: START_FAILURE_SETTLEMENT_ATTEMPTS, error };
+}
+
 async function settleTemplateGenerationStartFailureQuietly(params: {
   creditSupabase: SupabaseClient;
   error: unknown;
@@ -598,43 +692,37 @@ async function settleTemplateGenerationStartFailureQuietly(params: {
     ...generationStartDiagnostic(params.error),
   };
 
-  try {
-    const { data, error } = await params.creditSupabase.rpc('settle_template_generation_start_failed', {
+  const settlement = await settleRefusedGenerationStart(params.generationId, () => (
+    params.creditSupabase.rpc('settle_template_generation_start_failed', {
       p_generation_id: params.generationId,
       p_error_message: failure.message,
-    });
-    const status = data && typeof data === 'object' && 'status' in data
-      ? (data as { status?: unknown }).status
-      : null;
-
-    if (!error && (status === 'failed' || status === 'already_failed')) {
-      // `already_failed` is a row something else had refunded first.
-      if (status === 'failed') markRefundedGenerationStart(params.error, params.generationId);
-      logBackendError(TEMPLATE_START_FAILED_EVENT, { ...logEntry, settlement: status });
-      return;
-    }
-
-    // Every settlement failure now reports the same way. This used to branch on
-    // a missing RPC (PGRST202/42883) and fall back to `refund_credits` — an
-    // unguarded primitive that credited an arbitrary user an arbitrary amount
-    // with no idempotency key and no source row, the only function left that
-    // could mint credits from nothing. The branch was rolling-deploy
-    // compatibility for a database older than the code, which
-    // production-release.yml makes impossible: it migrates, then stages, then
-    // promotes, so the database is never behind. The RPC has been live since
-    // 20260711201026.
-    logBackendError(TEMPLATE_START_FAILED_EVENT, {
-      ...logEntry,
-      settlement: 'failed',
-      settlementError: supabaseErrorMessage(error, `Unexpected settlement status: ${String(status)}`),
-    });
-  } catch (settlementError) {
-    logBackendError(TEMPLATE_START_FAILED_EVENT, {
-      ...logEntry,
-      settlement: 'failed',
-      ...generationStartDiagnostic(settlementError),
-    });
+    })
+  ));
+  if (settlement.releasedHold) markRefundedGenerationStart(params.error, params.generationId);
+  if (settlement.settled) {
+    logBackendError(TEMPLATE_START_FAILED_EVENT, { ...logEntry, settlement: settlement.status });
+    return;
   }
+
+  // Every settlement failure now reports the same way. This used to branch on
+  // a missing RPC (PGRST202/42883) and fall back to `refund_credits` — an
+  // unguarded primitive that credited an arbitrary user an arbitrary amount
+  // with no idempotency key and no source row, the only function left that
+  // could mint credits from nothing. The branch was rolling-deploy
+  // compatibility for a database older than the code, which
+  // production-release.yml makes impossible: it migrates, then stages, then
+  // promotes, so the database is never behind. The RPC has been live since
+  // 20260711201026.
+  logBackendError(TEMPLATE_START_FAILED_EVENT, {
+    ...logEntry,
+    settlement: 'failed',
+    settlementStatus: settlement.status,
+    attempts: settlement.attempts,
+    settlementError: supabaseErrorMessage(
+      settlement.error,
+      `Unexpected settlement status: ${String(settlement.status)}`,
+    ),
+  });
 }
 
 /**
@@ -741,34 +829,23 @@ async function settleGenerationStartFailureQuietly(params: {
   }
 
   const failure = getPublicGenerationStartFailure(params.error);
-  try {
-    // The atomic settlement RPC is deployed everywhere; it refunds and marks
-    // the generation in one statement, so no manual refund fallback remains.
-    const { data, error } = await params.creditSupabase.rpc('settle_generation_start_failed', {
+  // The atomic settlement RPC is deployed everywhere; it refunds and marks
+  // the generation in one statement, so no manual refund fallback remains.
+  const settlement = await settleRefusedGenerationStart(params.generationId, () => (
+    params.creditSupabase.rpc('settle_generation_start_failed', {
       p_generation_id: params.generationId,
       p_error_message: failure.message,
-    });
-    const status = data && typeof data === 'object' && 'status' in data
-      ? (data as { status?: unknown }).status
-      : null;
+    })
+  ));
+  if (settlement.releasedHold) markRefundedGenerationStart(params.error, params.generationId);
+  if (settlement.settled) return;
 
-    if (!error && (status === 'failed' || status === 'already_failed')) {
-      // `already_failed` is a row something else had refunded first.
-      if (status === 'failed') markRefundedGenerationStart(params.error, params.generationId);
-      return;
-    }
-
-    logBackendError('generation_start_failure_settlement_failed', {
-      generationId: params.generationId,
-      settlementStatus: status,
-      error: supabaseErrorMessage(error, 'Unexpected generation start settlement status.'),
-    });
-  } catch (settlementError) {
-    logBackendError('generation_start_failure_settlement_failed', {
-      generationId: params.generationId,
-      error: supabaseErrorMessage(settlementError, 'Failed to settle generation start failure.'),
-    });
-  }
+  logBackendError('generation_start_failure_settlement_failed', {
+    generationId: params.generationId,
+    settlementStatus: settlement.status,
+    attempts: settlement.attempts,
+    error: supabaseErrorMessage(settlement.error, 'Unexpected generation start settlement status.'),
+  });
 }
 
 // Generous ceiling above every supported model's accepted prompt size; it only
@@ -2323,7 +2400,14 @@ export async function startVideoGeneration(params: {
           { templateAssetScope: templateAssetScope(templateContext) },
         )
       : [];
-  const totalReferenceImageCount = resolvedReferenceImageUrls.length;
+  // The reference pictures the provider is sent. They arrive as one list (`references`,
+  // `imageUrls`) or, from the creators, as named elements with a list of their own.
+  // The checks below and four provider branches used to read the first kind only, so a
+  // named picture was described in the prompt, kept as an input, and never sent.
+  const providerReferenceImageUrls = resolvedReferenceImageUrls.length > 0
+    ? resolvedReferenceImageUrls
+    : resolvedElementImageUrls;
+  const totalReferenceImageCount = providerReferenceImageUrls.length;
 
   if (totalReferenceImageCount > 0 && !videoElementSupport.enabled) {
     throw new GenerationServiceError(
@@ -2358,7 +2442,7 @@ export async function startVideoGeneration(params: {
   }
 
   if (model === 'wan-2.7' && (
-    resolvedReferenceImageUrls.length
+    totalReferenceImageCount
     + resolvedReferenceVideoUrls.length
     + resolvedReferenceAudioUrls.length
   ) > 5) {
@@ -2376,7 +2460,7 @@ export async function startVideoGeneration(params: {
     throw new GenerationServiceError('Gemini Omni supports one reference video per run.', 400);
   }
 
-  if (model === 'gemini-omni-video' && resolvedReferenceImageUrls.length + (resolvedReferenceVideoUrls.length * 2) > 7) {
+  if (model === 'gemini-omni-video' && totalReferenceImageCount + (resolvedReferenceVideoUrls.length * 2) > 7) {
     throw new GenerationServiceError('Gemini Omni supports seven reference slots; a video uses two slots.', 400);
   }
   if (model === 'gemini-omni-video' && normalizedPreparedAudioIds.length > 3) {
@@ -2385,7 +2469,7 @@ export async function startVideoGeneration(params: {
   if (model === 'gemini-omni-video' && normalizedCharacterIds.length > 3) {
     throw new GenerationServiceError('Gemini Omni supports up to 3 prepared character references.', 400);
   }
-  if (model === 'gemini-omni-video' && resolvedReferenceImageUrls.length + (resolvedReferenceVideoUrls.length * 2) + normalizedCharacterIds.length > 7) {
+  if (model === 'gemini-omni-video' && totalReferenceImageCount + (resolvedReferenceVideoUrls.length * 2) + normalizedCharacterIds.length > 7) {
     throw new GenerationServiceError('Gemini Omni supports seven reference slots; videos use two and characters use one.', 400);
   }
 
@@ -2552,6 +2636,14 @@ export async function startVideoGeneration(params: {
     : frameImageUrls.length > 0
       ? 'frames'
       : normalizedReferenceMode;
+  // The recipe has a word of its own for a run whose only references are named pictures:
+  // 'elements', which a remix and a bundle's description read. It is the word such a run
+  // stored before its pictures were counted, so counting them does not change it.
+  const onlyNamedReferencePictures = resolvedElementImageUrls.length > 0
+    && resolvedReferenceImageUrls.length === 0
+    && resolvedReferenceVideoUrls.length === 0
+    && resolvedReferenceAudioUrls.length === 0;
+  const recipeReferenceMode = onlyNamedReferencePictures ? 'elements' : effectiveReferenceMode;
 
   assertGenerationRequest(
     (selectedModel.aspectRatios as readonly string[]).includes(aspectRatio),
@@ -2596,10 +2688,6 @@ export async function startVideoGeneration(params: {
     let endpoint = 'https://api.kie.ai/api/v1/jobs/createTask';
     let body: Record<string, unknown>;
     let providerModelId = resolveProviderModelId(runtimeConfig, 'default', selectedModel.apiModelId || mode);
-    const referenceImageUrls = resolvedReferenceImageUrls;
-    const providerReferenceImageUrls = referenceImageUrls.length > 0
-      ? referenceImageUrls
-      : resolvedElementImageUrls;
     const requestedMode = mode;
     const providerMode = mode;
 
@@ -2785,8 +2873,8 @@ export async function startVideoGeneration(params: {
           generate_audio: soundEnabled,
         };
 
-        if (referenceImageUrls.length > 0) {
-          input.input_urls = referenceImageUrls;
+        if (providerReferenceImageUrls.length > 0) {
+          input.input_urls = providerReferenceImageUrls;
         } else if (frameImageUrls.length > 0) {
           input.input_urls = frameImageUrls;
         }
@@ -2924,11 +3012,11 @@ export async function startVideoGeneration(params: {
         model: providerModelId,
         aspect_ratio: aspectRatio,
         resolution,
-        generationType: referenceImageUrls.length > 0
+        generationType: providerReferenceImageUrls.length > 0
           ? 'REFERENCE_2_VIDEO'
           : (frameImageUrls.length > 0 ? 'FIRST_AND_LAST_FRAMES_2_VIDEO' : 'TEXT_2_VIDEO'),
-        ...(referenceImageUrls.length > 0
-          ? { imageUrls: referenceImageUrls }
+        ...(providerReferenceImageUrls.length > 0
+          ? { imageUrls: providerReferenceImageUrls }
           : (frameImageUrls.length > 0 ? { imageUrls: frameImageUrls } : {})),
       };
     } else {
@@ -2974,7 +3062,7 @@ export async function startVideoGeneration(params: {
           : undefined,
         resolution,
         fixedLens,
-        referenceMode: effectiveReferenceMode,
+        referenceMode: recipeReferenceMode,
         ...(providerReferenceImageUrls.length > 0
           ? { referenceImageUrls: providerReferenceImageUrls }
           : {}),
@@ -2996,6 +3084,17 @@ export async function startVideoGeneration(params: {
                 storagePath: element.storagePath,
                 sourceGenerationId: element.sourceGenerationId,
               })),
+            }
+          : {}),
+        // What the run used of each named subject. Its pictures are kept below;
+        // this says how many there were, so a run that kept fewer can be told.
+        ...(resolvedKlingSubjects.length > 0
+          ? {
+              klingSubjects: resolvedKlingSubjects.map((subject) => ({
+                handle: subject.handle,
+                displayName: subject.displayName,
+                images: subject.images.map((image) => ({ storagePath: image.storagePath })),
+              })) satisfies KlingSubjectDescriptor[],
             }
           : {}),
         ...(hasSeedanceAssetCollections(seedanceAssets)
@@ -3052,7 +3151,8 @@ export async function startVideoGeneration(params: {
     const startFrameSourceUrl = resolvedStartImageUrl || resolvedLegacyImageUrls[0] || null;
     const endFrameSourceUrl = resolvedEndImageUrl || resolvedLegacyImageUrls[1] || null;
 
-    if (effectiveReferenceMode === 'frames' && startFrameSourceUrl) {
+    // Wan 2.7 is sent a first frame beside its references, so a remix needs it kept there too.
+    if ((effectiveReferenceMode === 'frames' || model === 'wan-2.7') && startFrameSourceUrl) {
       videoInputCandidates.push({
         mediaType: 'image',
         role: 'start_frame',
@@ -3092,6 +3192,14 @@ export async function startVideoGeneration(params: {
           provider: 'kling',
           elementIndex: index,
         },
+      });
+    }
+    // A named subject's pictures, each with the handle the prompt mentions the
+    // subject by: what a remix of the run restores its subjects from.
+    for (const candidate of collectSubjectImageCandidates({ subjects: resolvedKlingSubjects })) {
+      videoInputCandidates.push({
+        ...candidate,
+        sortOrder: inputSortOrder++,
       });
     }
     const seedanceAssetCandidates = collectSeedanceAssetCandidates({

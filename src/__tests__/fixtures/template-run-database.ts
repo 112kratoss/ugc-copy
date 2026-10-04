@@ -135,6 +135,8 @@ export function createTemplateRunDatabase(options: { credits?: number } = {}) {
     admissionRefused: false,
     /** The settlement of a refused start cannot be reached. */
     settlementUnavailable: false,
+    /** How many of the first settlement calls for each refused start cannot be reached. The calls after them can. */
+    settlementsRefusedForEachStart: 0,
     /** The credit hold itself cannot be reached: nothing is reserved. */
     startUnavailable: false,
     /** A single generation cannot be read back. The worker loads a run's generations as a list. */
@@ -145,8 +147,18 @@ export function createTemplateRunDatabase(options: { credits?: number } = {}) {
      */
     writeRefused: null as ((table: string, values: Row) => boolean) | null,
   };
+  /** The settlement calls each refused generation has been refused so far. */
+  const settlementsRefused = new Map<unknown, number>();
   const now = () => new Date().toISOString();
   const answer = (status: string, extra: Row = {}): Answer<Row> => ({ data: { status, ...extra }, error: null });
+
+  function settlementIsRefused(generationId: unknown) {
+    if (conditions.settlementUnavailable) return true;
+    const refused = settlementsRefused.get(generationId) ?? 0;
+    if (refused >= conditions.settlementsRefusedForEachStart) return false;
+    settlementsRefused.set(generationId, refused + 1);
+    return true;
+  }
 
   function startTemplateGeneration(args: Row): Answer<Row> {
     const cost = args.p_cost;
@@ -316,7 +328,7 @@ export function createTemplateRunDatabase(options: { credits?: number } = {}) {
           ? { data: null, error: { message: 'canceling statement due to statement timeout' } }
           : startTemplateGeneration(args);
       case 'settle_template_generation_start_failed':
-        return conditions.settlementUnavailable
+        return settlementIsRefused(args.p_generation_id)
           ? { data: null, error: { message: 'settlement unavailable' } }
           : settleTemplateGenerationStartFailed(args);
       case 'attach_generation_provider_task':

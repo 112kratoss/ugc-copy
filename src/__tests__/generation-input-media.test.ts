@@ -684,3 +684,280 @@ describe('uncaptured input media', () => {
     )).toEqual([]);
   });
 });
+
+// A Kling O3 run takes named subjects: two to four pictures of one person or
+// product under one @handle. A run kept nothing of them, so a remix of it had
+// no subject to restore (2026-10-03).
+describe('the pictures of a Kling O3 named subject', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const picture = (overrides: Partial<GenerationInputMediaItem>): GenerationInputMediaItem => ({
+    id: 'row',
+    generationId: 'gen-1',
+    mediaType: 'image',
+    role: 'subject_image',
+    label: 'Hero creator',
+    url: 'https://signed.example.com/kept.png',
+    storagePath: 'generation_inputs/user-1/gen-1/00-subject_image.png',
+    sourceGenerationId: null,
+    sortOrder: 0,
+    metadata: { handle: '@lead', displayName: 'Hero creator', provider: 'kling', subjectIndex: 0, imageIndex: 0 },
+    ...overrides,
+  });
+
+  it('keeps each picture with the handle, the name and the place of its subject', async () => {
+    const { collectSubjectImageCandidates } = await import('@/lib/generation-input-media');
+
+    expect(collectSubjectImageCandidates({
+      subjects: [
+        {
+          handle: '@lead',
+          displayName: 'Hero creator',
+          images: [
+            { url: 'uploads/user-1/hero-front.png', storagePath: 'uploads/user-1/hero-front.png' },
+            { url: 'uploads/user-1/hero-side.png', storagePath: 'uploads/user-1/hero-side.png' },
+          ],
+          imageUrls: ['https://signed.example.com/hero-front.png', 'https://signed.example.com/hero-side.png'],
+        },
+        {
+          handle: '@bottle',
+          displayName: 'Serum bottle',
+          images: [{ url: 'uploads/user-1/bottle-front.png', storagePath: 'uploads/user-1/bottle-front.png' }],
+          imageUrls: ['https://signed.example.com/bottle-front.png'],
+        },
+      ],
+    })).toEqual([
+      {
+        mediaType: 'image',
+        role: 'subject_image',
+        label: 'Hero creator',
+        sourceUrl: 'https://signed.example.com/hero-front.png',
+        sourceStoragePath: 'uploads/user-1/hero-front.png',
+        sourceGenerationId: null,
+        metadata: { handle: '@lead', displayName: 'Hero creator', provider: 'kling', subjectIndex: 0, imageIndex: 0 },
+      },
+      {
+        mediaType: 'image',
+        role: 'subject_image',
+        label: 'Hero creator',
+        sourceUrl: 'https://signed.example.com/hero-side.png',
+        sourceStoragePath: 'uploads/user-1/hero-side.png',
+        sourceGenerationId: null,
+        metadata: { handle: '@lead', displayName: 'Hero creator', provider: 'kling', subjectIndex: 0, imageIndex: 1 },
+      },
+      {
+        mediaType: 'image',
+        role: 'subject_image',
+        label: 'Serum bottle',
+        sourceUrl: 'https://signed.example.com/bottle-front.png',
+        sourceStoragePath: 'uploads/user-1/bottle-front.png',
+        sourceGenerationId: null,
+        metadata: { handle: '@bottle', displayName: 'Serum bottle', provider: 'kling', subjectIndex: 1, imageIndex: 0 },
+      },
+    ]);
+  });
+
+  it('reads the staged file from the picture itself when the caller gave no path for it', async () => {
+    const { collectSubjectImageCandidates } = await import('@/lib/generation-input-media');
+
+    const [candidate] = collectSubjectImageCandidates({
+      subjects: [{
+        handle: '@lead',
+        displayName: 'Hero creator',
+        images: [{ url: 'uploads/user-1/hero-front.png' }],
+        imageUrls: ['https://signed.example.com/hero-front.png'],
+      }],
+    });
+
+    expect(candidate.sourceStoragePath).toBe('uploads/user-1/hero-front.png');
+  });
+
+  // A remixed picture is sent by the path of the creator's kept file, and the
+  // provider is given the caller's own copy of it. The new run keeps that copy.
+  it('keeps a remixed picture from the copy made for the caller, with its subject', async () => {
+    const { collectSubjectImageCandidates, persistGenerationInputMedia } = await import('@/lib/generation-input-media');
+    const download = vi.fn(async () => ({ data: new Blob(['imported-copy'], { type: 'image/png' }), error: null }));
+    const upload = vi.fn(async () => ({ error: null }));
+    const insert = vi.fn(async () => ({ error: null }));
+    const supabase = {
+      storage: {
+        from: vi.fn((bucket: string) => {
+          expect(bucket).toBe('generation_inputs');
+          return { download, upload };
+        }),
+      },
+      from: vi.fn(() => ({ insert })),
+    };
+
+    await persistGenerationInputMedia({
+      supabase: supabase as never,
+      generationId: 'gen-1',
+      userId: 'user-1',
+      candidates: collectSubjectImageCandidates({
+        subjects: [{
+          handle: '@lead',
+          displayName: 'Hero creator',
+          images: [{
+            url: 'generation_inputs/creator-1/gen-9/00-subject_image.png',
+            storagePath: 'generation_inputs/creator-1/gen-9/00-subject_image.png',
+          }],
+          imageUrls: [
+            'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/remix-imports/gen-9/00-subject_image.png?token=copy',
+          ],
+        }],
+      }),
+    });
+
+    expect(download).toHaveBeenCalledWith('user-1/remix-imports/gen-9/00-subject_image.png');
+    expect(upload).toHaveBeenCalledWith(
+      'user-1/gen-1/00-subject_image.png',
+      expect.any(Blob),
+      expect.objectContaining({ contentType: 'image/png' })
+    );
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({
+      role: 'subject_image',
+      label: 'Hero creator',
+      storage_path: 'generation_inputs/user-1/gen-1/00-subject_image.png',
+      metadata: expect.objectContaining({ handle: '@lead', displayName: 'Hero creator', subjectIndex: 0, imageIndex: 0 }),
+    }));
+  });
+
+  // What the run's settings say it used. Read without it, a run that kept two
+  // of a subject's three pictures looked complete, and the input repair had
+  // nothing to rebuild a subject from.
+  it('declares each picture a run’s settings record, without signing anything', async () => {
+    const { buildLegacyGenerationInputMedia } = await import('@/lib/generation-input-media');
+    const storageFrom = vi.fn();
+
+    const result = await buildLegacyGenerationInputMedia({
+      supabase: { storage: { from: storageFrom }, from: vi.fn() } as never,
+      generationId: 'gen-1',
+      ownerUserId: 'user-1',
+      category: 'video',
+      workflowSettings: {
+        model: 'kling-o3',
+        klingSubjects: [
+          {
+            handle: '@lead',
+            displayName: 'Hero creator',
+            images: [{ storagePath: 'uploads/user-1/hero-front.png' }, { storagePath: 'uploads/user-1/hero-side.png' }],
+          },
+          { handle: '@bottle', displayName: 'Serum bottle', images: [{ storagePath: 'uploads/user-1/bottle-front.png' }] },
+          // Not a handle a prompt could mention: nothing is made of it.
+          { handle: 'Hero', displayName: 'Broken', images: [{ storagePath: 'uploads/user-1/broken.png' }] },
+        ],
+      },
+      urlMode: 'none',
+    });
+
+    expect(result.map((item) => [item.mediaType, item.role, item.label, item.storagePath, item.url])).toEqual([
+      ['image', 'subject_image', 'Hero creator', 'uploads/user-1/hero-front.png', null],
+      ['image', 'subject_image', 'Hero creator', 'uploads/user-1/hero-side.png', null],
+      ['image', 'subject_image', 'Serum bottle', 'uploads/user-1/bottle-front.png', null],
+    ]);
+    expect(result.map((item) => item.metadata)).toEqual([
+      { legacy: true, handle: '@lead', displayName: 'Hero creator', provider: 'kling', subjectIndex: 0, imageIndex: 0 },
+      { legacy: true, handle: '@lead', displayName: 'Hero creator', provider: 'kling', subjectIndex: 0, imageIndex: 1 },
+      { legacy: true, handle: '@bottle', displayName: 'Serum bottle', provider: 'kling', subjectIndex: 1, imageIndex: 0 },
+    ]);
+    expect(storageFrom).not.toHaveBeenCalled();
+  });
+
+  it('signs a declared picture from the owner’s staged file, and no one else’s', async () => {
+    const { buildLegacyGenerationInputMedia } = await import('@/lib/generation-input-media');
+    const createSignedUrl = vi.fn(async (filePath: string) => ({
+      data: { signedUrl: `https://signed.example.com/${filePath}` },
+      error: null,
+    }));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const result = await buildLegacyGenerationInputMedia({
+      supabase: { storage: { from: vi.fn(() => ({ createSignedUrl })) }, from: vi.fn() } as never,
+      generationId: 'gen-1',
+      ownerUserId: 'user-1',
+      category: 'video',
+      workflowSettings: {
+        klingSubjects: [{
+          handle: '@lead',
+          displayName: 'Hero creator',
+          images: [
+            { storagePath: 'uploads/user-1/hero-front.png' },
+            // A remix records the path of the creator's kept file, which is not this owner's.
+            { storagePath: 'generation_inputs/user-2/gen-9/01-subject_image.png' },
+          ],
+        }],
+      },
+    });
+
+    expect(result.map((item) => item.url)).toEqual(['https://signed.example.com/user-1/hero-front.png', null]);
+    expect(createSignedUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts a subject picture the run did not keep as an image it used and lost', async () => {
+    const { buildLegacyGenerationInputMedia, findUncapturedInputMediaTypes } = await import('@/lib/generation-input-media');
+    const declared = await buildLegacyGenerationInputMedia({
+      supabase: { storage: { from: vi.fn() }, from: vi.fn() } as never,
+      generationId: 'gen-1',
+      ownerUserId: 'user-1',
+      category: 'video',
+      workflowSettings: {
+        klingSubjects: [{
+          handle: '@lead',
+          displayName: 'Hero creator',
+          images: ['front', 'side', 'back'].map((view) => ({ storagePath: `uploads/user-1/hero-${view}.png` })),
+        }],
+      },
+      urlMode: 'none',
+    });
+
+    expect(findUncapturedInputMediaTypes(declared, [picture({}), picture({ id: 'row-2', sortOrder: 1 })])).toEqual([
+      { mediaType: 'image', missing: 1 },
+    ]);
+    expect(findUncapturedInputMediaTypes(declared, [picture({}), picture({}), picture({})])).toEqual([]);
+  });
+
+  it('takes the subjects out of the settings a remix is given when the run’s inputs are not shared', async () => {
+    const { sanitizeWorkflowSettingsForRemix } = await import('@/lib/generation-input-media');
+    const settings = {
+      model: 'kling-o3',
+      duration: 5,
+      klingSubjects: [{ handle: '@lead', displayName: 'Hero creator', images: [{ storagePath: 'uploads/user-1/hero-front.png' }] }],
+    };
+
+    expect(sanitizeWorkflowSettingsForRemix(settings, false)).toEqual({ model: 'kling-o3', duration: 5 });
+    expect(sanitizeWorkflowSettingsForRemix(settings, true)).toEqual(settings);
+  });
+
+  it('puts the kept pictures back together as subjects, in the order the run used them', async () => {
+    const { toRemixSubjects } = await import('@/lib/generation-input-media');
+    const bottle = { handle: '@bottle', displayName: 'Serum bottle', provider: 'kling', subjectIndex: 1 };
+
+    expect(toRemixSubjects([
+      picture({ id: 'row-0', sortOrder: 0 }),
+      picture({ id: 'row-1', sortOrder: 1, storagePath: 'generation_inputs/user-1/gen-1/01-subject_image.png', url: null }),
+      picture({ id: 'row-2', sortOrder: 2, label: 'Serum bottle', storagePath: 'generation_inputs/user-1/gen-1/02-subject_image.png', metadata: { ...bottle, imageIndex: 0 } }),
+      // A plain reference image of the same run is not a subject's picture.
+      picture({ id: 'row-3', sortOrder: 3, role: 'reference_image', label: 'Backdrop', metadata: { handle: '@backdrop', displayName: 'Backdrop' } }),
+      // A row with no handle a prompt could mention belongs to no subject.
+      picture({ id: 'row-4', sortOrder: 4, metadata: { displayName: 'Nameless' } }),
+    ])).toEqual([
+      {
+        handle: '@lead',
+        displayName: 'Hero creator',
+        images: [
+          { kind: 'image', label: 'Hero creator', storagePath: 'generation_inputs/user-1/gen-1/00-subject_image.png', sourceGenerationId: null, url: 'https://signed.example.com/kept.png' },
+          { kind: 'image', label: 'Hero creator', storagePath: 'generation_inputs/user-1/gen-1/01-subject_image.png', sourceGenerationId: null, url: null },
+        ],
+      },
+      {
+        handle: '@bottle',
+        displayName: 'Serum bottle',
+        images: [
+          { kind: 'image', label: 'Serum bottle', storagePath: 'generation_inputs/user-1/gen-1/02-subject_image.png', sourceGenerationId: null, url: 'https://signed.example.com/kept.png' },
+        ],
+      },
+    ]);
+  });
+});

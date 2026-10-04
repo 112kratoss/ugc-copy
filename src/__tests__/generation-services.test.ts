@@ -5,6 +5,7 @@ import {
   createMobileNotificationHistory,
   withMobileNotificationHistory,
 } from '@/__tests__/fixtures/mobile-notification-history';
+import type { BackendLogRecord } from '@/lib/backend-logger';
 
 // Foreign references stay rejected by default; individual tests opt into an
 // authorized shared-media import.
@@ -36,12 +37,26 @@ type GenerationRow = {
   submission_unknown_at?: string | null;
 };
 
+/**
+ * One way a single call of an RPC goes wrong: it answers with an error and
+ * writes nothing, the client cannot reach the database at all, it answers
+ * with nothing, it answers with a status nobody knows, or it writes and its
+ * answer is lost on the way back.
+ */
+type RpcFault = 'error' | 'throw' | 'empty' | 'unknown' | 'lost-response';
+
 type SupabaseMockOptions = {
   generationInsertErrors?: Error[];
   generationUpdateErrors?: Error[];
   sharedGenerations?: GenerationRow[];
   /** Force a named RPC to fail, for testing fallback paths. */
   rpcErrors?: Record<string, { message: string }>;
+  /**
+   * Make the first calls of a named RPC go wrong, one fault for each call.
+   * The calls after them go through. Only the two start settlements write
+   * before a `lost-response`.
+   */
+  rpcFaults?: Record<string, RpcFault[]>;
   /** Force a named RPC to return a specific payload, for testing race outcomes. */
   rpcResults?: Record<string, unknown>;
 };
@@ -53,6 +68,7 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
   const generationInsertErrors = [...(options.generationInsertErrors ?? [])];
   const generationUpdateErrors = [...(options.generationUpdateErrors ?? [])];
+  const rpcFaults = new Map(Object.entries(options.rpcFaults ?? {}).map(([fn, faults]) => [fn, [...faults]]));
 
   const supabase = {
     rpc: vi.fn(async (fn: string, args: Record<string, unknown>) => {
@@ -62,6 +78,12 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
       if (forcedError) {
         return { data: null, error: forcedError };
       }
+
+      const fault = rpcFaults.get(fn)?.shift();
+      if (fault === 'error') return { data: null, error: { message: `${fn} could not be written` } };
+      if (fault === 'throw') throw new TypeError('fetch failed');
+      if (fault === 'empty') return { data: null, error: null };
+      if (fault === 'unknown') return { data: { status: 'unexpected' }, error: null };
 
       if (options.rpcResults && Object.hasOwn(options.rpcResults, fn)) {
         return { data: options.rpcResults[fn], error: null };
@@ -197,6 +219,7 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
         row.refunded = true;
         row.error_message = typeof args.p_error_message === 'string' ? args.p_error_message : null;
         row.client_request_key_hash = null;
+        if (fault === 'lost-response') return { data: null, error: { message: 'connection reset' } };
         return {
           data: {
             status: alreadyRefunded ? 'already_failed' : 'failed',
@@ -1989,6 +2012,185 @@ describe('generation services', () => {
     expect(rpcCalls.map((call) => call.fn)).not.toContain('settle_generation_start_failed');
     expect(generations[0].status).toBe('pending');
     expect(generations[0].refunded).toBeFalsy();
+  });
+
+  // A refused start is refunded by one database function, and by another for
+  // a template step. Both are safe to call again: they return the credits only
+  // while the row says they are still held.
+  describe.each([
+    {
+      start: 'a creation',
+      templateContext: undefined,
+      settlementRpc: 'settle_generation_start_failed',
+      isSettlementFailure: (record: BackendLogRecord) => record.msg === 'generation_start_failure_settlement_failed',
+    },
+    {
+      start: 'a template step',
+      templateContext: { runId: 'run-1', stepId: 'step-image-1' },
+      settlementRpc: 'settle_template_generation_start_failed',
+      // The template start reports its refund under the same name. The
+      // settlement's own error is what tells a refund that failed apart.
+      isSettlementFailure: (record: BackendLogRecord) => (
+        record.msg === 'template_generation_start_failed_after_reservation'
+        && typeof record.settlementError === 'string'
+      ),
+    },
+  ])('the refund of $start the provider turned away', ({ templateContext, settlementRpc, isSettlementFailure }) => {
+    const REQUEST_KEY = 'e'.repeat(64);
+
+    /** Starts an image the provider says it is too busy for, over a database that meets `options`. */
+    async function startRefusedAsBusy(options: SupabaseMockOptions) {
+      const { startImageGeneration } = await import('@/lib/generation-services');
+      const { getRefundedStartGenerationId } = await import('@/lib/generation-public-failure');
+      const { setBackendLogSink } = await import('@/lib/backend-logger');
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      vi.mocked(fetch).mockImplementation(async () => new Response(JSON.stringify({ msg: 'Too many requests' }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+      const logged: BackendLogRecord[] = [];
+      const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
+      const { supabase, generations, rpcCalls } = createSupabaseMock([], options);
+
+      try {
+        const refusal = await startImageGeneration({
+          supabase,
+          creditSupabase: supabase,
+          userId: 'user-1',
+          clientRequestKeyHash: REQUEST_KEY,
+          prompt: 'A ceramic mug on a linen cloth.',
+          model: 'nano-banana-2',
+          ...(templateContext ? { templateContext, privateRecipe: true, persistInputMedia: false } : {}),
+        }).catch((error: unknown) => error);
+
+        return {
+          refusal,
+          generation: generations[0],
+          settlements: rpcCalls.filter((call) => call.fn === settlementRpc),
+          /** The generation a run worker would announce as failed, if this start named one. */
+          announced: getRefundedStartGenerationId(refusal),
+          settlementFailures: logged.filter(isSettlementFailure),
+          retries: logged.filter((record) => record.msg === 'generation_start_failure_settlement_retried'),
+        };
+      } finally {
+        restoreLogSink();
+      }
+    }
+
+    it.each([
+      ['answered with an error', 'error'],
+      ['could not be reached', 'throw'],
+      ['answered with nothing', 'empty'],
+      ['answered with a status nobody knows', 'unknown'],
+    ] as const)('is tried again when the first settlement %s', async (_outcome, fault) => {
+      const refused = await startRefusedAsBusy({ rpcFaults: { [settlementRpc]: [fault] } });
+
+      expect(refused.settlements).toHaveLength(2);
+      expect(refused.settlements[1]).toEqual(refused.settlements[0]);
+      // The hold is released and the request key is free, so the same start
+      // can be made again instead of finding this generation still in the way.
+      expect(refused.generation).toMatchObject({
+        status: 'failed',
+        prediction_id: null,
+        refunded: true,
+        client_request_key_hash: null,
+      });
+      // The second try released the hold, so this start may be announced.
+      expect(refused.announced).toBe('gen-1');
+      expect(refused.settlementFailures).toEqual([]);
+      expect(refused.retries).toEqual([expect.objectContaining({
+        level: 'warn',
+        generationId: 'gen-1',
+        attempts: 2,
+        settlementStatus: 'failed',
+      })]);
+      // What the caller hears is still the provider's refusal.
+      expect(refused.refusal).toMatchObject({ status: 429, message: 'Too many requests' });
+    });
+
+    it('counts the refund as its own when the first settlement landed and only its answer was lost', async () => {
+      const refused = await startRefusedAsBusy({ rpcFaults: { [settlementRpc]: ['lost-response'] } });
+
+      // The second call finds the credits returned already. Between two tries
+      // of one call, the first try is what returned them.
+      expect(refused.settlements).toHaveLength(2);
+      expect(refused.generation).toMatchObject({ status: 'failed', refunded: true, client_request_key_hash: null });
+      expect(refused.announced).toBe('gen-1');
+      expect(refused.settlementFailures).toEqual([]);
+      expect(refused.retries).toEqual([expect.objectContaining({ attempts: 2, settlementStatus: 'already_failed' })]);
+    });
+
+    it('does not count a refund that something else had made first as its own', async () => {
+      const refused = await startRefusedAsBusy({
+        rpcResults: { [settlementRpc]: { status: 'already_failed', generation_id: 'gen-1', refunded: true } },
+      });
+
+      // Answered at once, with no try of this call before it that could have
+      // done it. Whatever returned the credits says so itself.
+      expect(refused.settlements).toHaveLength(1);
+      expect(refused.announced).toBeNull();
+      expect(refused.settlementFailures).toEqual([]);
+      expect(refused.retries).toEqual([]);
+    });
+
+    it.each([
+      // A callback gave the generation a task: the provider is running it.
+      'provider_task_attached',
+      'already_succeeded',
+      // The row is gone, or the account, and the hold with it.
+      'missing',
+      'profile_not_found',
+      // The call itself was wrong.
+      'invalid_request',
+      'invalid_template_context',
+    ])('stops at the answer %s, which a second call would only repeat', async (status) => {
+      const refused = await startRefusedAsBusy({
+        rpcResults: { [settlementRpc]: { status, generation_id: 'gen-1' } },
+      });
+
+      expect(refused.settlements).toHaveLength(1);
+      // Nothing was returned by this call, so there is nothing to announce.
+      expect(refused.announced).toBeNull();
+      expect(refused.settlementFailures).toHaveLength(1);
+      expect(refused.refusal).toMatchObject({ status: 429, message: 'Too many requests' });
+    });
+
+    it('gives up after three tries and leaves the hold as it is, for the reaper', async () => {
+      const refused = await startRefusedAsBusy({
+        rpcErrors: { [settlementRpc]: { message: 'database unavailable' } },
+      });
+
+      expect(refused.settlements).toHaveLength(3);
+      expect(refused.generation).toMatchObject({
+        status: 'pending',
+        prediction_id: null,
+        client_request_key_hash: REQUEST_KEY,
+      });
+      expect(refused.generation.refunded).toBeFalsy();
+      expect(refused.announced).toBeNull();
+      // Reported once, with what the last try met.
+      expect(refused.settlementFailures).toEqual([expect.objectContaining({
+        level: 'error',
+        generationId: 'gen-1',
+        attempts: 3,
+      })]);
+      expect(JSON.stringify(refused.settlementFailures)).toContain('database unavailable');
+      expect(refused.retries).toEqual([]);
+      expect(refused.refusal).toMatchObject({ status: 429, message: 'Too many requests' });
+    });
+
+    it('still answers with the provider’s refusal when every settlement throws', async () => {
+      const refused = await startRefusedAsBusy({ rpcFaults: { [settlementRpc]: ['throw', 'throw', 'throw'] } });
+
+      // The settlement is the second thing to go wrong. The first is what the
+      // caller has to hear about.
+      expect(refused.refusal).toMatchObject({ status: 429, message: 'Too many requests' });
+      expect(refused.settlements).toHaveLength(3);
+      expect(refused.generation).toMatchObject({ status: 'pending', client_request_key_hash: REQUEST_KEY });
+      expect(refused.announced).toBeNull();
+      expect(refused.settlementFailures).toEqual([expect.objectContaining({ generationId: 'gen-1', attempts: 3 })]);
+      expect(JSON.stringify(refused.settlementFailures)).toContain('fetch failed');
+    });
   });
 
   it('uses the backend client to mark backend-reserved image starts failed when provider submission fails', async () => {
@@ -3833,6 +4035,321 @@ describe('generation services', () => {
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 
+  // The page and the app give every reference picture an @handle, and the unified start
+  // hands the video start those pictures as `elements` with `elementImageUrls`, leaving
+  // `imageUrls` empty. Four models read only `imageUrls`: the run described the picture
+  // in its prompt, kept it as an input, and went to the provider without it (2026-10-04).
+  describe('a reference picture that carries a handle', () => {
+    type VideoStart = Parameters<typeof import('@/lib/generation-services')['startVideoGeneration']>[0];
+    type ProviderRequest = Record<string, unknown> & { input?: Record<string, unknown> };
+
+    const REFERENCE = 'https://signed.example.com/uploads/user-1/lead.png';
+    const FIRST_FRAME = 'https://signed.example.com/uploads/user-1/first-frame.png';
+
+    // The call the unified start makes for a run from the page.
+    async function startPageRun(model: VideoStart['model'], settings: Partial<VideoStart>) {
+      const { startVideoGeneration } = await import('@/lib/generation-services');
+      const requests: ProviderRequest[] = [];
+      vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (typeof init?.body === 'string') requests.push(JSON.parse(init.body));
+        return { ok: true, json: async () => ({ code: 200, data: { taskId: `task-named-reference-${requests.length}` } }) } as Response;
+      });
+
+      const client = createSupabaseMock();
+      await startVideoGeneration({
+        supabase: client.supabase,
+        creditSupabase: client.supabase,
+        userId: 'user-1',
+        prompt: '@lead walks along the harbour at dusk.',
+        model,
+        aspectRatio: '16:9',
+        referenceMode: 'elements',
+        imageUrls: [],
+        elements: [{
+          id: 'imageReferences-1',
+          displayName: 'Hero shot',
+          handle: '@lead',
+          storagePath: 'uploads/user-1/lead.png',
+          sourceGenerationId: null,
+        }],
+        elementImageUrls: [REFERENCE],
+        ...settings,
+      });
+      return { request: requests[0], ...client };
+    }
+
+    // Every model that takes reference pictures, and the request that carries one.
+    const ROUTES: Array<{
+      label: string;
+      model: VideoStart['model'];
+      settings: Partial<VideoStart>;
+      request: ProviderRequest;
+    }> = [
+      {
+        label: 'Seedance 1.5 Pro',
+        model: 'seedance-1.5-pro',
+        settings: { duration: 4, resolution: '720p' },
+        request: { model: 'bytedance/seedance-1.5-pro', input: { input_urls: [REFERENCE] } },
+      },
+      {
+        label: 'Seedance 2',
+        model: 'seedance-2',
+        settings: { duration: 5, resolution: '720p' },
+        request: { model: 'bytedance/seedance-2', input: { reference_image_urls: [REFERENCE] } },
+      },
+      {
+        label: 'Seedance 2 Fast',
+        model: 'seedance-2-fast',
+        settings: { duration: 5, resolution: '720p' },
+        request: { model: 'bytedance/seedance-2-fast', input: { reference_image_urls: [REFERENCE] } },
+      },
+      {
+        label: 'Seedance 2 Mini',
+        model: 'seedance-2-mini',
+        settings: { duration: 5, resolution: '720p' },
+        request: { model: 'bytedance/seedance-2-mini', input: { reference_image_urls: [REFERENCE] } },
+      },
+      {
+        label: 'Seedance 2.5',
+        model: 'seedance-2-5',
+        settings: { duration: 5, resolution: '720p' },
+        request: { model: 'bytedance/seedance-2-5', input: { reference_image_urls: [REFERENCE] } },
+      },
+      {
+        label: 'Wan 2.7',
+        model: 'wan-2.7',
+        settings: { duration: 5, resolution: '1080p' },
+        request: { model: 'wan/2-7-r2v', input: { reference_image: [REFERENCE], aspect_ratio: '16:9' } },
+      },
+      {
+        label: 'HappyHorse 1.1',
+        model: 'happyhorse-1.1',
+        settings: { duration: 5, resolution: '720p' },
+        request: { model: 'happyhorse-1-1/reference-to-video', input: { reference_image: [REFERENCE], aspect_ratio: '16:9' } },
+      },
+      {
+        label: 'Gemini Omni',
+        model: 'gemini-omni-video',
+        settings: { duration: 6, resolution: '720p' },
+        request: { model: 'gemini-omni-video', input: { image_urls: [REFERENCE] } },
+      },
+      {
+        label: 'Veo 3.1 Fast',
+        model: 'veo-3.1',
+        settings: { mode: 'veo3_fast', resolution: '720p' },
+        request: { model: 'veo3_fast', generationType: 'REFERENCE_2_VIDEO', imageUrls: [REFERENCE] },
+      },
+      {
+        label: 'Veo 3.1 Lite',
+        model: 'veo-3.1',
+        settings: { mode: 'veo3_lite', resolution: '720p' },
+        request: { model: 'veo3_lite', generationType: 'REFERENCE_2_VIDEO', imageUrls: [REFERENCE] },
+      },
+      {
+        label: 'Grok Imagine Video',
+        model: 'grok-imagine-video',
+        settings: { mode: 'normal', duration: 6, resolution: '480p' },
+        request: { model: 'grok-imagine/image-to-video', input: { image_urls: [REFERENCE] } },
+      },
+      {
+        label: 'Kling O3',
+        model: 'kling-o3',
+        settings: { duration: 5, resolution: '720p' },
+        request: { model: 'kling-3.0-omni/reference-to-video', input: { image_urls: [REFERENCE] } },
+      },
+      {
+        label: 'MiniMax H3',
+        model: 'minimax-h3',
+        settings: { duration: 5, resolution: '768P' },
+        request: { model: 'minimax-h3/reference-to-video', input: { reference_image_urls: [REFERENCE] } },
+      },
+    ];
+
+    it.each(ROUTES)('reaches $label, whose prompt says it is attached', async ({ model, settings, request: expected }) => {
+      const { request, generations, inputMediaRows } = await startPageRun(model, settings);
+
+      expect(request).toMatchObject(expected);
+      // The prompt, the kept input and the stored recipe all describe that picture.
+      expect(String(request.input?.prompt ?? request.prompt)).toContain('@lead = attached reference image 1');
+      expect(inputMediaRows).toEqual([
+        expect.objectContaining({ role: 'reference_image', metadata: expect.objectContaining({ handle: '@lead' }) }),
+      ]);
+      // 'elements' is the word a remix and a bundle's description read for named references.
+      expect(generations[0].workflow_settings).toMatchObject({
+        referenceMode: 'elements',
+        elements: [expect.objectContaining({ handle: '@lead' })],
+      });
+    });
+
+    it('has a route for every model that takes reference pictures', async () => {
+      const { VIDEO_MODELS, getVideoElementSupport } = await import('@/lib/models');
+      const taking = (Object.keys(VIDEO_MODELS) as Array<VideoStart['model']>).filter((model) => {
+        const modes = VIDEO_MODELS[model].modeOptions.map((option) => option.value);
+        return (modes.length > 0 ? modes : [undefined])
+          .some((mode) => getVideoElementSupport(model, { mode }).enabled);
+      });
+
+      expect([...new Set(ROUTES.map((route) => route.model))].sort()).toEqual([...taking].sort());
+      for (const route of ROUTES) {
+        expect(getVideoElementSupport(route.model, { mode: route.settings.mode }).enabled, route.label).toBe(true);
+      }
+    });
+
+    // Saying what the frame is, as the older route does, lets this harness keep it.
+    const OPENING_SHOT = {
+      kind: 'image' as const,
+      label: 'Opening shot',
+      storagePath: 'uploads/user-1/first-frame.png',
+      sourceGenerationId: null,
+    };
+
+    it('reaches Wan 2.7 beside a first frame, and the run keeps both', async () => {
+      const { request, generations, inputMediaRows } = await startPageRun('wan-2.7', {
+        duration: 5,
+        resolution: '1080p',
+        startImageUrl: FIRST_FRAME,
+        startFrame: OPENING_SHOT,
+      });
+
+      expect(request).toMatchObject({
+        model: 'wan/2-7-r2v',
+        input: { reference_image: [REFERENCE], first_frame: FIRST_FRAME },
+      });
+      // A remix restores the frame from its row: the page's start sends no descriptor.
+      expect(inputMediaRows.map((row) => [row.role, row.label])).toEqual([
+        ['reference_image', 'Hero shot'],
+        ['start_frame', 'Opening shot'],
+      ]);
+      expect(generations[0].workflow_settings).toMatchObject({ referenceMode: 'elements' });
+    });
+
+    it('keeps the first frame Wan 2.7 is sent beside a picture with no handle', async () => {
+      const { request, inputMediaRows } = await startPageRun('wan-2.7', {
+        duration: 5,
+        resolution: '1080p',
+        prompt: 'The harbour at dusk, slow push in.',
+        imageUrls: [REFERENCE],
+        elements: [],
+        elementImageUrls: [],
+        startImageUrl: FIRST_FRAME,
+        startFrame: OPENING_SHOT,
+      });
+
+      expect(request).toMatchObject({
+        model: 'wan/2-7-r2v',
+        input: { reference_image: [REFERENCE], first_frame: FIRST_FRAME },
+      });
+      expect(inputMediaRows.map((row) => row.role)).toContain('start_frame');
+    });
+
+    // 'elements' is kept for named pictures on their own. Every other run with a reference
+    // stored 'references' before named pictures were counted, and still does.
+    it.each<[string, Partial<VideoStart>]>([
+      ['a clip beside the picture', { referenceVideoUrls: ['https://signed.example.com/uploads/user-1/dance.mp4'] }],
+      ['a track beside the picture', { referenceAudioUrls: ['https://signed.example.com/uploads/user-1/beat.mp3'] }],
+      ['one list of pictures with their handles, as the canvas sends them', {
+        elements: [],
+        elementImageUrls: [],
+        references: [{
+          url: REFERENCE,
+          handle: '@lead',
+          displayName: 'Hero shot',
+          storagePath: 'uploads/user-1/lead.png',
+          sourceGenerationId: null,
+        }],
+      }],
+    ])('stores what it stored before for %s', async (_label, settings) => {
+      const { generations } = await startPageRun('seedance-2', { duration: 5, resolution: '720p', ...settings });
+
+      expect(generations[0].workflow_settings).toMatchObject({ referenceMode: 'references' });
+    });
+
+    const pictures = (count: number): Partial<VideoStart> => ({
+      elements: Array.from({ length: count }, (_unused, index) => ({
+        id: `imageReferences-${index + 1}`,
+        displayName: `Picture ${index + 1}`,
+        handle: index === 0 ? '@lead' : `@extra${index}`,
+        storagePath: `uploads/user-1/picture-${index + 1}.png`,
+        sourceGenerationId: null,
+      })),
+      elementImageUrls: Array.from({ length: count }, (_unused, index) => (
+        `https://signed.example.com/uploads/user-1/picture-${index + 1}.png`
+      )),
+    });
+    const clips = (count: number) => Array.from({ length: count }, (_unused, index) => (
+      `https://signed.example.com/uploads/user-1/clip-${index + 1}.mp4`
+    ));
+
+    // The quote refuses each of these first. The start is the last check before credits
+    // are held, and while named pictures went uncounted it let every one of them through.
+    const REFUSALS: Array<{
+      label: string;
+      model: VideoStart['model'];
+      settings: Partial<VideoStart>;
+      message: string;
+    }> = [
+      {
+        label: 'more pictures than Seedance 1.5 Pro takes',
+        model: 'seedance-1.5-pro',
+        settings: { duration: 4, resolution: '720p', ...pictures(3) },
+        message: 'This video mode supports up to 2 image references.',
+      },
+      {
+        label: 'a picture on Veo 3.1 Quality, which takes none',
+        model: 'veo-3.1',
+        settings: { mode: 'veo3', resolution: '720p' },
+        message: 'Reusable references require Veo Lite or Fast.',
+      },
+      {
+        label: 'a picture beside a start frame on HappyHorse 1.1, which takes one or the other',
+        model: 'happyhorse-1.1',
+        settings: { duration: 5, resolution: '720p', startImageUrl: FIRST_FRAME },
+        message: 'Image references cannot be combined with start or end frames in the same run.',
+      },
+      {
+        label: 'a sixth reference on Wan 2.7',
+        model: 'wan-2.7',
+        settings: {
+          duration: 5,
+          resolution: '1080p',
+          ...pictures(3),
+          referenceVideoUrls: clips(2),
+          referenceAudioUrls: ['https://signed.example.com/uploads/user-1/voice.mp3'],
+        },
+        message: 'Wan 2.7 supports up to 5 reusable image, video, and audio references in total.',
+      },
+      {
+        label: 'an eighth slot on Gemini Omni',
+        model: 'gemini-omni-video',
+        settings: { duration: 6, resolution: '720p', ...pictures(6), referenceVideoUrls: clips(1) },
+        message: 'Gemini Omni supports seven reference slots; a video uses two slots.',
+      },
+      {
+        label: 'a character past the seventh slot on Gemini Omni',
+        model: 'gemini-omni-video',
+        settings: {
+          duration: 6,
+          resolution: '720p',
+          ...pictures(5),
+          referenceVideoUrls: clips(1),
+          characterIds: ['character-prepared-1'],
+        },
+        message: 'Gemini Omni supports seven reference slots; videos use two and characters use one.',
+      },
+      {
+        label: 'more than ten seconds on Wan 2.7',
+        model: 'wan-2.7',
+        settings: { duration: 15, resolution: '1080p' },
+        message: 'Wan 2.7 reference-to-video runs may be at most 10 seconds.',
+      },
+    ];
+
+    it.each(REFUSALS)('refuses $label', async ({ model, settings, message }) => {
+      await expect(startPageRun(model, settings)).rejects.toThrow(message);
+      expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+    });
+  });
+
   it('queues processing audio outputs without downloading media in the status poll', async () => {
     const { syncGenerationStatuses } = await import('@/lib/generation-status-sync');
     const statusSignal = AbortSignal.abort();
@@ -4368,5 +4885,206 @@ describe('generation services', () => {
         ],
       }],
     })).rejects.toThrow(/replace reference images and frames/);
+  });
+
+  // A run sent its named subjects to the provider and kept nothing of them, so
+  // a remix of it restored the prompt and no subject (2026-10-03).
+  it('keeps each Kling O3 subject picture with the handle, the name and the place of its subject', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    vi.mocked(fetch).mockImplementation(async () => ({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-o3-subjects-kept-1' } }),
+    }) as Response);
+
+    const { supabase, generations, inputMediaRows, uploads } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      // Neither handle is the one its subject's name would give.
+      prompt: '@lead lifts @bottle and smiles at the camera.',
+      model: 'kling-o3',
+      duration: 5,
+      aspectRatio: '16:9',
+      resolution: '720p',
+      sound: false,
+      klingSubjects: [
+        {
+          handle: '@lead',
+          displayName: 'Hero creator',
+          images: ['front', 'side', 'back'].map((view) => ({
+            url: `https://signed.example.com/hero-${view}.png`,
+            storagePath: `uploads/user-1/hero-${view}.png`,
+          })),
+        },
+        {
+          handle: '@bottle',
+          displayName: 'Serum bottle',
+          images: ['front', 'side'].map((view) => ({
+            url: `https://signed.example.com/bottle-${view}.png`,
+            storagePath: `uploads/user-1/bottle-${view}.png`,
+          })),
+        },
+      ],
+    });
+
+    expect(inputMediaRows.map((row) => [row.media_type, row.role, row.label, row.storage_path])).toEqual([
+      ['image', 'subject_image', 'Hero creator', 'generation_inputs/user-1/gen-1/00-subject_image.png'],
+      ['image', 'subject_image', 'Hero creator', 'generation_inputs/user-1/gen-1/01-subject_image.png'],
+      ['image', 'subject_image', 'Hero creator', 'generation_inputs/user-1/gen-1/02-subject_image.png'],
+      ['image', 'subject_image', 'Serum bottle', 'generation_inputs/user-1/gen-1/03-subject_image.png'],
+      ['image', 'subject_image', 'Serum bottle', 'generation_inputs/user-1/gen-1/04-subject_image.png'],
+    ]);
+    expect(uploads).toContainEqual({ bucket: 'generation_inputs', filePath: 'user-1/gen-1/04-subject_image.png' });
+    expect(inputMediaRows.map((row) => row.metadata)).toEqual([
+      expect.objectContaining({ handle: '@lead', displayName: 'Hero creator', subjectIndex: 0, imageIndex: 0, sourceStoragePath: 'uploads/user-1/hero-front.png' }),
+      expect.objectContaining({ handle: '@lead', displayName: 'Hero creator', subjectIndex: 0, imageIndex: 1, sourceStoragePath: 'uploads/user-1/hero-side.png' }),
+      expect.objectContaining({ handle: '@lead', displayName: 'Hero creator', subjectIndex: 0, imageIndex: 2, sourceStoragePath: 'uploads/user-1/hero-back.png' }),
+      expect.objectContaining({ handle: '@bottle', displayName: 'Serum bottle', subjectIndex: 1, imageIndex: 0, sourceStoragePath: 'uploads/user-1/bottle-front.png' }),
+      expect.objectContaining({ handle: '@bottle', displayName: 'Serum bottle', subjectIndex: 1, imageIndex: 1, sourceStoragePath: 'uploads/user-1/bottle-side.png' }),
+    ]);
+    // The run's settings say what it used, so a run that kept less than that can be told.
+    expect(generations[0].workflow_settings?.klingSubjects).toEqual([
+      {
+        handle: '@lead',
+        displayName: 'Hero creator',
+        images: ['front', 'side', 'back'].map((view) => ({ storagePath: `uploads/user-1/hero-${view}.png` })),
+      },
+      {
+        handle: '@bottle',
+        displayName: 'Serum bottle',
+        images: ['front', 'side'].map((view) => ({ storagePath: `uploads/user-1/bottle-${view}.png` })),
+      },
+    ]);
+  });
+
+  it('records nothing of a Kling O3 subject for a template run, whose recipe is private', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: { input?: { elements?: Array<{ name: string }> } } | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-o3-subjects-template-1' } }),
+      } as Response;
+    });
+
+    const { supabase, generations, inputMediaRows, rpcCalls, uploads } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'v'.repeat(64),
+      prompt: '@lead smiles at the camera.',
+      model: 'kling-o3',
+      duration: 5,
+      aspectRatio: '16:9',
+      resolution: '720p',
+      sound: false,
+      klingSubjects: [{
+        handle: '@lead',
+        displayName: 'Hero creator',
+        images: ['front', 'side'].map((view) => ({
+          url: `https://signed.example.com/hero-${view}.png`,
+          storagePath: `uploads/user-1/hero-${view}.png`,
+        })),
+      }],
+      privateRecipe: true,
+      persistInputMedia: false,
+      templateContext: { runId: 'run-1', stepId: 'step-video-1' },
+    });
+
+    // The subject still reaches the provider.
+    expect((providerBody as { input?: { elements?: Array<{ name: string }> } } | null)?.input?.elements?.map((element) => element.name)).toEqual(['lead']);
+    expect(generations[0].workflow_settings).toEqual({});
+    expect(JSON.stringify(rpcCalls)).not.toMatch(/klingSubjects|hero-front|Hero creator|@lead/);
+    expect(inputMediaRows).toEqual([]);
+    expect(uploads).toEqual([]);
+  });
+
+  // A remix restores a subject picture as the creator's kept file, by its path.
+  // That path fails the ownership check, and who may use the file is decided
+  // from the path: the provider is sent the copy made for the caller.
+  it('sends the provider the caller’s own copy of a remixed Kling O3 subject picture', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: { input?: { elements?: Array<{ name: string; element_input_urls: string[] }> } } | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-o3-subjects-remix-1' } }),
+      } as Response;
+    });
+
+    const keptByCreator = (place: number) => `generation_inputs/user-2/gen-9/0${place}-subject_image.png`;
+    const copyForCaller = (source: string) => (
+      `https://project.supabase.co/storage/v1/object/sign/${source.replace('user-2/gen-9', 'user-1/remix-imports/gen-9')}?token=copy`
+    );
+    // The mock is the file's own: other tests have called it by now.
+    sharedImportMocks.importSharedGenerationInputMedia.mockClear();
+    sharedImportMocks.importSharedGenerationInputMedia.mockImplementation((async ({ source }: { source: string }) => ({
+      outcome: 'imported',
+      storagePath: source.replace('user-2/gen-9', 'user-1/remix-imports/gen-9'),
+      signedUrl: copyForCaller(source),
+    })) as never);
+
+    try {
+      const { supabase } = createSupabaseMock();
+      await startVideoGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: '@lead smiles at the camera.',
+        model: 'kling-o3',
+        duration: 5,
+        aspectRatio: '16:9',
+        resolution: '720p',
+        sound: false,
+        klingSubjects: [{
+          handle: '@lead',
+          displayName: 'Hero creator',
+          images: [0, 1].map((place) => ({ url: keptByCreator(place), storagePath: keptByCreator(place) })),
+        }],
+      });
+    } finally {
+      sharedImportMocks.importSharedGenerationInputMedia.mockImplementation(async () => ({ outcome: 'not-eligible' as const }));
+    }
+
+    expect(sharedImportMocks.importSharedGenerationInputMedia).toHaveBeenCalledTimes(2);
+    expect(sharedImportMocks.importSharedGenerationInputMedia).toHaveBeenCalledWith({ source: keptByCreator(0), viewerUserId: 'user-1' });
+    expect(sharedImportMocks.importSharedGenerationInputMedia).toHaveBeenCalledWith({ source: keptByCreator(1), viewerUserId: 'user-1' });
+    expect((providerBody as { input?: { elements?: Array<{ name: string; element_input_urls: string[] }> } } | null)?.input?.elements).toEqual([
+      expect.objectContaining({
+        name: 'lead',
+        element_input_urls: [copyForCaller(keptByCreator(0)), copyForCaller(keptByCreator(1))],
+      }),
+    ]);
+  });
+
+  it('refuses a Kling O3 subject picture that belongs to someone who shared nothing', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    const { supabase, rpcCalls } = createSupabaseMock();
+
+    await expect(startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: '@lead smiles at the camera.',
+      model: 'kling-o3',
+      duration: 5,
+      aspectRatio: '16:9',
+      resolution: '720p',
+      sound: false,
+      klingSubjects: [{
+        handle: '@lead',
+        displayName: 'Hero creator',
+        images: [0, 1].map((place) => ({
+          url: `generation_inputs/user-2/gen-9/0${place}-subject_image.png`,
+          storagePath: `generation_inputs/user-2/gen-9/0${place}-subject_image.png`,
+        })),
+      }],
+    })).rejects.toThrow('Media references must belong to the authenticated user.');
+    expect(rpcCalls.map((call) => call.fn)).not.toContain('start_generation');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 });

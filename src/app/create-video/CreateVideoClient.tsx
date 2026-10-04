@@ -33,7 +33,7 @@ import PublicShareButton from '@/components/PublicShareButton';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, getVideoElementSupport, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/client-generation-models';
-import { getVideoInputAffordances } from '@/lib/generation-model-affordances';
+import { getVideoRunAffordances } from '@/lib/generation-model-affordances';
 import type { GenerationModelDescriptor } from '@/lib/generation-model-catalog';
 import {
     resolveCatalogModelId,
@@ -611,6 +611,26 @@ export interface CreateVideoPrefill {
 
 const CATALOG_HANDLED_KEYS = ['mode', 'aspectRatio', 'sound', 'duration', 'resolution', 'fixedLens', 'isMultiShot', 'referenceMode'] as const;
 
+// What a run carries of a kind of reference its model has no slot for.
+const NO_RUN_ELEMENTS: readonly VideoElementDraft[] = [];
+const NO_RUN_REFERENCES: readonly SeedanceMediaReferenceDraft[] = [];
+
+/**
+ * What the standby card says of the saved clips and tracks the selected model has no
+ * slot for, or null when the draft holds none. A run leaves them out, and a creator is
+ * told so before paying for it.
+ */
+function standbyClipAndTrackNotice(modelName: string, clips: number, tracks: number): string | null {
+    if (clips + tracks === 0) return null;
+    const saved = [
+        ...(clips > 0 ? [clips === 1 ? 'clip' : 'clips'] : []),
+        ...(tracks > 0 ? [tracks === 1 ? 'track' : 'tracks'] : []),
+    ].join(' and ');
+    const slots = [...(clips > 0 ? ['clip'] : []), ...(tracks > 0 ? ['track'] : [])].join(' or ');
+    const one = clips + tracks === 1;
+    return `Your saved ${saved} ${one ? 'stays' : 'stay'} saved. ${modelName} takes no reference ${slots}, so this run does not use ${one ? 'it' : 'them'}.`;
+}
+
 export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPrefill }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
@@ -777,8 +797,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const isKlingO3Model = selectedModel === 'kling-o3';
     const isWanVideoModel = selectedModel === 'wan-2.7';
     const isGeminiOmniVideoModel = selectedModel === 'gemini-omni-video';
-    const supportsMultimodalReferences = isSeedance2Family || isWanVideoModel || isGeminiOmniVideoModel;
-    const supportsReferenceAudio = isSeedance2Family || isWanVideoModel;
     const commitElements = (nextElements: VideoElementDraft[]) => {
         elementsRef.current = nextElements;
         setElements(nextElements);
@@ -952,20 +970,32 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     // playground lays the fields out flat this way, and a derived mode cannot disagree
     // with the attachments the way a separately persisted one could.
     const hasFrameAttachment = Boolean(startImageUrl || startImageFile || endImageUrl || endImageFile);
-    const hasReferenceAttachment = elements.length > 0
-        || referenceVideos.length > 0
-        || referenceAudios.length > 0
-        || preparedAudioIds.length > 0
-        || characterIds.length > 0;
-    const affordances = getVideoInputAffordances(
+    // The browser keeps a creator's references when the model changes, so the draft can
+    // hold an image, a clip or a track that the selected model has no slot for. Those
+    // are on standby: saved for a model that takes them, and no part of this run. Only
+    // what the run carries is counted, priced, uploaded and sent, and only that makes it
+    // a references run. With every saved reference counted, the price quote refused
+    // Kling 3.0 and Hailuo 2.3 for references their own page called unused, and the page
+    // had no card to remove them by.
+    const affordances = getVideoRunAffordances(
         (videoModel as { catalogDescriptor?: GenerationModelDescriptor }).catalogDescriptor,
         selectedModel,
+        { mode: currentMode, isMultiShot: currentIsMultiShot },
         {
-            referenceMode: hasReferenceAttachment ? 'elements' : 'frames',
-            mode: currentMode,
-            isMultiShot: currentIsMultiShot,
+            // A multi-shot run sends its shots and no image reference, on every model.
+            images: currentIsMultiShot ? 0 : elements.length,
+            videos: referenceVideos.length,
+            audios: referenceAudios.length,
         },
     );
+    const runElements = affordances.carries.images ? elements : NO_RUN_ELEMENTS;
+    const runReferenceVideos = affordances.carries.videos ? referenceVideos : NO_RUN_REFERENCES;
+    const runReferenceAudios = affordances.carries.audios ? referenceAudios : NO_RUN_REFERENCES;
+    // Gemini Omni's prepared voices and characters are not among them. Their slot stands
+    // beside either shape, and the one model that has it has no frame for them to lock.
+    const hasReferenceAttachment = runElements.length > 0
+        || runReferenceVideos.length > 0
+        || runReferenceAudios.length > 0;
     // Providers that cannot take both shapes in one request get a live mutual lock instead
     // of a hidden mode: the other group stays visible, greyed, with the reason on it.
     // Only ever lock the empty side. A draft can hold both — the previous surface kept the
@@ -991,14 +1021,21 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const activeSupportsEndFrame = supportsEndFrame && !combinesFrameWithReferences;
     const referenceVideoLimit = affordances.referenceVideos.max;
     const referenceAudioLimit = affordances.referenceAudios.max;
+    // The clip and track panel, the checks before a run and the run itself follow the
+    // limits the model publishes. Two lists of models stood here before, and MiniMax H3
+    // was on neither: it takes three clips and three tracks, and the page had no place
+    // for one. Kling 3.0's clips are its named video elements, a slot of their own with
+    // a panel of their own, so its limit here is zero.
+    const supportsMultimodalReferences = referenceVideoLimit > 0 || referenceAudioLimit > 0;
+    const supportsReferenceAudio = referenceAudioLimit > 0;
     const totalDuration = currentIsMultiShot
         ? multiPrompts.reduce((acc, curr) => acc + curr.duration, 0)
         : (selectedModel === 'veo-3.1' ? videoModel.durations[0] : currentDuration);
-    const hasReferenceVideoForRun = (activeReferenceMode === 'elements' && referenceVideos.length > 0) || (isKlingVideoModel && klingVideoElements.length > 0);
+    const hasReferenceVideoForRun = (activeReferenceMode === 'elements' && runReferenceVideos.length > 0) || (isKlingVideoModel && klingVideoElements.length > 0);
     const frameReferenceCount = Number(Boolean(startImageUrl || startImageFile)) + (activeSupportsEndFrame ? Number(Boolean(endImageUrl || endImageFile)) : 0);
     const estimatedReferenceCount =
         activeReferenceMode === 'elements'
-            ? elements.length + referenceVideos.length + referenceAudios.length + preparedAudioIds.length + characterIds.length + (combinesFrameWithReferences && (startImageUrl || startImageFile) ? 1 : 0)
+            ? runElements.length + runReferenceVideos.length + runReferenceAudios.length + (isGeminiOmniVideoModel ? preparedAudioIds.length + characterIds.length : 0) + (combinesFrameWithReferences && (startImageUrl || startImageFile) ? 1 : 0)
             : frameReferenceCount + (isKlingVideoModel ? klingVideoElements.length : 0);
     const klingSubjectsActive = isKlingO3Model && klingSubjects.length > 0;
     const klingSubjectHandles = isKlingO3Model
@@ -1022,19 +1059,20 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         inputCounts: {
             images: klingSubjectsActive
                 ? klingSubjects.reduce((count, subject) => count + subject.images.length, 0)
-                : activeReferenceMode === 'elements' ? elements.length : frameReferenceCount,
-            videos: (activeReferenceMode === 'elements' ? referenceVideos.length : 0) + klingVideoElements.length,
-            audios: activeReferenceMode === 'elements' ? referenceAudios.length : 0,
+                : activeReferenceMode === 'elements' ? runElements.length : frameReferenceCount,
+            // A Kling clip is a named video element, which only Kling 3.0 has a slot for.
+            videos: (activeReferenceMode === 'elements' ? runReferenceVideos.length : 0) + (isKlingVideoModel ? klingVideoElements.length : 0),
+            audios: activeReferenceMode === 'elements' ? runReferenceAudios.length : 0,
             preparedAudios: isGeminiOmniVideoModel ? preparedAudioIds.length : 0,
             characters: isGeminiOmniVideoModel ? characterIds.length : 0,
         },
         inputMetadata: {
             slots: {
-                imageReferences: { count: activeReferenceMode === 'elements' ? elements.length : 0 },
+                imageReferences: { count: activeReferenceMode === 'elements' ? runElements.length : 0 },
                 videoReferences: {
-                    count: activeReferenceMode === 'elements' ? referenceVideos.length : 0,
+                    count: activeReferenceMode === 'elements' ? runReferenceVideos.length : 0,
                     durationsSeconds: activeReferenceMode === 'elements'
-                        ? referenceVideos.flatMap((reference) => (
+                        ? runReferenceVideos.flatMap((reference) => (
                             typeof reference.durationSeconds === 'number'
                                 ? [reference.durationSeconds]
                                 : []
@@ -1042,9 +1080,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                         : [],
                 },
                 audioReferences: {
-                    count: activeReferenceMode === 'elements' ? referenceAudios.length : 0,
+                    count: activeReferenceMode === 'elements' ? runReferenceAudios.length : 0,
                     durationsSeconds: activeReferenceMode === 'elements'
-                        ? referenceAudios.flatMap((reference) => (
+                        ? runReferenceAudios.flatMap((reference) => (
                             typeof reference.durationSeconds === 'number'
                                 ? [reference.durationSeconds]
                                 : []
@@ -1068,7 +1106,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 characters: { count: isGeminiOmniVideoModel ? characterIds.length : 0 },
             },
             referenceVideoDurationsSeconds: activeReferenceMode === 'elements'
-                ? referenceVideos.flatMap((reference) => (
+                ? runReferenceVideos.flatMap((reference) => (
                     typeof reference.durationSeconds === 'number'
                         ? [reference.durationSeconds]
                         : []
@@ -1076,7 +1114,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 : [],
         },
         catalogRevision: modelCatalog.catalog.revision,
-    } : null, [activeReferenceMode, activeSupportsEndFrame, characterIds.length, currentAspectRatio, currentFixedLens, currentIsMultiShot, currentMode, currentResolution, currentSound, elements.length, endImageFile, endImageUrl, frameReferenceCount, isGeminiOmniVideoModel, klingSubjects, klingSubjectsActive, klingVideoElements.length, modelCatalog.catalog, videoElementsSlotActive, preparedAudioIds.length, referenceAudios, referenceVideos, selectedModel, startImageFile, startImageUrl, totalDuration, modelCatalog.detailsReady, additionalSettings.settings]);
+    } : null, [activeReferenceMode, activeSupportsEndFrame, characterIds.length, currentAspectRatio, currentFixedLens, currentIsMultiShot, currentMode, currentResolution, currentSound, runElements.length, endImageFile, endImageUrl, frameReferenceCount, isGeminiOmniVideoModel, isKlingVideoModel, klingSubjects, klingSubjectsActive, klingVideoElements.length, modelCatalog.catalog, videoElementsSlotActive, preparedAudioIds.length, runReferenceAudios, runReferenceVideos, selectedModel, startImageFile, startImageUrl, totalDuration, modelCatalog.detailsReady, additionalSettings.settings]);
     const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token);
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED' && quoteState.error?.code !== 'MODEL_UNAVAILABLE') return;
@@ -1145,7 +1183,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         : [];
     const hasKnownElementMentions = knownElementMentions.length > 0;
     const hasKnownKlingVideoMentions = knownKlingVideoMentions.length > 0;
-    const hasInactiveElementMentions = !canUseVideoElements && hasKnownElementMentions;
+    // The saved references the prompt mentions on a model that takes none. The row under
+    // the prompt and the refusal on Generate both name them.
+    const standbyElementMentions = canUseVideoElements ? [] : knownElementMentions;
+    const hasInactiveElementMentions = standbyElementMentions.length > 0;
     const promptMentionCandidates: PromptMentionCandidate[] = [
         ...(canUseVideoElements
             ? elements.map((element) => ({
@@ -1186,6 +1227,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const showElementEditor = !currentIsMultiShot && canUseVideoElements;
     const showFramesEditor = supportsStartFrame || supportsEndFrame;
     const showSavedElementNotice = !canUseVideoElements && !currentIsMultiShot && elements.length > 0;
+    const savedClipAndTrackNotice = standbyClipAndTrackNotice(
+        videoModel.displayName,
+        affordances.carries.videos ? 0 : referenceVideos.length,
+        affordances.carries.audios ? 0 : referenceAudios.length,
+    );
     const showMultiShotElementNotice = currentIsMultiShot && (elements.length > 0 || (hasKnownElementMentions && !hasKnownKlingVideoMentions));
     // Enhance-time frame uploads, cached briefly so repeated enhance clicks on
     // the same attached file don't re-upload it every time.
@@ -1235,11 +1281,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         shotCount: multiPrompts.length,
         hasStartImage: (activeReferenceMode === 'frames' || combinesFrameWithReferences) && Boolean(startImageFile || startImageUrl),
         hasEndImage: activeReferenceMode === 'frames' && activeSupportsEndFrame && Boolean(endImageFile || endImageUrl),
-        referenceImageCount: activeReferenceMode === 'elements' ? elements.length : 0,
+        referenceImageCount: activeReferenceMode === 'elements' ? runElements.length : 0,
         hasReferenceVideo: hasReferenceVideoForRun,
         elementReferences: activeReferenceMode === 'elements' || klingVideoElements.length > 0 || klingSubjectsActive
             ? [
-                ...(activeReferenceMode === 'elements' ? elements : []),
+                ...(activeReferenceMode === 'elements' ? runElements : []),
                 ...(isKlingVideoModel ? klingVideoElements : []),
             ].map((element) => ({
                 handle: element.handle,
@@ -1364,7 +1410,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
     // Derived, not kept in `error`: it clears the moment the references fit the model
     // again, instead of lingering until the next generation.
-    const referenceLimitMessage = canUseVideoElements && modelCatalog.detailsReady && elements.length > videoElementSupport.maxElements
+    const referenceLimitMessage = canUseVideoElements && modelCatalog.detailsReady && runElements.length > videoElementSupport.maxElements
         ? `This model supports ${videoElementSupport.maxElements} reference image${videoElementSupport.maxElements === 1 ? '' : 's'}. Your references are preserved; remove extras or choose another model.`
         : null;
 
@@ -1439,6 +1485,23 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
                 const restoredVideoInputs = bundle.inputs.video;
                 const restoredSeedanceAssets = settings?.seedanceAssets ?? null;
+
+                // Kling O3's named subjects come back under the handles the prompt
+                // was written with. A picture is sent again as the file the run
+                // kept: the server reads who may use that file from its path.
+                setKlingSubjects(assignSubjectHandles((restoredVideoInputs?.subjects ?? []).map((subject) => ({
+                    id: `subject-${crypto.randomUUID()}`,
+                    displayName: subject.displayName,
+                    handle: subject.handle,
+                    images: subject.images.flatMap((image) => image.url ? [{
+                        id: `subject-image-${crypto.randomUUID()}`,
+                        // No file of the creator's own: the card draws the kept one.
+                        file: null,
+                        previewUrl: '',
+                        remoteUrl: image.url,
+                        storagePath: image.storagePath ?? null,
+                    }] : []),
+                }))));
 
                 if (isSeedance2VideoModelId(nextModelId)) {
                     const elementSupport = getVideoElementSupport(nextModelId, {
@@ -2696,7 +2759,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         }
 
         if (!currentIsMultiShot && hasInactiveElementMentions) {
-            setError(videoElementSupport.reason || 'Reusable references are not available in this video mode.');
+            setError(`${videoModel.displayName} cannot use ${standbyElementMentions.join(', ')}. Remove ${standbyElementMentions.length > 1 ? 'them' : 'it'} from the prompt, or pick a model that takes reusable references.`);
             return;
         }
 
@@ -2716,28 +2779,28 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 setError(`${invalidSubject.displayName || 'Each subject'} needs ${KLING_SUBJECT_MIN_IMAGES}–${KLING_SUBJECT_MAX_IMAGES} images of the same subject.`);
                 return;
             }
-            if (frameReferenceCount > 0 || (activeReferenceMode === 'elements' && (elements.length > 0 || referenceVideos.length > 0 || referenceAudios.length > 0))) {
+            if (frameReferenceCount > 0 || (activeReferenceMode === 'elements' && hasReferenceAttachment)) {
                 setError('Named subjects replace frames and reference images for this run — remove one or the other.');
                 return;
             }
         }
 
-        if (supportsMultimodalReferences && activeReferenceMode === 'elements' && referenceVideos.length > referenceVideoLimit) {
+        if (supportsMultimodalReferences && activeReferenceMode === 'elements' && runReferenceVideos.length > referenceVideoLimit) {
             setError(`${videoModel.displayName} supports up to ${referenceVideoLimit} reference videos per run.`);
             return;
         }
 
-        if (supportsMultimodalReferences && activeReferenceMode === 'elements' && referenceAudios.length > referenceAudioLimit) {
+        if (supportsMultimodalReferences && activeReferenceMode === 'elements' && runReferenceAudios.length > referenceAudioLimit) {
             setError(`${videoModel.displayName} supports up to ${referenceAudioLimit} reference audio file${referenceAudioLimit === 1 ? '' : 's'} per run.`);
             return;
         }
 
-        if (isWanVideoModel && activeReferenceMode === 'elements' && elements.length + referenceVideos.length + referenceAudios.length > 5) {
+        if (isWanVideoModel && activeReferenceMode === 'elements' && runElements.length + runReferenceVideos.length + runReferenceAudios.length > 5) {
             setError('Wan 2.7 supports up to 5 reusable image, video, and audio references in total.');
             return;
         }
 
-        if (isGeminiOmniVideoModel && activeReferenceMode === 'elements' && elements.length + (referenceVideos.length * 2) > 7) {
+        if (isGeminiOmniVideoModel && activeReferenceMode === 'elements' && runElements.length + (runReferenceVideos.length * 2) > 7) {
             setError('Gemini Omni supports seven reference slots; a video uses two slots.');
             return;
         }
@@ -2749,7 +2812,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             setError('Gemini Omni supports up to 3 prepared character references.');
             return;
         }
-        if (isGeminiOmniVideoModel && activeReferenceMode === 'elements' && elements.length + (referenceVideos.length * 2) + characterIds.length > 7) {
+        if (isGeminiOmniVideoModel && activeReferenceMode === 'elements' && runElements.length + (runReferenceVideos.length * 2) + characterIds.length > 7) {
             setError('Gemini Omni supports seven reference slots; videos use two and characters use one.');
             return;
         }
@@ -2767,7 +2830,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             (constraint) => constraint.type === 'combined-duration',
         );
         if (combinedDurationConstraint) {
-            const knownReferenceVideoDuration = referenceVideos.reduce((total, reference) => {
+            const knownReferenceVideoDuration = runReferenceVideos.reduce((total, reference) => {
                 return total + (typeof reference.durationSeconds === 'number' ? reference.durationSeconds : 0);
             }, 0);
             if (knownReferenceVideoDuration > combinedDurationConstraint.max) {
@@ -2861,15 +2924,15 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 audios: [],
             };
 
-            if (!currentIsMultiShot && activeReferenceMode === 'elements' && elements.length > 0) {
+            if (!currentIsMultiShot && activeReferenceMode === 'elements' && runElements.length > 0) {
                 setGenerationTiming(createLocalGenerationTiming({
                     kind: 'video',
-                    phaseLabel: elements.length === 1 ? 'Uploading 1 image reference' : `Uploading ${elements.length} image references`,
+                    phaseLabel: runElements.length === 1 ? 'Uploading 1 image reference' : `Uploading ${runElements.length} image references`,
                     startedAtMs,
                     estimatedTotalMs,
                 }));
 
-                const uploadedElements = await Promise.all(elements.map(async (element) => {
+                const uploadedElements = await Promise.all(runElements.map(async (element) => {
                     const preparedElement = await ensureUploadedElement(element);
                     const imageUrl = preparedElement.providerUrl || preparedElement.previewUrl;
                     if (!imageUrl) {
@@ -2900,14 +2963,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 nextSeedanceAssets.images = uploadedElements.map((item) => item.asset);
             }
 
-            if (supportsMultimodalReferences && activeReferenceMode === 'elements' && referenceVideos.length > 0) {
+            if (supportsMultimodalReferences && activeReferenceMode === 'elements' && runReferenceVideos.length > 0) {
                 setGenerationTiming(createLocalGenerationTiming({
                     kind: 'video',
-                    phaseLabel: referenceVideos.length === 1 ? 'Uploading 1 reference video' : `Uploading ${referenceVideos.length} reference videos`,
+                    phaseLabel: runReferenceVideos.length === 1 ? 'Uploading 1 reference video' : `Uploading ${runReferenceVideos.length} reference videos`,
                     startedAtMs,
                     estimatedTotalMs,
                 }));
-                const uploadedReferences = await Promise.all(referenceVideos.map(async (reference) => {
+                const uploadedReferences = await Promise.all(runReferenceVideos.map(async (reference) => {
                     const preparedReference = await ensureUploadedReference(reference, 'Video');
                     const sourceUrl = preparedReference.providerUrl || preparedReference.previewUrl;
                     if (!sourceUrl) {
@@ -2930,14 +2993,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 nextSeedanceAssets.videos = uploadedReferences.map((item) => item.asset);
             }
 
-            if (supportsReferenceAudio && activeReferenceMode === 'elements' && referenceAudios.length > 0) {
+            if (supportsReferenceAudio && activeReferenceMode === 'elements' && runReferenceAudios.length > 0) {
                 setGenerationTiming(createLocalGenerationTiming({
                     kind: 'video',
-                    phaseLabel: referenceAudios.length === 1 ? 'Uploading 1 reference audio clip' : `Uploading ${referenceAudios.length} reference audio clips`,
+                    phaseLabel: runReferenceAudios.length === 1 ? 'Uploading 1 reference audio clip' : `Uploading ${runReferenceAudios.length} reference audio clips`,
                     startedAtMs,
                     estimatedTotalMs,
                 }));
-                const uploadedReferences = await Promise.all(referenceAudios.map(async (reference) => {
+                const uploadedReferences = await Promise.all(runReferenceAudios.map(async (reference) => {
                     const preparedReference = await ensureUploadedReference(reference, 'Audio');
                     const sourceUrl = preparedReference.providerUrl || preparedReference.previewUrl;
                     if (!sourceUrl) {
@@ -3126,19 +3189,19 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                         kind: 'video',
                         url,
                         assetId: nextSeedanceAssets.videos?.[index]?.assetId ?? null,
-                        label: referenceVideos[index]?.displayName ?? `Video reference ${index + 1}`,
-                        durationSeconds: referenceVideos[index]?.durationSeconds ?? null,
-                        storagePath: referenceVideos[index]?.storagePath ?? null,
-                        sourceGenerationId: referenceVideos[index]?.sourceGenerationId ?? null,
+                        label: runReferenceVideos[index]?.displayName ?? `Video reference ${index + 1}`,
+                        durationSeconds: runReferenceVideos[index]?.durationSeconds ?? null,
+                        storagePath: runReferenceVideos[index]?.storagePath ?? null,
+                        sourceGenerationId: runReferenceVideos[index]?.sourceGenerationId ?? null,
                     })),
                     ...requestReferenceAudioUrls.map((url, index) => ({
                         slot: 'audioReferences',
                         kind: 'audio',
                         url,
                         assetId: nextSeedanceAssets.audios?.[index]?.assetId ?? null,
-                        label: referenceAudios[index]?.displayName ?? `Audio reference ${index + 1}`,
-                        storagePath: referenceAudios[index]?.storagePath ?? null,
-                        sourceGenerationId: referenceAudios[index]?.sourceGenerationId ?? null,
+                        label: runReferenceAudios[index]?.displayName ?? `Audio reference ${index + 1}`,
+                        storagePath: runReferenceAudios[index]?.storagePath ?? null,
+                        sourceGenerationId: runReferenceAudios[index]?.sourceGenerationId ?? null,
                     })),
                     ...requestKlingVideoElements.map((element) => ({
                         slot: 'videoElements',
@@ -3454,7 +3517,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         medium="video"
                                         selectedModel={selectedModel}
                                         helperText={
-                                            activeReferenceMode === 'elements' && elements.length > 0
+                                            activeReferenceMode === 'elements' && runElements.length > 0
                                                 ? 'Reusable references keep their @handles. This enhances the scene while preserving those identities.'
                                                 : undefined
                                         }
@@ -3464,7 +3527,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         showWarnings={false}
                                     />
                                     <PromptQualityWarnings warnings={promptQualityWarnings} />
-	                                    {(canUseVideoElements || elements.length > 0 || (isKlingVideoModel && promptMentionCandidates.length > 0)) && (
+	                                    {(canUseVideoElements || (isKlingVideoModel && promptMentionCandidates.length > 0)) && (
 	                                        <div className="mb-4 mt-4 space-y-3">
 	                                            <div className="flex items-center justify-between gap-3">
 	                                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
@@ -3509,6 +3572,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                             <span className="min-w-0 text-right text-rose-300">
                                                 Unknown element mention{staleElementMentions.length > 1 ? 's' : ''}:{' '}
                                                 <StudioElementHandleList handles={staleElementMentions} />
+                                            </span>
+                                        ) : standbyElementMentions.length > 0 ? (
+                                            // One line at a time, in the order Generate refuses a prompt.
+                                            <span className="min-w-0 text-right text-amber-300">
+                                                On standby here:{' '}
+                                                <StudioElementHandleList handles={standbyElementMentions} />
                                             </span>
                                         ) : null}
                                     </div>
@@ -3874,18 +3943,19 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                            </motion.div>
 	                        )}
 
-	                        {showSavedElementNotice && (
+	                        {(showSavedElementNotice || savedClipAndTrackNotice) && (
                             <div className="rounded-[26px] border border-amber-500/20 bg-amber-500/10 p-5">
-                                <p className="text-sm font-semibold text-white">
-                                    {elements.length > 0 ? 'Saved references are on standby' : 'Reusable references are unavailable in this mode'}
-                                </p>
-                                <p className="mt-2 text-sm leading-6 text-zinc-300">
-                                    {elements.length > 0
-                                        ? `Your ${elements.length} saved image reference${elements.length === 1 ? ' remains' : 's remain'} available. `
-                                        : ''}
-                                    {videoElementSupport.reason || `${videoModel.displayName} cannot use reusable references with the current settings.`}
-                                    {' '}Use start / end frames for this run, or choose a supported single-shot mode to use reusable references.
-                                </p>
+                                <p className="text-sm font-semibold text-white">Saved references are on standby</p>
+                                {showSavedElementNotice ? (
+                                    <p className="mt-2 text-sm leading-6 text-zinc-300">
+                                        {`Your ${elements.length} saved image reference${elements.length === 1 ? ' remains' : 's remain'} available. `}
+                                        {videoElementSupport.reason || `${videoModel.displayName} cannot use reusable references with the current settings.`}
+                                        {' '}Use start / end frames for this run, or choose a supported single-shot mode to use reusable references.
+                                    </p>
+                                ) : null}
+                                {savedClipAndTrackNotice ? (
+                                    <p className="mt-2 text-sm leading-6 text-zinc-300">{savedClipAndTrackNotice}</p>
+                                ) : null}
                             </div>
                         )}
 
@@ -4128,7 +4198,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             </motion.div>
                         )}
 
-                        {supportsMultimodalReferences && !currentIsMultiShot && (referenceVideoLimit > 0 || referenceAudioLimit > 0) && (
+                        {supportsMultimodalReferences && !currentIsMultiShot && (
                             <>
                                 <div
                                     aria-disabled={referencesLockedByFrames}
@@ -4236,9 +4306,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                             <div className="flex items-start justify-between gap-3">
                                                                 <div>
                                                                     <div className="text-sm font-semibold text-white">{reference.displayName}</div>
-                                                                    <div className="mt-1 text-xs text-zinc-500">
-                                                                        {reference.seedanceAsset.assetId ? 'Prepared asset available' : 'Uses URL fallback until prepared'}
-                                                                    </div>
+                                                                    {/* Only the Seedance 2 family prepares assets. On any other model the card says how long the track is. */}
+                                                                    {isSeedance2Family ? (
+                                                                        <div className="mt-1 text-xs text-zinc-500">
+                                                                            {reference.seedanceAsset.assetId ? 'Prepared asset available' : 'Uses URL fallback until prepared'}
+                                                                        </div>
+                                                                    ) : typeof reference.durationSeconds === 'number' ? (
+                                                                        <div className="mt-1 text-xs text-zinc-500">{`${reference.durationSeconds.toFixed(1)}s track`}</div>
+                                                                    ) : null}
                                                                 </div>
                                                                 <button
                                                                     type="button"
@@ -4579,7 +4654,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                : isKlingVideoModel
 	                                                    ? `${frameReferenceCount} frame${frameReferenceCount === 1 ? '' : 's'} + ${klingVideoElements.length} video ref${klingVideoElements.length === 1 ? '' : 's'}`
 	                                                : activeReferenceMode === 'elements'
-	                                                    ? `${elements.length + referenceVideos.length + referenceAudios.length} reference${elements.length + referenceVideos.length + referenceAudios.length === 1 ? '' : 's'}`
+	                                                    ? `${runElements.length + runReferenceVideos.length + runReferenceAudios.length} reference${runElements.length + runReferenceVideos.length + runReferenceAudios.length === 1 ? '' : 's'}`
                                                     : `${frameReferenceCount} frame${frameReferenceCount === 1 ? '' : 's'}`}
                                         </div>
                                     </div>

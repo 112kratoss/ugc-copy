@@ -201,14 +201,6 @@ export function getVideoInputAffordances(
     || declared.has('videoReferences')
     || declared.has('audioReferences');
 
-  // A model with no frame slots is always in elements mode; the picker only makes sense
-  // when both shapes exist.
-  const activeMode: 'frames' | 'elements' = !frameSlotsDeclared && referenceSlotDeclared
-    ? 'elements'
-    : (conditionSettings.referenceMode === 'elements' ? 'elements' : 'frames');
-  conditionSettings.referenceMode = activeMode;
-
-  const active = activeSlots(descriptor, conditionSettings);
   // Reference capacity is reported for the mode that can hold references, not the mode
   // currently showing. Reading it off `active` made the answer depend on the very toggle
   // it gated: the references mode could only be entered from a control that was hidden
@@ -220,18 +212,33 @@ export function getVideoInputAffordances(
   const declaredImageSlot = declared.get('imageReferences');
   const videoSlot = reachable.get('videoReferences');
   const audioSlot = reachable.get('audioReferences');
-  const videoElementSlot = active.get('videoElements');
-  // Frame slots report DECLARED capability, not activation: callers combine them with
-  // `activeMode`/`combineFramesWithReferences` themselves, and a model does not stop
-  // supporting an end frame just because the user is currently on the references tab.
-  const startSlot = declared.get('startFrame');
-  const endSlot = declared.get('endFrame');
 
   // Multi-shot suppresses reusable references everywhere except Kling O3, which carries
   // its named subjects across shots.
   const multiShotBlocks = Boolean(settings.isMultiShot) && modelId !== 'kling-o3';
   const elementsEnabled = Boolean(imageSlot) && imageSlot!.max > 0 && !multiShotBlocks;
   const maxTotal = elementsEnabled ? imageSlot!.max : 0;
+  const takesReferences = !multiShotBlocks
+    && [imageSlot, videoSlot, audioSlot].some((slot) => (slot?.max ?? 0) > 0);
+
+  // A model with no frame slots is always in elements mode; the picker only makes sense
+  // when both shapes exist. A model with frame slots is in elements mode only when that
+  // is asked for and the run can hold a reference. The fallback table above has always
+  // answered so. This path answered 'elements' to whoever asked, and the create-video
+  // page asked whenever a reference was saved in the browser: Kling 3.0 and Hailuo 2.3,
+  // which take none, became references runs that the price quote refused.
+  const activeMode: 'frames' | 'elements' = !frameSlotsDeclared && referenceSlotDeclared
+    ? 'elements'
+    : (conditionSettings.referenceMode === 'elements' && takesReferences ? 'elements' : 'frames');
+  conditionSettings.referenceMode = activeMode;
+
+  const active = activeSlots(descriptor, conditionSettings);
+  const videoElementSlot = active.get('videoElements');
+  // Frame slots report DECLARED capability, not activation: callers combine them with
+  // `activeMode`/`combineFramesWithReferences` themselves, and a model does not stop
+  // supporting an end frame just because the user is currently on the references tab.
+  const startSlot = declared.get('startFrame');
+  const endSlot = declared.get('endFrame');
 
   const disabledReason = elementsEnabled
     ? null
@@ -283,6 +290,53 @@ export function getVideoInputAffordances(
     activeConstraints,
     descriptorDriven: true,
   };
+}
+
+/** How many references of each kind a draft holds, attached here or saved on another model. */
+export type HeldVideoReferences = {
+  images: number;
+  /** Reference clips. Kling's named video elements are a slot of their own and not counted. */
+  videos: number;
+  audios: number;
+};
+
+export type VideoRunAffordances = VideoInputAffordances & {
+  /**
+   * Which kinds of held reference the run carries. A kind the model has no slot for
+   * with these settings is on standby: it stays in the draft and is no part of the run.
+   */
+  carries: { images: boolean; videos: boolean; audios: boolean };
+};
+
+/**
+ * The affordances of the run a draft makes on a model, with the run's shape read off
+ * what the draft holds.
+ *
+ * The browser keeps a creator's references when the model changes, so a draft can hold
+ * an image, a clip or a track that the selected model cannot take. Only a reference the
+ * model has a slot for makes the run a references run. The create-video page asked for
+ * one whenever anything was held, so two images saved on Seedance 2 made Kling 3.0 a
+ * references run of two images, and a clip saved there locked the frames of Seedance
+ * 1.5 Pro, which takes no clip, behind a reference its page had no card for.
+ */
+export function getVideoRunAffordances(
+  descriptor: GenerationModelDescriptor | null | undefined,
+  modelId: VideoModelId,
+  settings: Omit<AffordanceSettings, 'referenceMode'>,
+  held: HeldVideoReferences,
+): VideoRunAffordances {
+  // What a model takes does not depend on the run's shape, so it is read off the
+  // frames run first.
+  const framesRun = getVideoInputAffordances(descriptor, modelId, { ...settings, referenceMode: 'frames' });
+  const carries = {
+    images: held.images > 0 && framesRun.elements.enabled,
+    videos: held.videos > 0 && framesRun.referenceVideos.max > 0,
+    audios: held.audios > 0 && framesRun.referenceAudios.max > 0,
+  };
+  const affordances = carries.images || carries.videos || carries.audios
+    ? getVideoInputAffordances(descriptor, modelId, { ...settings, referenceMode: 'elements' })
+    : framesRun;
+  return { ...affordances, carries };
 }
 
 export type ImageInputAffordances = {
