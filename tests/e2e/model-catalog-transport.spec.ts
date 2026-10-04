@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import fixture from '../../contracts/model-catalog-transport-v1.json';
 
 // The dev server that the workers share reloads open pages on its own (see
@@ -14,6 +14,58 @@ test.beforeEach(async ({ context }) => {
     { name: 'e2e-auth', value: 'workflow-user', url: 'http://127.0.0.1:3100' },
   ]);
 });
+
+/**
+ * Runs `scenario`, and runs it again from the top when the dev server reloaded
+ * the page under it (see kling-o3-named-subjects.spec.ts).
+ *
+ * `scenario` opens its page once, as its first step. What it does after that
+ * lives in the page's memory alone: the edited prompt, the chosen setting, the
+ * catalog revision the page has read. Such a reload wipes all of it, and the
+ * fresh page reads the catalog as the stub answers at that moment, so no step
+ * can put things back and the scenario has to start over.
+ *
+ * It starts over for that reason only. A second request for the page's
+ * document is the reload. On a page that was asked for once, what the scenario
+ * found stands, a failure included.
+ *
+ * The reloads come a few seconds apart for as long as the server has routes to
+ * compile for the other worker: three in twelve seconds under the 390px test
+ * of Quality run 37137171313. So the scenario may start over for 30 seconds,
+ * which leaves a last run its time before the test's own 60 are up.
+ */
+async function runPastDevServerReloads(
+  page: Page,
+  scenario: () => Promise<void>,
+) {
+  let documents = 0;
+  page.on('request', (request) => {
+    if (
+      request.isNavigationRequest() &&
+      !request.redirectedFrom() &&
+      request.frame() === page.mainFrame()
+    )
+      documents++;
+  });
+  const giveUpAt = Date.now() + 30_000;
+  for (let runs = 1; ; runs++) {
+    documents = 0;
+    let failure: unknown;
+    try {
+      await scenario();
+      if (documents <= 1) return;
+    } catch (error) {
+      if (documents <= 1) throw error;
+      failure = error;
+    }
+    if (Date.now() > giveUpAt)
+      throw new Error(
+        `The dev server reloaded the page under each of ${runs} runs of the scenario, so none of them counts.`,
+        { cause: failure },
+      );
+  }
+}
+
 for (const viewport of [
   { width: 1280, height: 900 },
   { width: 390, height: 844 },
@@ -69,39 +121,49 @@ for (const viewport of [
         },
       }),
     );
-    await page.goto(
-      '/create-image?model=future-image-model&prompt=Original%20deep%20link',
-    );
-    const prompt = page.locator('textarea').first();
-    await expect(prompt).toHaveValue('Original deep link');
-    await prompt.fill('Keep my edited prompt');
-    await expect(
-      page.getByRole('button', { name: /Future Image Model/ }).first(),
-    ).toBeVisible();
-    await expect(
-      page.getByRole('combobox', { name: 'Background', exact: true }),
-    ).toBeVisible();
-    await page
-      .getByRole('combobox', { name: 'Background', exact: true })
-      .selectOption('transparent');
-    await expect(
-      page.getByRole('combobox', { name: 'Background', exact: true }),
-    ).toHaveValue('transparent');
-    const before = revisionReads;
-    revision = 'updated-catalog';
-    await page
-      .getByRole('button', { name: /Future Image Model/ })
-      .first()
-      .click();
-    await expect.poll(() => revisionReads).toBeGreaterThan(before);
-    await expect(
-      page.getByRole('button', { name: /Updated Future Model/ }).first(),
-    ).toBeVisible();
-    await expect(prompt).toHaveValue('Keep my edited prompt');
-    expect(errors).toEqual([]);
-    await page.screenshot({
-      path: `test-results/model-catalog-${viewport.width}.png`,
-      fullPage: true,
+    await runPastDevServerReloads(page, async () => {
+      // A run that starts over is answered with the first catalog again, and
+      // owes nothing for what the reloaded page threw. Each step it takes has a
+      // limit of its own, so one the page can no longer take ends the run in
+      // seconds and not at the test's timeout.
+      revision = fixture.current.revision;
+      errors.length = 0;
+      await page.goto(
+        '/create-image?model=future-image-model&prompt=Original%20deep%20link',
+      );
+      const prompt = page.locator('textarea').first();
+      await expect(prompt).toHaveValue('Original deep link');
+      await prompt.fill('Keep my edited prompt', { timeout: 5_000 });
+      await expect(
+        page.getByRole('button', { name: /Future Image Model/ }).first(),
+      ).toBeVisible();
+      await expect(
+        page.getByRole('combobox', { name: 'Background', exact: true }),
+      ).toBeVisible();
+      await page
+        .getByRole('combobox', { name: 'Background', exact: true })
+        .selectOption('transparent', { timeout: 5_000 });
+      await expect(
+        page.getByRole('combobox', { name: 'Background', exact: true }),
+      ).toHaveValue('transparent', { timeout: 5_000 });
+      const before = revisionReads;
+      revision = 'updated-catalog';
+      await page
+        .getByRole('button', { name: /Future Image Model/ })
+        .first()
+        .click({ timeout: 5_000 });
+      await expect.poll(() => revisionReads).toBeGreaterThan(before);
+      await expect(
+        page.getByRole('button', { name: /Updated Future Model/ }).first(),
+      ).toBeVisible();
+      await expect(prompt).toHaveValue('Keep my edited prompt', {
+        timeout: 5_000,
+      });
+      expect(errors).toEqual([]);
+      await page.screenshot({
+        path: `test-results/model-catalog-${viewport.width}.png`,
+        fullPage: true,
+      });
     });
   });
 }
@@ -177,14 +239,23 @@ for (const kind of ['video', 'motion'] as const) {
             };
       await route.fulfill({ json: body });
     });
-    await page.goto(`/create-${kind}?model=${model.id}`);
-    await expect(
-      page.getByRole('button', { name: new RegExp(model.displayName) }).first(),
-    ).toBeVisible();
-    const control = page.getByRole('checkbox', { name: 'New catalog option' });
-    await expect(control).toBeChecked();
-    await control.uncheck();
-    await expect(control).not.toBeChecked();
-    expect(errors).toEqual([]);
+    await runPastDevServerReloads(page, async () => {
+      // As above: a reload puts the unchecked option back, and what the
+      // reloaded page threw is not this run's.
+      errors.length = 0;
+      await page.goto(`/create-${kind}?model=${model.id}`);
+      await expect(
+        page
+          .getByRole('button', { name: new RegExp(model.displayName) })
+          .first(),
+      ).toBeVisible();
+      const control = page.getByRole('checkbox', {
+        name: 'New catalog option',
+      });
+      await expect(control).toBeChecked();
+      await control.uncheck({ timeout: 5_000 });
+      await expect(control).not.toBeChecked({ timeout: 5_000 });
+      expect(errors).toEqual([]);
+    });
   });
 }
