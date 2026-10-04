@@ -777,8 +777,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const isKlingO3Model = selectedModel === 'kling-o3';
     const isWanVideoModel = selectedModel === 'wan-2.7';
     const isGeminiOmniVideoModel = selectedModel === 'gemini-omni-video';
-    const supportsMultimodalReferences = isSeedance2Family || isWanVideoModel || isGeminiOmniVideoModel;
-    const supportsReferenceAudio = isSeedance2Family || isWanVideoModel;
     const commitElements = (nextElements: VideoElementDraft[]) => {
         elementsRef.current = nextElements;
         setElements(nextElements);
@@ -991,6 +989,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const activeSupportsEndFrame = supportsEndFrame && !combinesFrameWithReferences;
     const referenceVideoLimit = affordances.referenceVideos.max;
     const referenceAudioLimit = affordances.referenceAudios.max;
+    // The clip and track panel, the checks before a run and the run itself follow the
+    // limits the model publishes. Two lists of models stood here before, and MiniMax H3
+    // was on neither: it takes three clips and three tracks, and the page had no place
+    // for one. Kling 3.0's clips are its named video elements, a slot of their own with
+    // a panel of their own, so its limit here is zero.
+    const supportsMultimodalReferences = referenceVideoLimit > 0 || referenceAudioLimit > 0;
+    const supportsReferenceAudio = referenceAudioLimit > 0;
     const totalDuration = currentIsMultiShot
         ? multiPrompts.reduce((acc, curr) => acc + curr.duration, 0)
         : (selectedModel === 'veo-3.1' ? videoModel.durations[0] : currentDuration);
@@ -4145,7 +4150,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             </motion.div>
                         )}
 
-                        {supportsMultimodalReferences && !currentIsMultiShot && (referenceVideoLimit > 0 || referenceAudioLimit > 0) && (
+                        {supportsMultimodalReferences && !currentIsMultiShot && (
                             <>
                                 <div
                                     aria-disabled={referencesLockedByFrames}
@@ -4253,9 +4258,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                             <div className="flex items-start justify-between gap-3">
                                                                 <div>
                                                                     <div className="text-sm font-semibold text-white">{reference.displayName}</div>
-                                                                    <div className="mt-1 text-xs text-zinc-500">
-                                                                        {reference.seedanceAsset.assetId ? 'Prepared asset available' : 'Uses URL fallback until prepared'}
-                                                                    </div>
+                                                                    {/* Only the Seedance 2 family prepares assets. On any other model the card says how long the track is. */}
+                                                                    {isSeedance2Family ? (
+                                                                        <div className="mt-1 text-xs text-zinc-500">
+                                                                            {reference.seedanceAsset.assetId ? 'Prepared asset available' : 'Uses URL fallback until prepared'}
+                                                                        </div>
+                                                                    ) : typeof reference.durationSeconds === 'number' ? (
+                                                                        <div className="mt-1 text-xs text-zinc-500">{`${reference.durationSeconds.toFixed(1)}s track`}</div>
+                                                                    ) : null}
                                                                 </div>
                                                                 <button
                                                                     type="button"
