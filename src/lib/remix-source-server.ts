@@ -12,6 +12,7 @@ import {
   sanitizeWorkflowSettingsForRemix,
   toRemixAssetDescriptor,
   toRemixImageElement,
+  toRemixSubjects,
   type GenerationInputMediaItem,
 } from '@/lib/generation-input-media';
 import { REMIX_SOURCE_RATE_LIMIT, enforceBackendRateLimit } from '@/lib/backend-rate-limit';
@@ -468,6 +469,12 @@ export async function loadRemixSourceBundle(
       if (endFrame && !endFrame.url) {
         restoreIssues.push('video-end-frame');
       }
+      const subjects = toRemixSubjects(accessibleInputMedia);
+      for (const subject of subjects) {
+        if (subject.images.some((image) => !image.url)) {
+          restoreIssues.push(`video-subject:${subject.displayName}`);
+        }
+      }
 
       bundle.inputs.video = {
         referenceMode: workflowSettings.referenceMode === 'elements' ? 'elements' : 'frames',
@@ -480,6 +487,7 @@ export async function loadRemixSourceBundle(
         referenceAudios: accessibleInputMedia
           .filter((item) => item.mediaType === 'audio' && item.role === 'reference_audio')
           .map((item) => toRemixAssetDescriptor(item)),
+        subjects,
       };
     }
 
@@ -525,6 +533,7 @@ export async function loadRemixSourceBundle(
         referenceAudios: inputMedia
           .filter((item) => item.mediaType === 'audio' && item.role === 'reference_audio')
           .map((item) => toRemixAssetDescriptor(item)),
+        subjects: toRemixSubjects(inputMedia),
       };
     }
 
