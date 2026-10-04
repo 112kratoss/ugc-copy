@@ -91,10 +91,13 @@ function readPersistedSubjectHandles(page: Page): Promise<Array<string | null>> 
 /**
  * Reload, tolerating the dev server reloading the page out from under us.
  *
- * `next dev` tells every open page to `window.location.reload()` whenever a
- * Fast Refresh update cannot be hot-applied, and CI runs two Playwright workers
- * against one dev server that is still compiling routes on demand — so this
- * page navigates itself several times a minute through no doing of the test's.
+ * `next dev` sends its "sync" message to every open page whenever any page
+ * connects, and a page calls `window.location.reload()` when that message names
+ * a build other than the one it loaded — which every route compiled on demand
+ * makes true. With more than one worker, another worker's test compiling a route
+ * and then opening a page is enough, so this page can navigate itself through no
+ * doing of the test's. CI runs one worker for that reason (playwright.config.ts);
+ * a local run with several still meets it.
  * A self-reload that lands in the same tick as ours cancels ours, and Playwright
  * surfaces that as `page.reload: net::ERR_ABORTED` (Quality run 33009507821).
  *
