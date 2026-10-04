@@ -206,23 +206,43 @@ async function readMentionLines(page: Page, title: string): Promise<MentionLines
 }
 
 /**
+ * Switches to shot prompts. A dev server reload puts the page back on its single
+ * prompt. On a page that has only just loaded, the button is drawn before it
+ * answers, and a click that comes too early does nothing: the short wait ends
+ * the attempt there, so the next one can click again.
+ */
+async function showShotPrompts(page: Page) {
+  const shot = page.getByPlaceholder('Describe shot 1...');
+  if (await shot.count() === 0) {
+    await page.getByRole('button', { name: 'Multi-Shot', exact: true }).click({ timeout: 5_000 });
+    await expect(shot).toBeVisible({ timeout: 1_000 });
+  }
+}
+
+/**
  * Types each handle into `prompt` and measures at each width. A dev server reload
  * empties the prompt and shuts the panel, so the handle is typed again until the
- * lines have been measured.
+ * lines have been measured. The reload can also take the prompt itself off the
+ * page, as it does with a shot prompt, so `show` brings the prompt back before
+ * each typing. All typing happens inside the retried steps, and each of them gives
+ * up after 5 seconds: one that waits for as long as it takes would wait for a
+ * prompt that is gone until the 30 seconds were over, and nothing would be tried
+ * again.
  */
 async function expectTypedHandlesInTheirCard(
   page: Page,
   prompt: Locator,
   title: string,
   sentences: { unknown: boolean; resolve: boolean },
+  show: () => Promise<void> = async () => {},
 ) {
   for (const query of QUERIES) {
-    await prompt.fill(`${PROMPT_START}${query}`);
     for (const viewport of VIEWPORTS) {
       await page.setViewportSize(viewport);
       await expect(async () => {
         if ((await readMentionLines(page, title))?.echo !== `@${query}`) {
-          await prompt.fill(`${PROMPT_START}${query}`);
+          await show();
+          await prompt.fill(`${PROMPT_START}${query}`, { timeout: 5_000 });
         }
         expect(await readMentionLines(page, title), `"@${query}" at ${viewport.width}px wide`).toEqual({
           pageOverflow: 0,
@@ -254,22 +274,22 @@ test.describe('handles typed after "@"', () => {
 
   test('a Kling shot prompt keeps a typed handle inside its panel', async ({ page }) => {
     await page.goto('/create-video?model=kling-3.0-video');
-    await page.getByRole('button', { name: 'Multi-Shot', exact: true }).click();
     const shot = page.getByPlaceholder('Describe shot 1...');
-    await expect(shot).toBeVisible();
 
     // A shot prompt has the panel, and no sentence about unknown mentions.
-    await expectTypedHandlesInTheirCard(page, shot, 'Insert video element', { unknown: false, resolve: false });
+    await expectTypedHandlesInTheirCard(page, shot, 'Insert video element', { unknown: false, resolve: false }, () => (
+      showShotPrompts(page)
+    ));
   });
 
   test('a Kling O3 shot prompt keeps a typed handle inside its panel', async ({ page }) => {
     await page.goto('/create-video?model=kling-o3');
-    await page.getByRole('button', { name: 'Multi-Shot', exact: true }).click();
     const shot = page.getByPlaceholder('Describe shot 1...');
-    await expect(shot).toBeVisible();
 
     // The same panel under the title it has on Kling O3, where it offers the named subjects.
-    await expectTypedHandlesInTheirCard(page, shot, 'Insert subject', { unknown: false, resolve: false });
+    await expectTypedHandlesInTheirCard(page, shot, 'Insert subject', { unknown: false, resolve: false }, () => (
+      showShotPrompts(page)
+    ));
   });
 
   test('the image creator keeps a typed handle inside its prompt card', async ({ page }) => {
