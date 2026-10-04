@@ -1644,6 +1644,7 @@
       "deepLinks": {
         "generation": "/viewer?source=studio-creations&initialId=generation-1",
         "templateRun": "/template-runs/run-1",
+        "workflowCanvas": "/studio?workflowCanvas=canvas-1",
         "showcasePost": "/viewer?source=showcase-feed&initialId=post-1",
         "marketplaceResource": "/marketplace/resource-1",
         "creatorProfile": "/creators/batman",
