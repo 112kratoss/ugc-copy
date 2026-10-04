@@ -858,6 +858,9 @@ export async function finalizeTemplateRunInputs(params: {
       .eq('id', state.run.id)
       .eq('user_id', params.userId)
       .eq('status', 'collecting_inputs')
+      // Final copies were prepared from this exact input set. A concurrent
+      // finalizer must not replace it and leave the winning copies unreferenced.
+      .eq('input_storage_paths', JSON.stringify(state.run.input_storage_paths))
       .select('id')
       .maybeSingle();
     const updatedRun = updateResult.data;
@@ -866,7 +869,11 @@ export async function finalizeTemplateRunInputs(params: {
       durableUpdateOutcomeUnknown = Boolean(
         updateError && !isDefinitiveSupabaseMutationRejection(updateResult),
       );
-      throw updateError ?? new Error('Template input state changed before it could be committed.');
+      throw updateError ?? new MediaTemplateError(
+        'Template inputs changed before this upload could be saved. Try again.',
+        409,
+        'TEMPLATE_INPUT_CONFLICT',
+      );
     }
     durableUpdateOutcomeUnknown = false;
   } catch (error) {
