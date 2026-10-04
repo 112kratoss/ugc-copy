@@ -1,15 +1,35 @@
 # Backend audit — session handoff
 
-Updated 2026-10-04 (Asia/Kolkata). Read this first when continuing the section-by-section Magicbooklet backend audit.
+Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-by-section Magicbooklet backend audit.
 
 ## Workspace and authorization
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/social-coverage-audit-8e`, incorporating main `6808cd7c4fd1345c8f436bc1a3c15e33f3fbfae7` (#339); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/post-restore-audit-8f`, incorporating main `61620d00f5461f6fa86e19a7336b690bd20fe480` (#341); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+October 5 continuation: 8E #341 passed all four PR CI jobs 37215420224 and
+merged as 61620d00f5461f6fa86e19a7336b690bd20fe480 at October 4 19:28:26 UTC.
+No mobile-store release was active immediately before merge. Exact-main Quality
+37228400582 is running; standard release/live verification follow. Local branch
+includes main and the independent mobile UI fixes #340/#342/#343.
+
+8F reproduces service-role recipe restoration failing 42501 and a delayed archive
+response demoting a newly restored recipe. New migration 20261004161150 grants
+only the trusted service the existing private quality helper. It is applied to
+local 55322 (not its migration ledger) and clean replay 55332. All 1,970
+pgTAP assertions across 92 files pass after replay, including the new ten.
+After removing the redundant service demotion, all four PostgREST cases pass.
+The new pgTAP role test failed 5/10 before. Fifteen focused tests, types/lint pass.
+Next finish current production plan/rollback evidence,
+PR CI and release. Supabase MCP tools disappeared in this continuation; no
+management token is present in process env. Prior read-only production confirmed
+missing service grant before connector loss; do not claim production fix verified.
+Read backend-section-08-post-restore-2026-10-05.md. Full scope remains active.
+
 
 8C #338 is fully released as 7116126d. Exact-main Quality 37207818947 and
 standard release 37208546610 pass (release 14:18:52 UTC). Independent exact live
@@ -21,8 +41,9 @@ only function schema fingerprints changed. Read the follow/block release report.
 8D #339 passed all four PR Quality jobs (37208266763), then merged as
 6808cd7c4fd1345c8f436bc1a3c15e33f3fbfae7 at 15:53:46 UTC October 4.
 No mobile store release was active immediately before merge. Exact-main Quality
-37214724770 passes all four jobs. Standard release 37215325204 is running;
-independent live checks follow. No migration in 8D.
+37214724770 passes all four jobs. Standard release 37215325204 succeeded at
+16:07:17 UTC; independent exact live SHA/feed/admin/webhook checks pass.
+No migration in 8D. Read the comment-lifecycle release report.
 
 8E reproduces malformed/null JSON returning 500 on PATCH /api/profile and
 POST /api/profile/validate through actual local Next HTTP (four failures/eight
@@ -31,7 +52,15 @@ After-fix HTTP 12/12, PostgREST profile/contact 7/7, focused web 67/67 and mobil
 contract 123/123 pass, with types/lint. Permanent adapter baseline: ten failed,
 ten passed; real HTTP confirms malformed/null failures (other primitive cases
 are unit boundary coverage). No migration or mobile runtime change. See the
-profile/contact report; candidate PR/CI/release next. Full audit remains open.
+profile/contact report. PR #341, head 1216eb0c, Quality 37215420224 running.
+Next finish PR checks, check mobile-store-release immediately before merge, then
+exact-main Quality and standard release. Full audit remains open.
+
+Thirteen actual creator-page HTTP controls pass: public-only post projection,
+private fields omitted, owner/follow state, pagination, caching, both block
+directions and missing creator. Initial fixture table-name error was corrected;
+both runs cleaned up. See creator-visibility report. No runtime change from this
+matrix. Local dev server is stopped. Keep this evidence for the next audit PR.
 
 New read-only follow-up closes JOB-04: the original report (created September 27
 12:35:19.186226 UTC) is dismissed, reviewed October 1 05:09:36.862171 UTC with a
@@ -39,7 +68,7 @@ reviewer. Both queues now empty, latest watchdog 37203705619 passes. No audit
 mutation. See moderation-queue follow-up report. The explicit HTTP method map
 records 162 routes/186 methods but does not close MAP-02. New evidence/docs are
 local for the next documentation batch; do not restart PR CI just to record them.
-Ledger: 23 passed, 25 untested, three failed, two external. SOCIAL-04 is failed
+Ledger: 23 passed, 25 untested, three failed, two external. SOCIAL-01/04 are failed
 until 8E is released; broader profile/creator coverage remains open.
 
 8B #337 is released as e5bc769b. Exact-main Quality 37201725874 and release

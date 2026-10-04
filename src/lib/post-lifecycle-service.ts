@@ -110,14 +110,9 @@ export async function archiveOwnerPostForRoute({
 
   invalidateShowcaseFeedCache();
 
-  // The posts trigger already demoted the recipe when archived_at was set;
-  // this matches no rows now and stays as a belt for older schemas.
-  await adminSupabase
-    .from('post_resource_bundles')
-    .update({ status: 'draft' })
-    .eq('post_id', postId)
-    .eq('owner_user_id', ownerUserId)
-    .eq('status', 'published');
+  // Bundle exposure changes in the same transaction as the post. A separate
+  // demotion here could overwrite a newer restore that committed while this
+  // request was waiting for the archive response.
 
   // Setting archived_at took the linked generation off show in that same
   // statement: the posts trigger owns the generation's exposure. The post keeps

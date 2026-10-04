@@ -1,13 +1,13 @@
 # Backend audit completion checklist
 
-Updated 2026-10-04. Current independently checked production:
-`7116126d2a9dd1b4919a7dc554ec9640fc37d036`, including Section 8C.
+Updated 2026-10-05. Current independently checked production:
+`6808cd7c4fd1345c8f436bc1a3c15e33f3fbfae7`, including Section 8D.
 Exact-main Quality, standard release, function digests and live checks pass; see
 [save-counter release and repair](backend-section-08-save-counters-release-2026-10-04.md).
 The nine historical count mismatches were reconciled; independent readback is zero.
 [8C #338 release is verified](backend-section-08-follow-block-release-2026-10-04.md). 8D reproduces comment-thread
 reads across a creator block; eight real transport and 46 focused cases pass
-after the candidate fix. Broader social behavior coverage remains open.
+after the fix; [8D release is verified](backend-section-08-comment-lifecycle-release-2026-10-04.md). Broader social behavior coverage remains open.
 Surface inventory baseline remains `5934bd7d`; Section 6L changed no surfaces.
 
 This is the closure ledger for the audit, replacing section numbers as a progress
@@ -21,7 +21,7 @@ These counts describe this scoped checklist, not a percentage of the backend.
 WORKFLOW-02 and WORKFLOW-04 remain untested after their scoped fixes shipped.
 SOCIAL-02 returns to untested after the scoped 8B release and repair.
 SOCIAL-04 is failed for the 8E malformed-profile payload defect.
-SOCIAL-03 is failed until the 8D release is verified. MEDIA-07 remains failed
+SOCIAL-03 returns to untested after the scoped 8D release. MEDIA-07 remains failed
 for legacy retirement.
 No new obligation was added; these fixes do not complete the broader matrices.
 
@@ -126,10 +126,10 @@ coverage includes shared helpers that do not end in `service.ts`.
 
 | ID | Obligation and closure evidence | Status | Evidence / next action |
 | --- | --- | --- | --- |
-| SOCIAL-01 | Post/feed/search visibility, archive/restore/reveal and pagination | untested | Behavioral method matrix; existing ownership tests do not close visibility propagation |
+| SOCIAL-01 | Post/feed/search visibility, archive/restore/reveal and pagination | failed | [8F restore](backend-section-08-post-restore-2026-10-05.md): service-role quality-helper permission and delayed archive overwrite reproduced; candidate passes four actual PostgREST cases. Clean replay/CI/release pending; remaining visibility matrix stays open |
 | SOCIAL-02 | Comments, follows, saves, sharing and notifications across identities/lifecycle | untested | [8A](backend-section-08-follow-retries-2026-10-04.md) reproduces concurrent follow retry returning 500 despite the saved intent; three actual PostgREST controls pass and [8A release is verified](backend-section-08-follow-retries-release-2026-10-04.md). [8B](backend-section-08-save-counters-2026-10-04.md) reproduces save-count drift after deletion/concurrent toggle; 12 SQL controls pass and [8B release/repair is verified](backend-section-08-save-counters-release-2026-10-04.md). [8D](backend-section-08-comment-lifecycle-2026-10-04.md) adds 11 SQL lifecycle controls. Remaining mutation/retry and cross-user behavior; reuse scoped Section 2 ownership evidence |
-| SOCIAL-03 | Moderation/report/block propagation and admin sanctions | failed | [8C](backend-section-08-follow-block-race-2026-10-04.md) reproduces an uncommitted follow surviving a block; six SQL cases pass after serialization; [8C release is verified](backend-section-08-follow-block-release-2026-10-04.md). [8D](backend-section-08-comment-lifecycle-2026-10-04.md) reproduces whole-thread reads across creator blocks; actual transport fix passes, release pending. Remaining moderation and visibility behavior stays open |
-| SOCIAL-04 | Profile, creator and contact surfaces | failed | [8E profile/contact](backend-section-08-profile-contact-2026-10-04.md): malformed/null profile requests reproduce HTTP 500; candidate returns 400, twelve actual HTTP and seven PostgREST checks pass. Release pending; creator/privacy, request byte limits and remaining method behavior stay open |
+| SOCIAL-03 | Moderation/report/block propagation and admin sanctions | untested | [8C](backend-section-08-follow-block-race-2026-10-04.md) reproduces an uncommitted follow surviving a block; six SQL cases pass after serialization; [8C release is verified](backend-section-08-follow-block-release-2026-10-04.md). [8D](backend-section-08-comment-lifecycle-2026-10-04.md) reproduces whole-thread reads across creator blocks; [8D release is verified](backend-section-08-comment-lifecycle-release-2026-10-04.md). Remaining moderation and visibility behavior stays open |
+| SOCIAL-04 | Profile, creator and contact surfaces | failed | [8E profile/contact](backend-section-08-profile-contact-2026-10-04.md): malformed/null profile requests reproduce HTTP 500; candidate returns 400, twelve actual HTTP and seven PostgREST checks pass. Release pending; [13 creator HTTP controls](backend-section-08-creator-visibility-2026-10-04.md) pass. Profile media, share events, request byte limits and remaining method behavior stay open |
 | JOB-01 | Scheduler and all 12 jobs: lease contention, expiry, duplicate dispatch and retry | untested | Per-job fixture matrix from the surface map; existing generation cases apply only to that job |
 | JOB-02 | Budgets, poison work, retention/reclaim jobs and alert delivery | untested | Prove bounded progress and failures that remain observable |
 | JOB-03 | Push registration, preferences, delivery receipts and invalid-token cleanup | untested | Device/provider evidence plus database retry tests |
