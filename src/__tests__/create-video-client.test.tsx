@@ -1396,6 +1396,280 @@ describe('CreateVideoClient Kling video elements', () => {
       await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@captain', '@red_umbrella']));
       expect(promptBox()).toHaveValue('@captain walks past @red_umbrella at dusk');
     });
+
+    /**
+     * A remix brings a run's references back on every model that takes them. Only
+     * the Seedance 2 family got them back (2026-10-04). On each other model the
+     * restore dropped the run's image references, and its clips and tracks with
+     * them, so the prompt came back with its mentions and no card, and the line
+     * under it read "Unknown element mentions: @lead, @prop".
+     */
+    describe('restored by a remix', () => {
+      const KEPT = 'generation_inputs/owner-1/gen-1';
+      type KeptInputs = NonNullable<RemixSourceBundle['inputs']['video']>;
+
+      const keptImage = (place: string, displayName: string, handle: string): KeptInputs['elements'][number] => ({
+        id: `remix-${place}`,
+        displayName,
+        handle,
+        url: `https://signed.example.com/${KEPT}/${place}-reference_image.png`,
+        storagePath: `${KEPT}/${place}-reference_image.png`,
+        sourceGenerationId: 'gen-1',
+      });
+      const keptMedia = <Kind extends 'image' | 'video' | 'audio'>(kind: Kind, file: string, label: string, durationSeconds?: number) => ({
+        kind,
+        label,
+        storagePath: `${KEPT}/${file}`,
+        sourceGenerationId: 'gen-1',
+        url: `https://signed.example.com/${KEPT}/${file}`,
+        ...(durationSeconds === undefined ? {} : { durationSeconds }),
+      });
+      // Neither handle is the one its reference's name would give ("@hero_shot",
+      // "@umbrella"): the prompt was written with these.
+      const LEAD = keptImage('00', 'Hero shot', '@lead');
+      const PROP = keptImage('01', 'Umbrella', '@prop');
+      const PROMPT = '@lead walks past @prop at dusk';
+      const CLIP = keptMedia('video', '02-reference_video.mp4', 'Camera move', 4.5);
+      const TRACK = keptMedia('audio', '03-reference_audio.mp3', 'Voice line', 6);
+
+      /** What the server answers for a run that used references. */
+      function referenceRun(model: string, overrides: {
+        prompt?: string;
+        settings?: Record<string, unknown>;
+        video?: Partial<KeptInputs>;
+      } = {}): RemixSourceBundle {
+        return {
+          generation: { id: 'gen-1', title: 'Harbour', prompt: overrides.prompt ?? PROMPT, category: 'video', model },
+          result: { mediaType: 'video', url: 'https://example.com/result.mp4' },
+          inputs: {
+            video: {
+              referenceMode: 'elements',
+              startFrame: null,
+              endFrame: null,
+              elements: [LEAD, PROP],
+              referenceVideos: [],
+              referenceAudios: [],
+              ...overrides.video,
+            },
+          },
+          workflowSettings: { model, referenceMode: 'elements', ...overrides.settings },
+          restoreIssues: [],
+        };
+      }
+
+      function renderRemix(bundle: RemixSourceBundle) {
+        stubRemix(bundle);
+        return render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+      }
+
+      /** The name on each image reference card, in card order. */
+      function cardNames(container: HTMLElement) {
+        return Array.from(container.querySelectorAll<HTMLInputElement>(`input[placeholder="${IMAGE_RENAME}"]`))
+          .map((field) => field.value);
+      }
+
+      /** What the page last asked a price for. */
+      function quotedRun() {
+        return quoteRequestMock.mock.calls.at(-1)?.[0];
+      }
+
+      /** The inputs of the run the page posted, as [slot, url, label] with a handle where the input has one. */
+      function postedInputs() {
+        return (postedRun().inputs as Array<{ slot: string; url: string; label: string; handle?: string }>)
+          .map((input) => [input.slot, input.url, input.label, ...(input.handle ? [input.handle] : [])]);
+      }
+
+      it.each([
+        ['Seedance 1.5 Pro', 'seedance-1.5-pro', {}],
+        ['Wan 2.7', 'wan-2.7', {}],
+        ['Kling O3', 'kling-o3', {}],
+        ['MiniMax H3', 'minimax-h3', {}],
+        ['HappyHorse 1.1', 'happyhorse-1.1', {}],
+        ['Gemini Omni', 'gemini-omni-video', {}],
+        ['Veo 3.1 Fast', 'veo-3.1', { mode: 'veo3_fast' }],
+        ['Veo 3.1 Lite', 'veo-3.1', { mode: 'veo3_lite' }],
+      ])('brings the image references of a %s run back under the handles its prompt mentions', async (_name, model, settings) => {
+        const view = renderRemix(referenceRun(model, { settings }));
+
+        await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@lead', '@prop']));
+        expect(cardNames(view.container)).toEqual(['Hero shot', 'Umbrella']);
+        expect(screen.getByAltText('Hero shot')).toHaveAttribute('src', LEAD.url);
+        expect(screen.getByAltText('Umbrella')).toHaveAttribute('src', PROP.url);
+        expect(promptBox()).toHaveValue(PROMPT);
+        expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+      });
+
+      it('brings the one image reference of a Grok Imagine run back', async () => {
+        const prompt = '@lead walks along the harbour at dusk';
+        const view = renderRemix(referenceRun('grok-imagine-video', {
+          prompt,
+          settings: { mode: 'normal' },
+          video: { elements: [LEAD] },
+        }));
+
+        await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@lead']));
+        expect(screen.getByAltText('Hero shot')).toHaveAttribute('src', LEAD.url);
+        expect(promptBox()).toHaveValue(prompt);
+        expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+      });
+
+      it('sends a restored reference as the file the run kept, under its handle, and uploads nothing', async () => {
+        const view = renderRemix(referenceRun('seedance-1.5-pro'));
+        await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@lead', '@prop']));
+
+        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+
+        await waitFor(() => expect(postedRun()).toBeDefined());
+        const run = postedRun();
+        expect(run.modelId).toBe('seedance-1.5-pro');
+        expect(run.prompt).toBe(PROMPT);
+        expect(run.sourceGenerationId).toBe('gen-1');
+        expect(run.settings.referenceMode).toBe('elements');
+        expect(run.inputs).toEqual([LEAD, PROP].map((reference) => expect.objectContaining({
+          slot: 'imageReferences',
+          kind: 'image',
+          url: reference.url,
+          label: reference.displayName,
+          handle: reference.handle,
+          storagePath: reference.storagePath,
+          sourceGenerationId: 'gen-1',
+        })));
+        expect(temporaryUploadMock).not.toHaveBeenCalled();
+      });
+
+      it('brings a Wan 2.7 run back with its first frame beside its references', async () => {
+        const firstFrame = keptMedia('image', '02-start_frame.png', 'Start frame');
+        const view = renderRemix(referenceRun('wan-2.7', { video: { startFrame: firstFrame } }));
+
+        await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@lead', '@prop']));
+        expect(screen.getByAltText('Start frame')).toHaveAttribute('src', firstFrame.url);
+        // Wan 2.7 is the one model that takes a first frame together with
+        // references, so neither side is locked and nothing is in conflict.
+        expect(screen.getByText(/can use this first frame together with your reusable images/)).toBeInTheDocument();
+        expect(screen.queryByText(/cannot combine/)).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+
+        await waitFor(() => expect(postedRun()).toBeDefined());
+        expect(postedInputs()).toEqual([
+          ['imageReferences', LEAD.url, 'Hero shot', '@lead'],
+          ['imageReferences', PROP.url, 'Umbrella', '@prop'],
+          ['startFrame', firstFrame.url, 'Start frame'],
+        ]);
+      });
+
+      it.each([
+        ['Wan 2.7', 'wan-2.7'],
+        ['MiniMax H3', 'minimax-h3'],
+      ])('brings the reference clip and the track of a %s run back with their lengths', async (_name, model) => {
+        const view = renderRemix(referenceRun(model, { video: { referenceVideos: [CLIP], referenceAudios: [TRACK] } }));
+
+        await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@lead', '@prop']));
+        expect(screen.getByText('Camera move')).toBeInTheDocument();
+        expect(screen.getByText('4.5s clip')).toBeInTheDocument();
+        expect(screen.getByText('Voice line')).toBeInTheDocument();
+        // The quote prices and caps a run by its clips and tracks, so it is told of them.
+        await waitFor(() => {
+          expect(quotedRun()?.modelId).toBe(model);
+          expect(quotedRun()?.inputCounts).toMatchObject({ images: 2, videos: 1, audios: 1 });
+          expect(quotedRun()?.inputMetadata?.slots?.videoReferences).toEqual({ count: 1, durationsSeconds: [4.5] });
+          expect(quotedRun()?.inputMetadata?.slots?.audioReferences).toEqual({ count: 1, durationsSeconds: [6] });
+        });
+
+        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+
+        await waitFor(() => expect(postedRun()).toBeDefined());
+        expect(postedInputs()).toEqual([
+          ['imageReferences', LEAD.url, 'Hero shot', '@lead'],
+          ['imageReferences', PROP.url, 'Umbrella', '@prop'],
+          ['videoReferences', CLIP.url, 'Camera move'],
+          ['audioReferences', TRACK.url, 'Voice line'],
+        ]);
+        expect(temporaryUploadMock).not.toHaveBeenCalled();
+      });
+
+      it('brings the reference clip of a Gemini Omni run back', async () => {
+        // A run with a clip and no image reference, so this reads the clip alone.
+        const prompt = 'Follow the camera move of the clip through the harbour.';
+        renderRemix(referenceRun('gemini-omni-video', { prompt, video: { elements: [], referenceVideos: [CLIP] } }));
+
+        await waitFor(() => expect(screen.getByText('Camera move')).toBeInTheDocument());
+        expect(screen.getByText('4.5s clip')).toBeInTheDocument();
+        expect(promptBox()).toHaveValue(prompt);
+        await waitFor(() => {
+          expect(quotedRun()?.modelId).toBe('gemini-omni-video');
+          expect(quotedRun()?.inputCounts).toMatchObject({ images: 0, videos: 1 });
+          expect(quotedRun()?.inputMetadata?.slots?.videoReferences).toEqual({ count: 1, durationsSeconds: [4.5] });
+        });
+
+        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+
+        await waitFor(() => expect(postedRun()).toBeDefined());
+        expect(postedInputs()).toEqual([['videoReferences', CLIP.url, 'Camera move']]);
+      });
+
+      it('brings the clips of a Kling 3.0 run back as its video elements, and as nothing else', async () => {
+        // The bundle hands a Kling clip over as a reference clip, and Kling 3.0 has no
+        // slot for one: its clips are its video elements. Restored as a reference
+        // clip too, it would wait on the standby card beside its own element.
+        const view = renderRemix(referenceRun('kling-3.0-video', {
+          prompt: '@dancer crosses the stage at dusk',
+          settings: { klingVideoElements: [{ id: 'remix-1', displayName: 'Dancer', handle: '@dancer' }] },
+          video: { elements: [], referenceVideos: [CLIP] },
+        }));
+
+        await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@dancer']));
+        expect(screen.queryByText('Saved references are on standby')).not.toBeInTheDocument();
+        expect(screen.queryByText(/stays? saved/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+      });
+
+      it('brings back no more image references than the model takes, and says which mention is left without one', async () => {
+        // A run holds no more than its model takes, so this is a model whose limit
+        // has come down since: Grok Imagine takes one image reference.
+        const view = renderRemix(referenceRun('grok-imagine-video', { settings: { mode: 'normal' } }));
+
+        await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@lead']));
+        expect(screen.queryByAltText('Umbrella')).not.toBeInTheDocument();
+        expect(await unknownMentionLine()).toBe('Unknown element mention: @prop');
+      });
+
+      it('restores no image reference into a multi-shot run, where the page shows no reference card and sends none', async () => {
+        const shots = [
+          { id: 'shot-1', prompt: 'Open on the harbour in the rain, slow push in.', duration: 5 },
+          { id: 'shot-2', prompt: 'Cut closer as the lamps come on.', duration: 5 },
+        ];
+        // Kling O3 is the one multi-shot model the reference table does not switch
+        // off, and that is for its named subjects.
+        renderRemix(referenceRun('kling-o3', {
+          prompt: shots[0].prompt,
+          settings: { isMultiShot: true, multiPrompts: shots },
+        }));
+
+        await waitFor(() => expect(screen.getByPlaceholderText('Describe shot 2...')).toHaveValue(shots[1].prompt));
+        await waitFor(() => expect(quotedRun()?.modelId).toBe('kling-o3'));
+        expect(quotedRun()?.settings?.isMultiShot).toBe(true);
+        // One restored there would be held where the page has no card for it, and
+        // the page would say so.
+        expect(screen.queryByText('Reusable references are paused in multi-shot')).not.toBeInTheDocument();
+      });
+
+      it('brings a run that used frames back with its frames, and no reference card', async () => {
+        const startFrame = keptMedia('image', '00-start_frame.png', 'Start frame');
+        const endFrame = keptMedia('image', '01-end_frame.png', 'End frame');
+        const prompt = 'A lighthouse at dusk, slow push in.';
+        const view = renderRemix(referenceRun('seedance-1.5-pro', {
+          prompt,
+          settings: { referenceMode: 'frames' },
+          video: { referenceMode: 'frames', startFrame, endFrame, elements: [] },
+        }));
+
+        await waitFor(() => expect(screen.getByAltText('Start frame')).toHaveAttribute('src', startFrame.url));
+        expect(screen.getByAltText('End frame')).toHaveAttribute('src', endFrame.url);
+        expect(cardHandles(view.container, IMAGE_RENAME)).toEqual([]);
+        expect(promptBox()).toHaveValue(prompt);
+      });
+    });
   });
 
   /**

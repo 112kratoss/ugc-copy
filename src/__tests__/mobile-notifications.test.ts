@@ -114,6 +114,81 @@ function createPushTokenTable(
   return { rows, updates, reads, update, select };
 }
 
+type PreferencesState = {
+  user_id: string;
+  push_enabled: boolean;
+  generation_enabled: boolean;
+  commerce_enabled: boolean;
+  social_enabled: boolean;
+};
+
+/** user-1's preferences as the first send leaves them: every switch at its default. */
+const ALERTS_ON: PreferencesState = {
+  user_id: 'user-1',
+  push_enabled: true,
+  generation_enabled: true,
+  commerce_enabled: true,
+  social_enabled: true,
+};
+
+/**
+ * `mobile_notification_preferences` as the retry job sees it. A read hands back
+ * the columns it asked for, from the row its filters match, or nothing. A write
+ * is recorded and makes the row the database would, so a test can tell a job
+ * that only reads from one that leaves rows behind.
+ */
+function createPreferencesTable(
+  rows: PreferencesState[],
+  { readError = null }: { readError?: { message: string } | null } = {},
+) {
+  const reads: Array<Array<[string, unknown]>> = [];
+  const writes: Record<string, unknown>[] = [];
+
+  function pick(row: PreferencesState, columns: string) {
+    return Object.fromEntries(columns.split(',').map((column) => {
+      const name = column.trim();
+      return [name, (row as Record<string, unknown>)[name]];
+    }));
+  }
+
+  function select(columns: string) {
+    const filters: Array<[string, unknown]> = [];
+    reads.push(filters);
+
+    const query = {
+      eq(column: string, value: unknown) {
+        filters.push([column, value]);
+        return query;
+      },
+      async maybeSingle() {
+        if (readError) {
+          return { data: null, error: readError };
+        }
+        const row = rows.find((candidate) => filters.every(([column, expected]) => (
+          (candidate as Record<string, unknown>)[column] === expected
+        )));
+        return { data: row ? pick(row, columns) : null, error: null };
+      },
+    };
+
+    return query;
+  }
+
+  function upsert(values: Record<string, unknown>) {
+    writes.push(values);
+    const row = { ...ALERTS_ON, ...values } as PreferencesState;
+    rows.push(row);
+
+    return {
+      select(columns: string) {
+        return { single: async () => ({ data: pick(row, columns), error: null }) };
+      },
+    };
+  }
+
+  return { rows, reads, writes, select, upsert };
+}
+
 const DEVICE_NOT_REGISTERED = {
   status: 'error',
   message: 'The recipient device is not registered with FCM.',
@@ -129,19 +204,30 @@ const DEVICE_NOT_REGISTERED = {
  * A row handed in as retryable is filed the way the send path files a failed
  * send it leaves open; `storeDeliveries` takes rows exactly as they were
  * written and gives them the id the database would.
+ *
+ * Unless a test says otherwise, user-1 holds the preferences row the first send
+ * made, and every notification is the same finished render; `notification`
+ * changes what kind of alert it is.
  */
 function createPushMaintenanceSupabase({
   pendingDeliveries = [],
   retryableDeliveries = [],
   tokens,
   tokenReadError = null,
+  preferences = [{ ...ALERTS_ON }],
+  preferencesReadError = null,
+  notification = {},
 }: {
   pendingDeliveries?: Record<string, unknown>[];
   retryableDeliveries?: Record<string, unknown>[];
   tokens: PushTokenState[];
   tokenReadError?: { message: string } | null;
+  preferences?: PreferencesState[];
+  preferencesReadError?: { message: string } | null;
+  notification?: Record<string, unknown>;
 }) {
   const tokenTable = createPushTokenTable(tokens, { readError: tokenReadError });
+  const preferenceTable = createPreferencesTable(preferences, { readError: preferencesReadError });
   const deliveries: Record<string, unknown>[] = [
     ...pendingDeliveries.map((row) => ({ ...row })),
     ...retryableDeliveries.map((row) => ({
@@ -233,6 +319,7 @@ function createPushMaintenanceSupabase({
                     title: 'Render ready',
                     body: 'Open it in the app.',
                     deep_link: '/viewer?source=studio-creations&initialId=gen-1',
+                    ...notification,
                   },
                   error: null,
                 };
@@ -247,6 +334,10 @@ function createPushMaintenanceSupabase({
         return { update: tokenTable.update, select: tokenTable.select };
       }
 
+      if (table === 'mobile_notification_preferences') {
+        return { select: preferenceTable.select, upsert: preferenceTable.upsert };
+      }
+
       throw new Error(`Unexpected table ${table}`);
     },
     async rpc(name: string) {
@@ -258,7 +349,7 @@ function createPushMaintenanceSupabase({
     },
   };
 
-  return { adminSupabase, tokenTable, deliveries, deliveryUpdates, storeDeliveries };
+  return { adminSupabase, tokenTable, preferenceTable, deliveries, deliveryUpdates, storeDeliveries };
 }
 
 /** A failed send the retry job is due to pick up: tried once, on user-1's phone. */
@@ -1135,6 +1226,230 @@ describe('mobile notifications', () => {
     expect(fetcher).not.toHaveBeenCalled();
     // The delivery is left as it was, for the next run to ask again.
     expect(maintenance.deliveryUpdates).toEqual([]);
+  });
+
+  // Pausing push in the app patches the account's preferences and nothing
+  // else: the token row stays live, so the check above lets the retry through.
+  // The first send asked the preferences. The retry comes ten or twenty minutes
+  // later and has to ask them again.
+  it.each([
+    {
+      how: 'the account paused push alerts',
+      switches: { push_enabled: false },
+      notification: {},
+      receiptMessage: 'Not retried: push alerts are paused for this account.',
+    },
+    {
+      how: 'the account switched off generation alerts',
+      switches: { generation_enabled: false },
+      notification: {},
+      receiptMessage: 'Not retried: generation alerts are switched off for this account.',
+    },
+    {
+      how: 'the account switched off commerce alerts',
+      switches: { commerce_enabled: false },
+      notification: { type: 'credits_purchased', category: 'commerce' },
+      receiptMessage: 'Not retried: commerce alerts are switched off for this account.',
+    },
+    {
+      how: 'the account switched off social alerts',
+      switches: { social_enabled: false },
+      notification: { type: 'post_saved', category: 'social' },
+      receiptMessage: 'Not retried: social alerts are switched off for this account.',
+    },
+  ])('does not re-send a push after $how', async ({ switches, notification, receiptMessage }) => {
+    const maintenance = createPushMaintenanceSupabase({
+      retryableDeliveries: [retryableDelivery({ receipt_error_code: 'MessageRateExceeded' })],
+      tokens: [{ ...PHONE_TOKEN }],
+      preferences: [{ ...ALERTS_ON, ...switches }],
+      notification,
+    });
+    const fetcher = vi.fn<typeof fetch>(async () => expoResponse({ data: { status: 'ok', id: 'ticket-retry' } }));
+    const now = new Date('2026-10-04T05:10:00.000Z');
+
+    // The job hears about it once: this run closes it.
+    await expect(hasMobilePushMaintenanceWork(maintenance.adminSupabase as never, { now })).resolves.toBe(true);
+    const summary = await processMobilePushMaintenance(maintenance.adminSupabase as never, { fetcher, now });
+
+    expect(sentBodies(fetcher)).toEqual([]);
+    expect(summary).toMatchObject({
+      retryableCount: 1,
+      retriedCount: 0,
+      retrySkippedCount: 1,
+      resentCount: 0,
+      retryFailedCount: 0,
+    });
+    // Closed where it stands, with the reason. Its attempt count still says one
+    // request was made, and what Expo said about that one is kept.
+    expect(maintenance.deliveryUpdates).toEqual([
+      {
+        id: 'delivery-1',
+        values: {
+          receipt_status: 'stale',
+          receipt_checked_at: '2026-10-04T05:10:00.000Z',
+          receipt_message: receiptMessage,
+        },
+      },
+    ]);
+    expect(maintenance.deliveries).toEqual([
+      expect.objectContaining({
+        send_status: 'error',
+        receipt_error_code: 'MessageRateExceeded',
+        attempt_count: 1,
+      }),
+    ]);
+    // The phone keeps its token: the account paused alerts, it did not sign out.
+    expect(maintenance.tokenTable.updates).toEqual([]);
+    await expect(hasMobilePushMaintenanceWork(maintenance.adminSupabase as never, { now })).resolves.toBe(false);
+  });
+
+  it.each([
+    {
+      how: 'every switch is on',
+      switches: {},
+      notification: {},
+    },
+    {
+      how: 'only other kinds of alert are switched off',
+      switches: { commerce_enabled: false, social_enabled: false },
+      notification: {},
+    },
+    {
+      how: 'its kind of alert has no switch of its own',
+      switches: { generation_enabled: false, commerce_enabled: false, social_enabled: false },
+      notification: { category: 'system' },
+    },
+  ])('re-sends a push when $how', async ({ switches, notification }) => {
+    const maintenance = createPushMaintenanceSupabase({
+      retryableDeliveries: [retryableDelivery({ receipt_error_code: 'MessageRateExceeded' })],
+      tokens: [{ ...PHONE_TOKEN }],
+      preferences: [{ ...ALERTS_ON, ...switches }],
+      notification,
+    });
+    const fetcher = vi.fn<typeof fetch>(async () => expoResponse({ data: { status: 'ok', id: 'ticket-retry' } }));
+
+    const summary = await processMobilePushMaintenance(maintenance.adminSupabase as never, {
+      fetcher,
+      now: new Date('2026-10-04T05:10:00.000Z'),
+    });
+
+    expect(sentBodies(fetcher)).toEqual([
+      expect.objectContaining({ to: 'ExponentPushToken[phone]', title: 'Render ready' }),
+    ]);
+    expect(summary).toMatchObject({ retriedCount: 1, retrySkippedCount: 0, resentCount: 1 });
+    expect(maintenance.deliveries).toEqual([
+      expect.objectContaining({ send_status: 'sent', receipt_status: 'pending', attempt_count: 2 }),
+    ]);
+  });
+
+  // The first send makes the account's preferences row before it asks Expo, so
+  // a delivery normally has one. Where it is gone, the job goes by the defaults
+  // a new row would hold and leaves the table alone: a job that runs every ten
+  // minutes is no place to make settings rows, and an insert that failed would
+  // turn a read into a failed run.
+  it('reads an account with no preferences row as the defaults, and makes no row', async () => {
+    const maintenance = createPushMaintenanceSupabase({
+      retryableDeliveries: [retryableDelivery()],
+      tokens: [{ ...PHONE_TOKEN }],
+      preferences: [],
+    });
+    const fetcher = vi.fn<typeof fetch>(async () => expoResponse({ data: { status: 'ok', id: 'ticket-retry' } }));
+
+    const summary = await processMobilePushMaintenance(maintenance.adminSupabase as never, {
+      fetcher,
+      now: new Date('2026-10-04T05:10:00.000Z'),
+    });
+
+    expect(sentBodies(fetcher)).toEqual([
+      expect.objectContaining({ to: 'ExponentPushToken[phone]' }),
+    ]);
+    expect(summary).toMatchObject({ retriedCount: 1, retrySkippedCount: 0, resentCount: 1 });
+    // What it asked for was this account's row, and it wrote nothing.
+    expect(maintenance.preferenceTable.reads).toEqual([[['user_id', 'user-1']]]);
+    expect(maintenance.preferenceTable.writes).toEqual([]);
+    expect(maintenance.preferenceTable.rows).toEqual([]);
+  });
+
+  it('goes by the preferences of the account each delivery belongs to', async () => {
+    const maintenance = createPushMaintenanceSupabase({
+      retryableDeliveries: [
+        retryableDelivery(),
+        retryableDelivery({
+          id: 'delivery-2',
+          notification_id: 'notification-2',
+          user_id: 'user-2',
+          token_id: 'token-2',
+          expo_push_token: 'ExponentPushToken[other]',
+        }),
+      ],
+      tokens: [
+        { ...PHONE_TOKEN },
+        { ...PHONE_TOKEN, id: 'token-2', user_id: 'user-2', expo_push_token: 'ExponentPushToken[other]' },
+      ],
+      preferences: [
+        { ...ALERTS_ON, push_enabled: false },
+        { ...ALERTS_ON, user_id: 'user-2' },
+      ],
+    });
+    const fetcher = vi.fn<typeof fetch>(async () => expoResponse({ data: { status: 'ok', id: 'ticket-retry' } }));
+
+    const summary = await processMobilePushMaintenance(maintenance.adminSupabase as never, {
+      fetcher,
+      now: new Date('2026-10-04T05:10:00.000Z'),
+    });
+
+    expect(sentBodies(fetcher)).toEqual([
+      expect.objectContaining({ to: 'ExponentPushToken[other]' }),
+    ]);
+    expect(summary).toMatchObject({ retryableCount: 2, retriedCount: 1, retrySkippedCount: 1, resentCount: 1 });
+    expect(maintenance.deliveries).toEqual([
+      expect.objectContaining({ id: 'delivery-1', send_status: 'error', receipt_status: 'stale' }),
+      expect.objectContaining({ id: 'delivery-2', send_status: 'sent', receipt_status: 'pending' }),
+    ]);
+  });
+
+  // A delivery that was only passed over would wait on the ledger with its
+  // attempts unspent. The account switching alerts back on brings it within
+  // the job's reach again, and the next run would deliver an alert the account
+  // had asked not to get.
+  it('closes a delivery it will not send, so switching alerts back on does not send it late', async () => {
+    const maintenance = createPushMaintenanceSupabase({
+      retryableDeliveries: [retryableDelivery({ receipt_error_code: 'MessageRateExceeded' })],
+      tokens: [{ ...PHONE_TOKEN }],
+      preferences: [{ ...ALERTS_ON, push_enabled: false }],
+    });
+    const fetcher = vi.fn<typeof fetch>(async () => expoResponse({ data: { status: 'ok', id: 'ticket-retry' } }));
+
+    await processMobilePushMaintenance(maintenance.adminSupabase as never, {
+      fetcher,
+      now: new Date('2026-10-04T05:10:00.000Z'),
+    });
+    Object.assign(maintenance.preferenceTable.rows[0], { push_enabled: true });
+
+    await expect(processMobilePushMaintenance(maintenance.adminSupabase as never, {
+      fetcher,
+      now: new Date('2026-10-04T05:20:00.000Z'),
+    })).resolves.toMatchObject({ retryableCount: 0, retriedCount: 0 });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing when it cannot read the account's preferences", async () => {
+    const maintenance = createPushMaintenanceSupabase({
+      retryableDeliveries: [retryableDelivery()],
+      tokens: [{ ...PHONE_TOKEN }],
+      preferencesReadError: { message: 'connection reset' },
+    });
+    const fetcher = vi.fn<typeof fetch>(async () => expoResponse({ data: { status: 'ok', id: 'ticket-retry' } }));
+    const now = new Date('2026-10-04T05:10:00.000Z');
+
+    const run = processMobilePushMaintenance(maintenance.adminSupabase as never, { fetcher, now })
+      .then(() => 'completed', (error: unknown) => error);
+
+    expect(await run).toMatchObject({ name: 'MobileNotificationError', status: 500 });
+    expect(fetcher).not.toHaveBeenCalled();
+    // The delivery is left as it was, for the next run to ask again.
+    expect(maintenance.deliveryUpdates).toEqual([]);
+    await expect(hasMobilePushMaintenanceWork(maintenance.adminSupabase as never, { now })).resolves.toBe(true);
   });
 
   it.each(PERMANENT_EXPO_ERRORS)('closes a delivery whose retry Expo refuses with %s', async (code) => {
