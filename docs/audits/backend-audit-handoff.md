@@ -6,10 +6,31 @@ Updated 2026-10-04 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/template-input-audit-7k`, incorporating main `28b7467c8a8d1a2221fca140c30d7226f1e2db41` (#326); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/follow-retry-audit-8a`, incorporating main `4e4186a5ac0fa08e1aa7897ee0027f5672f1f674` (#335); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+7K #333 is released. PR Quality 37195063530, exact-main Quality 37195747753 and
+standard release 37196169222 passed. Merge b8f9c312 at 16:03:30 IST October 4;
+release completed 16:14:35 IST. No active mobile store run preceded the merge.
+Independent live checks verify descendant 4e4186a5 (release 37198669693) at
+17:01:42 IST: exact SHA/feed 200/admin 307/unsigned webhook 401. Read
+`backend-section-07-template-inputs-release-2026-10-04.md`.
+
+8A reproduces a false 500 when two follow requests read no row then insert the
+same pair through actual local PostgREST. A confirmed 23505 duplicate now returns
+success without a second notification task. Three permanent SQL/PostgREST cases
+and 35 focused service/route tests pass; app/test types and lint pass. Read
+`backend-section-08-follow-retries-2026-10-04.md`. Candidate CI/release next.
+WORKFLOW-04 returns to untested after 7K; SOCIAL-02 is failed until 8A is released.
+Ledger remains 22 passed, 26 untested, two failed, three external.
+Notification tasks are captured, never executed. Private logs/config remain in
+`.audit-evidence/backend-social/` and `.audit-evidence/backend-storage/`.
+Continue the social behavior matrix while CI runs. No full-audit completion claim.
+
+The preceding checkpoint follows.
+
 
 7J #331 passed PR Quality 37191142092 and merged as 49b89e7a at 14:50:02 IST
 October 4, with no active mobile store run immediately before merge. Exact-main
