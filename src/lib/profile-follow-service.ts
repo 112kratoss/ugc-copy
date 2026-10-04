@@ -200,6 +200,11 @@ export async function updateCreatorFollowForRoute({
         following_id: followingId,
       });
       if (insertError) {
+        // The block may commit after the service precheck. The database guard
+        // remains authoritative and uses the same unavailable response.
+        if (insertError.code === '23514' && insertError.message === 'Follow relationship is unavailable') {
+          return { ok: false, status: 404, body: { error: 'Creator not found.' } };
+        }
         // Another request can record the same intent after our initial read.
         // Confirm its row before treating the unique conflict as a successful
         // retry; the request that inserted it owns notification scheduling.

@@ -99,6 +99,25 @@ describe.skipIf(!configPath || !connectionString)('follow service with actual Po
     expect(notifications).toHaveLength(1);
   });
 
+  it('returns unavailable when a block commits after the service check but before insertion', async () => {
+    let injected = false;
+    const client = createClient(config.API_URL, config.SERVICE_ROLE_KEY, {
+      auth: { persistSession: false },
+      global: {
+        fetch: async (input, init) => {
+          if (!injected && init?.method === 'POST' && String(input).includes('/rest/v1/follows')) {
+            injected = true;
+            await db.query('insert into public.user_blocks(blocker_user_id,blocked_user_id) values($1,$2)', [creator, follower]);
+          }
+          return fetch(input, init);
+        },
+      },
+    });
+    expect(await update(true, client)).toMatchObject({ ok: false, status: 404 });
+    expect(await saved()).toHaveLength(0);
+    expect(notifications).toHaveLength(0);
+  });
+
   it('removes an existing follow on block and denies refollow', async () => {
     expect(await update(true)).toMatchObject({ ok: true });
     await db.query('insert into public.user_blocks(blocker_user_id,blocked_user_id) values($1,$2)', [creator, follower]);

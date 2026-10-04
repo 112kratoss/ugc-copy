@@ -188,6 +188,21 @@ describe('profile follow service', () => {
     expect(notifyCreatorFollowedMock).not.toHaveBeenCalled();
   });
 
+  it('maps the database block guard to unavailable without hiding unrelated constraints', async () => {
+    const client = createClient();
+    client.insertFollow.mockResolvedValueOnce({ error: { code: '23514', message: 'Follow relationship is unavailable' } });
+    expect(await updateCreatorFollowForRoute({
+      adminSupabase: client.client, followerId: 'follower-1',
+      body: { followingId: 'creator-1', following: true },
+    })).toEqual({ ok: false, status: 404, body: { error: 'Creator not found.' } });
+    client.insertFollow.mockResolvedValueOnce({ error: { code: '23514', message: 'A different constraint' } });
+    expect(await updateCreatorFollowForRoute({
+      adminSupabase: client.client, followerId: 'follower-1',
+      body: { followingId: 'creator-1', following: true },
+    })).toMatchObject({ ok: false, status: 500 });
+    expect(notifyCreatorFollowedMock).not.toHaveBeenCalled();
+  });
+
   it.each(['23505', '23503', '57014'])('does not claim follow success for an unconfirmed insert error %s', async code => {
     const client = createClient();
     client.insertFollow.mockResolvedValueOnce({ error: { code, message: 'insert refused' } });

@@ -6,10 +6,33 @@ Updated 2026-10-04 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/save-counter-audit-8b`, incorporating main `e6d8e81d54c3cef8bf0b5d7b68d42c245639b03e` (#336); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/follow-block-audit-8c`, incorporating main `e6d8e81d54c3cef8bf0b5d7b68d42c245639b03e` (#336); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+8B is PR #337 (head 91e38f05), Quality 37201195516 running: database, browser
+and mobile pass, web final checks pending. Migration plan has only 8B pending
+against the captured production ledger. Do not merge until all four pass and
+mobile-store-release is rechecked immediately. Existing drift repair SQL is
+private, rollback-by-default, NOWAIT table locks, capped at 20 mismatches;
+four isolated rehearsal controls pass. Apply only after prevention release is
+verified, preserving before/after evidence and independent zero-drift readback.
+
+8C now reproduces block/follow races in both orders/directions: four failed,
+two passed before. Both triggers now share a sorted-user-pair transaction lock;
+six SQL cases pass. Actual PostgREST also reproduced a false 500 for a block
+committing after the precheck; the exact guard error maps to 404. Four actual
+HTTP/service transport cases and 43 focused cases pass, types/lint pass.
+Clean replay passes 1,960 pgTAP and 18 combined actual save/block cases.
+Migration 20261004121413 is local; candidate CI/PR/release next after 8B merge.
+Read `backend-section-08-follow-block-race-2026-10-04.md`. Production read-only
+inventory has zero follows across blocks; no relationship repair is needed.
+SOCIAL-03 becomes failed; ledger: 22 passed, 25 untested, three failed, three
+external. Current live verified remains 8A e6d8e81d. Preserve unrelated changes.
+
+The preceding checkpoint follows.
+
 
 8A #336 is deployed and verified as e6d8e81d. PR Quality 37199243395,
 exact-main Quality 37199914979 and standard release 37200570697 passed.
