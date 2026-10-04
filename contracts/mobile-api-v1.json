@@ -1717,5 +1717,15 @@
         "Location": "https://project.supabase.co/storage/v1/object/sign/post_media/private-posts/b9100000-0000-4000-8000-000000000001/photo.jpg?token=short-lived"
       }
     }
+  },
+  "profileInvalidPayload": {
+    "operations": [
+      "updateProfile",
+      "validateProfile"
+    ],
+    "status": 400,
+    "response": {
+      "error": "Invalid profile payload."
+    }
   }
 }

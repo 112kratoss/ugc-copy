@@ -579,3 +579,17 @@ it.each(['submissionPending', 'submissionUnconfirmed'] as const)('retains %s for
   expect(error).toMatchObject({status:409,details:pending.response});
   expect(isAmbiguousGenerationStartFailure(error)).toBe(true);
 });
+
+
+it.each(['updateProfile', 'validateProfile'] as const)('preserves %s invalid-payload errors', async (operation) => {
+  const failure = mobileApiContract.profileInvalidPayload;
+  expect(failure.operations).toContain(operation);
+  const api = createApiClient({
+    baseUrl: 'https://magicbooklet.test',
+    getAccessToken: async () => 'token-1',
+    fetcher: vi.fn(async () => jsonResponse(failure.response, failure.status)) as unknown as typeof fetch,
+  });
+  await expect(api[operation]({ displayName: 'Creator One' })).rejects.toMatchObject({
+    status: failure.status, message: failure.response.error, details: failure.response,
+  });
+});

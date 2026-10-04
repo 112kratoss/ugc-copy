@@ -1,11 +1,11 @@
 # Backend audit completion checklist
 
 Updated 2026-10-04. Current independently checked production:
-`e5bc769b33cce373b3911bb93c4c8513f6841ae2`, including Section 8B.
+`7116126d2a9dd1b4919a7dc554ec9640fc37d036`, including Section 8C.
 Exact-main Quality, standard release, function digests and live checks pass; see
 [save-counter release and repair](backend-section-08-save-counters-release-2026-10-04.md).
 The nine historical count mismatches were reconciled; independent readback is zero.
-8C #338 is merged with release verification pending. 8D reproduces comment-thread
+[8C #338 release is verified](backend-section-08-follow-block-release-2026-10-04.md). 8D reproduces comment-thread
 reads across a creator block; eight real transport and 46 focused cases pass
 after the candidate fix. Broader social behavior coverage remains open.
 Surface inventory baseline remains `5934bd7d`; Section 6L changed no surfaces.
@@ -16,11 +16,12 @@ unequal effort and risk. Do not turn their pass count into a percentage of backe
 safety or an ETA. New findings attach to these obligations; changes in scope must
 be recorded explicitly instead of silently adding another lettered batch.
 
-Current ledger: **53 obligations — 22 passed, 26 untested, 2 failed, 3 external**.
+Current ledger: **53 obligations — 23 passed, 25 untested, 3 failed, 2 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
 WORKFLOW-02 and WORKFLOW-04 remain untested after their scoped fixes shipped.
 SOCIAL-02 returns to untested after the scoped 8B release and repair.
-SOCIAL-03 is failed for the 8C/8D block behavior defects. MEDIA-07 remains failed
+SOCIAL-04 is failed for the 8E malformed-profile payload defect.
+SOCIAL-03 is failed until the 8D release is verified. MEDIA-07 remains failed
 for legacy retirement.
 No new obligation was added; these fixes do not complete the broader matrices.
 
@@ -65,7 +66,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | ID | Obligation and closure evidence | Status | Evidence / next action |
 | --- | --- | --- | --- |
 | MAP-01 | Capture route/service/job/public-catalog inventory and assign review gates | passed | [Surface map](backend-audit-surface-map-2026-10-01.json); 162 routes, 201 services, 323 functions, 136 relations, 12 jobs; 0 unassigned routes |
-| MAP-02 | Reconcile method-level behaviors, non-API entrypoints, SQL/trigger callers, mobile direct access, edge and operational scripts to this ledger | untested | Static module paths are scheduling evidence only; [Caller reconciliation](backend-audit-caller-reconciliation-2026-10-04.md) reviews the earlier 152 entries; remaining entrypoints, method behavior and table mutation/read paths stay open |
+| MAP-02 | Reconcile method-level behaviors, non-API entrypoints, SQL/trigger callers, mobile direct access, edge and operational scripts to this ledger | untested | [Explicit HTTP method map](backend-audit-http-method-map-2026-10-04.md) records 162 routes/186 methods, including 35 social routes/45 methods. Static paths remain scheduling evidence; [Caller reconciliation](backend-audit-caller-reconciliation-2026-10-04.md) reviews the earlier 152 entries; remaining entrypoints, method behavior and table mutation/read paths stay open |
 
 ## Authentication and database
 
@@ -127,12 +128,12 @@ coverage includes shared helpers that do not end in `service.ts`.
 | --- | --- | --- | --- |
 | SOCIAL-01 | Post/feed/search visibility, archive/restore/reveal and pagination | untested | Behavioral method matrix; existing ownership tests do not close visibility propagation |
 | SOCIAL-02 | Comments, follows, saves, sharing and notifications across identities/lifecycle | untested | [8A](backend-section-08-follow-retries-2026-10-04.md) reproduces concurrent follow retry returning 500 despite the saved intent; three actual PostgREST controls pass and [8A release is verified](backend-section-08-follow-retries-release-2026-10-04.md). [8B](backend-section-08-save-counters-2026-10-04.md) reproduces save-count drift after deletion/concurrent toggle; 12 SQL controls pass and [8B release/repair is verified](backend-section-08-save-counters-release-2026-10-04.md). [8D](backend-section-08-comment-lifecycle-2026-10-04.md) adds 11 SQL lifecycle controls. Remaining mutation/retry and cross-user behavior; reuse scoped Section 2 ownership evidence |
-| SOCIAL-03 | Moderation/report/block propagation and admin sanctions | failed | [8C](backend-section-08-follow-block-race-2026-10-04.md) reproduces an uncommitted follow surviving a block; six SQL cases pass after serialization, release verification pending. [8D](backend-section-08-comment-lifecycle-2026-10-04.md) reproduces whole-thread reads across creator blocks; actual transport fix passes, release pending. Remaining moderation and visibility behavior stays open |
-| SOCIAL-04 | Profile, creator and contact surfaces | untested | Remaining method validation, privacy and abuse limits |
+| SOCIAL-03 | Moderation/report/block propagation and admin sanctions | failed | [8C](backend-section-08-follow-block-race-2026-10-04.md) reproduces an uncommitted follow surviving a block; six SQL cases pass after serialization; [8C release is verified](backend-section-08-follow-block-release-2026-10-04.md). [8D](backend-section-08-comment-lifecycle-2026-10-04.md) reproduces whole-thread reads across creator blocks; actual transport fix passes, release pending. Remaining moderation and visibility behavior stays open |
+| SOCIAL-04 | Profile, creator and contact surfaces | failed | [8E profile/contact](backend-section-08-profile-contact-2026-10-04.md): malformed/null profile requests reproduce HTTP 500; candidate returns 400, twelve actual HTTP and seven PostgREST checks pass. Release pending; creator/privacy, request byte limits and remaining method behavior stay open |
 | JOB-01 | Scheduler and all 12 jobs: lease contention, expiry, duplicate dispatch and retry | untested | Per-job fixture matrix from the surface map; existing generation cases apply only to that job |
 | JOB-02 | Budgets, poison work, retention/reclaim jobs and alert delivery | untested | Prove bounded progress and failures that remain observable |
 | JOB-03 | Push registration, preferences, delivery receipts and invalid-token cleanup | untested | Device/provider evidence plus database retry tests |
-| JOB-04 | Recorded overdue moderation report | external | Operator review at `/admin/moderation`; no report dismissed by the audit, latest resolution not established |
+| JOB-04 | Recorded overdue moderation report | passed | [Read-only follow-up](backend-section-08-moderation-queue-followup-2026-10-04.md): original report has a reviewer and October 1 dismissal timestamp; both queues empty October 4; watchdog passes. Audit made no report mutation |
 | OPS-01 | Exact-main Quality, staged/live health and standard release for Section 6J | passed | [6J release evidence](backend-section-06-staging-locks-release-2026-10-01.md); first attempt mismatch preserved |
 | OPS-02 | Backup restore and rollback/reconciliation exercises | untested | Isolated restoration with consistency checks and measured recovery; no production restore |
 | OPS-03 | Current-build capacity evidence and failure containment | untested | Reconcile [scaling entry point](../scaling-audit.md) with the audited build; local disk probes are not capacity certification |

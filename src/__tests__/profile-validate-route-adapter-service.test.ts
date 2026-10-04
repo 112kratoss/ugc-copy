@@ -1,3 +1,4 @@
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -121,6 +122,20 @@ describe('profile validate route adapter service', () => {
       key: user.id,
     });
     expect(json).not.toHaveBeenCalled();
+    expect(validateProfileSubmission).not.toHaveBeenCalled();
+  });
+
+  it.each(['{', 'null', '[]', '"profile"', '42'])('rejects invalid profile request %s before domain work', async (body) => {
+    const response = await postProfileValidateRouteResponse({
+      request: new Request('http://localhost/api/profile/validate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+      }),
+      dependencies: { createUserClient, createServiceClient, enforceBackendRateLimit, validateProfileSubmission, logError },
+    });
+    const contract = mobileApiContract.profileInvalidPayload;
+    expect(response.status).toBe(contract.status);
+    await expect(response.json()).resolves.toEqual(contract.response);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect(validateProfileSubmission).not.toHaveBeenCalled();
   });
 
