@@ -24,11 +24,12 @@ function searchResponse(query: string, type: string) {
   };
 }
 
-// The shared dev server compiles routes on demand and full-reloads connected
-// pages when Fast Refresh cannot hot-apply (see kling-o3-named-subjects.spec.ts
-// for the same behaviour surfacing as aborted navigations). A self-reload
-// mid-journey wipes typed input and in-memory results, so environmental
-// retries keep this spec stable without loosening any assertion.
+// The shared dev server compiles routes on demand, and a page reloads itself
+// when another page connects after such a compile (see
+// kling-o3-named-subjects.spec.ts for the same behaviour surfacing as aborted
+// navigations). A self-reload mid-journey wipes typed input and in-memory
+// results, so environmental retries keep this spec stable on a run with several
+// workers without loosening any assertion. CI runs one worker and does not meet it.
 test.describe.configure({ retries: 2 });
 
 test.describe('public search', () => {
