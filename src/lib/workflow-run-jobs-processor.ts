@@ -5,6 +5,7 @@ import { logBackendError } from '@/lib/backend-logger';
 import { jobErrorMessage } from '@/lib/job-error-message';
 import {
   MAX_WORKFLOW_RUN_STEP_ATTEMPTS,
+  WORKFLOW_RUN_MAX_LIFETIME_SECONDS,
   WORKFLOW_RUN_STEP_CONCURRENCY,
   claimWorkflowRunStepJobs,
   deferWorkflowRunStepJob,
@@ -15,16 +16,9 @@ import {
   heartbeatWorkflowRunStepJob,
   type WorkflowRunStepJob,
 } from '@/lib/workflow-run-jobs';
-import { advanceWorkflowRunOnce } from '@/lib/workflow-runner';
+import { advanceWorkflowRunOnce, endGivenUpWorkflowRun } from '@/lib/workflow-runner';
 
 export const WORKFLOW_RUN_STEP_BATCH_LIMIT = 10;
-
-// How long a run may stay unfinished before the queue stops polling it. The
-// generation reaper in the generation-completions job is what eventually closes
-// an orphaned provider task, which then hydrates the workflow step as failed --
-// so this only has to outlast the slowest legitimate generation, not guess at
-// terminal state on the run's behalf.
-export const WORKFLOW_RUN_MAX_LIFETIME_SECONDS = 24 * 60 * 60;
 
 // Deferral cadence while a run waits on a generation. Short enough that a
 // finished generation is reflected quickly, long enough that a day-long run
@@ -43,6 +37,7 @@ export type WorkflowRunStepProcessSummary = {
 };
 
 type AdvanceWorkflowRun = typeof advanceWorkflowRunOnce;
+type EndGivenUpWorkflowRun = typeof endGivenUpWorkflowRun;
 
 function isRunUnfinished(status: string | null | undefined): boolean {
   return status === 'processing';
@@ -56,13 +51,19 @@ function isRunUnfinished(status: string | null | undefined): boolean {
  * function instance served the original request, and a GET that mutated state
  * as a side effect of polling. A recycled instance stranded the run with
  * nothing watching, and the cron registry had no workflow entry at all.
+ *
+ * A run whose job has used every attempt gets no ticket. It is handed to
+ * `endGivenUpWorkflowRun`, which follows the renders the run started to their
+ * end and then ends it, so such a run can be met here on several sweeps while
+ * a render is still going.
  */
 export async function adoptStalledWorkflowRuns(params: {
   supabase: SupabaseClient;
   nowMs?: number;
   limit?: number;
+  endGivenUpRun?: EndGivenUpWorkflowRun;
 }): Promise<number> {
-  const { supabase, nowMs = Date.now(), limit = 25 } = params;
+  const { supabase, nowMs = Date.now(), limit = 25, endGivenUpRun = endGivenUpWorkflowRun } = params;
 
   const stalled = await findStalledWorkflowRuns(supabase, { nowMs, limit });
   if (stalled.length === 0) return 0;
@@ -92,25 +93,25 @@ export async function adoptStalledWorkflowRuns(params: {
     // whose earlier attempts all terminated gets a fresh ticket at the next
     // free attempt number.
     try {
-      const { data: usedAttempts } = await supabase
+      const { data: usedAttempts, error: usedAttemptsError } = await supabase
         .from('workflow_run_step_jobs')
-        .select('attempt')
+        .select('attempt, last_error')
         .eq('run_id', run.id)
         .order('attempt', { ascending: false })
         .limit(1);
 
-      const highestAttempt = Array.isArray(usedAttempts) && usedAttempts.length > 0
-        ? Number((usedAttempts[0] as { attempt: number }).attempt) || 0
-        : 0;
+      // Unread, a failed read counted as no attempts used, and a run with
+      // none left was offered a ticket it already had.
+      if (usedAttemptsError) throw usedAttemptsError;
+
+      const lastJob = (Array.isArray(usedAttempts) ? usedAttempts[0] : null) as
+        | { attempt: number; last_error?: string | null }
+        | null
+        | undefined;
+      const highestAttempt = Number(lastJob?.attempt) || 0;
 
       if (highestAttempt >= MAX_WORKFLOW_RUN_STEP_ATTEMPTS) {
-        await supabase
-          .from('workflow_canvas_runs')
-          .update({
-            status: 'failed',
-            finished_at: new Date(nowMs).toISOString(),
-          })
-          .eq('id', run.id);
+        await endGivenUpRun({ supabase, runId: run.id, nowMs, lastError: lastJob?.last_error ?? null });
         continue;
       }
 
@@ -144,9 +145,10 @@ async function processOne(params: {
   lockedBy: string;
   nowMs: number;
   advanceRun: AdvanceWorkflowRun;
+  endGivenUpRun: EndGivenUpWorkflowRun;
   summary: WorkflowRunStepProcessSummary;
 }): Promise<void> {
-  const { supabase, job, lockedBy, nowMs, advanceRun, summary } = params;
+  const { supabase, job, lockedBy, nowMs, advanceRun, endGivenUpRun, summary } = params;
   let heartbeatInFlight = false;
   let leaseLost = false;
   const heartbeatDuringAdvance = async () => {
@@ -184,18 +186,15 @@ async function processOne(params: {
     if (isRunUnfinished(run?.status)) {
       const runAgeMs = run?.created_at ? nowMs - Date.parse(run.created_at) : 0;
       if (Number.isFinite(runAgeMs) && runAgeMs > WORKFLOW_RUN_MAX_LIFETIME_SECONDS * 1000) {
-        await supabase
-          .from('workflow_canvas_runs')
-          .update({
-            status: 'failed',
-            finished_at: new Date(nowMs).toISOString(),
-          })
-          .eq('id', job.run_id);
+        const lifetimeError = 'Workflow run exceeded its maximum lifetime without finishing.';
+        // Before the ticket is closed: if the run cannot be ended, the catch
+        // below fails the ticket under the usual cap and its retry ends it.
+        await endGivenUpRun({ supabase, runId: job.run_id, nowMs, lastError: lifetimeError });
         const outcome = await finishWorkflowRunStepJob(supabase, {
           id: job.id,
           lockedBy,
           succeeded: false,
-          error: 'Workflow run exceeded its maximum lifetime without finishing.',
+          error: lifetimeError,
           retryDelaySeconds: getWorkflowRunStepRetryDelaySeconds(job.attempt),
           maxAttempts: job.attempt,
         });
@@ -243,6 +242,7 @@ export async function processWorkflowRunStepJobs(params: {
   concurrency?: number;
   nowMs?: number;
   advanceRun?: AdvanceWorkflowRun;
+  endGivenUpRun?: EndGivenUpWorkflowRun;
 }): Promise<WorkflowRunStepProcessSummary> {
   const {
     supabase,
@@ -251,6 +251,7 @@ export async function processWorkflowRunStepJobs(params: {
     concurrency = WORKFLOW_RUN_STEP_CONCURRENCY,
     nowMs = Date.now(),
     advanceRun = advanceWorkflowRunOnce,
+    endGivenUpRun = endGivenUpWorkflowRun,
   } = params;
 
   const summary: WorkflowRunStepProcessSummary = {
@@ -263,7 +264,7 @@ export async function processWorkflowRunStepJobs(params: {
     adopted: 0,
   };
 
-  summary.adopted = await adoptStalledWorkflowRuns({ supabase, nowMs });
+  summary.adopted = await adoptStalledWorkflowRuns({ supabase, nowMs, endGivenUpRun });
 
   const jobs = await claimWorkflowRunStepJobs(supabase, { limit, lockedBy });
   summary.claimed = jobs.length;
@@ -277,7 +278,7 @@ export async function processWorkflowRunStepJobs(params: {
     for (;;) {
       const job = queue.shift();
       if (!job) return;
-      await processOne({ supabase, job, lockedBy, nowMs, advanceRun, summary });
+      await processOne({ supabase, job, lockedBy, nowMs, advanceRun, endGivenUpRun, summary });
     }
   });
 

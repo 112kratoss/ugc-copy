@@ -375,6 +375,7 @@ export function toMobileNotificationRecord(row: NotificationRow): MobileNotifica
 export function buildMobileNotificationDeepLink(target:
   | { kind: 'generation'; generationId: string }
   | { kind: 'templateRun'; runId: string }
+  | { kind: 'workflowCanvas'; canvasId: string }
   | { kind: 'showcasePost'; postId: string }
   | { kind: 'marketplaceResource'; resourceId: string }
   | { kind: 'creatorProfile'; username: string }
@@ -386,6 +387,14 @@ export function buildMobileNotificationDeepLink(target:
 
   if (target.kind === 'templateRun') {
     return `/template-runs/${encodeURIComponent(target.runId)}`;
+  }
+
+  if (target.kind === 'workflowCanvas') {
+    // The canvas is on the web only, and the app opens a link only when its
+    // route is on the app's own list. So this is the app's Alerts route, which
+    // every installed build opens, with the canvas on it for the web to read
+    // (`resolveWebNotificationPath`).
+    return `/studio?workflowCanvas=${encodeURIComponent(target.canvasId)}`;
   }
 
   if (target.kind === 'showcasePost') {
@@ -1150,6 +1159,56 @@ async function findLivePushTokenId(
   return isRecord(data) ? rowString(data, 'id') : null;
 }
 
+/**
+ * The push preferences `userId` holds now, for a retry.
+ *
+ * Read, never made. `ensureMobileNotificationPreferences` inserts a row where
+ * there is none, which suits a request the account itself makes. The first send
+ * has already made this account's row and only deleting the account removes
+ * it, so an insert here could only race that deletion, and its failure would
+ * fail the run where a read gives an answer. A missing row is read as the
+ * defaults a new row would hold.
+ */
+async function readPushPreferencesForRetry(
+  adminSupabase: SupabaseClient,
+  userId: string,
+): Promise<MobileNotificationPreferences> {
+  const { data, error } = await adminSupabase
+    .from('mobile_notification_preferences')
+    .select('push_enabled, generation_enabled, commerce_enabled, social_enabled')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error) {
+    throw new MobileNotificationError('Failed to load notification preferences for push retry.', 500);
+  }
+
+  return toMobileNotificationPreferences(isRecord(data) ? data : null);
+}
+
+/**
+ * Closes a delivery the retry job has decided not to send, with the reason.
+ *
+ * Closed, not passed over. Left open it keeps its attempts, so it would go out
+ * late the day its token row came back to life or the account switched its
+ * alerts back on, and until then every run would be told there is work.
+ */
+async function closeUnsentPushDelivery(
+  adminSupabase: SupabaseClient,
+  deliveryId: string,
+  checkedAt: string,
+  reason: string,
+) {
+  await adminSupabase
+    .from('mobile_push_deliveries')
+    .update({
+      receipt_status: failedSendReceiptStatus(false),
+      receipt_checked_at: checkedAt,
+      receipt_message: reason,
+    })
+    .eq('id', deliveryId);
+}
+
 async function processRetryableMobilePushDeliveries(
   adminSupabase: SupabaseClient,
   {
@@ -1222,20 +1281,29 @@ async function processRetryableMobilePushDeliveries(
 
     const notification = toMobileNotificationRecord(notificationData as NotificationRow);
 
+    // The first send asked the account's preferences. Pausing push in the app
+    // changes those and leaves the token live, so the token check below does
+    // not cover it: the retry asks them again.
+    const preferences = await readPushPreferencesForRetry(adminSupabase, userId);
+    if (!shouldPushForPreferences(preferences, notification.category)) {
+      skippedCount += 1;
+      await closeUnsentPushDelivery(adminSupabase, deliveryId, nowIso, preferences.pushEnabled
+        ? `Not retried: ${notification.category} alerts are switched off for this account.`
+        : 'Not retried: push alerts are paused for this account.');
+      continue;
+    }
+
     // Asked last, so that nothing but the request stands between the answer
-    // and the send. A delivery it will not send is closed, not passed over:
-    // left open, it would go out late the day the token row came back to life.
+    // and the send.
     const liveTokenId = await findLivePushTokenId(adminSupabase, userId, expoPushToken);
     if (!liveTokenId) {
       skippedCount += 1;
-      await adminSupabase
-        .from('mobile_push_deliveries')
-        .update({
-          receipt_status: failedSendReceiptStatus(false),
-          receipt_checked_at: nowIso,
-          receipt_message: 'Not retried: the push token is no longer active for this account.',
-        })
-        .eq('id', deliveryId);
+      await closeUnsentPushDelivery(
+        adminSupabase,
+        deliveryId,
+        nowIso,
+        'Not retried: the push token is no longer active for this account.',
+      );
       continue;
     }
 
@@ -1650,6 +1718,34 @@ export async function notifyTemplateRunStopped(
     objectType: 'template_run',
     objectId: params.runId,
     dedupeKey: `template-run:${params.runId}:stopped`,
+  });
+}
+
+/**
+ * Tells the creator their workflow run was ended on our side.
+ *
+ * A canvas run announces nothing itself: each render does, as it finishes or
+ * fails. The steps a given-up run never reached have no render to speak for
+ * them, so this is the only word that the run is over for someone who has
+ * left the canvas. On the web it leads to the canvas, where each step that
+ * did not run says so. It never throws: the run has ended whatever becomes of
+ * the notification.
+ */
+export async function notifyWorkflowRunStopped(
+  adminSupabase: SupabaseClient,
+  params: { runId: string; canvasId: string; userId: string },
+) {
+  return createMobileNotificationSafely({
+    adminSupabase,
+    userId: params.userId,
+    type: 'generation_failed',
+    category: 'generation',
+    title: 'Your workflow run stopped',
+    body: 'A problem on our side ended it. Open the workflow to run it again.',
+    deepLink: buildMobileNotificationDeepLink({ kind: 'workflowCanvas', canvasId: params.canvasId }),
+    objectType: 'workflow_run',
+    objectId: params.runId,
+    dedupeKey: `workflow-run:${params.runId}:stopped`,
   });
 }
 

@@ -33,7 +33,7 @@ import PublicShareButton from '@/components/PublicShareButton';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, getVideoElementSupport, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/client-generation-models';
-import { getVideoRunAffordances } from '@/lib/generation-model-affordances';
+import { getVideoInputAffordances, getVideoRunAffordances } from '@/lib/generation-model-affordances';
 import type { GenerationModelDescriptor } from '@/lib/generation-model-catalog';
 import {
     resolveCatalogModelId,
@@ -42,7 +42,7 @@ import {
     useWebGenerationModelQuote,
 } from '@/lib/generation-model-client';
 import { useAuth } from '@/components/AuthProvider';
-import type { RemixMediaAssetDescriptor, RemixSourceBundle } from '@/lib/remix-source';
+import type { RemixMediaAssetDescriptor, RemixResolvedAsset, RemixSourceBundle } from '@/lib/remix-source';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import {
     createRemixElementSeeds,
@@ -528,6 +528,39 @@ function hydrateSeedanceMediaReferences(
             ...seed.seedanceAsset,
         }),
     }));
+}
+
+/**
+ * How many reference clips and tracks a model takes: the limits it publishes, which
+ * the panel and the run read for the model on screen. The remix restore asks for the
+ * model it is about to show, so a remix attaches no clip or track that model has no
+ * slot for. Kling 3.0's clips are its named video elements, a slot of their own, and
+ * do not count here.
+ */
+function referenceMediaLimits(modelId: VideoModelId): { videos: number; audios: number } {
+    const affordances = getVideoInputAffordances(
+        (VIDEO_MODELS[modelId] as { catalogDescriptor?: GenerationModelDescriptor }).catalogDescriptor,
+        modelId,
+    );
+    return { videos: affordances.referenceVideos.max, audios: affordances.referenceAudios.max };
+}
+
+/**
+ * The reference clips or tracks a remixed run kept, as seeds for their cards.
+ * The Seedance 2 family builds its own, which pair each one with its prepared asset.
+ */
+function keptReferenceSeeds(kept: RemixResolvedAsset[] | undefined): SeedanceMediaReferenceSeed[] {
+    return (kept ?? []).flatMap((item) => item.url ? [{
+        displayName: item.label ?? undefined,
+        file: null,
+        previewUrl: item.url,
+        providerUrl: item.url,
+        storagePath: item.storagePath ?? null,
+        source: 'remix' as const,
+        sourceGenerationId: item.sourceGenerationId ?? null,
+        // The quote is told each clip's length, and only a fresh upload is measured here.
+        durationSeconds: item.durationSeconds ?? null,
+    }] : []);
 }
 
 function hydrateKlingVideoElements(seeds: KlingVideoElementSeed[]): KlingVideoElementDraft[] {
@@ -1593,9 +1626,29 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     setEndImageUrl(null);
                     setEndFrameDescriptor(null);
                 } else {
-	                    commitElements([]);
-	                    commitReferenceVideos([]);
-	                    commitReferenceAudios([]);
+                    // A run on any other model gets its references back too. Its
+                    // image references come back under the handles the prompt
+                    // mentions them by, as many as the model takes. A multi-shot run
+                    // gets none: the page shows no reference card there and sends
+                    // none. (The table leaves Kling O3 on in multi-shot for its
+                    // named subjects.)
+                    const elementSupport = getVideoElementSupport(nextModelId, {
+                        mode: nextMode,
+                        isMultiShot: nextIsMultiShot,
+                    });
+                    commitElements(hydrateVideoElements(createRemixElementSeeds(
+                        restoredVideoInputs?.elements ?? [],
+                        nextIsMultiShot ? 0 : elementSupport.maxElements
+                    ).map((seed) => ({ ...seed, file: null }))));
+                    // Its clips and tracks come back where the model has a slot for
+                    // them. Kling 3.0's clips are its video elements, restored below.
+                    const mediaLimits = referenceMediaLimits(nextModelId);
+                    commitReferenceVideos(mediaLimits.videos > 0
+                        ? hydrateSeedanceMediaReferences('Video', keptReferenceSeeds(restoredVideoInputs?.referenceVideos))
+                        : []);
+                    commitReferenceAudios(mediaLimits.audios > 0
+                        ? hydrateSeedanceMediaReferences('Audio', keptReferenceSeeds(restoredVideoInputs?.referenceAudios))
+                        : []);
 	                    const restoredReferenceVideos = restoredVideoInputs?.referenceVideos ?? [];
 	                    const storedKlingVideoElements = Array.isArray(settings?.klingVideoElements)
 	                        ? settings.klingVideoElements

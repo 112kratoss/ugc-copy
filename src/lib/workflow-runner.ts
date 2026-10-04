@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createHash } from 'node:crypto';
 import { createServiceClient, resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
-import { logBackendWarning } from '@/lib/backend-logger';
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 import {
   startImageGeneration,
   startCatalogGeneration,
@@ -20,7 +20,9 @@ import {
   type PublicGenerationStartFailure,
 } from '@/lib/generation-public-failure';
 import { syncGenerationStatuses } from '@/lib/generation-status-sync';
+import { notifyWorkflowRunStopped } from '@/lib/mobile-notifications';
 import { notifyRunStepStartFailure } from '@/lib/run-step-start-failure-notification';
+import { WORKFLOW_RUN_MAX_LIFETIME_SECONDS } from '@/lib/workflow-run-jobs';
 import {
   type ApprovalGateNodeData,
   type AudioInputNodeData,
@@ -483,7 +485,11 @@ function getDerivedRunFinishedAt(run: WorkflowRunRow, status: 'processing' | 'aw
 }
 
 function buildWorkflowRunResponse(run: WorkflowRunRow, steps: HydratedRunStep[]): WorkflowRunResponse {
-  const status = deriveWorkflowRunStatus(steps);
+  // A run that is stored as failed stays failed: nothing will advance it, so a
+  // step it left unfinished must not read as a run still in progress. Until
+  // then the status comes from the steps, which lets a poll see a render the
+  // moment its callback lands without waiting for the worker to store it.
+  const status = run.status === 'failed' ? 'failed' : deriveWorkflowRunStatus(steps);
   const finished_at = getDerivedRunFinishedAt(run, status, steps);
 
   return {
@@ -1499,6 +1505,237 @@ async function advanceWorkflowRunProgress(params: {
     status: nextRunStatus,
     finished_at: nextFinishedAt,
   }, hydratedSteps);
+}
+
+/** What a step says when its run was ended on our side before the step ran. */
+export const WORKFLOW_RUN_STOPPED_STEP_MESSAGE =
+  'This step did not run. The run stopped because of a problem on our side. Run it again to continue.';
+
+/**
+ * What a step says when the render it started could not be linked to it. The
+ * render was started and charged, so "did not run" would be untrue of it, and
+ * the note says where its result is.
+ */
+export const WORKFLOW_RUN_STOPPED_UNLINKED_RENDER_MESSAGE =
+  'The run stopped because of a problem on our side before the result of this step could be shown here. Check Studio for it.';
+
+const UNFINISHED_STEP_STATUSES = ['queued', 'awaiting_approval', 'processing'];
+
+export type GivenUpWorkflowRunOutcome =
+  /** A render the run started is still going. The run is left open for the next sweep. */
+  | 'waiting'
+  /** This call ended the run, as what its steps add up to. */
+  | 'succeeded'
+  | 'failed'
+  /** The run is not in progress: it was ended elsewhere, or it is gone. */
+  | 'not_in_progress';
+
+/**
+ * Ends a run the queue has given up on: its job has used every attempt, or
+ * the run has outlived its lifetime. No worker passes over it again, so the
+ * job processor calls this, and it is the last thing that happens to the run.
+ *
+ * A render the run started is followed to its end first. A step can be left
+ * without the generation it started, when the write that links the two is
+ * what kept failing: that generation carries the step's request key, so it is
+ * found by the key and linked here. While any render of the run is still
+ * going the run is left open and `waiting` is returned. The processor's sweep
+ * comes back to it on every call, a provider callback's among them, and the
+ * creator's poll shows the render the moment it lands. A run past its
+ * lifetime is not waited on.
+ *
+ * Then every step that never ran is closed with a note, the run is stored as
+ * what its steps add up to, and the creator is told when that is `failed` and
+ * something of the run was left unfinished. A run whose only unfinished work
+ * was a render that came in ends `succeeded`. No credits move: each
+ * generation settles itself.
+ *
+ * Before the run's lifetime is over, a read or a write that fails here is
+ * thrown and the next sweep tries again, so a fault that passes costs nothing.
+ * Past it the run is ended with whatever could be done: a run that can never
+ * be read must not stay in progress for good.
+ */
+export async function endGivenUpWorkflowRun(params: {
+  /** Service-role: it reads generations and writes the run, its steps and the notification. */
+  supabase: SupabaseClient;
+  runId: string;
+  nowMs?: number;
+  /** What the run's last tick failed with, for the operator's log. */
+  lastError?: string | null;
+}): Promise<GivenUpWorkflowRunOutcome> {
+  const { supabase, runId, nowMs = Date.now() } = params;
+  const { data: runRow, error: runError } = await supabase
+    .from('workflow_canvas_runs')
+    .select('id, canvas_id, user_id, status, created_at')
+    .eq('id', runId)
+    .maybeSingle();
+  if (runError) throw runError;
+
+  const run = runRow as Pick<WorkflowRunRow, 'id' | 'canvas_id' | 'user_id' | 'status' | 'created_at'> | null;
+  if (!run || run.status !== 'processing') return 'not_in_progress';
+
+  const endedAt = new Date(nowMs).toISOString();
+  const pastLifetime = nowMs - Date.parse(run.created_at) > WORKFLOW_RUN_MAX_LIFETIME_SECONDS * 1000;
+  const linkedGenerationIds: string[] = [];
+  const unlinkedStepIds: string[] = [];
+  let steps: HydratedRunStep[] | null = null;
+
+  try {
+    const { data: stepRows, error: stepsError } = await supabase
+      .from('workflow_canvas_run_steps')
+      .select('id, node_id, status, generation_id, input_snapshot, output_snapshot, error_message, started_at, finished_at')
+      .eq('run_id', run.id);
+    if (stepsError) throw stepsError;
+    const storedSteps = (stepRows || []) as HydratedRunStep[];
+
+    // A step still queued with no generation may have started one all the
+    // same. The worker gives each start a key made from the run and the node,
+    // and a creator has at most one generation under a key.
+    const keyedSteps = new Map(storedSteps
+      .filter((step) => step.status === 'queued' && !step.generation_id)
+      .map((step) => [workflowGenerationIdempotencyHash(run.id, step.node_id), step]));
+    if (keyedSteps.size > 0) {
+      const { data: started, error: startedError } = await supabase
+        .from('generations')
+        .select('id, prediction_id, cost, created_at, client_request_key_hash')
+        .eq('user_id', run.user_id)
+        .in('client_request_key_hash', [...keyedSteps.keys()]);
+      if (startedError) throw startedError;
+
+      for (const generation of (started || []) as Array<{
+        id: string;
+        prediction_id: string | null;
+        cost: number | null;
+        created_at: string | null;
+        client_request_key_hash: string;
+      }>) {
+        const step = keyedSteps.get(generation.client_request_key_hash);
+        if (!step) continue;
+
+        // The shape the worker gives a step it starts, or, for a start the
+        // provider never confirmed, the one it gives a held submission.
+        const link = {
+          status: 'processing' as const,
+          generation_id: generation.id,
+          output_snapshot: generation.prediction_id
+            ? { predictionId: generation.prediction_id, cost: generation.cost }
+            : { submissionPending: true },
+          error_message: generation.prediction_id ? null : GENERATION_SUBMISSION_PENDING_MESSAGE,
+          started_at: step.started_at || generation.created_at || endedAt,
+          finished_at: null,
+        };
+        try {
+          await updateRunStep(supabase, run.id, step.id, link);
+        } catch (error) {
+          // This write is one of the ways a run gets here. A step it is
+          // refused for again is closed below, with the note that says where
+          // its render is.
+          logBackendError('workflow_run_step_link_refused_at_give_up', {
+            runId: run.id,
+            stepId: step.id,
+            nodeId: step.node_id,
+            generationId: generation.id,
+            error,
+          });
+          unlinkedStepIds.push(step.id);
+          continue;
+        }
+        Object.assign(step, link);
+        linkedGenerationIds.push(generation.id);
+        logBackendWarning('workflow_run_step_linked_at_give_up', {
+          runId: run.id,
+          stepId: step.id,
+          nodeId: step.node_id,
+          generationId: generation.id,
+        });
+      }
+    }
+
+    // Generations are read as their callbacks left them. A render that ended
+    // while no pass could record it is what its step shows from here on.
+    const hydratedSteps = await hydrateRunSteps({ steps: storedSteps, userId: run.user_id });
+    await persistHydratedStepUpdates(supabase, run.id, storedSteps, hydratedSteps);
+    steps = hydratedSteps;
+  } catch (error) {
+    if (!pastLifetime) throw error;
+    logBackendError('workflow_run_given_up_steps_unread', { runId: run.id, error });
+  }
+
+  if (!pastLifetime && steps?.some((step) => step.status === 'processing' && step.generation_id)) {
+    return 'waiting';
+  }
+
+  // A step with a generation shows what became of it on every read, so only
+  // the steps without one are closed. A render still going past the run's
+  // lifetime keeps its step, and the run is failed over it.
+  const isUnfinished = (step: HydratedRunStep) => UNFINISHED_STEP_STATUSES.includes(step.status);
+  const closed = { status: 'blocked' as const, finished_at: endedAt };
+  const closedStepIds = (steps ?? []).filter((step) => isUnfinished(step) && !step.generation_id).map((step) => step.id);
+  // Steps that could not be read are closed all the same, by what they are.
+  if (!steps || closedStepIds.length > 0) {
+    try {
+      for (const stepId of unlinkedStepIds) {
+        await updateRunStep(supabase, run.id, stepId, {
+          ...closed,
+          error_message: WORKFLOW_RUN_STOPPED_UNLINKED_RENDER_MESSAGE,
+        });
+      }
+      const { error: closeError } = await supabase
+        .from('workflow_canvas_run_steps')
+        .update({ ...closed, error_message: WORKFLOW_RUN_STOPPED_STEP_MESSAGE })
+        .eq('run_id', run.id)
+        .in('status', UNFINISHED_STEP_STATUSES)
+        .is('generation_id', null);
+      if (closeError) throw closeError;
+    } catch (error) {
+      if (!pastLifetime) throw error;
+      logBackendError('workflow_run_given_up_steps_unclosed', { runId: run.id, error });
+    }
+  }
+
+  const status = deriveWorkflowRunStatus((steps ?? []).map((step) => (
+    closedStepIds.includes(step.id) ? { ...step, ...closed } : step
+  ))) === 'succeeded' ? 'succeeded' : 'failed';
+
+  // Only while the run is still in progress, and the answer says whether this
+  // call is the one that ended it: a sweep that runs beside this one must not
+  // announce the run a second time.
+  const { data: ended, error: endError } = await supabase
+    .from('workflow_canvas_runs')
+    .update({ status, finished_at: endedAt })
+    .eq('id', run.id)
+    .eq('status', 'processing')
+    .select('id')
+    .maybeSingle();
+  if (endError) throw endError;
+  if (!ended) return 'not_in_progress';
+
+  logBackendError('workflow_run_given_up', {
+    runId: run.id,
+    canvasId: run.canvas_id,
+    userId: run.user_id,
+    status,
+    pastLifetime,
+    lastError: params.lastError ?? null,
+    closedStepIds,
+    linkedGenerationIds,
+    unlinkedStepIds,
+  });
+  // The notification says the run was stopped on our side, which is true only
+  // when something of the run was left unfinished, and such a run always ends
+  // `failed`. A run whose steps had all ended by themselves failed for their
+  // reasons, and each of those was announced when it happened. A step can
+  // also have been closed by an earlier call that then failed to store the
+  // run, and its note says so.
+  const stoppedOnOurSide = (step: HydratedRunStep) => isUnfinished(step) || (
+    step.status === 'blocked'
+    && (step.error_message === WORKFLOW_RUN_STOPPED_STEP_MESSAGE
+      || step.error_message === WORKFLOW_RUN_STOPPED_UNLINKED_RENDER_MESSAGE)
+  );
+  if (!steps?.length || steps.some(stoppedOnOurSide)) {
+    await notifyWorkflowRunStopped(supabase, { runId: run.id, canvasId: run.canvas_id, userId: run.user_id });
+  }
+  return status;
 }
 
 export async function approveWorkflowRunStep(params: {

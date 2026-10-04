@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { approveWorkflowRunStep, executeWorkflowRun, getWorkflowRunDetails, WORKFLOW_RUN_STEP_BUSY_RETRY_WINDOW_MS } from '@/lib/workflow-runner';
+import { approveWorkflowRunStep, executeWorkflowRun, getWorkflowRunDetails, WORKFLOW_RUN_STEP_BUSY_RETRY_WINDOW_MS, WORKFLOW_RUN_STOPPED_STEP_MESSAGE, WORKFLOW_RUN_STOPPED_UNLINKED_RENDER_MESSAGE } from '@/lib/workflow-runner';
 import { processWorkflowRunStepJobs } from '@/lib/workflow-run-jobs-processor';
 import { createCanvasEdge, createWorkflowNode, normalizeWorkflowGraph, type WorkflowCanvasGraph, type ImageGenerateNodeData, type VideoGenerateNodeData } from '@/lib/workflow-canvas';
 
@@ -118,6 +118,11 @@ function databaseClient(db: Client, afterWrite?: (table: string, updates: Record
         },
         eq: compare('='),
         neq: compare('<>'),
+        is(column: string, value: null) {
+          if (value !== null) throw new Error('Only IS NULL is supported');
+          filters.push(`${identifier(column)} is null`);
+          return query;
+        },
         in(column: string, value: unknown[]) {
           values.push(value);
           filters.push(`${identifier(column)}=any($${values.length})`);
@@ -240,8 +245,8 @@ describe.skipIf(!connectionString)('canvas execution and billing with real Postg
     await admin.query('delete from public.generations where user_id=$1', [userId]);
     await admin.query('delete from auth.users where id=$1', [userId]);
   });
-  async function start(key = 'canvas-fixture') {
-    const result = await executeWorkflowRun({ supabase: client, userId, canvasId, graph, startNodeId: imageId, mode: 'branch', idempotencyKey: key });
+  async function start(key = 'canvas-fixture', mode: 'branch' | 'node' = 'branch') {
+    const result = await executeWorkflowRun({ supabase: client, userId, canvasId, graph, startNodeId: imageId, mode, idempotencyKey: key });
     runId = result.runId;
     return result;
   }
@@ -583,5 +588,168 @@ describe.skipIf(!connectionString)('canvas execution and billing with real Postg
     expect(fetch).toHaveBeenCalledTimes(3);
     // Only the try that ended the step is announced.
     expect(await notifications()).toEqual([{ type: 'generation_failed', dedupe_key: `generation:${generations[2].id}:failed` }]);
+  });
+
+  // A run's job has five attempts over the life of the run. These take a run
+  // past the fifth, where the queue gives it up, through the real queue
+  // functions, the real worker and the real start service.
+  describe('a run the queue has given up', () => {
+    /** Refuses every write that links a step of this run to a generation. */
+    async function refuseLinkWrites() {
+      await admin.query(`create function public.given_up_canvas_link_failure() returns trigger language plpgsql as $$
+        begin
+          if new.run_id = '${runId}'::uuid and new.generation_id is not null and old.generation_id is null then
+            raise unique_violation using message = 'duplicate key value violates unique constraint "given_up_step_link"';
+          end if;
+          return new;
+        end $$`);
+      await admin.query(`create trigger given_up_canvas_link_failure before update on public.workflow_canvas_run_steps
+        for each row execute function public.given_up_canvas_link_failure()`);
+    }
+    async function acceptLinkWrites() {
+      await admin.query('drop trigger if exists given_up_canvas_link_failure on public.workflow_canvas_run_steps');
+      await admin.query('drop function if exists public.given_up_canvas_link_failure()');
+    }
+    afterEach(acceptLinkWrites);
+
+    /** Five ticks that start the image, or find it started, and are refused its link. */
+    async function spendEveryAttempt() {
+      await refuseLinkWrites();
+      const summaries = [];
+      for (let attempt = 1; attempt <= 5; attempt += 1) summaries.push(await tick());
+      expect(summaries.map(summary => [summary.retried, summary.exhausted])).toEqual([[1, 0], [1, 0], [1, 0], [1, 0], [0, 1]]);
+      expect((await tick()).claimed).toBe(0);
+    }
+    /** A call of the processor once the run has been without a ticket past the stall window. */
+    const sweep = () => processWorkflowRunStepJobs({ supabase: client, lockedBy: randomUUID(), limit: 10, concurrency: 1, nowMs: Date.now() + 5 * 60_000 });
+    const storedRun = async () => (await admin.query('select status, finished_at is not null as finished from public.workflow_canvas_runs where id=$1', [runId])).rows[0];
+    const storedSteps = async () => Object.fromEntries((await admin.query('select node_id, status, generation_id, error_message from public.workflow_canvas_run_steps where run_id=$1', [runId])).rows
+      .map(({ node_id, ...step }) => [node_id, step]));
+    const jobs = async () => (await admin.query('select attempt, status from public.workflow_run_step_jobs where run_id=$1 order by attempt', [runId])).rows;
+    const notifications = async () => (await admin.query('select type, title, deep_link, object_type, object_id, dedupe_key from public.mobile_notifications where user_id=$1', [userId])).rows;
+    const stopped = () => ({
+      type: 'generation_failed',
+      title: 'Your workflow run stopped',
+      deep_link: `/studio?workflowCanvas=${canvasId}`,
+      object_type: 'workflow_run',
+      object_id: runId,
+      dedupe_key: `workflow-run:${runId}:stopped`,
+    });
+
+    it('ends it for the creator, with a note on every step it never finished', async () => {
+      await start();
+      await spendEveryAttempt();
+      const [image] = await rows();
+      // Before the stall window has passed nothing is decided.
+      expect(await storedRun()).toEqual({ status: 'processing', finished: false });
+      expect((await details()).status).toBe('processing');
+
+      // The link is still refused when the queue gives the run up.
+      expect(await sweep()).toMatchObject({ claimed: 0, adopted: 0 });
+
+      expect(await storedRun()).toEqual({ status: 'failed', finished: true });
+      const run = await details();
+      expect(run.status).toBe('failed');
+      expect(run.finished_at).not.toBeNull();
+      expect(await storedSteps()).toEqual({
+        [imageId]: { status: 'blocked', generation_id: null, error_message: WORKFLOW_RUN_STOPPED_UNLINKED_RENDER_MESSAGE },
+        [approvalId]: { status: 'blocked', generation_id: null, error_message: WORKFLOW_RUN_STOPPED_STEP_MESSAGE },
+        [videoId]: { status: 'blocked', generation_id: null, error_message: WORKFLOW_RUN_STOPPED_STEP_MESSAGE },
+      });
+      expect(await notifications()).toEqual([stopped()]);
+      // The one render is still going and still charged, and nothing was started again.
+      expect(await rows()).toEqual([image]);
+      expect(image.status).toBe('processing');
+      expect(await balance()).toBe(initialCredits - image.cost);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(await jobs()).toEqual([1, 2, 3, 4, 5].map(attempt => ({ attempt, status: 'failed' })));
+      // A run that is stored as ended is not met by the sweep again.
+      await sweep();
+      expect(await notifications()).toHaveLength(1);
+    });
+
+    it('links the render its step never got, waits for it, and closes the steps after it', async () => {
+      await start();
+      await spendEveryAttempt();
+      await acceptLinkWrites();
+      const [image] = await rows();
+
+      expect(await sweep()).toMatchObject({ claimed: 0, adopted: 0 });
+
+      expect((await storedSteps())[imageId]).toEqual({ status: 'processing', generation_id: image.id, error_message: null });
+      expect((await storedSteps())[approvalId].status).toBe('queued');
+      expect(await storedRun()).toEqual({ status: 'processing', finished: false });
+      expect((await details()).status).toBe('processing');
+      expect(await notifications()).toEqual([]);
+      // The sweep comes back for as long as the render is going.
+      await sweep();
+      expect(await storedRun()).toEqual({ status: 'processing', finished: false });
+
+      await settle(image, true);
+      // The render's ending wakes no ticket for a run that has used every attempt.
+      expect(await jobs()).toHaveLength(5);
+      const landed = await details();
+      expect(landed.status).toBe('processing');
+      expect(landed.steps.find(step => step.node_id === imageId)).toMatchObject({ status: 'succeeded', generation_id: image.id });
+
+      await sweep();
+
+      expect(await storedSteps()).toEqual({
+        [imageId]: { status: 'succeeded', generation_id: image.id, error_message: null },
+        [approvalId]: { status: 'blocked', generation_id: null, error_message: WORKFLOW_RUN_STOPPED_STEP_MESSAGE },
+        [videoId]: { status: 'blocked', generation_id: null, error_message: WORKFLOW_RUN_STOPPED_STEP_MESSAGE },
+      });
+      expect(await storedRun()).toEqual({ status: 'failed', finished: true });
+      expect((await details()).status).toBe('failed');
+      expect(await notifications()).toEqual([stopped()]);
+      expect(await rows()).toHaveLength(1);
+      expect(await balance()).toBe(initialCredits - image.cost);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('ends a run of one step as succeeded when the render it was waiting for comes in', async () => {
+      await start('canvas-fixture-node', 'node');
+      await spendEveryAttempt();
+      await acceptLinkWrites();
+      const [image] = await rows();
+
+      await sweep();
+      expect(await storedRun()).toEqual({ status: 'processing', finished: false });
+      await settle(image, true);
+      // The poll has the run before the sweep stores it.
+      expect((await details()).status).toBe('succeeded');
+      await sweep();
+
+      expect(await storedSteps()).toEqual({ [imageId]: { status: 'succeeded', generation_id: image.id, error_message: null } });
+      expect(await storedRun()).toEqual({ status: 'succeeded', finished: true });
+      const run = await details();
+      expect(run.status).toBe('succeeded');
+      expect(run.steps[0].output_snapshot).toMatchObject({ outputUrl: `generated_images/${userId}/${image.id}.png` });
+      expect(await notifications()).toEqual([]);
+      expect(await balance()).toBe(initialCredits - image.cost);
+    });
+
+    it('ends a run that has outlived its lifetime on the tick that finds it so', async () => {
+      await start();
+      await admin.query("update public.workflow_canvas_runs set created_at=now()-interval '25 hours' where id=$1", [runId]);
+
+      expect(await tick()).toMatchObject({ claimed: 1, deferred: 0, exhausted: 1 });
+
+      const [image] = await rows();
+      expect(await jobs()).toEqual([{ attempt: 1, status: 'failed' }]);
+      expect(await storedRun()).toEqual({ status: 'failed', finished: true });
+      expect((await details()).status).toBe('failed');
+      // The image had just been started and keeps its step. The steps after it are closed.
+      expect(await storedSteps()).toEqual({
+        [imageId]: { status: 'processing', generation_id: image.id, error_message: null },
+        [approvalId]: { status: 'blocked', generation_id: null, error_message: WORKFLOW_RUN_STOPPED_STEP_MESSAGE },
+        [videoId]: { status: 'blocked', generation_id: null, error_message: WORKFLOW_RUN_STOPPED_STEP_MESSAGE },
+      });
+      expect(await notifications()).toEqual([stopped()]);
+      await settle(image, true);
+      const run = await details();
+      expect(run.status).toBe('failed');
+      expect(run.steps.find(step => step.node_id === imageId)?.status).toBe('succeeded');
+    });
   });
 });

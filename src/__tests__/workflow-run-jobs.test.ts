@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { logBackendError } from '@/lib/backend-logger';
 import {
+  WORKFLOW_RUN_MAX_LIFETIME_SECONDS,
   findStalledWorkflowRuns,
   getWorkflowRunStepRetryDelaySeconds,
   hasDueWorkflowRunStepJobs,
   shouldPruneWorkflowRunStepJobs,
 } from '@/lib/workflow-run-jobs';
 import {
-  WORKFLOW_RUN_MAX_LIFETIME_SECONDS,
   WORKFLOW_RUN_HEARTBEAT_INTERVAL_MS,
   adoptStalledWorkflowRuns,
   processWorkflowRunStepJobs,
@@ -34,6 +35,8 @@ type FakeClientOptions = {
   stalledRuns?: unknown[];
   liveJobs?: unknown[];
   highestAttempt?: unknown[];
+  /** What the database answers the read of a run's used attempts with, in place of rows. */
+  highestAttemptError?: unknown;
   runRow?: unknown;
   claimed?: unknown[];
   heartbeat?: boolean;
@@ -54,7 +57,11 @@ function createFakeClient(options: FakeClientOptions = {}) {
           // distinct column list, so this stays unambiguous.
           if (columns === 'id, canvas_id') return makeQuery({ data: options.stalledRuns ?? [], error: null });
           if (columns === 'run_id, attempt') return makeQuery({ data: options.liveJobs ?? [], error: null });
-          if (columns === 'attempt') return makeQuery({ data: options.highestAttempt ?? [], error: null });
+          if (columns === 'attempt, last_error') {
+            return makeQuery(options.highestAttemptError
+              ? { data: null, error: options.highestAttemptError }
+              : { data: options.highestAttempt ?? [], error: null });
+          }
           if (columns === 'start_node_id') return makeQuery({ data: options.runRow ?? null, error: null });
           if (columns === 'id') return makeQuery({ data: options.duePending ?? [], error: null });
           throw new Error(`Unexpected select on ${table}: ${columns}`);
@@ -268,23 +275,88 @@ describe('workflow run step worker', () => {
 
   it('stops deferring once a run outlives its maximum lifetime', async () => {
     // Otherwise a run whose generation never completes is polled forever.
-    const client = createFakeClient({ claimed: [makeJob()] });
+    const client = createFakeClient({ claimed: [makeJob({ attempt: 2 })] });
     const advanceRun = vi.fn(async () => ({
       status: 'processing',
       created_at: new Date(NOW - (WORKFLOW_RUN_MAX_LIFETIME_SECONDS + 60) * 1000).toISOString(),
     }));
+    // The run is ended while its ticket is still held.
+    const endGivenUpRun = vi.fn(async () => {
+      expect(client.rpcCalls.map((call) => call.fn)).not.toContain('finish_workflow_run_step_job');
+      return 'failed' as const;
+    });
 
     const summary = await processWorkflowRunStepJobs({
       supabase: client as never,
       lockedBy: 'worker-A',
       nowMs: NOW,
       advanceRun: advanceRun as never,
+      endGivenUpRun,
     });
 
     expect(summary.deferred).toBe(0);
+    expect(endGivenUpRun).toHaveBeenCalledTimes(1);
+    expect(endGivenUpRun).toHaveBeenCalledWith({
+      supabase: client,
+      runId: 'run-1',
+      nowMs: NOW,
+      lastError: 'Workflow run exceeded its maximum lifetime without finishing.',
+    });
+    // Ending the run is the runner's: it closes the steps, and a write of the
+    // run alone is what left a run stored as failed and read as processing.
+    expect(client.runUpdates).toEqual([]);
     const finish = client.rpcCalls.find((call) => call.fn === 'finish_workflow_run_step_job');
     expect(finish?.args.p_succeeded).toBe(false);
     expect(String(finish?.args.p_error)).toContain('maximum lifetime');
+    // No retry is scheduled for a run that is over.
+    expect(finish?.args.p_max_attempts).toBe(2);
+  });
+
+  it('retries the ticket when a run past its lifetime could not be ended', async () => {
+    const client = createFakeClient({ claimed: [makeJob()] });
+    const advanceRun = vi.fn(async () => ({
+      status: 'processing',
+      created_at: new Date(NOW - (WORKFLOW_RUN_MAX_LIFETIME_SECONDS + 60) * 1000).toISOString(),
+    }));
+    const endGivenUpRun = vi.fn().mockRejectedValue({ message: 'connection reset', code: '08006' });
+
+    await processWorkflowRunStepJobs({
+      supabase: client as never,
+      lockedBy: 'worker-A',
+      nowMs: NOW,
+      advanceRun: advanceRun as never,
+      endGivenUpRun,
+    });
+
+    // The ticket is failed with what the database said and under the usual
+    // cap, so the next attempt ends the run.
+    const finishes = client.rpcCalls.filter((call) => call.fn === 'finish_workflow_run_step_job');
+    expect(finishes).toHaveLength(1);
+    expect(finishes[0].args).toMatchObject({
+      p_succeeded: false,
+      p_error: 'connection reset (code 08006)',
+      p_max_attempts: 5,
+    });
+  });
+
+  it('never ends a run that is still inside its lifetime', async () => {
+    const client = createFakeClient({ claimed: [makeJob()] });
+    const advanceRun = vi.fn(async () => ({
+      status: 'processing',
+      created_at: new Date(NOW - (WORKFLOW_RUN_MAX_LIFETIME_SECONDS - 60) * 1000).toISOString(),
+    }));
+    const endGivenUpRun = vi.fn();
+
+    const summary = await processWorkflowRunStepJobs({
+      supabase: client as never,
+      lockedBy: 'worker-A',
+      nowMs: NOW,
+      advanceRun: advanceRun as never,
+      endGivenUpRun,
+    });
+
+    expect(summary.deferred).toBe(1);
+    expect(endGivenUpRun).not.toHaveBeenCalled();
   });
 
   it('records a failed advance as a retry with backoff', async () => {
@@ -330,6 +402,10 @@ describe('workflow run step worker', () => {
 });
 
 describe('stalled workflow run adoption', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('adopts an unfinished run that has no live job', async () => {
     const client = createFakeClient({
       stalledRuns: [{ id: 'run-1', canvas_id: 'canvas-1' }],
@@ -352,10 +428,97 @@ describe('stalled workflow run adoption', () => {
       stalledRuns: [{ id: 'run-1', canvas_id: 'canvas-1' }],
       liveJobs: [{ run_id: 'run-1', attempt: 1 }],
     });
+    const endGivenUpRun = vi.fn();
 
-    const adopted = await adoptStalledWorkflowRuns({ supabase: client as never, nowMs: NOW });
+    const adopted = await adoptStalledWorkflowRuns({ supabase: client as never, nowMs: NOW, endGivenUpRun });
 
     expect(adopted).toBe(0);
     expect(client.rpcCalls.map((call) => call.fn)).not.toContain('enqueue_workflow_run_step_job');
+    expect(endGivenUpRun).not.toHaveBeenCalled();
+  });
+
+  it('gives a run with one attempt left its last ticket', async () => {
+    const client = createFakeClient({
+      stalledRuns: [{ id: 'run-1', canvas_id: 'canvas-1' }],
+      highestAttempt: [{ attempt: 4, last_error: 'connection reset' }],
+      runRow: { start_node_id: 'node-1' },
+    });
+    const endGivenUpRun = vi.fn();
+
+    const adopted = await adoptStalledWorkflowRuns({ supabase: client as never, nowMs: NOW, endGivenUpRun });
+
+    expect(adopted).toBe(1);
+    const enqueue = client.rpcCalls.find((call) => call.fn === 'enqueue_workflow_run_step_job');
+    expect(enqueue?.args).toMatchObject({ p_run_id: 'run-1', p_attempt: 5 });
+    expect(endGivenUpRun).not.toHaveBeenCalled();
+  });
+
+  it('hands a run whose job has used every attempt to be ended, with what its last tick failed on', async () => {
+    const client = createFakeClient({
+      stalledRuns: [{ id: 'run-1', canvas_id: 'canvas-1' }],
+      highestAttempt: [{ attempt: 5, last_error: 'duplicate key value (code 23505)' }],
+      runRow: { start_node_id: 'node-1' },
+    });
+    const endGivenUpRun = vi.fn(async () => 'failed' as const);
+
+    const adopted = await adoptStalledWorkflowRuns({ supabase: client as never, nowMs: NOW, endGivenUpRun });
+
+    expect(endGivenUpRun).toHaveBeenCalledTimes(1);
+    expect(endGivenUpRun).toHaveBeenCalledWith({
+      supabase: client,
+      runId: 'run-1',
+      nowMs: NOW,
+      lastError: 'duplicate key value (code 23505)',
+    });
+    // No ticket past the cap, and the run is not counted as picked up again.
+    expect(adopted).toBe(0);
+    expect(client.rpcCalls.map((call) => call.fn)).not.toContain('enqueue_workflow_run_step_job');
+    // Ending the run is the runner's. The sweep writes nothing itself.
+    expect(client.runUpdates).toEqual([]);
+  });
+
+  it('logs a given-up run that could not be ended and carries on with the rest', async () => {
+    const client = createFakeClient({
+      stalledRuns: [{ id: 'run-1', canvas_id: 'canvas-1' }, { id: 'run-2', canvas_id: 'canvas-2' }],
+      highestAttempt: [{ attempt: 5, last_error: null }],
+    });
+    const refused = { message: 'canceling statement due to statement timeout', code: '57014' };
+    const endGivenUpRun = vi.fn(async ({ runId }: { runId: string }) => {
+      if (runId === 'run-1') throw refused;
+      return 'waiting' as const;
+    });
+
+    const adopted = await adoptStalledWorkflowRuns({
+      supabase: client as never,
+      nowMs: NOW,
+      endGivenUpRun: endGivenUpRun as never,
+    });
+
+    expect(adopted).toBe(0);
+    expect(endGivenUpRun.mock.calls.map(([params]) => params.runId)).toEqual(['run-1', 'run-2']);
+    // The run is still in progress, so the next sweep meets it again.
+    expect(vi.mocked(logBackendError).mock.calls).toEqual([
+      ['workflow_run_adopt_failed', { error: refused, runId: 'run-1' }],
+    ]);
+  });
+
+  it('does not take a failed read of the used attempts for a run with none used', async () => {
+    const refused = { message: 'connection reset', code: '08006' };
+    const client = createFakeClient({
+      stalledRuns: [{ id: 'run-1', canvas_id: 'canvas-1' }],
+      highestAttemptError: refused,
+      runRow: { start_node_id: 'node-1' },
+    });
+    const endGivenUpRun = vi.fn();
+
+    const adopted = await adoptStalledWorkflowRuns({ supabase: client as never, nowMs: NOW, endGivenUpRun });
+
+    // Neither a ticket nor an ending is decided on a number that was not read.
+    expect(adopted).toBe(0);
+    expect(client.rpcCalls.map((call) => call.fn)).not.toContain('enqueue_workflow_run_step_job');
+    expect(endGivenUpRun).not.toHaveBeenCalled();
+    expect(vi.mocked(logBackendError).mock.calls).toEqual([
+      ['workflow_run_adopt_failed', { error: refused, runId: 'run-1' }],
+    ]);
   });
 });
