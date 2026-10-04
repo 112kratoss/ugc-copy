@@ -21,7 +21,6 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Linking, Pressable, View } from 'react-native';
 
-import { RecoverableVideoPreview } from '@/components/recoverable-video-preview';
 import { MediaPreview } from '@/components/media-preview';
 import {
   AppText,
@@ -357,9 +356,11 @@ function TemplateDetailContent({
         </View>
       </View>
 
-      {template.videoUrl ? <RecoverableVideoPreview url={template.videoUrl} resolveRetryUrl={resolveVideoRetry}
-        style={{ width: '100%', height: 430, borderRadius: appTheme.radii.lg, backgroundColor: theme.colors.panelSoft }} />
-        : <MediaPreview url={template.thumbnailUrl} kind="image" height={430} />}
+      {/* The demo clip, or the poster of a template without one, in the same
+          frame: whole, and centred on black bands. */}
+      {template.videoUrl
+        ? <MediaPreview url={template.videoUrl} kind="video" height={430} letterbox resolveRetryUrl={resolveVideoRetry} />
+        : <MediaPreview url={template.thumbnailUrl} kind="image" height={430} letterbox />}
       {template.description ? <AppText variant="body" color="textSecondary">{template.description}</AppText> : null}
 
       <View style={{ gap: 12 }}>
@@ -694,7 +695,10 @@ function InputStage({
                 justifyContent: 'center',
               })}
             >
-              {preview ? <MediaPreview url={preview} kind={slot.kind} height={210} /> : <SlotIcon size={appTheme.icon.hero} color={theme.colors.faint} />}
+              {/* The whole upload, because it is what the workflow is given. A clip
+                  gets no player controls: the slot is one button, so a tap on
+                  them opened the picker as well. */}
+              {preview ? <MediaPreview url={preview} kind={slot.kind} height={210} letterbox nativeControls={false} /> : <SlotIcon size={appTheme.icon.hero} color={theme.colors.faint} />}
               <View style={{ position: preview ? 'absolute' : 'relative', bottom: preview ? 14 : undefined, minWidth: 132, minHeight: 48, borderRadius: 24, paddingHorizontal: 16, backgroundColor: hexWithAlpha(theme.colors.panel, 0.9), flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center' }}>
                 {uploadingSlot === slot.key ? <ActivityIndicator color={theme.colors.primary} /> : <Upload size={18} color={theme.colors.primary} />}
                 <AppText variant="label">{uploadingSlot === slot.key ? 'Uploading…' : uploaded ? `Replace ${slot.kind}` : `Choose ${slot.kind}`}</AppText>
@@ -871,7 +875,8 @@ function RunStepCard({
         <Pill label={templateRunStepStatusLabel(runStatus, step)} accent={statusAccent} />
       </View>
       {step.outputUrl ? (
-        <MediaPreview url={step.mediaKind === 'video' ? step.renditionUrl || step.outputUrl : step.outputUrl} kind={step.mediaKind} height={step.mediaKind === 'video' ? 300 : 390} />
+        // The whole output: a step can be waiting for it to be approved.
+        <MediaPreview url={step.mediaKind === 'video' ? step.renditionUrl || step.outputUrl : step.outputUrl} kind={step.mediaKind} height={step.mediaKind === 'video' ? 300 : 390} letterbox />
       ) : (
         <View style={{ minHeight: 220, borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: theme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
           {mark === 'no_output' ? <NotFinishedIcon size={appTheme.icon.hero} color={theme.colors.muted} />
@@ -992,7 +997,7 @@ function ResultStage({
         </View>
         <AppText variant="cardTitle">Final {result.kind}</AppText>
       </View>
-      <MediaPreview url={result.kind === 'video' ? result.renditionUrl || result.url : result.url} kind={result.kind} height={440} />
+      <MediaPreview url={result.kind === 'video' ? result.renditionUrl || result.url : result.url} kind={result.kind} height={440} letterbox />
       {!safeResultUrl ? (
         <StatusBlock
           title="Result link unavailable"
