@@ -526,7 +526,7 @@ Create is a prompt-first single page for Image, Video and Motion, not a wizard.
 - **Models:** pickers explain each model's benefit in plain words. Prompt enhancement never looks like the primary action.
 - **After generating:** the screen offers Post to feed (once there is a generation), Open Alerts, and Back to creator. It may also ask to turn on notifications. Progress survives leaving the screen and can be found in Alerts. The result is shown whole, across the column and centred on black bands (`letterbox` again), so a picture or clip of any shape is seen complete before it is posted.
 - **Templates** (`components/media-template-screens.tsx`): a template's demo clip or its poster, an uploaded input, each step's output and the final result use that same frame. An uploaded clip is drawn without player controls, because its slot is one button that opens the picker.
-- **Preview frames:** a `MediaPreview` given a height is as wide as its column at that height; with no height it is a 4:5 card of the column's width.
+- **Preview frames:** a `MediaPreview` given a height is as wide as its column at that height; with no height it is a 4:5 card of the column's width, as on the marketplace and unlock screens. A picture is cropped to fill the frame unless it is given `letterbox`. A clip is never cropped: the player shows it whole, so a clip of another shape than its frame always sits on black bands, in both schemes and with or without `letterbox`. What the player draws over that black (its loading spinner, its failure notice) takes the dark palette in both schemes, as in the lightbox.
 
 ### Profile
 

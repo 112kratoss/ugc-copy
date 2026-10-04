@@ -65,7 +65,8 @@ vi.mock('lucide-react-native', () => ({
 
 import { MediaPreview, StableMediaImage } from '../components/media-preview';
 import { decodedImageAspectRatio } from '../lib/decoded-image-aspect-ratio';
-import { mediaColors } from '../lib/theme';
+import { mediaColors, themes } from '../lib/theme';
+import { ThemeScope } from '../lib/theme-context';
 import { clearMediaDiagnosticsForTests, readMediaDiagnostics } from '../lib/media-diagnostics';
 import {
   MEDIA_AUTO_RETRY_BASE_DELAY_MS,
@@ -144,13 +145,11 @@ describe('MediaPreview frame', () => {
   });
 
   // The rule itself, whatever the fit: a height never meets the ratio.
-  it.each(['image', 'video'] as const)('gives a %s with a height the full width without letterbox too, cropped to fill', (kind) => {
+  it.each(['image', 'video'] as const)('gives a %s with a height the full width without letterbox too', (kind) => {
     const tree = mount(<MediaPreview url="https://cdn/result" kind={kind} height={480} />);
-    const { style, contentFit } = mediaNode(tree).props;
+    const { style } = mediaNode(tree).props;
     expect(style).toMatchObject({ width: '100%', height: 480 });
     expect(style).not.toHaveProperty('aspectRatio');
-    expect(style.backgroundColor).not.toBe(mediaColors.mediaGround);
-    if (kind === 'image') expect(contentFit).toBe('cover');
     renderer.act(() => tree.unmount());
   });
 
@@ -175,11 +174,9 @@ describe('MediaPreview frame', () => {
   // nothing for the ratio to be overridden by, and the card takes its width.
   it.each(['image', 'video'] as const)('keeps a %s with no height as a 4:5 card of its container’s width', (kind) => {
     const tree = mount(<MediaPreview url="https://cdn/post" kind={kind} />);
-    const { style, contentFit } = mediaNode(tree).props;
+    const { style } = mediaNode(tree).props;
     expect(style).toMatchObject({ width: '100%', aspectRatio: 4 / 5 });
     expect(style.height).toBeUndefined();
-    expect(style.backgroundColor).not.toBe(mediaColors.mediaGround);
-    if (kind === 'image') expect(contentFit).toBe('cover');
     renderer.act(() => tree.unmount());
   });
 
@@ -189,6 +186,45 @@ describe('MediaPreview frame', () => {
     expect(frame).toMatchObject({ width: '100%', aspectRatio: 4 / 5 });
     expect(frame.height).toBeUndefined();
     renderer.act(() => tree.unmount());
+  });
+
+  // What shows where the media does not reach. A picture without letterbox is
+  // cropped to fill its frame, so its ground is seen only while it loads: the
+  // scheme's neutral tile. A clip is never cropped. The player shows it whole
+  // and draws nothing around it, so the frame's colour is the bands beside a
+  // clip of any other shape, and those are black in both schemes. On the
+  // marketplace and unlock screens they were the light scheme's placeholder
+  // beige (looked at on the emulator and the simulator, 2026-10-04).
+  describe.each(['light', 'dark'] as const)('ground in the %s scheme', (scheme) => {
+    const mountIn = (element: React.ReactElement) => mount(<ThemeScope scheme={scheme}>{element}</ThemeScope>);
+
+    it.each([
+      ['with no height, as the marketplace and unlock screens draw it', undefined, false],
+      ['with a height', 480, false],
+      ['with letterbox', 300, true],
+    ] as const)('sits a clip on black bands %s', (_how, height, letterbox) => {
+      const tree = mountIn(<MediaPreview url="https://cdn/post.mp4" kind="video" height={height} letterbox={letterbox} />);
+      expect(mediaNode(tree).props.style.backgroundColor).toBe(mediaColors.mediaGround);
+      renderer.act(() => tree.unmount());
+    });
+
+    // The scheme's coral is a deep rust in light, made for paper: on the black
+    // card the spinner's brightest spoke measured 2.4:1 on the iPhone simulator.
+    it('draws what the player puts over a clip in the dark palette, as the lightbox does', () => {
+      const tree = mountIn(<MediaPreview url="https://cdn/post.mp4" kind="video" />);
+      let scope = mediaNode(tree).parent;
+      while (scope && scope.type !== ThemeScope) scope = scope.parent;
+      expect(scope?.props.scheme).toBe('dark');
+      renderer.act(() => tree.unmount());
+    });
+
+    it.each([undefined, 480])('crops a picture without letterbox to fill, on the neutral tile it loads onto (height %s)', (height) => {
+      const tree = mountIn(<MediaPreview url="https://cdn/post.webp" kind="image" height={height} />);
+      const { style, contentFit } = mediaNode(tree).props;
+      expect(contentFit).toBe('cover');
+      expect(style.backgroundColor).toBe(themes[scheme].colors.panelSoft);
+      renderer.act(() => tree.unmount());
+    });
   });
 });
 
