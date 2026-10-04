@@ -6,10 +6,33 @@ Updated 2026-10-04 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/follow-block-audit-8c`, incorporating main `e5bc769b33cce373b3911bb93c4c8513f6841ae2` (#337); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/social-lifecycle-audit-8d`, incorporating main `7116126d2a9dd1b4919a7dc554ec9640fc37d036` (#338); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+8B #337 is released as e5bc769b. Exact-main Quality 37201725874 and release
+37202416554 pass (release 12:35:38 UTC). Independent live SHA/feed/admin/webhook
+pass. All three function digests match clean replay; ledger version 20261004123218.
+Production rollback controls pass 4/4, cleanup zero. Nine historical count
+mismatches were rehearsed, then repaired with bounded NOWAIT locks. Independent
+38-post readback has zero mismatches. Security advisor groups are unchanged.
+Read the save-counter release report and preserve private save-release evidence.
+
+8C #338 passed PR Quality 37201786228 and merged 7116126d at 14:02:51 UTC
+October 4, with no active mobile store release immediately before merge.
+Exact-main Quality 37207818947 is running; standard release/live/digest checks next.
+8D reproduces comment-list exposure across a post-creator block in either
+direction (two fail/six pass actual PostgREST baseline). The fix checks the creator
+in the existing block set, with an exact lookup on truncation. Eight transport and
+46 focused cases pass; eleven actual SQL lifecycle cases are now wired into CI.
+Read `backend-section-08-comment-lifecycle-2026-10-04.md`. Candidate PR/CI/release next.
+SOCIAL-02 returns to untested after 8B; SOCIAL-03 remains failed for 8C/8D.
+Ledger: 22 passed, 26 untested, two failed, three external. Full scope and external
+gates remain open.
+
+The preceding checkpoint follows.
+
 
 8B PR #337 (head 91e38f05) passed all four Quality jobs in 37201195516 and
 merged as e5bc769b at 17:49:48 IST October 4. No mobile store run was active

@@ -330,6 +330,19 @@ export async function listPostCommentsForRoute({
       const relationships = await loadViewerBlockRelationships({ adminSupabase, viewerUserId });
       blockedIds = relationships.blockedUserIds;
 
+      // The thread belongs to its post creator, including comments written by
+      // other people. Do not expose that thread across either direction of block.
+      const creatorBlocked = post.user_id && (
+        relationships.truncated
+          ? (await loadBlockedCreatorIds({
+            adminSupabase, viewerUserId, creatorIds: [post.user_id],
+          })).has(post.user_id)
+          : blockedIds.has(post.user_id)
+      );
+      if (creatorBlocked) {
+        return { ok: false, status: 404, body: { error: 'Post not found.' } };
+      }
+
       if (relationships.truncated) {
         // Beyond the cap the in-memory set is incomplete, and an incomplete
         // block set shows a viewer content they blocked. Fall back to the
