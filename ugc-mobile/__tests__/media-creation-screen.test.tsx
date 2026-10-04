@@ -1504,10 +1504,14 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect.objectContaining({ durationSeconds: 7.2 }),
     );
     const previews = tree!.root.findAll((node) => String(node.type) === 'media-preview');
+    // Letterboxed, so the clip fills its square tile and sits in the middle of
+    // it: as a 4:5 card of the tile's height it was narrower and to the left.
     expect(previews).toContainEqual(expect.objectContaining({
       props: expect.objectContaining({
         kind: 'video',
         url: 'https://cdn.example.com/motion.mp4',
+        letterbox: true,
+        nativeControls: false,
       }),
     }));
   });
@@ -1577,10 +1581,13 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
     const text = collectText(tree!.root);
     expect(text).toContain('Reference details');
+    // Letterboxed: the whole reference, centred across the sheet. Without it the
+    // preview was a 240pt card against the left edge (see media-preview.test).
     expect(tree!.root.findAll((node) => String(node.type) === 'media-preview')).toContainEqual(expect.objectContaining({
       props: expect.objectContaining({
         url: 'https://cdn.example.com/hero.png',
         height: 300,
+        letterbox: true,
       }),
     }));
   });

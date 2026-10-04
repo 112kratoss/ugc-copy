@@ -19,6 +19,12 @@ type VideoPreviewProps = {
   resolveRetryUrl?: () => Promise<string>;
 };
 
+// These players hold one clip, so there is no previous or next to go to.
+// expo-video documents both buttons as hidden by default, but on Android it
+// only applies its defaults once this prop is set; until then Media3's own
+// defaults show them.
+const SINGLE_CLIP_BUTTONS = { showPrevious: false, showNext: false };
+
 /** Shared by result previews and lightboxes; retry never starts a generation. */
 export function RecoverableVideoPreview(props: VideoPreviewProps) {
   return <VideoPreviewSession key={props.url} {...props} />;
@@ -123,6 +129,7 @@ function VideoPreviewAttempt({
         onFullscreenEnter={playback.onFullscreenEnter}
         onFullscreenExit={playback.onFullscreenExit}
         nativeControls={nativeControls}
+        buttonOptions={SINGLE_CLIP_BUTTONS}
         contentFit={contentFit}
         style={{ width: '100%', height: '100%' }}
       />
