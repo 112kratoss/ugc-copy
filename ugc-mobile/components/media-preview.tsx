@@ -20,7 +20,7 @@ import {
 import { useMediaSource } from '@/lib/use-media-source';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { appTheme, mediaColors, themes } from '@/lib/theme';
-import { useAppTheme } from '@/lib/theme-context';
+import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 
 export function MediaPreview({
   url,
@@ -38,8 +38,9 @@ export function MediaPreview({
   radius?: number;
   nativeControls?: boolean;
   /**
-   * Show the whole picture or clip, centred on black bands. Without it a
-   * picture is cropped to fill the frame.
+   * Show the whole picture, centred on black bands. Without it a picture is
+   * cropped to fill the frame. A clip is shown whole on black either way: the
+   * player never crops it.
    */
   letterbox?: boolean;
   /** A fresh link for a video whose own has stopped working. */
@@ -57,7 +58,7 @@ export function MediaPreview({
   }
 
   if (kind === 'video') {
-    return <VideoPreview url={url} height={height} radius={radius} nativeControls={nativeControls} letterbox={letterbox} resolveRetryUrl={resolveRetryUrl} />;
+    return <VideoPreview url={url} height={height} radius={radius} nativeControls={nativeControls} resolveRetryUrl={resolveRetryUrl} />;
   }
 
   if (imageFailed) {
@@ -507,29 +508,33 @@ function VideoPreview({
   height,
   radius,
   nativeControls,
-  letterbox,
   resolveRetryUrl,
 }: {
   url: string;
   height?: number;
   radius: number;
   nativeControls: boolean;
-  letterbox: boolean;
   resolveRetryUrl?: () => Promise<string>;
 }) {
-  const theme = useAppTheme();
+  // A clip on black in both schemes, so what the player draws over it (its
+  // loading spinner, its failure notice) takes the dark palette, as in the
+  // lightbox. The light scheme's coral is too deep to read on black.
   return (
-    <RecoverableVideoPreview
-      url={url}
-      nativeControls={nativeControls}
-      resolveRetryUrl={resolveRetryUrl}
-      style={{
-        ...previewFrame(height),
-        borderRadius: radius,
-        // The player contains its clip, and the view without controls is
-        // transparent, so this colour is the bands either side of the clip.
-        backgroundColor: letterbox ? mediaColors.mediaGround : theme.colors.mediaPlaceholder,
-      }}
-    />
+    <ThemeScope scheme="dark">
+      <RecoverableVideoPreview
+        url={url}
+        nativeControls={nativeControls}
+        resolveRetryUrl={resolveRetryUrl}
+        style={{
+          ...previewFrame(height),
+          borderRadius: radius,
+          // The player shows its clip whole and its view is transparent, with
+          // controls or without, so this colour is the bands beside a clip of
+          // any other shape than the frame. They are black in both schemes, as
+          // in a video player: the scheme's placeholder made them beige in light.
+          backgroundColor: mediaColors.mediaGround,
+        }}
+      />
+    </ThemeScope>
   );
 }

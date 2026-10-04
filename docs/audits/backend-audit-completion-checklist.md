@@ -19,7 +19,7 @@ be recorded explicitly instead of silently adding another lettered batch.
 Current ledger: **53 obligations — 23 passed, 24 untested, 4 failed, 2 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
 WORKFLOW-02 and WORKFLOW-04 remain untested after their scoped fixes shipped.
-SOCIAL-02 returns to untested after the scoped 8B release and repair.
+SOCIAL-02 had returned to untested after 8B; the new 8G finding reopens it.
 SOCIAL-01 is failed for 8F; SOCIAL-02/04 are failed for the 8G input errors.
 SOCIAL-03 returns to untested after the scoped 8D release. MEDIA-07 remains failed
 for legacy retirement.
