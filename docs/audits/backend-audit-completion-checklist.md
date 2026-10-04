@@ -1,11 +1,11 @@
 # Backend audit completion checklist
 
 Updated 2026-10-04. Current independently checked production:
-`3befe071092beb75436b2135af94626cb8b2042b`, including Sections 7F/7G/7H. Exact-main
-Quality, standard release, protected health and independent public checks pass;
-see the [canvas authoring release](backend-section-07-canvas-authoring-release-2026-10-04.md).
-Section 7I fixes the reproduced share-import counter race; local verification
-passes and CI/release remain pending.
+`f1a6e7b7710b7278f42220d9acd346f642c5ab4b`, including Sections 7F/7G/7H/7I.
+Exact-main Quality, standard release, protected health and independent public checks
+pass on that descendant; see the [share-import release](backend-section-07-share-import-release-2026-10-04.md).
+Section 7J adds ten permanent assistant-apply database controls (17 total with
+discard); local verification passes and candidate CI is pending. No runtime change.
 Surface inventory baseline remains `5934bd7d`; Section 6L changed no surfaces.
 
 This is the closure ledger for the audit, replacing section numbers as a progress
@@ -14,10 +14,10 @@ unequal effort and risk. Do not turn their pass count into a percentage of backe
 safety or an ETA. New findings attach to these obligations; changes in scope must
 be recorded explicitly instead of silently adding another lettered batch.
 
-Current ledger: **53 obligations — 22 passed, 26 untested, 2 failed, 3 external**.
+Current ledger: **53 obligations — 22 passed, 27 untested, 1 failed, 3 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
-WORKFLOW-02 returns to untested after the 7E/7F canvas fixes shipped. WORKFLOW-04
-remains failed for the reproduced 7I share counter race; 7G/7H are deployed.
+WORKFLOW-02 and WORKFLOW-04 are untested for their broader matrices after the
+7E/7F and 7G/7H/7I fixes shipped. MEDIA-07 remains failed for legacy retirement.
 No new obligation was added; these fixes do not complete the broader matrices.
 
 Status meanings: **passed** has evidence for the stated scope; **failed** has a
@@ -29,9 +29,10 @@ The [surface map](backend-audit-surface-map-2026-10-01.json) records every curre
 API route and `*service.ts` file, the isolated database's public functions and
 relations, and all registered jobs. File-level static reachability deliberately
 over-approximates callers. Seven services without API callers have reviewed page
-callers; eight indirect RPC sites have reviewed function names. The 152 functions
-without identified JavaScript callers are **not** presumed unused: SQL callers,
-triggers, scripts, edge code and mobile access remain MAP-02/DB-03 work. The local
+callers; eight indirect RPC sites have reviewed function names. The [October 4 caller reconciliation](backend-audit-caller-reconciliation-2026-10-04.md)
+classifies the earlier 152 no-JS-caller functions as 85 catalog-bound, nine with
+source/operator callers, 34 with reviewed SQL calls and 24 without a current caller
+located. None is presumed unused; behavior and compatibility remain MAP-02/DB-03 work. The local
 catalog is not a fresh production snapshot.
 
 ## Closure gates
@@ -60,7 +61,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | ID | Obligation and closure evidence | Status | Evidence / next action |
 | --- | --- | --- | --- |
 | MAP-01 | Capture route/service/job/public-catalog inventory and assign review gates | passed | [Surface map](backend-audit-surface-map-2026-10-01.json); 162 routes, 201 services, 323 functions, 136 relations, 12 jobs; 0 unassigned routes |
-| MAP-02 | Reconcile method-level behaviors, non-API entrypoints, SQL/trigger callers, mobile direct access, edge and operational scripts to this ledger | untested | Static module paths are scheduling evidence only; inspect the 152 functions without identified JS callers and map tables to mutation/read paths |
+| MAP-02 | Reconcile method-level behaviors, non-API entrypoints, SQL/trigger callers, mobile direct access, edge and operational scripts to this ledger | untested | Static module paths are scheduling evidence only; [Caller reconciliation](backend-audit-caller-reconciliation-2026-10-04.md) reviews the earlier 152 entries; remaining entrypoints, method behavior and table mutation/read paths stay open |
 
 ## Authentication and database
 
@@ -105,7 +106,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | WORKFLOW-01 | Canvas/child/run-step ownership and start admission fixes | passed | [Workflow ownership](backend-section-02-workflow-release-2026-09-27.md), [RPC admission](backend-section-03-rpc-release-2026-09-27.md) |
 | WORKFLOW-02 | Execute, partially fail, restart, retry, approve and cancel runs | untested | [7E](backend-section-07-canvas-persistence-2026-10-03.md) reproduces accepted-task loss from a failed link write; [7F](backend-section-07-atomic-approval-2026-10-03.md) reproduces stranded partial approval. Both are released: [7E](backend-section-07-canvas-persistence-release-2026-10-03.md), [7F](backend-section-07-atomic-approval-release-2026-10-03.md). Template completion/worker death evidence is in [7C/D](backend-section-07-completion-recovery-release-2026-10-03.md); broader canvas recovery remains open |
 | WORKFLOW-03 | Billing conservation and idempotency across retry/cancel/recovery | untested | 7A/7C/D template SQL evidence and 7E/7F real canvas image/video holds, refunds, retries and duplicate settlement are recorded; remaining interruption and provider/Storage cases stay open |
-| WORKFLOW-04 | Template publication, sharing/import, assistant proposal application and input ownership | failed | [7G](backend-section-07-assistant-discard-2026-10-03.md) reproduces applied-state overwrite and false discard success; [7G release verified](backend-section-07-assistant-discard-release-2026-10-04.md). [7H](backend-section-07-canvas-authoring-2026-10-03.md) also reproduces stale restore overwrite and publication revision regression; [7H release verified](backend-section-07-canvas-authoring-release-2026-10-04.md). [7I](backend-section-07-share-import-count-2026-10-04.md) reproduces two imported copies counted as one; eight SQL cases pass, unreleased. [7B publication fix released](backend-section-07-publication-release-2026-10-03.md); [36-method inventory](backend-section-07-method-matrix-2026-10-03.md) records remaining actual Storage, cross-user, stale-version and authoring cases |
+| WORKFLOW-04 | Template publication, sharing/import, assistant proposal application and input ownership | untested | [7G](backend-section-07-assistant-discard-2026-10-03.md) reproduces applied-state overwrite and false discard success; [7G release verified](backend-section-07-assistant-discard-release-2026-10-04.md). [7H](backend-section-07-canvas-authoring-2026-10-03.md) also reproduces stale restore overwrite and publication revision regression; [7H release verified](backend-section-07-canvas-authoring-release-2026-10-04.md). [7I](backend-section-07-share-import-count-2026-10-04.md) reproduces two imported copies counted as one; eight SQL cases pass and [7I is released](backend-section-07-share-import-release-2026-10-04.md). [7J](backend-section-07-assistant-apply-2026-10-04.md) adds ten permanent apply controls, local checks pass, CI pending. [7B publication fix released](backend-section-07-publication-release-2026-10-03.md); [36-method inventory](backend-section-07-method-matrix-2026-10-03.md) records remaining actual Storage, cross-user, stale-version and authoring cases |
 | MEDIA-01 | Cleanup retry/concurrency and allocation-failure source cancellation | passed | [6H release](backend-section-06-staging-cleanup-release-2026-10-01.md) |
 | MEDIA-02 | Published dead-owner cleanup and inherited reader protection | passed | [6J release](backend-section-06-staging-locks-release-2026-10-01.md); no claim about legacy scratch |
 | MEDIA-03 | Sequential crash reclamation under a bounded filesystem | passed | [6K probe](backend-section-06-disk-pressure-2026-10-01.md): five killed owners on 2 MiB tmpfs followed by successful staging |
