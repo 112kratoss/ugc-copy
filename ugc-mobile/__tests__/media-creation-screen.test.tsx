@@ -1027,6 +1027,219 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(collectText(tree.root)).not.toContain('Restoring the original prompt, settings, and references…');
   });
 
+  // The "Restoring…" state belongs to one run of the restore, and a run that has been cancelled
+  // can no longer clear it. The run that follows usually restores again and takes the state over.
+  // When that run has nothing to do, the cancelled one has to hand the state back itself, or the
+  // banner stays up, Generate stays off and autosave stops for as long as the editor is open.
+  describe('a remix restore that is cancelled', () => {
+    const RESTORING = 'Restoring the original prompt, settings, and references…';
+    const source = {
+      generation: { id: 'gen-girl', title: 'Original', prompt: 'The girl from @girl is crying', category: 'video', model: 'seedance-2' },
+      result: null,
+      inputs: {
+        video: {
+          referenceMode: 'elements',
+          startFrame: null,
+          endFrame: null,
+          elements: [{ id: 'girl', displayName: 'Girl', handle: '@girl', url: 'https://cdn.example.com/girl.png', storagePath: 'generation_inputs/owner/gen-girl/girl.png', sourceGenerationId: 'gen-girl' }],
+          referenceVideos: [],
+          referenceAudios: [],
+        },
+      },
+      workflowSettings: { model: 'seedance-2', mode: '', aspectRatio: '9:16', resolution: '480p', duration: 4, sound: false, referenceMode: 'elements' },
+      restoreIssues: [],
+    };
+    /** That remix as an earlier session left it: restored, then the prompt rewritten. */
+    const savedRemix = JSON.stringify({
+      image: createDefaultCreationDraft('image'),
+      video: {
+        ...createDefaultCreationDraft('video'),
+        model: 'seedance-2',
+        prompt: 'My edited scene: @girl is crying',
+        aspectRatio: '9:16',
+        resolution: '480p',
+        duration: 4,
+        references: [{ id: 'girl', kind: 'image', url: 'https://cdn.example.com/girl.png', storagePath: 'generation_inputs/owner/gen-girl/girl.png', fileName: 'girl.png', displayName: 'Girl', handle: '@girl', sourceGenerationId: 'gen-girl' }],
+      },
+      motion: createDefaultCreationDraft('motion'),
+      updatedAt: '2026-10-04T00:00:00.000Z',
+      remixRestored: true,
+      remixEditedKeys: { video: ['prompt'] },
+    });
+    const editor = () => <MediaCreationScreen initialTool="video" remixSource={{ generationId: 'gen-girl', postId: 'post-girl' }} />;
+    // Past the quote's delay and the autosave's, and past every storage read a load makes.
+    const settle = () => renderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
+    const promptOf = (tree: renderer.ReactTestRenderer) => tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value;
+    const generate = (tree: renderer.ReactTestRenderer) => findPressableByLabelPrefix(tree.root, 'Generate ·');
+    const savedDraftReads = () => draftStorage.getItem.mock.calls.filter(([key]) => String(key).startsWith('magicbooklet.creation.drafts')).length;
+
+    beforeEach(() => {
+      catalogState.catalog = createRemixRestoreCatalog();
+    });
+
+    it('takes the restoring banner down when every effect runs again over a resumed remix', async () => {
+      draftStorage.getItem.mockResolvedValue(savedRemix);
+      authState.api.getRemixSourceBundle.mockResolvedValue(source);
+      // React runs every effect of a subtree again, with its state kept, when a hidden
+      // <Activity> is shown. Fast Refresh does the same to this screen after an edit to its
+      // module, which is how the stuck banner was first met.
+      const inActivity = (mode: 'visible' | 'hidden') => <React.Activity mode={mode}>{editor()}</React.Activity>;
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(inActivity('visible')); });
+      await settle();
+      expect(savedDraftReads()).toBe(1);
+      expect(authState.api.getRemixSourceBundle).not.toHaveBeenCalled();
+      expect(collectText(tree.root)).not.toContain(RESTORING);
+      expect(generate(tree).props.disabled).toBe(false);
+
+      await renderer.act(async () => { tree.update(inActivity('hidden')); });
+      await renderer.act(async () => { tree.update(inActivity('visible')); });
+      await settle();
+
+      // The saved draft was read a second time, so the effects did run again.
+      expect(savedDraftReads()).toBe(2);
+      expect(collectText(tree.root)).not.toContain(RESTORING);
+      expect(generate(tree).props.disabled).toBe(false);
+      // Still the session as it was saved, not the source restored over it.
+      expect(promptOf(tree)).toBe('My edited scene: @girl is crying');
+      expect(tree.root.findAllByProps({ accessibilityLabel: 'Open details for Girl' })).not.toHaveLength(0);
+    });
+
+    it('takes the restoring banner down when the draft is resumed first and a new catalog then cancels the read', async () => {
+      draftStorage.getItem.mockResolvedValue(savedRemix);
+      // The read that starts on the stale state never answers: only cancelling it can end it.
+      authState.api.getRemixSourceBundle.mockReturnValue(new Promise(() => {}));
+      const inActivity = (mode: 'visible' | 'hidden') => <React.Activity mode={mode}>{editor()}</React.Activity>;
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(inActivity('visible')); });
+      await settle();
+      await renderer.act(async () => { tree.update(inActivity('hidden')); });
+
+      // The order the Pixel_9a emulator runs it in. There the saved draft is back before React
+      // renders `draftsHydrated` false, so that false never reaches the screen and the stale read
+      // is still out when the draft is marked resumed. `act` always renders the reset first.
+      // Outside it the scheduler renders in the same task only while the task is under 5 ms old,
+      // so a storage call that holds the effect flush for 12 ms makes it yield, and the draft's
+      // answer gets in ahead of the render.
+      draftStorage.getItem.mockImplementation(() => {
+        const until = performance.now() + 12;
+        while (performance.now() < until) { /* hold the effect flush */ }
+        return Promise.resolve(savedRemix);
+      });
+      tree.update(inActivity('visible'));
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      // The stale read is out and nothing has cancelled it. If this stops holding, the reset has
+      // rendered first and this case no longer tests the order it is named for.
+      expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
+      expect(collectText(tree.root)).toContain(RESTORING);
+
+      // On the device the read is cancelled by the catalog arriving as a new object.
+      await renderer.act(async () => {
+        catalogState.catalog = createRemixRestoreCatalog();
+        tree.update(inActivity('visible'));
+      });
+      await settle();
+
+      expect(collectText(tree.root)).not.toContain(RESTORING);
+      expect(generate(tree).props.disabled).toBe(false);
+      expect(promptOf(tree)).toBe('My edited scene: @girl is crying');
+    });
+
+    it('resumes a saved remix when the account arrives after the editor has opened', async () => {
+      // A link that opens the editor at a cold start can beat the stored session.
+      authState.user = null;
+      authState.identityUserId = null;
+      draftStorage.getItem.mockResolvedValue(savedRemix);
+      authState.api.getRemixSourceBundle.mockResolvedValue(source);
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(editor()); });
+      await settle();
+      expect(savedDraftReads()).toBe(0);
+
+      authState.user = { id: 'user-123', email: 'creator@example.com' };
+      authState.identityUserId = 'user-123';
+      await renderer.act(async () => { tree.update(editor()); });
+      await settle();
+
+      expect(savedDraftReads()).toBe(1);
+      expect(authState.api.getRemixSourceBundle).not.toHaveBeenCalled();
+      expect(collectText(tree.root)).not.toContain(RESTORING);
+      expect(generate(tree).props.disabled).toBe(false);
+      expect(promptOf(tree)).toBe('My edited scene: @girl is crying');
+    });
+
+    it('keeps the restore on screen while a catalog refresh starts it again', async () => {
+      let releaseSource: (value: unknown) => void = () => {};
+      authState.api.getRemixSourceBundle
+        .mockReturnValueOnce(new Promise(() => {}))
+        .mockReturnValueOnce(new Promise((resolve) => { releaseSource = resolve; }));
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(editor()); });
+      expect(collectText(tree.root)).toContain(RESTORING);
+
+      await renderer.act(async () => {
+        catalogState.catalog = createRemixRestoreCatalog();
+        tree.update(editor());
+      });
+      await settle();
+      // The first read was abandoned and a second one is out: still restoring.
+      expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(2);
+      expect(collectText(tree.root)).toContain(RESTORING);
+      expect(generate(tree).props.disabled).toBe(true);
+
+      await renderer.act(async () => {
+        releaseSource(source);
+        await Promise.resolve();
+      });
+      await settle();
+      expect(collectText(tree.root)).not.toContain(RESTORING);
+      expect(promptOf(tree)).toBe('The girl from @girl is crying');
+      expect(generate(tree).props.disabled).toBe(false);
+    });
+
+    it('retries a failed restore from its banner', async () => {
+      authState.api.getRemixSourceBundle
+        .mockRejectedValueOnce(new Error('The source could not be read.'))
+        .mockResolvedValue(source);
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(editor()); });
+      await settle();
+      expect(collectText(tree.root)).toContain('The source could not be read.');
+      expect(collectText(tree.root)).not.toContain(RESTORING);
+      expect(generate(tree).props.disabled).toBe(true);
+
+      await renderer.act(async () => { findPressableByText(tree.root, 'Retry restore').props.onPress(); });
+      await settle();
+
+      expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(2);
+      expect(collectText(tree.root)).not.toContain('The source could not be read.');
+      expect(collectText(tree.root)).not.toContain(RESTORING);
+      expect(promptOf(tree)).toBe('The girl from @girl is crying');
+      expect(generate(tree).props.disabled).toBe(false);
+    });
+
+    it('lets the creator go on with the inputs they have after a failed restore', async () => {
+      authState.api.getRemixSourceBundle.mockRejectedValue(new Error('The source could not be read.'));
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(editor()); });
+      await settle();
+      renderer.act(() => {
+        tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('A scene of my own');
+      });
+      await settle();
+      expect(generate(tree).props.disabled).toBe(true);
+
+      await renderer.act(async () => { findPressableByText(tree.root, 'Use available inputs').props.onPress(); });
+      await settle();
+
+      expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
+      expect(collectText(tree.root)).not.toContain('The source could not be read.');
+      expect(collectText(tree.root)).not.toContain(RESTORING);
+      expect(promptOf(tree)).toBe('A scene of my own');
+      expect(generate(tree).props.disabled).toBe(false);
+    });
+  });
+
   // The catalog reaches the screen after it mounts, so a restore usually starts in the same commit
   // as the catalog's first normalization of the default drafts, or after it. These cases deliver it
   // that way. Each update renders a fresh element: re-rendering the same element object lets React
@@ -1504,10 +1717,14 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect.objectContaining({ durationSeconds: 7.2 }),
     );
     const previews = tree!.root.findAll((node) => String(node.type) === 'media-preview');
+    // Letterboxed, so the clip fills its square tile and sits in the middle of
+    // it: as a 4:5 card of the tile's height it was narrower and to the left.
     expect(previews).toContainEqual(expect.objectContaining({
       props: expect.objectContaining({
         kind: 'video',
         url: 'https://cdn.example.com/motion.mp4',
+        letterbox: true,
+        nativeControls: false,
       }),
     }));
   });
@@ -1577,10 +1794,13 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
     const text = collectText(tree!.root);
     expect(text).toContain('Reference details');
+    // Letterboxed: the whole reference, centred across the sheet. Without it the
+    // preview was a 240pt card against the left edge (see media-preview.test).
     expect(tree!.root.findAll((node) => String(node.type) === 'media-preview')).toContainEqual(expect.objectContaining({
       props: expect.objectContaining({
         url: 'https://cdn.example.com/hero.png',
         height: 300,
+        letterbox: true,
       }),
     }));
   });
@@ -2796,7 +3016,13 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
     expect(authState.api.startVideoGeneration).toHaveBeenCalledTimes(1);
     expect(collectText(tree!.root)).toContain('Your video');
-    expect(tree!.root.find((node) => String(node.type) === 'media-preview' && node.props.url === 'https://cdn.example.com/output.mp4').props.kind).toBe('video');
+    // Letterboxed: the whole result, across its column. As a 4:5 card of its
+    // height it was 384pt wide in a 366pt column (see media-preview.test).
+    expect(tree!.root.find((node) => String(node.type) === 'media-preview' && node.props.url === 'https://cdn.example.com/output.mp4').props).toMatchObject({
+      kind: 'video',
+      height: 480,
+      letterbox: true,
+    });
     renderer.act(() => {
       findPressableByText(tree!.root, 'Post to feed').props.onPress();
     });

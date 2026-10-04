@@ -522,8 +522,11 @@ Create is a prompt-first single page for Image, Video and Motion, not a wizard.
   - The first-time path is prompt, then generate.
   - References are optional, except Motion's required character image and reference motion video, which come before the prompt.
   - Upload guidance says what is accepted and why.
+  - Reference details shows the whole reference, picture or clip, centred across the sheet on black bands (`MediaPreview` with `letterbox`), because it is what the model is given. A clip in a reference tile is centred the same way.
 - **Models:** pickers explain each model's benefit in plain words. Prompt enhancement never looks like the primary action.
-- **After generating:** the screen offers Post to feed (once there is a generation), Open Alerts, and Back to creator. It may also ask to turn on notifications. Progress survives leaving the screen and can be found in Alerts.
+- **After generating:** the screen offers Post to feed (once there is a generation), Open Alerts, and Back to creator. It may also ask to turn on notifications. Progress survives leaving the screen and can be found in Alerts. The result is shown whole, across the column and centred on black bands (`letterbox` again), so a picture or clip of any shape is seen complete before it is posted.
+- **Templates** (`components/media-template-screens.tsx`): a template's demo clip or its poster, an uploaded input, each step's output and the final result use that same frame. An uploaded clip is drawn without player controls, because its slot is one button that opens the picker.
+- **Preview frames:** a `MediaPreview` given a height is as wide as its column at that height; with no height it is a 4:5 card of the column's width.
 
 ### Profile
 

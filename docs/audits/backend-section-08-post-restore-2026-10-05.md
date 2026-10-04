@@ -47,8 +47,9 @@ Docker had stopped between sessions; the first resumed verification could not
 connect, then passed after Docker was restarted. That infrastructure failure is
 preserved separately from the product reproduction.
 
-Clean migration replay, full SQL assertions, production migration plan, PR CI
-and standard release verification remain pending. Private evidence is under
+Clean migration replay and all 1,970 SQL assertions across 92 files pass.
+Current production migration plan, PR CI and standard release verification
+remain pending. Private evidence is under
 `.audit-evidence/backend-social/post-lifecycle-*` and `post-restore-*`.
 SOCIAL-01 is failed until release; broader visibility/lifecycle coverage remains
 open. Historical recipe status alone cannot attribute this race or justify

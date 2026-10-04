@@ -28,13 +28,20 @@ export function MediaPreview({
   height,
   radius = appTheme.radii.lg,
   nativeControls = true,
+  letterbox = false,
   resolveRetryUrl,
 }: {
   url: string | null | undefined;
   kind?: 'image' | 'video' | null;
+  /** A frame this tall and as wide as its container. Without it, a 4:5 card of the container's width. */
   height?: number;
   radius?: number;
   nativeControls?: boolean;
+  /**
+   * Show the whole picture or clip, centred on black bands. Without it a
+   * picture is cropped to fill the frame.
+   */
+  letterbox?: boolean;
   /** A fresh link for a video whose own has stopped working. */
   resolveRetryUrl?: () => Promise<string>;
 }) {
@@ -50,7 +57,7 @@ export function MediaPreview({
   }
 
   if (kind === 'video') {
-    return <VideoPreview url={url} height={height} radius={radius} nativeControls={nativeControls} resolveRetryUrl={resolveRetryUrl} />;
+    return <VideoPreview url={url} height={height} radius={radius} nativeControls={nativeControls} letterbox={letterbox} resolveRetryUrl={resolveRetryUrl} />;
   }
 
   if (imageFailed) {
@@ -72,22 +79,34 @@ export function MediaPreview({
       key={`${url}:${retryNonce}`}
       url={url}
       cacheKey={url}
-      contentFit="cover"
+      contentFit={letterbox ? 'contain' : 'cover'}
       onError={() => setFailedUrl(sourceKey)}
       style={{
-        width: '100%',
-        aspectRatio: 4 / 5,
-        height,
+        ...previewFrame(height),
         borderRadius: radius,
         borderWidth: 1,
         borderColor: theme.colors.border,
         // A neutral tile rather than near-black: while a large preview loads,
         // #050506 is indistinguishable from the page behind it, so the card
         // reads as a hole punched in the layout instead of media on its way.
-        backgroundColor: theme.colors.panelSoft,
+        // A letterboxed picture sits on the black its bands are drawn in.
+        backgroundColor: letterbox ? mediaColors.mediaGround : theme.colors.panelSoft,
       }}
     />
   );
+}
+
+/**
+ * The box a preview fills: its container's width at the given height, or a 4:5
+ * card of that width when no height is given. The ratio and a height never go
+ * together. Given both, Yoga takes the width from the height (300 gives 240)
+ * and never reads `width: '100%'`, so the box sits against the left edge of a
+ * wider column and runs past the edge of a narrower one.
+ */
+function previewFrame(height: number | undefined) {
+  return height === undefined
+    ? { width: '100%' as const, aspectRatio: 4 / 5 }
+    : { width: '100%' as const, height };
 }
 
 type StableMediaImageProps = {
@@ -421,14 +440,15 @@ function MediaFallback({
   renewing?: boolean;
   /** A silent retry is loading behind this plate. */
   retrying?: boolean;
-  /** Cover the parent instead of taking a 4:5 frame of its width: the plate over a retrying image. */
+  /** Cover the parent instead of taking the preview's own frame: the plate over a retrying image. */
   fill?: boolean;
 }) {
   const theme = useAppTheme();
   const frameStyle = {
+    // The frame the picture would have had, so nothing around it moves when it fails.
     ...(fill
       ? { position: 'absolute' as const, inset: 0 }
-      : { width: '100%' as const, aspectRatio: 4 / 5, height, borderWidth: 1, borderColor: theme.colors.border }),
+      : { ...previewFrame(height), borderWidth: 1, borderColor: theme.colors.border }),
     borderRadius: radius,
     backgroundColor: theme.colors.surfaceInset,
     alignItems: 'center' as const,
@@ -487,12 +507,14 @@ function VideoPreview({
   height,
   radius,
   nativeControls,
+  letterbox,
   resolveRetryUrl,
 }: {
   url: string;
   height?: number;
   radius: number;
   nativeControls: boolean;
+  letterbox: boolean;
   resolveRetryUrl?: () => Promise<string>;
 }) {
   const theme = useAppTheme();
@@ -502,11 +524,11 @@ function VideoPreview({
       nativeControls={nativeControls}
       resolveRetryUrl={resolveRetryUrl}
       style={{
-        width: '100%',
-        aspectRatio: 4 / 5,
-        height,
+        ...previewFrame(height),
         borderRadius: radius,
-        backgroundColor: theme.colors.mediaPlaceholder,
+        // The player contains its clip, and the view without controls is
+        // transparent, so this colour is the bands either side of the clip.
+        backgroundColor: letterbox ? mediaColors.mediaGround : theme.colors.mediaPlaceholder,
       }}
     />
   );
