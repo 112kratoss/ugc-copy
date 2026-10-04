@@ -6,10 +6,37 @@ Updated 2026-10-04 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/follow-retry-audit-8a`, incorporating main `4e4186a5ac0fa08e1aa7897ee0027f5672f1f674` (#335); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/save-counter-audit-8b`, incorporating main `e6d8e81d54c3cef8bf0b5d7b68d42c245639b03e` (#336); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+8A #336 is deployed and verified as e6d8e81d. PR Quality 37199243395,
+exact-main Quality 37199914979 and standard release 37200570697 passed.
+Merge 17:17:23 IST October 4; release 17:33:46 IST; live checks 17:35:16 IST.
+No active mobile store run preceded merge. Read the follow retry release report.
+
+8B reproduces save-counter drift after account deletion and concurrent legacy
+toggles. Permanent baseline: six failed/two passed. Candidate migration
+20261004114652 preserves service-only RPC grants, serializes save intents per
+pair, counts only actual legacy deletions, and decrements actual deleted saves
+before Auth deletion. Clean replay + 1,960 pgTAP assertions and 12 SQL cases pass;
+actual local Auth API deletion passes. Read `backend-section-08-save-counters-2026-10-04.md`.
+Candidate CI/release next. Production rollback baseline passes 2/4, cleanup zero.
+Production aggregate: 38 posts, nine save-count mismatches (+9); no historical
+repair performed, cause not attributed. SOCIAL-02 remains failed for this work.
+The ledger stays 22 passed, 26 untested, two failed, three external.
+
+A separate private replay stack at DB55332 (project magicbooklet-social-replay)
+has migrations/tests symlinked from the checkout. Original 55321/55322 stack is
+preserved. Docker stopped and was restarted; candidate subsequently applied only
+locally. New private evidence is `.audit-evidence/backend-social/`; production
+probe variable and initial Auth fixture errors were corrected and retained.
+The private comment probe passes eight boundary controls. Keep the full audit
+scope open; the historical source-map and other domain obligations remain.
+
+The preceding checkpoint follows.
+
 
 7K #333 is released. PR Quality 37195063530, exact-main Quality 37195747753 and
 standard release 37196169222 passed. Merge b8f9c312 at 16:03:30 IST October 4;

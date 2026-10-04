@@ -1,12 +1,12 @@
 # Backend audit completion checklist
 
 Updated 2026-10-04. Current independently checked production:
-`4e4186a5ac0fa08e1aa7897ee0027f5672f1f674`, including Sections 7F–7K.
+`e6d8e81d54c3cef8bf0b5d7b68d42c245639b03e`, including Section 8A.
 Exact-main Quality, standard release and independent live checks pass; see the
-[template input release](backend-section-07-template-inputs-release-2026-10-04.md).
-Section 8A reproduces a false 500 on concurrent follow retries through actual
-local PostgREST. Three real transport controls and 35 focused tests pass after
-the fix; candidate CI/release remain pending.
+[follow retry release](backend-section-08-follow-retries-release-2026-10-04.md).
+Section 8B reproduces save-count drift on account deletion and concurrent legacy
+toggles. Its migration passes clean replay, 1,960 pgTAP assertions and 12 real
+SQL cases; candidate CI/release and existing-counter reconciliation remain pending.
 Surface inventory baseline remains `5934bd7d`; Section 6L changed no surfaces.
 
 This is the closure ledger for the audit, replacing section numbers as a progress
@@ -18,7 +18,7 @@ be recorded explicitly instead of silently adding another lettered batch.
 Current ledger: **53 obligations — 22 passed, 26 untested, 2 failed, 3 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
 WORKFLOW-02 and WORKFLOW-04 remain untested after their scoped fixes shipped.
-SOCIAL-02 is failed for the unreleased 8A retry defect. MEDIA-07 remains failed
+SOCIAL-02 is failed for the 8B save-counter defects and existing drift. MEDIA-07 remains failed
 for legacy retirement.
 No new obligation was added; these fixes do not complete the broader matrices.
 
@@ -124,7 +124,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | ID | Obligation and closure evidence | Status | Evidence / next action |
 | --- | --- | --- | --- |
 | SOCIAL-01 | Post/feed/search visibility, archive/restore/reveal and pagination | untested | Behavioral method matrix; existing ownership tests do not close visibility propagation |
-| SOCIAL-02 | Comments, follows, saves, sharing and notifications across identities/lifecycle | failed | [8A](backend-section-08-follow-retries-2026-10-04.md) reproduces concurrent follow retry returning 500 despite the saved intent; three actual PostgREST controls pass after fix, release pending. Remaining mutation/retry and cross-user behavior; reuse scoped Section 2 ownership evidence |
+| SOCIAL-02 | Comments, follows, saves, sharing and notifications across identities/lifecycle | failed | [8A](backend-section-08-follow-retries-2026-10-04.md) reproduces concurrent follow retry returning 500 despite the saved intent; three actual PostgREST controls pass and [8A release is verified](backend-section-08-follow-retries-release-2026-10-04.md). [8B](backend-section-08-save-counters-2026-10-04.md) reproduces save-count drift after deletion/concurrent toggle; 12 SQL controls pass after fix, release and historical reconciliation pending. Remaining mutation/retry and cross-user behavior; reuse scoped Section 2 ownership evidence |
 | SOCIAL-03 | Moderation/report/block propagation and admin sanctions | untested | Real visibility changes and authorization across readers/clients |
 | SOCIAL-04 | Profile, creator and contact surfaces | untested | Remaining method validation, privacy and abuse limits |
 | JOB-01 | Scheduler and all 12 jobs: lease contention, expiry, duplicate dispatch and retry | untested | Per-job fixture matrix from the surface map; existing generation cases apply only to that job |
