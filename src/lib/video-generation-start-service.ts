@@ -167,7 +167,11 @@ export async function startVideoGenerationForRoute({
       klingVideoElements,
       startImageUrl,
       endImageUrl,
-      imageUrls: buildImageUrls(startImageUrl, endImageUrl),
+      // With references, the start reads `imageUrls` as reference pictures. A first frame
+      // repeated there went to Wan 2.7 as its reference, in place of the named one.
+      imageUrls: normalizedSettings.referenceMode === 'elements'
+        ? []
+        : buildImageUrls(startImageUrl, endImageUrl),
       mode: String(normalizedSettings.mode),
       aspectRatio: String(normalizedSettings.aspectRatio),
       sound: Boolean(normalizedSettings.sound),
