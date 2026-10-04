@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import { GenerationModelCatalogSchemaUnavailableError } from '@/lib/generation-model-catalog-store';
@@ -725,5 +725,183 @@ describe('reference lengths a caller reports', () => {
     );
 
     expect([...slots].sort()).toEqual(['audioReferences', 'clipReferences', 'motionReferences', 'videoReferences']);
+  });
+});
+
+// A run from the page with one named reference picture, taken from the request body to
+// the provider request. The catalog's quote, the adapter and the video start are the real
+// ones, so the mapping in one and the routing in the other are held to each other: the
+// adapter hands named pictures over as elements, and four models never sent those.
+describe('a page run with a named reference picture', () => {
+  const REFERENCE = 'https://signed.example.com/uploads/user-1/lead.png';
+  const FIRST_FRAME = 'https://signed.example.com/uploads/user-1/first-frame.png';
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.stubEnv('KIE_AI_API_KEY', 'test-key');
+    vi.stubEnv('KIE_PROVIDER_WEBHOOK_SECRET', 'test-webhook-secret');
+    vi.stubEnv('KIE_WEBHOOK_HMAC_KEY', 'hmac-key');
+    vi.stubEnv('NEXT_PUBLIC_SITE_URL', 'https://magicbooklet.com');
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project.supabase.co');
+    vi.stubEnv('GENERATION_MODEL_CATALOG_SOURCE', 'code');
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  /** What a start asks of the service client: the idempotency claim and lock, the reservation, the provider task. */
+  function createAdminClient() {
+    return {
+      rpc: vi.fn(async (fn: string, args: Record<string, unknown>) => {
+        if (fn === 'claim_generation_start_request') return { data: 'claimed', error: null };
+        if (fn === 'start_generation') {
+          return {
+            data: { status: 'started', generation_id: 'generation-1', remaining_credits: 100, cost: args.p_cost },
+            error: null,
+          };
+        }
+        if (fn === 'attach_generation_provider_task') {
+          return { data: { status: 'attached', generation_id: 'generation-1' }, error: null };
+        }
+        return { data: true, error: null };
+      }),
+      from: vi.fn(() => {
+        const builder = {
+          select: () => builder,
+          eq: () => builder,
+          maybeSingle: async () => ({ data: null, error: null }),
+        };
+        return builder;
+      }),
+    };
+  }
+
+  async function startFromPage(
+    modelId: string,
+    settings: Record<string, unknown>,
+    frames: Array<Record<string, unknown>> = [],
+  ) {
+    const { startUnifiedGenerationForRoute: startRoute } = await import('@/lib/unified-generation-start-service');
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    const { loadPublishedGenerationModelCatalog } = await import('@/lib/generation-model-catalog-store');
+    const { catalog } = await loadPublishedGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
+
+    const requests: Array<Record<string, unknown>> = [];
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (typeof init?.body === 'string') requests.push(JSON.parse(init.body));
+      return { ok: true, json: async () => ({ code: 200, data: { taskId: 'provider-task-1' } }) } as Response;
+    });
+
+    const outcome = await startRoute(
+      {
+        request: new Request('http://localhost/api/generations', {
+          method: 'POST',
+          headers: { 'Idempotency-Key': `named-reference-${modelId}` },
+        }),
+        // The body CreateVideoClient posts for one reference card.
+        body: {
+          kind: 'video',
+          modelId,
+          catalogRevision: catalog.revision,
+          prompt: '@lead walks along the harbour at dusk.',
+          shots: [],
+          settings: {
+            aspectRatio: '16:9',
+            sound: false,
+            fixedLens: false,
+            isMultiShot: false,
+            referenceMode: 'elements',
+            ...settings,
+          },
+          inputs: [
+            {
+              slot: 'imageReferences',
+              kind: 'image',
+              url: REFERENCE,
+              assetId: null,
+              label: 'Hero shot',
+              handle: '@lead',
+              storagePath: 'uploads/user-1/lead.png',
+              sourceGenerationId: null,
+            },
+            ...frames,
+          ],
+        },
+        userId: 'user-1',
+        supabase: {} as never,
+        adminSupabase: createAdminClient() as never,
+      },
+      {
+        resolveSource: vi.fn(async () => null) as never,
+        enforceRateLimit: vi.fn(async () => undefined) as never,
+        // The real video start. Keeping a run's inputs has its own suite.
+        startVideo: (params) => startVideoGeneration({ ...params, persistInputMedia: false }),
+      },
+    );
+    return { outcome, request: requests[0] };
+  }
+
+  it.each([
+    {
+      label: 'Seedance 1.5 Pro',
+      modelId: 'seedance-1.5-pro',
+      settings: { duration: 4, resolution: '720p' },
+      request: { model: 'bytedance/seedance-1.5-pro', input: { input_urls: [REFERENCE] } },
+    },
+    {
+      label: 'Wan 2.7',
+      modelId: 'wan-2.7',
+      settings: { duration: 5, resolution: '1080p' },
+      request: { model: 'wan/2-7-r2v', input: { reference_image: [REFERENCE] } },
+    },
+    {
+      label: 'HappyHorse 1.1',
+      modelId: 'happyhorse-1.1',
+      settings: { duration: 5, resolution: '720p' },
+      request: { model: 'happyhorse-1-1/reference-to-video', input: { reference_image: [REFERENCE] } },
+    },
+    {
+      label: 'Veo 3.1 Fast',
+      modelId: 'veo-3.1',
+      settings: { mode: 'veo3_fast', duration: 8, resolution: '720p' },
+      request: { model: 'veo3_fast', generationType: 'REFERENCE_2_VIDEO', imageUrls: [REFERENCE] },
+    },
+    {
+      label: 'Veo 3.1 Lite',
+      modelId: 'veo-3.1',
+      settings: { mode: 'veo3_lite', duration: 8, resolution: '720p' },
+      request: { model: 'veo3_lite', generationType: 'REFERENCE_2_VIDEO', imageUrls: [REFERENCE] },
+    },
+    {
+      // One of the models that always sent it, so a pass here is not the harness.
+      label: 'Seedance 2.5',
+      modelId: 'seedance-2-5',
+      settings: { duration: 5, resolution: '720p' },
+      request: { model: 'bytedance/seedance-2-5', input: { reference_image_urls: [REFERENCE] } },
+    },
+  ])('sends $label the picture', async ({ modelId, settings, request: expected }) => {
+    const { outcome, request } = await startFromPage(modelId, settings);
+
+    expect(outcome).toMatchObject({ success: true, predictionId: 'provider-task-1', modelId });
+    expect(request).toMatchObject(expected);
+  });
+
+  it('sends Wan 2.7 the picture beside a first frame', async () => {
+    const { request } = await startFromPage('wan-2.7', { duration: 5, resolution: '1080p' }, [{
+      slot: 'startFrame',
+      kind: 'image',
+      url: FIRST_FRAME,
+      label: 'Start frame',
+      storagePath: 'uploads/user-1/first-frame.png',
+      sourceGenerationId: null,
+    }]);
+
+    expect(request).toMatchObject({
+      model: 'wan/2-7-r2v',
+      input: { reference_image: [REFERENCE], first_frame: FIRST_FRAME },
+    });
   });
 });
