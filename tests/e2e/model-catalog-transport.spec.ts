@@ -1,6 +1,14 @@
 import { expect, test } from '@playwright/test';
 import fixture from '../../contracts/model-catalog-transport-v1.json';
 
+// The dev server that the workers share reloads open pages on its own (see
+// kling-o3-named-subjects.spec.ts). These journeys keep what they did in the
+// page's memory alone: the edited prompt, the chosen setting, the catalog
+// revision the page loaded. Such a reload wipes all of it and no step can bring
+// it back, so environmental retries run the journey again, as in
+// public-search.spec.ts.
+test.describe.configure({ retries: 2 });
+
 test.beforeEach(async ({ context }) => {
   await context.addCookies([
     { name: 'e2e-auth', value: 'workflow-user', url: 'http://127.0.0.1:3100' },
