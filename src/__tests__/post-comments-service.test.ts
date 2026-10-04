@@ -339,6 +339,21 @@ describe('post comments service', () => {
       expect(result.body.pageInfo.hasMore).toBe(false);
     });
 
+    it.each(['outgoing', 'incoming', 'beyond-cap'])('denies the whole creator thread for an %s block before reading comments', async direction => {
+      const filler = direction === 'beyond-cap'
+        ? Array.from({ length: 5001 }, (_, index) => ({ blocker_user_id: STRANGER_ID, blocked_user_id: `unrelated-${index}` }))
+        : [];
+      const { client, tableReads } = createClient({
+        userBlocks: [...filler, direction === 'incoming'
+          ? { blocker_user_id: POST_OWNER_ID, blocked_user_id: STRANGER_ID }
+          : { blocker_user_id: STRANGER_ID, blocked_user_id: POST_OWNER_ID }],
+      });
+      expect(await listPostCommentsForRoute({
+        postId: POST_ID, viewerUserId: STRANGER_ID, createAdminSupabase: () => client,
+      })).toMatchObject({ ok: false, status: 404 });
+      expect(tableReads.post_comments ?? 0).toBe(0);
+    });
+
     it('reports 404 for a post that is not publicly visible', async () => {
       const { client } = createClient({ posts: [{ ...PUBLIC_POST, visibility: 'private' }] });
 

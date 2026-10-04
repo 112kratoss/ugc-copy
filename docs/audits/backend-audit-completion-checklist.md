@@ -1,12 +1,13 @@
 # Backend audit completion checklist
 
 Updated 2026-10-04. Current independently checked production:
-`e6d8e81d54c3cef8bf0b5d7b68d42c245639b03e`, including Section 8A.
-Exact-main Quality, standard release and independent live checks pass; see the
-[follow retry release](backend-section-08-follow-retries-release-2026-10-04.md).
-Section 8B reproduces save-count drift on account deletion and concurrent legacy
-toggles. Its migration passes clean replay, 1,960 pgTAP assertions and 12 real
-SQL cases; candidate CI/release and existing-counter reconciliation remain pending.
+`e5bc769b33cce373b3911bb93c4c8513f6841ae2`, including Section 8B.
+Exact-main Quality, standard release, function digests and live checks pass; see
+[save-counter release and repair](backend-section-08-save-counters-release-2026-10-04.md).
+The nine historical count mismatches were reconciled; independent readback is zero.
+8C #338 is merged with release verification pending. 8D reproduces comment-thread
+reads across a creator block; eight real transport and 46 focused cases pass
+after the candidate fix. Broader social behavior coverage remains open.
 Surface inventory baseline remains `5934bd7d`; Section 6L changed no surfaces.
 
 This is the closure ledger for the audit, replacing section numbers as a progress
@@ -15,11 +16,11 @@ unequal effort and risk. Do not turn their pass count into a percentage of backe
 safety or an ETA. New findings attach to these obligations; changes in scope must
 be recorded explicitly instead of silently adding another lettered batch.
 
-Current ledger: **53 obligations — 22 passed, 25 untested, 3 failed, 3 external**.
+Current ledger: **53 obligations — 22 passed, 26 untested, 2 failed, 3 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
 WORKFLOW-02 and WORKFLOW-04 remain untested after their scoped fixes shipped.
-SOCIAL-02 is failed for the 8B save-counter defects and existing drift.
-SOCIAL-03 is failed for the 8C block/follow race. MEDIA-07 remains failed
+SOCIAL-02 returns to untested after the scoped 8B release and repair.
+SOCIAL-03 is failed for the 8C/8D block behavior defects. MEDIA-07 remains failed
 for legacy retirement.
 No new obligation was added; these fixes do not complete the broader matrices.
 
@@ -125,8 +126,8 @@ coverage includes shared helpers that do not end in `service.ts`.
 | ID | Obligation and closure evidence | Status | Evidence / next action |
 | --- | --- | --- | --- |
 | SOCIAL-01 | Post/feed/search visibility, archive/restore/reveal and pagination | untested | Behavioral method matrix; existing ownership tests do not close visibility propagation |
-| SOCIAL-02 | Comments, follows, saves, sharing and notifications across identities/lifecycle | failed | [8A](backend-section-08-follow-retries-2026-10-04.md) reproduces concurrent follow retry returning 500 despite the saved intent; three actual PostgREST controls pass and [8A release is verified](backend-section-08-follow-retries-release-2026-10-04.md). [8B](backend-section-08-save-counters-2026-10-04.md) reproduces save-count drift after deletion/concurrent toggle; 12 SQL controls pass after fix, release and historical reconciliation pending. Remaining mutation/retry and cross-user behavior; reuse scoped Section 2 ownership evidence |
-| SOCIAL-03 | Moderation/report/block propagation and admin sanctions | failed | [8C](backend-section-08-follow-block-race-2026-10-04.md) reproduces an uncommitted follow surviving a block; six SQL cases pass after serialization, candidate release pending. Remaining moderation and visibility behavior stays open |
+| SOCIAL-02 | Comments, follows, saves, sharing and notifications across identities/lifecycle | untested | [8A](backend-section-08-follow-retries-2026-10-04.md) reproduces concurrent follow retry returning 500 despite the saved intent; three actual PostgREST controls pass and [8A release is verified](backend-section-08-follow-retries-release-2026-10-04.md). [8B](backend-section-08-save-counters-2026-10-04.md) reproduces save-count drift after deletion/concurrent toggle; 12 SQL controls pass and [8B release/repair is verified](backend-section-08-save-counters-release-2026-10-04.md). [8D](backend-section-08-comment-lifecycle-2026-10-04.md) adds 11 SQL lifecycle controls. Remaining mutation/retry and cross-user behavior; reuse scoped Section 2 ownership evidence |
+| SOCIAL-03 | Moderation/report/block propagation and admin sanctions | failed | [8C](backend-section-08-follow-block-race-2026-10-04.md) reproduces an uncommitted follow surviving a block; six SQL cases pass after serialization, release verification pending. [8D](backend-section-08-comment-lifecycle-2026-10-04.md) reproduces whole-thread reads across creator blocks; actual transport fix passes, release pending. Remaining moderation and visibility behavior stays open |
 | SOCIAL-04 | Profile, creator and contact surfaces | untested | Remaining method validation, privacy and abuse limits |
 | JOB-01 | Scheduler and all 12 jobs: lease contention, expiry, duplicate dispatch and retry | untested | Per-job fixture matrix from the surface map; existing generation cases apply only to that job |
 | JOB-02 | Budgets, poison work, retention/reclaim jobs and alert delivery | untested | Prove bounded progress and failures that remain observable |
