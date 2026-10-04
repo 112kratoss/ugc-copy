@@ -327,6 +327,11 @@ jobs:
           SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
         run: npx vitest run src/__tests__/post-save-counter-database.test.ts
 
+      - name: Test follow and block concurrency with real SQL
+        env:
+          SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: npx vitest run src/__tests__/follow-block-concurrency-database.test.ts
+
       - name: Stop isolated Supabase database
         if: always()
         continue-on-error: true

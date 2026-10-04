@@ -15,10 +15,11 @@ unequal effort and risk. Do not turn their pass count into a percentage of backe
 safety or an ETA. New findings attach to these obligations; changes in scope must
 be recorded explicitly instead of silently adding another lettered batch.
 
-Current ledger: **53 obligations — 22 passed, 26 untested, 2 failed, 3 external**.
+Current ledger: **53 obligations — 22 passed, 25 untested, 3 failed, 3 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
 WORKFLOW-02 and WORKFLOW-04 remain untested after their scoped fixes shipped.
-SOCIAL-02 is failed for the 8B save-counter defects and existing drift. MEDIA-07 remains failed
+SOCIAL-02 is failed for the 8B save-counter defects and existing drift.
+SOCIAL-03 is failed for the 8C block/follow race. MEDIA-07 remains failed
 for legacy retirement.
 No new obligation was added; these fixes do not complete the broader matrices.
 
@@ -125,7 +126,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | --- | --- | --- | --- |
 | SOCIAL-01 | Post/feed/search visibility, archive/restore/reveal and pagination | untested | Behavioral method matrix; existing ownership tests do not close visibility propagation |
 | SOCIAL-02 | Comments, follows, saves, sharing and notifications across identities/lifecycle | failed | [8A](backend-section-08-follow-retries-2026-10-04.md) reproduces concurrent follow retry returning 500 despite the saved intent; three actual PostgREST controls pass and [8A release is verified](backend-section-08-follow-retries-release-2026-10-04.md). [8B](backend-section-08-save-counters-2026-10-04.md) reproduces save-count drift after deletion/concurrent toggle; 12 SQL controls pass after fix, release and historical reconciliation pending. Remaining mutation/retry and cross-user behavior; reuse scoped Section 2 ownership evidence |
-| SOCIAL-03 | Moderation/report/block propagation and admin sanctions | untested | Real visibility changes and authorization across readers/clients |
+| SOCIAL-03 | Moderation/report/block propagation and admin sanctions | failed | [8C](backend-section-08-follow-block-race-2026-10-04.md) reproduces an uncommitted follow surviving a block; six SQL cases pass after serialization, candidate release pending. Remaining moderation and visibility behavior stays open |
 | SOCIAL-04 | Profile, creator and contact surfaces | untested | Remaining method validation, privacy and abuse limits |
 | JOB-01 | Scheduler and all 12 jobs: lease contention, expiry, duplicate dispatch and retry | untested | Per-job fixture matrix from the surface map; existing generation cases apply only to that job |
 | JOB-02 | Budgets, poison work, retention/reclaim jobs and alert delivery | untested | Prove bounded progress and failures that remain observable |
