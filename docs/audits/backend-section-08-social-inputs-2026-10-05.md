@@ -38,7 +38,7 @@ rate entries and checked Auth absence. No notification, paid provider call,
 production mutation or historical repair occurred. The dev server was stopped.
 Private before/after evidence: `.audit-evidence/backend-social/social-input-*`.
 
-No migration or mobile runtime change is needed. PR/CI/release remain pending.
+No migration or mobile runtime change is needed. [PR/CI/release verified](backend-section-08-social-inputs-release-2026-10-05.md).
 SOCIAL-01/02/04 remain open; these malformed-input controls do not establish
 complete method coverage, request byte limits or successful sharing/publication
 lifecycle coverage. No new checklist obligation was added.

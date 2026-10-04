@@ -6,10 +6,40 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/social-share-audit-8h`, based on main `44864e5667eb6a9ed7d81bcc6faa5138590a8767` (#346); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/job-lock-audit-9a`, based on the #348 candidate `0f3442b8` atop main `44864e5667eb6a9ed7d81bcc6faa5138590a8767` (#346); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+8G is fully released as 44864e56. Exact-main Quality 37234106785 and standard
+release 37234741646 pass (October 4 21:10:17 UTC). Independent exact live build,
+feed/admin/webhook checks pass. See social-inputs-release report. SOCIAL-02/04
+return to untested for remaining behavior.
+
+DB-04 current configuration is verified: production/local empty publication,
+no application channel producer/consumer, three actual local socket identities
+across changes/deletion receive no row events. Report records transport failure
+before enabling isolated Realtime and the precise limits. Reopen before enabling
+streams/channels. Ledger: 24 passed, 26 untested, one failed, two external (53).
+9A job-lock tests and these release/Realtime docs are in the current local branch for the next PR.
+8H #348 Quality 37234612545 is running. Full goal remains incomplete.
+
+DB-04 investigation: production and isolated local publication inventories both
+show supabase_realtime with all_tables=false and zero tables; current web/mobile
+source has no Postgres Realtime channel consumer. First actual socket probe hit
+transport failure because audit Realtime container was excluded, not an access
+control result. It cleaned up all fixtures. Isolated audit stack is being restarted
+with Realtime enabled (primary stack untouched); retry socket checks next.
+Private evidence: .audit-evidence/backend-realtime/.
+
+8H tests/docs PR #348 is open, head 0f3442b8, Quality 37234612545 running.
+8G exact-main Quality 37234106785 passed; standard release 37234741646 running.
+Finish that release and independent live checks before closing its scoped failures.
+
+9A local shared job-lock tests: seven actual PostgREST/SQL cases pass, including
+SIGKILL of a real holder and replacement only after real lease expiry. Types/lint
+pass. New tests/config/report are uncommitted for the next audit batch. This is
+shared-primitive coverage, not certification of all twelve jobs.
 
 8H share controls: thirteen actual PostgREST/SQL tests and ten assertions across
 six real Next HTTP requests pass; no new runtime defect. Caller attribution,
