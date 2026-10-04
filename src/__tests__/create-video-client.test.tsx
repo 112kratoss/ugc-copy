@@ -4,6 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CreateVideoClient from '@/app/create-video/CreateVideoClient';
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import type { PersistedImageElementRecord, PersistedMediaRecord, PersistedSubjectRecord } from '@/lib/persisted-media';
+// For "references saved on another model": the registry the page reads, the server's
+// catalog and its quote function, and what hands the one to the other in the browser.
+import * as clientModels from '@/lib/client-generation-models';
+import * as serverCatalog from '@/lib/generation-model-catalog';
+import * as catalogClient from '@/lib/generation-model-client';
 import type { EnhancerContext } from '@/lib/prompt-enhancer';
 import type { RemixResolvedSubject, RemixSourceBundle } from '@/lib/remix-source';
 
@@ -1889,13 +1894,19 @@ describe('CreateVideoClient Kling video elements', () => {
    * A reference saved on one model stays in the browser, so a prompt on Kling 3.0
    * can still mention it. The row under the prompt answered "Switch to Reusable
    * references to use @hero", which named a mode switch the page lost when the
-   * shape of a run became a reading of what is attached (#95). The line was left
-   * showing only while the page had no catalog entry for the model, where
-   * Generate is disabled (2026-10-03). The card that says the references are on
-   * standby gives the model's reason, and Generate refuses the run with it.
+   * shape of a run became a reading of what is attached (#95). That line was
+   * removed (2026-10-03): it showed only while the page had no catalog entry for
+   * the model, where Generate is disabled.
+   *
+   * With saved references left out of the run, such a prompt reaches Generate on
+   * a model that has its catalog entry too, and the model's reason alone ("...
+   * not available for this model yet") did not say that one word of the prompt
+   * was what stopped the run. The row names the mention now, and so does the
+   * refusal (2026-10-04).
    *
    * This file's catalog hook hands the page no descriptor, so the page reads its
-   * built-in table here, which is the state the line showed in.
+   * built-in table here. "references saved on another model" below has the same
+   * on the catalog's entries.
    */
   describe('a saved reference the model cannot take', () => {
     const prompt = 'A harbour at dusk where @hero walks home';
@@ -1915,25 +1926,501 @@ describe('CreateVideoClient Kling video elements', () => {
       return view;
     }
 
-    it('says why on the standby card, and leaves the row under the prompt to the character count', async () => {
+    it('says why on the standby card, and names the mention in the row under the prompt', async () => {
       await renderWithSavedReferenceMentioned();
 
       expect(screen.getByText(/Reusable image references are not available for Kling yet\./)).toBeInTheDocument();
-      // The handle is one the page knows, so it is not an unknown mention either.
+      // The handle is one the page knows, so it is not an unknown mention.
       const row = promptBox().nextElementSibling;
-      expect(row?.textContent).toBe(`${prompt.length}/2500`);
+      expect(Array.from(row?.children ?? []).map((part) => part.textContent)).toEqual([
+        `${prompt.length}/2500`,
+        'On standby here: @hero',
+      ]);
+    });
+
+    it('leaves that row to an unknown mention while the prompt has one', async () => {
+      // One line at a time, in the order Generate refuses a prompt.
+      await renderWithSavedReferenceMentioned();
+      const withUnknown = `${prompt} past @ghost`;
+      fireEvent.change(promptBox(), { target: { value: withUnknown } });
+
+      const row = promptBox().nextElementSibling;
+      expect(Array.from(row?.children ?? []).map((part) => part.textContent)).toEqual([
+        `${withUnknown.length}/2500`,
+        'Unknown element mention: @ghost',
+      ]);
+    });
+
+    it('says nothing in that row while the prompt mentions no saved reference', async () => {
+      await renderWithSavedReferenceMentioned();
+      fireEvent.change(promptBox(), { target: { value: 'A harbour at dusk' } });
+
+      const row = promptBox().nextElementSibling;
+      expect(row?.textContent).toBe('17/2500');
       expect(row?.children).toHaveLength(1);
     });
 
-    it('refuses the run with the reason the card gives', async () => {
+    it('refuses the run and names the mention', async () => {
       const view = await renderWithSavedReferenceMentioned();
 
       fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
 
       expect(view.container.querySelector('p.text-red-400')?.textContent)
-        .toBe('Reusable image references are not available for Kling yet.');
+        .toBe('Kling 3.0 Cinematic cannot use @hero. Remove it from the prompt, or pick a model that takes reusable references.');
       expect(temporaryUploadMock).not.toHaveBeenCalled();
       expect(fetchMock).not.toHaveBeenCalledWith('/api/generations', expect.objectContaining({ method: 'POST' }));
+    });
+  });
+
+  /**
+   * References saved in the browser on one model, and a model that cannot take them.
+   *
+   * The browser keeps a creator's references when the model changes, so a draft can
+   * hold an image, a clip or a track that the selected model has no slot for. The
+   * page counted all of them (2026-10-03). Two images saved on Seedance 2 made Kling
+   * 3.0 and Hailuo 2.3 references runs: the price quote refused them, Generate stayed
+   * off, and the page had no card to remove the images by, while its own card said
+   * they were on standby. A saved clip did the same to every model that takes none.
+   *
+   * Here the page reads the catalog entries the server publishes, as it does in the
+   * browser once the catalog has loaded. The rest of this file leaves it on its
+   * built-in table, where a saved image never made Kling 3.0 a references run, which
+   * is how this went unseen. The server's own quote function prices what the page asks.
+   */
+  describe('references saved on another model', () => {
+    type VideoModelId = Parameters<typeof serverCatalog.getVideoInputLimits>[0];
+    const publishedCatalog = serverCatalog.buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
+    const videoModelIds = publishedCatalog.models
+      .filter((model) => model.kind === 'video')
+      .map((model) => model.id as VideoModelId);
+    const registry = clientModels.VIDEO_MODELS as unknown as Record<string, Record<string, unknown>>;
+    let builtInTable: Record<string, Record<string, unknown>>;
+
+    beforeEach(() => {
+      builtInTable = { ...registry };
+      catalogClient.applyGenerationModelCatalogToRegistries(publishedCatalog, { image: {}, video: registry, motion: {} });
+    });
+
+    afterEach(() => {
+      for (const id of Object.keys(registry)) delete registry[id];
+      Object.assign(registry, builtInTable);
+    });
+
+    const picture = (name: string) => new File(['image'], `${name}.png`, { type: 'image/png' });
+
+    /** What the browser holds when the page opens. */
+    function saveInTheBrowser(saved: { images?: number; clip?: boolean; clips?: number; track?: boolean; klingClip?: boolean; startFrame?: boolean }) {
+      getPersistedImageElementRecordsMock.mockResolvedValue(Array.from({ length: saved.images ?? 0 }, (_, index) => ({
+        id: `saved-image-${index + 1}`,
+        displayName: `Saved image ${index + 1}`,
+        file: picture(`saved-image-${index + 1}`),
+      })));
+      getPersistedMediaRecordsMock.mockImplementation(async (key: string) => {
+        if (key === 'create-video:reference-videos' && (saved.clip || saved.clips)) {
+          return Array.from({ length: saved.clips ?? 1 }, (_, index) => ({
+            id: `saved-clip-${index + 1}`,
+            displayName: index === 0 ? 'Saved clip' : `Saved clip ${index + 1}`,
+            file: new File(['clip'], `saved-clip-${index + 1}.mp4`, { type: 'video/mp4' }),
+            durationSeconds: 4,
+          }));
+        }
+        if (key === 'create-video:reference-audios' && saved.track) {
+          return [{ id: 'saved-track', displayName: 'Saved track', file: new File(['track'], 'saved-track.mp3', { type: 'audio/mpeg' }), durationSeconds: 6 }];
+        }
+        if (key === 'create-video:kling-video-elements' && saved.klingClip) {
+          return [{ id: 'saved-kling-clip', displayName: 'Saved Kling clip', handle: '@saved_kling_clip', file: new File(['clip'], 'saved-kling-clip.mp4', { type: 'video/mp4' }), durationSeconds: 4 }];
+        }
+        return [];
+      });
+      if (saved.startFrame) {
+        getPersistedFileMock.mockImplementation(async (key: string) => (
+          key === 'create-video:start-image' ? picture('start') : null
+        ));
+      }
+    }
+
+    /**
+     * Waits until the page has read the saved draft back and drawn itself with it. A
+     * reference on standby leaves no mark on the page, so there is nothing to look for:
+     * the reads resolve together, and one turn of the event loop later the page has
+     * taken them in one render.
+     */
+    async function restored() {
+      await waitFor(() => expect(getPersistedMediaRecordsMock).toHaveBeenCalledTimes(3));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
+    /** What the page last asked the price quote for. */
+    function lastQuoteRequest() {
+      const request = quoteRequestMock.mock.calls.at(-1)?.[0];
+      expect(request).toBeTruthy();
+      return request as GenerationModelQuoteInput & {
+        settings: Record<string, unknown>;
+        inputCounts: { images: number; videos: number; audios: number };
+        inputMetadata: { slots: Record<string, { count: number }> };
+      };
+    }
+
+    /** The server's answer to that request: null when it gives a price, or why it refuses. */
+    function refusedByTheServer(request: GenerationModelQuoteInput) {
+      try {
+        // This file's catalog hook has a revision of its own; the question is the rules.
+        serverCatalog.quoteGenerationModel({ ...request, catalogRevision: undefined });
+        return null;
+      } catch (error) {
+        if (!(error instanceof serverCatalog.CatalogError)) throw error;
+        return error.fieldErrors;
+      }
+    }
+
+    /** One line of the run summary, by its label. */
+    function runSummary(label: 'Reference' | 'Inputs') {
+      return screen.getByText(label, { selector: 'div' }).nextElementSibling?.textContent?.replace(/\s+/g, ' ').trim();
+    }
+
+    /** The group that holds the start frame, and whether the page has greyed it out. */
+    function frameGroupLocked(container: HTMLElement) {
+      const group = container.querySelector('#video-start-frame-input')?.closest('[aria-disabled]');
+      expect(group).not.toBeNull();
+      return group!.getAttribute('aria-disabled') === 'true';
+    }
+
+    function runInputs(slot: string) {
+      return (postedRun()?.inputs ?? []).filter((input: { slot: string }) => input.slot === slot);
+    }
+
+    /** What the standby card says under its title, or null where the page shows no such card. */
+    function standbyCard() {
+      const title = screen.queryByText('Saved references are on standby');
+      return title
+        ? Array.from(title.parentElement?.querySelectorAll('p') ?? []).slice(1).map((line) => line.textContent)
+        : null;
+    }
+
+    it.each(videoModelIds)('%s: asks the quote for what the model takes of a saved image, clip, track and Kling clip', async (modelId) => {
+      // One of each kind the browser keeps, so within what any model takes of a kind it
+      // has a slot for. Hailuo 2.3 animates a start image and has no run without one.
+      saveInTheBrowser({ images: 1, clip: true, track: true, klingClip: true, startFrame: modelId === 'hailuo-2.3' });
+      render(<CreateVideoClient prefill={{ model: modelId }} />);
+      await restored();
+
+      const request = lastQuoteRequest();
+      const limits = serverCatalog.getVideoInputLimits(modelId);
+      // Kling 3.0's clips are its named video elements, a slot of their own.
+      const takesClips = limits.videos > 0 && modelId !== 'kling-3.0-video';
+      const carried = {
+        imageReferences: limits.images > 0 ? 1 : 0,
+        videoReferences: takesClips ? 1 : 0,
+        audioReferences: limits.audios > 0 ? 1 : 0,
+        videoElements: modelId === 'kling-3.0-video' ? 1 : 0,
+      };
+
+      expect({
+        imageReferences: request.inputMetadata.slots.imageReferences.count,
+        videoReferences: request.inputMetadata.slots.videoReferences.count,
+        audioReferences: request.inputMetadata.slots.audioReferences.count,
+        videoElements: request.inputMetadata.slots.videoElements.count,
+      }).toEqual(carried);
+      expect(request.inputCounts.videos).toBe(carried.videoReferences + carried.videoElements);
+      expect(request.inputCounts.audios).toBe(carried.audioReferences);
+      const carriesAReference = carried.imageReferences + carried.videoReferences + carried.audioReferences > 0;
+      expect(request.settings.referenceMode).toBe(carriesAReference || !limits.startFrame ? 'elements' : 'frames');
+      // And the server gives that request a price.
+      expect(refusedByTheServer(request)).toBeNull();
+    });
+
+    it('checks that against models of every kind', () => {
+      // A list with no model that takes nothing, or none that takes everything, would
+      // let the test above pass without proving anything.
+      const takes = (modelId: VideoModelId) => {
+        const limits = serverCatalog.getVideoInputLimits(modelId);
+        return `${limits.images > 0 ? 'images' : '-'} ${limits.videos > 0 && modelId !== 'kling-3.0-video' ? 'clips' : '-'} ${limits.audios > 0 ? 'tracks' : '-'}`;
+      };
+
+      expect(videoModelIds.filter((modelId) => takes(modelId) === '- - -').sort()).toEqual(['hailuo-2.3', 'kling-3.0-turbo', 'kling-3.0-video']);
+      expect(videoModelIds.filter((modelId) => takes(modelId) === 'images - -').length).toBeGreaterThan(2);
+      expect(videoModelIds.filter((modelId) => takes(modelId) === 'images clips -')).toEqual(['gemini-omni-video']);
+      expect(videoModelIds.filter((modelId) => takes(modelId) === 'images clips tracks').length).toBeGreaterThan(2);
+    });
+
+    it('makes a frames run on Kling 3.0 while two saved images are on standby, and says so', async () => {
+      saveInTheBrowser({ images: 2, startFrame: true });
+      const view = render(<CreateVideoClient prefill={{}} />);
+      await screen.findByText('Saved references are on standby');
+      await restored();
+
+      // The request is the one the page makes with nothing saved: a frame, no reference.
+      const request = lastQuoteRequest();
+      expect(request.settings.referenceMode).toBe('frames');
+      expect(request.inputCounts).toMatchObject({ images: 1, videos: 0, audios: 0 });
+      expect(request.inputMetadata.slots.imageReferences.count).toBe(0);
+      expect(request.inputMetadata.slots.startFrame.count).toBe(1);
+      expect(refusedByTheServer(request)).toBeNull();
+
+      // The page says the same of the run as its standby card does.
+      expect(runSummary('Reference')).toBe('Start / end frames');
+      expect(runSummary('Inputs')).toBe('1 frame + 0 video refs');
+      expect(screen.getByText(/The latest render will take over this workspace\./).textContent)
+        .toBe('Choose the shot structure, write the prompt, and set your frames. The latest render will take over this workspace.');
+      // Nothing by the prompt speaks of references the run does not use.
+      expect(screen.queryByText(/Upload reference images below/)).toBeNull();
+      const enhance = enhanceButtonPropsMock.mock.calls.at(-1)?.[0] as { helperText?: string; context?: EnhancerContext } | undefined;
+      expect(enhance?.helperText).toBeUndefined();
+      expect(enhance?.context).toMatchObject({ referenceImageCount: 0, hasStartImage: true });
+      expect(view.container.querySelectorAll('input[placeholder="Rename element"]')).toHaveLength(0);
+
+      // The run sends the frame and neither of the saved images.
+      fireEvent.change(screen.getByPlaceholderText(/^Describe the Kling 3\.0 Cinematic scene/), {
+        target: { value: 'A harbour at dusk, a slow push in over the water as the lamps come on along the quay.' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+      await waitFor(() => expect(postedRun()).toBeDefined());
+
+      expect(postedRun().settings.referenceMode).toBe('frames');
+      expect(runInputs('startFrame')).toHaveLength(1);
+      expect(runInputs('imageReferences')).toHaveLength(0);
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(1);
+      expect(temporaryUploadMock.mock.calls[0][0]).toMatchObject({ name: 'start.png' });
+    });
+
+    it.each(['kling-3.0-turbo', 'hailuo-2.3'] as const)('makes a frames run on %s while two saved images are on standby', async (modelId) => {
+      saveInTheBrowser({ images: 2, startFrame: true });
+      render(<CreateVideoClient prefill={{ model: modelId }} />);
+      await screen.findByText('Saved references are on standby');
+      await restored();
+
+      const request = lastQuoteRequest();
+      expect(request.settings.referenceMode).toBe('frames');
+      expect(request.inputCounts).toMatchObject({ images: 1, videos: 0, audios: 0 });
+      expect(refusedByTheServer(request)).toBeNull();
+      expect(runSummary('Reference')).toBe('Start / end frames');
+      expect(runSummary('Inputs')).toBe('1 frame');
+    });
+
+    it('leaves the frames of Seedance 1.5 Pro free while a saved clip and track are on standby', async () => {
+      // The model takes two images and no clip. The saved clip greyed the frames out
+      // under "Clear your references", on a page with no card for a clip.
+      saveInTheBrowser({ clip: true, track: true });
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+      await screen.findByText('Frames or references');
+      await restored();
+
+      expect(frameGroupLocked(view.container)).toBe(false);
+      expect(screen.getByText(/takes either frames or references in a single run/)).toBeInTheDocument();
+      expect(runSummary('Reference')).toBe('Start / end frames');
+      expect(runSummary('Inputs')).toBe('0 frames');
+      expect(lastQuoteRequest().settings.referenceMode).toBe('frames');
+
+      // A frame attached now locks the references, as on a draft that holds no clip.
+      fireEvent.change(view.container.querySelector<HTMLInputElement>('#video-start-frame-input')!, {
+        target: { files: [picture('start')] },
+      });
+      expect(await screen.findByText(/cannot combine references with frames\. Clear your frames/)).toBeInTheDocument();
+      expect(runSummary('Inputs')).toBe('1 frame');
+    });
+
+    it('counts the image and not the clip in a references run on Seedance 1.5 Pro', async () => {
+      saveInTheBrowser({ images: 1, clip: true, track: true });
+      render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+      await screen.findByPlaceholderText('Rename element');
+      await restored();
+
+      expect(runSummary('Reference')).toBe('Reusable references');
+      expect(runSummary('Inputs')).toBe('1 reference');
+      const request = lastQuoteRequest();
+      expect(request.inputCounts).toMatchObject({ images: 1, videos: 0, audios: 0 });
+      expect(refusedByTheServer(request)).toBeNull();
+    });
+
+    it('sends the image and the clip on Gemini Omni, and leaves a saved track out', async () => {
+      // Gemini Omni takes images and one clip, and no track. Its page has no card for a
+      // track, and Generate answered "supports up to 0 reference audio files per run".
+      saveInTheBrowser({ images: 1, clip: true, track: true });
+      render(<CreateVideoClient prefill={{ model: 'gemini-omni-video' }} />);
+      await screen.findByPlaceholderText('Rename element');
+      await restored();
+
+      expect(screen.getByText('Saved clip')).toBeInTheDocument();
+      expect(screen.queryByText('Saved track')).toBeNull();
+      expect(runSummary('Inputs')).toBe('2 references');
+      expect(refusedByTheServer(lastQuoteRequest())).toBeNull();
+
+      fireEvent.change(screen.getByPlaceholderText(/^Describe the Gemini Omni Video scene/), {
+        target: { value: 'A dancer crosses a bright studio in the rhythm of the reference clip, slow push in, soft daylight.' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+      await waitFor(() => expect(postedRun()).toBeDefined());
+
+      expect(runInputs('imageReferences')).toHaveLength(1);
+      expect(runInputs('videoReferences')).toHaveLength(1);
+      expect(runInputs('audioReferences')).toHaveLength(0);
+    });
+
+    it('keeps Kling O3 a frames run in multi-shot, where the page says saved images are paused', async () => {
+      saveInTheBrowser({ images: 1, startFrame: true });
+      const view = render(<CreateVideoClient prefill={{ model: 'kling-o3' }} />);
+      await screen.findByPlaceholderText('Rename element');
+      await restored();
+      // Single-shot first: the image is in the run, and the saved frame is the odd one out.
+      expect(lastQuoteRequest().settings.referenceMode).toBe('elements');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Multi-Shot' }));
+      await screen.findByText('Reusable references are paused in multi-shot');
+
+      const request = lastQuoteRequest();
+      expect(request.settings.referenceMode).toBe('frames');
+      expect(request.inputCounts).toMatchObject({ images: 1, videos: 0, audios: 0 });
+      expect(request.inputMetadata.slots.imageReferences.count).toBe(0);
+      expect(refusedByTheServer(request)).toBeNull();
+      expect(frameGroupLocked(view.container)).toBe(false);
+
+      fireEvent.change(screen.getByPlaceholderText('Describe shot 1...'), {
+        target: { value: 'A lighthouse keeper climbs the stairs with a lamp, the camera rising with him, warm light on stone.' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+      await waitFor(() => expect(postedRun()).toBeDefined());
+
+      expect(postedRun().settings.referenceMode).toBe('frames');
+      expect(runInputs('startFrame')).toHaveLength(1);
+      expect(runInputs('imageReferences')).toHaveLength(0);
+    });
+
+    it('runs the named subjects of Kling O3 while a saved clip is on standby', async () => {
+      // Kling O3 takes no clip. The saved one made the run a references run, which named
+      // subjects replace, so Generate asked the creator to remove what the page did not show.
+      saveInTheBrowser({ clip: true });
+      getPersistedSubjectRecordsMock.mockResolvedValue([{
+        id: 'subject-1',
+        displayName: 'Hero creator',
+        images: [
+          { id: 'image-1', file: picture('front') },
+          { id: 'image-2', file: picture('side') },
+        ],
+      }]);
+      render(<CreateVideoClient prefill={{ model: 'kling-o3' }} />);
+      await screen.findByDisplayValue('Hero creator');
+      await restored();
+
+      const request = lastQuoteRequest();
+      expect(request.settings.referenceMode).toBe('subjects');
+      expect(request.inputCounts).toMatchObject({ images: 2, videos: 0, audios: 0 });
+      expect(request.inputMetadata.slots.videoReferences.count).toBe(0);
+
+      fireEvent.change(screen.getByPlaceholderText(/^Describe the Kling O3 scene/), {
+        target: { value: '@hero_creator lifts the serum and smiles at the camera in a bright studio, slow push in.' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+      await waitFor(() => expect(postedRun()).toBeDefined());
+
+      expect(postedRun().settings.referenceMode).toBe('subjects');
+      expect(runInputs('subjectImages')).toHaveLength(2);
+      expect(runInputs('videoReferences')).toHaveLength(0);
+    });
+
+    it('names every saved image the prompt mentions, under the prompt and when Generate refuses it', async () => {
+      // With images left out of the run, a prompt that mentions one reaches Generate on a
+      // model that takes none. The model's reason alone did not say which word stopped it.
+      saveInTheBrowser({ images: 2, startFrame: true });
+      const view = render(<CreateVideoClient prefill={{}} />);
+      await screen.findByText('Saved references are on standby');
+      await restored();
+
+      const promptBox = screen.getByPlaceholderText(/^Describe the Kling 3\.0 Cinematic scene/);
+      const prompt = 'A harbour at dusk where @saved_image_1 meets @saved_image_2 by the water, slow push in.';
+      fireEvent.change(promptBox, { target: { value: prompt } });
+
+      expect(Array.from(promptBox.nextElementSibling?.children ?? []).map((part) => part.textContent)).toEqual([
+        `${prompt.length}/2500`,
+        'On standby here: @saved_image_1, @saved_image_2',
+      ]);
+
+      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+
+      expect(view.container.querySelector('p.text-red-400')?.textContent)
+        .toBe('Kling 3.0 Cinematic cannot use @saved_image_1, @saved_image_2. Remove them from the prompt, or pick a model that takes reusable references.');
+      expect(temporaryUploadMock).not.toHaveBeenCalled();
+      expect(postedRun()).toBeUndefined();
+    });
+
+    it('says on the standby card that a saved clip and track are not used', async () => {
+      // The card spoke for images only, so a clip saved on another model was left out of
+      // a run without a word.
+      saveInTheBrowser({ clip: true, track: true });
+      render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+      await screen.findByText('Saved references are on standby');
+      await restored();
+
+      expect(standbyCard()).toEqual([
+        'Your saved clip and track stay saved. Seedance 1.5 Pro takes no reference clip or track, so this run does not use them.',
+      ]);
+    });
+
+    it.each([
+      {
+        saved: { clips: 2 },
+        model: 'kling-o3',
+        says: 'Your saved clips stay saved. Kling O3 takes no reference clip, so this run does not use them.',
+      },
+      {
+        saved: { clip: true, track: true },
+        model: 'gemini-omni-video',
+        says: 'Your saved track stays saved. Gemini Omni Video takes no reference track, so this run does not use it.',
+      },
+      {
+        saved: { clip: true },
+        model: 'hailuo-2.3',
+        says: 'Your saved clip stays saved. Hailuo 2.3 takes no reference clip, so this run does not use it.',
+      },
+    ] as const)('says it of what $model does not take', async ({ saved, model, says }) => {
+      saveInTheBrowser(saved);
+      render(<CreateVideoClient prefill={{ model }} />);
+      await screen.findByText('Saved references are on standby');
+      await restored();
+
+      expect(standbyCard()).toEqual([says]);
+    });
+
+    it('speaks for saved images and a saved clip on one card', async () => {
+      saveInTheBrowser({ images: 2, clip: true });
+      render(<CreateVideoClient prefill={{}} />);
+      await screen.findByText('Saved references are on standby');
+      await restored();
+
+      expect(standbyCard()).toEqual([
+        'Your 2 saved image references remain available. Reusable references are not available for this model yet. Use start / end frames for this run, or choose a supported single-shot mode to use reusable references.',
+        'Your saved clip stays saved. Kling 3.0 Cinematic takes no reference clip, so this run does not use it.',
+      ]);
+      expect(screen.getAllByText('Saved references are on standby')).toHaveLength(1);
+    });
+
+    it('shows no standby card on a model that takes what is saved', async () => {
+      saveInTheBrowser({ images: 1, clip: true, track: true });
+      render(<CreateVideoClient prefill={{ model: 'wan-2.7' }} />);
+      await screen.findByPlaceholderText('Rename element');
+      await restored();
+
+      expect(screen.getByText('Saved clip')).toBeInTheDocument();
+      expect(standbyCard()).toBeNull();
+    });
+
+    it('leaves the frames of another model free after a character id was added on Gemini Omni', async () => {
+      // The id stays in the page when the model changes, and only Gemini Omni shows it.
+      modelCatalogState.summaries = videoModelSummaries;
+      const view = render(<CreateVideoClient prefill={{ model: 'gemini-omni-video' }} />);
+      const field = await screen.findByLabelText('Gemini Omni character ID');
+      fireEvent.change(field, { target: { value: 'character-0001' } });
+      fireEvent.keyDown(field, { key: 'Enter' });
+      expect(await screen.findByText('character-0001')).toBeInTheDocument();
+
+      chooseModel(view.container, 'Seedance 1.5 Pro');
+      await screen.findByText('Frames or references');
+
+      expect(screen.queryByText('character-0001')).toBeNull();
+      expect(frameGroupLocked(view.container)).toBe(false);
+      expect(screen.getByText(/takes either frames or references in a single run/)).toBeInTheDocument();
+      expect(lastQuoteRequest().settings.referenceMode).toBe('frames');
     });
   });
 });
