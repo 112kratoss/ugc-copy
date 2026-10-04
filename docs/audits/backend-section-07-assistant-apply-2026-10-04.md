@@ -27,7 +27,7 @@ files; test TypeScript and targeted ESLint pass. The first added stale-graph
 assertion compared JavaScript's undefined fields to stored JSON; its expectation
 was corrected to compare the serialized graph, without changing runtime code.
 Failure and passing logs are retained in private `assistant-apply-*.log`.
-The existing CI database step already runs this file. Candidate CI is pending.
+The existing CI database step already runs this file. [PR #331 and its release are verified](backend-section-07-assistant-apply-release-2026-10-04.md).
 
 Limits: the small Supabase-shaped adapter runs real PostgreSQL statements but is
 not PostgREST/HTTP transport. Lost acknowledgement is injected after the real

@@ -6,40 +6,47 @@ Updated 2026-10-04 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/assistant-apply-audit-7j`, incorporating main `f1a6e7b7710b7278f42220d9acd346f642c5ab4b` (#329); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/template-input-audit-7k`, incorporating main `28b7467c8a8d1a2221fca140c30d7226f1e2db41` (#326); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-7I #319 is merged as ee722e6e (05:12:03 IST October 4), with no active mobile
-store run immediately before merge. PR Quality 37162022173 passed all four jobs.
-Exact-main 37162603068 failed the Kling O3 browser geometry case; web/mobile/DB
-passed. Logs are preserved; do not call that run green. Main subsequently advanced
-through #320–329. Descendant f1a6e7b7 passed exact-main Quality 37189287821 and
-standard release 37189710120 at 14:15:17 IST. Independent exact-SHA/feed/admin/
-webhook checks pass. Read the share-import release report. WORKFLOW-04 returns
-to untested: ledger 22 passed, 27 untested, one failed, three external.
+7J #331 passed PR Quality 37191142092 and merged as 49b89e7a at 14:50:02 IST
+October 4, with no active mobile store run immediately before merge. Exact-main
+Quality 37191811350 and standard release 37192468056 passed (release 15:05:16 IST).
+Main advanced through #330/#326 to 28b7467c, now incorporated. That descendant's
+release 37194103115 and independent exact-SHA/feed/admin/webhook checks pass.
+Read the assistant-apply release report. Existing unrelated edits are preserved.
 
-7J adds ten permanent actual SQL apply controls to the existing seven discard
-cases, with service-level graph/publication/history checks, concurrent same/different
-proposals, stale revisions, actual history-trigger rollback, observed commit plus
-lost acknowledgement, foreign/anonymous identity and no-op application. All 17
-pass; combined service/route checks pass 34, test types and lint pass. No runtime
-or migration change. These local changes await candidate CI. The original fixture
-assertion mismatch and passing logs are preserved. Existing CI already runs the file.
-Read `backend-section-07-assistant-apply-2026-10-04.md`.
+7K reproduces a real local Storage/PostgREST race: two successful finalizations
+from one saved input map leave two final objects, only one referenced. The fix
+compares the complete saved input JSON atomically in the existing run UPDATE;
+losers return 409 and clean their prepared copy, retaining staging for retry.
+Seven real Storage/HTTP cases and five permanent service regressions pass,
+including same/different-slot races, run-start conflict, malformed image/metadata,
+consumed tokens, replacement and committed-but-lost acknowledgement. App/test
+types, lint and diff checks pass; focused template suite passes 213 (53 skips).
+The existing actual template-run DB suite also passes 25 cases (one harness skip).
+Current runtime/tests/report are local, awaiting candidate CI and release. Read
+`backend-section-07-template-inputs-2026-10-04.md`. Ledger is 22 passed,
+26 untested, two failed, three external. WORKFLOW-04 is failed for unreleased 7K.
 
-MAP-02 now has a reviewed JSON/report for the earlier 152 no-JS-caller functions:
-85 catalog bindings, nine source/operator callers, 34 actual SQL call statements,
-24 without a current caller located. Two comment-only false positives were removed;
-one shell SQL caller was located. Local grants inspected. No function/grant removed,
-no whole MAP/DB obligation closed. Raw evidence stays in `.audit-evidence/backend-map-02/`.
+The audit's isolated database now has API/Auth/Storage on 55321 as well as DB55322.
+The disappeared temporary config was reconstructed in private
+`.audit-evidence/backend-storage/local/`; CLI2.75.0 restarted only the isolated
+stack, preserving its DB (326 functions). Primary 5432x stack untouched. Local
+status JSON/start logs contain local credentials: keep private. Seven HTTP cases
+run via `vitest.template-storage.config.ts` with explicit AUDIT_STORAGE_CONFIG and
+SUPABASE_TEST_DB_URL. Standard CI runs the service regressions, not this opt-in suite.
+44 fixture users/runs/templates and objects were removed; 59 reservation rows remain
+under retention. IDs/readback/logs are private. Do not call retention complete or
+disable triggers to erase evidence. No paid/provider calls or production mutations.
 
-The checkout incorporates current main f1a6e7b7, including the new UTC migration
-stamp instruction in AGENTS.md. Preserve the unrelated receipt/Section 1 edits
-and private evidence. Finish the 7J candidate checks/PR, then continue the broader
-workflow/method/Storage matrix. Provider/operator and compatibility gates remain
-open; do not call the full audit complete from these scoped tests.
+Continue 7K verification/PR/release, then the broader workflow/Storage matrix.
+MAP-02 reviewed reconciliation remains partial: 85 catalog, nine source/operator,
+34 SQL call entries, 24 needing entrypoint/compatibility evidence. Provider/operator,
+identity/recovery, commerce/social/jobs and operational obligations are still open.
+Do not call the full audit complete from scoped tests or a green release.
 
 The preceding checkpoint follows.
 
