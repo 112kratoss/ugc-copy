@@ -6,15 +6,16 @@ Updated 2026-10-04 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/follow-block-audit-8c`, incorporating main `e6d8e81d54c3cef8bf0b5d7b68d42c245639b03e` (#336); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/follow-block-audit-8c`, incorporating main `e5bc769b33cce373b3911bb93c4c8513f6841ae2` (#337); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-8B is PR #337 (head 91e38f05), Quality 37201195516 running: database, browser
-and mobile pass, web final checks pending. Migration plan has only 8B pending
-against the captured production ledger. Do not merge until all four pass and
-mobile-store-release is rechecked immediately. Existing drift repair SQL is
+8B PR #337 (head 91e38f05) passed all four Quality jobs in 37201195516 and
+merged as e5bc769b at 17:49:48 IST October 4. No mobile store run was active
+immediately before merge. Exact-main Quality 37201725874 is running; standard
+release and live verification follow. Migration plan has only 8B pending against
+the captured production ledger. Existing drift repair SQL is
 private, rollback-by-default, NOWAIT table locks, capped at 20 mismatches;
 four isolated rehearsal controls pass. Apply only after prevention release is
 verified, preserving before/after evidence and independent zero-drift readback.
