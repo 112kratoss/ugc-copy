@@ -15,6 +15,12 @@ describe('resolveWebNotificationPath', () => {
 
   it('maps the mobile studio route to the web studio', () => {
     expect(resolveWebNotificationPath('/studio')).toBe('/creations');
+    expect(resolveWebNotificationPath('/studio?tab=alerts')).toBe('/creations');
+  });
+
+  it('maps a workflow run link to its canvas', () => {
+    expect(resolveWebNotificationPath('/studio?workflowCanvas=canvas-1')).toBe('/create-workflow?canvas=canvas-1');
+    expect(resolveWebNotificationPath('/studio?workflowCanvas=')).toBe('/creations');
   });
 
   it('preserves valid web routes', () => {

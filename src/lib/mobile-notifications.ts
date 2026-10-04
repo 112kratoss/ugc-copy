@@ -375,6 +375,7 @@ export function toMobileNotificationRecord(row: NotificationRow): MobileNotifica
 export function buildMobileNotificationDeepLink(target:
   | { kind: 'generation'; generationId: string }
   | { kind: 'templateRun'; runId: string }
+  | { kind: 'workflowCanvas'; canvasId: string }
   | { kind: 'showcasePost'; postId: string }
   | { kind: 'marketplaceResource'; resourceId: string }
   | { kind: 'creatorProfile'; username: string }
@@ -386,6 +387,14 @@ export function buildMobileNotificationDeepLink(target:
 
   if (target.kind === 'templateRun') {
     return `/template-runs/${encodeURIComponent(target.runId)}`;
+  }
+
+  if (target.kind === 'workflowCanvas') {
+    // The canvas is on the web only, and the app opens a link only when its
+    // route is on the app's own list. So this is the app's Alerts route, which
+    // every installed build opens, with the canvas on it for the web to read
+    // (`resolveWebNotificationPath`).
+    return `/studio?workflowCanvas=${encodeURIComponent(target.canvasId)}`;
   }
 
   if (target.kind === 'showcasePost') {
@@ -1650,6 +1659,34 @@ export async function notifyTemplateRunStopped(
     objectType: 'template_run',
     objectId: params.runId,
     dedupeKey: `template-run:${params.runId}:stopped`,
+  });
+}
+
+/**
+ * Tells the creator their workflow run was ended on our side.
+ *
+ * A canvas run announces nothing itself: each render does, as it finishes or
+ * fails. The steps a given-up run never reached have no render to speak for
+ * them, so this is the only word that the run is over for someone who has
+ * left the canvas. On the web it leads to the canvas, where each step that
+ * did not run says so. It never throws: the run has ended whatever becomes of
+ * the notification.
+ */
+export async function notifyWorkflowRunStopped(
+  adminSupabase: SupabaseClient,
+  params: { runId: string; canvasId: string; userId: string },
+) {
+  return createMobileNotificationSafely({
+    adminSupabase,
+    userId: params.userId,
+    type: 'generation_failed',
+    category: 'generation',
+    title: 'Your workflow run stopped',
+    body: 'A problem on our side ended it. Open the workflow to run it again.',
+    deepLink: buildMobileNotificationDeepLink({ kind: 'workflowCanvas', canvasId: params.canvasId }),
+    objectType: 'workflow_run',
+    objectId: params.runId,
+    dedupeKey: `workflow-run:${params.runId}:stopped`,
   });
 }
 

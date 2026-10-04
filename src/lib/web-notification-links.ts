@@ -27,7 +27,10 @@ export function resolveWebNotificationPath(deepLink: string | null | undefined) 
     }
 
     if (url.pathname === '/studio') {
-      return '/creations';
+      // A workflow run's notification. The app has no canvas, so the link is
+      // its Alerts route with the canvas on it, and the canvas is here.
+      const canvasId = url.searchParams.get('workflowCanvas');
+      return canvasId ? `/create-workflow?canvas=${encodeURIComponent(canvasId)}` : '/creations';
     }
 
     if (!url.pathname.startsWith('/')) return null;
