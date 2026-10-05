@@ -6,10 +6,28 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/push-first-send-audit-9f`, incorporating main `177d6c989ec904e124052f5e458d8181bf7ccc0a` (#359); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/push-maintenance-progress-audit-9g`, incorporating main `177d6c989ec904e124052f5e458d8181bf7ccc0a` (#359); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+9F is PR #361, head fd3aa2a2f56e5ac898c6d75723d10c220aeedee3. Quality
+37289045693 is active; E2E/mobile pass, web and DB continue. Current 9G branch
+preserves this candidate plus new investigation docs; do not push 9G onto #361.
+Before merging #361, verify exact-head Quality and mobile-store idle immediately
+before merge. Standard exact-main release and production verification remain.
+The prepared .audit-evidence/backend-social/first-send-release/verify.cjs requires
+exact live SHA; expected functions/columns/default/grants/index from clean replay,
+full/filtered production baseline, eight locally passing rollback controls and
+security baseline are saved. Its release-smoke.cjs verifies exact SHA and health.
+
+9G reproduces three push-maintenance starvation cases with actual local DB
+readback over three repeated passes each: oldest saved-outcome failure, stale
+receipt update failure, or retry claim failure blocks healthy next records and
+all later phases/retention. See push-poison-progress report. No runtime fix yet;
+include full-batch poison fairness and failure observability in the design.
+Current ledger: 24 passed / 24 untested / 3 failed / 2 external (53); JOB-02
+returns to failed, JOB-03 remains failed, full goal remains active.
 
 9E #356 is merged as cd264d3945fd3c77a7b5ffb665f3384973c6ec79 at 04:36:54 UTC.
 Exact-head Quality 37263340019, exact-main 37264292974 and standard release
