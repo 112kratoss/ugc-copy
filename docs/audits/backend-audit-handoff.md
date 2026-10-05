@@ -11,26 +11,22 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 
 ## Exact checkpoint
 
-9F PR #361 passed exact-head Quality 37289045693 on
-fd3aa2a2f56e5ac898c6d75723d10c220aeedee3 and merged at 09:27:18 UTC as
-32a3f47336a6ad54ff0c41b667d9ba41be8d12c2. Mobile-store release was checked
-idle immediately before the guarded merge. Exact-main Quality and standard
-release/live verification remain. Current 9G branch preserves the 9F candidate
-plus investigation docs, not the new squash commit; incorporate main as needed.
-The prepared .audit-evidence/backend-social/first-send-release/verify.cjs requires
-exact live SHA; expected functions/columns/default/grants/index from clean replay,
-full/filtered production baseline, eight locally passing rollback controls and
-security baseline are saved. Its release-smoke.cjs verifies exact SHA and health.
-Do not mark 9F deployed until these gates pass. No production 9F probe yet.
+9F #361 is verified live on 32a3f47336a6ad54ff0c41b667d9ba41be8d12c2.
+Exact-main Quality 37290134172 and standard release 37291187466 passed.
+Independent exact-live SHA/schema/grants/eight rollback controls/cleanup/advisors/
+feed/admin/webhook verification passed at 09:44 UTC. See first-send-release report.
 
-9G reproduces four push-maintenance starvation cases with actual local DB
-readback over three repeated passes each: oldest saved-outcome failure, stale
-receipt update failure, or retry claim failure blocks healthy next records and
-all later phases/retention; a full 100-row poison batch also blocks the healthy
-101st outcome. See push-poison-progress report. No runtime fix yet;
-include full-batch poison fairness and failure observability in the design.
-Current ledger: 24 passed / 24 untested / 3 failed / 2 external (53); JOB-02
-returns to failed, JOB-03 remains failed, full goal remains active.
+9G scan/failure-isolation candidate is implemented locally: independent persisted
+(created_at,id) scan positions, fixed sweep endpoints and one wrap; service-only
+invoker RPC and RLS state table. Per-record/phase failures permit later work, then
+throw a typed partial-result error persisted in the managed job's failed summary.
+Eight actual controls include original four before/after regressions, managed
+summary, concurrent scans, phase outage and SIGKILL after committed scan. Prior
+16 retry/9 initial/4 receipt cases pass; 95 focused tests, app/test types/lint,
+clean replay and 2,046 SQL checks pass. Clean-replay public schema diff reports no changes. Draft migration 20261005092947 is local only. PR, exact-head CI,
+mobile-store idle before merge, standard release and production gates remain.
+See push-poison-progress report for precise limits. Preserve unrelated edits.
+Current ledger 24 passed / 24 untested / 3 failed / 2 external (53). Full goal active.
 
 9E #356 is merged as cd264d3945fd3c77a7b5ffb665f3384973c6ec79 at 04:36:54 UTC.
 Exact-head Quality 37263340019, exact-main 37264292974 and standard release

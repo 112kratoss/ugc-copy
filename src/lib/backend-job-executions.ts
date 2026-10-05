@@ -1,3 +1,4 @@
+import { MobilePushMaintenanceError } from '@/lib/mobile-push-maintenance-error';
 import { hasPendingUploadedMediaMaintenance, processUploadedMediaMaintenance } from '@/lib/uploaded-media-maintenance';
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -344,11 +345,13 @@ async function runManagedBackendJob<TSummary>({
     };
     } catch (error) {
       const finishedAtMs = Date.now();
+      const partialSummary = error instanceof MobilePushMaintenanceError ? error.summary : undefined;
       if (currentServiceClient) {
         await finishBackendJobRun(currentServiceClient, jobRun, {
           status: 'failed',
           finishedAtMs,
           errorMessage: errorMessage(error),
+          ...(partialSummary ? { summary: partialSummary } : {}),
         });
         await maybePruneBackendJobRuns(currentServiceClient, { nowMs: startedAtMs });
       }

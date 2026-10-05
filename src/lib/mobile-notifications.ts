@@ -1,3 +1,4 @@
+import { MobilePushMaintenanceError } from '@/lib/mobile-push-maintenance-error';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
 import { getAudioGenerationKind, isAudioModel } from '@/lib/models';
@@ -122,6 +123,36 @@ export class MobileNotificationError extends Error {
     super(message);
     this.name = 'MobileNotificationError';
   }
+}
+
+type PushMaintenancePhase = 'recorded' | 'receipts' | 'retries' | 'retention';
+
+class PushMaintenanceFailures {
+  count = 0;
+  firstError: unknown;
+  phases = new Set<PushMaintenancePhase>();
+  samples: Array<{ phase: PushMaintenancePhase; deliveryId?: string; message: string }> = [];
+
+  capture(phase: PushMaintenancePhase, error: unknown, deliveryId?: string) {
+    if (this.count === 0) this.firstError = error;
+    this.count += 1;
+    this.phases.add(phase);
+    if (this.samples.length < 10) this.samples.push({ phase, deliveryId, message: getErrorMessage(error, 'Push maintenance failed.') });
+  }
+
+  summary() {
+    return { maintenanceFailureCount: this.count, failedPhases: [...this.phases], maintenanceFailures: this.samples };
+  }
+}
+
+async function scanPushMaintenance(
+  client: SupabaseClient, phase: Exclude<PushMaintenancePhase, 'retention'>, limit: number, now: Date,
+): Promise<DeliveryRow[]> {
+  const { data, error } = await client.rpc('scan_mobile_push_maintenance', {
+    p_phase: phase, p_limit: limit, p_now: now.toISOString(),
+  });
+  if (error) throw new MobileNotificationError(`Failed to scan push maintenance: ${phase}.`, 500);
+  return Array.isArray(data) ? data : [];
 }
 
 class ExpoPushRetryError extends Error {
@@ -986,31 +1017,21 @@ export async function processPendingMobilePushReceipts(
     fetcher = fetch,
     now = new Date(),
     batchSize = DEFAULT_RECEIPT_BATCH_SIZE,
+    failures: sharedFailures,
   }: {
     fetcher?: typeof fetch;
     now?: Date;
     batchSize?: number;
+    failures?: PushMaintenanceFailures;
   } = {}
 ) {
   const nowIso = now.toISOString();
-  const dueBefore = new Date(now.getTime() - RECEIPT_MIN_AGE_MINUTES * 60 * 1000).toISOString();
   const staleThreshold = now.getTime() - (RECEIPT_STALE_AFTER_HOURS * 60 * 60 * 1000);
   const boundedBatchSize = Number.isFinite(batchSize)
     ? Math.max(1, Math.min(Math.trunc(batchSize), MAX_RECEIPT_BATCH_SIZE))
     : DEFAULT_RECEIPT_BATCH_SIZE;
-  const { data, error } = await adminSupabase
-    .from('mobile_push_deliveries')
-    .select('id, token_id, push_ticket_id, receipt_status, sent_at')
-    .eq('receipt_status', 'pending')
-    .lte('sent_at', dueBefore)
-    .order('sent_at', { ascending: true })
-    .limit(boundedBatchSize);
-
-  if (error) {
-    throw new MobileNotificationError('Failed to load mobile push deliveries.', 500);
-  }
-
-  const deliveries = (data ?? []) as DeliveryRow[];
+  const failures = sharedFailures ?? new PushMaintenanceFailures();
+  const deliveries = await scanPushMaintenance(adminSupabase, 'receipts', boundedBatchSize, now);
   const staleDeliveries = deliveries.filter((delivery) => {
     const sentAt = rowString(delivery, 'sent_at');
     const timestamp = sentAt ? Date.parse(sentAt) : Number.NaN;
@@ -1020,21 +1041,23 @@ export async function processPendingMobilePushReceipts(
 
   let staleCount = 0;
   for (const delivery of staleDeliveries) {
-    const deliveryId = rowString(delivery, 'id');
-    if (!deliveryId) {
-      continue;
-    }
+    try {
+      const deliveryId = rowString(delivery, 'id');
+      if (!deliveryId) {
+        continue;
+      }
 
-    const { error: staleError } = await adminSupabase
-      .from('mobile_push_deliveries')
-      .update({
-        receipt_status: 'stale',
-        receipt_checked_at: nowIso,
-        receipt_message: 'Receipt unavailable after 24 hours.',
-      })
-      .eq('id', deliveryId);
-    if (staleError) throw new MobileNotificationError('Failed to mark push receipt stale.', 500);
-    staleCount += 1;
+      const { error: staleError } = await adminSupabase
+        .from('mobile_push_deliveries')
+        .update({
+          receipt_status: 'stale',
+          receipt_checked_at: nowIso,
+          receipt_message: 'Receipt unavailable after 24 hours.',
+        })
+        .eq('id', deliveryId);
+      if (staleError) throw new MobileNotificationError('Failed to mark push receipt stale.', 500);
+      staleCount += 1;
+    } catch (error) { failures.capture('receipts', error, rowString(delivery, 'id') ?? undefined); }
   }
 
   let updatedCount = 0;
@@ -1048,57 +1071,63 @@ export async function processPendingMobilePushReceipts(
   const receiptsByTicketId: Record<string, ExpoReceipt> = {};
 
   for (const ticketBatch of receiptLookups) {
-    const nextReceipts = await fetchExpoPushReceipts(ticketBatch, fetcher);
-    Object.assign(receiptsByTicketId, nextReceipts);
+    try {
+      const nextReceipts = await fetchExpoPushReceipts(ticketBatch, fetcher);
+      Object.assign(receiptsByTicketId, nextReceipts);
+    } catch (error) { failures.capture('receipts', error); }
   }
 
   for (const delivery of activeDeliveries) {
-    const deliveryId = rowString(delivery, 'id');
-    const tokenId = rowString(delivery, 'token_id');
-    const ticketId = rowString(delivery, 'push_ticket_id');
+    try {
+      const deliveryId = rowString(delivery, 'id');
+      const tokenId = rowString(delivery, 'token_id');
+      const ticketId = rowString(delivery, 'push_ticket_id');
 
-    if (!deliveryId || !ticketId) {
-      continue;
-    }
+      if (!deliveryId || !ticketId) {
+        continue;
+      }
 
-    const receipt = receiptsByTicketId[ticketId];
-    if (!isRecord(receipt)) {
-      continue;
-    }
+      const receipt = receiptsByTicketId[ticketId];
+      if (!isRecord(receipt)) {
+        continue;
+      }
 
-    const receiptDetails = isRecord(receipt.details) ? receipt.details : null;
-    const receiptStatus = receipt.status === 'ok' ? 'ok' : 'error';
-    const receiptMessage = normalizeOptionalString(receipt.message)
-      ?? (receiptStatus === 'ok' ? 'Delivered to push provider.' : 'Expo receipt reported a delivery error.');
-    const receiptErrorCode = receiptDetails ? normalizeOptionalString(receiptDetails.error) : null;
+      const receiptDetails = isRecord(receipt.details) ? receipt.details : null;
+      const receiptStatus = receipt.status === 'ok' ? 'ok' : 'error';
+      const receiptMessage = normalizeOptionalString(receipt.message)
+        ?? (receiptStatus === 'ok' ? 'Delivered to push provider.' : 'Expo receipt reported a delivery error.');
+      const receiptErrorCode = receiptDetails ? normalizeOptionalString(receiptDetails.error) : null;
 
-    // Keep the receipt pending if retirement fails, so the next run retries it.
-    // If the later receipt write fails, retiring an already inactive token is
-    // idempotent and preserves the original disabled_at timestamp.
-    if (receiptErrorCode === 'DeviceNotRegistered' && tokenId) {
-      disabledTokenCount += await retireUnregisteredPushTokens(adminSupabase, [tokenId], nowIso);
-    }
+      // Keep the receipt pending if retirement fails, so the next run retries it.
+      // If the later receipt write fails, retiring an already inactive token is
+      // idempotent and preserves the original disabled_at timestamp.
+      if (receiptErrorCode === 'DeviceNotRegistered' && tokenId) {
+        disabledTokenCount += await retireUnregisteredPushTokens(adminSupabase, [tokenId], nowIso);
+      }
 
-    const { error: receiptError } = await adminSupabase
-      .from('mobile_push_deliveries')
-      .update({
-        receipt_status: receiptStatus,
-        receipt_checked_at: nowIso,
-        receipt_error_code: receiptErrorCode,
-        receipt_message: receiptMessage,
-        provider_details: receiptDetails,
-      })
-      .eq('id', deliveryId);
-    if (receiptError) throw new MobileNotificationError('Failed to record push receipt.', 500);
-    updatedCount += 1;
+      const { error: receiptError } = await adminSupabase
+        .from('mobile_push_deliveries')
+        .update({
+          receipt_status: receiptStatus,
+          receipt_checked_at: nowIso,
+          receipt_error_code: receiptErrorCode,
+          receipt_message: receiptMessage,
+          provider_details: receiptDetails,
+        })
+        .eq('id', deliveryId);
+      if (receiptError) throw new MobileNotificationError('Failed to record push receipt.', 500);
+      updatedCount += 1;
+    } catch (error) { failures.capture('receipts', error, rowString(delivery, 'id') ?? undefined); }
   }
 
-  return {
+  const summary = {
     checkedCount: deliveries.length,
     updatedCount,
     staleCount,
     disabledTokenCount,
   };
+  if (!sharedFailures && failures.count) throw new MobilePushMaintenanceError(failures.firstError, { ...summary, ...failures.summary() });
+  return summary;
 }
 
 /**
@@ -1195,18 +1224,17 @@ async function finishRecordedPushRetry(adminSupabase: SupabaseClient, deliveryId
   return isRecord(data) && data.applied === true ? data : null;
 }
 
-async function recoverRecordedPushRetries(adminSupabase: SupabaseClient) {
-  const { data, error } = await adminSupabase.from('mobile_push_deliveries')
-    .select('id, retry_claim_id').not('retry_outcome', 'is', null)
-    .order('last_attempt_at', { ascending: true }).limit(RETRYABLE_DELIVERY_BATCH_SIZE);
-  if (error) throw new MobileNotificationError('Failed to load recorded push retries.', 500);
+async function recoverRecordedPushRetries(adminSupabase: SupabaseClient, now: Date, failures: PushMaintenanceFailures) {
+  const data = await scanPushMaintenance(adminSupabase, 'recorded', RETRYABLE_DELIVERY_BATCH_SIZE, now);
   let recoveredCount = 0;
   let disabledTokenCount = 0;
-  for (const row of data ?? []) {
-    const completion = await finishRecordedPushRetry(adminSupabase, row.id, row.retry_claim_id);
-    if (!completion) continue;
-    recoveredCount += 1;
-    disabledTokenCount += normalizeNonNegativeInteger(completion.disabledTokenCount);
+  for (const row of data) {
+    try {
+      const completion = await finishRecordedPushRetry(adminSupabase, String(row.id), String(row.retry_claim_id));
+      if (!completion) continue;
+      recoveredCount += 1;
+      disabledTokenCount += normalizeNonNegativeInteger(completion.disabledTokenCount);
+    } catch (error) { failures.capture('recorded', error, rowString(row, 'id') ?? undefined); }
   }
   return { recoveredCount, disabledTokenCount };
 }
@@ -1217,32 +1245,20 @@ async function processRetryableMobilePushDeliveries(
     fetcher = fetch,
     now = new Date(),
     batchSize = RETRYABLE_DELIVERY_BATCH_SIZE,
+    failures,
   }: {
     fetcher?: typeof fetch;
     now?: Date;
     batchSize?: number;
-  } = {}
+    failures: PushMaintenanceFailures;
+  }
 ) {
   const nowIso = now.toISOString();
   const boundedBatchSize = Number.isFinite(batchSize)
     ? Math.max(1, Math.min(Math.trunc(batchSize), RETRYABLE_DELIVERY_BATCH_SIZE))
     : RETRYABLE_DELIVERY_BATCH_SIZE;
 
-  const { data, error } = await adminSupabase
-    .from('mobile_push_deliveries')
-    .select('id, notification_id, user_id, expo_push_token, attempt_count')
-    .eq('send_status', 'error')
-    .eq('receipt_status', 'error')
-    .is('push_ticket_id', null)
-    .lt('attempt_count', DEFAULT_EXPO_PUSH_MAX_ATTEMPTS)
-    .order('last_attempt_at', { ascending: true })
-    .limit(boundedBatchSize);
-
-  if (error) {
-    throw new MobileNotificationError('Failed to load retryable mobile push deliveries.', 500);
-  }
-
-  const deliveries = (data ?? []) as DeliveryRow[];
+  const deliveries = await scanPushMaintenance(adminSupabase, 'retries', boundedBatchSize, now);
   let retriedCount = 0;
   let skippedCount = 0;
   let resentCount = 0;
@@ -1250,112 +1266,114 @@ async function processRetryableMobilePushDeliveries(
   let disabledTokenCount = 0;
 
   for (const delivery of deliveries) {
-    const deliveryId = rowString(delivery, 'id');
-    const notificationId = rowString(delivery, 'notification_id');
-    const userId = rowString(delivery, 'user_id');
-    const expoPushToken = rowString(delivery, 'expo_push_token');
-    const priorAttemptCount = rowNumber(delivery, 'attempt_count', 0);
-
-    if (!deliveryId || !notificationId || !userId || !expoPushToken) {
-      continue;
-    }
-
-    const { data: notificationData, error: notificationError } = await adminSupabase
-      .from('mobile_notifications')
-      .select('id, type, category, title, body, deep_link')
-      .eq('id', notificationId)
-      .maybeSingle();
-
-    if (notificationError) {
-      throw new MobileNotificationError('Failed to load notification for push retry.', 500);
-    }
-
-    if (!notificationData) {
-      await closeUnsentPushDelivery(adminSupabase, deliveryId, nowIso, 'Notification no longer exists.');
-      continue;
-    }
-
-    const notification = toMobileNotificationRecord(notificationData as NotificationRow);
-
-    // The first send asked the account's preferences. Pausing push in the app
-    // changes those and leaves the token live, so the token check below does
-    // not cover it: the retry asks them again.
-    const preferences = await readPushPreferencesForRetry(adminSupabase, userId);
-    if (!shouldPushForPreferences(preferences, notification.category)) {
-      skippedCount += 1;
-      await closeUnsentPushDelivery(adminSupabase, deliveryId, nowIso, preferences.pushEnabled
-        ? `Not retried: ${notification.category} alerts are switched off for this account.`
-        : 'Not retried: push alerts are paused for this account.');
-      continue;
-    }
-
-    // Asked last, so that nothing but the request stands between the answer
-    // and the send.
-    const liveTokenId = await findLivePushTokenId(adminSupabase, userId, expoPushToken);
-    if (!liveTokenId) {
-      skippedCount += 1;
-      await closeUnsentPushDelivery(
-        adminSupabase,
-        deliveryId,
-        nowIso,
-        'Not retried: the push token is no longer active for this account.',
-      );
-      continue;
-    }
-
-    const { data: claimId, error: claimError } = await adminSupabase.rpc('claim_mobile_push_retry', {
-      p_delivery_id: deliveryId,
-      p_expected_attempt_count: priorAttemptCount,
-    });
-    if (claimError) throw new MobileNotificationError('Failed to claim push retry.', 500);
-    if (typeof claimId !== 'string') continue;
-    retriedCount += 1;
-
-    // The claim durably spends one attempt before the request. One provider
-    // request per claim keeps failed writes and worker death within the cap.
-    let outcome: Record<string, unknown>;
     try {
-      const result = await sendExpoPushNotification({
-        expoPushToken,
-        title: notification.title,
-        body: notification.body,
-        priority: priorityForNotificationCategory(notification.category),
-        data: {
-          notificationId: notification.id,
-          type: notification.type,
-          category: notification.category,
-          deepLink: notification.deepLink,
-        },
-        fetcher,
-      });
-      outcome = result.status === 'ok'
-        ? { status: 'sent', ticket_id: result.id }
-        : {
-          status: isPermanentExpoPushRefusal(result.details) ? 'refused' : 'retryable',
-          error_code: isRecord(result.details) ? normalizeOptionalString(result.details.error) : null,
-          message: result.message,
-          details: isRecord(result.details) ? result.details : null,
-        };
-    } catch (error) {
-      outcome = {
-        status: isRefusedExpoPushRequest(error) ? 'refused' : 'retryable',
-        message: getErrorMessage(error, 'Expo push retry failed.'),
-        details: toProviderErrorDetails(error),
-      };
-    }
+      const deliveryId = rowString(delivery, 'id');
+      const notificationId = rowString(delivery, 'notification_id');
+      const userId = rowString(delivery, 'user_id');
+      const expoPushToken = rowString(delivery, 'expo_push_token');
+      const priorAttemptCount = rowNumber(delivery, 'attempt_count', 0);
 
-    // Finalization is fenced by the claim and atomically retires invalid tokens.
-    // A failed write leaves the spent attempt durable; never resend here.
-    const { data: recorded, error: recordError } = await adminSupabase.rpc('record_mobile_push_retry_outcome', {
-      p_delivery_id: deliveryId, p_claim_id: claimId, p_outcome: outcome,
-    });
-    if (recordError) throw new MobileNotificationError('Failed to record push retry.', 500);
-    if (recorded !== true) continue;
-    const completion = await finishRecordedPushRetry(adminSupabase, deliveryId, claimId);
-    if (!completion) continue;
-    disabledTokenCount += normalizeNonNegativeInteger(completion.disabledTokenCount);
-    if (outcome.status === 'sent') resentCount += 1;
-    else retryFailedCount += 1;
+      if (!deliveryId || !notificationId || !userId || !expoPushToken) {
+        continue;
+      }
+
+      const { data: notificationData, error: notificationError } = await adminSupabase
+        .from('mobile_notifications')
+        .select('id, type, category, title, body, deep_link')
+        .eq('id', notificationId)
+        .maybeSingle();
+
+      if (notificationError) {
+        throw new MobileNotificationError('Failed to load notification for push retry.', 500);
+      }
+
+      if (!notificationData) {
+        await closeUnsentPushDelivery(adminSupabase, deliveryId, nowIso, 'Notification no longer exists.');
+        continue;
+      }
+
+      const notification = toMobileNotificationRecord(notificationData as NotificationRow);
+
+      // The first send asked the account's preferences. Pausing push in the app
+      // changes those and leaves the token live, so the token check below does
+      // not cover it: the retry asks them again.
+      const preferences = await readPushPreferencesForRetry(adminSupabase, userId);
+      if (!shouldPushForPreferences(preferences, notification.category)) {
+        skippedCount += 1;
+        await closeUnsentPushDelivery(adminSupabase, deliveryId, nowIso, preferences.pushEnabled
+          ? `Not retried: ${notification.category} alerts are switched off for this account.`
+          : 'Not retried: push alerts are paused for this account.');
+        continue;
+      }
+
+      // Asked last, so that nothing but the request stands between the answer
+      // and the send.
+      const liveTokenId = await findLivePushTokenId(adminSupabase, userId, expoPushToken);
+      if (!liveTokenId) {
+        skippedCount += 1;
+        await closeUnsentPushDelivery(
+          adminSupabase,
+          deliveryId,
+          nowIso,
+          'Not retried: the push token is no longer active for this account.',
+        );
+        continue;
+      }
+
+      const { data: claimId, error: claimError } = await adminSupabase.rpc('claim_mobile_push_retry', {
+        p_delivery_id: deliveryId,
+        p_expected_attempt_count: priorAttemptCount,
+      });
+      if (claimError) throw new MobileNotificationError('Failed to claim push retry.', 500);
+      if (typeof claimId !== 'string') continue;
+      retriedCount += 1;
+
+      // The claim durably spends one attempt before the request. One provider
+      // request per claim keeps failed writes and worker death within the cap.
+      let outcome: Record<string, unknown>;
+      try {
+        const result = await sendExpoPushNotification({
+          expoPushToken,
+          title: notification.title,
+          body: notification.body,
+          priority: priorityForNotificationCategory(notification.category),
+          data: {
+            notificationId: notification.id,
+            type: notification.type,
+            category: notification.category,
+            deepLink: notification.deepLink,
+          },
+          fetcher,
+        });
+        outcome = result.status === 'ok'
+          ? { status: 'sent', ticket_id: result.id }
+          : {
+            status: isPermanentExpoPushRefusal(result.details) ? 'refused' : 'retryable',
+            error_code: isRecord(result.details) ? normalizeOptionalString(result.details.error) : null,
+            message: result.message,
+            details: isRecord(result.details) ? result.details : null,
+          };
+      } catch (error) {
+        outcome = {
+          status: isRefusedExpoPushRequest(error) ? 'refused' : 'retryable',
+          message: getErrorMessage(error, 'Expo push retry failed.'),
+          details: toProviderErrorDetails(error),
+        };
+      }
+
+      // Finalization is fenced by the claim and atomically retires invalid tokens.
+      // A failed write leaves the spent attempt durable; never resend here.
+      const { data: recorded, error: recordError } = await adminSupabase.rpc('record_mobile_push_retry_outcome', {
+        p_delivery_id: deliveryId, p_claim_id: claimId, p_outcome: outcome,
+      });
+      if (recordError) throw new MobileNotificationError('Failed to record push retry.', 500);
+      if (recorded !== true) continue;
+      const completion = await finishRecordedPushRetry(adminSupabase, deliveryId, claimId);
+      if (!completion) continue;
+      disabledTokenCount += normalizeNonNegativeInteger(completion.disabledTokenCount);
+      if (outcome.status === 'sent') resentCount += 1;
+      else retryFailedCount += 1;
+    } catch (error) { failures.capture('retries', error, rowString(delivery, 'id') ?? undefined); }
   }
 
   return {
@@ -1408,25 +1426,32 @@ export async function processMobilePushMaintenance(
     batchSize?: number;
   } = {}
 ) {
-  const recoverySummary = await recoverRecordedPushRetries(adminSupabase);
-  const receiptSummary = await processPendingMobilePushReceipts(adminSupabase, {
-    fetcher,
-    now,
-    batchSize,
+  const failures = new PushMaintenanceFailures();
+  async function phase<T>(name: PushMaintenancePhase, run: () => Promise<T>, fallback: T): Promise<T> {
+    try { return await run(); } catch (error) { failures.capture(name, error); return fallback; }
+  }
+  const recoverySummary = await phase('recorded', () => recoverRecordedPushRetries(adminSupabase, now, failures), { recoveredCount: 0, disabledTokenCount: 0 });
+  const receiptSummary = await phase('receipts', () => processPendingMobilePushReceipts(adminSupabase, {
+    fetcher, now, batchSize, failures,
+  }), { checkedCount: 0, updatedCount: 0, staleCount: 0, disabledTokenCount: 0 });
+  const retrySummary = await phase('retries', () => processRetryableMobilePushDeliveries(adminSupabase, {
+    fetcher, now, failures,
+  }), { retryableCount: 0, retriedCount: 0, retrySkippedCount: 0, resentCount: 0, retryFailedCount: 0, retryDisabledTokenCount: 0 });
+  const retentionSummary = await phase('retention', () => pruneMobileNotificationRetention(adminSupabase, { now }), {
+    deliveryRetentionDays: DELIVERY_RETENTION_DAYS, readNotificationRetentionDays: READ_NOTIFICATION_RETENTION_DAYS,
+    deliveriesDeleted: 0, notificationsDeleted: 0, retentionBatchLimitReached: false,
   });
-  const retrySummary = await processRetryableMobilePushDeliveries(adminSupabase, {
-    fetcher,
-    now,
-  });
-  const retentionSummary = await pruneMobileNotificationRetention(adminSupabase, { now });
 
-  return {
+  const summary = {
     ...receiptSummary,
     ...retrySummary,
     ...retentionSummary,
+    ...failures.summary(),
     recoveredRetryCount: recoverySummary.recoveredCount,
     disabledTokenCount: receiptSummary.disabledTokenCount + retrySummary.retryDisabledTokenCount + recoverySummary.disabledTokenCount,
   };
+  if (failures.count) throw new MobilePushMaintenanceError(failures.firstError, summary);
+  return summary;
 }
 
 export async function createMobileNotification({
