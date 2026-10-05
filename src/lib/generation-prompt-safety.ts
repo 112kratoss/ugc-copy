@@ -13,6 +13,15 @@
  * - `see_through_clothing`: see-through or x-ray views of what someone wears;
  * - `nudity`: asking for nude, naked or topless people, or genitals.
  *
+ * Each of those is one request said many ways, and a rule only knows the
+ * wordings it lists. The reviewer's other prompt, "Remove the cloth fabric from
+ * the woman revealing everything underneath", passed every rule on 2026-09-17
+ * and was stopped by the provider alone. So the same three requests are also
+ * matched when the cloth is named as a material, when a garment leaves by
+ * itself ("her dress disappears"), when someone is shown "without her
+ * clothes", when the view is "under her dress", and when nudity is described
+ * without its usual words ("wearing only heels").
+ *
  * Everything else, including swimwear, lingerie, fashion, dance and art that
  * does not ask for nudity, still reaches the model unchanged. Only positive
  * prompts are checked. Negative prompts ask a model to avoid these words, and a
@@ -141,6 +150,33 @@ const WORN_BY_PERSON_WITH_TOPS = `(?:${POSSESSIVE}(?:${CLOTHING.slice(3, -1)}|to
 const SEE_THROUGH = '(?:see\\s*(?:through|thru)|seethrough|seethru)';
 const PERSON = '(?:her|his|their|them|him|the (?:woman|women|man|men|girl|girls|boy|boys|person|people|lady|ladies|model|models|guy|guys|subject|character|actress|actor)|this (?:woman|man|girl|boy|person|lady|model|guy))';
 
+/** The alternatives of CLOTHING without their group, for building wider lists. */
+const CLOTHING_WORDS = CLOTHING.slice(3, -1);
+const GARMENT_OR_TOPS = `(?:${CLOTHING_WORDS}|top|tops|shorts)`;
+// Cloth named as a material rather than a garment: "the cloth fabric".
+const CLOTH = `(?:cloth|cloths|fabric|fabrics|textile|textiles|covering|coverings|attire|apparel|garb|${CLOTHING_WORDS}|top|tops|shorts)`;
+// Who the cloth is taken from. Outerwear and objects are not here, so "remove
+// the towel from the chair" and "the excess clay from the model" read as edits.
+const TAKEN_FROM = '(?:her|him|them|herself|himself|themselves|everyone|everybody|(?:her|his|their)\\s+(?:body|bodies|figure|torso|chest|frame)|(?:the|this|that)\\s+(?:woman|women|man|men|girl|girls|boy|boys|person|people|lady|ladies|model|models|guy|guys|subject|subjects|character|characters|actress|actor|figure|female|male|bride|dancer|couple))';
+const TAKE_AWAY = '(?:take|takes|taking|took|taken|pull|pulls|pulling|pulled|rip|rips|ripping|ripped|tear|tears|tearing|tore|torn|strip|strips|stripping|stripped|remove|removes|removing|removed|peel|peels|peeling|peeled|lift|lifts|lifting|lifted|erase|erases|erasing|erased|delete|deletes|deleting|deleted|wipe|wipes|wiping|wiped|clear|clears|clearing|cleared|(?:get|gets|getting|got)\\s+rid\\s+of)';
+// Garments that are rarely anything but worn. "top", "shorts", "towel" and
+// "robe" also name things lying around a scene, so "remove the towel" stays an
+// edit unless it says who it comes off.
+const WORN_GARMENT = '(?:dress|dresses|skirt|skirts|shirt|shirts|t shirt|tshirt|blouse|blouses|pants|jeans|leggings|outfit|outfits|gown|gowns|saree|sari|kurti|bodysuit|leotard|nightgown|nightie|nightdress|uniform|uniforms)';
+// What follows a garment when the request is about the garment, not the wearer.
+// With "the" instead of "her", a towel or a robe can be lying anywhere.
+const THE_WORN = `(?:clothes|clothing|garments?|bra|bras|underwear|panties|knickers|lingerie|bikini|bikinis|swimsuit|swimsuits|swimwear|${WORN_GARMENT.slice(3, -1)})`;
+const GARMENT_DETAIL = '(?:stain|stains|wrinkle|wrinkles|crease|creases|logo|logos|text|print|prints|pattern|patterns|shadow|shadows|tag|tags|label|labels|lint|dust|spot|spots|mark|marks|color|colour|background|rack|racks|hanger|hangers|code|strap|straps|belt|button|buttons|sleeve|sleeves|collar|pocket|pockets|zipper|price|hem|lining|train|bow|ribbon|embroidery|sequins|glare|reflection|fold|folds|detail|details|design|texture|shop|store|display|number|numbers|name|names|badge|badges|patch|patches|sponsor|sponsors|stripe|stripes|crest|brand|branding|watermark)';
+const GARMENT_PLACE = '(?:chair|floor|bed|table|rack|hanger|hangers|line|clothesline|wall|shelf|sofa|couch|mannequin|closet|wardrobe|drawer|basket|bag|box|door|hook|railing|car|ground|window|display|store|shop|background)';
+const SWAPPED_FOR_NOTHING = '(?:nothing|bare\\s+skin|body\\s*paint|bodypaint)';
+// A garment going away without anyone taking it. "dissolves into butterflies"
+// and "fades to black" are effects, and "falls off the shoulder" is a neckline.
+const GOES_AWAY = '(?:disappear|disappears|disappeared|disappearing|vanish|vanishes|vanished|vanishing|dissolve|dissolves|dissolved|dissolving|evaporate|evaporates|evaporated|evaporating|disintegrate|disintegrates|disintegrated|disintegrating|(?:melt|melts|melted|melting|fade|fades|faded|fading|burn|burns|burned|burnt|burning|fall|falls|fell|falling|peel|peels|peeled|peeling|blow|blows|blew|blown|blowing|fly|flies|flew|flying|slide|slides|slid|sliding|slip|slips|slipped|slipping|come|comes|came|coming|tear|tears|tore|torn|rip|rips|ripped|drift|drifts|float|floats)\\s+(?:right\\s+|completely\\s+|clean\\s+)?(?:off|away|apart|undone|loose)|(?:drop|drops|dropped|dropping)\\s+(?:to\\s+the\\s+(?:floor|ground)|off|away|down))';
+// What a person "wears only" when they are wearing no clothes.
+const ONLY = '(?:only|just|nothing\\s+but|nothing\\s+except|nothing\\s+other\\s+than)';
+const NOT_CLOTHES = '(?:(?:her|his|their)\\s+(?:own\\s+|bare\\s+)?(?:skin|hands|hand|arms|hair)|skin|body\\s*paint|bodypaint|a\\s+smile|(?:high\\s+)?heels|stilettos|an\\s+apron|jewelry|jewellery|a\\s+necklace|necklaces|stockings|socks|a\\s+tie|a\\s+hat|boots|shoes|leaves|(?:a\\s+)?(?:fig\\s+)?leaf|petals|bubbles|foam|suds|shadows|glitter|tattoos|a\\s+ribbon|ribbons|chains|pearls|(?:body\\s+)?oil)';
+const NOT_SKIN_TIGHT = '(?!\\s*(?:tight|tone|toned|tones|colored|coloured|color|colour|care|splattered|stained))';
+
 type SafetyRule = {
   category: GenerationPromptSafetyCategory;
   pattern: RegExp;
@@ -161,7 +197,7 @@ const RULES: ReadonlyArray<SafetyRule> = [
   { category: 'undressing', pattern: /\b(?:strip|strips|stripped|stripping)\s+(?:her|him|them)\b(?!\s+of\s+(?:her|his|their)\s+(?:title|titles|rights|power|powers|rank|crown|medal|medals|license|licence|role|job|name|dignity|wealth|money|land))/ },
   { category: 'undressing', pattern: /\b(?:wear|wears|wore|worn)\s+(?:absolutely\s+)?nothing\b(?!\s+(?:special|fancy|much|else|flashy|formal|expensive|fashionable|new|bright|colorful|colourful|on\s+(?:it|the|her\s+(?:face|head|feet))))/ },
   { category: 'undressing', pattern: /\b(?:clothes|clothing|outfit|outfits|dress|garments?|bikini|bra|underwear|panties|lingerie)\s+(?:are|is|were|was|get|gets|got|getting)\s+(?:all\s+)?(?:gone|off|removed|missing|taken off|pulled off|ripped off|torn off|stripped|stripped off)\b/ },
-  { category: 'undressing', pattern: /\b(?:clothes|clothing|outfit|outfits|dress|garments?)\s+(?:to|into|with|for)\s+nothing\b/ },
+  { category: 'undressing', pattern: new RegExp(`\\b${GARMENT_OR_TOPS}\\s+(?:to|into|with|for|by)\\s+(?:just\\s+|only\\s+)?(?:nothing|bare\\s+skin|(?:her|his|their)\\s+(?:bare\\s+|own\\s+)?skin|skin${NOT_SKIN_TIGHT}|body\\s*paint|bodypaint)\\b`) },
   { category: 'undressing', pattern: /\b(?:she|he|they|her|him|them|woman|women|man|men|girl|girls|boy|boys|lady|person|model)\s+(?:is\s+|are\s+|was\s+|were\s+|looks?\s+|appears?\s+|stands?\s+|standing\s+|sits?\s+|sitting\s+|lies?\s+|lying\s+)?(?:completely|totally|fully|entirely|stark)\s+(?:bare|naked|nude)\b/ },
   { category: 'undressing', pattern: /\b(?:clothes|clothing|bra|underwear|panties|bikini|lingerie|pants|trousers|skirt|dress|swimsuit)\s+(?:off|removed|gone|pulled down|pulled off|ripped off|torn off|falling off|fall off|falls off|fell off|slipping off|slips off|slid off|dropped)\b(?!\s+(?:white|the shoulder|shoulder|shoulders|one shoulder|screen|camera|stage|duty|road|track|season|guard|balance|rack|racks|hanger|hangers))/ },
   { category: 'undressing', pattern: /\bher\s+(?:shirt|top|blouse|t shirt|tshirt)\s+off\b/ },
@@ -169,12 +205,30 @@ const RULES: ReadonlyArray<SafetyRule> = [
   { category: 'undressing', pattern: /\bwearing\s+(?:absolutely\s+)?nothing\b(?!\s+(?:special|fancy|much|else|flashy|formal|expensive|fashionable|new|bright|colorful|colourful|on\s+(?:it|the|her\s+(?:face|head|feet))))/ },
   { category: 'undressing', pattern: /\b(?:not|isn t|isnt|aren t|arent|wasn t|wasnt|without)\s+wearing\s+(?:any\s+)?(?:clothes|clothing|anything)\b/ },
   { category: 'undressing', pattern: /\b(?:no|without(?:\s+any)?)\s+(?:clothes|clothing)\b(?!\s+(?:hanging|hung|in\s+the|inside|left|to\s+wear|on\s+the\s+(?:rack|hanger|hangers|floor|line|bed)|rack|racks|hangers?|store|shop|brand|label))/ },
+  // Cloth taken off a person, however the cloth is named: "remove the cloth
+  // fabric from the woman", "take the towel off her".
+  { category: 'undressing', pattern: new RegExp(`\\b${TAKE_AWAY}\\s+(?:off\\s+|away\\s+)?(?:all\\s+(?:of\\s+)?)?(?:the\\s+|that\\s+|this\\s+|any\\s+|every\\s+)?(?:\\w+\\s+){0,2}?${CLOTH}\\s+(?:\\w+\\s+)?(?:from|off|off\\s+of)\\s+${TAKEN_FROM}\\b`) },
+  // "erase the dress": a worn garment removed and nothing put in its place.
+  { category: 'undressing', pattern: new RegExp(
+    `\\b(?:remove|removes|removing|removed|erase|erases|erasing|erased|delete|deletes|deleting|deleted|(?:get|gets|getting|got)\\s+rid\\s+of|(?:take|takes|taking|took|strip|strips|stripping)\\s+(?:off|away)|(?:rip|tear|pull|peel|cut)\\s+off|wipe\\s+away)\\s+(?:the|that|this|those|these)\\s+(?:\\w+\\s+)?${WORN_GARMENT}\\b`
+    + `(?!\\s+${GARMENT_DETAIL}\\b)`
+    + `(?!\\s+(?:from|off|on|in|at|near|behind|beside|hanging|lying|laying|draped|folded)\\s+(?:on\\s+|from\\s+|over\\s+)?(?:the\\s+|a\\s+|an\\s+)?${GARMENT_PLACE}\\b)`
+    + `(?!.*\\b(?:replace|replaces|replaced|replacing|swap|swaps|swapped|swapping|instead)\\b(?!\\s+(?:it|them)\\s+(?:with|for|to|into)\\s+${SWAPPED_FOR_NOTHING}\\b))`,
+  ) },
+  // A garment that leaves by itself: "her dress disappears", "her top comes off".
+  { category: 'undressing', pattern: new RegExp(`\\b(?:(?:her|his|their)\\s+(?:\\w+\\s+)?${GARMENT_OR_TOPS}|the\\s+(?:\\w+\\s+)?${THE_WORN})\\s+(?:slowly\\s+|suddenly\\s+|magically\\s+|completely\\s+|just\\s+|all\\s+|then\\s+|to\\s+|should\\s+|will\\s+|starts?\\s+to\\s+|begins?\\s+to\\s+)*${GOES_AWAY}\\b(?!\\s+(?:into|to|as|the\\s+shoulder|shoulder|shoulders|one\\s+shoulder|screen|camera|stage|duty|road|track|season|guard|balance|rack|racks|hanger|hangers|white)\\b)`) },
+  // Someone shown without what they wear. A shirtless man is as allowed as
+  // "his shirt off" is above, so "his" covers less than "her".
+  { category: 'undressing', pattern: /\b(?:without|minus|sans)\s+(?:any\s+of\s+)?(?:(?:her|their)\s+(?:\w+\s+)?(?:clothes|clothing|garments?|outfit|outfits|dress|gown|shirt|t shirt|tshirt|blouse|top|bra|pants|trousers|jeans|skirt|shorts|underwear|panties|knickers|lingerie|bikini|swimsuit|swimwear|bodysuit|leotard|nightgown|nightie|nightdress|towel|robe|saree|sari|kurti|uniform)|his\s+(?:\w+\s+)?(?:clothes|clothing|garments?|outfit|pants|trousers|jeans|underwear|boxers|briefs|towel|robe|uniform))\b(?!\s+(?:shoes|code|sense|size|collection|line|brand|designer|maker|rehearsal))/ },
 
   // See-through or x-ray views of what someone is wearing.
   { category: 'see_through_clothing', pattern: new RegExp(`\\b${SEE_THROUGH}\\s+(?:${WORN_BY_PERSON_WITH_TOPS}|(?:the\\s+|a\\s+|an\\s+)?${CLOTHING})\\b`) },
   { category: 'see_through_clothing', pattern: new RegExp(`\\b(?:transparent|x\\s*ray|xray)\\s+(?:${WORN_BY_PERSON_WITH_TOPS}|${CLOTHING})\\b`) },
   { category: 'see_through_clothing', pattern: new RegExp(`\\b${CLOTHING}\\s+(?:that\\s+(?:is|are)\\s+|which\\s+(?:is|are)\\s+|is\\s+|are\\s+|made\\s+|turned\\s+|turning\\s+|becomes?\\s+|became\\s+|goes\\s+|went\\s+)?(?:${SEE_THROUGH}|transparent)\\b`) },
   { category: 'see_through_clothing', pattern: /\b(?:x\s*ray|xray)\s+(?:(?:vision|scan|view|filter|camera|glasses|goggles|mode)\s+)?(?:through\s+)?(?:her|his|their|them|him)\b/ },
+  // The view under a garment: "what is under her dress", "look up her skirt".
+  { category: 'see_through_clothing', pattern: new RegExp(`\\b(?:what\\s+(?:is|s|lies|was)|whats|everything|anything|all)\\s+(?:that\\s+is\\s+|that\\s+s\\s+|hidden\\s+|hiding\\s+)?(?:underneath|under|beneath)\\s+(?:her|his|their|the|that|those|all\\s+(?:of\\s+)?(?:her|his|their|the|those))\\s+(?:\\w+\\s+)?${GARMENT_OR_TOPS}\\b(?!\\s+code)`) },
+  { category: 'see_through_clothing', pattern: /\b(?:see|sees|seeing|look|looks|looking|peek|peeks|peeking|peep|peeping|glimpse|view|camera)\s+(?:right\s+|straight\s+)?(?:under|underneath|beneath|up)\s+(?:her|their)\s+(?:\w+\s+)?(?:clothes|clothing|garments?|outfit|dress|skirt|skirts|towel|robe|kilt|nightgown|nightie)\b/ },
 
   // Nudity itself.
   { category: 'nudity', pattern: /\b(?:nude|nudes|nudity|naked|nakedness|nudist|nudists|nudism|topless)\b/ },
@@ -185,6 +239,20 @@ const RULES: ReadonlyArray<SafetyRule> = [
   // Hindi, Spanish, Portuguese and German words people type for the same request.
   { category: 'nudity', pattern: /\b(?:nangi|desnuda|desnudas|desnudo|desnudos|desnudar|desnudarla|nackt|nackte|nackten|sin\s+ropa|sem\s+roupa|ohne\s+kleidung)\b/ },
   { category: 'nudity', pattern: /\b(?:porn|porno|pornography|pornographic|pornstar|pornstars|nsfw|hentai)\b/ },
+  // "au naturel" is also how people ask for bare-faced makeup and natural hair.
+  { category: 'nudity', pattern: /(?<!\b(?:makeup|make up|hair|hairstyle|look|skin|beauty|nails|face|curls|lashes|brows)\s+(?:is\s+|goes\s+|going\s+|went\s+|kept\s+|left\s+|worn\s+|styled\s+)?)\bau\s+natur(?:el|elle|ale|al)\b(?!\s+(?:makeup|make up|look|looks|beauty|hair|hairstyle|style|skin|glow|face|curls|nails|lashes|brows|lips|finish|shade|shades|tone|tones|color|colour))/ },
+  { category: 'nudity', pattern: /\b(?:unclad|clothesless|starkers|in\s+the\s+altogether)\b/ },
+  // "wearing only heels", "dressed in nothing but body paint".
+  { category: 'nudity', pattern: new RegExp(`\\b(?:wear|wears|wearing|wore|worn|dressed|clad|clothed)\\s+(?:in\\s+|with\\s+)?${ONLY}\\s+(?:in\\s+|with\\s+)?${NOT_CLOTHES}\\b${NOT_SKIN_TIGHT}`) },
+  // "cover her only with her hands". A cake covered only with petals has no "her".
+  { category: 'nudity', pattern: new RegExp(`\\b(?:cover|covers|covered|covering)\\s+(?:up\\s+)?(?:her|him|them|herself|himself|themselves|(?:her|his|their)\\s+(?:\\w+\\s+)?(?:body|bodies|chest|breasts|modesty))\\s+(?:up\\s+)?${ONLY}\\s+(?:in\\s+|with\\s+|by\\s+)?${NOT_CLOTHES}\\b${NOT_SKIN_TIGHT}`) },
+  { category: 'nudity', pattern: new RegExp(`\\b(?:she|he|they|woman|women|man|men|girl|lady|person|model|body|bodies)\\s+(?:is\\s+|are\\s+|was\\s+|were\\s+)?covered\\s+${ONLY}\\s+(?:in\\s+|with\\s+|by\\s+)?${NOT_CLOTHES}\\b${NOT_SKIN_TIGHT}`) },
+  // A body said to be exposed or bare, which is not "exposed body panels" or
+  // skin "exposed to the sun".
+  { category: 'nudity', pattern: /\b(?:fully|completely|totally|entirely|wholly)\s+exposed\s+(?:body|bodies|woman|women|man|men|girl|lady|person|model|figure|chest|torso)\b(?!\s+(?:panel|panels|work|kit|shell|frame|armor|armour|parts?))/ },
+  { category: 'nudity', pattern: /\b(?:her|his|their)\s+(?:whole\s+|entire\s+)?(?:body|bodies)\s+(?:is\s+|are\s+|was\s+|were\s+)?(?:fully\s+|completely\s+|totally\s+|entirely\s+)?(?:exposed|uncovered|bared|on\s+full\s+display)\b(?!\s+to\s+(?:the\s+)?(?:sun|sunlight|elements|cold|wind|rain|light|air|weather|danger|radiation|heat|water))/ },
+  { category: 'nudity', pattern: /\b(?:expose|exposes|exposing|uncover|uncovers|uncovering|bare|bares|baring)\s+(?:(?:her|his|their)\s+(?:whole\s+|entire\s+|full\s+|bare\s+)?(?:body|bodies)|(?:her|their)\s+(?:bare\s+)?(?:chest|torso))\b(?!\s+to\s+(?:the\s+)?(?:sun|sunlight|elements|cold|wind|rain|light|air|weather|danger|radiation|heat|water))/ },
+  { category: 'nudity', pattern: /\bbare\s+(?:body|bodies|bodied)\b(?!\s+(?:of\s+(?:a|an|the)\s+(?:\w+\s+)?(?:guitar|car|violin|bass|truck|bike|vehicle|plane|ship|boat|instrument|machine|robot)|care|lotion|wash|oil|butter|scrub|cream|products?|panel|panels|shell|frame|kit|work))/ },
 ];
 
 const MINOR_TERMS: RegExp[] = [
