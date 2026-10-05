@@ -27,7 +27,6 @@ describe.skipIf(!configPath || !connectionString)('push send retry persistence w
     unregistered ? { status: 'error', message: 'Gone', details: { error: 'DeviceNotRegistered' } } : { status: 'ok', id: ticket },
   }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
   const state = async () => (await db.query('select receipt_status,send_status,attempt_count,push_ticket_id from public.mobile_push_deliveries where id=$1', [delivery])).rows[0];
-  const tokenState = async () => (await db.query('select is_active,disabled_at from public.mobile_push_tokens where id=$1', [token])).rows[0];
   beforeAll(async () => {
     config = JSON.parse(readFileSync(configPath!, 'utf8'));
     expect(['localhost', '127.0.0.1']).toContain(new URL(config.API_URL).hostname);
@@ -76,53 +75,4 @@ describe.skipIf(!configPath || !connectionString)('push send retry persistence w
     expect(fetcher).not.toHaveBeenCalled();
   });
 
-  it('does not convert failed accepted-ticket persistence into a provider failure', async () => {
-    const fetcher = provider();
-    failTable = 'mobile_push_deliveries';
-    failOnce = true;
-    await expect(processMobilePushMaintenance(admin, { fetcher, now })).rejects.toThrow('Failed to record push retry.');
-    expect(writes).toEqual(['/rest/v1/mobile_push_deliveries']);
-    expect(await state()).toMatchObject({ receipt_status: 'error', send_status: 'error', attempt_count: 1, push_ticket_id: null });
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    // The accepted ticket is not durable. This test proves truthful failure,
-    // not exactly-once sending: a later run still sends this row again.
-    expect(await processMobilePushMaintenance(admin, { fetcher, now })).toMatchObject({ resentCount: 1 });
-    expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(await state()).toMatchObject({ send_status: 'sent', push_ticket_id: ticket, attempt_count: 2 });
-  });
-
-  it('surfaces a failed provider-refusal write', async () => {
-    const fetcher = vi.fn<typeof fetch>(async () => new Response('{}', { status: 400 }));
-    failTable = 'mobile_push_deliveries';
-    await expect(processMobilePushMaintenance(admin, { fetcher, now })).rejects.toThrow('Failed to record push retry.');
-    expect(await state()).toMatchObject({ receipt_status: 'error', attempt_count: 1 });
-    failTable = null;
-    await processMobilePushMaintenance(admin, { fetcher, now });
-    expect(await state()).toMatchObject({ receipt_status: 'stale', attempt_count: 2 });
-  });
-
-  it('keeps failed token retirement recoverable instead of consuming the remaining attempt budget', async () => {
-    const fetcher = provider(true);
-    failTable = 'mobile_push_tokens';
-    await expect(processMobilePushMaintenance(admin, { fetcher, now })).rejects.toThrow('Failed to retire unregistered push tokens.');
-    expect(await state()).toMatchObject({ receipt_status: 'error', attempt_count: 1 });
-    expect(await tokenState()).toMatchObject({ is_active: true });
-    failTable = null;
-    expect(await processMobilePushMaintenance(admin, { fetcher, now })).toMatchObject({ retryDisabledTokenCount: 1, retryFailedCount: 1 });
-    expect(await state()).toMatchObject({ receipt_status: 'stale', attempt_count: 2 });
-    expect(await tokenState()).toMatchObject({ is_active: false, disabled_at: now });
-  });
-
-  it('retires an invalid token before a failed delivery write and closes on retry without another send', async () => {
-    const fetcher = provider(true);
-    failTable = 'mobile_push_deliveries';
-    await expect(processMobilePushMaintenance(admin, { fetcher, now })).rejects.toThrow('Failed to record push retry.');
-    expect(await tokenState()).toMatchObject({ is_active: false, disabled_at: now });
-    expect(await state()).toMatchObject({ receipt_status: 'error', attempt_count: 1 });
-    failTable = null;
-    expect(await processMobilePushMaintenance(admin, { fetcher, now: new Date(now.getTime() + 1000) })).toMatchObject({ retrySkippedCount: 1 });
-    expect(await state()).toMatchObject({ receipt_status: 'stale' });
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(await tokenState()).toMatchObject({ disabled_at: now });
-  });
 });

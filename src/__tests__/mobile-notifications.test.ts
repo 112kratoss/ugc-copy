@@ -258,6 +258,10 @@ function createPushMaintenanceSupabase({
                 tests.push((row) => row[column] === value);
                 return query;
               },
+              not(column: string, _operator: string, value: unknown) {
+                tests.push(row => (row[column] ?? null) !== value);
+                return query;
+              },
               is(column: string, value: unknown) {
                 tests.push((row) => (row[column] ?? null) === value);
                 return query;
@@ -283,18 +287,19 @@ function createPushMaintenanceSupabase({
             return query;
           },
           update(values: Record<string, unknown>) {
-            return {
-              eq(column: string, value: unknown) {
-                deliveryUpdates.push({ id: String(value), values });
-                if (deliveryWriteError) return Promise.resolve({ error: deliveryWriteError });
-                for (const row of deliveries) {
-                  if (row[column] === value) {
-                    Object.assign(row, values);
-                  }
+            const filters: Array<[string, unknown]> = [];
+            const query = {
+              eq(column: string, value: unknown) { filters.push([column, value]); return query; },
+              is(column: string, value: unknown) { filters.push([column, value]); return query; },
+              then(resolve: (result: { error: { message: string } | null }) => unknown) {
+                deliveryUpdates.push({ id: String(filters.find(([column]) => column === 'id')?.[1]), values });
+                if (!deliveryWriteError) for (const row of deliveries) {
+                  if (filters.every(([column, value]) => (row[column] ?? null) === value)) Object.assign(row, values);
                 }
-                return Promise.resolve({ error: null });
+                return Promise.resolve({error: deliveryWriteError}).then(resolve);
               },
             };
+            return query;
           },
         };
       }
@@ -343,7 +348,46 @@ function createPushMaintenanceSupabase({
 
       throw new Error(`Unexpected table ${table}`);
     },
-    async rpc(name: string) {
+    async rpc(name: string, args: Record<string, unknown> = {}) {
+      const row = deliveries.find(row => row.id === args.p_delivery_id);
+      if (name === 'claim_mobile_push_retry') {
+        if (!row || row.retry_claim_id || row.attempt_count !== args.p_expected_attempt_count) return { data: null, error: null };
+        row.attempt_count = Number(row.attempt_count) + 1;
+        row.retry_claim_id = 'claim-' + row.id;
+        row.last_attempt_at = new Date().toISOString();
+        return { data: row.retry_claim_id, error: null };
+      }
+      if (name === 'record_mobile_push_retry_outcome') {
+        const outcome = args.p_outcome as Record<string, unknown>;
+        deliveryUpdates.push({ id: String(args.p_delivery_id), values: outcome });
+        if (deliveryWriteError) return { data: null, error: deliveryWriteError };
+        if (!row || row.retry_claim_id !== args.p_claim_id) return { data: false, error: null };
+        row.retry_outcome = outcome;
+        return { data: true, error: null };
+      }
+      if (name === 'finish_mobile_push_retry') {
+        const outcome = row?.retry_outcome as Record<string, unknown>;
+        if (!outcome) return { data: { applied: false }, error: null };
+        if (!row || row.retry_claim_id !== args.p_claim_id) return { data: { applied: false }, error: null };
+        let disabledTokenCount = 0;
+        if (outcome.error_code === 'DeviceNotRegistered') {
+          const token = tokenTable.rows.find(token => token.user_id === row.user_id && token.expo_push_token === row.expo_push_token);
+          if (token) {
+            const result = await tokenTable.update({ is_active: false, disabled_at: new Date().toISOString() }).in('id', [token.id]).eq('is_active', true).select();
+            disabledTokenCount = result.data?.length ?? 0;
+          }
+        }
+        Object.assign(row, {
+          retry_claim_id: null, retry_outcome: null,
+          send_status: outcome.status === 'sent' ? 'sent' : 'error',
+          receipt_status: outcome.status === 'sent' ? 'pending' : outcome.status === 'refused' ? 'stale' : 'error',
+          push_ticket_id: outcome.ticket_id ?? null,
+          receipt_error_code: outcome.error_code ?? null,
+          provider_message: outcome.message ?? null,
+          sent_at: outcome.status === 'sent' ? new Date().toISOString() : row.sent_at,
+        });
+        return { data: { applied: true, disabledTokenCount }, error: null };
+      }
       expect(name).toBe('prune_mobile_notification_retention');
       return {
         data: { deliveriesDeleted: 0, notificationsDeleted: 0, batchLimitReached: false },
@@ -1005,7 +1049,7 @@ describe('mobile notifications', () => {
         ...PHONE_TOKEN,
         expo_push_token: 'ExponentPushToken[gone]',
         is_active: false,
-        disabled_at: '2026-10-01T14:40:00.000Z',
+        disabled_at: expect.any(String),
       },
       { ...PHONE_TOKEN, id: 'token-2', expo_push_token: 'ExponentPushToken[tablet]' },
     ]);
@@ -1081,7 +1125,7 @@ describe('mobile notifications', () => {
         send_status: 'sent',
         receipt_status: 'pending',
         attempt_count: 2,
-        sent_at: '2026-10-04T05:10:00.000Z',
+        sent_at: expect.any(String),
       }),
     ]);
     // Its receipt is not due for fifteen minutes, and nothing is left to retry.
@@ -1208,7 +1252,7 @@ describe('mobile notifications', () => {
     // The row it found live is the row it retires when Expo says the device is gone.
     expect(summary).toMatchObject({ retriedCount: 1, retryFailedCount: 1, retryDisabledTokenCount: 1 });
     expect(maintenance.tokenTable.rows).toEqual([
-      { ...PHONE_TOKEN, id: 'token-9', is_active: false, disabled_at: '2026-10-04T05:10:00.000Z' },
+      { ...PHONE_TOKEN, id: 'token-9', is_active: false, disabled_at: expect.any(String) },
     ]);
   });
 
@@ -1469,9 +1513,9 @@ describe('mobile notifications', () => {
     await expect(processMobilePushMaintenance(maintenance.adminSupabase as never, { fetcher }))
       .rejects.toThrow(outcome === 'paused' ? 'Failed to close unsent push delivery.' : 'Failed to record push retry.');
     expect(maintenance.deliveryUpdates).toHaveLength(1);
-    expect(maintenance.deliveries[0]).toMatchObject({ send_status: 'error', receipt_status: 'error', attempt_count: 1, push_ticket_id: null });
+    expect(maintenance.deliveries[0]).toMatchObject({ send_status: 'error', receipt_status: 'error', attempt_count: outcome === 'paused' ? 1 : 2, push_ticket_id: null });
     expect(fetcher).toHaveBeenCalledTimes(outcome === 'paused' ? 0 : 1);
-    if (outcome === 'accepted') expect(maintenance.deliveryUpdates[0]?.values).toMatchObject({ push_ticket_id: 'accepted-ticket', attempt_count: 2 });
+    if (outcome === 'accepted') expect(maintenance.deliveryUpdates[0]?.values).toMatchObject({ ticket_id: 'accepted-ticket', status: 'sent' });
   });
 
   it.each(PERMANENT_EXPO_ERRORS)('closes a delivery whose retry Expo refuses with %s', async (code) => {
@@ -1493,7 +1537,7 @@ describe('mobile notifications', () => {
         receipt_status: 'stale',
         receipt_error_code: code,
         attempt_count: 2,
-        last_attempt_at: '2026-10-04T05:10:00.000Z',
+        last_attempt_at: expect.any(String),
       }),
     ]);
   });
@@ -1554,9 +1598,8 @@ describe('mobile notifications', () => {
     ]);
   });
 
-  // Expo did not answer at all. That may pass, so the retry spends the attempts
-  // the delivery has left there and then, and the count is what ends it.
-  it('spends the attempts a delivery has left when Expo cannot be reached', async () => {
+  // Each scheduled retry spends one durable attempt before its provider call.
+  it('spends the remaining attempts across runs when Expo cannot be reached', async () => {
     const maintenance = createPushMaintenanceSupabase({
       retryableDeliveries: [retryableDelivery()],
       tokens: [{ ...PHONE_TOKEN }],
@@ -1571,6 +1614,9 @@ describe('mobile notifications', () => {
       retryFailedCount: 1,
     });
 
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(maintenance.deliveries[0]).toMatchObject({ attempt_count: 2 });
+    await processMobilePushMaintenance(maintenance.adminSupabase as never, { fetcher, now });
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(maintenance.deliveries).toEqual([
       expect.objectContaining({ receipt_status: 'error', provider_message: 'network down', attempt_count: 3 }),
