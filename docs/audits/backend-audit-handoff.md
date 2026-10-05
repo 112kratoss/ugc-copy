@@ -6,10 +6,28 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/push-send-claims-audit-9e`, based on the #348 candidate `0f3442b8` atop main `44864e5667eb6a9ed7d81bcc6faa5138590a8767` (#346); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/push-first-send-audit-9f`, based on the #348 candidate `0f3442b8` atop main `44864e5667eb6a9ed7d81bcc6faa5138590a8767` (#346); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+9E PR #356 is open at 690aa98fef2fc26e9812188641ba96dcbeffaaa3; exact-head Quality
+37263340019 is running. Merge with main 9903c6dc preserved independent prompt
+safety #355; inspected conflicts were only the existing audit changes after their
+squash merge. The final focused set including prompt safety passes 237 cases.
+Production before-schema/advisor evidence and clean replay function/grant/column/
+index snapshots are prepared in .audit-evidence/backend-social/claims-release/;
+108 existing security advisor findings. The prepared claims-release/verify.cjs
+requires the exact live release SHA, compares expected objects/unchanged schema,
+runs six rollback controls and cleanup/advisor comparisons. Its rollback SQL
+passes locally. Execute it only after standard release. No production 9E migration yet.
+
+9F initial-send investigation reproduces two further failures with actual local
+DB state: accepted push plus failed delivery INSERT leaves no ticket and dedupe
+retry cannot repair it; token retirement failure follows a terminal first-send
+refusal and leaves the token active. See first-send-persistence report/private
+probe. These are open failures, not fixed by #356. JOB-03 remains failed after
+9E release until this initial-send path and broader evidence are addressed.
 
 9E claim candidate is implemented locally, not yet released: three service-only
 invoker RPCs reserve an attempt, save its outcome, and atomically finalize/retire.
