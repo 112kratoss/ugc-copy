@@ -23,6 +23,16 @@ vi.mock('@/components/content-policy-gate', () => ({
   ContentPolicyGate: ({ children }: { children: unknown }) => children,
 }));
 
+// The question it puts has its own tests (ai-data-consent-on-open.test.tsx);
+// here it only has to be on the screen.
+const aiDataConsentState = vi.hoisted(() => ({ mounted: 0 }));
+vi.mock('@/components/ai-data-consent-on-open', () => ({
+  AiDataConsentOnOpen: () => {
+    aiDataConsentState.mounted += 1;
+    return null;
+  },
+}));
+
 vi.mock('@react-navigation/native', () => ({ useNavigation: () => ({ dispatch: navigationState.dispatch }), usePreventRemove: navigationState.prevent }));
 
 const stackState = vi.hoisted(() => ({ options: null as Record<string, unknown> | null }));
@@ -55,6 +65,31 @@ describe('create tool route', () => {
     stackState.options = null;
     navigationState.dispatch.mockClear();
     navigationState.prevent.mockClear();
+    aiDataConsentState.mounted = 0;
+  });
+
+  // App Review, 2026-10-05: the question was asked only at Generate, which a
+  // balance below the price disables, so it has to come with the screen.
+  it('puts the AI data-sharing question when a creation tool opens', () => {
+    routeState.params = { tool: 'video' };
+
+    renderer.act(() => {
+      renderer.create(<CreateToolScreen />);
+    });
+
+    expect(aiDataConsentState.mounted).toBe(1);
+    expect(mediaCreationState.props).toMatchObject({ initialTool: 'video' });
+  });
+
+  it('asks nothing on the screen that only says the mode is unavailable', () => {
+    routeState.params = { tool: 'audio' };
+
+    renderer.act(() => {
+      renderer.create(<CreateToolScreen />);
+    });
+
+    expect(aiDataConsentState.mounted).toBe(0);
+    expect(mediaCreationState.props).toBeNull();
   });
 
   it('passes remix source route params into the native create screen', () => {

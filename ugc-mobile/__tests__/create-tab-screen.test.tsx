@@ -22,6 +22,16 @@ vi.mock('@/components/content-policy-gate', () => ({
   ContentPolicyGate: ({ children }: { children: unknown }) => children,
 }));
 
+// The question it puts has its own tests (ai-data-consent-on-open.test.tsx);
+// here it only has to be on the screen.
+const aiDataConsentState = vi.hoisted(() => ({ mounted: 0 }));
+vi.mock('@/components/ai-data-consent-on-open', () => ({
+  AiDataConsentOnOpen: () => {
+    aiDataConsentState.mounted += 1;
+    return null;
+  },
+}));
+
 vi.mock('expo-router', () => ({
   useLocalSearchParams: () => routeState.params,
   router: {
@@ -47,6 +57,17 @@ describe('create tab route', () => {
     routeState.back.mockReset();
     routeState.replace.mockReset();
     mediaCreationState.props = null;
+    aiDataConsentState.mounted = 0;
+  });
+
+  // App Review, 2026-10-05: the question was asked only at Generate, which a
+  // balance below the price disables, so it has to come with the screen.
+  it('puts the AI data-sharing question when the tab opens', () => {
+    renderer.act(() => {
+      renderer.create(<CreateTabScreen />);
+    });
+
+    expect(aiDataConsentState.mounted).toBe(1);
   });
 
   it('opens the regular image creator by default', () => {

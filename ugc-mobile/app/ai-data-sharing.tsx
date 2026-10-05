@@ -17,9 +17,10 @@ import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
 /**
- * Settings → AI data sharing. The create screen asks the first time a prompt or
- * media would leave the phone (`ensureAiDataConsent`); this screen says the same
- * things at more length, shows the answer, and changes it.
+ * Settings → AI data sharing. A creation screen asks when it first opens
+ * (`askAiDataConsentOnOpen`) and again before a prompt or media would leave the
+ * phone (`ensureAiDataConsent`); this screen says the same things at more
+ * length, shows the answer, and changes it.
  */
 export default function AiDataSharingScreen() {
   const theme = useAppTheme();
