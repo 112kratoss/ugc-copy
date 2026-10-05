@@ -6,6 +6,7 @@ import { ActivityIndicator, Platform, StyleSheet, Text, View, type StyleProp, ty
 import { SecondaryButton } from '@/components/ui';
 import { useNativePreviewPlayback } from '@/lib/use-native-preview-playback';
 import { cachedVideoSource } from '@/lib/media-source';
+import { leaveTouchToNativeView } from '@/lib/native-touch-owner';
 import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
 import { useVideoHasBeenReady } from '@/lib/use-video-has-been-ready';
@@ -159,7 +160,12 @@ function VideoPreviewAttempt({
           in for its place on the page. The press target around it then sees
           the finger jump out of its bounds on the first movement and drops the
           press, so a finger never opens it, and only a tap with no movement at
-          all (`adb shell input tap`) does. */}
+          all (`adb shell input tap`) does.
+
+          A player with controls answers for the touches that begin on it,
+          natively. On Android its view tells JS of each one as well, so it
+          says there that the touch is its own, and a sheet's drag, which would
+          take any touch-down, leaves it (see leaveTouchToNativeView). */}
       <View collapsable={false} pointerEvents={nativeControls ? 'auto' : 'none'} style={{ width: '100%', height: '100%' }}>
         <VideoView
           player={player}
@@ -170,6 +176,7 @@ function VideoPreviewAttempt({
           contentFit={contentFit}
           style={{ width: '100%', height: '100%' }}
           importantForAccessibility={covered ? 'no-hide-descendants' : undefined}
+          onStartShouldSetResponder={Platform.OS === 'android' && nativeControls ? leaveTouchToNativeView : undefined}
         />
       </View>
       {covered ? (

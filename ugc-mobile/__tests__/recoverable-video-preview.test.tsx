@@ -60,6 +60,7 @@ vi.mock('expo-video', () => ({
   },
 }));
 import { RecoverableVideoPreview } from '../components/recoverable-video-preview';
+import { touchBelongsToNativeView } from '../lib/native-touch-owner';
 let tree: renderer.ReactTestRenderer | undefined;
 beforeEach(() => { state.initialStatus = 'loading'; state.focused = true; state.os = 'ios'; state.sourceVersion = 0; state.players = []; });
 afterEach(() => { renderer.act(() => tree?.unmount()); tree = undefined; });
@@ -298,6 +299,31 @@ it('leaves a player with controls its own touches, and a failed one its retry', 
   expect(wrapper.props.pointerEvents).toBe('none');
   expect(wrapper.findAllByType('retry-button' as never)).toHaveLength(0);
   expect(tree!.root.findByType('retry-button' as never).props.label).toBe('Retry video');
+});
+// On the S24 a finger on play did nothing in the Reference details sheet, and a
+// tap with no movement played (2026-10-05). The sheet's drag takes a touch-down
+// that nothing below it claims, and Android then cancels the touch of a native
+// view under the view that claimed it, at the finger's first movement. So the
+// player's view says the touch is its own, and the sheet leaves it. Claiming it
+// instead left the player holding a touch whose end JS is never told of (a drag
+// on the seek bar), and the next press on any button was ignored once.
+it('has an Android player with controls say its touches are its own, without claiming them', () => {
+  state.os = 'android';
+  const video = mount().root.findByType('video' as never);
+  const touch = { nativeEvent: { pageX: 10, pageY: 20 } };
+  expect(touchBelongsToNativeView(touch as never)).toBe(false);
+  expect(video.props.onStartShouldSetResponder(touch)).toBe(false);
+  expect(touchBelongsToNativeView(touch as never)).toBe(true);
+  expect(video.props.onResponderTerminationRequest).toBeUndefined();
+});
+it('leaves the touches of a player without controls, and of an iPhone’s player, unmarked', () => {
+  state.os = 'android';
+  renderer.act(() => { tree = renderer.create(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 300 }} nativeControls={false} />); });
+  expect(tree!.root.findByType('video' as never).props.onStartShouldSetResponder).toBeUndefined();
+  renderer.act(() => tree?.unmount());
+
+  state.os = 'ios';
+  expect(mount().root.findByType('video' as never).props.onStartShouldSetResponder).toBeUndefined();
 });
 it('pauses a retained screen on blur and does not resume it automatically on return', () => {
   const view = mount(true);

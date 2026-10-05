@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as ReactNative from 'react-native';
 
+import { touchBelongsToNativeView } from '@/lib/native-touch-owner';
 import { appTheme, type ThemeColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
@@ -280,8 +281,12 @@ export function useSheetDismissDrag({
         // move phase at all (verified on the emulator: a pull that began on
         // the create menu's subtitle went nowhere until this). It arrives
         // unarmed, so taking it costs the tap nothing. Buttons, fields and
-        // lists are deeper and take their own touches first.
-        onStartShouldSetPanResponder: () => enabledRef.current,
+        // lists are deeper and take their own touches first. So does a native
+        // view with controls of its own, a player: it cannot hold the touch
+        // for JS, so it says the touch is its own and the panel leaves it.
+        // Taken here, Android would cancel the player's buttons at the
+        // finger's first movement.
+        onStartShouldSetPanResponder: (event) => enabledRef.current && !touchBelongsToNativeView(event),
         // The other way in: a touch a child already holds. Asked in the
         // capture phase, so the panel comes before the pressed child;
         // `Pressable` yields (its `cancelable` defaults to true) and receives
