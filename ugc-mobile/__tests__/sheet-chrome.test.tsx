@@ -343,14 +343,15 @@ describe('a hosted sheet’s motion', () => {
     return { ...latest!, unmount: () => renderer.act(() => tree!.unmount()) };
   }
 
-  it('folds the entrance and the drag into one transform and one opacity', () => {
+  it('folds the entrance and the drag into one transform, and the scrim’s two fades into one opacity', () => {
     const { drag, presentation, unmount } = mountHosted();
     const motion = sheetMotion(drag, presentation);
 
     // Two transforms, or two opacities, on one view would not compose: one is
-    // driven natively by the timing, the other set from the finger.
+    // driven natively by the timing, the other set from the finger. The panel
+    // has no opacity of its own: until it is laid out it waits below the
+    // screen, which does not depend on a render reaching the native side.
     expect(motion.panel).toEqual({
-      opacity: presentation.panelOpacity,
       transform: [{ translateY: { add: [presentation.entryTranslateY, drag.translateY] } }],
     });
     expect(motion.backdrop).toEqual({
@@ -394,12 +395,22 @@ describe('a hosted sheet’s arrival and departure', () => {
     return {
       onEntered,
       onExited,
+      presentation: () => latest!,
+      /** How far below its place the closed panel sits: the second factor of the travel. */
+      hiddenOffset: () => (latest!.entryTranslateY as unknown as { multiply: [unknown, MockValue] }).multiply[1],
       show: (shown: boolean) => renderer.act(() => tree!.update(<Probe shown={shown} />)),
-      /** The panel's first layout, which the slide waits for: it travels the panel's own height. */
-      measure: () => renderer.act(() => latest!.onPanelLayout({ nativeEvent: { layout: { height: 560 } } } as never)),
+      /** The panel's layout, which the slide waits for: it travels the panel's own height. */
+      measure: (height = 560) => renderer.act(() => latest!.onPanelLayout({ nativeEvent: { layout: { height } } } as never)),
       unmount: () => renderer.act(() => tree!.unmount()),
     };
   }
+
+  const slidesStarted = () => vi.mocked(Animated.timing).mock.calls.length;
+  /** The newest timed animation's `start`, as a spy. */
+  const newestStart = () => {
+    const started = vi.mocked(Animated.timing).mock.results;
+    return (started[started.length - 1].value as unknown as { start: ReturnType<typeof vi.fn> }).start;
+  };
 
   /** Ends the newest timed animation, as the native side does once it has run (or been cut short). */
   function endSlide(finished = true) {
@@ -441,6 +452,76 @@ describe('a hosted sheet’s arrival and departure', () => {
     sheet.measure();
     expect(sheet.onEntered).toHaveBeenCalledTimes(1);
     expect(vi.mocked(Animated.timing).mock.calls.length).toBe(slidesBefore);
+    sheet.unmount();
+  });
+
+  // On a first opening the whole sheet was drawn at its resting place for a
+  // frame or two, then jumped below the screen and slid in (emulator films,
+  // 2026-10-05). The travel was an interpolation rebuilt by the render after
+  // the measurement, and before that render reached the native side the old
+  // one, whose range was the 24pt slop alone, was what the slide drove.
+  it('keeps a panel that has not been laid out far below the screen, and has its travel set before the slide starts', () => {
+    const sheet = mountPresented();
+    sheet.show(true);
+    const offset = sheet.hiddenOffset();
+    // Further down than any screen is tall: nothing drawn this early can show.
+    expect(offset.value).toBeGreaterThan(5_000);
+    const before = slidesStarted();
+    sheet.measure(560);
+    // Its own height and the slop for its shadow.
+    expect(offset.value).toBe(584);
+    expect(slidesStarted()).toBe(before + 1);
+    // Set from the layout event, so it is queued for the native side ahead of the slide's start.
+    expect(offset.setValue.mock.invocationCallOrder.at(-1)!).toBeLessThan(newestStart().mock.invocationCallOrder[0]);
+    sheet.unmount();
+  });
+
+  it('hands every render the same travel, so nothing has to be connected again while the sheet slides', () => {
+    const sheet = mountPresented();
+    sheet.show(true);
+    const travel = sheet.presentation().entryTranslateY;
+    const scrim = sheet.presentation().backdropProgress;
+    sheet.measure(560);
+    expect(sheet.presentation().entryTranslateY).toBe(travel);
+    expect(sheet.presentation().backdropProgress).toBe(scrim);
+    sheet.unmount();
+  });
+
+  // The slide is drawn on the main thread, where the sheet's views are built:
+  // begun before they were, the model picker's entrance was first drawn 49 to
+  // 133 ms in. And a sheet is not always as tall as it was last time.
+  it('waits for the panel’s layout at every opening, not the first alone', () => {
+    const sheet = mountPresented();
+    sheet.show(true);
+    sheet.measure(560);
+    endSlide();
+    sheet.show(false);
+    endSlide();
+    expect(sheet.onExited).toHaveBeenCalledTimes(1);
+    // Gone: the next panel waits out of sight again.
+    expect(sheet.hiddenOffset().value).toBeGreaterThan(5_000);
+
+    const before = slidesStarted();
+    sheet.show(true);
+    expect(slidesStarted()).toBe(before);
+    sheet.measure(700);
+    expect(slidesStarted()).toBe(before + 1);
+    expect(sheet.hiddenOffset().value).toBe(724);
+    sheet.unmount();
+  });
+
+  it('leaves by the height the panel has by then', () => {
+    const sheet = mountPresented();
+    sheet.show(true);
+    sheet.measure(700);
+    endSlide();
+    // The keyboard has shortened it, or a step has changed what it holds.
+    sheet.measure(458);
+    expect(sheet.hiddenOffset().value).toBe(482);
+    // A layout is not a reason to slide again.
+    const before = slidesStarted();
+    sheet.measure(460);
+    expect(slidesStarted()).toBe(before);
     sheet.unmount();
   });
 

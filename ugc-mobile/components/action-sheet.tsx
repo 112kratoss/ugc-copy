@@ -125,7 +125,6 @@ function ActionSheetSurface({
           sheetPanelStyle(theme.colors),
           {
             paddingBottom: Math.max(bottomInset, appTheme.spacing.panel),
-            opacity: presentation.panelOpacity,
             transform: [{ translateY }],
           },
         ]}
