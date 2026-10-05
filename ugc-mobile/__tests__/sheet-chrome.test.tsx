@@ -38,6 +38,7 @@ vi.mock('react-native', () => ({
 }));
 
 import { SHEET_BACKDROP_FADE_DISTANCE, useSheetDismissDrag, type SheetDismissDrag } from '../components/sheet-chrome';
+import { leaveTouchToNativeView } from '../lib/native-touch-owner';
 
 type Handler = (event: unknown, gesture: Record<string, number>) => unknown;
 type Handlers = Record<string, Handler>;
@@ -121,6 +122,24 @@ describe('sheet dismiss drag', () => {
     expect(content.onMoveShouldSetPanResponderCapture({}, gesture(20))).toBe(false);
     sheet.drag().scrollProps.onScroll!({ nativeEvent: { contentOffset: { y: 0 } } } as never);
     expect(content.onMoveShouldSetPanResponderCapture({}, gesture(20))).toBe(true);
+    sheet.unmount();
+  });
+
+  // A player's own controls. Taken by the panel, Android cancels the touch under
+  // it at the finger's first movement: in the Reference details sheet a finger
+  // on play did nothing, and a tap with no movement played (S24, 2026-10-05).
+  it('leaves a touch-down that a native view inside it has said is its own', () => {
+    const sheet = mount(true);
+    const content = sheet.content();
+    const onThePlayer = { nativeEvent: { pageX: 120, pageY: 300 } };
+    const onATitle = { nativeEvent: { pageX: 120, pageY: 40 } };
+    // The player's view is asked first, and declines for itself as it says so.
+    expect(leaveTouchToNativeView(onThePlayer as never)).toBe(false);
+    expect(content.onStartShouldSetPanResponder(onThePlayer, gesture(0))).toBe(false);
+    // Only that touch: the next one, on a title, is the panel's again.
+    expect(content.onStartShouldSetPanResponder(onATitle, gesture(0))).toBe(true);
+    // The grabber is no part of the content, and still takes its own.
+    expect(sheet.grabber().onStartShouldSetPanResponder(onThePlayer, gesture(0))).toBe(true);
     sheet.unmount();
   });
 
