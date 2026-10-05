@@ -5,7 +5,9 @@ history-loss defect: with 101 recent observations for one model and an older
 seven-failure observation for another, the release-wide latest-100 selection
 forgets the latter. A new error is counted as failure one and the degraded count
 incorrectly stays zero. The permanent regression fails before the fix. This is
-an uneven-history fixture, not evidence of a production incident.
+an uneven-history fixture, not evidence of a production incident. Read-only
+production inspection found 38 active models, all configured for manual
+verification; no current HTTP-mode model was found.
 
 Migration 20261005190934 adds latest_generation_model_provider_checks(uuid),
 a service-only stable invoker function with an empty search path. For each model

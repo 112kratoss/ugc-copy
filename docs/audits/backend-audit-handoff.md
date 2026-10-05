@@ -6,7 +6,7 @@ Updated 2026-10-06 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/model-verification-audit-9n`, incorporating main `63a2d7fb449844ac656e7d476ccd59646e01025e` (#370); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/model-verification-audit-9n`, incorporating main `c0f33e438800de69b6e99736ac2904141d0a93e1` (#371); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
