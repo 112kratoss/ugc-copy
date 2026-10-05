@@ -120,6 +120,43 @@ it('leaves the forward buffer uncapped so the download finishes and other player
   mount();
   expect(state.players[0]).not.toHaveProperty('bufferOptions');
 });
+// On the S24 a finger on the clip of a video reference tile opened nothing,
+// while its label and a picture tile did (2026-10-05). Without controls,
+// expo-video's Android view keeps the touch and forwards it to JS with the
+// finger's place inside the clip as its place on the page, so the tile's press
+// target saw the finger leave on the first movement. Only a tap with no movement
+// (`adb shell input tap`) got through, which is why device checks had missed it.
+// The layout of touches does not run here: this holds the prop that keeps the
+// player out of their way, and the press itself is checked on a device.
+// The view the player sits in: the nearest host `view` above it.
+function playerWrapper(view: renderer.ReactTestRenderer) {
+  let node = view.root.findByType('video' as never).parent;
+  while (node && String(node.type) !== 'view') node = node.parent;
+  if (!node) throw new Error('the player has no view around it');
+  return node;
+}
+it('lets touches pass a player that has no controls, so a press reaches what holds it', () => {
+  renderer.act(() => { tree = renderer.create(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 72 }} nativeControls={false} />); });
+  expect(tree!.root.findByType('video' as never).props.nativeControls).toBe(false);
+  const wrapper = playerWrapper(tree!);
+  expect(wrapper.props.pointerEvents).toBe('none');
+  // A real view, or the flattened hierarchy would hand the player its touches back.
+  expect(wrapper.props.collapsable).toBe(false);
+});
+it('leaves a player with controls its own touches, and a failed one its retry', () => {
+  const view = mount();
+  expect(view.root.findByType('video' as never).props.nativeControls).toBe(true);
+  expect(playerWrapper(view).props.pointerEvents).toBe('auto');
+
+  state.initialStatus = 'error';
+  renderer.act(() => tree?.unmount());
+  renderer.act(() => { tree = renderer.create(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 72 }} nativeControls={false} />); });
+  // The retry card is beside the touch-transparent wrapper, not inside it.
+  const wrapper = playerWrapper(tree!);
+  expect(wrapper.props.pointerEvents).toBe('none');
+  expect(wrapper.findAllByType('retry-button' as never)).toHaveLength(0);
+  expect(tree!.root.findByType('retry-button' as never).props.label).toBe('Retry video');
+});
 it('pauses a retained screen on blur and does not resume it automatically on return', () => {
   const view = mount(true);
   const player = state.players[0];
