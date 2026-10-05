@@ -6,7 +6,7 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/push-summary-audit-9i`, incorporating main `36962d613c5a70d3dc125319e25a37f63633e75b` (#362); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/push-summary-audit-9i`, incorporating main `8ff10cc6480d2cea341a2157db21ba5d25b86f5d` (#364); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
@@ -19,16 +19,17 @@ retain 108 baseline findings plus exactly one expected service-only-table INFO.
 See push-progress-release report. JOB-02 returns to untested; ledger is now
 24 passed / 25 untested / 2 failed / 2 external (53), full goal active.
 
-9H registration is PR #364, head 07d43d14, exact-head Quality 37319529666
-running. Local seven Auth/PostgREST cases, three SQL concurrency cases (also wired
-into CI), 2,068 SQL assertions/96 files, 92 focused tests, types/lint and schema
-diff pass. The permanent actual race fails on baseline 34fc96ee. Preserve 9H's
-head while CI runs: current 9I branch adds a separate follow-up. Before merging
-#364, verify exact-head CI and mobile-store idle immediately before merge;
-then exact-main standard release and production verification. Prepared private
-registration-release/verify.cjs expects exact live SHA, one added function/grant,
-eight rollback controls, zero fixtures and unchanged advisors. Baseline captured
-after verified 9G release; local probe passes all eight.
+9H PR #364 passed exact-head Quality 37319529666 on 07d43d14 and merged
+at 16:50:34 UTC as 8ff10cc6480d2cea341a2157db21ba5d25b86f5d after the
+immediate mobile-store idle guard. Exact-main Quality 37343916362 is running.
+Independent Android/mobile changes #363/#360/#366/#365 are preserved.
+Local seven Auth/PostgREST cases, three CI SQL concurrency cases, 2,068 SQL
+assertions/96 files, 92 focused tests, types/lint and schema diff pass. The
+permanent actual race fails on baseline 34fc96ee. Standard release and production
+verification remain. Prepared private registration-release/verify.cjs expects
+exact live SHA, one added function/grant, eight rollback controls, zero fixtures
+and unchanged advisors. Baseline captured after verified 9G release; local probe
+passes all eight. Current 9I branch is separate from merged #364.
 
 9I locally fixes ignored legacy notification-summary errors after actual
 before-commit/lost-ack regressions. It adds diagnostic logging, preserves durable

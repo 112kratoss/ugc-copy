@@ -2,11 +2,13 @@ import { useContext, useEffect, useRef } from 'react';
 import { AppState, Dimensions, Platform, View } from 'react-native';
 import type { VideoPlayer } from 'expo-video';
 import { MediaViewportContext } from '@/components/media-viewport-scroll-view';
+import { useInModalWindow } from './modal-window';
 import { nativePreviewPlaybackOwner, previewIntersectsViewport, type PreviewRect } from './native-preview-playback';
 
 export function useNativePreviewPlayback(player: VideoPlayer, isFocused: boolean) {
   const viewRef = useRef<View>(null);
   const viewport = useContext(MediaViewportContext);
+  const inModalWindow = useInModalWindow();
   const fullscreen = useRef(false);
   const checkRef = useRef(() => {});
   useEffect(() => {
@@ -44,7 +46,12 @@ export function useNativePreviewPlayback(player: VideoPlayer, isFocused: boolean
       else nativePreviewPlaybackOwner.release(player);
     });
     const background = AppState.addEventListener('change', state => { if (state !== 'active') pause(); });
-    const blur = Platform.OS === 'android' ? AppState.addEventListener('blur', pause) : null;
+    // Android: the activity's window lost the focus, so something has come
+    // over the page: the notification shade, a system dialog, a Modal of the
+    // app. A preview inside a Modal is in that Modal's window, not on the
+    // page, and the blur it hears is its own Modal opening: pausing on it
+    // took back the lightbox clip's request to play (see ModalWindowScope).
+    const blur = Platform.OS === 'android' && !inModalWindow ? AppState.addEventListener('blur', pause) : null;
     const unsubscribe = viewport?.subscribe(check);
     const dimensions = Dimensions.addEventListener('change', check);
     if (player.playing) claim();
@@ -53,7 +60,7 @@ export function useNativePreviewPlayback(player: VideoPlayer, isFocused: boolean
       playing.remove(); background.remove(); blur?.remove(); dimensions.remove(); unsubscribe?.();
       nativePreviewPlaybackOwner.release(player);
     };
-  }, [isFocused, player, viewport]);
+  }, [inModalWindow, isFocused, player, viewport]);
   return { viewRef, onLayout: () => checkRef.current(),
     onFullscreenEnter: () => { fullscreen.current = true; },
     onFullscreenExit: () => { fullscreen.current = false; checkRef.current(); },

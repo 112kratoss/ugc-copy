@@ -188,6 +188,28 @@ describe('MediaPreview frame', () => {
     renderer.act(() => tree.unmount());
   });
 
+  // The sheet a reference tile opens holds its clip's player back while it
+  // slides in: the slide is drawn on the thread a player is built on. What
+  // stands in has to be the player's own box, or the sheet would change
+  // under the hand as the player arrived.
+  it('draws a held clip as its frame alone, the box the player then fills', () => {
+    const held = mount(<MediaPreview url="https://cdn/reference.mp4" kind="video" height={300} radius={22} letterbox playerHeld />);
+    expect(held.root.findAll((node) => String(node.type) === 'video-preview')).toHaveLength(0);
+    const frame = held.root.findAll((node) => String(node.type) === 'view')[0].props.style;
+    expect(frame).toEqual({ width: '100%', height: 300, borderRadius: 22, backgroundColor: mediaColors.mediaGround });
+    renderer.act(() => held.unmount());
+
+    const built = mount(<MediaPreview url="https://cdn/reference.mp4" kind="video" height={300} radius={22} letterbox />);
+    expect(mediaNode(built).props.style).toEqual(frame);
+    renderer.act(() => built.unmount());
+  });
+
+  it('draws a picture whether a player is held or not', () => {
+    const tree = mount(<MediaPreview url="https://cdn/reference.png" kind="image" height={300} letterbox playerHeld />);
+    expect(String(mediaNode(tree).type)).toBe('image');
+    renderer.act(() => tree.unmount());
+  });
+
   // What shows where the media does not reach. A picture without letterbox is
   // cropped to fill its frame, so its ground is seen only while it loads: the
   // scheme's neutral tile. A clip is never cropped. The player shows it whole

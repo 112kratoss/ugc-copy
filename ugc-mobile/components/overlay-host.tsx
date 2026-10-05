@@ -5,10 +5,12 @@ import { View } from 'react-native';
  * A place to render full-screen surfaces inside the app's own window.
  *
  * React Native's `Modal` is a separate window on Android, and that window
- * receives neither the keyboard insets Reanimated reads nor the JS `Keyboard`
- * events — both were measured returning nothing from inside one. A sheet with a
- * text field hosted there cannot lift, so the composer sits under the keyboard
- * while you type into it.
+ * receives none of the keyboard insets Reanimated's tracker reads. The JS
+ * `Keyboard` events were first measured not arriving there either; on the
+ * Pixel 9a emulator (API 36, 2026-10-05) they did, once the keyboard had
+ * stopped moving and short by the navigation bar's 24dp. A sheet with a text
+ * field hosted there cannot follow the keyboard, so the composer sat under it
+ * while you typed into it.
  *
  * Rendering above the navigator instead keeps such a surface in the same window
  * as everything else, so ordinary keyboard avoidance applies. It also draws over

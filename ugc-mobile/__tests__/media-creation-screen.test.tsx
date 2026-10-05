@@ -62,6 +62,26 @@ const nativeAlertState = vi.hoisted(() => ({
   alert: vi.fn(),
 }));
 
+const keyboardState = vi.hoisted(() => ({
+  dismiss: vi.fn(),
+}));
+
+// Android's back key, as the screen's own surfaces claim it.
+const backHandlerState = vi.hoisted(() => ({
+  listeners: new Set<() => boolean>(),
+}));
+
+// Timed animations end at once unless a case holds them, to look at a sheet
+// while it is still leaving; `finishAnimations` then delivers their ends.
+const animatedState = vi.hoisted(() => ({
+  hold: false,
+  pending: [] as Array<(result: { finished: boolean }) => void>,
+}));
+
+function finishAnimations() {
+  for (const done of animatedState.pending.splice(0)) done({ finished: true });
+}
+
 // Permission to send prompts and media to AI services is its own module's job
 // (`__tests__/ai-data-consent.test.ts`). Here it answers yes unless a case says
 // otherwise, and the cases check that the screen asks before anything is sent.
@@ -88,6 +108,42 @@ vi.mock('expo-haptics', () => ({
 vi.mock('react-native', () => ({
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   Alert: nativeAlertState,
+  Animated: {
+    View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
+    Value: class {
+      constructor(public value: number) {}
+
+      setValue(next: number) {
+        this.value = next;
+      }
+
+      interpolate(config: unknown) {
+        return { interpolate: config };
+      }
+    },
+    add: (a: unknown, b: unknown) => ({ add: [a, b] }),
+    multiply: (a: unknown, b: unknown) => ({ multiply: [a, b] }),
+    timing: () => ({
+      start: (done?: (result: { finished: boolean }) => void) => {
+        if (!done) return;
+        if (animatedState.hold) animatedState.pending.push(done);
+        else done({ finished: true });
+      },
+      stop: () => undefined,
+    }),
+    spring: () => ({
+      start: (done?: (result: { finished: boolean }) => void) => done?.({ finished: true }),
+      stop: () => undefined,
+    }),
+  },
+  BackHandler: {
+    addEventListener: (_name: string, listener: () => boolean) => {
+      backHandlerState.listeners.add(listener);
+      return { remove: () => backHandlerState.listeners.delete(listener) };
+    },
+  },
+  Easing: { in: (fn: unknown) => fn, out: (fn: unknown) => fn, cubic: 'cubic' },
+  Keyboard: keyboardState,
   AppState: {
     currentState: 'active',
     addEventListener: vi.fn(() => ({ remove: vi.fn() })),
@@ -190,7 +246,7 @@ vi.mock('@/lib/use-generation-model-catalog', () => ({
   useGenerationModelCatalog: () => ({ ...catalogState, loadDetails: loadCatalogDetails, summaries: (catalogState.catalog as {models?: unknown[]} | null)?.models ?? [], missingIds: EMPTY_MISSING_IDS, isLoadingModels: false }),
 }));
 
-import { AppState } from 'react-native';
+import { AppState, PanResponder } from 'react-native';
 import { createDefaultCreationDraft } from '../lib/media-creation-view-model';
 import { MediaCreationScreen } from '../components/media-creation-screen';
 import { PUSH_OFFER_STORAGE_KEY, resetPushOffersForTests } from '../lib/push-prompt';
@@ -324,6 +380,10 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     catalogState.refetch.mockReset();
     EMPTY_MISSING_IDS.length = 0;
     nativeAlertState.alert.mockReset();
+    keyboardState.dismiss.mockReset();
+    backHandlerState.listeners.clear();
+    animatedState.hold = false;
+    animatedState.pending.length = 0;
     aiDataConsentState.ensure.mockReset().mockResolvedValue(true);
     vi.mocked(pickAudioDocument).mockReset();
     vi.mocked(pickMedia).mockReset();
@@ -2048,6 +2108,193 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       tree!.root.findByProps({ accessibilityLabel: 'Reference name for Hero product' }).props.onBlur();
     });
     expect(collectText(tree!.root)).toContain('Saved to draft');
+  });
+
+  describe('the Reference details sheet', () => {
+    /** The image composer with one uploaded picture, "hero", and its details sheet open. */
+    async function openHeroDetails() {
+      vi.mocked(pickMediaList).mockResolvedValue([
+        { uri: 'file:///hero.png', fileName: 'hero.png', mimeType: 'image/png', fileSize: 2048 } as never,
+      ]);
+      vi.mocked(uploadPickedMedia).mockResolvedValue({
+        signedUrl: 'https://cdn.example.com/hero.png',
+        storagePath: 'uploads/user/hero.png',
+        mimeType: 'image/png',
+        fileName: 'hero.png',
+        kind: 'image',
+        durationSeconds: null,
+        sizeBytes: 2048,
+      });
+
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<MediaCreationScreen initialTool="image" />);
+      });
+      await renderer.act(async () => {
+        await findPressableByText(tree!.root, 'Reference').props.onPress();
+      });
+      // Nothing has been asked of the keyboard or the back key by the page alone.
+      expect(keyboardState.dismiss).not.toHaveBeenCalled();
+      expect(backHandlerState.listeners.size).toBe(0);
+      renderer.act(() => {
+        tree!.root.findByProps({ accessibilityLabel: 'Open details for hero' }).props.onPress();
+      });
+      return tree!;
+    }
+
+    function ancestors(node: renderer.ReactTestInstance) {
+      const found: renderer.ReactTestInstance[] = [];
+      for (let current = node.parent; current; current = current.parent) found.push(current);
+      return found;
+    }
+
+    const nameField = (tree: renderer.ReactTestRenderer) => tree.root.findByProps({ accessibilityLabel: 'Reference name for hero' });
+    /** The sheet's own scroll view: the nearest one above its name field. (With no overlay host in a test, the sheet draws in place, inside the page's.) */
+    const sheetBody = (tree: renderer.ReactTestRenderer) => ancestors(nameField(tree)).find((node) => String(node.type) === 'scrollview')!;
+
+    it('draws in the app’s own window, in an area that gives way to the keyboard, with its body in a scroll view', async () => {
+      const tree = await openHeroDetails();
+      const above = ancestors(nameField(tree));
+
+      // A Modal is a window of its own on Android, where the keyboard tracker
+      // reads nothing: the field sat under the keys while it was typed in.
+      expect(above.some((node) => String(node.type) === 'modal')).toBe(false);
+      expect(above.some((node) => node.props.testID === 'reference-details-keyboard-area')).toBe(true);
+
+      // Both halves of the keyboard pairing: Android shortens the area and
+      // scrolls the focused field into what is left of the scroll view; iOS
+      // has the scroll view make the room itself.
+      const body = sheetBody(tree);
+      expect(body.props).toEqual(expect.objectContaining({
+        automaticallyAdjustKeyboardInsets: true,
+        // A row answers with the keyboard up; a touch on anything else in the body puts it away.
+        keyboardShouldPersistTaps: 'handled',
+      }));
+
+      // The way out stays put while the body scrolls under it.
+      const close = tree.root.findByProps({ accessibilityLabel: 'Close reference details' });
+      expect(ancestors(close)).not.toContain(body);
+      // And the area is the sheet's own, not the page's: the panel's height is a share of what it leaves.
+      expect(ancestors(body).findIndex((node) => node.props.testID === 'reference-details-keyboard-area')).toBeGreaterThan(-1);
+    });
+
+    it('takes the keyboard from the page as it opens, and puts its own away as it closes', async () => {
+      const tree = await openHeroDetails();
+      // Opening over the prompt while it is being typed in: a Modal's window
+      // took the keyboard by taking the focus, and an overlay takes nothing.
+      expect(keyboardState.dismiss).toHaveBeenCalledTimes(1);
+
+      renderer.act(() => {
+        tree.root.findByProps({ accessibilityLabel: 'Close reference details' }).props.onPress();
+      });
+      expect(keyboardState.dismiss).toHaveBeenCalledTimes(2);
+    });
+
+    it('closes on Android’s back key, and gives the key back once it is closed', async () => {
+      const tree = await openHeroDetails();
+      expect(backHandlerState.listeners.size).toBe(1);
+
+      let claimed: boolean | undefined;
+      renderer.act(() => {
+        claimed = [...backHandlerState.listeners][0]();
+      });
+      expect(claimed).toBe(true);
+      expect(collectText(tree.root)).not.toContain('Reference details');
+      expect(backHandlerState.listeners.size).toBe(0);
+    });
+
+    it('leaves showing the reference it was opened for, and takes no press while it does', async () => {
+      const tree = await openHeroDetails();
+      const surface = () => ancestors(nameField(tree)).find((node) => node.props.pointerEvents !== undefined);
+      expect(surface()?.props.pointerEvents).toBe('auto');
+
+      // A rename on the way: its "saved" line is part of what the panel is as tall as.
+      renderer.act(() => {
+        nameField(tree).props.onChangeText('hero');
+      });
+      renderer.act(() => {
+        nameField(tree).props.onBlur();
+      });
+      expect(collectText(tree.root)).toContain('Saved to draft');
+
+      animatedState.hold = true;
+      renderer.act(() => {
+        tree.root.findByProps({ accessibilityLabel: 'Close reference details' }).props.onPress();
+      });
+      // The page has dropped the reference; the panel is still on its way out
+      // with the same rows, or it would change height under its own exit.
+      const leaving = collectText(tree.root);
+      expect(leaving).toContain('Reference details');
+      expect(leaving).toContain('Insert @hero');
+      expect(leaving.some((text) => text.startsWith('Replace media'))).toBe(true);
+      expect(leaving).toContain('Saved to draft');
+      expect(nameField(tree).props.value).toBe('hero');
+      expect(surface()?.props.pointerEvents).toBe('none');
+
+      renderer.act(() => finishAnimations());
+      expect(collectText(tree.root)).not.toContain('Reference details');
+    });
+
+    /** The sheet's preview, and the panel whose first layout its slide waits for. */
+    const sheetPreview = (tree: renderer.ReactTestRenderer) => sheetBody(tree).findAll((node) => String(node.type) === 'media-preview')[0];
+    const sheetPanel = (tree: renderer.ReactTestRenderer) => ancestors(sheetBody(tree)).find((node) => typeof node.props.onLayout === 'function')!;
+
+    it('holds a clip’s player back until the sheet has arrived, and keeps it while the sheet leaves', async () => {
+      const tree = await openHeroDetails();
+      // The slide has not begun: it waits for the panel's height.
+      expect(sheetPreview(tree).props.playerHeld).toBe(true);
+
+      animatedState.hold = true;
+      renderer.act(() => {
+        sheetPanel(tree).props.onLayout({ nativeEvent: { layout: { height: 584 } } });
+      });
+      // On its way in. A player is built on the main thread, where this slide
+      // is drawn: built now, it took the first 32 to 197 ms out of it.
+      expect(sheetPreview(tree).props.playerHeld).toBe(true);
+      renderer.act(() => finishAnimations());
+      expect(sheetPreview(tree).props.playerHeld).toBe(false);
+
+      // Leaving, the player stays to the end: taken down as the exit began it
+      // would be work on the thread that draws the exit, and a black box
+      // sliding out where the clip had been.
+      renderer.act(() => {
+        tree.root.findByProps({ accessibilityLabel: 'Close reference details' }).props.onPress();
+      });
+      expect(sheetPreview(tree).props.playerHeld).toBe(false);
+      renderer.act(() => finishAnimations());
+      expect(collectText(tree.root)).not.toContain('Reference details');
+    });
+
+    it('takes a pull from its title as from its grabber, and leaves a touch-down on its body to the scroll view', async () => {
+      type Config = Record<string, (...args: unknown[]) => boolean>;
+      // For this case the double hands each responder's own config back as its
+      // handlers, so the tree shows which view carries which.
+      vi.mocked(PanResponder.create).mockImplementation(((config: unknown) => ({ panHandlers: { panConfig: config } })) as never);
+      try {
+        const tree = await openHeroDetails();
+        const touch = { nativeEvent: { target: 57 }, stopPropagation: () => undefined };
+        const title = tree.root.findByProps({ children: 'Reference details' });
+
+        // The title row: taken as it lands, as the grabber's strip is, with no
+        // question about where the body is scrolled to. The panel's own drag
+        // waits for the body to be at its top, and with the keyboard up the
+        // body has always scrolled a little: a pull from the title did nothing.
+        const titleRow = ancestors(title).find((node) => node.props.panConfig)!;
+        const header = titleRow.props.panConfig as Config;
+        expect(header.onStartShouldSetPanResponder(touch, { dy: 0, dx: 0 })).toBe(true);
+        expect('onMoveShouldSetPanResponderCapture' in header).toBe(false);
+
+        // The panel: in its own window nothing above it takes an unowned
+        // touch, so it waits for the pull. Held from its start, the touch is
+        // intercepted from the scroll view inside on Android, and a slow drag
+        // that began on the picture scrolled nothing.
+        const panel = ancestors(titleRow).find((node) => node.props.panConfig && node.props.panConfig !== header)!.props.panConfig as Config;
+        expect(panel.onStartShouldSetPanResponder(touch, { dy: 0, dx: 0 })).toBe(false);
+        expect(panel.onMoveShouldSetPanResponder(touch, { dy: 12, dx: 0 })).toBe(true);
+      } finally {
+        vi.mocked(PanResponder.create).mockImplementation((() => ({ panHandlers: {} })) as never);
+      }
+    });
   });
 
   it('keeps model selection out of the parameter sheet', () => {

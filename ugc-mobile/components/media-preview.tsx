@@ -29,6 +29,7 @@ export function MediaPreview({
   radius = appTheme.radii.lg,
   nativeControls = true,
   letterbox = false,
+  playerHeld = false,
   resolveRetryUrl,
 }: {
   url: string | null | undefined;
@@ -43,6 +44,13 @@ export function MediaPreview({
    * player never crops it.
    */
   letterbox?: boolean;
+  /**
+   * A clip's frame without its player, for a surface that is still arriving:
+   * the player is built on the main thread, where an entrance is drawn. The
+   * frame is the black a clip plays on, so the player takes its place with no
+   * change of size or colour. A picture is drawn either way.
+   */
+  playerHeld?: boolean;
   /** A fresh link for a video whose own has stopped working. */
   resolveRetryUrl?: () => Promise<string>;
 }) {
@@ -58,6 +66,7 @@ export function MediaPreview({
   }
 
   if (kind === 'video') {
+    if (playerHeld) return <View style={videoFrame(height, radius)} />;
     return <VideoPreview url={url} height={height} radius={radius} nativeControls={nativeControls} resolveRetryUrl={resolveRetryUrl} />;
   }
 
@@ -503,6 +512,19 @@ function MediaFallback({
   );
 }
 
+/** The box a clip plays in, and what stands in for it while its player is held. */
+function videoFrame(height: number | undefined, radius: number) {
+  return {
+    ...previewFrame(height),
+    borderRadius: radius,
+    // The player shows its clip whole and its view is transparent, with
+    // controls or without, so this colour is the bands beside a clip of
+    // any other shape than the frame. They are black in both schemes, as
+    // in a video player: the scheme's placeholder made them beige in light.
+    backgroundColor: mediaColors.mediaGround,
+  };
+}
+
 function VideoPreview({
   url,
   height,
@@ -525,15 +547,7 @@ function VideoPreview({
         url={url}
         nativeControls={nativeControls}
         resolveRetryUrl={resolveRetryUrl}
-        style={{
-          ...previewFrame(height),
-          borderRadius: radius,
-          // The player shows its clip whole and its view is transparent, with
-          // controls or without, so this colour is the bands beside a clip of
-          // any other shape than the frame. They are black in both schemes, as
-          // in a video player: the scheme's placeholder made them beige in light.
-          backgroundColor: mediaColors.mediaGround,
-        }}
+        style={videoFrame(height, radius)}
       />
     </ThemeScope>
   );

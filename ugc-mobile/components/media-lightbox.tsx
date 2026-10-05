@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { StableMediaImage } from '@/components/media-preview';
 import { AppText } from '@/components/ui';
+import { ModalWindowScope } from '@/lib/modal-window';
 import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
@@ -61,23 +62,29 @@ export function MediaLightbox({
       presentationStyle="overFullScreen"
       onRequestClose={onClose}
     >
-      {/* A picture on black in both schemes: the lightbox is a media surface,
-          like the reel, and its controls are drawn against the image. */}
-      <ThemeScope scheme="dark">
-        {isOpen ? (
-          <>
-            <StatusBar style="light" />
-            <MediaLightboxContent
-              items={items}
-              activeIndex={activeIndex}
-              onClose={onClose}
-              onNavigate={onNavigate}
-              statusMessage={statusMessage}
-              errorMessage={errorMessage}
-            />
-          </>
-        ) : null}
-      </ThemeScope>
+      {/* A clip here asks to play as the lightbox opens. On Android this
+          Modal takes the window's focus at that moment, which a preview on
+          the page reads as being covered, and pauses on. This clip is what
+          does the covering. */}
+      <ModalWindowScope>
+        {/* A picture on black in both schemes: the lightbox is a media surface,
+            like the reel, and its controls are drawn against the image. */}
+        <ThemeScope scheme="dark">
+          {isOpen ? (
+            <>
+              <StatusBar style="light" />
+              <MediaLightboxContent
+                items={items}
+                activeIndex={activeIndex}
+                onClose={onClose}
+                onNavigate={onNavigate}
+                statusMessage={statusMessage}
+                errorMessage={errorMessage}
+              />
+            </>
+          ) : null}
+        </ThemeScope>
+      </ModalWindowScope>
     </Modal>
   );
 }
