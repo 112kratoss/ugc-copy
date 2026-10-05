@@ -6,10 +6,27 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/push-maintenance-progress-audit-9g`, incorporating main `32a3f47336a6ad54ff0c41b667d9ba41be8d12c2` (#361); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/push-registration-audit-9h`, incorporating main `32a3f47336a6ad54ff0c41b667d9ba41be8d12c2` (#361); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+9G is PR #362 at f69759ed1712dcf6d3780bc52cfc393743e6badd; Quality
+37292884858 is running. The current 9H branch preserves the candidate plus
+registration investigation docs; do not push 9H onto #362. Before merging #362,
+verify exact-head CI and mobile-store idle immediately before merge. Standard
+exact-main release/live verification remain. The prepared private
+.audit-evidence/backend-social/push-progress-release/verify.cjs checks exact-live
+SHA, planned schema, six rollback controls (already pass locally), cleanup and
+advisors. It permits only the expected INFO rls_enabled_no_policy for the new
+service-only scan table; all other baseline advisor entries must remain unchanged.
+The production probe fixes scan bounds to fixture IDs and rolls back; it never
+wraps into real work. Snapshot/expected objects and release-smoke.cjs are ready.
+
+9H actual local Auth/PostgREST race reproduces two same-device registrations
+both returning success and both tokens becoming inactive. See registration-race
+report/private probe. No registration fix yet. Atomic transition and concurrency,
+rollback, rotation/account-handoff/RLS coverage are next. Full goal remains active.
 
 9F #361 is verified live on 32a3f47336a6ad54ff0c41b667d9ba41be8d12c2.
 Exact-main Quality 37290134172 and standard release 37291187466 passed.
