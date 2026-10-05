@@ -1,0 +1,16 @@
+diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/FullscreenPlayerActivity.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/FullscreenPlayerActivity.kt
+index 721a944..dc91a43 100644
+--- a/node_modules/expo-video/android/src/main/java/expo/modules/video/FullscreenPlayerActivity.kt
++++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/FullscreenPlayerActivity.kt
+@@ -144,7 +144,10 @@ class FullscreenPlayerActivity : Activity(), VideoManagerListener {
+ 
+   override fun onPause() {
+     if (videoPlayer?.staysActiveInBackground != true && !didFinish) {
+-      wasAutoPaused = videoPlayer?.player?.isPlaying == true
++      // `playWhenReady`, not `isPlaying`: a clip that has been asked to play and is still waiting for data is not playing
++      // yet, and left as it is it starts when its data comes, behind the launcher or the lock screen. A clip stopped here
++      // is started again if the activity turns out to be entering picture-in-picture, so there it goes on as before.
++      wasAutoPaused = videoPlayer?.player?.playWhenReady == true
+       if (wasAutoPaused) {
+         playerView.useController = false
+         videoPlayer?.player?.pause()
