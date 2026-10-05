@@ -6,74 +6,50 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/push-preferences-audit-9k`, incorporating main `d4c293a9f14b2f828e8636d03103b0faf6e5b700` (#368); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/feed-interest-progress-audit-9l`, incorporating main `d4c293a9f14b2f828e8636d03103b0faf6e5b700` (#368); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-9H is released and independently verified on 8ff10cc6480d2cea341a2157db21ba5d25b86f5d.
-Quality 37343916362 and release 37344929966 pass; independent 17:03 UTC exact
-SHA/schema/ACL/eight rollback controls/cleanup/109 unchanged advisors/health pass.
-See push-registration-release report. 9I passed 37344035869 on ece2c8a2 and merged with mobile-store idle
-at 17:05:15 UTC as d4c293a9f14b2f828e8636d03103b0faf6e5b700. Exact-main
-Quality 37345781975 is running; standard release and live verification remain.
+9L feed interest progress is implemented locally. Permanent SQL regression fails
+on the original function for an audio-only user starving a healthy user; after
+fix all 19 controls pass. Full 1,000 empty-user batch advances, and actual lock
+contention returns zero. Clean replay, 2,087 SQL assertions/97 files, 11 focused
+checks (2 database/1 migration/8 maintenance), test types/lint and no-drift public
+schema comparison pass. Draft migration 20261005170739 adds service-only per-user
+refresh state and updates the existing invoker function. Marker/weights commit
+atomically, account deletion cascades. No source formula or batch limit changed.
+See feed-interest-progress report. PR/CI/release gates remain; prepared private
+feed-interest-release/ has eight bounded rollback controls already passing locally.
+Its historical source-window guard refuses any preexisting candidate; no live
+account can be refreshed by that probe. Baseline/schema/advisor/ledger plan saved.
 
-New feed investigation: actual isolated SQL calls to refresh_user_interest_weights
-with one empty-result user before one valid image-interest user return one
-processed user three times, but healthy weights remain zero. Probe is
-.audit-evidence/backend-social/feed-interest-progress-probe.sql and before.json.
-No feed fix yet. JOB-02 reopens failed; investigate valid zero-weight feed events
-and persist refresh progress independent of nonempty interest rows.
+9J/K evidence PR #369 passed 37345982967 on e849da13 and merged with mobile-store
+idle at 17:47:37 UTC as 1acdc6865887d0e863e4b0d9fd07c567cd14e549.
+Exact-main Quality 37351084486 is running. The branch must incorporate this main
+before its PR. Eleven actual alert HTTP/DB controls and seven Auth/PostgREST
+preference/retirement controls pass; no runtime/schema change in #369.
+Standard exact-main release/live evidence still needed.
 
-9K adds seven actual registered-identity Auth/PostgREST controls for first-use
-preferences, partial/concurrent updates, delayed initialization vs pause,
-foreign RLS and scoped/repeated device retirement. No runtime defect found;
-only rate-limit helper is stubbed. Types/lint and existing contract tests pass.
-See push-preferences report. Current branch includes 9J's eleven alert controls;
-combine these evidence-only follow-ups after pending 9I. Full goal remains active.
+9I #368 is independently verified on d4c293a9f14b2f828e8636d03103b0faf6e5b700.
+Exact-main 37345781975 and release 37347329859 pass. At 17:47 UTC exact-live
+SHA/feed/admin/webhook and unchanged schema/109 advisor findings pass. See
+push-summary-release report. Legacy summary remains best effort with explicit
+failure logging; durable delivery drives recovery. JOB-03 returns to untested.
 
-9H exact-main Quality 37343916362 passed. Standard release 37344929966 is staging;
-37345012360 is a pending workflow-run follow-up, not proof of another release.
-Wait for terminal state and exact-live SHA before registration-release/verify.cjs.
-9I exact-head Quality 37344035869 is finishing web checks; other three jobs passed.
-Before merge, recheck exact head and mobile-store idle, then standard/live gates.
+9H #364 is verified on 8ff10cc6480d2cea341a2157db21ba5d25b86f5d. Quality
+37343916362/release 37344929966 passed; independent 17:03 UTC exact SHA/schema/
+ACL/eight rollback controls/cleanup/109 unchanged advisors/health pass. See
+push-registration-release report. Independent mobile #363/#360/#366/#365 preserved.
 
-9J alert-delivery evidence: eleven real local HTTP/PostgREST/SQL cases pass,
-including actual collectors, no-work, collector outage, receiver rejection,
-lost acknowledgement, five-second timeout, concurrent dispatch, real shortened
-lease expiry and actual SIGKILL at the receiver boundary. No runtime defect found.
-Tests and runbook document duplicate-delivery/ephemeral-snapshot limits; no
-external sink was configured or contacted. See alert-delivery report. Local
-test types/lint pass; separate evidence commit/PR remains. Do not alter #368's
-head with this follow-up while its CI runs. Full audit remains active.
+9G #362 is verified on 36962d613c5a70d3dc125319e25a37f63633e75b. Quality
+37317775601/release 37319362945 passed; independent six rollback controls,
+planned schema, cleanup and health passed at 13:50 UTC. One expected private-table
+INFO was added to the unchanged 108 prior findings. See push-progress-release.
 
-9G is released and independently verified on
-36962d613c5a70d3dc125319e25a37f63633e75b. Exact-main Quality 37317775601
-and standard release 37319362945 passed. At 13:50 UTC all six rollback controls,
-planned schema comparison, zero-fixture cleanup and live health passed. Advisors
-retain 108 baseline findings plus exactly one expected service-only-table INFO.
-See push-progress-release report. JOB-02 returns to untested; ledger is now
-24 passed / 25 untested / 2 failed / 2 external (53), full goal active.
-
-9H PR #364 passed exact-head Quality 37319529666 on 07d43d14 and merged
-at 16:50:34 UTC as 8ff10cc6480d2cea341a2157db21ba5d25b86f5d after the
-immediate mobile-store idle guard. Exact-main Quality 37343916362 is running.
-Independent Android/mobile changes #363/#360/#366/#365 are preserved.
-Local seven Auth/PostgREST cases, three CI SQL concurrency cases, 2,068 SQL
-assertions/96 files, 92 focused tests, types/lint and schema diff pass. The
-permanent actual race fails on baseline 34fc96ee. Standard release and production
-verification remain. Prepared private registration-release/verify.cjs expects
-exact live SHA, one added function/grant, eight rollback controls, zero fixtures
-and unchanged advisors. Baseline captured after verified 9G release; local probe
-passes all eight. Current 9I branch is separate from merged #364.
-
-9I locally fixes ignored legacy notification-summary errors after actual
-before-commit/lost-ack regressions. It adds diagnostic logging, preserves durable
-delivery and never resends for a summary failure. These fields have no current
-application reader; see push-summary report for the explicit best-effort limit.
-Eleven actual first-send cases, 69 notification tests, app/test types and lint
-pass. No migration or mobile change. PR #368 head ece2c8a2 is running exact-head Quality 37344035869; merge/release remain.
-Preserve unrelated receipt edits, Section 1 files and private evidence.
+Current ledger 24 passed / 25 untested / 2 failed / 2 external (53). JOB-02 failed
+for feed-interest progress; MEDIA-07 failed for legacy retirement. Full goal active.
+Preserve unrelated receipt edits, Section 1 files and all private evidence.
 
 9F #361 is verified live on 32a3f47336a6ad54ff0c41b667d9ba41be8d12c2.
 Exact-main Quality 37290134172 and standard release 37291187466 passed.
