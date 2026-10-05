@@ -1,9 +1,12 @@
 import { readFileSync } from 'node:fs';
+import { fork } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { createServer, type Server } from 'node:http';
+import { createServer, type Server, type ServerResponse } from 'node:http';
 import { Client } from 'pg';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('@/lib/backend-logger', () => ({ logBackendError: vi.fn(), logBackendEvent: vi.fn(), logBackendWarning: vi.fn() }));
+import { runGenerationModelVerificationBackendJob } from '@/lib/backend-job-executions';
 import { verifyPublishedGenerationModels } from '@/lib/generation-model-provider-verification';
 
 const configPath = process.env.AUDIT_STORAGE_CONFIG;
@@ -16,6 +19,10 @@ describe.skipIf(!configPath || !connectionString)('catalog verification with rea
   let status: number, disconnect: boolean, hold: boolean, insertFailure: 'before' | 'after' | null;
   let historyFailure: boolean;
   let sequence: number;
+  let held: ServerResponse[], received: (() => void) | undefined;
+  const managedNow = new Date('2007-01-01T00:06:00Z').getTime();
+  const managed = () => runGenerationModelVerificationBackendJob({ serviceClient: admin, requestId: `audit-model-${fixture}-${sequence++}`, startedAtMs: managedNow });
+  const runs = async () => (await db.query('select status,summary,error_message from public.backend_job_runs where request_id like $1 order by request_id', [`audit-model-${fixture}-%`])).rows;
   const originalFetch = globalThis.fetch;
   const run = () => verifyPublishedGenerationModels(admin, { now: new Date(Date.UTC(2007, 0, 1, 0, sequence++)) });
   const checks = async () => (await db.query('select model_id,status,consecutive_discrepancies,observed_hash,sanitized_details from public.generation_model_provider_checks where release_id=$1 order by checked_at,model_id,id', [fixture])).rows;
@@ -37,7 +44,9 @@ describe.skipIf(!configPath || !connectionString)('catalog verification with rea
     expect(models).toHaveLength(2);
     server = createServer((request, response) => {
       requests.push({ method: request.method, authorization: request.headers.authorization });
+      received?.();
       if (disconnect) request.socket.destroy();
+      else if (hold) held.push(response);
       else if (!hold) { response.statusCode = status; response.setHeader('etag', 'audit-local'); response.end(); }
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -62,7 +71,7 @@ describe.skipIf(!configPath || !connectionString)('catalog verification with rea
     await db?.end();
   });
   beforeEach(async () => {
-    fixture = randomUUID(); sequence = 0; requests = []; status = 200; disconnect = false; hold = false; insertFailure = null; historyFailure = false;
+    fixture = randomUUID(); sequence = 0; requests = []; status = 200; disconnect = false; hold = false; insertFailure = null; historyFailure = false; held = []; received = undefined;
     vi.stubEnv('KIE_AI_API_KEY', 'local-audit-only');
     vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
@@ -80,7 +89,8 @@ describe.skipIf(!configPath || !connectionString)('catalog verification with rea
     } catch (error) { await db.query('rollback'); throw error; }
   });
   afterEach(async () => {
-    server.closeAllConnections(); vi.unstubAllGlobals(); vi.unstubAllEnvs();
+    server.closeAllConnections(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks();
+    await db.query('delete from public.backend_job_runs where request_id like $1', [`audit-model-${fixture}-%`]);
     await db.query('begin');
     try {
       await db.query("update public.generation_model_catalog_releases set status='draft' where id=$1", [fixture]);
@@ -90,6 +100,8 @@ describe.skipIf(!configPath || !connectionString)('catalog verification with rea
       await db.query('commit');
     } catch (error) { await db.query('rollback'); throw error; }
     expect(await checks()).toEqual([]);
+    expect(await runs()).toEqual([]);
+    expect((await db.query('select name from public.backend_job_locks where locked_by like $1', [`%audit-model-${fixture}-%`])).rows).toEqual([]);
     expect((await db.query("select id from public.generation_model_catalog_releases where status='active'")).rows.map(row => row.id)).toEqual(original ? [original] : []);
   });
   it('does no work when there is no active catalog release', async () => {
@@ -184,5 +196,68 @@ describe.skipIf(!configPath || !connectionString)('catalog verification with rea
     expect(Date.now() - started).toBeGreaterThanOrEqual(7500);
     expect(Date.now() - started).toBeLessThan(11500);
     expect((await checks()).map(row => row.sanitized_details)).toEqual([{ reason: 'timeout' }, { reason: 'timeout' }]);
+  }, 15000);
+  it('records a managed history outage then a successful retry', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(managedNow);
+    historyFailure = true;
+    expect(await managed()).toMatchObject({ status: 'failed', success: false });
+    expect((await runs())[0]).toMatchObject({ status: 'failed', error_message: 'Injected history read outage' });
+    expect(requests).toEqual([]);
+    historyFailure = false;
+    expect(await managed()).toMatchObject({ status: 'succeeded', summary: { checked: 2 } });
+    expect((await runs()).map(row => row.status)).toEqual(['failed', 'succeeded']);
+  });
+  it('suppresses overlapping managed provider requests', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(managedNow);
+    hold = true;
+    const boundary = new Promise<void>(resolve => { received = () => { if (requests.length === 2) resolve(); }; });
+    const first = managed();
+    try {
+      await boundary;
+      expect(await managed()).toMatchObject({ status: 'skipped', reason: 'already_running' });
+      expect(requests).toHaveLength(2);
+      hold = false; held.forEach(response => { response.statusCode = 200; response.end(); });
+      expect(await first).toMatchObject({ status: 'succeeded' });
+      expect((await runs()).map(row => row.status).sort()).toEqual(['skipped', 'succeeded']);
+      expect(await checks()).toHaveLength(2);
+    } finally { server.closeAllConnections(); await first; }
+  });
+  it('waits for an abandoned managed lease to expire', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(managedNow);
+    const acquired = await admin.rpc('try_acquire_backend_job_lock', { p_name: 'generation-model-verification', p_ttl_seconds: 1, p_locked_by: `audit-model-${fixture}-abandoned` });
+    expect(acquired.error).toBeNull(); expect(acquired.data).toBe(true);
+    expect(await managed()).toMatchObject({ status: 'skipped', reason: 'already_running' });
+    expect(requests).toEqual([]);
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    expect(await managed()).toMatchObject({ status: 'succeeded' });
+    expect(await checks()).toHaveLength(2);
+  });
+  it.each(['provider-completed', 'snapshot-committed'])('recovers after SIGKILL at %s', async checkpoint => {
+    vi.spyOn(Date, 'now').mockReturnValue(managedNow);
+    const child = fork('src/__tests__/model-verification-worker.cjs', [], {
+      execArgv: ['--import', 'tsx'],
+      env: { NODE_ENV: 'test', PATH: process.env.PATH, TSX_TSCONFIG_PATH: 'tsconfig.mobile-push-worker.json', AUDIT_STORAGE_CONFIG: configPath, AUDIT_REQUEST_ID: `audit-model-${fixture}-killed`, AUDIT_PROVIDER_URL: destination, AUDIT_STOP_PHASE: checkpoint },
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Child did not reach checkpoint')), 8000);
+        child.once('message', message => { clearTimeout(timer); if ((message as { stage: string }).stage === checkpoint) resolve(); else reject(new Error('Worker failed')); });
+        child.once('exit', () => { clearTimeout(timer); reject(new Error('Worker exited early')); });
+      });
+      const exited = new Promise(resolve => child.once('exit', (_code, signal) => resolve(signal)));
+      child.kill('SIGKILL'); expect(await exited).toBe('SIGKILL');
+      expect(await checks()).toHaveLength(checkpoint === 'snapshot-committed' ? 2 : 0);
+      expect((await runs())[0]).toMatchObject({ status: 'started' });
+      expect(await managed()).toMatchObject({ status: 'skipped', reason: 'already_running' });
+      await new Promise(resolve => setTimeout(resolve, 2200));
+      expect(await managed()).toMatchObject({ status: 'succeeded', summary: { checked: 2 } });
+      expect(await checks()).toHaveLength(checkpoint === 'snapshot-committed' ? 4 : 2);
+      expect((await runs()).map(row => row.status).sort()).toEqual(['skipped', 'started', 'succeeded']);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        const exited = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGKILL'); await exited;
+      }
+    }
   }, 15000);
 });

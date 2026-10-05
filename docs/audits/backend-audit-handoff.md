@@ -6,10 +6,17 @@ Updated 2026-10-06 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/model-verification-audit-9n`, incorporating main `c0f33e438800de69b6e99736ac2904141d0a93e1` (#371); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/model-verification-recovery-audit-9o`, incorporating main `c0f33e438800de69b6e99736ac2904141d0a93e1` (#371); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+9O adds five actual managed model-verification controls: durable failed/retried
+history reads, overlap, abandoned expiry and SIGKILL after provider response or
+committed snapshot. All 19 actual cases, test types and scoped lint pass. Original
+catalog restored; fixtures/job rows removed; no fixture locks. No new runtime or
+schema change. See model-verification-recovery report. Preserve separately from
+9N PR #372, head 93d7b0a3, exact-head Quality 37362149076 running.
 
 9N implements per-model latest verification history after an actual sparse-history
 regression: 101 observations for one model hide another model's seven-failure
@@ -18,7 +25,7 @@ breaks equal timestamps by identity. Fourteen actual local HTTP/PostgREST cases,
 15 new pgTAP controls, app/test types and lint pass. Clean replay and 2,102 SQL
 assertions across 98 files pass; no public schema drift. Seven bounded rollback
 controls pass locally; model-verification-release/ has the production baseline,
-one-migration plan and verifier. No PR/deployment yet; see 9N report. Runtime
+one-migration plan and verifier. PR #372 is running exact-head CI; see 9N report. Runtime
 change is only the lookup; no provider contacted. Preserve local edits.
 
 9M #371 passed exact-head Quality 37353739378 on 9cc05bcf and merged with
