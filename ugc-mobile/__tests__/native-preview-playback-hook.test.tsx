@@ -11,15 +11,16 @@ vi.mock('@/components/media-viewport-scroll-view', async () => ({ MediaViewportC
   subscribe(callback: () => void) { state.scroll = callback; return () => { state.scroll = null; }; },
   measure(callback: (rect: object) => void) { callback({ x: 0, y: 80, width: 400, height: 700 }); },
 }) }));
+import { ModalWindowScope } from '../lib/modal-window';
 import { useNativePreviewPlayback } from '../lib/use-native-preview-playback';
 let tree: renderer.ReactTestRenderer | undefined;
 afterEach(() => { renderer.act(() => tree?.unmount()); tree = undefined; state.currentState = 'active'; state.platform = 'ios'; state.y = 100; state.measurements = 0; });
-function mount() {
+function mount(inModal = false) {
   let event!: (value: { isPlaying: boolean }) => void;
   const player = { playing: true, pause: vi.fn(() => { player.playing = false; }), addListener: vi.fn((_name: string, callback: typeof event) => { event = callback; return { remove: vi.fn() }; }) };
   let result!: ReturnType<typeof useNativePreviewPlayback>;
   function Harness() { result = useNativePreviewPlayback(player as never, true); result.viewRef.current = { measureInWindow(callback: (x: number, y: number, width: number, height: number) => void) { state.measurements++; callback(0, state.y, 300, 220); } } as never; return null; }
-  renderer.act(() => { tree = renderer.create(<Harness />); });
+  renderer.act(() => { tree = renderer.create(inModal ? <ModalWindowScope><Harness /></ModalWindowScope> : <Harness />); });
   return { player, event: () => event({ isPlaying: true }), controls: () => result };
 }
 it('checks playing previews on scroll and does no work for paused scrolling', () => {
@@ -47,4 +48,21 @@ it('subscribes to notification blur only on Android', () => {
   renderer.act(() => tree?.unmount()); tree = undefined;
   state.platform = 'android'; const { player } = mount();
   state.appListeners.get('blur')?.(''); expect(player.playing).toBe(false);
+});
+
+// On Android a Modal is a second window, and `blur` is the activity's window
+// losing the focus: to the notification shade, and to every Modal as it opens.
+// The lightbox's clip was paused by the lightbox's own opening (2026-10-05).
+it('pauses a preview on the page when the activity window loses the focus, and leaves one inside a Modal playing', () => {
+  state.platform = 'android';
+  const page = mount();
+  state.appListeners.get('blur')?.(''); expect(page.player.pause).toHaveBeenCalledOnce();
+  renderer.act(() => tree?.unmount()); tree = undefined;
+  const lightbox = mount(true);
+  expect(state.appListeners.has('blur')).toBe(false); expect(lightbox.player.playing).toBe(true);
+});
+it('still stops a preview inside a Modal when the app leaves the foreground', () => {
+  state.platform = 'android';
+  const { player } = mount(true);
+  state.currentState = 'background'; state.appListeners.get('change')?.('background'); expect(player.playing).toBe(false);
 });
