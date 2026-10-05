@@ -124,15 +124,25 @@ function VideoPreviewAttempt({
 
   return (
     <View ref={playback.viewRef} collapsable={false} onLayout={playback.onLayout} style={[style, { overflow: 'hidden' }]}>
-      <VideoView
-        player={player}
-        onFullscreenEnter={playback.onFullscreenEnter}
-        onFullscreenExit={playback.onFullscreenExit}
-        nativeControls={nativeControls}
-        buttonOptions={SINGLE_CLIP_BUTTONS}
-        contentFit={contentFit}
-        style={{ width: '100%', height: '100%' }}
-      />
+      {/* A player without controls has nothing of its own to touch, so touches
+          pass it by and reach whatever holds it: a reference tile, an upload
+          slot. Left to take them, expo-video's Android view keeps each touch
+          and forwards it to JS with the finger's place inside the clip standing
+          in for its place on the page. The press target around it then sees
+          the finger jump out of its bounds on the first movement and drops the
+          press, so a finger never opens it, and only a tap with no movement at
+          all (`adb shell input tap`) does. */}
+      <View collapsable={false} pointerEvents={nativeControls ? 'auto' : 'none'} style={{ width: '100%', height: '100%' }}>
+        <VideoView
+          player={player}
+          onFullscreenEnter={playback.onFullscreenEnter}
+          onFullscreenExit={playback.onFullscreenExit}
+          nativeControls={nativeControls}
+          buttonOptions={SINGLE_CLIP_BUTTONS}
+          contentFit={contentFit}
+          style={{ width: '100%', height: '100%' }}
+        />
+      </View>
       {!timedOut && (status === 'loading' || status === 'idle') ? (
         <View pointerEvents="none" style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
           <ActivityIndicator accessibilityLabel="Loading video" color={theme.colors.primary} />
