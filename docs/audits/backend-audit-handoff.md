@@ -11,8 +11,15 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 
 ## Exact checkpoint
 
-9G is PR #362 at f69759ed1712dcf6d3780bc52cfc393743e6badd; Quality
-37292884858 is running. The current 9H branch preserves the candidate plus
+9G PR #362 first-head Quality 37292884858 failed four older receipt mock cases
+missing the new scan RPC; 7,421 other web tests and DB/mobile/E2E passed.
+The mock is corrected with assertions preserved; 99 focused tests, lint and
+test types pass. A new exact-head CI run is required. Registration investigation
+is preserved separately on codex/push-registration-audit-9h (9f0eaf0a); do not
+lose it when continuing after this CI repair.
+
+9G is PR #362 at 34fc96ee67fd8e3c96e49a02b0e98966ff56df0b; fresh Quality
+37293789959 is running. The current 9H branch preserves the candidate plus
 registration investigation docs; do not push 9H onto #362. Before merging #362,
 verify exact-head CI and mobile-store idle immediately before merge. Standard
 exact-main release/live verification remain. The prepared private
@@ -39,7 +46,7 @@ invoker RPC and RLS state table. Per-record/phase failures permit later work, th
 throw a typed partial-result error persisted in the managed job's failed summary.
 Eight actual controls include original four before/after regressions, managed
 summary, concurrent scans, phase outage and SIGKILL after committed scan. Prior
-16 retry/9 initial/4 receipt cases pass; 95 focused tests, app/test types/lint,
+16 retry/9 initial/4 receipt cases pass; 99 focused tests, app/test types/lint,
 clean replay and 2,046 SQL checks pass. Clean-replay public schema diff reports no changes. Draft migration 20261005092947 is local only. PR, exact-head CI,
 mobile-store idle before merge, standard release and production gates remain.
 See push-poison-progress report for precise limits. Preserve unrelated edits.
