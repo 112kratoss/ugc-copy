@@ -8,8 +8,11 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { reclaimExpiredUploadReservations } from '@/lib/upload-finalization';
+import { logBackendError } from '@/lib/backend-logger';
 
 export type OperationalRetentionSummary = {
+  /** Failed best-effort operations, retained in the durable job-run summary. */
+  supplementaryPruneFailures: string[];
   jobRunsDeleted: number;
   rateLimitsDeleted: number;
   completionJobsDeleted: number;
@@ -63,33 +66,25 @@ export async function pruneOperationalBackendData(
   // unbounded share telemetry ledgers, and the synthetic $0 orders a retried
   // free unlock leaves behind. All best-effort -- a failure here must not fail
   // the whole retention run.
-  let shareEventsDeleted = 0;
-  let profileShareEventsDeleted = 0;
-  let abandonedFreeUnlockOrdersDeleted = 0;
-  let accountMergeTicketsDeleted = 0;
-  let uploadByteReservationsDeleted = 0;
-
-  const shareResult = await client.rpc('prune_post_share_events', {});
-  if (!shareResult.error) {
-    shareEventsDeleted = toCount(shareResult.data);
+  const supplementaryPruneFailures: string[] = [];
+  async function pruneSupplementary(operation: string, args: Record<string, unknown> = {}) {
+    try {
+      const result = await client.rpc(operation, args);
+      if (result.error) throw result.error;
+      return toCount(result.data);
+    } catch (error) {
+      supplementaryPruneFailures.push(operation);
+      logBackendError('operational_retention_supplementary_prune_failed', { operation, error });
+      return 0;
+    }
   }
 
-  const profileShareResult = await client.rpc('prune_profile_share_events', {});
-  if (!profileShareResult.error) {
-    profileShareEventsDeleted = toCount(profileShareResult.data);
-  }
-
-  const freeUnlockResult = await client.rpc('prune_abandoned_free_unlock_orders', {});
-  if (!freeUnlockResult.error) {
-    abandonedFreeUnlockOrdersDeleted = toCount(freeUnlockResult.data);
-  }
-
-  const mergeTicketResult = await client.rpc('prune_account_merge_tickets', {
+  const shareEventsDeleted = await pruneSupplementary('prune_post_share_events');
+  const profileShareEventsDeleted = await pruneSupplementary('prune_profile_share_events');
+  const abandonedFreeUnlockOrdersDeleted = await pruneSupplementary('prune_abandoned_free_unlock_orders');
+  const accountMergeTicketsDeleted = await pruneSupplementary('prune_account_merge_tickets', {
     p_limit: options.maxDeletesPerTable ?? 5000,
   });
-  if (!mergeTicketResult.error) {
-    accountMergeTicketsDeleted = toCount(mergeTicketResult.data);
-  }
 
   // Expiry is not proof of absence. Delete/prove each unfinalized object first;
   // only rows this worker releases are eligible for the bookkeeping prune.
@@ -98,14 +93,12 @@ export async function pruneOperationalBackendData(
     limit: options.maxDeletesPerTable ?? 500,
   });
 
-  const uploadReservationResult = await client.rpc('prune_upload_byte_reservations', {
+  const uploadByteReservationsDeleted = await pruneSupplementary('prune_upload_byte_reservations', {
     p_limit: options.maxDeletesPerTable ?? 5000,
   });
-  if (!uploadReservationResult.error) {
-    uploadByteReservationsDeleted = toCount(uploadReservationResult.data);
-  }
 
   return {
+    supplementaryPruneFailures,
     shareEventsDeleted,
     profileShareEventsDeleted,
     abandonedFreeUnlockOrdersDeleted,

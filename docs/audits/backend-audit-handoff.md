@@ -6,10 +6,43 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/job-lock-audit-9a`, based on the #348 candidate `0f3442b8` atop main `44864e5667eb6a9ed7d81bcc6faa5138590a8767` (#346); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/retention-observability-audit-9b`, based on the #348 candidate `0f3442b8` atop main `44864e5667eb6a9ed7d81bcc6faa5138590a8767` (#346); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+9A #349 passed exact-head CI 37255743353 and merged as
+80a3d303fbf0c31e68a26c152c0c90f93734e485 at October 5 02:45:21 UTC.
+Mobile-store release was idle immediately before merge. Exact-main CI and standard
+release remain to verify. 9B #352 initially passed CI 37255805722; its branch now
+incorporates this main, preserving independent Android preview change #350.
+Only historical audit docs conflicted; latest evidence retained. New head CI needed.
+
+9B reproduces silent supplementary retention errors / rejected calls stopping
+later work (eleven failing baseline service cases). Fix saves failed operation
+names in durable job summaries and logs each failure while continuing best-effort
+prunes; object reclamation still stops bookkeeping on error. 39 focused tests and
+one actual managed-job PostgREST persistence/retry test pass; app/test types/lint
+pass. No migration/mobile runtime change. See retention-failures report.
+Ledger: 24 passed, 25 untested, two failed, two external; JOB-02 reopened for 9B.
+Candidate needs PR/CI/release after #349. Current branch includes #349 pending base.
+
+8H #348 passed all four PR jobs and merged 360d62496aa3dc91ffc97cb7ed0139a024a8f726
+at October 4 21:18:35 UTC, with mobile-store idle immediately before merge.
+Exact-main CI/standard release remain to verify. #349 PR CI 37235238993 has three
+jobs passed and web still running. Inspect/update its base against merged main.
+
+9A PR #349 is open (head 24e436b3), including the pending #348 base until that
+merges. Its tests/docs are pushed; no runtime/migration change. #348 Quality
+37234612545 has DB/mobile/E2E success and web progressing after its tests passed.
+Finish #348, then merge main into #349 and resolve only inspected docs conflicts,
+update its final PR description, finish CI and normal release. Check mobile-store
+idle immediately before every main merge. Preserve unrelated receipt/Section 1 edits.
+
+Isolated API stack was restarted without resetting its volumes, with Realtime
+now healthy. local-status.json was refreshed privately. No Next server remains.
+Final local 9A run passes seven tests; typecheck and warning-free scoped lint pass.
+Both Realtime attempts cleaned fixtures and disconnected all channels.
 
 8G is fully released as 44864e56. Exact-main Quality 37234106785 and standard
 release 37234741646 pass (October 4 21:10:17 UTC). Independent exact live build,

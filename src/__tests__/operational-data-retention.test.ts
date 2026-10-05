@@ -90,6 +90,7 @@ describe('operational data retention', () => {
 
     expect(calls[0].fn).toBe('prune_operational_backend_data');
     expect(summary).toEqual({
+      supplementaryPruneFailures: [],
       jobRunsDeleted: 4200,
       rateLimitsDeleted: 12,
       completionJobsDeleted: 3,
