@@ -459,7 +459,10 @@ function sentBodies(fetchMock: { mock: { calls: Parameters<typeof fetch>[] } }) 
  * The tables one push fan-out touches, for an account holding `tokens`. Writes
  * are recorded as they arrive, so a test can count statements as well as rows.
  */
-function createPushFanOutSupabase(tokens: PushTokenRow[]) {
+function createPushFanOutSupabase(
+  tokens: PushTokenRow[],
+  summaryError: { message: string } | null = null,
+) {
   const deliveries: Record<string, unknown>[] = [];
   const rpcCalls: string[] = [];
   const tokenFilters: Array<[string, unknown]> = [];
@@ -531,7 +534,7 @@ function createPushFanOutSupabase(tokens: PushTokenRow[]) {
             return {
               eq(_column: string, value: unknown) {
                 notificationUpdates.push({ id: String(value), values });
-                return Promise.resolve({ error: null });
+                return Promise.resolve({ error: summaryError });
               },
             };
           },
@@ -1642,6 +1645,20 @@ describe('mobile notifications', () => {
       expect.objectContaining({ receipt_status: 'error', provider_message: 'network down', attempt_count: 3 }),
     ]);
     await expect(hasMobilePushMaintenanceWork(maintenance.adminSupabase as never, { now })).resolves.toBe(false);
+  });
+
+  it('logs a summary write failure while retaining the accepted delivery', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const fetcher = vi.fn(async () => expoResponse({ data: [{ status: 'ok', id: 'ticket-summary' }] }));
+    vi.stubGlobal('fetch', fetcher);
+    const fanOut = createPushFanOutSupabase([
+      { id: 'token-1', expo_push_token: 'ExponentPushToken[summary]', platform: 'ios' },
+    ], { message: 'Summary unavailable' });
+    await expect(unlockNotification(fanOut.adminSupabase)).resolves.toMatchObject({ id: 'notification-1' });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fanOut.deliveries).toEqual([expect.objectContaining({ send_status: 'sent', push_ticket_id: 'ticket-summary' })]);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('mobile_push_summary_update_failed'));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('notification-1'));
   });
 
   it('records delivery errors when the Expo send call throws before a receipt is created', async () => {

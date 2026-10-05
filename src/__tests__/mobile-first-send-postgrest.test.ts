@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 vi.mock('@/lib/backend-logger', () => ({ logBackendError: vi.fn(), logBackendWarning: vi.fn() }));
 vi.mock('@/lib/provider-dependency-telemetry', () => ({ recordProviderDependencyEvent: vi.fn() }));
+import { logBackendError } from '@/lib/backend-logger';
 import { createMobileNotification, processMobilePushMaintenance } from '@/lib/mobile-notifications';
 
 const configPath = process.env.AUDIT_STORAGE_CONFIG;
@@ -19,6 +20,7 @@ describe.skipIf(!configPath || !connectionString)('first-send persistence with a
   let token: string;
   let ticket: string;
   let failTable: string | null;
+  let failSummary: 'before' | 'after' | null;
   let config: { API_URL: string; SERVICE_ROLE_KEY: string };
   const realFetch = globalThis.fetch;
   const now = new Date();
@@ -35,9 +37,15 @@ describe.skipIf(!configPath || !connectionString)('first-send persistence with a
   afterAll(async () => { await db?.end(); });
   beforeEach(async () => {
     [owner, token, ticket] = Array.from({ length: 3 }, () => randomUUID());
-    failTable = null;
+    failTable = null; failSummary = null; vi.clearAllMocks();
     admin = createClient(config.API_URL, config.SERVICE_ROLE_KEY, { auth: { persistSession: false }, global: { fetch: async (input, init) => {
       const url = new URL(String(input));
+      if (failSummary && init?.method === 'PATCH' && url.pathname === '/rest/v1/mobile_notifications') {
+        if (failSummary === 'after') await realFetch(input, init);
+        return new Response(JSON.stringify({ code: 'XX000', message: 'Injected summary acknowledgement failure' }), {
+          status: 503, headers: { 'Content-Type': 'application/json' },
+        });
+      }
       if (url.pathname === '/rest/v1/rpc/prune_mobile_notification_retention') return new Response('{}', { headers: { 'Content-Type': 'application/json' } });
       if ((['PATCH','POST'].includes(init?.method ?? '') && url.pathname === '/rest/v1/' + failTable) || (init?.method === 'POST' && url.pathname === '/rest/v1/rpc/' + failTable)) {
         return new Response(JSON.stringify({ code: 'XX000', message: 'Injected receipt write failure' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
@@ -56,6 +64,21 @@ describe.skipIf(!configPath || !connectionString)('first-send persistence with a
 
   const create = () => createMobileNotification({adminSupabase:admin,userId:owner,type:'post_saved',category:'social',title:'Fixture',body:'Local only',dedupeKey:'first-send-'+owner});
   const rows = async () => (await db.query('select * from public.mobile_push_deliveries where user_id=$1',[owner])).rows;
+
+  it.each(['before', 'after'] as const)('reports summary failure %s commit without losing delivery or resending', async boundary => {
+    const fetcher = provider(); vi.stubGlobal('fetch', fetcher); failSummary = boundary;
+    const notification = await create();
+    expect(notification?.id).toEqual(expect.any(String));
+    expect(await rows()).toEqual([expect.objectContaining({ push_ticket_id: ticket, send_status: 'sent' })]);
+    const stored = (await db.query('select pushed_at,push_ticket_id from public.mobile_notifications where id=$1', [notification!.id])).rows[0];
+    expect(stored).toEqual(boundary === 'before'
+      ? { pushed_at: null, push_ticket_id: null }
+      : { pushed_at: expect.any(Date), push_ticket_id: ticket });
+    await create(); expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(logBackendError).toHaveBeenCalledWith('mobile_push_summary_update_failed', {
+      notificationId: notification!.id, error: expect.objectContaining({ code: 'XX000' }),
+    });
+  });
 
   it('reserves durable delivery intent before the initial batch reaches the provider', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => {
