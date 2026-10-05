@@ -6,10 +6,23 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/push-receipt-audit-9c`, based on the #348 candidate `0f3442b8` atop main `44864e5667eb6a9ed7d81bcc6faa5138590a8767` (#346); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/push-retry-persistence-audit-9d`, based on the #348 candidate `0f3442b8` atop main `44864e5667eb6a9ed7d81bcc6faa5138590a8767` (#346); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+9D local retry persistence fix: six actual PostgREST cases fail before/pass after;
+77 focused tests pass. Writes now report errors, the catch covers only provider
+calls, and invalid tokens retire before terminal delivery updates. See push-retries
+report. Accepted-ticket persistence failure still reproduces a duplicate send and
+undercounted attempt on the next run; JOB-03 stays failed. New batch has no schema
+or mobile runtime change. All fixtures removed; no real push sent.
+
+9C #353 updated to e1b1abc3 after resolving only historical audit-document
+conflicts against main 79192454; fresh CI 37257838592 running. 9B exact-main CI
+37257678307 running. 9A release 37257450848 stopped at stale-main guard after
+successful staging: preserve as expected safeguard evidence, verify its changes
+on the 9B descendant after the standard release. Do not bypass promotion guards.
 
 9B #352 passed updated-head Quality 37256707025 and merged as
 79192454beba6584314eff54b11ff747790f60cc at October 5 03:00:59 UTC with

@@ -1205,7 +1205,7 @@ async function closeUnsentPushDelivery(
   checkedAt: string,
   reason: string,
 ) {
-  await adminSupabase
+  const { error } = await adminSupabase
     .from('mobile_push_deliveries')
     .update({
       receipt_status: failedSendReceiptStatus(false),
@@ -1213,6 +1213,7 @@ async function closeUnsentPushDelivery(
       receipt_message: reason,
     })
     .eq('id', deliveryId);
+  if (error) throw new MobileNotificationError('Failed to close unsent push delivery.', 500);
 }
 
 async function processRetryableMobilePushDeliveries(
@@ -1275,13 +1276,7 @@ async function processRetryableMobilePushDeliveries(
     }
 
     if (!notificationData) {
-      await adminSupabase
-        .from('mobile_push_deliveries')
-        .update({
-          receipt_message: 'Notification no longer exists.',
-          last_attempt_at: nowIso,
-        })
-        .eq('id', deliveryId);
+      await closeUnsentPushDelivery(adminSupabase, deliveryId, nowIso, 'Notification no longer exists.');
       continue;
     }
 
@@ -1316,8 +1311,12 @@ async function processRetryableMobilePushDeliveries(
     const remainingAttempts = DEFAULT_EXPO_PUSH_MAX_ATTEMPTS - priorAttemptCount;
     retriedCount += 1;
 
+    // Only provider failures belong in the provider-error branch. A database
+    // failure must escape to the job runner without consuming more attempts or
+    // overwriting an accepted ticket with a fabricated provider failure.
+    let outcome: Awaited<ReturnType<typeof sendExpoPushNotificationWithRetry>>;
     try {
-      const { result, attemptCount } = await sendExpoPushNotificationWithRetry({
+      outcome = await sendExpoPushNotificationWithRetry({
         expoPushToken,
         title: notification.title,
         body: notification.body,
@@ -1331,49 +1330,9 @@ async function processRetryableMobilePushDeliveries(
         fetcher,
         maxAttempts: remainingAttempts,
       });
-
-      if (result.status === 'ok') {
-        resentCount += 1;
-        await adminSupabase
-          .from('mobile_push_deliveries')
-          .update({
-            push_ticket_id: result.id ?? null,
-            send_status: 'sent',
-            receipt_status: 'pending',
-            receipt_checked_at: null,
-            receipt_error_code: null,
-            receipt_message: null,
-            provider_message: null,
-            provider_details: null,
-            attempt_count: priorAttemptCount + attemptCount,
-            sent_at: nowIso,
-            last_attempt_at: nowIso,
-          })
-          .eq('id', deliveryId);
-        continue;
-      }
-
-      retryFailedCount += 1;
-      await adminSupabase
-        .from('mobile_push_deliveries')
-        .update({
-          receipt_status: failedSendReceiptStatus(!isPermanentExpoPushRefusal(result.details)),
-          receipt_error_code: isRecord(result.details) ? normalizeOptionalString(result.details.error) : null,
-          receipt_message: result.message,
-          provider_message: result.message,
-          provider_details: isRecord(result.details) ? result.details : null,
-          attempt_count: priorAttemptCount + attemptCount,
-          last_attempt_at: nowIso,
-        })
-        .eq('id', deliveryId);
-
-      if (isDeviceNotRegistered(result.details)) {
-        disabledTokenCount += await retireUnregisteredPushTokens(adminSupabase, [liveTokenId], nowIso);
-      }
     } catch (error) {
-      retryFailedCount += 1;
       const attemptCount = getExpoPushAttemptCount(error, remainingAttempts);
-      await adminSupabase
+      const { error: writeError } = await adminSupabase
         .from('mobile_push_deliveries')
         .update({
           receipt_status: failedSendReceiptStatus(!isRefusedExpoPushRequest(error)),
@@ -1383,7 +1342,53 @@ async function processRetryableMobilePushDeliveries(
           last_attempt_at: nowIso,
         })
         .eq('id', deliveryId);
+      if (writeError) throw new MobileNotificationError('Failed to record push retry.', 500);
+      retryFailedCount += 1;
+      continue;
     }
+
+    const { result, attemptCount } = outcome;
+    if (result.status === 'ok') {
+      const { error: writeError } = await adminSupabase
+        .from('mobile_push_deliveries')
+        .update({
+          push_ticket_id: result.id ?? null,
+          send_status: 'sent',
+          receipt_status: 'pending',
+          receipt_checked_at: null,
+          receipt_error_code: null,
+          receipt_message: null,
+          provider_message: null,
+          provider_details: null,
+          attempt_count: priorAttemptCount + attemptCount,
+          sent_at: nowIso,
+          last_attempt_at: nowIso,
+        })
+        .eq('id', deliveryId);
+      if (writeError) throw new MobileNotificationError('Failed to record push retry.', 500);
+      resentCount += 1;
+      continue;
+    }
+
+    // Retire first: finalizing the delivery first would strand an active token
+    // if retirement failed, since that delivery would no longer be retryable.
+    if (isDeviceNotRegistered(result.details)) {
+      disabledTokenCount += await retireUnregisteredPushTokens(adminSupabase, [liveTokenId], nowIso);
+    }
+    const { error: writeError } = await adminSupabase
+      .from('mobile_push_deliveries')
+      .update({
+        receipt_status: failedSendReceiptStatus(!isPermanentExpoPushRefusal(result.details)),
+        receipt_error_code: isRecord(result.details) ? normalizeOptionalString(result.details.error) : null,
+        receipt_message: result.message,
+        provider_message: result.message,
+        provider_details: isRecord(result.details) ? result.details : null,
+        attempt_count: priorAttemptCount + attemptCount,
+        last_attempt_at: nowIso,
+      })
+      .eq('id', deliveryId);
+    if (writeError) throw new MobileNotificationError('Failed to record push retry.', 500);
+    retryFailedCount += 1;
   }
 
   return {

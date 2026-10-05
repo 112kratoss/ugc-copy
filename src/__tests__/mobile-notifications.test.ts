@@ -216,6 +216,7 @@ function createPushMaintenanceSupabase({
   tokenReadError = null,
   preferences = [{ ...ALERTS_ON }],
   preferencesReadError = null,
+  deliveryWriteError = null,
   notification = {},
 }: {
   pendingDeliveries?: Record<string, unknown>[];
@@ -224,6 +225,7 @@ function createPushMaintenanceSupabase({
   tokenReadError?: { message: string } | null;
   preferences?: PreferencesState[];
   preferencesReadError?: { message: string } | null;
+  deliveryWriteError?: { message: string } | null;
   notification?: Record<string, unknown>;
 }) {
   const tokenTable = createPushTokenTable(tokens, { readError: tokenReadError });
@@ -284,6 +286,7 @@ function createPushMaintenanceSupabase({
             return {
               eq(column: string, value: unknown) {
                 deliveryUpdates.push({ id: String(value), values });
+                if (deliveryWriteError) return Promise.resolve({ error: deliveryWriteError });
                 for (const row of deliveries) {
                   if (row[column] === value) {
                     Object.assign(row, values);
@@ -1450,6 +1453,25 @@ describe('mobile notifications', () => {
     // The delivery is left as it was, for the next run to ask again.
     expect(maintenance.deliveryUpdates).toEqual([]);
     await expect(hasMobilePushMaintenanceWork(maintenance.adminSupabase as never, { now })).resolves.toBe(true);
+  });
+
+  it.each(['accepted', 'refused', 'permanent', 'paused'] as const)('surfaces a failed retry write after %s without rewriting it as a provider error', async (outcome) => {
+    const maintenance = createPushMaintenanceSupabase({
+      retryableDeliveries: [retryableDelivery()],
+      tokens: [{ ...PHONE_TOKEN }],
+      preferences: [{ ...ALERTS_ON, push_enabled: outcome !== 'paused' }],
+      deliveryWriteError: { message: 'Database unavailable' },
+    });
+    const fetcher = vi.fn<typeof fetch>(async () => outcome === 'refused'
+      ? new Response('{}', { status: 400 })
+      : expoResponse({ data: outcome === 'permanent'
+        ? refusedTicket('MessageTooBig') : { status: 'ok', id: 'accepted-ticket' } }));
+    await expect(processMobilePushMaintenance(maintenance.adminSupabase as never, { fetcher }))
+      .rejects.toThrow(outcome === 'paused' ? 'Failed to close unsent push delivery.' : 'Failed to record push retry.');
+    expect(maintenance.deliveryUpdates).toHaveLength(1);
+    expect(maintenance.deliveries[0]).toMatchObject({ send_status: 'error', receipt_status: 'error', attempt_count: 1, push_ticket_id: null });
+    expect(fetcher).toHaveBeenCalledTimes(outcome === 'paused' ? 0 : 1);
+    if (outcome === 'accepted') expect(maintenance.deliveryUpdates[0]?.values).toMatchObject({ push_ticket_id: 'accepted-ticket', attempt_count: 2 });
   });
 
   it.each(PERMANENT_EXPO_ERRORS)('closes a delivery whose retry Expo refuses with %s', async (code) => {
