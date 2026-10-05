@@ -6,10 +6,23 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/alert-delivery-audit-9j`, incorporating main `8ff10cc6480d2cea341a2157db21ba5d25b86f5d` (#364); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/push-preferences-audit-9k`, incorporating main `8ff10cc6480d2cea341a2157db21ba5d25b86f5d` (#364); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+9K adds seven actual registered-identity Auth/PostgREST controls for first-use
+preferences, partial/concurrent updates, delayed initialization vs pause,
+foreign RLS and scoped/repeated device retirement. No runtime defect found;
+only rate-limit helper is stubbed. Types/lint and existing contract tests pass.
+See push-preferences report. Current branch includes 9J's eleven alert controls;
+combine these evidence-only follow-ups after pending 9I. Full goal remains active.
+
+9H exact-main Quality 37343916362 passed. Standard release 37344929966 is staging;
+37345012360 is a pending workflow-run follow-up, not proof of another release.
+Wait for terminal state and exact-live SHA before registration-release/verify.cjs.
+9I exact-head Quality 37344035869 is finishing web checks; other three jobs passed.
+Before merge, recheck exact head and mobile-store idle, then standard/live gates.
 
 9J alert-delivery evidence: eleven real local HTTP/PostgREST/SQL cases pass,
 including actual collectors, no-work, collector outage, receiver rejection,
