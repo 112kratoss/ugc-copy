@@ -6,10 +6,29 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/push-retry-persistence-audit-9d`, based on the #348 candidate `0f3442b8` atop main `44864e5667eb6a9ed7d81bcc6faa5138590a8767` (#346); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/push-send-claims-audit-9e`, based on the #348 candidate `0f3442b8` atop main `44864e5667eb6a9ed7d81bcc6faa5138590a8767` (#346); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+9E claim candidate is implemented locally, not yet released: three service-only
+invoker RPCs reserve an attempt, save its outcome, and atomically finalize/retire.
+Sixty-second claims fence overlapping/stale workers; one provider request per
+claim. Recovery processes saved outcomes even at the cap. Unknown unsaved results
+can resend only within the existing three-attempt budget. Sixteen real local DB/
+worker controls (including real expiry, SIGKILL and lost write acknowledgement),
+two closure cases, 85 focused tests, types/lint, full replay and 1,991 SQL checks
+pass. See push-send-claims report for scope and remaining first-send/device work.
+Migration 20261005031821 is applied only to isolated local/replay databases;
+no production migration yet. Finish final checks, PR, exact-head CI, mobile-store
+idle check before merge, exact-main CI, standard release and schema/live checks.
+
+9A–9D are verified live on 9903c6dcdfe63c9fa66398d572864061650cb2d2. #354 passed
+37258797988 on 469d3231 and merged October 5 03:27:13 UTC with mobile-store idle.
+Exact-main Quality 37259501863 and release 37260329433 passed; independent exact
+SHA/feed/admin/webhook checks pass. See jobs-release report. JOB-02 returns to
+untested; JOB-03 stays failed pending claim release and further evidence. Ledger
+24 passed / 25 untested / 2 failed / 2 external (53). Full goal remains active.
 
 9D #354 now incorporates main 19731ba9 after #353 merged. Only historical audit
 notes conflicted; newest evidence retained, independent Android #351 changes

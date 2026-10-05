@@ -1,0 +1,1 @@
+{"compilerOptions":{"target":"ES2022","module":"commonjs","esModuleInterop":true,"baseUrl":".","paths":{"@/*":["src/*"],"server-only":["src/__tests__/mocks/server-only.ts"]}}}
