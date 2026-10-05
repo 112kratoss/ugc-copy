@@ -1,274 +1,47 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Mock } from 'vitest';
+import {beforeEach,describe,expect,it,vi} from 'vitest';
+import {registerMobilePushTokenForRoute} from '@/lib/mobile-push-registration-service';
 
-const ensureMobileNotificationPreferencesMock = vi.fn();
-
-vi.mock('@/lib/mobile-notifications', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/mobile-notifications')>('@/lib/mobile-notifications');
-  return {
-    ...actual,
-    ensureMobileNotificationPreferences: (...args: unknown[]) => ensureMobileNotificationPreferencesMock(...args),
-  };
-});
-
-const upsertCalls: Array<{ values: Record<string, unknown>; options: Record<string, unknown> | undefined }> = [];
-const deactivateCalls: Array<{
-  values: Record<string, unknown>;
-  eqFilters: Array<[string, unknown]>;
-  neqFilters: Array<[string, unknown]>;
-}> = [];
-const crossUserDeactivateCalls: Array<{
-  values: Record<string, unknown>;
-  eqFilters: Array<[string, unknown]>;
-  neqFilters: Array<[string, unknown]>;
-}> = [];
-
-function createRateLimitRpc({
-  allowed = true,
-  limit = 20,
-  remaining = 19,
-  retryAfterSeconds = 0,
-  resetAt = '2026-06-22T06:30:00.000Z',
-} = {}) {
-  return vi.fn(async () => ({
-    data: {
-      allowed,
-      limit,
-      remaining,
-      retryAfterSeconds,
-      resetAt,
-    },
-    error: null,
-  }));
+function fixture({user=null,allowed=true,error=null}: {user?: {id:string;is_anonymous?:boolean}|null;allowed?:boolean;error?:{message:string}|null}={}) {
+ const register=vi.fn(async(_args:unknown)=>{void _args;return {data:error?null:'token-row',error};});
+ const rpc=vi.fn((name:string,args:unknown)=>{
+  if(name==='register_mobile_push_token')return register(args);
+  expect(name).toBe('check_backend_rate_limit');
+  return Promise.resolve({data:{allowed,limit:20,remaining:allowed?19:0,retryAfterSeconds:35,resetAt:'2026-10-05T13:00:00Z'},error:null});
+ });
+ const admin={rpc};
+ const userClient={auth:{getUser:vi.fn(async()=>({data:{user},error:null}))},from:vi.fn(()=>{throw Error('Unexpected non-atomic write');})};
+ const getAdminSupabase=vi.fn(()=>admin);
+ return {register,rpc,userClient,getAdminSupabase};
 }
-
-function createUserSupabaseMock(options: { userId?: string | null; authError?: Error | null } = {}) {
-  return {
-    auth: {
-      getUser: vi.fn(async () => ({
-        data: { user: options.userId === null || options.authError ? null : { id: options.userId ?? 'user-1' } },
-        error: options.authError ?? null,
-      })),
-    },
-    from(table: string) {
-      if (table !== 'mobile_push_tokens') {
-        throw new Error(`Unexpected table ${table}`);
-      }
-
-      return {
-        async upsert(values: Record<string, unknown>, options?: Record<string, unknown>) {
-          upsertCalls.push({ values, options });
-          return { error: null };
-        },
-        update(values: Record<string, unknown>) {
-          const call = {
-            values,
-            eqFilters: [] as Array<[string, unknown]>,
-            neqFilters: [] as Array<[string, unknown]>,
-            error: null as null,
-            eq(column: string, value: unknown) {
-              call.eqFilters.push([column, value]);
-              return call;
-            },
-            neq(column: string, value: unknown) {
-              call.neqFilters.push([column, value]);
-              return call;
-            },
-          };
-
-          deactivateCalls.push(call);
-          return call;
-        },
-      };
-    },
-  };
-}
-
-function createAdminSupabaseMock(rateLimitRpc: ReturnType<typeof createRateLimitRpc>) {
-  return {
-    rpc: rateLimitRpc,
-    from(table: string) {
-      if (table !== 'mobile_push_tokens') {
-        throw new Error(`Unexpected admin table ${table}`);
-      }
-
-      return {
-        update(values: Record<string, unknown>) {
-          const call = {
-            values,
-            eqFilters: [] as Array<[string, unknown]>,
-            neqFilters: [] as Array<[string, unknown]>,
-            error: null as null,
-            eq(column: string, value: unknown) {
-              call.eqFilters.push([column, value]);
-              return call;
-            },
-            neq(column: string, value: unknown) {
-              call.neqFilters.push([column, value]);
-              return call;
-            },
-          };
-
-          crossUserDeactivateCalls.push(call);
-          return call;
-        },
-      };
-    },
-  };
-}
-
-describe('mobile push registration service', () => {
-  let rateLimitRpc: ReturnType<typeof createRateLimitRpc>;
-  let getAdminSupabase: Mock<() => unknown>;
-
-  beforeEach(() => {
-    vi.resetModules();
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-05-26T08:00:00.000Z'));
-    upsertCalls.length = 0;
-    deactivateCalls.length = 0;
-    crossUserDeactivateCalls.length = 0;
-    rateLimitRpc = createRateLimitRpc();
-    getAdminSupabase = vi.fn(() => createAdminSupabaseMock(rateLimitRpc));
-    ensureMobileNotificationPreferencesMock.mockReset();
-    ensureMobileNotificationPreferencesMock.mockResolvedValue({
-      pushEnabled: true,
-      generationEnabled: true,
-      commerceEnabled: true,
-      socialEnabled: true,
-    });
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('returns unauthorized before parsing or privileged work when the mobile session is missing', async () => {
-    const { registerMobilePushTokenForRoute } = await import('@/lib/mobile-push-registration-service');
-    const result = await registerMobilePushTokenForRoute({
-      getAdminSupabase,
-      requestBody: {
-        expoPushToken: 'ExponentPushToken[new123]',
-        platform: 'android',
-      },
-      userSupabase: createUserSupabaseMock({ userId: null }),
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      body: { error: 'Unauthorized' },
-      status: 401,
-    });
-    expect(getAdminSupabase).not.toHaveBeenCalled();
-    expect(upsertCalls).toEqual([]);
-    expect(ensureMobileNotificationPreferencesMock).not.toHaveBeenCalled();
-  });
-
-  it('registers the latest token, deactivates stale device tokens, and initializes preferences', async () => {
-    const { registerMobilePushTokenForRoute } = await import('@/lib/mobile-push-registration-service');
-    const userSupabase = createUserSupabaseMock();
-    const result = await registerMobilePushTokenForRoute({
-      getAdminSupabase,
-      requestBody: {
-        expoPushToken: 'ExponentPushToken[new123]',
-        platform: 'android',
-        deviceId: 'device-1',
-        appVersion: '1.0.0',
-      },
-      userSupabase,
-    });
-
-    expect(result).toEqual({
-      ok: true,
-      body: { success: true },
-    });
-    expect(rateLimitRpc).toHaveBeenCalledWith('check_backend_rate_limit', {
-      p_scope: 'mobile-push-token:register',
-      p_subject_key: 'user-1',
-      p_limit: 20,
-      p_window_seconds: 600,
-    });
-    expect(upsertCalls).toEqual([
-      {
-        values: {
-          user_id: 'user-1',
-          expo_push_token: 'ExponentPushToken[new123]',
-          platform: 'android',
-          device_id: 'device-1',
-          app_version: '1.0.0',
-          is_active: true,
-          disabled_at: null,
-          last_seen_at: '2026-05-26T08:00:00.000Z',
-        },
-        options: { onConflict: 'user_id,expo_push_token' },
-      },
-    ]);
-    expect(deactivateCalls).toEqual([
-      {
-        values: {
-          is_active: false,
-          disabled_at: '2026-05-26T08:00:00.000Z',
-        },
-        eqFilters: [
-          ['user_id', 'user-1'],
-          ['device_id', 'device-1'],
-          ['is_active', true],
-        ],
-        neqFilters: [
-          ['expo_push_token', 'ExponentPushToken[new123]'],
-        ],
-        error: null,
-        eq: expect.any(Function),
-        neq: expect.any(Function),
-      },
-    ]);
-    expect(crossUserDeactivateCalls).toEqual([
-      {
-        values: {
-          is_active: false,
-          disabled_at: '2026-05-26T08:00:00.000Z',
-        },
-        eqFilters: [
-          ['expo_push_token', 'ExponentPushToken[new123]'],
-          ['is_active', true],
-        ],
-        neqFilters: [
-          ['user_id', 'user-1'],
-        ],
-        error: null,
-        eq: expect.any(Function),
-        neq: expect.any(Function),
-      },
-    ]);
-    expect(ensureMobileNotificationPreferencesMock).toHaveBeenCalledWith(userSupabase, 'user-1');
-  });
-
-  it('returns the backend rate-limit response before token or preference writes', async () => {
-    rateLimitRpc = createRateLimitRpc({
-      allowed: false,
-      remaining: 0,
-      retryAfterSeconds: 35,
-    });
-    getAdminSupabase = vi.fn(() => createAdminSupabaseMock(rateLimitRpc));
-
-    const { registerMobilePushTokenForRoute } = await import('@/lib/mobile-push-registration-service');
-    const result = await registerMobilePushTokenForRoute({
-      getAdminSupabase,
-      requestBody: {
-        expoPushToken: 'ExponentPushToken[new123]',
-        platform: 'android',
-        deviceId: 'device-1',
-      },
-      userSupabase: createUserSupabaseMock(),
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      status: 429,
-      rateLimitError: expect.any(Error),
-    });
-    expect(upsertCalls).toEqual([]);
-    expect(deactivateCalls).toEqual([]);
-    expect(ensureMobileNotificationPreferencesMock).not.toHaveBeenCalled();
-  });
+const payload={expoPushToken:'ExponentPushToken[new123]',platform:'android',deviceId:'device-1',appVersion:'1.0.0'};
+describe('mobile push registration service',()=>{
+ beforeEach(()=>{vi.restoreAllMocks();});
+ it.each([null,{id:'guest',is_anonymous:true}])('rejects missing/guest identity before parsing and privileged calls',async user=>{
+  const f=fixture({user});const readRequestBody=vi.fn(async()=>payload);
+  expect(await registerMobilePushTokenForRoute({userSupabase:f.userClient,getAdminSupabase:f.getAdminSupabase,readRequestBody})).toEqual({ok:false,body:{error:'Unauthorized'},status:401});
+  expect(f.getAdminSupabase).not.toHaveBeenCalled();expect(readRequestBody).not.toHaveBeenCalled();
+ });
+ it('passes the verified owner and normalized payload to one atomic RPC after the rate limit',async()=>{
+  const f=fixture({user:{id:'owner'}});
+  expect(await registerMobilePushTokenForRoute({userSupabase:f.userClient,getAdminSupabase:f.getAdminSupabase,requestBody:{...payload,userId:'foreign'}})).toEqual({ok:true,body:{success:true}});
+  expect(f.rpc.mock.calls).toEqual([
+   ['check_backend_rate_limit',{p_scope:'mobile-push-token:register',p_subject_key:'owner',p_limit:20,p_window_seconds:600}],
+   ['register_mobile_push_token',{p_user_id:'owner',p_expo_push_token:payload.expoPushToken,p_platform:'android',p_device_id:'device-1',p_app_version:'1.0.0'}],
+  ]);
+  expect(f.userClient.from).not.toHaveBeenCalled();
+ });
+ it('stops before registration when the backend rate limit refuses the request',async()=>{
+  const f=fixture({user:{id:'owner'},allowed:false});
+  expect(await registerMobilePushTokenForRoute({userSupabase:f.userClient,getAdminSupabase:f.getAdminSupabase,requestBody:payload})).toMatchObject({ok:false,status:429,rateLimitError:expect.any(Error)});
+  expect(f.register).not.toHaveBeenCalled();
+ });
+ it('surfaces an atomic transaction failure without returning registration success',async()=>{
+  const f=fixture({user:{id:'owner'},error:{message:'Database failure'}});
+  expect(await registerMobilePushTokenForRoute({userSupabase:f.userClient,getAdminSupabase:f.getAdminSupabase,requestBody:payload})).toEqual({ok:false,status:500,body:{error:'Failed to register mobile push token.'}});
+ });
+ it('validates the token before privileged work',async()=>{
+  const f=fixture({user:{id:'owner'}});
+  expect(await registerMobilePushTokenForRoute({userSupabase:f.userClient,getAdminSupabase:f.getAdminSupabase,requestBody:{...payload,expoPushToken:'bad'}})).toMatchObject({ok:false,status:400});
+  expect(f.getAdminSupabase).not.toHaveBeenCalled();
+ });
 });
