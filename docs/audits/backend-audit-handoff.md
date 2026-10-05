@@ -11,6 +11,14 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 
 ## Exact checkpoint
 
+9B #352 passed updated-head Quality 37256707025 and merged as
+79192454beba6584314eff54b11ff747790f60cc at October 5 03:00:59 UTC with
+mobile-store release idle immediately before merge. Exact-main Quality/release
+remain. 9C #353 passed 37256762027 on 54c69068; merging new main requires fresh
+head checks. 9A exact-main 37256639143 passed; release 37257450848 was still
+staging when main advanced, so inspect its stale-release result and subsequent
+retention release before claiming production completion.
+
 Current 9C candidate is PR #353, now incorporating 9B head da2dc256 and main
 80a3d303. Main #349 Quality 37256639143 running. 9B/9C must use their new-head CI
 before merge. Their earlier checks apply only to their prior heads. The twelve-job
