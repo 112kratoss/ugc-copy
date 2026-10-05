@@ -306,14 +306,17 @@ it('leaves a player with controls its own touches, and a failed one its retry', 
 // view under the view that claimed it, at the finger's first movement. So the
 // player's view says the touch is its own, and the sheet leaves it. Claiming it
 // instead left the player holding a touch whose end JS is never told of (a drag
-// on the seek bar), and the next press on any button was ignored once.
-it('has an Android player with controls say its touches are its own, without claiming them', () => {
+// on the seek bar), and the next press on any button was ignored once. So did
+// letting the question go on up: inside a Modal it ends at the Modal's own
+// host, which takes it. The view stops the question at itself.
+it('has an Android player with controls say its touches are its own, without claiming them or letting anything above be asked', () => {
   state.os = 'android';
   const video = mount().root.findByType('video' as never);
-  const touch = { nativeEvent: { pageX: 10, pageY: 20 } };
+  const touch = { nativeEvent: { target: 41, pageX: 10, pageY: 20 }, stopPropagation: vi.fn() };
   expect(touchBelongsToNativeView(touch as never)).toBe(false);
   expect(video.props.onStartShouldSetResponder(touch)).toBe(false);
   expect(touchBelongsToNativeView(touch as never)).toBe(true);
+  expect(touch.stopPropagation).toHaveBeenCalledOnce();
   expect(video.props.onResponderTerminationRequest).toBeUndefined();
 });
 it('leaves the touches of a player without controls, and of an iPhone’s player, unmarked', () => {

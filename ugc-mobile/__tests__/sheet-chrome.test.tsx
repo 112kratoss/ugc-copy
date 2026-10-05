@@ -69,6 +69,11 @@ function mount(visible: boolean, onDismiss = vi.fn()) {
 
 const gesture = (dy: number, dx = 0, vy = 0) => ({ dy, dx, vy, vx: 0 });
 
+/** One event of a touch: each names the view that was under the finger when it came down. */
+const PLAYER = 41;
+const TITLE = 57;
+const touchOn = (target: number) => ({ nativeEvent: { target, pageX: 120, pageY: 300 }, stopPropagation: () => {} });
+
 describe('sheet dismiss drag', () => {
   it('starts every opening from rest, even after a drag dismissed the last one', () => {
     const sheet = mount(true);
@@ -131,15 +136,36 @@ describe('sheet dismiss drag', () => {
   it('leaves a touch-down that a native view inside it has said is its own', () => {
     const sheet = mount(true);
     const content = sheet.content();
-    const onThePlayer = { nativeEvent: { pageX: 120, pageY: 300 } };
-    const onATitle = { nativeEvent: { pageX: 120, pageY: 40 } };
+    const onThePlayer = touchOn(PLAYER);
     // The player's view is asked first, and declines for itself as it says so.
     expect(leaveTouchToNativeView(onThePlayer as never)).toBe(false);
     expect(content.onStartShouldSetPanResponder(onThePlayer, gesture(0))).toBe(false);
-    // Only that touch: the next one, on a title, is the panel's again.
-    expect(content.onStartShouldSetPanResponder(onATitle, gesture(0))).toBe(true);
+    // Only that view's: a touch on a title is the panel's.
+    expect(content.onStartShouldSetPanResponder(touchOn(TITLE), gesture(0))).toBe(true);
     // The grabber is no part of the content, and still takes its own.
     expect(sheet.grabber().onStartShouldSetPanResponder(onThePlayer, gesture(0))).toBe(true);
+    sheet.unmount();
+  });
+
+  // Nothing holds a player's touch (a holder would never hear a touch on the
+  // seek bar end, and the next press in the sheet would be lost), so the panel
+  // is asked about it at every move. A finger that slides down on the play
+  // button as it presses is not a pull on the sheet: with only the start
+  // question stopped, that press did not play 5 times in 6 (emulator, 2026-10-05).
+  it('leaves that touch at every later move too, however far down it has gone', () => {
+    const sheet = mount(true);
+    const content = sheet.content();
+    leaveTouchToNativeView(touchOn(PLAYER) as never);
+
+    const sliding = touchOn(PLAYER);
+    expect(content.onMoveShouldSetPanResponderCapture(sliding, gesture(20, 2))).toBe(false);
+    expect(content.onMoveShouldSetPanResponder(sliding, gesture(20, 2))).toBe(false);
+    expect(content.onMoveShouldSetPanResponderCapture(sliding, gesture(180))).toBe(false);
+
+    // The same pull from a title, or from a button the finger is already on, is the sheet's.
+    const onATitle = touchOn(TITLE);
+    expect(content.onMoveShouldSetPanResponderCapture(onATitle, gesture(20, 2))).toBe(true);
+    expect(content.onMoveShouldSetPanResponder(onATitle, gesture(20, 2))).toBe(true);
     sheet.unmount();
   });
 

@@ -164,8 +164,10 @@ function VideoPreviewAttempt({
 
           A player with controls answers for the touches that begin on it,
           natively. On Android its view tells JS of each one as well, so it
-          says there that the touch is its own, and a sheet's drag, which would
-          take any touch-down, leaves it (see leaveTouchToNativeView). */}
+          says there that the touch is its own and has nothing above it asked:
+          not a sheet's drag, which would take any touch-down, nor a Modal's
+          host, which would be left holding a touch on the seek bar (see
+          leaveTouchToNativeView). */}
       <View collapsable={false} pointerEvents={nativeControls ? 'auto' : 'none'} style={{ width: '100%', height: '100%' }}>
         <VideoView
           player={player}
