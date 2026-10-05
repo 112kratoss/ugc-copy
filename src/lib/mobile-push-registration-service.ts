@@ -10,7 +10,6 @@ import {
 } from '@/lib/backend-rate-limit';
 import {
   MobileNotificationError,
-  ensureMobileNotificationPreferences,
   normalizeMobilePushTokenPayload,
 } from '@/lib/mobile-notifications';
 
@@ -109,57 +108,16 @@ export async function registerMobilePushTokenForRoute(
     const rateLimitResult = await enforceRegistrationRateLimit(adminSupabase, userId);
     if (rateLimitResult) return rateLimitResult;
 
-    const nowIso = new Date().toISOString();
-
-    const { error: deactivateCrossUserError } = await adminSupabase
-      .from('mobile_push_tokens')
-      .update({
-        is_active: false,
-        disabled_at: nowIso,
-      })
-      .eq('expo_push_token', payload.expoPushToken)
-      .eq('is_active', true)
-      .neq('user_id', userId);
-
-    if (deactivateCrossUserError) {
-      throw new MobileNotificationError('Failed to deactivate mobile push token for previous account.', 500);
-    }
-
-    const { error } = await userSupabase
-      .from('mobile_push_tokens')
-      .upsert({
-        user_id: userId,
-        expo_push_token: payload.expoPushToken,
-        platform: payload.platform,
-        device_id: payload.deviceId,
-        app_version: payload.appVersion,
-        is_active: true,
-        disabled_at: null,
-        last_seen_at: nowIso,
-      }, { onConflict: 'user_id,expo_push_token' });
-
+    const { error } = await adminSupabase.rpc('register_mobile_push_token', {
+      p_user_id: userId,
+      p_expo_push_token: payload.expoPushToken,
+      p_platform: payload.platform,
+      p_device_id: payload.deviceId,
+      p_app_version: payload.appVersion,
+    });
     if (error) {
       throw new MobileNotificationError('Failed to register mobile push token.', 500);
     }
-
-    if (payload.deviceId) {
-      const { error: deactivateError } = await userSupabase
-        .from('mobile_push_tokens')
-        .update({
-          is_active: false,
-          disabled_at: nowIso,
-        })
-        .eq('user_id', userId)
-        .eq('device_id', payload.deviceId)
-        .eq('is_active', true)
-        .neq('expo_push_token', payload.expoPushToken);
-
-      if (deactivateError) {
-        throw new MobileNotificationError('Failed to deactivate stale mobile push tokens.', 500);
-      }
-    }
-
-    await ensureMobileNotificationPreferences(userSupabase, userId);
 
     return {
       ok: true,

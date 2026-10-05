@@ -6,17 +6,30 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/push-maintenance-progress-audit-9g`, incorporating main `32a3f47336a6ad54ff0c41b667d9ba41be8d12c2` (#361); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/push-registration-audit-9h`, incorporating main `36962d613c5a70d3dc125319e25a37f63633e75b` (#362); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-9G PR #362 first-head Quality 37292884858 failed four older receipt mock cases
-missing the new scan RPC; 7,421 other web tests and DB/mobile/E2E passed.
-The mock is corrected with assertions preserved; 99 focused tests, lint and
-test types pass. A new exact-head CI run is required. Registration investigation
-is preserved separately on codex/push-registration-audit-9h (9f0eaf0a); do not
-lose it when continuing after this CI repair.
+9G PR #362 passed exact-head Quality 37293789959 on
+34fc96ee67fd8e3c96e49a02b0e98966ff56df0b and merged at 13:33:49 UTC as
+36962d613c5a70d3dc125319e25a37f63633e75b. Mobile-store idle was checked
+immediately before merge. Exact-main Quality 37317775601 has DB/mobile/E2E
+success; web is still running. Standard release and independent production
+verification remain. Prepared push-progress-release/verify.cjs and
+release-smoke.cjs require that exact live SHA; never run against an older build.
+
+9H atomic registration candidate is implemented and locally verified. The
+permanent real Auth/PostgREST regression fails against baseline 34fc96ee with
+two successful registrations and zero active tokens, and passes after the fix.
+Seven actual cases cover rotations, account handoff, opposite transfers,
+rollback on preference failure, idempotence, paused preferences and access checks.
+Three real SQL concurrency cases are wired into Quality. Clean replay, 2,068 SQL
+assertions/96 files, 92 focused tests, application/test types and scoped lint
+pass; public schema diff has no changes. See registration-race report for the
+protocol/compatibility limits. Migration 20261005100245 remains local only.
+PR, fresh exact-head CI, guarded merge, standard release and production verification
+remain. Keep all unrelated edits and private evidence. Full goal remains active.
 
 9F #361 is verified live on 32a3f47336a6ad54ff0c41b667d9ba41be8d12c2.
 Exact-main Quality 37290134172 and standard release 37291187466 passed.
