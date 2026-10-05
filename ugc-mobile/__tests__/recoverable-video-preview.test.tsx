@@ -27,6 +27,7 @@ vi.mock('@react-navigation/native', () => ({ useIsFocused: () => state.focused }
 vi.mock('@/lib/use-media-source', () => ({ useMediaSource: (url: string) => ({ source: { uri: state.sourceVersion ? `${url}?version=${state.sourceVersion}` : url } }) }));
 vi.mock('@/components/ui', () => ({ SecondaryButton: (props: object) => React.createElement('retry-button', props) }));
 vi.mock('react-native', () => ({
+  StyleSheet: { flatten: (style: unknown) => Object.assign({}, ...[style].flat()) },
   View: (props: object) => React.createElement('view', props),
   Text: (props: object) => React.createElement('text', props),
   ActivityIndicator: (props: object) => React.createElement('loading', props),
@@ -36,14 +37,18 @@ vi.mock('expo-video', () => ({
   VideoView: (props: object) => React.createElement('video', props),
   useVideoPlayer: (source: unknown, setup: (player: unknown) => void) => {
     const player = React.useMemo(() => {
+      const listeners = new Set<(event: { status: string }) => void>();
       const instance = {
         source,
         currentTime: 0, playing: false, muted: false, volume: 1, playbackRate: 1,
         status: state.initialStatus, play: vi.fn(), pause: vi.fn(), release: vi.fn(), replaceAsync: vi.fn(async () => { instance.currentTime = 0; }),
         listener: undefined as ((event: { status: string }) => void) | undefined,
         addListener: (_name: string, listener: (event: { status: string }) => void) => {
-          instance.listener = listener;
-          return { remove: () => { instance.listener = undefined; } };
+          // The real player calls every listener added, and the preview listens twice:
+          // for its status, and for whether its clip has been able to play.
+          listeners.add(listener);
+          instance.listener = event => { [...listeners].forEach(each => each(event)); };
+          return { remove: () => { listeners.delete(listener); } };
         },
       };
       state.players.push(instance);
@@ -61,6 +66,27 @@ afterEach(() => { renderer.act(() => tree?.unmount()); tree = undefined; });
 function mount(autoPlay = false) {
   renderer.act(() => { tree = renderer.create(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 300 }} autoPlay={autoPlay} />); });
   return tree!;
+}
+type Drawn = { type: string; props: { style?: { backgroundColor?: string; position?: string; inset?: number }; pointerEvents?: string; importantForAccessibility?: string }; children: Drawn[] | null };
+/** What the preview draws in its frame, bottom to top. */
+function layers(view: renderer.ReactTestRenderer) {
+  return (view.toJSON() as unknown as Drawn).children ?? [];
+}
+/** Whether a layer is the native player, or holds it. */
+function holdsPlayer(layer: Drawn): boolean {
+  return layer.type === 'video' || (layer.children ?? []).some(holdsPlayer);
+}
+/** The painted, childless view over the whole frame, if one is drawn: it hides what is under it and takes its touches. */
+function playerCover(view: renderer.ReactTestRenderer) {
+  return layers(view).find(layer => layer.type === 'view' && !layer.children && layer.props.style?.backgroundColor
+    && layer.props.style.position === 'absolute' && layer.props.style.inset === 0 && layer.props.pointerEvents !== 'none');
+}
+/** Whether a person can see and touch the native player, and a screen reader reach it. */
+function playerShown(view: renderer.ReactTestRenderer) {
+  const reachable = (view.root.findByType('video' as never).props.importantForAccessibility ?? 'auto') === 'auto';
+  const covered = playerCover(view) !== undefined;
+  if (covered === reachable) throw new Error(`The player is half hidden: ${JSON.stringify({ covered, reachable })}`);
+  return !covered;
 }
 it('shows loading feedback without starting a result preview automatically', () => {
   const view = mount();
@@ -99,6 +125,119 @@ it('preserves lightbox autoplay', () => {
 // is set (2026-10-04).
 it('asks for no previous or next button, as each of these players holds one clip', () => {
   expect(mount().root.findByType('video' as never).props.buttonOptions).toEqual({ showPrevious: false, showNext: false });
+});
+// On Android the Media3 controller shows itself on any paused player, loaded or
+// not: a play button exactly over the spinner, "00:00 · 00:00" below it, and its
+// bar still up under the retry card (Pixel 9a emulator, 2026-10-04). The player
+// is covered until its clip can play.
+it('keeps the Android player and its controls out of sight and reach until the clip can play', () => {
+  state.os = 'android';
+  const view = mount();
+  expect(playerShown(view)).toBe(false);
+  expect(view.root.findByType('loading' as never).props.accessibilityLabel).toBe('Loading video');
+  renderer.act(() => state.players[0].listener?.({ status: 'readyToPlay' }));
+  expect(playerShown(view)).toBe(true);
+  expect(view.root.findAllByType('loading' as never)).toHaveLength(0);
+});
+it('covers the Android player with the frame\'s own ground, under the spinner', () => {
+  state.os = 'android';
+  renderer.act(() => { tree = renderer.create(<RecoverableVideoPreview url="https://media.test/video.mp4" style={[{ height: 300 }, { backgroundColor: '#050506' }]} />); });
+  expect(layers(tree!)).toHaveLength(3);
+  const [player, cover, spinner] = layers(tree!);
+  expect(holdsPlayer(player)).toBe(true);
+  expect(cover).toEqual(playerCover(tree!));
+  expect(cover.props.style).toEqual({ position: 'absolute', inset: 0, backgroundColor: '#050506' });
+  expect(spinner.children?.[0].type).toBe('loading');
+});
+it('covers an Android player whose frame names no ground with the black a clip sits on', () => {
+  state.os = 'android';
+  expect(playerCover(mount())?.props.style?.backgroundColor).toBe('#000000');
+});
+// Covered, not left out or changed: a player mounted late, or mounted without
+// its controls and given them at ready (a different native view on Android),
+// takes a new surface just as its first frames arrive, which is how a paused
+// clip loses its first frame for good.
+it('has the Android player mounted with its controls from the first render, and never remounts it', () => {
+  state.os = 'android';
+  const view = mount();
+  const video = view.root.findByType('video' as never);
+  expect(holdsPlayer(layers(view)[0])).toBe(true);
+  expect(video.props.nativeControls).toBe(true);
+  renderer.act(() => state.players[0].listener?.({ status: 'readyToPlay' }));
+  expect(view.root.findByType('video' as never)).toBe(video);
+  expect(layers(view).map(holdsPlayer)).toEqual([true]);
+  expect(video.props.nativeControls).toBe(true);
+});
+it('shows the Android player when its clip was ready before the status listener attached', () => {
+  state.os = 'android';
+  state.initialStatus = 'readyToPlay';
+  expect(playerShown(mount())).toBe(true);
+});
+it('covers the Android player under the retry card when its clip fails, before or after it could play', () => {
+  state.os = 'android';
+  state.initialStatus = 'error';
+  const failedAtOnce = mount();
+  expect(playerShown(failedAtOnce)).toBe(false);
+  expect(failedAtOnce.root.findByType('retry-button' as never).props.label).toBe('Retry video');
+  renderer.act(() => failedAtOnce.unmount());
+
+  state.initialStatus = 'loading';
+  const failedLater = mount();
+  const player = state.players[1];
+  renderer.act(() => player.listener?.({ status: 'readyToPlay' }));
+  expect(playerShown(failedLater)).toBe(true);
+  renderer.act(() => player.listener?.({ status: 'error' }));
+  expect(playerShown(failedLater)).toBe(false);
+});
+it('covers the Android player when its load times out', () => {
+  state.os = 'android';
+  vi.useFakeTimers();
+  try {
+    const view = mount();
+    renderer.act(() => { vi.advanceTimersByTime(30_000); });
+    expect(view.root.findByType('retry-button' as never).props.label).toBe('Retry video');
+    expect(playerShown(view)).toBe(false);
+  } finally { vi.useRealTimers(); }
+});
+// Covering it again would blank a clip the viewer is watching each time it stalls.
+it('keeps an Android clip that has played in view while it buffers again', () => {
+  state.os = 'android';
+  const view = mount();
+  renderer.act(() => state.players[0].listener?.({ status: 'readyToPlay' }));
+  renderer.act(() => state.players[0].listener?.({ status: 'loading' }));
+  expect(playerShown(view)).toBe(true);
+  expect(view.root.findAllByType('loading' as never)).toHaveLength(1);
+});
+// On Android a renewed link goes to the player already there, which is given
+// each clip once its view has a surface (the tests at the end of this file).
+// That player has played, so it stays in view while the renewed clip loads,
+// like a clip that buffers.
+it('keeps the Android player in view while a renewed link loads on it', withFrames(() => {
+  const view = mount();
+  renderer.act(() => frameOf(view).props.onLayout());
+  nextFrame();
+  nextFrame();
+  renderer.act(() => state.players[0].listener?.({ status: 'readyToPlay' }));
+  state.sourceVersion = 1;
+  renderer.act(() => view.update(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 300 }} />));
+  expect(state.players).toHaveLength(1);
+  expect(state.players[0].replaceAsync).toHaveBeenLastCalledWith({ uri: 'https://media.test/video.mp4?version=1', useCaching: true });
+  renderer.act(() => state.players[0].listener?.({ status: 'loading' }));
+  expect(playerShown(view)).toBe(true);
+}));
+it('never covers an Android player that draws no controls of its own', () => {
+  state.os = 'android';
+  renderer.act(() => { tree = renderer.create(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 300 }} nativeControls={false} />); });
+  expect(playerShown(tree!)).toBe(true);
+  renderer.act(() => state.players[0].listener?.({ status: 'error' }));
+  expect(playerShown(tree!)).toBe(true);
+});
+// iOS draws its controls only once there is something to play.
+it('never covers the iPhone player, loading or failed', () => {
+  const view = mount();
+  expect(playerShown(view)).toBe(true);
+  renderer.act(() => state.players[0].listener?.({ status: 'error' }));
+  expect(playerShown(view)).toBe(true);
 });
 // On Android an uncached looping player downloads its clip again for every
 // repeat it buffers: five times for a paused 12s reference clip (2026-10-02).

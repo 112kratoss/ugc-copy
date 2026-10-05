@@ -37,7 +37,9 @@ vi.mock('react-native-safe-area-context', () => ({
 }));
 
 vi.mock('expo-video', () => ({
-  useVideoPlayer: (url: string) => ({ url, status: 'readyToPlay', addListener: () => ({ remove: vi.fn() }) }),
+  // One player for as long as its source stays the same, as the real hook gives. The preview
+  // keeps state by player, so a new player on every render would render without end.
+  useVideoPlayer: (url: string) => React.useMemo(() => ({ url, status: 'readyToPlay', addListener: () => ({ remove: vi.fn() }) }), [JSON.stringify(url)]),
   VideoView: (props: MockProps) => React.createElement('video-view', props),
 }));
 
