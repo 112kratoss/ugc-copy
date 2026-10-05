@@ -6,10 +6,19 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/feed-interest-progress-audit-9l`, incorporating main `1acdc6865887d0e863e4b0d9fd07c567cd14e549` (#369); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/feed-maintenance-audit-9m`, incorporating main `1acdc6865887d0e863e4b0d9fd07c567cd14e549` (#369); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+9M adds 13 actual feed-maintenance PostgREST/SQL recovery controls, including
+failures before each of six RPC phases, SIGKILL after each phase commits, and
+lost rollup acknowledgement. Retry preserves two deliveries/one open and stable
+interest weights; all fixtures removed. Types/lint pass. No runtime/schema change.
+See feed-maintenance-recovery report. Preserve this follow-up separately from
+9L PR #370 (93f1e3d3, exact-head Quality 37351866362 running). #369 main Quality
+37351084486 is finishing web checks; its DB/mobile/E2E already passed. Do not
+confuse its skipped workflow-run events with a completed production release.
 
 9L feed interest progress is implemented locally. Permanent SQL regression fails
 on the original function for an audio-only user starving a healthy user; after
