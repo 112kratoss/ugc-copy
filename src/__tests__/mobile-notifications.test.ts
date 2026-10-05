@@ -16,14 +16,6 @@ import {
 } from '@/lib/mobile-notifications';
 import { EXTERNAL_API_REQUEST_TIMEOUT_MS } from '@/lib/provider-fetch';
 
-function createPendingReceiptQuery(deliveryRows: Record<string, unknown>[]) {
-  const limit = vi.fn(async () => ({ data: deliveryRows, error: null }));
-  const order = vi.fn(() => ({ limit }));
-  const lte = vi.fn(() => ({ order }));
-  const eq = vi.fn(() => ({ lte }));
-
-  return { eq, lte, order, limit };
-}
 
 type PushTokenRow = { id: string; expo_push_token: string; platform: 'ios' | 'android' };
 type PushTokenState = {
@@ -349,6 +341,13 @@ function createPushMaintenanceSupabase({
       throw new Error(`Unexpected table ${table}`);
     },
     async rpc(name: string, args: Record<string, unknown> = {}) {
+      if (name === 'scan_mobile_push_maintenance') {
+        const due = new Date(String(args.p_now)).getTime() - 15 * 60 * 1000;
+        const eligible = deliveries.filter(row => args.p_phase === 'recorded' ? row.retry_outcome != null
+          : args.p_phase === 'receipts' ? row.receipt_status === 'pending' && Date.parse(String(row.sent_at)) <= due
+            : row.send_status === 'error' && row.receipt_status === 'error' && row.push_ticket_id == null && row.retry_outcome == null && Number(row.attempt_count) < 3);
+        return { data: eligible.slice(0, Number(args.p_limit)).map(row => ({ ...row })), error: null };
+      }
       const row = deliveries.find(row => row.id === args.p_delivery_id);
       if (name === 'claim_mobile_push_retry') {
         if (!row || row.retry_claim_id || row.attempt_count !== args.p_expected_attempt_count) return { data: null, error: null };
@@ -811,15 +810,13 @@ describe('mobile notifications', () => {
       { id: 'token-1', is_active: true, disabled_at: null },
       { id: 'token-2', is_active: true, disabled_at: null },
     ]);
-    const pendingQuery = createPendingReceiptQuery(deliveryRows);
+    const scan = vi.fn(async () => ({ data: deliveryRows, error: null }));
 
     const adminSupabase = {
+      rpc: scan,
       from(table: string) {
         if (table === 'mobile_push_deliveries') {
           return {
-            select() {
-              return { eq: pendingQuery.eq };
-            },
             update(values: Record<string, unknown>) {
               return {
                 eq(column: string, value: unknown) {
@@ -875,9 +872,7 @@ describe('mobile notifications', () => {
       signal: timeoutSignal,
     }));
     expect(timeoutSpy).toHaveBeenCalledWith(EXTERNAL_API_REQUEST_TIMEOUT_MS);
-    expect(pendingQuery.lte).toHaveBeenCalledWith('sent_at', '2026-05-26T11:45:00.000Z');
-    expect(pendingQuery.order).toHaveBeenCalledWith('sent_at', { ascending: true });
-    expect(pendingQuery.limit).toHaveBeenCalledWith(1000);
+    expect(scan).toHaveBeenCalledWith('scan_mobile_push_maintenance', { p_phase: 'receipts', p_limit: 1000, p_now: '2026-05-26T12:00:00.000Z' });
     expect(deliveryUpdates).toEqual([
       expect.objectContaining({
         id: 'delivery-1',
@@ -1294,7 +1289,7 @@ describe('mobile notifications', () => {
       now: new Date('2026-10-04T05:10:00.000Z'),
     }).then(() => 'completed', (error: unknown) => error);
 
-    expect(await run).toMatchObject({ name: 'MobileNotificationError', status: 500 });
+    expect(await run).toMatchObject({ name: 'MobilePushMaintenanceError', summary: { maintenanceFailureCount: 1, failedPhases: ['retries'] }, cause: { name: 'MobileNotificationError', status: 500 } });
     expect(fetcher).not.toHaveBeenCalled();
     // The delivery is left as it was, for the next run to ask again.
     expect(maintenance.deliveryUpdates).toEqual([]);
@@ -1517,7 +1512,7 @@ describe('mobile notifications', () => {
     const run = processMobilePushMaintenance(maintenance.adminSupabase as never, { fetcher, now })
       .then(() => 'completed', (error: unknown) => error);
 
-    expect(await run).toMatchObject({ name: 'MobileNotificationError', status: 500 });
+    expect(await run).toMatchObject({ name: 'MobilePushMaintenanceError', summary: { maintenanceFailureCount: 1, failedPhases: ['retries'] }, cause: { name: 'MobileNotificationError', status: 500 } });
     expect(fetcher).not.toHaveBeenCalled();
     // The delivery is left as it was, for the next run to ask again.
     expect(maintenance.deliveryUpdates).toEqual([]);
@@ -2177,15 +2172,13 @@ describe('mobile notifications', () => {
       },
     ];
     const deliveryUpdates: Array<{ id: string; values: Record<string, unknown> }> = [];
-    const pendingQuery = createPendingReceiptQuery(deliveryRows);
+    const scan = vi.fn(async () => ({ data: deliveryRows, error: null }));
 
     const adminSupabase = {
+      rpc: scan,
       from(table: string) {
         if (table === 'mobile_push_deliveries') {
           return {
-            select() {
-              return { eq: pendingQuery.eq };
-            },
             update(values: Record<string, unknown>) {
               return {
                 eq(column: string, value: unknown) {

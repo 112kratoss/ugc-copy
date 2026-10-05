@@ -6,10 +6,34 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/push-first-send-audit-9f`, incorporating main `177d6c989ec904e124052f5e458d8181bf7ccc0a` (#359); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/push-maintenance-progress-audit-9g`, incorporating main `32a3f47336a6ad54ff0c41b667d9ba41be8d12c2` (#361); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+9G PR #362 first-head Quality 37292884858 failed four older receipt mock cases
+missing the new scan RPC; 7,421 other web tests and DB/mobile/E2E passed.
+The mock is corrected with assertions preserved; 99 focused tests, lint and
+test types pass. A new exact-head CI run is required. Registration investigation
+is preserved separately on codex/push-registration-audit-9h (9f0eaf0a); do not
+lose it when continuing after this CI repair.
+
+9F #361 is verified live on 32a3f47336a6ad54ff0c41b667d9ba41be8d12c2.
+Exact-main Quality 37290134172 and standard release 37291187466 passed.
+Independent exact-live SHA/schema/grants/eight rollback controls/cleanup/advisors/
+feed/admin/webhook verification passed at 09:44 UTC. See first-send-release report.
+
+9G scan/failure-isolation candidate is implemented locally: independent persisted
+(created_at,id) scan positions, fixed sweep endpoints and one wrap; service-only
+invoker RPC and RLS state table. Per-record/phase failures permit later work, then
+throw a typed partial-result error persisted in the managed job's failed summary.
+Eight actual controls include original four before/after regressions, managed
+summary, concurrent scans, phase outage and SIGKILL after committed scan. Prior
+16 retry/9 initial/4 receipt cases pass; 99 focused tests, app/test types/lint,
+clean replay and 2,046 SQL checks pass. Clean-replay public schema diff reports no changes. Draft migration 20261005092947 is local only. PR, exact-head CI,
+mobile-store idle before merge, standard release and production gates remain.
+See push-poison-progress report for precise limits. Preserve unrelated edits.
+Current ledger 24 passed / 24 untested / 3 failed / 2 external (53). Full goal active.
 
 9E #356 is merged as cd264d3945fd3c77a7b5ffb665f3384973c6ec79 at 04:36:54 UTC.
 Exact-head Quality 37263340019, exact-main 37264292974 and standard release

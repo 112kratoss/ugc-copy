@@ -84,5 +84,4 @@ explicit loopback credentials; ordinary CI runs unit and database controls.
 
 Private evidence: `.audit-evidence/backend-social/mobile-first-send-*`. The
 original two bad-state probes remain baseline evidence, not passing safety
-controls. Candidate changes are not yet released; exact-head CI, standard
-release, production schema/grant/rollback and live verification remain.
+controls. The candidate is now released in #361 with [independent production verification](backend-section-09-first-send-release-2026-10-05.md).
