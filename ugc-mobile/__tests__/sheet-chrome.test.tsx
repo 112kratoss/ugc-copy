@@ -9,6 +9,8 @@ import { describe, expect, it, vi } from 'vitest';
  */
 const animatedState = vi.hoisted(() => ({
   spring: vi.fn(() => ({ start: vi.fn() })),
+  /** Which value each interpolation was made from. */
+  interpolatedFrom: new WeakMap<object, unknown>(),
 }));
 
 vi.mock('react-native', () => ({
@@ -20,12 +22,17 @@ vi.mock('react-native', () => ({
         this.value = next;
       });
 
-      constructor(initial: number) {
+      config: unknown;
+
+      constructor(initial: number, config?: unknown) {
         this.value = initial;
+        this.config = config;
       }
 
       interpolate(config: unknown) {
-        return { interpolate: config };
+        const made = { interpolate: config };
+        animatedState.interpolatedFrom.set(made, this);
+        return made;
       }
     },
     spring: animatedState.spring,
@@ -46,7 +53,7 @@ import { leaveTouchToNativeView } from '../lib/native-touch-owner';
 
 type Handler = (event: unknown, gesture: Record<string, number>) => unknown;
 type Handlers = Record<string, Handler>;
-type MockValue = { value: number; setValue: ReturnType<typeof vi.fn> };
+type MockValue = { value: number; config: unknown; setValue: ReturnType<typeof vi.fn> };
 
 function mount(visible: boolean, onDismiss = vi.fn(), takesTouchDown?: boolean) {
   let latest: SheetDismissDrag | undefined;
@@ -522,6 +529,26 @@ describe('a hosted sheet’s arrival and departure', () => {
     const before = slidesStarted();
     sheet.measure(460);
     expect(slidesStarted()).toBe(before);
+    sheet.unmount();
+  });
+
+  // A value that is not the native driver's is changed from JS until its first
+  // native animation, and on Fabric a change from JS reaches the view through
+  // `setNativeProps`, which the view's shadow node keeps and applies again at
+  // every later layout, over what the native driver has drawn since. The
+  // panel's first measurement was such a change: the first sheet a screen
+  // opened sat at that first offset for as long as it was being laid out anew,
+  // a strip at the foot of the screen, and then jumped to rest (emulator
+  // films, 2026-10-05).
+  it('makes both of its values the native driver’s from their first value', () => {
+    const sheet = mountPresented();
+    const travel = sheet.presentation().entryTranslateY as unknown as { multiply: [object, MockValue] };
+    const progress = animatedState.interpolatedFrom.get(travel.multiply[0]) as MockValue;
+    const hiddenOffset = travel.multiply[1];
+    expect(hiddenOffset.config).toEqual({ useNativeDriver: true });
+    expect(progress.config).toEqual({ useNativeDriver: true });
+    // The scrim is drawn from the same progress.
+    expect(animatedState.interpolatedFrom.get(sheet.presentation().backdropProgress as unknown as object)).toBe(progress);
     sheet.unmount();
   });
 

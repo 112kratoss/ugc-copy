@@ -387,6 +387,9 @@ function springBack(dragY: ReactNative.Animated.Value | null) {
   }).start();
 }
 
+/** See where `useSheetPresentation` makes its two values. */
+const NATIVE_FROM_THE_START = { useNativeDriver: true };
+
 /**
  * The entrance and exit of a sheet that is not hosted by a `Modal`.
  *
@@ -436,8 +439,20 @@ export function useSheetPresentation({
   const [rendered, setRendered] = useState(visible);
   // Whether the panel now on screen has been laid out. Asked again at every opening.
   const [measured, setMeasured] = useState(false);
-  const progress = useRef(animatedApi?.Value ? new animatedApi.Value(visible ? 1 : 0) : null).current;
-  const hiddenOffset = useRef(animatedApi?.Value ? new animatedApi.Value(SHEET_UNMEASURED_OFFSET) : null).current;
+  // Both are the native driver's from their first value. One that is not is
+  // changed from JS until its first native animation, and on Fabric a change
+  // from JS reaches the view through `setNativeProps`, which the view's shadow
+  // node keeps: every later clone of that node for layout applies those props
+  // again, over whatever the native driver has drawn since
+  // (`ShadowNode::clone`, `nativeProps_DEPRECATED`). The panel's first
+  // measurement was such a change, so the first sheet a screen opened kept
+  // that first offset for as long as it was being laid out anew: opened over
+  // the page's keyboard, in an area following the keys down, it was a strip
+  // at the foot of the screen for ten frames and then jumped to rest; closed
+  // with its own keyboard up it stayed at rest, sank 29dp with the area and
+  // was gone (Pixel 9a emulator films, 2026-10-05).
+  const progress = useRef(animatedApi?.Value ? new animatedApi.Value(visible ? 1 : 0, NATIVE_FROM_THE_START) : null).current;
+  const hiddenOffset = useRef(animatedApi?.Value ? new animatedApi.Value(SHEET_UNMEASURED_OFFSET, NATIVE_FROM_THE_START) : null).current;
   const onEnteredRef = useRef(onEntered);
   onEnteredRef.current = onEntered;
   const onExitedRef = useRef(onExited);
