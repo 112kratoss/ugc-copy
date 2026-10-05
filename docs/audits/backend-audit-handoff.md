@@ -11,6 +11,19 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 
 ## Exact checkpoint
 
+9H is released and independently verified on 8ff10cc6480d2cea341a2157db21ba5d25b86f5d.
+Quality 37343916362 and release 37344929966 pass; independent 17:03 UTC exact
+SHA/schema/ACL/eight rollback controls/cleanup/109 unchanged advisors/health pass.
+See push-registration-release report. 9I passed 37344035869 on ece2c8a2; the
+mobile-store-guarded merge has been requested. Inspect its merge SHA/current CI.
+
+New feed investigation: actual isolated SQL calls to refresh_user_interest_weights
+with one empty-result user before one valid image-interest user return one
+processed user three times, but healthy weights remain zero. Probe is
+.audit-evidence/backend-social/feed-interest-progress-probe.sql and before.json.
+No feed fix yet. JOB-02 reopens failed; investigate valid zero-weight feed events
+and persist refresh progress independent of nonempty interest rows.
+
 9K adds seven actual registered-identity Auth/PostgREST controls for first-use
 preferences, partial/concurrent updates, delayed initialization vs pause,
 foreign RLS and scoped/repeated device retirement. No runtime defect found;
