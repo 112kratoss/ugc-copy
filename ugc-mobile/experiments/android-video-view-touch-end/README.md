@@ -1,6 +1,6 @@
 # Android video view touch end
 
-Status: **built into the Android dev client and run on the Pixel 9a emulator (2026-10-05); waiting for the next Android store build. Not yet run in a release build or on a phone.**
+Status: **built into the Android dev client and run on the Pixel 9a emulator (2026-10-05); waiting for the next Android store build. Not yet run in a release build of this app or on a phone.**
 
 The patch is deliberately outside `patches/`, so `postinstall` does not apply it: `@expo/fingerprint` hashes `patches/` for both platforms and hashes the patched `node_modules/expo-video/android`, and either would stop JavaScript-only updates reaching the binaries already out. It moves into `patches/` in the commit the next Android store build is cut from ("Graduating" below), and `__tests__/android-video-view-touch-end.test.ts` fails the release bump that leaves it behind.
 
@@ -60,11 +60,13 @@ Two dev clients built from one tree (main `35d8cb29`, arm64, debug), one with th
 
 With #359 as well, on the patched build, the app's own surfaces answered as before: in the Reference details sheet the close button, a pull from the title and BACK after a drag of the seek bar, a press on play, a press on play that slides 17 dp down, a pull that starts on the clip; on a plain page a button after a drag of the seek bar, a press on play, a scroll that starts on the clip; the lightbox's close button and the result's "Back to creator" after a drag of the seek bar (one round each, all first time).
 
+**In a fresh project, two SDKs on.** The reproduction in `upstream-issue.md` was built as a new `create-expo-app` project (Expo SDK 57, expo-video 57.0.5, React Native 0.86.3, Media3 1.9.0; release builds) and run on the same emulator, once as it is and once with this method added to its expo-video and the module compiled from source. Its screen says which touches on the player JS was told of. As published, each of four touches on the time bar (three drags, one press) reached JS as a start with no move and no end, and the press after it was lost (4 of 4). With the method, each reached JS whole (36 moves for a drag, 7 for a press) and the press after it counted (4 of 4). The clip was scrubbed either way, and both builds counted every press with nothing sent to the player and after a drag across the picture. So upstream still has the fault, and the same method ends it there.
+
 Also:
 
 - **It round-trips.** `patch-package` applies it on top of the four shipped expo-video patches and reverses it to the file they leave, byte for byte. Applied or not, a plain `patch-package` run (any `npm install`) is content.
 - **Parked, it moves nothing.** `scripts/verify-ota-target.mjs` reports both fingerprints equal to the shipped 0.1.8 builds with this folder present. Applied by hand, iOS still matches and Android moves; copied into `patches/`, both move.
-- **Tests.** The guard test fails for a release bump that leaves the patch parked, for the patch in both places, for an override that calls through to `ViewGroup` or drops the request, and for a patch cut against another base.
+- **Tests.** The guard test fails for a release bump that leaves the patch parked, for the patch in both places, for an override that calls through to `ViewGroup` or drops the request, for a patch cut against another base, and for a later-numbered patch that changes `VideoView.kt` as well. A later-numbered patch for another file of the package does not trip it.
 
 **Not done.**
 
@@ -72,7 +74,7 @@ Also:
 - The coasting case was made by setting the scroll view's own momentum-begin time from the probe, which is what a fling does through `onMomentumScrollBegin`. A fling timed by hand was not tried: while the list is really moving, Android's own scroll view takes the touch-down and the seek bar never sees it, so the case needs a touch in the moment after the list has stopped and before JS has heard so.
 - Nothing on iPhone: the patch is Kotlin.
 
-The rig, the two APKs, every log and screenshot are outside git, in `archive/android-video-view-touch-end-2026-10-05/` at the workspace level.
+The rig, the APKs, every log and screenshot are outside git, in `archive/android-video-view-touch-end-2026-10-05/` at the workspace level (`fresh-project/` for the run just above).
 
 ## What the JavaScript fix can drop once this ships
 
@@ -99,8 +101,10 @@ Reverse with `--reverse`. `patch-package --reverse` ignores `--dry-run` and real
 In the release bump that the next Android store build is cut from:
 
 1. `git mv experiments/android-video-view-touch-end/patches/expo-video+55.0.21+005+android-video-view-touch-end.patch patches/` and put a "Graduated on" line at the top of this file, as `experiments/ios-light-video-view/README.md` has.
-2. If iOS is not rebuilt in the same release, add `patches/expo-video+55.0.21+005+android-video-view-touch-end.patch` to `ios.setAside` in `ota-targets.json`. The patch is Kotlin only: applied by hand it leaves the iOS fingerprint where it is, but any file in `patches/` moves it. This step has not been rehearsed.
+2. If iOS is not rebuilt in the same release, add `patches/expo-video+55.0.21+005+android-video-view-touch-end.patch` to `ios.setAside` in `ota-targets.json`. The patch is Kotlin only: applied by hand it leaves the iOS fingerprint where it is, but any file in `patches/` moves it. `scripts/publish-ota.mjs` removes a set-aside file from its throwaway tree just before it fingerprints iOS, with the Kotlin already patched by `npm ci`, which is the "applied by hand" state measured above. The script itself has not been run with this entry.
 3. Record the new Android fingerprint in `ota-targets.json` when that binary ships.
+
+If another expo-video patch is parked for the same build, move it in the same commit, or this one first. One for the fullscreen activity, numbered `+006+`, was being prepared on 2026-10-05. patch-package applies a package's patches by number, and on a tree that already carries a later number it refuses an earlier one that turns up afterwards ("The patches for expo-video have changed"): every checkout would then need its `node_modules` installed again. A fresh `npm ci` applies them all in order either way.
 
 A release that ships no Android binary can repin the version in the guard test instead. Drop the patch when the app moves to an expo-video that carries the change.
 
@@ -112,4 +116,6 @@ A release that ships no Android binary can repin the version in the guard test i
 
 ## Upstream
 
-`upstream-issue.md` is a draft of the report for expo/expo, with the reproduction and this change. It has not been posted. `VideoView.kt` on expo's `main` (expo-video 58.0.6 on 2026-10-05) has the same hook and no override.
+`upstream-issue.md` is the report for expo/expo, laid out as the four fields of their bug form, with the reproduction, this change and what both did in the fresh project. It has not been posted. Their form wants a link to a public repository, and the project is published for that as https://github.com/112kratoss/expo-video-time-bar-touch (its local copy is `archive/android-video-view-touch-end-2026-10-05/fresh-project/repo/` at the workspace level). The first draft's clip address had died (403), which a fresh build showed at once, so the reproduction carries its own clip.
+
+`VideoView.kt` in expo-video 57.0.5 and on expo's `main` (expo-video 58.0.6 on 2026-10-05) has the same hook and no override.

@@ -69,26 +69,29 @@ describe('Android video view touch end', () => {
     expect(removed).toEqual([]);
   });
 
-  it('applies after every shipped expo-video patch, on the file the light player view patch leaves', () => {
+  it('applies after every other patch that changes the video view, on the file the last of them leaves', () => {
     // patch-package applies a package's patches in the order of the number in
-    // their names, and this one is cut against the result of the others.
-    const numbers = readdirSync(join(projectRoot, 'patches'))
+    // their names, and this one is cut against what the others leave of this
+    // one file. A patch that changes other files of the package may carry any
+    // number, a later one included: one for the fullscreen activity was parked
+    // as `+006+` for the same store build.
+    const number = (name: string) => Number(name.split('+')[2]);
+    const header = `diff --git a/${viewFile} b/${viewFile}`;
+    const others = readdirSync(join(projectRoot, 'patches'))
       .filter((name) => name.startsWith('expo-video+55.0.21+') && name !== patchFile)
-      .map((name) => Number(name.split('+')[2]));
-    expect(numbers.length).toBeGreaterThan(0);
-    expect(Math.max(...numbers)).toBeLessThan(Number(patchFile.split('+')[2]));
+      .filter((name) => read(join('patches', name)).split('\n').includes(header))
+      .sort((one, other) => number(one) - number(other));
+    const last = others[others.length - 1];
+    expect(last).toBe(lightPlayerPatch.slice('patches/'.length));
+    expect(number(last)).toBeLessThan(number(patchFile));
 
     // Each file in a patch names the blob it starts from and the one it
-    // makes. The light player view patch is the only shipped one that changes
-    // this file, and this patch starts from the blob that one makes.
-    const blobs = (patch: string[]) => {
-      const header = patch.indexOf(`diff --git a/${viewFile} b/${viewFile}`);
-      return /^index ([0-9a-f]+)\.\.([0-9a-f]+)/.exec(patch[header + 1] ?? '')?.slice(1, 3);
-    };
-    const [, lightPlayerResult] = blobs(read(lightPlayerPatch).split('\n')) ?? [];
+    // makes: this patch starts from the blob the last of the others makes.
+    const blobs = (patch: string[]) => /^index ([0-9a-f]+)\.\.([0-9a-f]+)/.exec(patch[patch.indexOf(header) + 1] ?? '')?.slice(1, 3);
+    const [, leftByTheLast] = blobs(read(join('patches', last)).split('\n')) ?? [];
     const [startsFrom] = blobs(lines) ?? [];
-    expect(lightPlayerResult).toBeTruthy();
-    expect(startsFrom).toBe(lightPlayerResult);
+    expect(leftByTheLast).toBeTruthy();
+    expect(startsFrom).toBe(leftByTheLast);
   });
 
   it('is compiled at all: the module is built from source on Android', () => {
