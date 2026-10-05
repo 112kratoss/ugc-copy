@@ -27,6 +27,7 @@ import {
   AI_DATA_CONSENT_VERSION,
   AI_DATA_RECIPIENTS,
   AI_MODEL_MAKERS,
+  askAiDataConsentOnOpen,
   ensureAiDataConsent,
   formatAiDataConsentDate,
   getAiDataConsentSnapshot,
@@ -198,6 +199,81 @@ describe('ensureAiDataConsent', () => {
 
     await expect(ensureAiDataConsent()).resolves.toBe(true);
     expect(hasAiDataConsent()).toBe(true);
+  });
+});
+
+// App Review rejected 0.1.8 (58) on 2026-10-05: with no credits Generate is
+// disabled, so a question asked only at Generate could never be seen.
+describe('askAiDataConsentOnOpen', () => {
+  /** The question is put without being awaited, so let the stored answer's read and the dialog settle. */
+  async function settle() {
+    for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+  }
+
+  it('asks when a creation screen opens, before anything is pressed', async () => {
+    askAiDataConsentOnOpen();
+    await settle();
+
+    expect(dialog.showConfirmDialog).toHaveBeenCalledTimes(1);
+    expect(dialog.showConfirmDialog).toHaveBeenCalledWith({
+      title: AI_DATA_CONSENT_TITLE,
+      message: AI_DATA_CONSENT_MESSAGE,
+      confirmLabel: 'Allow',
+      cancelLabel: 'Don’t Allow',
+    });
+  });
+
+  it('stores an Allow given there, so Generate does not ask again', async () => {
+    dialog.showConfirmDialog.mockResolvedValue(true);
+
+    askAiDataConsentOnOpen();
+    await settle();
+
+    expect(hasAiDataConsent()).toBe(true);
+    expect(storage.setItem).toHaveBeenCalledTimes(1);
+    await expect(ensureAiDataConsent()).resolves.toBe(true);
+    expect(dialog.showConfirmDialog).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks nothing of someone who has already allowed it', async () => {
+    storage.getItem.mockResolvedValue(STORED);
+
+    askAiDataConsentOnOpen();
+    await settle();
+
+    expect(dialog.showConfirmDialog).not.toHaveBeenCalled();
+  });
+
+  it('asks once in a run of the app, however often a creation screen opens', async () => {
+    askAiDataConsentOnOpen();
+    await settle();
+    askAiDataConsentOnOpen();
+    askAiDataConsentOnOpen();
+    await settle();
+
+    expect(dialog.showConfirmDialog).toHaveBeenCalledTimes(1);
+  });
+
+  it('still asks at Generate after a Don’t Allow on opening', async () => {
+    askAiDataConsentOnOpen();
+    await settle();
+    expect(hasAiDataConsent()).toBe(false);
+
+    dialog.showConfirmDialog.mockResolvedValue(true);
+    await expect(ensureAiDataConsent()).resolves.toBe(true);
+    expect(dialog.showConfirmDialog).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks again on opening once permission has been withdrawn', async () => {
+    dialog.showConfirmDialog.mockResolvedValue(true);
+    askAiDataConsentOnOpen();
+    await settle();
+    await withdrawAiDataConsent();
+
+    askAiDataConsentOnOpen();
+    await settle();
+
+    expect(dialog.showConfirmDialog).toHaveBeenCalledTimes(2);
   });
 });
 

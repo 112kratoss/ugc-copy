@@ -1,5 +1,6 @@
 import { router, useLocalSearchParams } from 'expo-router';
 
+import { AiDataConsentOnOpen } from '@/components/ai-data-consent-on-open';
 import { ContentPolicyGate } from '@/components/content-policy-gate';
 import { MediaCreationScreen } from '@/components/media-creation-screen';
 import type { CreatorToolId } from '@/lib/types';
@@ -23,6 +24,7 @@ export default function CreateTabScreen() {
 
   return (
     <ContentPolicyGate chrome="tab">
+      <AiDataConsentOnOpen />
       <MediaCreationScreen
         key={`${initialTool}:${guided ? 'guided' : 'standard'}`}
         initialTool={initialTool}

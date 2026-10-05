@@ -1,5 +1,6 @@
 import { useLocalSearchParams } from 'expo-router';
 
+import { AiDataConsentOnOpen } from '@/components/ai-data-consent-on-open';
 import { ContentPolicyGate } from '@/components/content-policy-gate';
 import { MediaTemplateDetailScreen } from '@/components/media-template-screens';
 
@@ -11,6 +12,7 @@ export default function TemplateDetailRoute() {
   const { slug } = useLocalSearchParams<{ slug?: string | string[] }>();
   return (
     <ContentPolicyGate>
+      <AiDataConsentOnOpen />
       <MediaTemplateDetailScreen slug={firstParam(slug) ?? ''} />
     </ContentPolicyGate>
   );

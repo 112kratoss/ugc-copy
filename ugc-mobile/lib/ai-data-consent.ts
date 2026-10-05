@@ -14,6 +14,12 @@ import { showConfirmDialog } from '@/lib/dialog';
  * `ensureAiDataConsent`: generating and enhancing a prompt on the create screen,
  * and starting, retrying or approving a template run.
  *
+ * The question is also put when a creation screen first opens
+ * (`askAiDataConsentOnOpen`). App Review rejected 0.1.8 (58) under the same
+ * two guidelines on 2026-10-05: the reviewer's account had no credits, a
+ * balance below the price disables Generate, and so the question could not be
+ * reached and the screen said nothing about where a prompt goes.
+ *
  * Held per phone, like the Appearance choice (`lib/appearance.ts`), in one
  * process-wide store: the create screen asks, and Settings → AI data sharing
  * shows and changes the same answer.
@@ -98,6 +104,8 @@ export function parseStoredAiDataConsent(raw: string | null): StoredAiDataConsen
 let snapshot: AiDataConsentSnapshot = { hydrated: false, grantedAt: null };
 let hydration: Promise<void> | null = null;
 let pendingRequest: Promise<boolean> | null = null;
+// Whether a creation screen has put the question in this run of the app.
+let askedOnOpen = false;
 // Counts answers given in this process, so a slow first read cannot overwrite one.
 let answers = 0;
 const listeners = new Set<() => void>();
@@ -154,6 +162,8 @@ export function grantAiDataConsent(now: Date = new Date()) {
 /** Nothing more is sent until permission is given again, when the next request asks. */
 export function withdrawAiDataConsent() {
   answers += 1;
+  // Settings says "you’ll be asked again the next time you create".
+  askedOnOpen = false;
   publish({ hydrated: true, grantedAt: null });
   return AsyncStorage.removeItem(AI_DATA_CONSENT_STORAGE_KEY).catch(() => undefined);
 }
@@ -195,6 +205,20 @@ export function ensureAiDataConsent(): Promise<boolean> {
   return request;
 }
 
+/**
+ * Puts the question when a creation screen comes into view, before anything is
+ * typed or added there, so it does not depend on Generate being pressable.
+ *
+ * Once in a run of the app. Someone who answers "Don’t Allow" is not asked on
+ * every visit, and is still asked when they generate, enhance or start a
+ * template. Nothing is asked of someone who has already allowed it.
+ */
+export function askAiDataConsentOnOpen() {
+  if (askedOnOpen) return;
+  askedOnOpen = true;
+  void ensureAiDataConsent();
+}
+
 /** Runs `send` only once permission is in hand. */
 export async function withAiDataConsent(send: () => void) {
   if (await ensureAiDataConsent()) send();
@@ -220,5 +244,6 @@ export function resetAiDataConsentForTests() {
   snapshot = { hydrated: false, grantedAt: null };
   hydration = null;
   pendingRequest = null;
+  askedOnOpen = false;
   answers = 0;
 }

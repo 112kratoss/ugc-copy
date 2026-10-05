@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 
+import { AiDataConsentOnOpen } from '@/components/ai-data-consent-on-open';
 import { ContentPolicyGate } from '@/components/content-policy-gate';
 import { MediaCreationScreen } from '@/components/media-creation-screen';
 import { PrimaryButton, Screen, SecondaryButton, SectionTitle } from '@/components/ui';
@@ -72,6 +73,7 @@ export default function CreateToolScreen() {
           edit to lose. An untouched session keeps it, and ✕ always works. */}
       <Stack.Screen options={{ gestureEnabled: !dirty }} />
       <ContentPolicyGate chrome="headerless">
+        <AiDataConsentOnOpen />
         <MediaCreationScreen
           key={`${initialTool}:${remixId ?? ''}:${remixPostId ?? ''}:${initialPrompt ?? ''}`}
           initialTool={initialTool}
