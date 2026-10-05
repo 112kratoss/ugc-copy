@@ -11,33 +11,26 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 
 ## Exact checkpoint
 
-9M adds 13 actual feed-maintenance PostgREST/SQL recovery controls, including
-failures before each of six RPC phases, SIGKILL after each phase commits, and
-lost rollup acknowledgement. Retry preserves two deliveries/one open and stable
-interest weights; all fixtures removed. Types/lint pass. No runtime/schema change.
-See feed-maintenance-recovery report. Preserve this follow-up separately from
-9L PR #370 (93f1e3d3, exact-head Quality 37351866362 running). #369 main Quality
-37351084486 is finishing web checks; its DB/mobile/E2E already passed. Do not
-confuse its skipped workflow-run events with a completed production release.
+9M now has 17 passing actual feed-maintenance PostgREST/SQL controls. In addition
+to six phase failures, six SIGKILL checkpoints and lost rollup acknowledgement,
+four managed-job cases cover durable failure/retry, active overlap, abandoned
+lease expiry and managed SIGKILL/expiry recovery. Fixtures and job rows removed;
+no fixture lock remains. Test types/lint pass. No runtime/schema change.
 
-9L feed interest progress is implemented locally. Permanent SQL regression fails
-on the original function for an audio-only user starving a healthy user; after
-fix all 19 controls pass. Full 1,000 empty-user batch advances, and actual lock
-contention returns zero. Clean replay, 2,087 SQL assertions/97 files, 11 focused
-checks (2 database/1 migration/8 maintenance), test types/lint and no-drift public
-schema comparison pass. Draft migration 20261005170739 adds service-only per-user
-refresh state and updates the existing invoker function. Marker/weights commit
-atomically, account deletion cascades. No source formula or batch limit changed.
-See feed-interest-progress report. PR/CI/release gates remain; prepared private
-feed-interest-release/ has eight bounded rollback controls already passing locally.
-Its historical source-window guard refuses any preexisting candidate; no live
-account can be refreshed by that probe. Baseline/schema/advisor/ledger plan saved.
+9L PR #370 passed exact-head Quality 37351866362 on 93f1e3d3 and merged with
+mobile-store idle at 18:06:52 UTC as 63a2d7fb449844ac656e7d476ccd59646e01025e.
+Exact-main Quality, standard release and production verification remain. Prepared
+private feed-interest-release/ has eight bounded rollback controls with a guard
+against preexisting candidates. It compares exact live SHA, planned schema only,
+cleanup, migration ledger and advisors. Do not claim the candidate live yet.
+The candidate passes 19 SQL controls, two actual SQL cases (1,000 empty users
+then healthy-user progress and lock contention), clean replay, 2,087 pgTAP
+assertions, no-drift schema comparison and focused checks.
 
-9J/K evidence PR #369 passed 37345982967 on e849da13 and merged with mobile-store
-idle at 17:47:37 UTC as 1acdc6865887d0e863e4b0d9fd07c567cd14e549.
-Exact-main Quality 37351084486 is running. The current branch incorporates this main. Eleven actual alert HTTP/DB controls and seven Auth/PostgREST
-preference/retirement controls pass; no runtime/schema change in #369.
-Standard exact-main release/live evidence still needed.
+9J/K #369 is verified live on 1acdc6865887d0e863e4b0d9fd07c567cd14e549.
+Exact-main Quality 37351084486/release 37352679153 passed; independent 18:05 UTC
+live SHA, feed/admin/webhook, unchanged schema and 109 advisors passed. See
+backend-section-09-dispatch-release-2026-10-05.md. No runtime/schema change.
 
 9I #368 is independently verified on d4c293a9f14b2f828e8636d03103b0faf6e5b700.
 Exact-main 37345781975 and release 37347329859 pass. At 17:47 UTC exact-live

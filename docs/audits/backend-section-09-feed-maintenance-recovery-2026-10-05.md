@@ -1,6 +1,6 @@
 # Section 9M — feed-maintenance phase recovery
 
-Baseline 93f1e3d3, including candidate 9L. Thirteen actual local PostgREST/SQL
+Baseline 93f1e3d3, including candidate 9L. Seventeen actual local PostgREST/SQL
 controls pass without another runtime change. The fixture has one creator,
 two served feed deliveries, one open and one completed image generation. A
 historical as-of isolates the source window; algorithm IDs isolate rollup cleanup.
@@ -18,8 +18,18 @@ and retains two deliveries/one open with two image-interest dimensions. A final
 case commits the daily rollup but loses its acknowledgement; pruning is not
 called on that run, and retry does not duplicate the committed aggregates.
 
-All fixture users, generations, sessions, delivery facts, algorithm versions and
-daily buckets are removed. No provider or production endpoint is contacted.
+Four additional controls exercise the actual managed-job entrypoint: phase
+failure with durable failed status followed by successful retry; overlapping
+workers with the second skipped before business SQL; abandoned-lease expiry;
+and SIGKILL after the first committed RPC under a managed lease, then rejection
+before expiry and successful recovery afterward. The killed run remains `started`,
+while the later run records success. The child alone uses a two-second lease;
+production retains 840 seconds. SQL clocks and lease waits are real. The parent
+application clock is fixed to the fixture's 2005 window (outside automatic job
+history pruning), with cache invalidation and logging controlled.
+
+All fixture users, generations, sessions, delivery facts, algorithm versions,
+daily buckets and job-history rows are removed; no fixture-owned lock remains. No provider or production endpoint is contacted.
 The real timeout/retry body is not mocked; only the documented cache callback
 and targeted PostgREST response are controlled. Test types and scoped lint pass.
 Use vitest.feed-maintenance-postgrest.config.ts with the explicit loopback
