@@ -11,15 +11,17 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 
 ## Exact checkpoint
 
-9F is PR #361, head fd3aa2a2f56e5ac898c6d75723d10c220aeedee3. Quality
-37289045693 is active; E2E/mobile/DB pass, web build continues. Current 9G branch
-preserves this candidate plus new investigation docs; do not push 9G onto #361.
-Before merging #361, verify exact-head Quality and mobile-store idle immediately
-before merge. Standard exact-main release and production verification remain.
+9F PR #361 passed exact-head Quality 37289045693 on
+fd3aa2a2f56e5ac898c6d75723d10c220aeedee3 and merged at 09:27:18 UTC as
+32a3f47336a6ad54ff0c41b667d9ba41be8d12c2. Mobile-store release was checked
+idle immediately before the guarded merge. Exact-main Quality and standard
+release/live verification remain. Current 9G branch preserves the 9F candidate
+plus investigation docs, not the new squash commit; incorporate main as needed.
 The prepared .audit-evidence/backend-social/first-send-release/verify.cjs requires
 exact live SHA; expected functions/columns/default/grants/index from clean replay,
 full/filtered production baseline, eight locally passing rollback controls and
 security baseline are saved. Its release-smoke.cjs verifies exact SHA and health.
+Do not mark 9F deployed until these gates pass. No production 9F probe yet.
 
 9G reproduces four push-maintenance starvation cases with actual local DB
 readback over three repeated passes each: oldest saved-outcome failure, stale
