@@ -6,7 +6,7 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/push-preferences-audit-9k`, incorporating main `8ff10cc6480d2cea341a2157db21ba5d25b86f5d` (#364); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/push-preferences-audit-9k`, incorporating main `d4c293a9f14b2f828e8636d03103b0faf6e5b700` (#368); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
@@ -14,8 +14,9 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 9H is released and independently verified on 8ff10cc6480d2cea341a2157db21ba5d25b86f5d.
 Quality 37343916362 and release 37344929966 pass; independent 17:03 UTC exact
 SHA/schema/ACL/eight rollback controls/cleanup/109 unchanged advisors/health pass.
-See push-registration-release report. 9I passed 37344035869 on ece2c8a2; the
-mobile-store-guarded merge has been requested. Inspect its merge SHA/current CI.
+See push-registration-release report. 9I passed 37344035869 on ece2c8a2 and merged with mobile-store idle
+at 17:05:15 UTC as d4c293a9f14b2f828e8636d03103b0faf6e5b700. Exact-main
+Quality 37345781975 is running; standard release and live verification remain.
 
 New feed investigation: actual isolated SQL calls to refresh_user_interest_weights
 with one empty-result user before one valid image-interest user return one
