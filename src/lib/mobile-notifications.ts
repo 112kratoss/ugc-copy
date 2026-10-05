@@ -737,7 +737,7 @@ async function retireUnregisteredPushTokens(
     return 0;
   }
 
-  const { data } = await adminSupabase
+  const { data, error } = await adminSupabase
     .from('mobile_push_tokens')
     .update({
       is_active: false,
@@ -747,6 +747,7 @@ async function retireUnregisteredPushTokens(
     .eq('is_active', true)
     .select('id');
 
+  if (error) throw new MobileNotificationError('Failed to retire unregistered push tokens.', 500);
   return data?.length ?? 0;
 }
 
@@ -1056,8 +1057,7 @@ export async function processPendingMobilePushReceipts(
       continue;
     }
 
-    staleCount += 1;
-    await adminSupabase
+    const { error: staleError } = await adminSupabase
       .from('mobile_push_deliveries')
       .update({
         receipt_status: 'stale',
@@ -1065,6 +1065,8 @@ export async function processPendingMobilePushReceipts(
         receipt_message: 'Receipt unavailable after 24 hours.',
       })
       .eq('id', deliveryId);
+    if (staleError) throw new MobileNotificationError('Failed to mark push receipt stale.', 500);
+    staleCount += 1;
   }
 
   let updatedCount = 0;
@@ -1096,14 +1098,20 @@ export async function processPendingMobilePushReceipts(
       continue;
     }
 
-    updatedCount += 1;
     const receiptDetails = isRecord(receipt.details) ? receipt.details : null;
     const receiptStatus = receipt.status === 'ok' ? 'ok' : 'error';
     const receiptMessage = normalizeOptionalString(receipt.message)
       ?? (receiptStatus === 'ok' ? 'Delivered to push provider.' : 'Expo receipt reported a delivery error.');
     const receiptErrorCode = receiptDetails ? normalizeOptionalString(receiptDetails.error) : null;
 
-    await adminSupabase
+    // Keep the receipt pending if retirement fails, so the next run retries it.
+    // If the later receipt write fails, retiring an already inactive token is
+    // idempotent and preserves the original disabled_at timestamp.
+    if (receiptErrorCode === 'DeviceNotRegistered' && tokenId) {
+      disabledTokenCount += await retireUnregisteredPushTokens(adminSupabase, [tokenId], nowIso);
+    }
+
+    const { error: receiptError } = await adminSupabase
       .from('mobile_push_deliveries')
       .update({
         receipt_status: receiptStatus,
@@ -1113,10 +1121,8 @@ export async function processPendingMobilePushReceipts(
         provider_details: receiptDetails,
       })
       .eq('id', deliveryId);
-
-    if (receiptErrorCode === 'DeviceNotRegistered' && tokenId) {
-      disabledTokenCount += await retireUnregisteredPushTokens(adminSupabase, [tokenId], nowIso);
-    }
+    if (receiptError) throw new MobileNotificationError('Failed to record push receipt.', 500);
+    updatedCount += 1;
   }
 
   return {
