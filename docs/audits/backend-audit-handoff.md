@@ -1,31 +1,37 @@
 # Backend audit — session handoff
 
-Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-by-section Magicbooklet backend audit.
+Updated 2026-10-06 (Asia/Kolkata). Read this first when continuing the section-by-section Magicbooklet backend audit.
 
 ## Workspace and authorization
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/feed-maintenance-audit-9m`, incorporating main `63a2d7fb449844ac656e7d476ccd59646e01025e` (#370); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/model-verification-audit-9n`, incorporating main `63a2d7fb449844ac656e7d476ccd59646e01025e` (#370); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-9M now has 17 passing actual feed-maintenance PostgREST/SQL controls. In addition
-to six phase failures, six SIGKILL checkpoints and lost rollup acknowledgement,
-four managed-job cases cover durable failure/retry, active overlap, abandoned
-lease expiry and managed SIGKILL/expiry recovery. Fixtures and job rows removed;
-no fixture lock remains. Test types/lint pass. No runtime/schema change.
+9N implements per-model latest verification history after an actual sparse-history
+regression: 101 observations for one model hide another model's seven-failure
+history in the old shared window. New service-only invoker lookup retains it and
+breaks equal timestamps by identity. Fourteen actual local HTTP/PostgREST cases,
+15 new pgTAP controls, app/test types and lint pass. Clean replay and 2,102 SQL
+assertions across 98 files pass; no public schema drift. Seven bounded rollback
+controls pass locally; model-verification-release/ has the production baseline,
+one-migration plan and verifier. No PR/deployment yet; see 9N report. Runtime
+change is only the lookup; no provider contacted. Preserve local edits.
 
-9L PR #370 passed exact-head Quality 37351866362 on 93f1e3d3 and merged with
-mobile-store idle at 18:06:52 UTC as 63a2d7fb449844ac656e7d476ccd59646e01025e.
-Exact-main Quality 37353506342 is running; standard release and production verification remain. Prepared
-private feed-interest-release/ has eight bounded rollback controls with a guard
-against preexisting candidates. It compares exact live SHA, planned schema only,
-cleanup, migration ledger and advisors. Do not claim the candidate live yet.
-The candidate passes 19 SQL controls, two actual SQL cases (1,000 empty users
-then healthy-user progress and lock contention), clean replay, 2,087 pgTAP
-assertions, no-drift schema comparison and focused checks.
+9M #371 passed exact-head Quality 37353739378 on 9cc05bcf and merged with
+mobile-store idle October 5 19:09:32 UTC as c0f33e438800de69b6e99736ac2904141d0a93e1.
+Exact-main Quality 37361374584 is running. Standard release and independent
+verification remain. Seventeen actual feed-maintenance recovery controls pass;
+no runtime/schema change. Production limits/cache/overlong-holder fencing remain.
+
+9L #370 is verified live on 63a2d7fb449844ac656e7d476ccd59646e01025e. Quality
+37353506342/release 37355044779 passed. Independent October 5 19:08 UTC exact
+SHA/schema/eight rollback/zero-fixture/health checks pass. Existing 109 advisor
+findings unchanged plus one expected service-only RLS INFO. Source migration
+20261005170739 recorded as 20261005181948. See feed-interest-release report.
 
 9J/K #369 is verified live on 1acdc6865887d0e863e4b0d9fd07c567cd14e549.
 Exact-main Quality 37351084486/release 37352679153 passed; independent 18:05 UTC
@@ -49,7 +55,7 @@ planned schema, cleanup and health passed at 13:50 UTC. One expected private-tab
 INFO was added to the unchanged 108 prior findings. See push-progress-release.
 
 Current ledger 24 passed / 25 untested / 2 failed / 2 external (53). JOB-02 failed
-for feed-interest progress; MEDIA-07 failed for legacy retirement. Full goal active.
+for provider-verification history loss (feed-interest progress is released); MEDIA-07 failed for legacy retirement. Full goal active.
 Preserve unrelated receipt edits, Section 1 files and all private evidence.
 
 9F #361 is verified live on 32a3f47336a6ad54ff0c41b667d9ba41be8d12c2.
