@@ -76,7 +76,7 @@ and targeted database failures are injected. The scan crash test performs no
 provider call, waits for child exit, and fixtures are removed.
 
 All prior 16 retry-claim/worker controls (including real lease expiry), nine
-initial-send cases and four receipt-recovery cases pass. Ninety-five focused
+initial-send cases and four receipt-recovery cases pass. Ninety-nine focused
 notification, route, job and migration tests pass, as do app/test types and scoped
 lint. Clean replay and all 2,046 pgTAP checks across 95 files pass, including 23
 new scan controls covering grants/RLS, limits, tied timestamps, repeated failures,
@@ -89,3 +89,10 @@ to assert key order rather than nondeterministic Promise completion order.
 Private evidence: `.audit-evidence/backend-social/mobile-push-progress-*`.
 This candidate needs exact-head CI, standard release and production verification.
 It does not close the whole JOB-02/03 matrices.
+
+PR #362 first-head Quality 37292884858 passed DB/mobile/E2E but failed four
+older receipt write-failure tests: their mock client lacked the new scan RPC.
+The remaining 7,421 web cases passed. The four fixtures now return the same rows
+through that RPC, preserving all failure and write-order assertions. The expanded
+99-case focused suite, lint and test types pass. Fresh full CI is required for
+this corrected head; the initial failing run is not release evidence.

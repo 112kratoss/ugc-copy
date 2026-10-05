@@ -4,18 +4,14 @@ import { processPendingMobilePushReceipts } from '@/lib/mobile-notifications';
 
 function fixture({ fail, stale = false }: { fail: 'receipt' | 'token'; stale?: boolean }) {
   const writes: string[] = [];
-  const pending = {
-    select: () => pending, eq: () => pending, lte: () => pending, order: () => pending,
-    limit: async () => ({ data: [{ id: 'delivery', token_id: 'token', push_ticket_id: 'ticket', receipt_status: 'pending', sent_at: stale ? '2026-10-01T00:00:00Z' : '2026-10-02T11:00:00Z' }], error: null }),
-  };
+  const scan = async () => ({ data: [{ id: 'delivery', token_id: 'token', push_ticket_id: 'ticket', receipt_status: 'pending', sent_at: stale ? '2026-10-01T00:00:00Z' : '2026-10-02T11:00:00Z' }], error: null });
   const tokenUpdate = {
     in: () => tokenUpdate, eq: () => tokenUpdate,
     select: async () => { writes.push('token'); return { data: fail === 'token' ? null : [{ id: 'token' }], error: fail === 'token' ? { message: 'Token update failed' } : null }; },
   };
-  const client = { from: (table: string) => {
+  const client = { rpc: (name: string) => { expect(name).toBe('scan_mobile_push_maintenance'); return scan(); }, from: (table: string) => {
     if (table === 'mobile_push_tokens') return { update: () => tokenUpdate };
     if (table === 'mobile_push_deliveries') return {
-      ...pending,
       update: () => ({ eq: async () => { writes.push('receipt'); return { data: null, error: fail === 'receipt' ? { message: 'Receipt update failed' } : null }; } }),
     };
     throw new Error('Unexpected table: ' + table);
