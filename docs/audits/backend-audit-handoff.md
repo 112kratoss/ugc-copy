@@ -11,6 +11,20 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 
 ## Exact checkpoint
 
+Current 9C candidate is PR #353, now incorporating 9B head da2dc256 and main
+80a3d303. Main #349 Quality 37256639143 running. 9B/9C must use their new-head CI
+before merge. Their earlier checks apply only to their prior heads. The twelve-job
+matrix now records each entrypoint, existing evidence and missing cases; it is not
+certification. Preserve the unrelated mobile changes from main and receipt/Section 1
+local evidence. Full goal remains active; ledger 24/24/3/2.
+
+9A #349 passed exact-head CI 37255743353 and merged as
+80a3d303fbf0c31e68a26c152c0c90f93734e485 at October 5 02:45:21 UTC.
+Mobile-store release was idle immediately before merge. Exact-main CI and standard
+release remain to verify. 9B #352 initially passed CI 37255805722; its branch now
+incorporates this main, preserving independent Android preview change #350.
+Only historical audit docs conflicted; latest evidence retained. New head CI needed.
+
 9C receipt maintenance: four actual PostgREST fixture cases fail before and pass
 after checking writes and retiring invalid tokens before receipt finalization.
 A failed retirement previously left the token active and receipt terminal. Partial
