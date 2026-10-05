@@ -11,7 +11,8 @@ import { ContentPolicyGate } from '@/components/content-policy-gate';
 import { AppText, ChoiceChip, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
 import { ComposerMediaLightbox, getComposerMediaLabel } from '@/components/composer-media-lightbox';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
-import { SheetBackdrop, SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
+import { Overlay } from '@/components/overlay-host';
+import { SheetBackdrop, SheetGrabber, SheetPanel, sheetMotion, useSheetDismissDrag, useSheetPresentation, type SheetDismissDrag } from '@/components/sheet-chrome';
 import { showConfirmDialog } from '@/lib/dialog';
 import { showActionSheet } from '@/lib/action-sheet';
 import { StableMediaImage } from '@/components/media-preview';
@@ -118,6 +119,7 @@ import { hexWithAlpha } from '@/lib/eased-fade';
 import { accentFill, appTheme, mediaColors, onAccentFill, type ToolAccent } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import { isUploadCancelledError, runWeightedUploadQueue } from '@/lib/upload-file';
+import { useHardwareBack } from '@/lib/use-hardware-back';
 import type { GenerationListItem, OwnerPostsResponse, PostResourceAttachment, PostResourceBundleAccessMode, PostResourceItemType, SourceToolOption } from '@/lib/types';
 import { buildShareUrl } from '@/lib/viewer-actions';
 import { haptic } from '@/lib/haptics';
@@ -146,6 +148,9 @@ const getDefaultResourceDraft = () => ({
   priceUsd: '1',
   priceTokens: '100',
 });
+
+// The dimmed strip kept between the status bar and a resource sheet that the keyboard has shortened.
+const RESOURCE_SHEET_TOP_GAP = 8;
 
 const COMPOSER_SECTION_STYLE = {
   padding: 14,
@@ -1296,6 +1301,65 @@ function VisibilitySheet({
   );
 }
 
+/** What the resource sheet draws that the composer drops or resets the moment it closes. */
+type ResourceSheetContent = {
+  mode: 'type' | 'editor';
+  card: PostComposerResourceCardDraft | null;
+  isUploading: boolean;
+  uploadProgress: ResourceUploadProgress | null;
+  uploadError: string | null;
+  canRetryUpload: boolean;
+};
+
+function sameResourceSheetContent(held: ResourceSheetContent | null, live: ResourceSheetContent) {
+  return held !== null
+    && held.mode === live.mode
+    && held.card === live.card
+    && held.isUploading === live.isUploading
+    && held.uploadProgress === live.uploadProgress
+    && held.uploadError === live.uploadError
+    && held.canRetryUpload === live.canRetryUpload;
+}
+
+type ResourceComposerSheetProps = {
+  mode: 'type' | 'editor' | null;
+  card: PostComposerResourceCardDraft | null;
+  mediaItems: PostComposerMediaItem[];
+  bottomInset: number;
+  isUploading: boolean;
+  uploadProgress: ResourceUploadProgress | null;
+  uploadError: string | null;
+  canRetryUpload: boolean;
+  onRequestClose: () => void;
+  onSave: () => void;
+  onChooseType: (type: PostComposerResourceCardType) => void;
+  onChange: (patch: Partial<PostComposerResourceCardDraft>) => void;
+  onPickFile: () => void;
+  onRetryUpload: () => void;
+  onCancelUpload: () => void;
+  onRemoveAttachment: (id: string) => void;
+};
+
+/**
+ * The sheet the Resources step opens: first what kind of resource to add, then
+ * its editor.
+ *
+ * Through the overlay host, not a `Modal`, because the editor holds text
+ * fields. As a Modal on Android it could not follow the keyboard. The area
+ * around it lifted on React Native's event alone, after the keys had begun to
+ * cover the Save row and 24dp short, and the panel was lifted whole instead of
+ * shortened: its title, its Close button and the Resource title field went off
+ * the top of the screen (Pixel 9a emulator, 2026-10-05). In the app's own
+ * window the area follows the keyboard frame by frame, and the panel gives up
+ * height to it: on Android it shortens to what the keyboard and the status bar
+ * leave, its header and Save row stay where they can be pressed, and the
+ * fields scroll between them; on iOS the panel stays and the scroll view makes
+ * the room itself.
+ *
+ * Being an ordinary view, the sheet owns what a Modal gave for free: its
+ * entrance and exit, Android's back key, and taking the keyboard from the page
+ * as it opens.
+ */
 function ResourceComposerSheet({
   mode,
   card,
@@ -1313,27 +1377,126 @@ function ResourceComposerSheet({
   onRetryUpload,
   onCancelUpload,
   onRemoveAttachment,
-}: {
-  mode: 'type' | 'editor' | null;
-  card: PostComposerResourceCardDraft | null;
-  mediaItems: PostComposerMediaItem[];
-  bottomInset: number;
-  isUploading: boolean;
-  uploadProgress: ResourceUploadProgress | null;
-  uploadError: string | null;
-  canRetryUpload: boolean;
-  onRequestClose: () => void;
-  onSave: () => void;
-  onChooseType: (type: PostComposerResourceCardType) => void;
-  onChange: (patch: Partial<PostComposerResourceCardDraft>) => void;
-  onPickFile: () => void;
-  onRetryUpload: () => void;
-  onCancelUpload: () => void;
-  onRemoveAttachment: (id: string) => void;
-}) {
+}: ResourceComposerSheetProps) {
   const theme = useAppTheme();
+  const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
+  const reducedMotion = useReducedMotion();
   const visible = mode !== null;
+  // The composer drops the step and the card the moment the sheet closes, and
+  // an upload's progress and error with them. The panel leaves showing what it
+  // was showing: emptied as its exit began, it fell to the height of its title
+  // in one frame, which is how the Modal left on the iPhone.
+  const [held, setHeld] = useState<ResourceSheetContent | null>(null);
+  const live: ResourceSheetContent | null = mode !== null
+    ? { mode, card, isUploading, uploadProgress, uploadError, canRetryUpload }
+    : null;
+  if (live && !sameResourceSheetContent(held, live)) setHeld(live);
+  const shown = live ?? held;
+
+  // Dismissing by drag goes through the same handler as the Close button, so
+  // the unsaved-changes confirmation runs either way (Modality: get
+  // confirmation before closing a modal view, gesture or button). The panel
+  // takes a touch only once it is a pull: held from its start, as a sheet in a
+  // Modal must, the touch is taken from the scroll view on Android at the
+  // finger's next movement (see `takesTouchDown`).
+  const drag = useSheetDismissDrag({ onDismiss: onRequestClose, visible, takesTouchDown: false });
+  const presentation = useSheetPresentation({ visible, reducedMotion, onExited: () => setHeld(null) });
+  // An overlay is an ordinary view: unlike a Modal it has no native claim on
+  // Android's back key, so it takes one, and asks what the Close button asks.
+  useHardwareBack(visible, onRequestClose);
+
+  // The keyboard goes with whatever had it. Opening over a field of the page
+  // takes the keyboard from it, as a Modal's window did by taking the focus;
+  // closing puts the editor's own away as the sheet leaves rather than after
+  // it has gone.
+  const wasVisibleRef = useRef(visible);
+  useEffect(() => {
+    if (wasVisibleRef.current === visible) return;
+    wasVisibleRef.current = visible;
+    Keyboard.dismiss();
+  }, [visible]);
+
+  if (!shown) return null;
+  const motion = sheetMotion(drag, presentation);
+
+  return (
+    <Overlay visible={presentation.rendered}>
+      {/* Answered once: while the exit plays the sheet is still drawn, and a press on it must not land. */}
+      <View pointerEvents={visible ? 'auto' : 'none'} style={{ flex: 1 }}>
+        {/* The area ends under the status bar, so a panel that has to give up height to the keyboard never
+            gives up its title to the clock. `reservedBottomInset`: the Save row and the list already keep
+            that much clear of the screen's edge, and the keyboard covers the same strip. */}
+        <KeyboardAvoidingArea
+          iosScrollViewAdjustsInsets
+          reservedBottomInset={bottomInset}
+          testID="resource-editor-keyboard-area"
+          style={{ justifyContent: 'flex-end', paddingTop: insets.top + RESOURCE_SHEET_TOP_GAP }}
+        >
+          <SheetBackdrop drag={drag} style={motion.backdrop} color={theme.colors.overlayStrong} onPress={onRequestClose} />
+          <SheetPanel
+            {...drag.contentPanHandlers}
+            accessibilityViewIsModal
+            onLayout={presentation.onPanelLayout}
+            style={[
+              {
+                maxHeight: Math.min(height * 0.9, 760),
+                // The one thing between the header and the Save row that can give way is the scroll
+                // view, and the panel has to be allowed to pass the keyboard's squeeze on to it.
+                flexShrink: 1,
+                borderTopLeftRadius: 28,
+                borderTopRightRadius: 28,
+                borderWidth: 1,
+                borderBottomWidth: 0,
+                borderColor: theme.colors.border,
+                backgroundColor: theme.colors.panel,
+                overflow: 'hidden',
+              },
+              motion.panel,
+            ]}
+          >
+            <ResourceComposerContent
+              drag={drag}
+              {...shown}
+              mediaItems={mediaItems}
+              bottomInset={bottomInset}
+              onRequestClose={onRequestClose}
+              onSave={onSave}
+              onChooseType={onChooseType}
+              onChange={onChange}
+              onPickFile={onPickFile}
+              onRetryUpload={onRetryUpload}
+              onCancelUpload={onCancelUpload}
+              onRemoveAttachment={onRemoveAttachment}
+            />
+          </SheetPanel>
+        </KeyboardAvoidingArea>
+      </View>
+    </Overlay>
+  );
+}
+
+/** What the resource sheet's panel holds: its title row, then the list of kinds or the editor. */
+function ResourceComposerContent({
+  drag,
+  mode,
+  card,
+  mediaItems,
+  bottomInset,
+  isUploading,
+  uploadProgress,
+  uploadError,
+  canRetryUpload,
+  onRequestClose,
+  onSave,
+  onChooseType,
+  onChange,
+  onPickFile,
+  onRetryUpload,
+  onCancelUpload,
+  onRemoveAttachment,
+}: Omit<ResourceComposerSheetProps, 'mode'> & { drag: SheetDismissDrag; mode: 'type' | 'editor' }) {
+  const theme = useAppTheme();
   const option = card ? POST_COMPOSER_RESOURCE_CARD_OPTIONS.find((candidate) => candidate.id === card.type) : null;
   const textType = card?.type === 'prompt' || card?.type === 'settings' || card?.type === 'guide' || card?.type === 'other';
   const linkType = card?.type === 'external_link' || card?.type === 'remix_link' || card?.type === 'workflow';
@@ -1347,288 +1510,264 @@ function ResourceComposerSheet({
     || Boolean(card?.attachments.length);
   const cardErrors = card ? getPostComposerResourceCardErrors(card) : {};
   const isReady = card ? isPostComposerResourceCardReady(card) : false;
-  // Dismissing by drag goes through the same handler as the Close button, so
-  // the unsaved-changes confirmation runs either way (Modality: get
-  // confirmation before closing a modal view, gesture or button).
-  const drag = useSheetDismissDrag({ onDismiss: onRequestClose, visible });
-  const reducedMotion = useReducedMotion();
 
   return (
-    <Modal visible={visible} transparent animationType={reducedMotion ? 'none' : 'slide'} presentationStyle="overFullScreen" onRequestClose={onRequestClose}>
-      <KeyboardAvoidingArea iosScrollViewAdjustsInsets style={{ justifyContent: 'flex-end' }}>
-        <SheetBackdrop drag={drag} color={theme.colors.overlayStrong} onPress={onRequestClose} />
-        <SheetPanel
-          {...drag.contentPanHandlers}
-          accessibilityViewIsModal
-          style={[
-            {
-              maxHeight: Math.min(height * 0.9, 760),
-              borderTopLeftRadius: 28,
-              borderTopRightRadius: 28,
-              borderWidth: 1,
-              borderBottomWidth: 0,
-              borderColor: theme.colors.border,
-              backgroundColor: theme.colors.panel,
-              overflow: 'hidden',
-            },
-            drag.dragStyle,
-          ]}
-        >
-          <View style={{ paddingHorizontal: 18 }}>
-            <SheetGrabber drag={drag} />
-            <View style={{ minHeight: 62, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-                <AppText heading variant="sectionTitle">{mode === 'type' ? 'Add a resource' : option?.label ?? 'Edit resource'}</AppText>
-                <AppText variant="caption" color="muted">
-                  {mode === 'type'
-                    ? 'Choose what people will receive.'
-                    : isUploading
-                      ? 'Keep this editor open while the file uploads.'
-                      : 'Contents stay protected until unlock.'}
-                </AppText>
-              </View>
-              <HeaderIconButton label="Close resource editor" icon="close" onPress={onRequestClose} />
-            </View>
+    <>
+      <View style={{ paddingHorizontal: 18 }}>
+        <SheetGrabber drag={drag} />
+        {/* The title takes a pull as the grabber does, wherever the body is scrolled to. The panel's own
+            drag waits for the body to be at its top, so a pull from here did nothing once it had scrolled. */}
+        <View {...drag.panHandlers} style={{ minHeight: 62, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+            <AppText heading variant="sectionTitle">{mode === 'type' ? 'Add a resource' : option?.label ?? 'Edit resource'}</AppText>
+            <AppText variant="caption" color="muted">
+              {mode === 'type'
+                ? 'Choose what people will receive.'
+                : isUploading
+                  ? 'Keep this editor open while the file uploads.'
+                  : 'Contents stay protected until unlock.'}
+            </AppText>
           </View>
+          <HeaderIconButton label="Close resource editor" icon="close" onPress={onRequestClose} />
+        </View>
+      </View>
 
-          {mode === 'type' ? (
-            <ScrollView
-              {...drag.scrollProps}
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: bottomInset + 20, gap: 9 }}
+      {mode === 'type' ? (
+        <ScrollView
+          {...drag.scrollProps}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: bottomInset + 20, gap: 9 }}
+        >
+          {POST_COMPOSER_RESOURCE_CARD_OPTIONS.map((resourceOption) => (
+            <Pressable
+              key={resourceOption.id}
+              accessibilityRole="button"
+              onPress={() => onChooseType(resourceOption.id)}
+              style={({ pressed }) => ({
+                minHeight: 68,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 12,
+                borderRadius: 17,
+                borderWidth: 1,
+                borderColor: theme.colors.borderSubtle,
+                backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surface,
+                padding: 12,
+              })}
             >
-              {POST_COMPOSER_RESOURCE_CARD_OPTIONS.map((resourceOption) => (
+              <View style={{ width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
+                <ResourceTypeIcon type={resourceOption.id} color={theme.colors.textSecondary} />
+              </View>
+              <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                <AppText variant="label">{resourceOption.label}</AppText>
+                <AppText variant="caption" color="muted" numberOfLines={2}>{resourceOption.body}</AppText>
+              </View>
+              <ChevronRight size={18} color={theme.colors.faint} />
+            </Pressable>
+          ))}
+        </ScrollView>
+      ) : card ? (
+        <>
+          <ScrollView
+            {...drag.scrollProps}
+            automaticallyAdjustKeyboardInsets
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="interactive"
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: bottomInset + 24, gap: 14 }}
+          >
+            <ComposerFieldShell>
+              <CompactFieldLabel label="Resource title" required valueLength={card.title.length} maxLength={80} />
+              <ComposerInput
+                accessibilityLabel="Resource title, required"
+                accessibilityHint={card.publicTitleIntent === 'legacy_private'
+                  ? 'This existing title stays protected unless you edit it. Editing opts the updated title into the locked public package preview.'
+                  : 'Enter a public title for this protected resource. Maximum 80 characters.'}
+                value={card.title}
+                onChangeText={(title) => onChange({
+                  title: title.slice(0, 80),
+                  publicTitleIntent: 'explicit',
+                })}
+                placeholder={option?.label ?? 'Resource title'}
+              />
+              <FieldErrorText message={cardErrors.title} />
+              {card.publicTitleIntent === 'legacy_private' ? (
+                <AppText variant="caption" color="muted">
+                  This legacy title stays private. Editing it makes the updated title visible in the locked package preview.
+                </AppText>
+              ) : null}
+              <CompactFieldLabel label="Unlocked description" optional valueLength={card.preview.length} maxLength={120} />
+              <ComposerInput
+                accessibilityLabel="Unlocked description, optional"
+                accessibilityHint="Add a short note buyers see with this resource after they unlock the package. Maximum 120 characters."
+                value={card.preview}
+                onChangeText={(preview) => onChange({ preview: preview.slice(0, 120) })}
+                placeholder="Optional note shown after unlock"
+                multiline
+                minHeight={66}
+              />
+            </ComposerFieldShell>
+
+            {textType ? (
+              <ComposerFieldShell>
+                <CompactFieldLabel
+                  label={card.type === 'prompt' ? 'Prompt or script' : card.type === 'settings' ? 'Settings' : card.type === 'guide' ? 'Guide or notes' : 'Resource content'}
+                  required={!fileType || card.attachments.length === 0}
+                />
+                <ComposerInput
+                  accessibilityLabel={`${card.type === 'prompt' ? 'Prompt or script' : card.type === 'settings' ? 'Settings' : card.type === 'guide' ? 'Guide or notes' : 'Resource content'}, required`}
+                  accessibilityHint="This protected content is revealed only after the resource package is unlocked."
+                  value={card.textContent}
+                  onChangeText={(textContent) => onChange({ textContent })}
+                  placeholder="This content is revealed only after unlock"
+                  multiline
+                  minHeight={150}
+                />
+                <FieldErrorText message={cardErrors.content} />
+              </ComposerFieldShell>
+            ) : null}
+
+            {linkType ? (
+              <ComposerFieldShell>
+                <CompactFieldLabel label={card.type === 'remix_link' ? 'Remix URL' : card.type === 'workflow' ? 'Workflow link' : 'URL'} required={card.type !== 'workflow' || card.attachments.length === 0} />
+                <ComposerInput
+                  accessibilityLabel={`${card.type === 'remix_link' ? 'Remix URL' : card.type === 'workflow' ? 'Workflow link' : 'URL'}, required`}
+                  accessibilityHint="Enter the protected destination URL."
+                  value={card.externalUrl}
+                  onChangeText={(externalUrl) => onChange({ externalUrl })}
+                  placeholder="https://"
+                  autoCapitalize="none"
+                  keyboardType="url"
+                />
+                <FieldErrorText message={cardErrors.content} />
+                {card.type === 'remix_link' ? <AppText variant="caption" color="muted">The URL remains hidden until the package is unlocked.</AppText> : null}
+              </ComposerFieldShell>
+            ) : null}
+
+            {fileType ? (
+              <ComposerFieldShell>
+                <CompactFieldLabel label={card.type === 'reference_media' ? 'Reference files' : card.type === 'workflow' ? 'Workflow files' : 'Files'} optional={card.type === 'workflow' || card.type === 'other'} required={card.type === 'reference_media' || card.type === 'source_assets'} />
+                {card.attachments.map((attachment) => (
+                  <View key={attachment.id} style={{ minHeight: 50, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 14, backgroundColor: theme.colors.surfaceInset, paddingHorizontal: 11 }}>
+                    <FileText size={17} color={theme.colors.textSecondary} />
+                    <AppText variant="caption" numberOfLines={1} style={{ flex: 1 }}>{attachment.label}</AppText>
+                    <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${attachment.label}`} onPress={() => onRemoveAttachment(attachment.id)} style={({ pressed }) => ({ width: 44, height: 44, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+                      <X size={17} color={theme.colors.danger} />
+                    </Pressable>
+                  </View>
+                ))}
                 <Pressable
-                  key={resourceOption.id}
                   accessibilityRole="button"
-                  onPress={() => onChooseType(resourceOption.id)}
+                  disabled={isUploading}
+                  onPress={onPickFile}
                   style={({ pressed }) => ({
-                    minHeight: 68,
+                    minHeight: 50,
                     flexDirection: 'row',
                     alignItems: 'center',
-                    gap: 12,
-                    borderRadius: 17,
-                    borderWidth: 1,
-                    borderColor: theme.colors.borderSubtle,
-                    backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surface,
-                    padding: 12,
-                  })}
-                >
-                  <View style={{ width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
-                    <ResourceTypeIcon type={resourceOption.id} color={theme.colors.textSecondary} />
-                  </View>
-                  <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-                    <AppText variant="label">{resourceOption.label}</AppText>
-                    <AppText variant="caption" color="muted" numberOfLines={2}>{resourceOption.body}</AppText>
-                  </View>
-                  <ChevronRight size={18} color={theme.colors.faint} />
-                </Pressable>
-              ))}
-            </ScrollView>
-          ) : card ? (
-            <>
-              <ScrollView
-                {...drag.scrollProps}
-                automaticallyAdjustKeyboardInsets
-                keyboardShouldPersistTaps="handled"
-                keyboardDismissMode="interactive"
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: bottomInset + 24, gap: 14 }}
-              >
-                <ComposerFieldShell>
-                  <CompactFieldLabel label="Resource title" required valueLength={card.title.length} maxLength={80} />
-                  <ComposerInput
-                    accessibilityLabel="Resource title, required"
-                    accessibilityHint={card.publicTitleIntent === 'legacy_private'
-                      ? 'This existing title stays protected unless you edit it. Editing opts the updated title into the locked public package preview.'
-                      : 'Enter a public title for this protected resource. Maximum 80 characters.'}
-                    value={card.title}
-                    onChangeText={(title) => onChange({
-                      title: title.slice(0, 80),
-                      publicTitleIntent: 'explicit',
-                    })}
-                    placeholder={option?.label ?? 'Resource title'}
-                  />
-                  <FieldErrorText message={cardErrors.title} />
-                  {card.publicTitleIntent === 'legacy_private' ? (
-                    <AppText variant="caption" color="muted">
-                      This legacy title stays private. Editing it makes the updated title visible in the locked package preview.
-                    </AppText>
-                  ) : null}
-                  <CompactFieldLabel label="Unlocked description" optional valueLength={card.preview.length} maxLength={120} />
-                  <ComposerInput
-                    accessibilityLabel="Unlocked description, optional"
-                    accessibilityHint="Add a short note buyers see with this resource after they unlock the package. Maximum 120 characters."
-                    value={card.preview}
-                    onChangeText={(preview) => onChange({ preview: preview.slice(0, 120) })}
-                    placeholder="Optional note shown after unlock"
-                    multiline
-                    minHeight={66}
-                  />
-                </ComposerFieldShell>
-
-                {textType ? (
-                  <ComposerFieldShell>
-                    <CompactFieldLabel
-                      label={card.type === 'prompt' ? 'Prompt or script' : card.type === 'settings' ? 'Settings' : card.type === 'guide' ? 'Guide or notes' : 'Resource content'}
-                      required={!fileType || card.attachments.length === 0}
-                    />
-                    <ComposerInput
-                      accessibilityLabel={`${card.type === 'prompt' ? 'Prompt or script' : card.type === 'settings' ? 'Settings' : card.type === 'guide' ? 'Guide or notes' : 'Resource content'}, required`}
-                      accessibilityHint="This protected content is revealed only after the resource package is unlocked."
-                      value={card.textContent}
-                      onChangeText={(textContent) => onChange({ textContent })}
-                      placeholder="This content is revealed only after unlock"
-                      multiline
-                      minHeight={150}
-                    />
-                    <FieldErrorText message={cardErrors.content} />
-                  </ComposerFieldShell>
-                ) : null}
-
-                {linkType ? (
-                  <ComposerFieldShell>
-                    <CompactFieldLabel label={card.type === 'remix_link' ? 'Remix URL' : card.type === 'workflow' ? 'Workflow link' : 'URL'} required={card.type !== 'workflow' || card.attachments.length === 0} />
-                    <ComposerInput
-                      accessibilityLabel={`${card.type === 'remix_link' ? 'Remix URL' : card.type === 'workflow' ? 'Workflow link' : 'URL'}, required`}
-                      accessibilityHint="Enter the protected destination URL."
-                      value={card.externalUrl}
-                      onChangeText={(externalUrl) => onChange({ externalUrl })}
-                      placeholder="https://"
-                      autoCapitalize="none"
-                      keyboardType="url"
-                    />
-                    <FieldErrorText message={cardErrors.content} />
-                    {card.type === 'remix_link' ? <AppText variant="caption" color="muted">The URL remains hidden until the package is unlocked.</AppText> : null}
-                  </ComposerFieldShell>
-                ) : null}
-
-                {fileType ? (
-                  <ComposerFieldShell>
-                    <CompactFieldLabel label={card.type === 'reference_media' ? 'Reference files' : card.type === 'workflow' ? 'Workflow files' : 'Files'} optional={card.type === 'workflow' || card.type === 'other'} required={card.type === 'reference_media' || card.type === 'source_assets'} />
-                    {card.attachments.map((attachment) => (
-                      <View key={attachment.id} style={{ minHeight: 50, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 14, backgroundColor: theme.colors.surfaceInset, paddingHorizontal: 11 }}>
-                        <FileText size={17} color={theme.colors.textSecondary} />
-                        <AppText variant="caption" numberOfLines={1} style={{ flex: 1 }}>{attachment.label}</AppText>
-                        <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${attachment.label}`} onPress={() => onRemoveAttachment(attachment.id)} style={({ pressed }) => ({ width: 44, height: 44, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-                          <X size={17} color={theme.colors.danger} />
-                        </Pressable>
-                      </View>
-                    ))}
-                    <Pressable
-                      accessibilityRole="button"
-                      disabled={isUploading}
-                      onPress={onPickFile}
-                      style={({ pressed }) => ({
-                        minHeight: 50,
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 8,
-                        borderRadius: 15,
-                        borderWidth: 1,
-                        borderStyle: 'dashed',
-                        borderColor: theme.colors.border,
-                        backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surfaceInset,
-                        opacity: isUploading ? appTheme.opacity.disabled : 1,
-                      })}
-                    >
-                      {isUploading ? <ActivityIndicator size="small" color={theme.colors.primary} /> : <Upload size={17} color={theme.colors.textSecondary} />}
-                      <AppText variant="label" color="textSecondary">{isUploading ? 'Uploading' : 'Add file'}</AppText>
-                    </Pressable>
-                    {isUploading ? (
-                      <View
-                        accessible
-                        accessibilityLabel="Resource file upload progress"
-                        accessibilityRole="progressbar"
-                        accessibilityValue={{ min: 0, max: 100, now: uploadProgress?.percent ?? 0 }}
-                        style={{ gap: 9 }}
-                      >
-                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-                          <AppText variant="caption" color="muted">
-                            {uploadProgress
-                              ? `Uploading file · ${uploadProgress.percent}%`
-                              : 'Preparing file…'}
-                          </AppText>
-                          <Pressable
-                            accessibilityRole="button"
-                            accessibilityLabel="Cancel resource upload"
-                            onPress={onCancelUpload}
-                            style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
-                          >
-                            <AppText variant="caption" color="danger">Cancel</AppText>
-                          </Pressable>
-                        </View>
-                        <View style={{ height: 5, overflow: 'hidden', borderRadius: 3, backgroundColor: theme.colors.borderSubtle }}>
-                          <View
-                            style={{
-                              width: `${uploadProgress?.percent ?? 0}%`,
-                              height: '100%',
-                              borderRadius: 3,
-                              backgroundColor: theme.colors.primary,
-                            }}
-                          />
-                        </View>
-                        {uploadProgress && uploadProgress.totalBytes > 0 ? (
-                          <AppText variant="caption" color="faint">
-                            {`${formatUploadBytes(uploadProgress.bytesSent)} of ${formatUploadBytes(uploadProgress.totalBytes)}`}
-                          </AppText>
-                        ) : null}
-                      </View>
-                    ) : uploadError ? (
-                      <View
-                        accessibilityLiveRegion="polite"
-                        style={{ gap: 8, borderRadius: 14, backgroundColor: `${theme.colors.danger}12`, padding: 11 }}
-                      >
-                        <AppText variant="label" color="danger">Could not add file</AppText>
-                        <AppText variant="caption" color="muted">{uploadError}</AppText>
-                        {canRetryUpload ? (
-                          <Pressable
-                            accessibilityRole="button"
-                            accessibilityLabel="Retry resource upload"
-                            onPress={onRetryUpload}
-                            style={({ pressed }) => ({ alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
-                          >
-                            <AppText variant="caption" color="primary">Retry upload</AppText>
-                          </Pressable>
-                        ) : null}
-                      </View>
-                    ) : null}
-                    {!linkType && !textType ? <FieldErrorText message={cardErrors.content} /> : null}
-                  </ComposerFieldShell>
-                ) : null}
-
-                {mediaItems.length > 1 ? (
-                  <ResourceScopePicker card={card} mediaItems={mediaItems} onChange={onChange} />
-                ) : null}
-              </ScrollView>
-              <View style={{ paddingHorizontal: 18, paddingTop: 10, paddingBottom: bottomInset + 12, borderTopWidth: 1, borderTopColor: theme.colors.borderSubtle }}>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Save resource"
-                  accessibilityState={{ disabled: !isReady || isUploading }}
-                  disabled={!isReady || isUploading}
-                  onPress={() => {
-                    Keyboard.dismiss();
-                    onSave();
-                  }}
-                  style={({ pressed }) => ({
-                    minHeight: 54,
-                    alignItems: 'center',
                     justifyContent: 'center',
-                    borderRadius: 17,
-                    backgroundColor: theme.colors.primaryFill,
-                    opacity: !isReady || isUploading ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+                    gap: 8,
+                    borderRadius: 15,
+                    borderWidth: 1,
+                    borderStyle: 'dashed',
+                    borderColor: theme.colors.border,
+                    backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surfaceInset,
+                    opacity: isUploading ? appTheme.opacity.disabled : 1,
                   })}
                 >
-                  <AppText variant="button" color="onPrimary">Save resource</AppText>
+                  {isUploading ? <ActivityIndicator size="small" color={theme.colors.primary} /> : <Upload size={17} color={theme.colors.textSecondary} />}
+                  <AppText variant="label" color="textSecondary">{isUploading ? 'Uploading' : 'Add file'}</AppText>
                 </Pressable>
-              </View>
-            </>
-          ) : null}
-        </SheetPanel>
-      </KeyboardAvoidingArea>
-    </Modal>
+                {isUploading ? (
+                  <View
+                    accessible
+                    accessibilityLabel="Resource file upload progress"
+                    accessibilityRole="progressbar"
+                    accessibilityValue={{ min: 0, max: 100, now: uploadProgress?.percent ?? 0 }}
+                    style={{ gap: 9 }}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                      <AppText variant="caption" color="muted">
+                        {uploadProgress
+                          ? `Uploading file · ${uploadProgress.percent}%`
+                          : 'Preparing file…'}
+                      </AppText>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Cancel resource upload"
+                        onPress={onCancelUpload}
+                        style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+                      >
+                        <AppText variant="caption" color="danger">Cancel</AppText>
+                      </Pressable>
+                    </View>
+                    <View style={{ height: 5, overflow: 'hidden', borderRadius: 3, backgroundColor: theme.colors.borderSubtle }}>
+                      <View
+                        style={{
+                          width: `${uploadProgress?.percent ?? 0}%`,
+                          height: '100%',
+                          borderRadius: 3,
+                          backgroundColor: theme.colors.primary,
+                        }}
+                      />
+                    </View>
+                    {uploadProgress && uploadProgress.totalBytes > 0 ? (
+                      <AppText variant="caption" color="faint">
+                        {`${formatUploadBytes(uploadProgress.bytesSent)} of ${formatUploadBytes(uploadProgress.totalBytes)}`}
+                      </AppText>
+                    ) : null}
+                  </View>
+                ) : uploadError ? (
+                  <View
+                    accessibilityLiveRegion="polite"
+                    style={{ gap: 8, borderRadius: 14, backgroundColor: `${theme.colors.danger}12`, padding: 11 }}
+                  >
+                    <AppText variant="label" color="danger">Could not add file</AppText>
+                    <AppText variant="caption" color="muted">{uploadError}</AppText>
+                    {canRetryUpload ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Retry resource upload"
+                        onPress={onRetryUpload}
+                        style={({ pressed }) => ({ alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+                      >
+                        <AppText variant="caption" color="primary">Retry upload</AppText>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                ) : null}
+                {!linkType && !textType ? <FieldErrorText message={cardErrors.content} /> : null}
+              </ComposerFieldShell>
+            ) : null}
+
+            {mediaItems.length > 1 ? (
+              <ResourceScopePicker card={card} mediaItems={mediaItems} onChange={onChange} />
+            ) : null}
+          </ScrollView>
+          <View style={{ paddingHorizontal: 18, paddingTop: 10, paddingBottom: bottomInset + 12, borderTopWidth: 1, borderTopColor: theme.colors.borderSubtle }}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Save resource"
+              accessibilityState={{ disabled: !isReady || isUploading }}
+              disabled={!isReady || isUploading}
+              onPress={() => {
+                Keyboard.dismiss();
+                onSave();
+              }}
+              style={({ pressed }) => ({
+                minHeight: 54,
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: 17,
+                backgroundColor: theme.colors.primaryFill,
+                opacity: !isReady || isUploading ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+              })}
+            >
+              <AppText variant="button" color="onPrimary">Save resource</AppText>
+            </Pressable>
+          </View>
+        </>
+      ) : null}
+    </>
   );
 }
 

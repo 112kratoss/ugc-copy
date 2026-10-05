@@ -1797,7 +1797,7 @@ function IdentityCreationScreen({
           }}
         />
 
-        <SearchableModelPickerModal
+        <SearchableModelPickerSheet
           visible={modelPickerVisible}
           loading={catalogQuery.isLoadingModels}
           error={catalogQuery.error?.message}
@@ -2062,7 +2062,7 @@ function IdentityCreationScreen({
           }}
         />
 
-        <SearchableModelPickerModal
+        <SearchableModelPickerSheet
           visible={modelPickerVisible}
           loading={catalogQuery.isLoadingModels}
           error={catalogQuery.error?.message}
@@ -3898,7 +3898,24 @@ function CreatorPersistentBar({
   );
 }
 
-function SearchableModelPickerModal({
+/**
+ * The sheet a creation screen's model chip opens: a search field over the
+ * list of models.
+ *
+ * Through the overlay host, not a `Modal`, because it holds a text field. As a
+ * Modal it had nothing that gave way to the keyboard on either platform: the
+ * field near its top stayed in view, but the list ran on behind the keys, and
+ * its last three rows of sixteen could not be scrolled above them (Pixel 9a
+ * emulator and iPhone simulator, 2026-10-05). A search that left more rows
+ * than fitted above the keys hid the rest the same way.
+ *
+ * In the app's own window the area below follows the keyboard. On Android it
+ * shortens, the panel is 78% of what is left and the list ends above the keys;
+ * on iOS the panel stays and the list makes the room itself. Being an ordinary
+ * view, the sheet owns what a Modal gave for free: its entrance and exit,
+ * Android's back key, and taking the keyboard from the page as it opens.
+ */
+function SearchableModelPickerSheet({
   visible,
   items,
   value,
@@ -3920,64 +3937,98 @@ function SearchableModelPickerModal({
   const theme = useAppTheme();
   const [query, setQuery] = useState('');
   const reducedMotion = useReducedMotion();
-  const drag = useSheetDismissDrag({ onDismiss: onClose, visible });
+  // The panel takes a touch only once it is a pull. Held from its start, as a
+  // sheet in a Modal must, the touch is taken from the list on Android at the
+  // finger's next movement (see `takesTouchDown`).
+  const drag = useSheetDismissDrag({ onDismiss: onClose, visible, takesTouchDown: false });
+  const presentation = useSheetPresentation({
+    visible,
+    reducedMotion,
+    // The search goes once the sheet has gone. Cleared as it closed, the list
+    // would grow back to every model under its own exit. A Modal's `onDismiss`
+    // did this on iOS only: on Android the picker reopened on its last search.
+    onExited: () => setQuery(''),
+  });
+  // An overlay is an ordinary view: unlike a Modal it has no native claim on
+  // Android's back key, so it takes one (Modality: always an obvious way out).
+  useHardwareBack(visible, onClose);
+
+  // The keyboard goes with whatever had it. Opening over the prompt while it
+  // is being typed in takes the keyboard from it, as a Modal's window did by
+  // taking the focus; left up, the sheet would open already shortened, with
+  // the keys still typing into the prompt behind it. Closing puts the search
+  // field's keyboard away as the sheet leaves rather than after it has gone.
+  const wasVisibleRef = useRef(visible);
+  useEffect(() => {
+    if (wasVisibleRef.current === visible) return;
+    wasVisibleRef.current = visible;
+    Keyboard.dismiss();
+  }, [visible]);
+
   const normalizedQuery = query.trim().toLowerCase();
   const filteredItems = useMemo(() => items.filter((item) => (
     !normalizedQuery || `${item.displayName} ${item.description} ${item.badge ?? ''}`.toLowerCase().includes(normalizedQuery)
   )), [items, normalizedQuery]);
+  const motion = sheetMotion(drag, presentation);
 
   return (
-    <Modal visible={visible} transparent statusBarTranslucent animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose} onDismiss={() => setQuery('')}>
-      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-        <SheetBackdrop drag={drag} color={hexWithAlpha(theme.dim.color, 0.7 * theme.dim.scale)} onPress={onClose} />
-        <SheetPanel {...drag.contentPanHandlers} accessibilityViewIsModal style={[{ height: '78%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: theme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 20, gap: 12 }, drag.dragStyle]}>
-          <SheetGrabber drag={drag} />
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-            <View style={{ flex: 1, gap: 2 }}>
-              <Text style={{ color: theme.colors.text, fontSize: 21, fontWeight: '800' }}>Choose model</Text>
-              <Text style={{ color: theme.colors.muted, fontSize: 12 }}>Defaults and quote update after selection.</Text>
+    <Overlay visible={presentation.rendered}>
+      {/* Answered once: while the exit plays the sheet is still drawn, and a press on it must not land. */}
+      <View pointerEvents={visible ? 'auto' : 'none'} style={{ flex: 1 }}>
+        <KeyboardAvoidingArea iosScrollViewAdjustsInsets testID="model-picker-keyboard-area" style={{ justifyContent: 'flex-end' }}>
+          <SheetBackdrop drag={drag} style={motion.backdrop} color={hexWithAlpha(theme.dim.color, 0.7 * theme.dim.scale)} onPress={onClose} />
+          <SheetPanel {...drag.contentPanHandlers} accessibilityViewIsModal onLayout={presentation.onPanelLayout} style={[{ height: '78%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: theme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 20, gap: 12 }, motion.panel]}>
+            <SheetGrabber drag={drag} />
+            {/* The title takes a pull as the grabber does, wherever the list is scrolled to. The panel's own
+                drag waits for the list to be at its top, so a pull from here did nothing once it had scrolled. */}
+            <View {...drag.panHandlers} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text style={{ color: theme.colors.text, fontSize: 21, fontWeight: '800' }}>Choose model</Text>
+                <Text style={{ color: theme.colors.muted, fontSize: 12 }}>Defaults and quote update after selection.</Text>
+              </View>
+              <Pressable accessibilityRole="button" accessibilityLabel="Close model picker" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+                <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
+              </Pressable>
             </View>
-            <Pressable accessibilityRole="button" accessibilityLabel="Close model picker" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-              <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
-            </Pressable>
-          </View>
-          <View style={{ minHeight: 52, borderRadius: 17, borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.surfaceInset, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 9 }}>
-            <Search size={18} color={theme.colors.muted} />
-            <TextInput accessibilityLabel="Search model names" value={query} onChangeText={setQuery} placeholder="Search models" placeholderTextColor={theme.colors.faint} autoCapitalize="none" autoCorrect={false} spellCheck={false} returnKeyType="search" clearButtonMode="while-editing" style={{ flex: 1, color: theme.colors.text, fontSize: 14, paddingVertical: 12 }} />
-          </View>
-          <ScrollView {...drag.scrollProps} keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 8, paddingBottom: 28 }}>
-            {filteredItems.map((item) => {
-              const selected = item.id === value;
-              return (
-                <Pressable
-                  key={item.id}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected }}
-                  accessibilityLabel={`${item.displayName}. ${item.description}`}
-                  onPress={() => onChange(item.id)}
-                  style={({ pressed }) => ({ minHeight: 76, borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: selected ? hexWithAlpha(theme.colors.image, 0.55) : theme.colors.border, backgroundColor: selected ? hexWithAlpha(theme.colors.image, 0.1) : theme.colors.surfaceStrong, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 12, opacity: pressed ? appTheme.opacity.pressed : 1 })}
-                >
-                  <View style={{ width: 40, height: 40, borderRadius: 14, backgroundColor: selected ? hexWithAlpha(theme.colors.image, 0.18) : theme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center' }}>
-                    <ImageIcon size={19} color={selected ? theme.colors.image : theme.colors.muted} />
-                  </View>
-                  <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
-                      <Text numberOfLines={1} style={{ flexShrink: 1, color: theme.colors.text, fontSize: 14, fontWeight: '800' }}>{item.displayName}</Text>
-                      {item.badge ? <Text style={{ color: theme.colors.image, fontSize: 11, fontWeight: '800' }}>{item.badge}</Text> : null}
+            <View style={{ minHeight: 52, borderRadius: 17, borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.surfaceInset, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 9 }}>
+              <Search size={18} color={theme.colors.muted} />
+              <TextInput accessibilityLabel="Search model names" value={query} onChangeText={setQuery} placeholder="Search models" placeholderTextColor={theme.colors.faint} autoCapitalize="none" autoCorrect={false} spellCheck={false} returnKeyType="search" clearButtonMode="while-editing" style={{ flex: 1, color: theme.colors.text, fontSize: 14, paddingVertical: 12 }} />
+            </View>
+            {/* `handled`: a press on a model answers with the keyboard up, and a touch on anything else in the list puts the keyboard away. */}
+            <ScrollView {...drag.scrollProps} automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 8, paddingBottom: 28 }}>
+              {filteredItems.map((item) => {
+                const selected = item.id === value;
+                return (
+                  <Pressable
+                    key={item.id}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    accessibilityLabel={`${item.displayName}. ${item.description}`}
+                    onPress={() => onChange(item.id)}
+                    style={({ pressed }) => ({ minHeight: 76, borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: selected ? hexWithAlpha(theme.colors.image, 0.55) : theme.colors.border, backgroundColor: selected ? hexWithAlpha(theme.colors.image, 0.1) : theme.colors.surfaceStrong, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 12, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+                  >
+                    <View style={{ width: 40, height: 40, borderRadius: 14, backgroundColor: selected ? hexWithAlpha(theme.colors.image, 0.18) : theme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center' }}>
+                      <ImageIcon size={19} color={selected ? theme.colors.image : theme.colors.muted} />
                     </View>
-                    <Text numberOfLines={2} style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 15 }}>{item.description}</Text>
-                  </View>
-                  {selected ? <Check size={19} color={theme.colors.image} /> : null}
-                </Pressable>
-              );
-            })}
-            {loading ? <Text accessibilityRole="text" style={{ color: theme.colors.muted, paddingVertical: 12 }}>Loading models…</Text> : null}
-            {error ? <Pressable accessibilityRole="button" onPress={onRetry} style={{ minHeight: 44, justifyContent: 'center' }}><Text style={{ color: theme.colors.text }}>{error} Tap to retry.</Text></Pressable> : null}
-            {!loading && !error && filteredItems.length === 0 ? <Text style={{ color: theme.colors.muted, textAlign: 'center', paddingVertical: 28 }}>No models found.</Text> : null}
-          </ScrollView>
-        </SheetPanel>
+                    <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
+                        <Text numberOfLines={1} style={{ flexShrink: 1, color: theme.colors.text, fontSize: 14, fontWeight: '800' }}>{item.displayName}</Text>
+                        {item.badge ? <Text style={{ color: theme.colors.image, fontSize: 11, fontWeight: '800' }}>{item.badge}</Text> : null}
+                      </View>
+                      <Text numberOfLines={2} style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 15 }}>{item.description}</Text>
+                    </View>
+                    {selected ? <Check size={19} color={theme.colors.image} /> : null}
+                  </Pressable>
+                );
+              })}
+              {loading ? <Text accessibilityRole="text" style={{ color: theme.colors.muted, paddingVertical: 12 }}>Loading models…</Text> : null}
+              {error ? <Pressable accessibilityRole="button" onPress={onRetry} style={{ minHeight: 44, justifyContent: 'center' }}><Text style={{ color: theme.colors.text }}>{error} Tap to retry.</Text></Pressable> : null}
+              {!loading && !error && filteredItems.length === 0 ? <Text style={{ color: theme.colors.muted, textAlign: 'center', paddingVertical: 28 }}>No models found.</Text> : null}
+            </ScrollView>
+          </SheetPanel>
+        </KeyboardAvoidingArea>
       </View>
-    </Modal>
+    </Overlay>
   );
 }
 
