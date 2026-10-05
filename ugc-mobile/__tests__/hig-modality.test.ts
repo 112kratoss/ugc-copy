@@ -192,6 +192,29 @@ describe('HIG modality — sheets, alerts and the way out', () => {
     expect(unclaimed).toEqual([]);
   });
 
+  it('hosts no further text field in a Modal', () => {
+    // A React Native Modal is a window of its own on Android, and the keyboard
+    // tracker reads nothing there: a field in one cannot follow the keys, and
+    // the Reference details sheet's name field sat under them while it was
+    // typed in. A sheet with a field draws through `OverlayHost` instead. This
+    // sees a field written inside the Modal's own JSX, not one a child draws.
+    const textEntry = /<(TextInput|AppTextInput|ProfileTextField|ComposerInput|WorkspaceInput)\b/;
+    const hosted = files.flatMap((entry) => [...entry.source.matchAll(/<Modal\b[\s\S]*?<\/Modal>/g)]
+      .filter((block) => textEntry.test(block[0]))
+      .map((block) => {
+        const owner = [...entry.source.slice(0, block.index).matchAll(/\nfunction (\w+)\(/g)].pop()?.[1] ?? '?';
+        return `${entry.name}: ${owner}`;
+      }));
+
+    // The two still to move, as the Reference details sheet was. The model
+    // picker's field stays in view, but the end of its list cannot be scrolled
+    // above the keys. This list only gets shorter.
+    expect(hosted).toEqual([
+      'app/post/new.tsx: ResourceComposerSheet',
+      'components/media-creation-screen.tsx: SearchableModelPickerModal',
+    ]);
+  });
+
   it('dismisses every modal surface with the shared Close control', () => {
     // Toolbars: "Use the standard Back and Close buttons ... ensure you
     // consistently implement it throughout your app." A raw `X` on a control

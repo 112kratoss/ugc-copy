@@ -30,6 +30,8 @@ vi.mock('react-native', () => ({
     },
     spring: animatedState.spring,
     timing: vi.fn(() => ({ start: vi.fn(), stop: vi.fn() })),
+    add: (a: unknown, b: unknown) => ({ add: [a, b] }),
+    multiply: (a: unknown, b: unknown) => ({ multiply: [a, b] }),
   },
   Easing: { in: (fn: unknown) => fn, out: (fn: unknown) => fn, cubic: 'cubic' },
   PanResponder: { create: (config: Record<string, unknown>) => ({ panHandlers: config }) },
@@ -37,17 +39,19 @@ vi.mock('react-native', () => ({
   View: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement('view', props, children),
 }));
 
-import { SHEET_BACKDROP_FADE_DISTANCE, useSheetDismissDrag, type SheetDismissDrag } from '../components/sheet-chrome';
+import { Animated } from 'react-native';
+
+import { SHEET_BACKDROP_FADE_DISTANCE, SheetBackdrop, sheetMotion, useSheetDismissDrag, useSheetPresentation, type SheetDismissDrag } from '../components/sheet-chrome';
 import { leaveTouchToNativeView } from '../lib/native-touch-owner';
 
 type Handler = (event: unknown, gesture: Record<string, number>) => unknown;
 type Handlers = Record<string, Handler>;
 type MockValue = { value: number; setValue: ReturnType<typeof vi.fn> };
 
-function mount(visible: boolean, onDismiss = vi.fn()) {
+function mount(visible: boolean, onDismiss = vi.fn(), takesTouchDown?: boolean) {
   let latest: SheetDismissDrag | undefined;
   const Probe = ({ shown }: { shown: boolean }) => {
-    latest = useSheetDismissDrag({ onDismiss, visible: shown });
+    latest = useSheetDismissDrag({ onDismiss, visible: shown, takesTouchDown });
     return null;
   };
   let tree: renderer.ReactTestRenderer | undefined;
@@ -203,6 +207,27 @@ describe('sheet dismiss drag', () => {
     sheet.unmount();
   });
 
+  it('takes no touch-down for a sheet that asks it not to, and still takes the pull', () => {
+    // In the app's own window nothing above the panel takes an unowned touch,
+    // so the panel can wait for the pull. Held from its start, the touch is
+    // lost to a scroll view inside the panel on Android.
+    const sheet = mount(true, vi.fn(), false);
+    const content = sheet.content();
+
+    expect(content.onStartShouldSetPanResponder(touchOn(TITLE), gesture(0))).toBe(false);
+    // The grabber is its own strip and still takes its touch as it lands.
+    expect(sheet.grabber().onStartShouldSetPanResponder(touchOn(TITLE), gesture(0))).toBe(true);
+
+    // The pull is taken at the move, and arrives armed: the sheet follows from where it was taken.
+    expect(content.onMoveShouldSetPanResponder(touchOn(TITLE), gesture(8))).toBe(true);
+    content.onPanResponderGrant({}, gesture(8));
+    content.onPanResponderMove({}, gesture(60));
+    expect(sheet.offset().value).toBe(52);
+    content.onPanResponderRelease({}, gesture(160));
+    expect(sheet.onDismiss).toHaveBeenCalledOnce();
+    sheet.unmount();
+  });
+
   it('never arms over a list that is scrolled away from its top', () => {
     const sheet = mount(true);
     const content = sheet.content();
@@ -221,6 +246,23 @@ describe('sheet dismiss drag', () => {
     content.onPanResponderMove({}, gesture(120));
     content.onPanResponderMove({}, gesture(150));
     expect(sheet.offset().value).toBe(30);
+    sheet.unmount();
+  });
+
+  it('takes a pull on the grabber wherever the list is scrolled to', () => {
+    // The grabber's handlers are also what a sheet spreads on a header that
+    // must answer a pull while its body is scrolled.
+    const sheet = mount(true);
+    sheet.drag().scrollProps.onScroll!({ nativeEvent: { contentOffset: { y: 80 } } } as never);
+    const grabber = sheet.grabber();
+
+    expect(grabber.onStartShouldSetPanResponder(touchOn(TITLE), gesture(0))).toBe(true);
+    expect(grabber.onMoveShouldSetPanResponder(touchOn(TITLE), gesture(20))).toBe(true);
+    grabber.onPanResponderGrant({}, gesture(0));
+    grabber.onPanResponderMove({}, gesture(60));
+    expect(sheet.offset().value).toBe(60);
+    grabber.onPanResponderRelease({}, gesture(140));
+    expect(sheet.onDismiss).toHaveBeenCalledOnce();
     sheet.unmount();
   });
 
@@ -281,6 +323,137 @@ describe('sheet dismiss drag', () => {
     });
     expect(sheet.drag().backdropStyle).toEqual({ opacity: sheet.drag().backdropOpacity });
     expect(sheet.drag().scrollProps).toMatchObject({ bounces: false, overScrollMode: 'never', scrollEventThrottle: 16 });
+    sheet.unmount();
+  });
+});
+
+describe('a hosted sheet’s motion', () => {
+  function mountHosted() {
+    let latest: { drag: SheetDismissDrag; presentation: ReturnType<typeof useSheetPresentation> } | undefined;
+    const Probe = () => {
+      const drag = useSheetDismissDrag({ onDismiss: () => {}, visible: true });
+      const presentation = useSheetPresentation({ visible: true, reducedMotion: false });
+      latest = { drag, presentation };
+      return null;
+    };
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<Probe />);
+    });
+    return { ...latest!, unmount: () => renderer.act(() => tree!.unmount()) };
+  }
+
+  it('folds the entrance and the drag into one transform and one opacity', () => {
+    const { drag, presentation, unmount } = mountHosted();
+    const motion = sheetMotion(drag, presentation);
+
+    // Two transforms, or two opacities, on one view would not compose: one is
+    // driven natively by the timing, the other set from the finger.
+    expect(motion.panel).toEqual({
+      opacity: presentation.panelOpacity,
+      transform: [{ translateY: { add: [presentation.entryTranslateY, drag.translateY] } }],
+    });
+    expect(motion.backdrop).toEqual({
+      opacity: { multiply: [presentation.backdropProgress, drag.backdropOpacity] },
+    });
+    unmount();
+  });
+
+  it('gives the scrim that one opacity in place of the drag’s own', () => {
+    const { drag, presentation, unmount } = mountHosted();
+    const motion = sheetMotion(drag, presentation);
+    const scrimStyle = (element: React.ReactElement) => {
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(element);
+      });
+      const style = tree!.root.findAllByType('view' as never)[0].props.style as unknown[];
+      renderer.act(() => tree!.unmount());
+      return style[style.length - 1];
+    };
+
+    expect(scrimStyle(<SheetBackdrop drag={drag} onPress={() => {}} />)).toEqual(drag.backdropStyle);
+    expect(scrimStyle(<SheetBackdrop drag={drag} style={motion.backdrop} onPress={() => {}} />)).toEqual(motion.backdrop);
+    unmount();
+  });
+});
+
+describe('a hosted sheet’s arrival and departure', () => {
+  function mountPresented(reducedMotion = false) {
+    const onEntered = vi.fn();
+    const onExited = vi.fn();
+    let latest: ReturnType<typeof useSheetPresentation> | undefined;
+    const Probe = ({ shown }: { shown: boolean }) => {
+      latest = useSheetPresentation({ visible: shown, reducedMotion, onEntered, onExited });
+      return null;
+    };
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<Probe shown={false} />);
+    });
+    return {
+      onEntered,
+      onExited,
+      show: (shown: boolean) => renderer.act(() => tree!.update(<Probe shown={shown} />)),
+      /** The panel's first layout, which the slide waits for: it travels the panel's own height. */
+      measure: () => renderer.act(() => latest!.onPanelLayout({ nativeEvent: { layout: { height: 560 } } } as never)),
+      unmount: () => renderer.act(() => tree!.unmount()),
+    };
+  }
+
+  /** Ends the newest timed animation, as the native side does once it has run (or been cut short). */
+  function endSlide(finished = true) {
+    const started = vi.mocked(Animated.timing).mock.results;
+    const slide = started[started.length - 1].value as unknown as { start: ReturnType<typeof vi.fn> };
+    const calls = slide.start.mock.calls;
+    renderer.act(() => (calls[calls.length - 1][0] as (result: { finished: boolean }) => void)({ finished }));
+  }
+
+  // The sheet a reference tile opens holds its clip's player back until this
+  // is said: a player built while the sheet travelled took the first 32 to
+  // 197 ms out of the slide (emulator and simulator films, 2026-10-05).
+  it('says the sheet has arrived once its slide has played, and not before', () => {
+    const sheet = mountPresented();
+    sheet.show(true);
+    expect(sheet.onEntered).not.toHaveBeenCalled();
+    sheet.measure();
+    // On its way in.
+    expect(sheet.onEntered).not.toHaveBeenCalled();
+    endSlide();
+    expect(sheet.onEntered).toHaveBeenCalledTimes(1);
+    expect(sheet.onExited).not.toHaveBeenCalled();
+    sheet.unmount();
+  });
+
+  it('does not say so for a slide that was cut short', () => {
+    const sheet = mountPresented();
+    sheet.show(true);
+    sheet.measure();
+    endSlide(false);
+    expect(sheet.onEntered).not.toHaveBeenCalled();
+    sheet.unmount();
+  });
+
+  it('says it at once when there is no slide to wait for', () => {
+    const slidesBefore = vi.mocked(Animated.timing).mock.calls.length;
+    const sheet = mountPresented(true);
+    sheet.show(true);
+    sheet.measure();
+    expect(sheet.onEntered).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(Animated.timing).mock.calls.length).toBe(slidesBefore);
+    sheet.unmount();
+  });
+
+  it('says it has left when its exit has played, and nothing more of its arrival', () => {
+    const sheet = mountPresented();
+    sheet.show(true);
+    sheet.measure();
+    endSlide();
+    sheet.show(false);
+    expect(sheet.onExited).not.toHaveBeenCalled();
+    endSlide();
+    expect(sheet.onExited).toHaveBeenCalledTimes(1);
+    expect(sheet.onEntered).toHaveBeenCalledTimes(1);
     sheet.unmount();
   });
 });

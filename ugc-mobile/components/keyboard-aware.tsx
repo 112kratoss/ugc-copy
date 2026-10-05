@@ -69,9 +69,13 @@ const platformApi = optionalNativeExport(() => ReactNative.Platform);
  * picker opened over the prompt's keyboard: the tracker still read open at 336
  * while these events had already reported the hide.
  *
- * It does not rescue an Android `Modal`: that window receives neither the
- * insets nor these JS events — both were measured returning nothing from inside
- * one. See the note in comments-sheet for what actually fixes that case.
+ * It is no rescue for an Android `Modal`. That window receives none of the
+ * insets, and these JS events were first measured not arriving there either.
+ * On the Pixel 9a emulator (API 36, 2026-10-05) they did arrive: an area
+ * inside a Modal lifted, after the keyboard had stopped moving and 24dp short
+ * (the navigation bar), where the tracker in the app's own window follows it
+ * frame by frame by its whole height. See the note in comments-sheet for what
+ * actually fixes that case.
  *
  * Deliberately not gated on Reduce Motion, unlike every other animation in the
  * app. That preference governs the app's own motion, not the system keyboard,

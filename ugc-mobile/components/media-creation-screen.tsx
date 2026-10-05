@@ -18,11 +18,12 @@ import {
   X,
 } from 'lucide-react-native';
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
-import { ActivityIndicator, AppState, Modal, Pressable, ScrollView, Switch, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, AppState, Keyboard, Modal, Pressable, ScrollView, Switch, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { MediaPreview, StableMediaImage } from '@/components/media-preview';
+import { Overlay } from '@/components/overlay-host';
 import { PushOfferCard } from '@/components/push-offer-card';
 import {
   AppText,
@@ -50,7 +51,7 @@ import {
   type PendingGenerationAttempt,
 } from '@/lib/generation-attempts';
 import { createDraftSaveQueue } from '@/lib/draft-save-queue';
-import { SheetBackdrop, SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
+import { SheetBackdrop, SheetGrabber, SheetPanel, sheetMotion, useSheetDismissDrag, useSheetPresentation } from '@/components/sheet-chrome';
 import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { trackOnboardingEvent } from '@/lib/onboarding';
@@ -120,6 +121,7 @@ import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
 import { invalidateActiveGenerations } from '@/lib/active-generations';
 import { verticalHitSlop } from '@/lib/hit-target';
 import { haptic } from '@/lib/haptics';
+import { useHardwareBack } from '@/lib/use-hardware-back';
 
 const TOOL_META: Record<CreatorToolId, { title: string; accent: ToolAccent; subtitle: string }> = {
   image: {
@@ -3614,6 +3616,37 @@ function ComposerToolbarButton({ icon, label, onPress, disabled, accent, quiet }
   );
 }
 
+/** What the Reference details sheet draws: the reference, and which of its optional rows it has. */
+type ReferenceDetailsContent = { media: MediaDraft; insertsHandle: boolean; replaces: boolean; isReplacing: boolean };
+
+function sameReferenceDetails(held: ReferenceDetailsContent | null, live: ReferenceDetailsContent) {
+  return held !== null
+    && held.media === live.media
+    && held.insertsHandle === live.insertsHandle
+    && held.replaces === live.replaces
+    && held.isReplacing === live.isReplacing;
+}
+
+/**
+ * The sheet a reference tile opens: its preview, its name, and what can be done
+ * with it.
+ *
+ * Through the overlay host, not a `Modal`, because it holds a text field and
+ * has to give way to the keyboard. In the app's own window the area below
+ * follows the keyboard frame by frame, by its whole height. Inside a Modal on
+ * Android that tracker reads nothing, and the most that arrived there on the
+ * emulator was React Native's event, once the keyboard had stopped moving and
+ * short by the navigation bar. Being an ordinary view, it owns what a Modal
+ * gave for free: the entrance and exit, Android's back key, and taking the
+ * keyboard from the page as it opens.
+ *
+ * Under the title the body scrolls. With the keyboard up there is no room for
+ * a 300pt preview, the field and the rows below it, so on Android the panel
+ * shortens to what is left of the screen and the scroll view keeps the
+ * focused field in what remains of it; on iOS the panel stays and the scroll
+ * view makes the room itself. On a short phone the tallest shape of the sheet
+ * scrolls at rest too, where its last row used to run off the screen.
+ */
 function ReferenceDetailsOverlay({
   media,
   handleUsedInPrompt,
@@ -3636,20 +3669,72 @@ function ReferenceDetailsOverlay({
 }) {
   const theme = useAppTheme();
   const reducedMotion = useReducedMotion();
-  const drag = useSheetDismissDrag({ onDismiss: onClose, visible: media !== null });
+  const visible = media !== null;
+  // A caller drops the reference the moment the sheet closes, and the rows that
+  // hang off it go with it. The panel leaves showing what it was opened with,
+  // or it would change height under its own exit.
+  const [held, setHeld] = useState<ReferenceDetailsContent | null>(null);
+  const live: ReferenceDetailsContent | null = media
+    ? { media, insertsHandle: Boolean(onUseHandle), replaces: Boolean(onReplace), isReplacing: Boolean(isReplacing) }
+    : null;
+  if (live && !sameReferenceDetails(held, live)) setHeld(live);
+  const content = live ?? held;
+
+  // The panel takes a touch only once it is a pull. Holding it from its start,
+  // as a sheet in a Modal must, costs the body its scrolling on Android: a slow
+  // drag that began on the picture went nowhere (Pixel 9a emulator, 2026-10-05).
+  const drag = useSheetDismissDrag({ onDismiss: onClose, visible, takesTouchDown: false });
+  // A clip's player waits for the sheet to arrive. A player is built on the
+  // main thread, which is where this entrance is drawn too, and the Modal this
+  // sheet used to be was slid in by the system, which a busy main thread does
+  // not slow. Built with the sheet, the player took the start of the 300 ms
+  // slide: the sheet was first drawn 67 to 175 ms in on the iPhone simulator
+  // and 32 to 197 ms in on the Pixel 9a emulator, part-way up the screen, where
+  // with a picture it was drawn from 15 to 56 ms in (films, 2026-10-05).
+  const [arrived, setArrived] = useState(false);
+  const presentation = useSheetPresentation({
+    visible,
+    reducedMotion,
+    onEntered: () => setArrived(true),
+    onExited: () => {
+      setHeld(null);
+      setArrived(false);
+    },
+  });
+  // An overlay is an ordinary view: unlike a Modal it has no native claim on
+  // Android's back key, so it takes one (Modality: always an obvious way out).
+  useHardwareBack(visible, onClose);
   const [renameStatus, setRenameStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const renameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // The keyboard goes with whatever had it. Opening over the prompt while it
+  // is being typed in takes the keyboard from it, as a Modal's window did by
+  // taking the focus; left up, the sheet would open already lifted, with the
+  // keys still typing into the prompt behind it. Closing puts the sheet's own
+  // keyboard away as it leaves rather than after it has gone.
+  const wasVisibleRef = useRef(visible);
+  useEffect(() => {
+    if (wasVisibleRef.current === visible) return;
+    wasVisibleRef.current = visible;
+    Keyboard.dismiss();
+  }, [visible]);
+
+  // Keyed to the reference the sheet shows, which it still shows while it
+  // leaves: reset when the caller drops it, the saved line would go from under
+  // the field as the exit began and the panel would shorten on its way out.
+  const shownId = content?.media.id;
   useEffect(() => {
     setRenameStatus('idle');
     if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
     return () => {
       if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
     };
-  }, [media?.id]);
+  }, [shownId]);
 
-  if (!media) return null;
-  const accessibleName = mediaAccessibleName(media);
+  if (!content) return null;
+  const shown = content.media;
+  const accessibleName = mediaAccessibleName(shown);
+  const motion = sheetMotion(drag, presentation);
 
   const markRenameSaved = () => {
     if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
@@ -3666,8 +3751,8 @@ function ReferenceDetailsOverlay({
   const confirmRemove = () => {
     void showConfirmDialog({
       title: 'Remove reference?',
-      message: handleUsedInPrompt && media.handle
-        ? `${accessibleName} and ${media.handle} will be removed from this draft.`
+      message: handleUsedInPrompt && shown.handle
+        ? `${accessibleName} and ${shown.handle} will be removed from this draft.`
         : `${accessibleName} will be removed from this draft.`,
       confirmLabel: 'Remove',
       destructive: true,
@@ -3677,59 +3762,67 @@ function ReferenceDetailsOverlay({
   };
 
   return (
-    <Modal visible transparent statusBarTranslucent animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose}>
-      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-        <SheetBackdrop drag={drag} color={hexWithAlpha(theme.dim.color, 0.68 * theme.dim.scale)} onPress={onClose} />
-        <SheetPanel {...drag.contentPanHandlers} accessibilityViewIsModal style={[{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: theme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 30, gap: 14 }, drag.dragStyle]}>
-          <SheetGrabber drag={drag} />
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Text style={{ color: theme.colors.text, fontSize: 20, fontWeight: '800' }}>Reference details</Text>
-            <Pressable accessibilityRole="button" accessibilityLabel="Close reference details" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-              <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
-            </Pressable>
-          </View>
-          {/* The whole reference, centred across the sheet: it is what the model is given, so none of it is cropped away. */}
-          <MediaPreview url={media.url} kind={media.kind === 'video' ? 'video' : 'image'} height={300} radius={22} letterbox />
-          <View style={{ gap: 7 }}>
-            <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>Reference name</Text>
-            <TextInput
-              accessibilityLabel={`Reference name for ${accessibleName}`}
-              value={media.displayName}
-              onChangeText={handleRename}
-              onBlur={renameStatus === 'saving' ? markRenameSaved : undefined}
-              placeholder="Reference name"
-              placeholderTextColor={theme.colors.faint}
-              style={{ minHeight: 52, borderRadius: 16, borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.surfaceInset, color: theme.colors.text, paddingHorizontal: 14, fontSize: 14, fontWeight: '700' }}
-            />
-            {renameStatus !== 'idle' ? (
-              <Text accessibilityLiveRegion="polite" style={{ color: renameStatus === 'saved' ? theme.colors.image : theme.colors.muted, fontSize: 11, fontWeight: '700' }}>
-                {renameStatus === 'saved' ? 'Saved to draft' : 'Saving…'}
-              </Text>
-            ) : null}
-          </View>
-          {media.handle && onUseHandle ? <SecondaryButton label={`Insert ${media.handle}`} onPress={() => onUseHandle(media.handle!)} /> : null}
-          {onReplace ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Replace ${accessibleName}`}
-              accessibilityState={{ disabled: Boolean(isReplacing) }}
-              disabled={isReplacing}
-              onPress={onReplace}
-              style={({ pressed }) => ({ minHeight: 52, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: theme.colors.borderStrong, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, opacity: isReplacing ? 0.55 : pressed ? appTheme.opacity.pressed : 1 })}
-            >
-              {isReplacing ? <ActivityIndicator size="small" color={theme.colors.text} /> : <RefreshCw size={16} color={theme.colors.text} />}
-              <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '800' }}>
-                {isReplacing ? 'Replacing…' : `Replace media${media.handle ? ` · keeps ${media.handle}` : ''}`}
-              </Text>
-            </Pressable>
-          ) : null}
-          <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${accessibleName}`} onPress={confirmRemove} style={({ pressed }) => ({ minHeight: 52, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.danger, 0.34), alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-            <Trash2 size={17} color={theme.colors.danger} />
-            <Text style={{ color: theme.colors.danger, fontSize: 13, fontWeight: '800' }}>Remove reference</Text>
-          </Pressable>
-        </SheetPanel>
+    <Overlay visible={presentation.rendered}>
+      {/* Answered once: while the exit plays the sheet is still drawn, and a press on it must not land. */}
+      <View pointerEvents={visible ? 'auto' : 'none'} style={{ flex: 1 }}>
+        <KeyboardAvoidingArea iosScrollViewAdjustsInsets testID="reference-details-keyboard-area" style={{ justifyContent: 'flex-end' }}>
+          <SheetBackdrop drag={drag} style={motion.backdrop} color={hexWithAlpha(theme.dim.color, 0.68 * theme.dim.scale)} onPress={onClose} />
+          <SheetPanel {...drag.contentPanHandlers} accessibilityViewIsModal onLayout={presentation.onPanelLayout} style={[{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: theme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 30, gap: 14 }, motion.panel]}>
+            <SheetGrabber drag={drag} />
+            {/* The title takes a pull as the grabber does, wherever the body is scrolled to. The panel's own
+                drag waits for the body to be at its top, and with the keyboard up the body never quite is. */}
+            <View {...drag.panHandlers} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={{ color: theme.colors.text, fontSize: 20, fontWeight: '800' }}>Reference details</Text>
+              <Pressable accessibilityRole="button" accessibilityLabel="Close reference details" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+                <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
+              </Pressable>
+            </View>
+            {/* `handled`: a press on a row answers with the keyboard up, and a touch on anything else in the body puts the keyboard away. */}
+            <ScrollView {...drag.scrollProps} automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 14 }}>
+              {/* The whole reference, centred across the sheet: it is what the model is given, so none of it is cropped away. */}
+              <MediaPreview url={shown.url} kind={shown.kind === 'video' ? 'video' : 'image'} height={300} radius={22} letterbox playerHeld={!arrived} />
+              <View style={{ gap: 7 }}>
+                <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>Reference name</Text>
+                <TextInput
+                  accessibilityLabel={`Reference name for ${accessibleName}`}
+                  value={shown.displayName}
+                  onChangeText={handleRename}
+                  onBlur={renameStatus === 'saving' ? markRenameSaved : undefined}
+                  placeholder="Reference name"
+                  placeholderTextColor={theme.colors.faint}
+                  style={{ minHeight: 52, borderRadius: 16, borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.surfaceInset, color: theme.colors.text, paddingHorizontal: 14, fontSize: 14, fontWeight: '700' }}
+                />
+                {renameStatus !== 'idle' ? (
+                  <Text accessibilityLiveRegion="polite" style={{ color: renameStatus === 'saved' ? theme.colors.image : theme.colors.muted, fontSize: 11, fontWeight: '700' }}>
+                    {renameStatus === 'saved' ? 'Saved to draft' : 'Saving…'}
+                  </Text>
+                ) : null}
+              </View>
+              {shown.handle && content.insertsHandle ? <SecondaryButton label={`Insert ${shown.handle}`} onPress={() => onUseHandle?.(shown.handle!)} /> : null}
+              {content.replaces ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Replace ${accessibleName}`}
+                  accessibilityState={{ disabled: content.isReplacing }}
+                  disabled={content.isReplacing}
+                  onPress={onReplace}
+                  style={({ pressed }) => ({ minHeight: 52, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: theme.colors.borderStrong, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, opacity: content.isReplacing ? 0.55 : pressed ? appTheme.opacity.pressed : 1 })}
+                >
+                  {content.isReplacing ? <ActivityIndicator size="small" color={theme.colors.text} /> : <RefreshCw size={16} color={theme.colors.text} />}
+                  <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '800' }}>
+                    {content.isReplacing ? 'Replacing…' : `Replace media${shown.handle ? ` · keeps ${shown.handle}` : ''}`}
+                  </Text>
+                </Pressable>
+              ) : null}
+              <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${accessibleName}`} onPress={confirmRemove} style={({ pressed }) => ({ minHeight: 52, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.danger, 0.34), alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+                <Trash2 size={17} color={theme.colors.danger} />
+                <Text style={{ color: theme.colors.danger, fontSize: 13, fontWeight: '800' }}>Remove reference</Text>
+              </Pressable>
+            </ScrollView>
+          </SheetPanel>
+        </KeyboardAvoidingArea>
       </View>
-    </Modal>
+    </Overlay>
   );
 }
 

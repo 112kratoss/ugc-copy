@@ -135,6 +135,7 @@ export function useSheetDismissDrag({
   onDismiss,
   visible,
   enabled = true,
+  takesTouchDown = true,
 }: {
   onDismiss: () => void;
   /**
@@ -147,6 +148,26 @@ export function useSheetDismissDrag({
    */
   visible: boolean;
   enabled?: boolean;
+  /**
+   * Whether the panel takes a touch-down that nothing below it wanted, before
+   * it is a pull.
+   *
+   * Inside a React Native `Modal` it has to (see the content responder below).
+   * In the app's own window nothing above the panel takes that touch, and the
+   * panel is asked about it again at every move, so it can wait for the pull.
+   * A sheet drawn through `OverlayHost` with a scroll view in it passes
+   * `false`. Held from its start, the touch is taken from that scroll view on
+   * Android: the view that holds a touch for JS intercepts it at the finger's
+   * next movement. In the Reference details sheet a slow drag that began on
+   * the picture scrolled nothing, and a quick one scrolled only because the
+   * scroll view had started before JS answered (Pixel 9a emulator, 2026-10-05).
+   *
+   * What it costs: while that scroll view has somewhere to scroll, a pull down
+   * that starts on its content is the scroll view's and no longer moves the
+   * sheet. The title, the grabber and a pull from a button still do, and with
+   * nothing to scroll a pull from anywhere does.
+   */
+  takesTouchDown?: boolean;
 }): SheetDismissDrag {
   // A brand-new offset for every opening, rather than one value reset in
   // place. Once the native driver has touched an `Animated.Value` it carries
@@ -170,6 +191,8 @@ export function useSheetDismissDrag({
   onDismissRef.current = onDismiss;
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
+  const takesTouchDownRef = useRef(takesTouchDown);
+  takesTouchDownRef.current = takesTouchDown;
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
   const mountedRef = useRef(true);
@@ -288,7 +311,7 @@ export function useSheetDismissDrag({
         // never let go. So its view stops the question before the panel is
         // asked (see leaveTouchToNativeView), and the panel leaves that touch
         // whenever it is asked about it.
-        onStartShouldSetPanResponder: (event) => enabledRef.current && !touchBelongsToNativeView(event),
+        onStartShouldSetPanResponder: (event) => enabledRef.current && takesTouchDownRef.current && !touchBelongsToNativeView(event),
         // The other way in: a touch a child already holds. Asked in the
         // capture phase, so the panel comes before the pressed child;
         // `Pressable` yields (its `cancelable` defaults to true) and receives
@@ -375,15 +398,24 @@ function springBack(dragY: ReactNative.Animated.Value | null) {
 export function useSheetPresentation({
   visible,
   reducedMotion,
+  onEntered,
   onExited,
 }: {
   visible: boolean;
   reducedMotion: boolean;
+  /**
+   * The entrance has played and the sheet is at rest. For what must not be
+   * built while it travels: the slide is drawn on the main thread, and work
+   * done there in the same moment is taken out of its first frames.
+   */
+  onEntered?: () => void;
   onExited?: () => void;
 }) {
   const [rendered, setRendered] = useState(visible);
   const [panelHeight, setPanelHeight] = useState(0);
   const progress = useRef(animatedApi?.Value ? new animatedApi.Value(visible ? 1 : 0) : null).current;
+  const onEnteredRef = useRef(onEntered);
+  onEnteredRef.current = onEntered;
   const onExitedRef = useRef(onExited);
   onExitedRef.current = onExited;
   const measured = panelHeight > 0;
@@ -397,7 +429,10 @@ export function useSheetPresentation({
     if (visible && !measured) return;
 
     const finish = () => {
-      if (visible) return;
+      if (visible) {
+        onEnteredRef.current?.();
+        return;
+      }
       setRendered(false);
       onExitedRef.current?.();
     };
@@ -446,6 +481,26 @@ export function useSheetPresentation({
     // holds the panel back for the frame before it is measured.
     panelOpacity: progress ? (measured ? 1 : 0) : 1,
     onPanelLayout,
+  };
+}
+
+/**
+ * A hosted sheet's entrance and its drag as the one transform and the one
+ * opacity a view can take: a JS-driven value beside a native-driven one on the
+ * same view does not compose, so the two are added and multiplied instead.
+ * `panel` goes on the `SheetPanel`, `backdrop` on the `SheetBackdrop`.
+ */
+export function sheetMotion(drag: SheetDismissDrag, presentation: ReturnType<typeof useSheetPresentation>) {
+  const translateY = drag.translateY && animatedApi?.add && typeof presentation.entryTranslateY !== 'number'
+    ? animatedApi.add(presentation.entryTranslateY, drag.translateY)
+    : presentation.entryTranslateY;
+  const backdropOpacity = drag.backdropOpacity && animatedApi?.multiply && typeof presentation.backdropProgress !== 'number'
+    ? animatedApi.multiply(presentation.backdropProgress, drag.backdropOpacity)
+    : presentation.backdropProgress;
+
+  return {
+    panel: { opacity: presentation.panelOpacity, transform: [{ translateY }] } as AnimatedViewStyle,
+    backdrop: { opacity: backdropOpacity } as AnimatedViewStyle,
   };
 }
 
@@ -539,17 +594,20 @@ export function SheetBackdrop({
   onPress,
   label,
   color,
+  style,
 }: {
   drag: SheetDismissDrag;
   onPress: () => void;
   label?: string;
   /** Defaults to the scheme's scrim; a sheet over darker media may pass its own. */
   color?: string;
+  /** In place of the drag's own fade: a hosted sheet passes `sheetMotion(…).backdrop`, its entrance and the drag as one. */
+  style?: AnimatedViewStyle;
 }) {
   const theme = useAppTheme();
   return (
     <AnimatedView
-      style={[{ position: 'absolute', inset: 0, backgroundColor: color ?? theme.colors.scrim }, drag.backdropStyle]}
+      style={[{ position: 'absolute', inset: 0, backgroundColor: color ?? theme.colors.scrim }, style ?? drag.backdropStyle]}
     >
       {NativePressable ? (
         label ? (
