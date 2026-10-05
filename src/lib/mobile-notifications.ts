@@ -876,7 +876,7 @@ async function sendMobilePushForNotification(
     if (finishError) throw new MobileNotificationError('Failed to finalize initial mobile push outcomes.', 500);
   }
 
-  await adminSupabase
+  const { error: summaryError } = await adminSupabase
     .from('mobile_notifications')
     .update({
       pushed_at: pushedAt,
@@ -884,6 +884,15 @@ async function sendMobilePushForNotification(
       push_error: firstError,
     })
     .eq('id', notification.id);
+
+  // Delivery records already hold the durable outcomes. This legacy summary is
+  // diagnostic only; report its failure without retrying an accepted push.
+  if (summaryError) {
+    logBackendError('mobile_push_summary_update_failed', {
+      notificationId: notification.id,
+      error: summaryError,
+    });
+  }
 }
 
 async function fetchExpoPushReceipts(

@@ -6,30 +6,38 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/push-registration-audit-9h`, incorporating main `36962d613c5a70d3dc125319e25a37f63633e75b` (#362); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/push-summary-audit-9i`, incorporating main `8ff10cc6480d2cea341a2157db21ba5d25b86f5d` (#364); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-9G PR #362 passed exact-head Quality 37293789959 on
-34fc96ee67fd8e3c96e49a02b0e98966ff56df0b and merged at 13:33:49 UTC as
-36962d613c5a70d3dc125319e25a37f63633e75b. Mobile-store idle was checked
-immediately before merge. Exact-main Quality 37317775601 has DB/mobile/E2E
-success; web is still running. Standard release and independent production
-verification remain. Prepared push-progress-release/verify.cjs and
-release-smoke.cjs require that exact live SHA; never run against an older build.
+9G is released and independently verified on
+36962d613c5a70d3dc125319e25a37f63633e75b. Exact-main Quality 37317775601
+and standard release 37319362945 passed. At 13:50 UTC all six rollback controls,
+planned schema comparison, zero-fixture cleanup and live health passed. Advisors
+retain 108 baseline findings plus exactly one expected service-only-table INFO.
+See push-progress-release report. JOB-02 returns to untested; ledger is now
+24 passed / 25 untested / 2 failed / 2 external (53), full goal active.
 
-9H atomic registration candidate is implemented and locally verified. The
-permanent real Auth/PostgREST regression fails against baseline 34fc96ee with
-two successful registrations and zero active tokens, and passes after the fix.
-Seven actual cases cover rotations, account handoff, opposite transfers,
-rollback on preference failure, idempotence, paused preferences and access checks.
-Three real SQL concurrency cases are wired into Quality. Clean replay, 2,068 SQL
-assertions/96 files, 92 focused tests, application/test types and scoped lint
-pass; public schema diff has no changes. See registration-race report for the
-protocol/compatibility limits. Migration 20261005100245 remains local only.
-PR, fresh exact-head CI, guarded merge, standard release and production verification
-remain. Keep all unrelated edits and private evidence. Full goal remains active.
+9H PR #364 passed exact-head Quality 37319529666 on 07d43d14 and merged
+at 16:50:34 UTC as 8ff10cc6480d2cea341a2157db21ba5d25b86f5d after the
+immediate mobile-store idle guard. Exact-main Quality 37343916362 is running.
+Independent Android/mobile changes #363/#360/#366/#365 are preserved.
+Local seven Auth/PostgREST cases, three CI SQL concurrency cases, 2,068 SQL
+assertions/96 files, 92 focused tests, types/lint and schema diff pass. The
+permanent actual race fails on baseline 34fc96ee. Standard release and production
+verification remain. Prepared private registration-release/verify.cjs expects
+exact live SHA, one added function/grant, eight rollback controls, zero fixtures
+and unchanged advisors. Baseline captured after verified 9G release; local probe
+passes all eight. Current 9I branch is separate from merged #364.
+
+9I locally fixes ignored legacy notification-summary errors after actual
+before-commit/lost-ack regressions. It adds diagnostic logging, preserves durable
+delivery and never resends for a summary failure. These fields have no current
+application reader; see push-summary report for the explicit best-effort limit.
+Eleven actual first-send cases, 69 notification tests, app/test types and lint
+pass. No migration or mobile change. Separate commit/PR/release remains.
+Preserve unrelated receipt edits, Section 1 files and private evidence.
 
 9F #361 is verified live on 32a3f47336a6ad54ff0c41b667d9ba41be8d12c2.
 Exact-main Quality 37290134172 and standard release 37291187466 passed.
