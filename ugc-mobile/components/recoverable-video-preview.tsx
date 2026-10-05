@@ -1,13 +1,14 @@
 import { useVideoPlayer, VideoView, type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
 import { useIsFocused } from '@react-navigation/native';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { ActivityIndicator, Platform, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { SecondaryButton } from '@/components/ui';
 import { useNativePreviewPlayback } from '@/lib/use-native-preview-playback';
 import { cachedVideoSource } from '@/lib/media-source';
 import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
+import { useVideoSourceAfterSurface } from '@/lib/use-video-source-after-surface';
 import { useAppTheme } from '@/lib/theme-context';
 
 type VideoPreviewProps = {
@@ -85,7 +86,11 @@ function VideoPreviewAttempt({
   // on purpose. A capped player stops partway through the file and holds its
   // cache entry open, so a second player on the same clip (the details sheet
   // over a tile, the lightbox over a result) has to download it again.
-  const player = useVideoPlayer(cachedVideoSource(source), instance => {
+  //
+  // On Android the player is made empty and given its clip once its view has a
+  // surface to draw on (see useVideoSourceAfterSurface).
+  const afterSurface = Platform.OS === 'android';
+  const player = useVideoPlayer(afterSurface ? null : cachedVideoSource(source), instance => {
     const previous = previousPlayer.current;
     instance.loop = true;
     instance.muted = previous?.muted ?? false;
@@ -93,7 +98,8 @@ function VideoPreviewAttempt({
     // The hook recreates its native player when credentials or the effective
     // URL change. The old player is still alive during setup, so preserve the
     // viewer's state before the hook releases it. A new item/explicit Retry
-    // remounts this attempt and starts with no previous player.
+    // remounts this attempt and starts with no previous player. (On Android
+    // the one player is handed the renewed link instead, and keeps its state.)
     if (previous) {
       instance.currentTime = previous.currentTime;
       instance.volume = previous.volume;
@@ -107,6 +113,7 @@ function VideoPreviewAttempt({
     else if (previous) instance.pause();
   });
   previousPlayer.current = player;
+  const surface = useVideoSourceAfterSurface(afterSurface ? cachedVideoSource(source) : null, player);
   const playback = useNativePreviewPlayback(player, isFocused);
   // Stack navigation keeps earlier screens mounted. Their players must stop
   // even though useVideoPlayer's unmount cleanup has not run yet.
@@ -123,7 +130,12 @@ function VideoPreviewAttempt({
   }, [player]);
 
   return (
-    <View ref={playback.viewRef} collapsable={false} onLayout={playback.onLayout} style={[style, { overflow: 'hidden' }]}>
+    <View
+      ref={playback.viewRef}
+      collapsable={false}
+      onLayout={() => { playback.onLayout(); surface.onLayout(); }}
+      style={[style, { overflow: 'hidden' }]}
+    >
       {/* A player without controls has nothing of its own to touch, so touches
           pass it by and reach whatever holds it: a reference tile, an upload
           slot. Left to take them, expo-video's Android view keeps each touch

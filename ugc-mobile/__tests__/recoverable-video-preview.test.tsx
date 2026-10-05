@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({
   initialStatus: 'loading',
   focused: true,
+  os: 'ios',
   sourceVersion: 0,
   players: [] as Array<{
     source: unknown;
@@ -17,6 +18,7 @@ const state = vi.hoisted(() => ({
     play: ReturnType<typeof vi.fn>;
     pause: ReturnType<typeof vi.fn>;
     release: ReturnType<typeof vi.fn>;
+    replaceAsync: ReturnType<typeof vi.fn>;
     listener?: (event: { status: string }) => void;
   }>,
 }));
@@ -28,6 +30,7 @@ vi.mock('react-native', () => ({
   View: (props: object) => React.createElement('view', props),
   Text: (props: object) => React.createElement('text', props),
   ActivityIndicator: (props: object) => React.createElement('loading', props),
+  Platform: { get OS() { return state.os; } },
 }));
 vi.mock('expo-video', () => ({
   VideoView: (props: object) => React.createElement('video', props),
@@ -36,7 +39,7 @@ vi.mock('expo-video', () => ({
       const instance = {
         source,
         currentTime: 0, playing: false, muted: false, volume: 1, playbackRate: 1,
-        status: state.initialStatus, play: vi.fn(), pause: vi.fn(), release: vi.fn(), replaceAsync: vi.fn(async () => {}),
+        status: state.initialStatus, play: vi.fn(), pause: vi.fn(), release: vi.fn(), replaceAsync: vi.fn(async () => { instance.currentTime = 0; }),
         listener: undefined as ((event: { status: string }) => void) | undefined,
         addListener: (_name: string, listener: (event: { status: string }) => void) => {
           instance.listener = listener;
@@ -53,7 +56,7 @@ vi.mock('expo-video', () => ({
 }));
 import { RecoverableVideoPreview } from '../components/recoverable-video-preview';
 let tree: renderer.ReactTestRenderer | undefined;
-beforeEach(() => { state.initialStatus = 'loading'; state.focused = true; state.sourceVersion = 0; state.players = []; });
+beforeEach(() => { state.initialStatus = 'loading'; state.focused = true; state.os = 'ios'; state.sourceVersion = 0; state.players = []; });
 afterEach(() => { renderer.act(() => tree?.unmount()); tree = undefined; });
 function mount(autoPlay = false) {
   renderer.act(() => { tree = renderer.create(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 300 }} autoPlay={autoPlay} />); });
@@ -292,3 +295,117 @@ it('clears the load deadline once native playback is ready', () => {
     expect(view.root.findAllByType('retry-button' as never)).toHaveLength(0);
   } finally { vi.useRealTimers(); }
 });
+
+// On Android a paused clip came up with its controls and duration and no
+// picture, and stayed that way: 5 mounts in 102 on the Pixel_9a emulator
+// (2026-10-05). The player was loading before its view existed, so the decoder
+// started on a placeholder surface and was moved to the view's a few
+// milliseconds later, and a frame in flight during the move was dropped with
+// only a log line (`rendring output error -32`). The player reports that frame
+// as rendered all the same. Nothing here can lose a frame, so these hold the
+// order that keeps the move from happening: the view first, then the clip.
+const CLIP = { uri: 'https://media.test/video.mp4', useCaching: true };
+/** The view the preview is drawn in: its layout is what the clip waits for. */
+function frameOf(view: renderer.ReactTestRenderer) {
+  return view.root.findAllByType('view' as never)[0];
+}
+function nextFrame() {
+  renderer.act(() => { vi.advanceTimersByTime(16); });
+}
+function withFrames(run: () => void | Promise<void>) {
+  return async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('requestAnimationFrame', (callback: () => void) => setTimeout(callback, 16));
+    vi.stubGlobal('cancelAnimationFrame', (handle: ReturnType<typeof setTimeout>) => clearTimeout(handle));
+    try {
+      state.os = 'android';
+      await run();
+    } finally {
+      renderer.act(() => tree?.unmount());
+      tree = undefined;
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  };
+}
+it('on Android makes the player empty and gives it its clip two frames after its view is laid out', withFrames(() => {
+  const view = mount();
+  const player = state.players[0];
+  expect(player.source).toBeNull();
+  // Not on a timer, and not before there is a view to make a surface in.
+  renderer.act(() => { vi.advanceTimersByTime(1_000); });
+  expect(player.replaceAsync).not.toHaveBeenCalled();
+  renderer.act(() => frameOf(view).props.onLayout());
+  nextFrame();
+  expect(player.replaceAsync).not.toHaveBeenCalled();
+  nextFrame();
+  expect(player.replaceAsync.mock.calls).toEqual([[CLIP]]);
+  expect(state.players).toHaveLength(1);
+}));
+it('gives the clip once, however often the view is laid out', withFrames(() => {
+  const view = mount();
+  renderer.act(() => frameOf(view).props.onLayout());
+  nextFrame();
+  renderer.act(() => frameOf(view).props.onLayout());
+  nextFrame();
+  nextFrame();
+  renderer.act(() => frameOf(view).props.onLayout());
+  nextFrame();
+  nextFrame();
+  expect(state.players[0].replaceAsync).toHaveBeenCalledOnce();
+}));
+it('gives nothing to a player whose preview is gone before the frames have passed', withFrames(() => {
+  const view = mount();
+  const player = state.players[0];
+  renderer.act(() => frameOf(view).props.onLayout());
+  nextFrame();
+  renderer.act(() => tree?.unmount());
+  tree = undefined;
+  nextFrame();
+  nextFrame();
+  expect(player.replaceAsync).not.toHaveBeenCalled();
+}));
+it('keeps an autoplay request made before the clip arrives', withFrames(() => {
+  const view = mount(true);
+  expect(state.players[0].play).toHaveBeenCalledOnce();
+  renderer.act(() => frameOf(view).props.onLayout());
+  nextFrame();
+  nextFrame();
+  expect(state.players[0].replaceAsync.mock.calls).toEqual([[CLIP]]);
+  expect(state.players[0].pause).not.toHaveBeenCalled();
+}));
+// A new player for a renewed link would start loading before the view has
+// handed it the surface, which is the race over again.
+it('on Android hands a renewed link to the same player, which keeps its place', withFrames(async () => {
+  const view = mount();
+  const player = state.players[0];
+  renderer.act(() => frameOf(view).props.onLayout());
+  nextFrame();
+  nextFrame();
+  Object.assign(player, { status: 'readyToPlay', currentTime: 12.5, muted: true, volume: 0.4 });
+  state.sourceVersion = 1;
+  await renderer.act(async () => { view.update(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 300 }} />); });
+  expect(state.players).toHaveLength(1);
+  expect(player.release).not.toHaveBeenCalled();
+  expect(player.replaceAsync).toHaveBeenLastCalledWith({ uri: 'https://media.test/video.mp4?version=1', useCaching: true });
+  expect(player).toMatchObject({ currentTime: 12.5, muted: true, volume: 0.4 });
+  expect(player.play).not.toHaveBeenCalled();
+}));
+it('uses the newest link when it is renewed before the view is ready', withFrames(() => {
+  const view = mount();
+  state.sourceVersion = 1;
+  renderer.act(() => view.update(<RecoverableVideoPreview url="https://media.test/video.mp4" style={{ height: 300 }} />));
+  renderer.act(() => frameOf(view).props.onLayout());
+  nextFrame();
+  nextFrame();
+  expect(state.players[0].replaceAsync.mock.calls).toEqual([[{ uri: 'https://media.test/video.mp4?version=1', useCaching: true }]]);
+}));
+it('leaves an iPhone’s player as it was: made with its clip, and not given it again', withFrames(() => {
+  state.os = 'ios';
+  const view = mount();
+  expect(state.players[0].source).toEqual(CLIP);
+  renderer.act(() => frameOf(view).props.onLayout());
+  nextFrame();
+  nextFrame();
+  expect(state.players[0].replaceAsync).not.toHaveBeenCalled();
+}));

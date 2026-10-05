@@ -11,6 +11,13 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 
 ## Exact checkpoint
 
+9A #349 passed exact-head CI 37255743353 and merged as
+80a3d303fbf0c31e68a26c152c0c90f93734e485 at October 5 02:45:21 UTC.
+Mobile-store release was idle immediately before merge. Exact-main CI and standard
+release remain to verify. 9B #352 initially passed CI 37255805722; its branch now
+incorporates this main, preserving independent Android preview change #350.
+Only historical audit docs conflicted; latest evidence retained. New head CI needed.
+
 9B reproduces silent supplementary retention errors / rejected calls stopping
 later work (eleven failing baseline service cases). Fix saves failed operation
 names in durable job summaries and logs each failure while continuing best-effort
