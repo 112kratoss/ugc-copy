@@ -552,6 +552,49 @@ describe('a hosted sheet’s arrival and departure', () => {
     sheet.unmount();
   });
 
+  // A sheet with a field hands this to its keyboard area, which holds still
+  // while it is false. The keys are leaving whenever a sheet opens over the
+  // page's keyboard or closes with its own up, and an area that followed them
+  // moved and resized the sheet at every frame of its slide: it came into
+  // view part-way up, sank and rose again (emulator films, 2026-10-05).
+  it('is settled from its arrival until it is told to leave, and at no other time', () => {
+    const sheet = mountPresented();
+    expect(sheet.presentation().settled).toBe(false);
+    sheet.show(true);
+    sheet.measure();
+    // On its way in.
+    expect(sheet.presentation().settled).toBe(false);
+    endSlide();
+    expect(sheet.presentation().settled).toBe(true);
+    // Told to leave: not settled from that render on, before its exit has moved.
+    sheet.show(false);
+    expect(sheet.presentation().settled).toBe(false);
+    endSlide();
+    expect(sheet.presentation().settled).toBe(false);
+    // And not during the next entrance either.
+    sheet.show(true);
+    sheet.measure();
+    expect(sheet.presentation().settled).toBe(false);
+    sheet.unmount();
+  });
+
+  it('waits for its own arrival when it is opened again before its exit has played', () => {
+    const sheet = mountPresented();
+    sheet.show(true);
+    sheet.measure();
+    endSlide();
+    expect(sheet.presentation().settled).toBe(true);
+    // Told to leave, and asked for again while it is still on its way out:
+    // the exit is cut short and never says it has played.
+    sheet.show(false);
+    sheet.show(true);
+    expect(sheet.onExited).not.toHaveBeenCalled();
+    expect(sheet.presentation().settled).toBe(false);
+    endSlide();
+    expect(sheet.presentation().settled).toBe(true);
+    sheet.unmount();
+  });
+
   it('says it has left when its exit has played, and nothing more of its arrival', () => {
     const sheet = mountPresented();
     sheet.show(true);

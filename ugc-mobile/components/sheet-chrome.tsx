@@ -439,6 +439,11 @@ export function useSheetPresentation({
   const [rendered, setRendered] = useState(visible);
   // Whether the panel now on screen has been laid out. Asked again at every opening.
   const [measured, setMeasured] = useState(false);
+  // Whether the entrance has played. Forgotten in the render that tells the
+  // sheet to leave, not when its exit ends: an opening that cuts the exit short
+  // has its own arrival to wait for.
+  const [arrived, setArrived] = useState(false);
+  if (!visible && arrived) setArrived(false);
   // Both are the native driver's from their first value. One that is not is
   // changed from JS until its first native animation, and on Fabric a change
   // from JS reaches the view through `setNativeProps`, which the view's shadow
@@ -468,6 +473,7 @@ export function useSheetPresentation({
 
     const finish = () => {
       if (visible) {
+        setArrived(true);
         onEnteredRef.current?.();
         return;
       }
@@ -525,6 +531,13 @@ export function useSheetPresentation({
   return {
     /** Keep the sheet in the tree while this is true; it turns false once the exit has played. */
     rendered,
+    /**
+     * True while the sheet is at rest: its entrance has played and it has not
+     * been told to leave. A sheet with a field gives this to its
+     * `KeyboardAvoidingArea` as `followsKeyboard`, so that the area holds still
+     * while the sheet slides (see that prop).
+     */
+    settled: arrived,
     /** Fold into the panel's transform, added to the drag offset. No cross-fade: the travel carries the entrance on its own. */
     entryTranslateY,
     backdropProgress,

@@ -159,12 +159,30 @@ export function KeyboardAvoidingArea({
   children,
   reservedBottomInset = 0,
   iosScrollViewAdjustsInsets = false,
+  followsKeyboard = true,
   style,
   testID = KEYBOARD_AVOIDING_AREA_TEST_ID,
 }: {
   children: React.ReactNode;
   /** Bottom inset already excluded from this area, if it stops short of the screen edge. */
   reservedBottomInset?: number;
+  /**
+   * False while the surface in this area is arriving or leaving by a slide of
+   * its own. The area then keeps the lift it has, none if it is mounted that
+   * way, and takes the keyboard up again when this is true.
+   *
+   * A sheet that opens over the page's keyboard puts that keyboard away, and
+   * so does one that closes with its own up: either way the keys are leaving
+   * while the sheet slides. An area that follows them moves and resizes the
+   * sheet at every frame of that slide, and the two do not add up to one
+   * motion (Pixel 9a emulator films, 2026-10-05). Opened over a keyboard, a
+   * plain panel came into view part-way up, sank 95dp and rose again; the
+   * model picker did the same, and so did the Reference details sheet on
+   * main (up, 55dp down, up). The same panel in a plain view, or in this area
+   * held still, rose from behind the keys in one curve. Held still, a sheet
+   * opens at its resting shape and leaves at the shape it had, as a Modal did.
+   */
+  followsKeyboard?: boolean;
   /**
    * Set when the wrapped ScrollView carries `automaticallyAdjustKeyboardInsets`,
    * which is how iOS scrolls a focused field back into view.
@@ -183,10 +201,28 @@ export function KeyboardAvoidingArea({
   const keyboardHeight = useKeyboardHeight();
   const deferToNativeInsets = iosScrollViewAdjustsInsets && platformApi?.OS === 'ios';
 
+  const follows = useSharedValue(followsKeyboard);
+  // The lift kept while the area is not following the keyboard; null while it is.
+  const heldLift = useSharedValue<number | null>(followsKeyboard ? null : 0);
+  useEffect(() => {
+    follows.value = followsKeyboard;
+  }, [follows, followsKeyboard]);
+  // Taken on the UI thread, at the frame the surface starts to leave: the lift
+  // it is kept at is the one the keyboard had given it by then.
+  useAnimatedReaction(
+    () => follows.value,
+    (now, before) => {
+      if (before === null || now === before) return;
+      heldLift.value = now
+        ? null
+        : getKeyboardLift({ keyboardHeight: keyboardHeight.value, reservedBottomInset });
+    },
+  );
+
   const areaStyle = useAnimatedStyle(() => ({
     paddingBottom: deferToNativeInsets
       ? 0
-      : getKeyboardLift({ keyboardHeight: keyboardHeight.value, reservedBottomInset }),
+      : heldLift.value ?? getKeyboardLift({ keyboardHeight: keyboardHeight.value, reservedBottomInset }),
   }));
 
   return (

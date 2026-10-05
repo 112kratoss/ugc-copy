@@ -3765,7 +3765,7 @@ function ReferenceDetailsOverlay({
     <Overlay visible={presentation.rendered}>
       {/* Answered once: while the exit plays the sheet is still drawn, and a press on it must not land. */}
       <View pointerEvents={visible ? 'auto' : 'none'} style={{ flex: 1 }}>
-        <KeyboardAvoidingArea iosScrollViewAdjustsInsets testID="reference-details-keyboard-area" style={{ justifyContent: 'flex-end' }}>
+        <KeyboardAvoidingArea iosScrollViewAdjustsInsets followsKeyboard={presentation.settled} testID="reference-details-keyboard-area" style={{ justifyContent: 'flex-end' }}>
           <SheetBackdrop drag={drag} style={motion.backdrop} color={hexWithAlpha(theme.dim.color, 0.68 * theme.dim.scale)} onPress={onClose} />
           <SheetPanel {...drag.contentPanHandlers} accessibilityViewIsModal onLayout={presentation.onPanelLayout} style={[{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: theme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 30, gap: 14 }, motion.panel]}>
             <SheetGrabber drag={drag} />
@@ -3975,7 +3975,7 @@ function SearchableModelPickerSheet({
     <Overlay visible={presentation.rendered}>
       {/* Answered once: while the exit plays the sheet is still drawn, and a press on it must not land. */}
       <View pointerEvents={visible ? 'auto' : 'none'} style={{ flex: 1 }}>
-        <KeyboardAvoidingArea iosScrollViewAdjustsInsets testID="model-picker-keyboard-area" style={{ justifyContent: 'flex-end' }}>
+        <KeyboardAvoidingArea iosScrollViewAdjustsInsets followsKeyboard={presentation.settled} testID="model-picker-keyboard-area" style={{ justifyContent: 'flex-end' }}>
           <SheetBackdrop drag={drag} style={motion.backdrop} color={hexWithAlpha(theme.dim.color, 0.7 * theme.dim.scale)} onPress={onClose} />
           <SheetPanel {...drag.contentPanHandlers} accessibilityViewIsModal onLayout={presentation.onPanelLayout} style={[{ height: '78%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: theme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 20, gap: 12 }, motion.panel]}>
             <SheetGrabber drag={drag} />

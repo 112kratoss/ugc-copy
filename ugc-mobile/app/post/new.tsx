@@ -1429,6 +1429,7 @@ function ResourceComposerSheet({
             that much clear of the screen's edge, and the keyboard covers the same strip. */}
         <KeyboardAvoidingArea
           iosScrollViewAdjustsInsets
+          followsKeyboard={presentation.settled}
           reservedBottomInset={bottomInset}
           testID="resource-editor-keyboard-area"
           style={{ justifyContent: 'flex-end', paddingTop: insets.top + RESOURCE_SHEET_TOP_GAP }}
