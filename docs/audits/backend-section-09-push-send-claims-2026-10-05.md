@@ -1,6 +1,8 @@
 # Section 9E — durable push retry claims
 
-Candidate on `codex/push-send-claims-audit-9e`, based on 9D head `469d3231`.
+Released in PR #356, merged as `cd264d39` on October 5 at 04:36:54 UTC.
+See the [release verification](backend-section-09-push-claims-release-2026-10-05.md).
+The candidate was based on 9D head `469d3231`.
 The [baseline investigation](backend-section-09-push-send-budget-2026-10-05.md)
 reproduces undercounting by overlapping workers, sends beyond the configured
 cap when ticket writes fail, and lost accounting after SIGKILL.
@@ -58,7 +60,7 @@ Private evidence: `.audit-evidence/backend-social/mobile-claims-*`, the original
 between runs; it was restarted without removing volumes. The initial attempt to
 use psql failed because it is not installed; local SQL uses the existing pg
 client. Early test-harness type/lint failures were repaired; they were not counted
-as successful validation. No production schema mutation has occurred for 9E.
+as successful validation. Production application and independent verification are now recorded in the release report.
 
 Release must apply the migration before the worker. Retain the additive schema
 if rolling back application code; rolling back to the pre-claim worker forfeits

@@ -6,22 +6,32 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/push-send-claims-audit-9e`, based on the #348 candidate `0f3442b8` atop main `44864e5667eb6a9ed7d81bcc6faa5138590a8767` (#346); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/push-first-send-audit-9f`, incorporating main `177d6c989ec904e124052f5e458d8181bf7ccc0a` (#359); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-9E claim candidate is implemented locally, not yet released: three service-only
-invoker RPCs reserve an attempt, save its outcome, and atomically finalize/retire.
-Sixty-second claims fence overlapping/stale workers; one provider request per
-claim. Recovery processes saved outcomes even at the cap. Unknown unsaved results
-can resend only within the existing three-attempt budget. Sixteen real local DB/
-worker controls (including real expiry, SIGKILL and lost write acknowledgement),
-two closure cases, 85 focused tests, types/lint, full replay and 1,991 SQL checks
-pass. See push-send-claims report for scope and remaining first-send/device work.
-Migration 20261005031821 is applied only to isolated local/replay databases;
-no production migration yet. Finish final checks, PR, exact-head CI, mobile-store
-idle check before merge, exact-main CI, standard release and schema/live checks.
+9E #356 is merged as cd264d3945fd3c77a7b5ffb665f3384973c6ec79 at 04:36:54 UTC.
+Exact-head Quality 37263340019, exact-main 37264292974 and standard release
+37264834355 passed. Production independently verified on descendant 177d6c989e
+(Quality 37285060694, release 37286445214): only planned schema additions,
+6 rollback controls, zero fixtures, unchanged 108 security advisor findings,
+exact-live SHA/feed/admin/webhook checks. See push-claims-release report. Preserve
+independent mobile #357–359 changes when incorporating main. JOB-03 stays failed.
+
+9F candidate now reserves all initial device delivery rows before provider calls,
+saves batch outcomes, and finalizes them with atomic matching-token retirement.
+A known outcome refunds unused reserved slots; an unknown result retains all
+three and is not resent automatically. This can lose unsent delivery opportunities
+on crash and preserves existing rejected-batch single-device fallback accounting.
+Nine actual local PostgREST/SQL controls, including real SIGKILL at provider and
+saved-outcome boundaries, 101-device batching, partial batch failure and dedupe,
+pass. Seventy focused tests, app/test types, scoped lint, clean replay and 2,023
+SQL checks pass. See first-send-persistence report for precise limits. Migration
+20261005043056 is local only. Candidate PR/CI/release/production checks remain.
+All 16 actual retry-regression cases also pass, including real lease expiry.
+Clean-replay public schema comparison reports no drift. Notification summary
+writes and full registration/preferences/device evidence remain open.
 
 9A–9D are verified live on 9903c6dcdfe63c9fa66398d572864061650cb2d2. #354 passed
 37258797988 on 469d3231 and merged October 5 03:27:13 UTC with mobile-store idle.

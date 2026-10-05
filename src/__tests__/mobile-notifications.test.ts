@@ -461,6 +461,8 @@ function sentBodies(fetchMock: { mock: { calls: Parameters<typeof fetch>[] } }) 
  * are recorded as they arrive, so a test can count statements as well as rows.
  */
 function createPushFanOutSupabase(tokens: PushTokenRow[]) {
+  const deliveries: Record<string, unknown>[] = [];
+  const rpcCalls: string[] = [];
   const tokenFilters: Array<[string, unknown]> = [];
   const deliveryInsertCalls: Array<Record<string, unknown>[]> = [];
   // Every token the fan-out loads is live at the moment it is read.
@@ -472,6 +474,28 @@ function createPushFanOutSupabase(tokens: PushTokenRow[]) {
   const notificationUpdates: Array<{ id: string; values: Record<string, unknown> }> = [];
 
   const adminSupabase = {
+    async rpc(name: string, args: {p_items: Array<{delivery_id:string;claim_id:string;outcome:Record<string,unknown>}>}) {
+      rpcCalls.push(name);
+      for (const item of args.p_items) {
+        const row = deliveries.find(row => row.id === item.delivery_id && row.retry_claim_id === item.claim_id);
+        if (!row) continue;
+        if (name === 'record_initial_mobile_push_outcomes') { row.retry_outcome = item.outcome; continue; }
+        expect(name).toBe('finish_initial_mobile_push_outcomes');
+        const outcome = row.retry_outcome as Record<string, unknown>;
+        if (outcome.error_code === 'DeviceNotRegistered') await tokenTable.update({is_active:false,disabled_at:new Date().toISOString()}).in('id',[String(row.token_id)]).eq('is_active',true).select();
+        Object.assign(row, {
+          send_status: outcome.status === 'sent' ? 'sent' : 'error',
+          receipt_status: outcome.status === 'sent' ? 'pending' : outcome.status === 'refused' ? 'stale' : 'error',
+          push_ticket_id: outcome.ticket_id ?? null,
+          receipt_error_code: outcome.error_code ?? null,
+          receipt_message: outcome.message ?? null,
+          provider_message: outcome.message ?? null, provider_details:outcome.details ?? null,
+          attempt_count: outcome.attempt_count, initial_attempt_reservation:false,
+          retry_claim_id:null,retry_outcome:null,
+        });
+      }
+      return {data:args.p_items.length,error:null};
+    },
     from(table: string) {
       if (table === 'mobile_notifications') {
         return {
@@ -560,6 +584,7 @@ function createPushFanOutSupabase(tokens: PushTokenRow[]) {
         return {
           async insert(values: Record<string, unknown> | Record<string, unknown>[]) {
             deliveryInsertCalls.push([values].flat());
+            deliveries.push(...[values].flat().map(row => ({...row})));
             return { error: null };
           },
         };
@@ -570,7 +595,7 @@ function createPushFanOutSupabase(tokens: PushTokenRow[]) {
   };
 
   return {
-    adminSupabase,
+    adminSupabase, deliveries, rpcCalls,
     tokenFilters,
     deliveryInsertCalls,
     tokenTable,
@@ -1629,115 +1654,8 @@ describe('mobile notifications', () => {
       throw new Error('network down');
     }));
 
-    const deliveryInserts: Array<Record<string, unknown>> = [];
-    const notificationUpdates: Array<{ id: string; values: Record<string, unknown> }> = [];
-
-    const adminSupabase = {
-      from(table: string) {
-        if (table === 'mobile_notifications') {
-          return {
-            insert(values: Record<string, unknown>) {
-              return {
-                select() {
-                  return {
-                    async single() {
-                      return {
-                        data: {
-                          id: 'notification-1',
-                          user_id: 'user-1',
-                          actor_user_id: null,
-                          type: values.type,
-                          category: values.category,
-                          title: values.title,
-                          body: values.body,
-                          deep_link: values.deep_link,
-                          object_type: values.object_type,
-                          object_id: values.object_id,
-                          event_count: 1,
-                          is_read: false,
-                          created_at: '2026-05-26T10:00:00.000Z',
-                          updated_at: '2026-05-26T10:00:00.000Z',
-                        },
-                        error: null,
-                      };
-                    },
-                  };
-                },
-              };
-            },
-            update(values: Record<string, unknown>) {
-              return {
-                eq(column: string, value: unknown) {
-                  expect(column).toBe('id');
-                  notificationUpdates.push({ id: String(value), values });
-                  return Promise.resolve({ error: null });
-                },
-              };
-            },
-          };
-        }
-
-        if (table === 'mobile_notification_preferences') {
-          return {
-            select() {
-              return {
-                eq(column: string, value: unknown) {
-                  expect(column).toBe('user_id');
-                  expect(value).toBe('user-1');
-                  return {
-                    maybeSingle() {
-                      return Promise.resolve({
-                        data: {
-                          push_enabled: true,
-                          generation_enabled: true,
-                          commerce_enabled: true,
-                          social_enabled: true,
-                        },
-                        error: null,
-                      });
-                    },
-                  };
-                },
-              };
-            },
-          };
-        }
-
-        if (table === 'mobile_push_tokens') {
-          return {
-            select() {
-              const filters: Record<string, unknown> = {};
-              const query = {
-                error: null,
-                data: [
-                  {
-                    id: 'token-1',
-                    expo_push_token: 'ExponentPushToken[token123]',
-                    platform: 'ios',
-                  },
-                ],
-                eq(column: string, value: unknown) {
-                  filters[column] = value;
-                  return query;
-                },
-              };
-              return query;
-            },
-          };
-        }
-
-        if (table === 'mobile_push_deliveries') {
-          return {
-            async insert(values: Record<string, unknown>[]) {
-              deliveryInserts.push(...values);
-              return { error: null };
-            },
-          };
-        }
-
-        throw new Error(`Unexpected table ${table}`);
-      },
-    };
+    const fanOut = createPushFanOutSupabase([{id:'token-1',expo_push_token:'ExponentPushToken[token123]',platform:'ios'}]);
+    const {adminSupabase,notificationUpdates,deliveries:deliveryInserts} = fanOut;
 
     await expect(createMobileNotification({
       adminSupabase: adminSupabase as never,
@@ -1763,7 +1681,7 @@ describe('mobile notifications', () => {
         platform: 'ios',
         send_status: 'error',
         receipt_status: 'error',
-        receipt_message: 'Push send failed before a receipt was created.',
+        receipt_message: 'network down',
         provider_message: 'network down',
         provider_details: expect.objectContaining({
           attempts: 3,
@@ -1790,7 +1708,7 @@ describe('mobile notifications', () => {
   // Production, 2026-10-01: one unlock notification to an account holding 32
   // active tokens made 32 Expo requests and 32 inserts in turn, 14.1 seconds in
   // all, inside the request of the person who unlocked the post.
-  it('sends every device on an account in one Expo request and one ledger write', async () => {
+  it('sends every device on an account in one Expo request with batched durable writes', async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => expoResponse({
       data: [
         { status: 'ok', id: 'ticket-1' },
@@ -1843,7 +1761,7 @@ describe('mobile notifications', () => {
     ]]);
 
     expect(fanOut.deliveryInsertCalls).toHaveLength(1);
-    expect(fanOut.deliveryInsertCalls[0]).toEqual([
+    expect(fanOut.deliveries).toEqual([
       expect.objectContaining({
         notification_id: 'notification-1',
         user_id: 'user-1',
@@ -1932,7 +1850,7 @@ describe('mobile notifications', () => {
     ]);
     // The fan-out still ran to its end: the refusal is on the ledger and on the
     // notification.
-    expect(fanOut.deliveryInsertCalls).toEqual([[
+    expect([fanOut.deliveries]).toEqual([[
       expect.objectContaining({ token_id: 'token-1', receipt_error_code: 'DeviceNotRegistered' }),
     ]]);
     expect(fanOut.notificationUpdates).toHaveLength(1);
@@ -1956,14 +1874,14 @@ describe('mobile notifications', () => {
     await unlockNotification(fanOut.adminSupabase);
 
     expect(sentBodies(fetchMock).map((messages) => messages.length)).toEqual([100, 1]);
-    // Each request's tickets are written before the next request goes out.
+    // All intent batches are inserted before provider calls; results are also batched.
     expect(fanOut.deliveryInsertCalls.map((rows) => rows.length)).toEqual([100, 1]);
     // Tickets are matched to tokens by position, on both sides of the boundary.
-    expect(fanOut.deliveryInsertCalls[0]?.[99]).toMatchObject({
+    expect(fanOut.deliveries[99]).toMatchObject({
       token_id: 'token-99',
       push_ticket_id: 'ticket-for-ExponentPushToken[device99]',
     });
-    expect(fanOut.deliveryInsertCalls[1]?.[0]).toMatchObject({
+    expect(fanOut.deliveries[100]).toMatchObject({
       token_id: 'token-100',
       push_ticket_id: 'ticket-for-ExponentPushToken[device100]',
     });
@@ -2002,7 +1920,7 @@ describe('mobile notifications', () => {
       'ExponentPushToken[phone]',
     ]);
     expect(fanOut.deliveryInsertCalls).toHaveLength(1);
-    expect(fanOut.deliveryInsertCalls[0]).toEqual([
+    expect(fanOut.deliveries).toEqual([
       expect.objectContaining({
         token_id: 'token-1',
         send_status: 'error',
@@ -2031,7 +1949,7 @@ describe('mobile notifications', () => {
     await unlockNotification(fanOut.adminSupabase);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fanOut.deliveryInsertCalls).toEqual([[
+    expect([fanOut.deliveries]).toEqual([[
       expect.objectContaining({
         token_id: 'token-1',
         send_status: 'error',
@@ -2055,7 +1973,7 @@ describe('mobile notifications', () => {
     await unlockNotification(fanOut.adminSupabase);
 
     const maintenance = createPushMaintenanceSupabase({ tokens: [{ ...PHONE_TOKEN }] });
-    maintenance.storeDeliveries(fanOut.deliveryInsertCalls.flat());
+    maintenance.storeDeliveries(fanOut.deliveries);
     const retryFetch = vi.fn<typeof fetch>(async () => expoResponse({ data: refusedTicket(code) }));
     const workAfterSend = await hasMobilePushMaintenanceWork(maintenance.adminSupabase as never, {
       now: new Date('2026-10-04T05:10:00.000Z'),
@@ -2088,7 +2006,7 @@ describe('mobile notifications', () => {
     ]);
     await unlockNotification(fanOut.adminSupabase);
 
-    expect(fanOut.deliveryInsertCalls).toEqual([[
+    expect([fanOut.deliveries]).toEqual([[
       expect.objectContaining({
         send_status: 'error',
         receipt_status: 'error',
@@ -2098,7 +2016,7 @@ describe('mobile notifications', () => {
     ]]);
 
     const maintenance = createPushMaintenanceSupabase({ tokens: [{ ...PHONE_TOKEN }] });
-    maintenance.storeDeliveries(fanOut.deliveryInsertCalls.flat());
+    maintenance.storeDeliveries(fanOut.deliveries);
     const retryFetch = vi.fn<typeof fetch>(async () => expoResponse({ data: { status: 'ok', id: 'ticket-retry' } }));
     const now = new Date('2026-10-04T05:10:00.000Z');
 
@@ -2130,7 +2048,7 @@ describe('mobile notifications', () => {
     await unlockNotification(fanOut.adminSupabase);
 
     const maintenance = createPushMaintenanceSupabase({ tokens: [{ ...PHONE_TOKEN }] });
-    maintenance.storeDeliveries(fanOut.deliveryInsertCalls.flat());
+    maintenance.storeDeliveries(fanOut.deliveries);
     const retryFetch = vi.fn<typeof fetch>(async () => refusal());
     for (const now of ['2026-10-04T05:10:00.000Z', '2026-10-04T05:20:00.000Z']) {
       await processMobilePushMaintenance(maintenance.adminSupabase as never, {
