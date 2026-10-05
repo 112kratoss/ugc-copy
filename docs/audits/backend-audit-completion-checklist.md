@@ -1,7 +1,8 @@
 # Backend audit completion checklist
 
 Updated 2026-10-05. Current independently checked production:
-`44864e5667eb6a9ed7d81bcc6faa5138590a8767`, including Section 8G.
+`360d62496aa3dc91ffc97cb7ed0139a024a8f726`, including Section 8H.
+[8H release evidence](backend-section-08-share-controls-release-2026-10-05.md).
 Exact-main Quality, standard release, function digests and live checks pass; see
 [save-counter release and repair](backend-section-08-save-counters-release-2026-10-04.md).
 The nine historical count mismatches were reconciled; independent readback is zero.
