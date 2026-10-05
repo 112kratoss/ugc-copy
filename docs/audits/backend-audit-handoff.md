@@ -6,10 +6,31 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/retention-observability-audit-9b`, based on the #348 candidate `0f3442b8` atop main `44864e5667eb6a9ed7d81bcc6faa5138590a8767` (#346); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/push-receipt-audit-9c`, based on the #348 candidate `0f3442b8` atop main `44864e5667eb6a9ed7d81bcc6faa5138590a8767` (#346); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+9C receipt maintenance: four actual PostgREST fixture cases fail before and pass
+after checking writes and retiring invalid tokens before receipt finalization.
+A failed retirement previously left the token active and receipt terminal. Partial
+write retries now retain pending work and preserve first disabled_at. No migration
+or provider request. 73 focused unit cases, app/test types/lint pass. New tests/
+report/source are local, PR/release next after #352. See push-receipts report.
+Ledger: 24 passed, 24 untested, three failed, two external; JOB-03 reopened.
+
+9B #352 Quality 37255805722 running; #349 Quality 37255743353 running. Both have
+DB/mobile/E2E passed and web still progressing. Full audit remains incomplete.
+
+9B is PR #352, branch codex/retention-observability-audit-9b, pushed after merging
+updated #349 branch (04e836d8). CI pending. #349 now incorporates main #348 plus
+the unrelated mobile preview changes; inspected conflicts were only old audit
+checkpoints and resolved to the latest evidence. New #349 CI is 37255743353.
+Do not use the previous head's green checks to merge this updated candidate.
+
+8H #348 release verified: exact-main Quality 37235572061, standard release
+37236449862 success October 4 21:35:08 UTC, independent exact SHA/feed/admin/
+webhook checks pass. See share-controls-release report. No runtime/migration change.
 
 9B reproduces silent supplementary retention errors / rejected calls stopping
 later work (eleven failing baseline service cases). Fix saves failed operation

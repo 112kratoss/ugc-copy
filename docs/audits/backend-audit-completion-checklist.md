@@ -16,7 +16,7 @@ unequal effort and risk. Do not turn their pass count into a percentage of backe
 safety or an ETA. New findings attach to these obligations; changes in scope must
 be recorded explicitly instead of silently adding another lettered batch.
 
-Current ledger: **53 obligations — 24 passed, 25 untested, 2 failed, 2 external**.
+Current ledger: **53 obligations — 24 passed, 24 untested, 3 failed, 2 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
 WORKFLOW-02 and WORKFLOW-04 remain untested after their scoped fixes shipped.
 SOCIAL-01/02/04 return to untested after the verified 8F/8G releases.
@@ -132,7 +132,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | SOCIAL-04 | Profile, creator and contact surfaces | untested | [8G profile sharing](backend-section-08-social-inputs-2026-10-05.md) reproduces malformed/null request 500s; [8G release verified](backend-section-08-social-inputs-release-2026-10-05.md).  [8E profile/contact](backend-section-08-profile-contact-2026-10-04.md): malformed/null profile requests reproduce HTTP 500; candidate returns 400, twelve actual HTTP and seven PostgREST checks pass. [8E release verified](backend-section-08-profile-contact-release-2026-10-05.md); [13 creator HTTP controls](backend-section-08-creator-visibility-2026-10-04.md) pass. Profile media, share events, request byte limits and remaining method behavior stay open |
 | JOB-01 | Scheduler and all 12 jobs: lease contention, expiry, duplicate dispatch and retry | untested | [Shared lease controls](backend-section-09-job-locks-2026-10-05.md): seven real PostgREST/SQL cases, including SIGKILL and real expiry, pass. Per-job fixture matrix still required; existing generation cases apply only to that job |
 | JOB-02 | Budgets, poison work, retention/reclaim jobs and alert delivery | failed | [9B retention reporting](backend-section-09-retention-failures-2026-10-05.md): eleven baseline regressions reproduce silent RPC errors and interrupted supplementary progress. Local fix passes 39 focused cases and actual durable job-summary persistence; release pending. Broader bounded-progress matrix remains open |
-| JOB-03 | Push registration, preferences, delivery receipts and invalid-token cleanup | untested | Device/provider evidence plus database retry tests |
+| JOB-03 | Push registration, preferences, delivery receipts and invalid-token cleanup | failed | [9C receipt recovery](backend-section-09-push-receipts-2026-10-05.md): four actual PostgREST cases reproduce ignored writes/stranded token retirement; local fix and retry controls pass. PR/release pending; remaining device/provider and send-retry evidence stays open |
 | JOB-04 | Recorded overdue moderation report | passed | [Read-only follow-up](backend-section-08-moderation-queue-followup-2026-10-04.md): original report has a reviewer and October 1 dismissal timestamp; both queues empty October 4; watchdog passes. Audit made no report mutation |
 | OPS-01 | Exact-main Quality, staged/live health and standard release for Section 6J | passed | [6J release evidence](backend-section-06-staging-locks-release-2026-10-01.md); first attempt mismatch preserved |
 | OPS-02 | Backup restore and rollback/reconciliation exercises | untested | Isolated restoration with consistency checks and measured recovery; no production restore |
