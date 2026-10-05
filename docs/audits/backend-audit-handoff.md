@@ -12,7 +12,7 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 ## Exact checkpoint
 
 9F is PR #361, head fd3aa2a2f56e5ac898c6d75723d10c220aeedee3. Quality
-37289045693 is active; E2E/mobile pass, web and DB continue. Current 9G branch
+37289045693 is active; E2E/mobile/DB pass, web build continues. Current 9G branch
 preserves this candidate plus new investigation docs; do not push 9G onto #361.
 Before merging #361, verify exact-head Quality and mobile-store idle immediately
 before merge. Standard exact-main release and production verification remain.
@@ -21,10 +21,11 @@ exact live SHA; expected functions/columns/default/grants/index from clean repla
 full/filtered production baseline, eight locally passing rollback controls and
 security baseline are saved. Its release-smoke.cjs verifies exact SHA and health.
 
-9G reproduces three push-maintenance starvation cases with actual local DB
+9G reproduces four push-maintenance starvation cases with actual local DB
 readback over three repeated passes each: oldest saved-outcome failure, stale
 receipt update failure, or retry claim failure blocks healthy next records and
-all later phases/retention. See push-poison-progress report. No runtime fix yet;
+all later phases/retention; a full 100-row poison batch also blocks the healthy
+101st outcome. See push-poison-progress report. No runtime fix yet;
 include full-batch poison fairness and failure observability in the design.
 Current ledger: 24 passed / 24 untested / 3 failed / 2 external (53); JOB-02
 returns to failed, JOB-03 remains failed, full goal remains active.

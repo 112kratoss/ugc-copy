@@ -1,7 +1,7 @@
 # Section 9G investigation — push maintenance starvation
 
 Baseline: initial-send candidate `fd3aa2a2` (PR #361), incorporating main
-`177d6c98`. Three actual local PostgREST/SQL reproductions establish that one
+`177d6c98`. Four actual local PostgREST/SQL reproductions establish that one
 record failure aborts the whole push maintenance pass before unrelated work.
 Each case runs the actual service three times with the same oldest failed row
 and verifies the healthy next row remains unchanged after every pass.
@@ -13,6 +13,8 @@ and verifies the healthy next row remains unchanged after every pass.
    pending without even a provider lookup; retries and retention never run.
 3. An oldest retry fails its claim RPC. The next eligible delivery stays at its
    original attempt count without a claim; retention never runs.
+4. A full batch of 100 saved results fails finalization, with a healthy 101st
+   result beyond the scan limit. All 101 remain unfinalized across three passes.
 
 The injected fault targets exactly the selected record through the real
 Supabase client's HTTP transport; all other requests reach the isolated local
@@ -22,7 +24,7 @@ No provider call occurred in any case. Fixtures cascade-delete after each case
 and SQL confirms no delivery remains for the fixture owner.
 
 Evidence: `.audit-evidence/backend-social/mobile-push-poison-probe.test.ts`,
-`mobile-push-poison.config.ts`, `mobile-push-poison-baseline.log`. The three passing
+`mobile-push-poison.config.ts`, `mobile-push-poison-baseline.log`. The four passing
 characterizations assert the defective behavior; they are not safety tests.
 No runtime fix is included in this investigation.
 
