@@ -1,0 +1,19 @@
+diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoView.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoView.kt
+index 043ce01..e10b959 100644
+--- a/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoView.kt
++++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoView.kt
+@@ -409,6 +409,14 @@ open class VideoView(context: Context, appContext: AppContext, useTextureView: B
+     return false
+   }
+ 
++  // A child that wants a gesture to itself asks its parents not to intercept it: the controls' time bar does, as soon as
++  // a touch lands on it. A view that records that request is not asked `onInterceptTouchEvent` again until the gesture
++  // ends, so JS would hear the touch start and never its end. This view never intercepts, so it has nothing to give up:
++  // it passes the request on to the views above without recording it, as React Native's root views do.
++  override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
++    parent?.requestDisallowInterceptTouchEvent(disallowIntercept)
++  }
++
+   private fun getPlayerViewLayoutId(useTextureView: Boolean, lightweight: Boolean): Int {
+     if (lightweight) return if (useTextureView) R.layout.magicbooklet_texture_player_view else R.layout.magicbooklet_surface_player_view
+     return if (useTextureView) {
