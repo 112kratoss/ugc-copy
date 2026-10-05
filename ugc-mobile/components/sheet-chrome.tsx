@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as ReactNative from 'react-native';
 
+import { touchBelongsToNativeView } from '@/lib/native-touch-owner';
 import { appTheme, type ThemeColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
@@ -280,14 +281,24 @@ export function useSheetDismissDrag({
         // move phase at all (verified on the emulator: a pull that began on
         // the create menu's subtitle went nowhere until this). It arrives
         // unarmed, so taking it costs the tap nothing. Buttons, fields and
-        // lists are deeper and take their own touches first.
-        onStartShouldSetPanResponder: () => enabledRef.current,
+        // lists are deeper and take their own touches first. A native view
+        // with controls of its own, a player, is deeper too, and nothing may
+        // hold its touch for JS: held, Android cancels the player's buttons
+        // at the finger's first movement, and a touch on its seek bar is
+        // never let go. So its view stops the question before the panel is
+        // asked (see leaveTouchToNativeView), and the panel leaves that touch
+        // whenever it is asked about it.
+        onStartShouldSetPanResponder: (event) => enabledRef.current && !touchBelongsToNativeView(event),
         // The other way in: a touch a child already holds. Asked in the
         // capture phase, so the panel comes before the pressed child;
         // `Pressable` yields (its `cancelable` defaults to true) and receives
         // a terminate instead of a press. This one arrives armed.
-        onMoveShouldSetPanResponderCapture: (_event, gesture) => isContentDrag(gesture),
-        onMoveShouldSetPanResponder: (_event, gesture) => isContentDrag(gesture),
+        //
+        // A player's touch is held by nothing, so the panel is asked about it
+        // at every move, and a finger that slides down on the play button as
+        // it presses reads as a pull. That touch is the player's still.
+        onMoveShouldSetPanResponderCapture: (event, gesture) => isContentDrag(gesture) && !touchBelongsToNativeView(event),
+        onMoveShouldSetPanResponder: (event, gesture) => isContentDrag(gesture) && !touchBelongsToNativeView(event),
         onPanResponderGrant: contentGrant,
         onPanResponderMove: contentMove,
         onPanResponderRelease: contentRelease,

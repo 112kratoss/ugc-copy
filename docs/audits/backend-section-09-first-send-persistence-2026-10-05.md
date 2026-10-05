@@ -75,7 +75,11 @@ lease expiry. Seventy focused notification/migration tests, app and test typeche
 lint pass. Clean replay succeeds; all 2,023 SQL checks across 94 files pass,
 including 32 new controls for invoker/grant boundaries, malformed/oversized
 batches, claim identity, budget refunds, idempotence, save rollback and full
-finalization rollback (including token retirement). Transport suites require
+finalization rollback (including token retirement). Clean-replay public schema
+diff reports no changes. The first diff mistakenly targeted the fixture stack
+whose workdir has no migration directory; it compared against an empty history
+and is not parity evidence. The corrected run uses the replay workdir with the
+repository migration symlink. Transport suites require
 explicit loopback credentials; ordinary CI runs unit and database controls.
 
 Private evidence: `.audit-evidence/backend-social/mobile-first-send-*`. The

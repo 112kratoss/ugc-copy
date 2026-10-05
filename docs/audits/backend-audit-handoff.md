@@ -6,7 +6,7 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/push-first-send-audit-9f`, based on the #348 candidate `0f3442b8` atop main `44864e5667eb6a9ed7d81bcc6faa5138590a8767` (#346); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/push-first-send-audit-9f`, incorporating main `177d6c989ec904e124052f5e458d8181bf7ccc0a` (#359); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
@@ -30,7 +30,7 @@ pass. Seventy focused tests, app/test types, scoped lint, clean replay and 2,023
 SQL checks pass. See first-send-persistence report for precise limits. Migration
 20261005043056 is local only. Candidate PR/CI/release/production checks remain.
 All 16 actual retry-regression cases also pass, including real lease expiry.
-Clean-replay schema comparison is running; record its result before claiming it. Notification summary
+Clean-replay public schema comparison reports no drift. Notification summary
 writes and full registration/preferences/device evidence remain open.
 
 9A–9D are verified live on 9903c6dcdfe63c9fa66398d572864061650cb2d2. #354 passed
