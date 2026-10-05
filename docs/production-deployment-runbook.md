@@ -580,6 +580,16 @@ The internal `/api/ops/backend-dashboard` endpoint is the cost-conscious product
 
 Optionally wire a monitored destination such as Better Stack, PagerDuty, Slack workflow, or another incident channel through `BACKEND_ALERT_DELIVERY_URL`. The `backend-alert-delivery` logical job runs under the existing `/api/cron/backend-jobs` scheduler, so this does not add another Vercel cron invocation. It posts only warning/degraded summaries by default; set `BACKEND_ALERT_DELIVERY_NOTIFY_OK=true` only when the destination needs explicit recovery events. Use `BACKEND_ALERT_DELIVERY_AUTH_HEADER` when the destination requires an authorization header.
 
+A successful job records that the receiver returned a `2xx` HTTP response; it
+cannot prove that a person was notified. A rejected response, network loss or
+five-second request timeout marks the job failed and releases its lease. The
+next scheduled dispatch collects a fresh summary and may send it again. If the
+receiver accepted an earlier request but its acknowledgement was lost, delivery
+can repeat. Group repeats by `delivery.dedupeKey` (also sent as
+`x-magicbooklet-alert-dedupe-key`). There is no exactly-once delivery guarantee
+or persistent queue of every transient alert snapshot. A killed worker leaves
+a started job record and its lease until expiry; a later dispatcher can then run.
+
 As a secondary check, a monitor may also call `/api/ops/backend-dashboard` or `/api/ops/backend-alerts` with `Authorization: Bearer $OPS_READ_SECRET` after production deployment. Treat non-`2xx` responses as alertable; `503` means the backend is degraded and the response body still contains the normalized dashboard or alert payload.
 
 The endpoint must remain private: expect `Cache-Control: private, no-store`, an `x-request-id`, and no shared-cache hit. Do not expose `OPS_READ_SECRET` or `CRON_SECRET` to browser clients, mobile clients, or public monitor pages.

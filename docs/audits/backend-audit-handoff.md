@@ -6,10 +6,19 @@ Updated 2026-10-05 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/push-summary-audit-9i`, incorporating main `8ff10cc6480d2cea341a2157db21ba5d25b86f5d` (#364); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/alert-delivery-audit-9j`, incorporating main `8ff10cc6480d2cea341a2157db21ba5d25b86f5d` (#364); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+9J alert-delivery evidence: eleven real local HTTP/PostgREST/SQL cases pass,
+including actual collectors, no-work, collector outage, receiver rejection,
+lost acknowledgement, five-second timeout, concurrent dispatch, real shortened
+lease expiry and actual SIGKILL at the receiver boundary. No runtime defect found.
+Tests and runbook document duplicate-delivery/ephemeral-snapshot limits; no
+external sink was configured or contacted. See alert-delivery report. Local
+test types/lint pass; separate evidence commit/PR remains. Do not alter #368's
+head with this follow-up while its CI runs. Full audit remains active.
 
 9G is released and independently verified on
 36962d613c5a70d3dc125319e25a37f63633e75b. Exact-main Quality 37317775601
@@ -36,7 +45,7 @@ before-commit/lost-ack regressions. It adds diagnostic logging, preserves durabl
 delivery and never resends for a summary failure. These fields have no current
 application reader; see push-summary report for the explicit best-effort limit.
 Eleven actual first-send cases, 69 notification tests, app/test types and lint
-pass. No migration or mobile change. Separate commit/PR/release remains.
+pass. No migration or mobile change. PR #368 head ece2c8a2 is running exact-head Quality 37344035869; merge/release remain.
 Preserve unrelated receipt edits, Section 1 files and private evidence.
 
 9F #361 is verified live on 32a3f47336a6ad54ff0c41b667d9ba41be8d12c2.
