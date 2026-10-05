@@ -11,35 +11,27 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 
 ## Exact checkpoint
 
-9E PR #356 is open at 690aa98fef2fc26e9812188641ba96dcbeffaaa3; exact-head Quality
-37263340019 is running. Merge with main 9903c6dc preserved independent prompt
-safety #355; inspected conflicts were only the existing audit changes after their
-squash merge. The final focused set including prompt safety passes 237 cases.
-Production before-schema/advisor evidence and clean replay function/grant/column/
-index snapshots are prepared in .audit-evidence/backend-social/claims-release/;
-108 existing security advisor findings. The prepared claims-release/verify.cjs
-requires the exact live release SHA, compares expected objects/unchanged schema,
-runs six rollback controls and cleanup/advisor comparisons. Its rollback SQL
-passes locally. Execute it only after standard release. No production 9E migration yet.
+9E #356 is merged as cd264d3945fd3c77a7b5ffb665f3384973c6ec79 at 04:36:54 UTC.
+Exact-head Quality 37263340019, exact-main 37264292974 and standard release
+37264834355 passed. Production independently verified on descendant 177d6c989e
+(Quality 37285060694, release 37286445214): only planned schema additions,
+6 rollback controls, zero fixtures, unchanged 108 security advisor findings,
+exact-live SHA/feed/admin/webhook checks. See push-claims-release report. Preserve
+independent mobile #357–359 changes when incorporating main. JOB-03 stays failed.
 
-9F initial-send investigation reproduces two further failures with actual local
-DB state: accepted push plus failed delivery INSERT leaves no ticket and dedupe
-retry cannot repair it; token retirement failure follows a terminal first-send
-refusal and leaves the token active. See first-send-persistence report/private
-probe. These are open failures, not fixed by #356. JOB-03 remains failed after
-9E release until this initial-send path and broader evidence are addressed.
-
-9E claim candidate is implemented locally, not yet released: three service-only
-invoker RPCs reserve an attempt, save its outcome, and atomically finalize/retire.
-Sixty-second claims fence overlapping/stale workers; one provider request per
-claim. Recovery processes saved outcomes even at the cap. Unknown unsaved results
-can resend only within the existing three-attempt budget. Sixteen real local DB/
-worker controls (including real expiry, SIGKILL and lost write acknowledgement),
-two closure cases, 85 focused tests, types/lint, full replay and 1,991 SQL checks
-pass. See push-send-claims report for scope and remaining first-send/device work.
-Migration 20261005031821 is applied only to isolated local/replay databases;
-no production migration yet. Finish final checks, PR, exact-head CI, mobile-store
-idle check before merge, exact-main CI, standard release and schema/live checks.
+9F candidate now reserves all initial device delivery rows before provider calls,
+saves batch outcomes, and finalizes them with atomic matching-token retirement.
+A known outcome refunds unused reserved slots; an unknown result retains all
+three and is not resent automatically. This can lose unsent delivery opportunities
+on crash and preserves existing rejected-batch single-device fallback accounting.
+Nine actual local PostgREST/SQL controls, including real SIGKILL at provider and
+saved-outcome boundaries, 101-device batching, partial batch failure and dedupe,
+pass. Seventy focused tests, app/test types, scoped lint, clean replay and 2,023
+SQL checks pass. See first-send-persistence report for precise limits. Migration
+20261005043056 is local only. Candidate PR/CI/release/production checks remain.
+All 16 actual retry-regression cases also pass, including real lease expiry.
+Clean-replay schema comparison is running; record its result before claiming it. Notification summary
+writes and full registration/preferences/device evidence remain open.
 
 9A–9D are verified live on 9903c6dcdfe63c9fa66398d572864061650cb2d2. #354 passed
 37258797988 on 469d3231 and merged October 5 03:27:13 UTC with mobile-store idle.

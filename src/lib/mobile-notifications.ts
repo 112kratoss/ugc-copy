@@ -200,10 +200,6 @@ function rowBoolean(row: NotificationRow, key: string, fallback = false) {
   return typeof value === 'boolean' ? value : fallback;
 }
 
-function isDeviceNotRegistered(details: unknown) {
-  return isRecord(details) && details.error === 'DeviceNotRegistered';
-}
-
 /**
  * What Expo says about a message that sending it again cannot change: the
  * device is gone, the project's push credentials are wrong, or the message
@@ -795,90 +791,58 @@ async function sendMobilePushForNotification(
     },
   };
 
-  // An account's devices go out together: one Expo request, one ledger write
-  // and one token update per batch. Each used to happen once per device, in
-  // turn, inside the request of whoever caused the notification — an account
-  // holding 32 tokens kept that person waiting 14 seconds.
-  for (const batch of chunkValues(devices, EXPO_PUSH_SEND_BATCH_SIZE)) {
-    const outcomes = await sendExpoPushBatchToDevices(batch, content);
-    const deliveries: Record<string, unknown>[] = [];
-    const unregisteredTokenIds: string[] = [];
+  // Reserve the complete first-send budget before any provider call. A crash or
+  // lost result consumes this reservation conservatively; a saved result refunds
+  // only the known unused slots when it is finalized under the same claim.
+  const batches = chunkValues(devices, EXPO_PUSH_SEND_BATCH_SIZE).map(batch => ({
+    devices: batch,
+    reservations: batch.map(device => ({
+      id: crypto.randomUUID(), retry_claim_id: crypto.randomUUID(),
+      notification_id: notification.id, user_id: notification.userId,
+      token_id: device.tokenId, expo_push_token: device.expoPushToken, platform: device.platform,
+      send_status: 'error', receipt_status: 'error',
+      attempt_count: DEFAULT_EXPO_PUSH_MAX_ATTEMPTS, initial_attempt_reservation: true,
+      last_attempt_at: pushedAt, retry_claim_until: null,
+      receipt_error_code: 'PushRetryOutcomeUnknown',
+      receipt_message: 'Initial push budget reserved; provider outcome has not been recorded.',
+    })),
+  }));
+  for (const batch of batches) {
+    const { error } = await adminSupabase.from('mobile_push_deliveries').insert(batch.reservations);
+    if (error) throw new MobileNotificationError('Failed to reserve mobile push deliveries.', 500);
+  }
 
-    for (const [index, device] of batch.entries()) {
-      const outcome = outcomes[index];
-      const delivery = {
-        notification_id: notification.id,
-        user_id: notification.userId,
-        token_id: device.tokenId,
-        expo_push_token: device.expoPushToken,
-        platform: device.platform,
-        last_attempt_at: pushedAt,
-      };
-
+  for (const batch of batches) {
+    const outcomes = await sendExpoPushBatchToDevices(batch.devices, content);
+    const items = outcomes.map((outcome, index) => {
+      const reservation = batch.reservations[index];
+      let recorded: Record<string, unknown>;
       if ('failure' in outcome) {
-        const providerMessage = getErrorMessage(outcome.failure, 'Expo push send failed before the provider accepted the notification.');
-        firstError ??= providerMessage;
-        deliveries.push({
-          ...delivery,
-          send_status: 'error',
-          // A request Expo turned down is not tried twice here, and a later
-          // one would be the same request. One it never answered is filed as
-          // before: its attempts are spent, which already keeps the retry job
-          // from it.
-          receipt_status: failedSendReceiptStatus(!isRefusedExpoPushRequest(outcome.failure)),
-          receipt_checked_at: pushedAt,
-          receipt_message: 'Push send failed before a receipt was created.',
-          provider_message: providerMessage,
-          provider_details: toProviderErrorDetails(outcome.failure),
+        const message = getErrorMessage(outcome.failure, 'Expo push send failed before the provider accepted the notification.');
+        firstError ??= message;
+        recorded = {
+          status: isRefusedExpoPushRequest(outcome.failure) ? 'refused' : 'retryable',
+          message, details: toProviderErrorDetails(outcome.failure),
           attempt_count: getExpoPushAttemptCount(outcome.failure, 1),
-        });
-        continue;
+        };
+      } else if (outcome.result.status === 'ok') {
+        firstTicketId ??= outcome.result.id ?? null;
+        recorded = { status: 'sent', ticket_id: outcome.result.id, attempt_count: outcome.attemptCount };
+      } else {
+        const result = outcome.result;
+        firstError ??= result.message;
+        recorded = {
+          status: isPermanentExpoPushRefusal(result.details) ? 'refused' : 'retryable',
+          error_code: isRecord(result.details) ? normalizeOptionalString(result.details.error) : null,
+          message: result.message, details: result.details, attempt_count: outcome.attemptCount,
+        };
       }
-
-      const { result } = outcome;
-      if (result.status === 'ok') {
-        firstTicketId ??= result.id ?? null;
-        deliveries.push({
-          ...delivery,
-          push_ticket_id: result.id ?? null,
-          send_status: 'sent',
-          receipt_status: 'pending',
-          attempt_count: outcome.attemptCount,
-          sent_at: pushedAt,
-        });
-        continue;
-      }
-
-      firstError ??= result.message;
-      deliveries.push({
-        ...delivery,
-        send_status: 'error',
-        receipt_status: failedSendReceiptStatus(!isPermanentExpoPushRefusal(result.details)),
-        receipt_checked_at: pushedAt,
-        receipt_error_code: isRecord(result.details) ? normalizeOptionalString(result.details.error) : null,
-        receipt_message: result.message,
-        provider_message: result.message,
-        provider_details: isRecord(result.details) ? result.details : null,
-        attempt_count: 1,
-      });
-
-      if (isDeviceNotRegistered(result.details) && device.tokenId) {
-        unregisteredTokenIds.push(device.tokenId);
-      }
-    }
-
-    // The rows carry different optional columns. All of those are nullable with
-    // no default, so the nulls PostgREST fills in across a mixed batch are what
-    // separate inserts would have left there.
-    const { error: insertError } = await adminSupabase
-      .from('mobile_push_deliveries')
-      .insert(deliveries);
-
-    if (insertError) {
-      throw new MobileNotificationError('Failed to store mobile push delivery.', 500);
-    }
-
-    await retireUnregisteredPushTokens(adminSupabase, unregisteredTokenIds, pushedAt);
+      return { delivery_id: reservation.id, claim_id: reservation.retry_claim_id, outcome: recorded };
+    });
+    const { error: recordError } = await adminSupabase.rpc('record_initial_mobile_push_outcomes', { p_items: items });
+    if (recordError) throw new MobileNotificationError('Failed to record initial mobile push outcomes.', 500);
+    const { error: finishError } = await adminSupabase.rpc('finish_initial_mobile_push_outcomes', { p_items: items });
+    if (finishError) throw new MobileNotificationError('Failed to finalize initial mobile push outcomes.', 500);
   }
 
   await adminSupabase
