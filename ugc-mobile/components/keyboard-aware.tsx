@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
 import * as ReactNative from 'react-native';
 import Animated, {
-  KeyboardState,
   useAnimatedKeyboard,
   useAnimatedReaction,
   useAnimatedStyle,
@@ -66,8 +65,8 @@ const platformApi = optionalNativeExport(() => ReactNative.Platform);
  * without a closing animation, which Android's tracker never notices (see
  * `resolveKeyboardHeight`). These events come from the window's own insets on
  * every layout, so they do. Measured on the Pixel 9a emulator with the model
- * picker opened over the prompt's keyboard: the tracker still read open at 336
- * while these events had already reported the hide.
+ * picker, a Modal at the time, opened over the prompt's keyboard: the tracker
+ * still read open at 336 while these events had already reported the hide.
  *
  * It is no rescue for an Android `Modal`. That window receives none of the
  * insets, and these JS events were first measured not arriving there either.
@@ -122,21 +121,20 @@ function useKeyboardHeight() {
   const keyboard = useAnimatedKeyboard();
   const { height: reportedHeight, hidden: reportedHidden } = useReportedKeyboard();
 
-  // Once the tracker animates again its frames are current, whatever the last event
+  // Once the tracker moves again its frames are current, whatever the last event
   // said. Clearing on the UI thread means a show event that lands late (the JS thread
   // busy as the prompt takes focus) cannot drop the content behind the new keyboard.
+  // "Moves" is read from its height and never from its state, which can be left
+  // unsettled for the rest of the process (see `resolveKeyboardHeight`).
   useAnimatedReaction(
-    () => keyboard.state.value,
-    (state, previous) => {
-      if (state !== previous && (state === KeyboardState.OPENING || state === KeyboardState.CLOSING)) {
-        reportedHidden.value = false;
-      }
+    () => keyboard.height.value,
+    (height, previous) => {
+      if (previous !== null && height !== previous) reportedHidden.value = false;
     },
   );
 
   return useDerivedValue(() => resolveKeyboardHeight({
     trackedHeight: keyboard.height.value,
-    trackerSettledOpen: keyboard.state.value === KeyboardState.OPEN,
     reportedHeight: reportedHeight.value,
     reportedHidden: reportedHidden.value,
   }));
