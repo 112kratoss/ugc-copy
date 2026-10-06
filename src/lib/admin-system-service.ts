@@ -75,17 +75,15 @@ export async function collectAdminSystemSnapshot(
   const now = options.now ?? new Date();
   const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
 
-  const [runs, dayRuns, locks, releases, contact] = await Promise.all([
+  const [runs, dayRuns, locks, releases, active, contact] = await Promise.all([
     client
       .from('backend_job_runs')
       .select('id, job_name, status, started_at, finished_at, duration_ms, skip_reason, error_message')
       .order('started_at', { ascending: false })
       .limit(60),
-    client
-      .from('backend_job_runs')
-      .select('job_name, status, started_at')
-      .gte('started_at', dayAgo)
-      .limit(2000),
+    // Aggregate in one database snapshot; the Data API's row ceiling must not
+    // hide job failures or understate the day's run counts.
+    client.rpc('admin_job_run_summary', { p_since: dayAgo }),
     client
       .from('backend_job_locks')
       .select('name, locked_until, locked_by')
@@ -96,6 +94,16 @@ export async function collectAdminSystemSnapshot(
       .select('id, revision, status, change_note, created_at, activated_at')
       .order('created_at', { ascending: false })
       .limit(10),
+    // History is bounded; newer shadow/draft releases must not hide the
+    // currently active release or reset its entry count to zero.
+    client
+      .from('generation_model_catalog_releases')
+      .select('id, revision, status, activated_at')
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
     runPagedQuery<Record<string, unknown>>(
       (from, to) => {
         const query = client
@@ -117,42 +125,21 @@ export async function collectAdminSystemSnapshot(
   ]);
 
   // `contact` is omitted: runPagedQuery already threw on any error it saw.
-  for (const result of [runs, dayRuns, locks, releases]) {
+  for (const result of [runs, dayRuns, locks, releases, active]) {
     if (result.error) throw result.error;
   }
 
   const dayRunRows = (dayRuns.data ?? []) as Array<Record<string, unknown>>;
-  const summaryByJob = new Map<string, AdminJobSummary>();
-
-  for (const row of dayRunRows) {
-    const jobName = String(row.job_name ?? '');
-    const status = String(row.status ?? '');
-    const startedAt = (row.started_at as string | null) ?? null;
-    const existing = summaryByJob.get(jobName);
-
-    if (!existing) {
-      summaryByJob.set(jobName, {
-        jobName,
-        lastStatus: status,
-        lastRunAt: startedAt,
-        failureCount24h: status === 'failed' ? 1 : 0,
-        runCount24h: 1,
-      });
-      continue;
-    }
-
-    existing.runCount24h += 1;
-    if (status === 'failed') existing.failureCount24h += 1;
-    // Rows arrive newest-first, so the first sighting is already the latest run;
-    // only replace it if an out-of-order row is genuinely newer.
-    if (startedAt && (!existing.lastRunAt || startedAt > existing.lastRunAt)) {
-      existing.lastRunAt = startedAt;
-      existing.lastStatus = status;
-    }
-  }
+  const jobSummaries: AdminJobSummary[] = dayRunRows.map((row) => ({
+    jobName: String(row.job_name),
+    lastStatus: String(row.last_status),
+    lastRunAt: String(row.last_run_at),
+    failureCount24h: Number(row.failure_count),
+    runCount24h: Number(row.run_count),
+  }));
 
   const releaseRows = (releases.data ?? []) as Array<Record<string, unknown>>;
-  const activeRelease = releaseRows.find((row) => String(row.status ?? '') === 'active') ?? null;
+  const activeRelease = active.data as Record<string, unknown> | null;
 
   let entryCount = 0;
   if (activeRelease) {
@@ -165,7 +152,7 @@ export async function collectAdminSystemSnapshot(
   }
 
   return {
-    jobSummaries: [...summaryByJob.values()].sort((left, right) => left.jobName.localeCompare(right.jobName)),
+    jobSummaries: jobSummaries.sort((left, right) => left.jobName.localeCompare(right.jobName)),
     recentRuns: ((runs.data ?? []) as Array<Record<string, unknown>>).map((row) => ({
       id: String(row.id),
       jobName: String(row.job_name ?? ''),

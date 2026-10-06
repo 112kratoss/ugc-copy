@@ -101,6 +101,8 @@ export async function collectAdminOverview(
       .from('transactions')
       .select('id', { count: 'exact', head: true })
       .eq('status', 'success')
+      // Mobile credit purchases mirror this ledger but belong to the IAP rail.
+      .is('mobile_product_id', null)
       // Dev-era test-mode purchases charged 1–5 rupees for a full credit pack;
       // counting them here would report eight paid orders against one real sale.
       .eq('is_test', false)

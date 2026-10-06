@@ -1,7 +1,8 @@
 # Backend audit completion checklist
 
-Updated 2026-10-06. Current independently checked production:
-`75dc4eb7fc8fef7139fc42c1a50b10f3f653f4de`, including Sections 9A–9O and 10A–H.
+Updated 2026-10-07. Current independently checked production:
+`eac420e23b42e804f0307c5c0285b770eacae17b`, including Sections 9A–9O, 10A–I and 11A.
+[11A release evidence](backend-section-11-fx-provider-release-2026-10-07.md).
 [10G/H release evidence](backend-section-10-retention-mapping-release-2026-10-06.md).
 [10F release evidence](backend-section-10-deletion-freeze-refunds-release-2026-10-06.md).
 [10E release evidence](backend-section-10-detached-cash-refunds-release-2026-10-06.md).
@@ -151,7 +152,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | OPS-01 | Exact-main Quality, staged/live health and standard release for Section 6J | passed | [6J release evidence](backend-section-06-staging-locks-release-2026-10-01.md); first attempt mismatch preserved |
 | OPS-02 | Backup restore and rollback/reconciliation exercises | untested | Isolated restoration with consistency checks and measured recovery; no production restore |
 | OPS-03 | Current-build capacity evidence and failure containment | untested | Reconcile [scaling entry point](../scaling-audit.md) with the audited build; local disk probes are not capacity certification |
-| OPS-04 | Admin page collectors, telemetry, app-version, CSP and FX methods | failed | [11A](backend-section-11-fx-provider-payload-2026-10-06.md) reproduces public caching of invalid/missing non-USD rates in 20 actual HTTP cases; candidate passes locally, release remains. [11B](backend-section-11-operations-ingress-2026-10-06.md) reproduces out-of-range diagnostic timestamps throwing RangeError; candidate passes 25 actual HTTP/SQL cases, release remains. [11C](backend-section-11-admin-page-authorization-2026-10-07.md) reproduces private data in revoked-session redirect bodies and gates all ten admin pages before reads; production candidate passes, release remains. Broader collector semantics and deployed method behavior remain; the seventh page-only service is home dashboard under SOCIAL-GATE. |
+| OPS-04 | Admin page collectors, telemetry, app-version, CSP and FX methods | failed | [11A release](backend-section-11-fx-provider-release-2026-10-07.md) fixes invalid/missing supported rates; exact live build, unchanged schema/advisors and healthy rates independently checked. [11B](backend-section-11-operations-ingress-2026-10-06.md) reproduces out-of-range diagnostic timestamps throwing RangeError; candidate passes 25 actual HTTP/SQL cases, release remains. [11C](backend-section-11-admin-page-authorization-2026-10-07.md) reproduces private data in revoked-session redirect bodies and gates all ten admin pages before reads; production candidate passes, release remains. [11D](backend-section-11-admin-purchase-counter-2026-10-07.md) reproduces mobile ledger mirrors in the Razorpay overview count; seven actual API/SQL cases pass after the filter, release remains. [11E](backend-section-11-admin-collector-limits-2026-10-07.md) reproduces 1,001-row revenue and daily job summaries truncated by the API ceiling; 14 actual cases and clean migration replay pass, release remains. [11F](backend-section-11-admin-catalog-coverage-2026-10-07.md) reproduces active catalog disappearance beyond the bounded history; all 21 actual collector cases pass. 11D/E/F are consolidated into #382, release remains. Broader collector semantics and deployed method behavior remain; the seventh page-only service is home dashboard under SOCIAL-GATE. |
 
 ## Completion rule and next sequence
 
