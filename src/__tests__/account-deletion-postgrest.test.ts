@@ -20,7 +20,7 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
   let db: Client, admin: SupabaseClient;
   let userClient: SupabaseClient;
   let owners: string[], accessToken: string;
-  let fail: 'storage' | 'auth' | 'copy' | 'mapping' | 'list' | 'fingerprint' | 'target-auth' | 'revision-list' | 'supplement-read' | 'supplement-write' | 'mapping-read' | null;
+  let fail: 'storage' | 'auth' | 'copy' | 'mapping' | 'list' | 'fingerprint' | 'target-auth' | 'revision-list' | 'supplement-read' | 'supplement-write' | 'mapping-read' | 'retained-info' | null;
   let deletedAuth: string[], fixtureFingerprints: string[];
   let extraObjects: { bucket: string; path: string }[], postIds: string[], templateIds: string[], generationIds: string[];
   let bundle: string | null, post: string | null, order: string | null, purchase: string | null, revision: string | null;
@@ -96,6 +96,9 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
     expect((await db.query("select user_id from public.account_deletion_jobs where status<>'completed'")).rows).toEqual([]);
     admin = createClient(config.API_URL, config.SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false }, global: { fetch: async (input, init) => {
       const path = new URL(String(input)).pathname;
+      if (fail === 'retained-info' && path.startsWith('/storage/v1/object/info/')) {
+        return new Response(JSON.stringify({ statusCode: '503', error: 'Injected outage', message: 'Injected retained metadata outage' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+      }
       if (init?.method === 'DELETE' && ((fail === 'storage' && path.startsWith('/storage/v1/object/')) || (fail === 'auth' && path.startsWith('/auth/v1/admin/users/')))) {
         return new Response(JSON.stringify({ statusCode: '503', error: 'Injected outage', message: 'Injected ' + fail + ' deletion outage' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
       }
@@ -427,6 +430,49 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
     await db.query("update public.account_deletion_jobs set next_attempt_at=now()-interval '1 second' where user_id=$1", [owners[0]]);
     expect(await cleanup()).toMatchObject({ initial: { claimed: 1, resweepScheduled: 1 } });
     expect(await authExists()).toBe(false); expect(await objects()).toEqual([]);
+  });
+  it('repairs a missing committed retained copy before retrying creator erasure', async () => {
+    await sold(); fail = 'storage';
+    await expect(initial()).rejects.toThrow();
+    await markAccountDeletionStage(admin, owners[0], 'failed', new Error('Isolated retention retry'));
+    expect(await authExists()).toBe(true); expect(await retained()).toHaveLength(1);
+    fail = null;
+    const retainedPath = (await retained())[0].name;
+    expect((await admin.storage.from('post_resource_files').remove([retainedPath])).error).toBeNull();
+    expect(await retained()).toEqual([]);
+    await db.query("update public.account_deletion_jobs set next_attempt_at=now()-interval '1 second' where user_id=$1", [owners[0]]);
+    expect(await cleanup()).toMatchObject({ initial: { claimed: 1, resweepScheduled: 1 } });
+    expect(await authExists()).toBe(false); expect(await retained()).toHaveLength(1);
+    await buyerFile();
+  });
+  it.each(['missing-source', 'info-outage', 'invalid-mapping'])('halts erasure on a committed retention mapping failure: %s', async failure => {
+    await sold(); fail = 'storage';
+    await expect(initial()).rejects.toThrow();
+    await markAccountDeletionStage(admin, owners[0], 'failed', new Error('Isolated retention retry gate'));
+    fail = null;
+    const retainedPath = (await retained())[0].name;
+    if (failure === 'missing-source') {
+      expect((await admin.storage.from('post_resource_files').remove([retainedPath, owners[0] + '/audit-fixture.png'])).error).toBeNull();
+    } else if (failure === 'info-outage') {
+      fail = 'retained-info';
+    } else {
+      await db.query("update public.post_resource_bundle_revision_files set retained_path='retained/'||$1::text||'/invalid.png' where revision_id=$1", [revision]);
+    }
+    await db.query("update public.account_deletion_jobs set next_attempt_at=now()-interval '1 second' where user_id=$1", [owners[0]]);
+    await expect(cleanup()).rejects.toThrow('cleanup batch incomplete');
+    expect(await authExists()).toBe(true); expect((await objects()).length).toBeGreaterThan(0);
+    expect(await job()).toMatchObject({ status: 'failed' });
+    fail = null;
+    if (failure === 'missing-source') {
+      // Both copies are genuinely gone. Erasure must stay failed until an
+      // operator restores data; the test does not bypass blocked-owner writes.
+      return;
+    } else if (failure === 'invalid-mapping') {
+      await db.query('update public.post_resource_bundle_revision_files set retained_path=$1 where revision_id=$2', [retainedPath, revision]);
+    }
+    await db.query("update public.account_deletion_jobs set next_attempt_at=now()-interval '1 second' where user_id=$1", [owners[0]]);
+    expect(await cleanup()).toMatchObject({ initial: { claimed: 1, resweepScheduled: 1 } });
+    expect(await authExists()).toBe(false); await buyerFile();
   });
   it.each(['live', 'deleted', 'storage', 'auth'].flatMap(state => ['refund', 'dispute', 'restore'].map(action => ({ state, action }))))('processes a signed cash $action webhook with creator state $state', async ({ state, action }) => {
     await sold({ captured: true });

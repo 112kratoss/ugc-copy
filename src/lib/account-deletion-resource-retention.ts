@@ -32,6 +32,8 @@ type RetainedMappingRow = {
   revision_id: string;
   source_bucket: string;
   source_path: string;
+  retained_bucket: string;
+  retained_path: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -202,13 +204,13 @@ export async function retainPurchasedUnlockFiles(
 
   const { data: mappingData, error: mappingLoadError } = await admin
     .from('post_resource_bundle_revision_files')
-    .select('revision_id, source_bucket, source_path')
+    .select('revision_id, source_bucket, source_path, retained_bucket, retained_path')
     .in('revision_id', revisionIds);
   if (mappingLoadError) throw new Error('Could not inspect retained resource mappings.');
 
-  const existingMappings = new Set(
+  const existingMappings = new Map(
     ((mappingData ?? []) as RetainedMappingRow[])
-      .map((row) => `${row.revision_id}:${row.source_bucket}:${row.source_path}`),
+      .map((row) => [`${row.revision_id}:${row.source_bucket}:${row.source_path}`, row]),
   );
   let filesRetained = 0;
 
@@ -225,13 +227,30 @@ export async function retainPurchasedUnlockFiles(
         throw new Error('Could not retain purchased resource with an invalid storage path.');
       }
       const mappingIdentity = `${revision.revision_id}:${source.bucket}:${source.filePath}`;
-      if (existingMappings.has(mappingIdentity)) continue;
-
       const retainedPath = retainedPathFor(
         revision.revision_id,
         source.bucket,
         source.filePath,
       );
+      const mapping = existingMappings.get(mappingIdentity);
+      if (mapping) {
+        if (mapping.retained_bucket !== RETAINED_BUCKET || mapping.retained_path !== retainedPath) {
+          throw new Error('Could not confirm purchased resource with an invalid retained mapping.');
+        }
+        const { data: retainedObject, error: retainedInfoError } = await admin.storage
+          .from(RETAINED_BUCKET)
+          .info(retainedPath);
+        if (!retainedInfoError && retainedObject) continue;
+        const status = retainedInfoError && typeof retainedInfoError === 'object'
+          ? String(('statusCode' in retainedInfoError ? retainedInfoError.statusCode : undefined)
+            ?? ('status' in retainedInfoError ? retainedInfoError.status : undefined))
+          : '';
+        if (status !== '404') {
+          throw new Error('Could not confirm retained purchased resource.');
+        }
+        // A committed mapping is not proof the Storage object still exists.
+        // Re-copy a missing object while its owner source is still available.
+      }
       await copyOrConfirmExisting(admin, source.bucket, source.filePath, retainedPath);
 
       const { error: mappingWriteError } = await admin
@@ -245,7 +264,13 @@ export async function retainPurchasedUnlockFiles(
         }, { onConflict: 'revision_id,source_bucket,source_path' });
       if (mappingWriteError) throw new Error('Could not record retained resource mapping.');
 
-      existingMappings.add(mappingIdentity);
+      existingMappings.set(mappingIdentity, {
+        revision_id: revision.revision_id,
+        source_bucket: source.bucket,
+        source_path: source.filePath,
+        retained_bucket: RETAINED_BUCKET,
+        retained_path: retainedPath,
+      });
       filesRetained += 1;
     }
   }
