@@ -4431,6 +4431,9 @@ function CreatorParameterSheet({
 }) {
   const theme = useAppTheme();
   const reducedMotion = useReducedMotion();
+  // Still a Modal, so its panel keeps taking a touch-down that nothing below it wanted (see
+  // `takesTouchDown`, and what that costs a list on Android: a slow drag that begins on a label or in
+  // a gap of this one scrolls nothing. Pixel 9a emulator, 2026-10-07; not what this change is for).
   const drag = useSheetDismissDrag({ onDismiss: onClose, visible });
   const quoteLabel = quoteStatus === 'ready' ? `${cost ?? 0} credits` : quoteStatus === 'error' ? 'Unavailable' : 'Calculating…';
   const balanceLabel = typeof availableCredits === 'number'
@@ -4442,7 +4445,9 @@ function CreatorParameterSheet({
         <SheetBackdrop drag={drag} color={hexWithAlpha(theme.dim.color, 0.7 * theme.dim.scale)} onPress={onClose} />
         <SheetPanel {...drag.contentPanHandlers} testID="creator-parameter-sheet" accessibilityViewIsModal style={[{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: theme.colors.panel, paddingTop: 6, paddingBottom: bottomInset + 12 }, drag.dragStyle]}>
           <SheetGrabber drag={drag} />
-          <View style={{ paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          {/* The title takes a pull as the grabber does, wherever the list is scrolled to. The panel's own
+              drag waits for the list to be at its top, so a pull from here did nothing once it had scrolled. */}
+          <View {...drag.panHandlers} style={{ paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <View style={{ flex: 1, gap: 2 }}>
               <Text style={{ color: theme.colors.text, fontSize: 21, fontWeight: '800' }}>Generation parameters</Text>
               <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 12 }}>{model?.displayName ?? `${TOOL_META[draft.tool].title} settings`}</Text>
