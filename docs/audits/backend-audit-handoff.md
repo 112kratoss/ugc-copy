@@ -6,10 +6,26 @@ Updated 2026-10-06 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/account-deletion-audit-10b`, incorporating main `b9729ee41f4fc4db1c500bc96283d667eae34847` (#373); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/account-deletion-audit-10c`, incorporating main `b9729ee41f4fc4db1c500bc96283d667eae34847` (#373); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+10C adds five actual local purchased legacy-generation-input controls. A remix
+revision's supplemental reference and attachment survive creator deletion in
+neutral Storage; actual buyer signed reads match the source bytes. Four 503
+listing/read/write failures halt deletion and recover from durable failed jobs.
+All 27 actual deletion cases pass (147.56 seconds), including live expiry/grace;
+test types/lint and fixture cleanup pass. No runtime/schema change; no provider
+called. See 10C report. Local candidate, no PR yet: complete the parent #374
+release first, incorporate main and open the scoped evidence PR.
+
+10B PR #374 exact head de100f062fc08692a327dcf22a370e2a4cfd1ec1 has Quality
+37498287785 running. Mobile/E2E pass; DB replay finishing, web continues.
+9O/10A #373 exact-main Quality 37498165169 has DB/mobile/E2E passes; web
+checks continue. Standard release and private account-deletion-release/
+unchanged schema/security/live verifier remain. Do not merge #374 before #373's
+release is independently verified; keep mobile-store idle immediately at merge.
 
 10B adds ten actual local deletion controls: linked guest order/partial Auth
 failure; all eight owner buckets; template snapshot anonymization/public/private
