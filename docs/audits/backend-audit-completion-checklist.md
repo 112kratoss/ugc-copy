@@ -1,7 +1,8 @@
 # Backend audit completion checklist
 
 Updated 2026-10-06. Current independently checked production:
-`b9729ee41f4fc4db1c500bc96283d667eae34847`, including Sections 9A–9O and 10A.
+`b82a7de987ad08212edc12b134be02e2a3d8be6c`, including Sections 9A–9O and 10A–E.
+[10E release evidence](backend-section-10-detached-cash-refunds-release-2026-10-06.md).
 [9O/10A release evidence](backend-section-10-account-deletion-release-2026-10-06.md).
 [9M/9N release evidence](backend-section-09-model-verification-release-2026-10-06.md).
 [9L release evidence](backend-section-09-feed-interest-release-2026-10-06.md).
@@ -27,7 +28,7 @@ unequal effort and risk. Do not turn their pass count into a percentage of backe
 safety or an ETA. New findings attach to these obligations; changes in scope must
 be recorded explicitly instead of silently adding another lettered batch.
 
-Current ledger: **53 obligations — 24 passed, 25 untested, 2 failed, 2 external**.
+Current ledger: **53 obligations — 24 passed, 24 untested, 3 failed, 2 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
 WORKFLOW-02 and WORKFLOW-04 remain untested after their scoped fixes shipped.
 SOCIAL-01/02/04 return to untested after the verified 8F/8G releases.
@@ -85,7 +86,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | --- | --- | --- | --- |
 | AUTH-01 | Guest/profile, ban/session/lifecycle and signed-balance merge regressions | passed | [Section 1 report](backend-section-01-auth-2026-09-26.md) and the current handoff, including controlled live identity and merge checks; historical balances were not rewritten |
 | AUTH-02 | Previously exercised native Apple, Chrome web and admin login/logout flows | passed | [Current handoff](backend-audit-handoff.md); this does not certify every provider or recovery flow |
-| AUTH-03 | Disposable-account deletion through provider revocation, cleanup failure and restart | untested | [10A](backend-section-10-account-deletion-2026-10-06.md): twelve actual local Auth/Storage/SQL controls cover owner cleanup, route identity/reauthentication, buyer file retention, copy/mapping failures and SIGKILL recovery. [10B](backend-section-10-account-deletion-identities-2026-10-06.md) adds ten real controls for linked guests, all eight owner buckets, template/public/private post namespaces, durable claim history and a live worker after actual lease/grace expiry (22 total). [10C](backend-section-10-account-deletion-references-2026-10-06.md) adds five real legacy generation-reference retention/failure-retry controls (27 total). [10D](backend-section-10-account-deletion-retained-access-2026-10-06.md) adds six structured-file/publication and retained-read/retraction/signature/expiry controls (33 total). Cash refund after creator deletion, other reference variants and real provider revocation stay open |
+| AUTH-03 | Disposable-account deletion through provider revocation, cleanup failure and restart | untested | [10A](backend-section-10-account-deletion-2026-10-06.md): twelve actual local Auth/Storage/SQL controls cover owner cleanup, route identity/reauthentication, buyer file retention, copy/mapping failures and SIGKILL recovery. [10B](backend-section-10-account-deletion-identities-2026-10-06.md) adds ten real controls for linked guests, all eight owner buckets, template/public/private post namespaces, durable claim history and a live worker after actual lease/grace expiry (22 total). [10C](backend-section-10-account-deletion-references-2026-10-06.md) adds five real legacy generation-reference retention/failure-retry controls (27 total). [10D](backend-section-10-account-deletion-retained-access-2026-10-06.md) adds six structured-file/publication and retained-read/retraction/signature/expiry controls (33 total). [10E/F](backend-section-10-deletion-freeze-refunds-2026-10-06.md) add four actual cash lifecycle controls; [10G](backend-section-10-signed-cash-webhooks-2026-10-06.md) adds twelve signed-webhook cases (49 total). [10H](backend-section-10-retention-mapping-recovery-2026-10-06.md) covers mapping retry failures. Other reference variants and real provider revocation stay open |
 | AUTH-04 | Mobile Google deep-link completion and remaining password/email/session recovery flows | untested | Real client/provider execution; reconcile earlier evidence before repeating checks |
 | AUTH-05 | JWT key rotation/fallback and sessionless-token compatibility | untested | Controlled rotation environment and explicit legacy compatibility decision |
 | AUTH-06 | CAPTCHA/rate configuration rollout compatible with installed clients | untested | Hosted configuration plus old/new client behavior, not configuration presence alone |
@@ -102,7 +103,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | PAY-01 | Credit grant identity/idempotency regressions | passed | [Credit grant release](backend-section-05-credit-grants-release-2026-09-28.md) |
 | PAY-02 | Receipt/event identity and reversal target binding regressions | passed | [Receipt release](backend-section-05-receipt-identity-release-2026-09-29.md), [binding release](backend-section-05-credit-event-binding-release-2026-09-29.md), [event history](backend-section-05-mobile-event-history-release-2026-09-29.md) |
 | PAY-03 | Reproduced refund/restore ordering and debt cases | passed | [Refund release](backend-section-05-refund-ordering-release-2026-09-28.md); the full event lifecycle matrix is PAY-04 |
-| PAY-04 | Remaining credit, referral, refund/dispute/restore and reconciliation combinations | failed | [10E](backend-section-10-detached-cash-refunds-2026-10-06.md) reproduces detached refund rejection/deletion deadlock; merged #376 awaits release verification. [10F](backend-section-10-deletion-freeze-refunds-2026-10-06.md) fixes reproduced refunds frozen during retrying deletion locally; release remains. Broader orderings stay open. |
+| PAY-04 | Remaining credit, referral, refund/dispute/restore and reconciliation combinations | failed | [10E](backend-section-10-detached-cash-refunds-2026-10-06.md) reproduces detached refund rejection/deletion deadlock; [10E release verified](backend-section-10-detached-cash-refunds-release-2026-10-06.md). [10F](backend-section-10-deletion-freeze-refunds-2026-10-06.md) fixes reproduced refunds frozen during retrying deletion; #377 merged, main CI/release verification remains. Broader orderings stay open. |
 | PAY-05 | Genuine purchase/refund/webhook delivery and installed-client restore | external | Provider test credentials/accounts were unavailable in prior batches; synthetic events do not close this row |
 | PAY-06 | Scoped payout transition and detached reporting defects | passed | [Payout release](backend-section-04-payouts-release-2026-09-27.md), [detached reporting](backend-section-05-payout-detached-reporting-release-2026-09-30.md) |
 | PAY-07 | Creator payout crash recovery and reconciliation to external transfer outcome | untested | No actual money transfer is authorized as an incidental probe; use suitable test facilities |
@@ -131,7 +132,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | MEDIA-06 | Concurrent disk admission/backpressure across cooperating writers | passed | [6R release](backend-section-06-capacity-admission-release-2026-10-03.md): shared atomic claims, enforced output ceilings, completed-source accounting, inherited readers, block/inode headroom and DB retry with stable credits; exact-main CI and standard release passed. Uncoordinated writers and production throughput remain outside this bounded certificate |
 | MEDIA-07 | Other scratch namespaces and metadata/legacy accumulation policy | failed | [6N reproduction/fix](backend-section-06-media-scratch-2026-10-01.md): all five old namespaces retain bytes after owner death. New leased scratch and cancellation ordering pass real FFmpeg locally and in CI; [deployed in #257](backend-section-06-media-scratch-release-2026-10-01.md). [6S release](backend-section-06-metadata-lifecycle-release-2026-10-03.md) fixes interrupted initialization; verified legacy environment-retirement evidence remains open |
 | MEDIA-08 | Upload/import validation, private signed reads, finalization and revocation | untested | Real Storage/HTTP behavior with ownership, expiry, malformed input and replay |
-| MEDIA-09 | Deletion/retention correctness and durable input/output recovery | untested | Objects and DB references remain consistent through partial deletion and retry |
+| MEDIA-09 | Deletion/retention correctness and durable input/output recovery | failed | [10H](backend-section-10-retention-mapping-recovery-2026-10-06.md) reproduces mapping retries deleting sources without a surviving copy. Four actual regressions pass locally after candidate; release remains. Broader recovery matrix stays open. |
 
 ## Community, jobs and operations
 

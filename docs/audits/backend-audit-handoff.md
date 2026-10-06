@@ -6,10 +6,51 @@ Updated 2026-10-06 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/deletion-freeze-refund-audit-10f`, preserving the merged 10D/E and new 10F candidate; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/retention-mapping-recovery-audit-10h`, preserving 10G evidence and new 10H retention fix; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+10H reproduces a missing committed retained Storage copy being trusted on retry,
+then source Storage/Auth being erased. Four actual regressions cover missing
+copy repair, both copies missing, metadata outage and invalid retained mapping.
+Candidate validates the deterministic mapping and actual Storage object before
+skipping copy; only actual not-found permits re-copy, other failures halt erasure.
+Local Storage info reports HTTP 400 plus statusCode 404 for a missing object;
+classify using statusCode first. Missing source remains safely failed (do not
+bypass blocked-owner writes to pretend recovery). All 53 actual deletion/access cases pass on Node 24.21.0 (163.35 seconds),
+plus 36 focused service checks, app/test types and scoped lint; tracked cleanup
+passes. No schema change. 10G signed-webhook evidence is included in the next
+scoped runtime fix PR. MEDIA-09 is failed until release verification; ledger is
+24 passed, 24 untested, 3 failed, 2 external (53 obligations).
+
+10E #376 is independently verified live on b82a7de9 at October 6 17:56:54 UTC:
+exact-main Quality 37505298701, standard release 37506928664, planned function
+only, all 23 rollback controls, zero fixtures and 110 unchanged advisors pass.
+See detached cash release report. Prod ledger version 20261006175317 maps to
+source 20261006172011. 10F #377 passed exact-head Quality 37505858506 and merged
+with mobile-store idle October 6 17:57:20 UTC as
+ab9eb3ad0ce90e5053e782d9b87231d7a48b57de; exact-main Quality 37507548395
+is running. Standard release/independent partial-deletion-refund-release/ checks
+remain. Do not merge the next candidate before parent verification.
+
+
+10G adds twelve actual local signed webhook controls: refund/dispute/won across
+live/deleted/Storage-failed/Auth-failed creators; real HMAC/tampered bytes,
+dispatcher/SQL, idempotency, entitlement revocation, manual review, retrying
+cleanup and buyer retained-file reads. All twelve targeted controls and the
+expanded 49-case actual suite pass; types/lint pass. No runtime/schema change.
+See signed-cash-webhooks report; no genuine provider called. Preserve evidence
+in a separate batch after parent #377 is released/verified.
+
+10F PR #377 is open on 34abafbe9cb506ff817111d6fff9402741bfa891;
+exact-head Quality 37505858506 passes all four jobs. Parent 10E exact-main
+Quality 37505298701 passed; standard release 37506928664 is running. Independent
+10E detached-refund-release/ verification must pass before merging #377.
+Follow-up partial-deletion-refund-release/ baseline is captured after 10E's
+migration, with exactly one ordered 10F migration pending. Verify mobile-store
+idle immediately before merge.
+
 
 10F reproduces Storage/Auth-failed deletion freezing legitimate cash refunds
 (SQLSTATE 55000). Two actual PostgREST failures pass after the strict sales-count
