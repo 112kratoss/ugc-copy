@@ -6,7 +6,7 @@ Updated 2026-10-06 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/account-deletion-audit-10a`, incorporating main `c0f33e438800de69b6e99736ac2904141d0a93e1` (#371); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/account-deletion-audit-10a`, incorporating main `9cbe5815aa94179e90b1c249cd932a4f369b38b4` (#372); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
@@ -22,8 +22,8 @@ scope. See account-deletion report. Preserve the separate 9O evidence.
 
 9N #372 passed Quality 37362149076 on 93d7b0a3 and merged with mobile-store idle
 October 6 16:18:24 UTC as 9cbe5815aa94179e90b1c249cd932a4f369b38b4.
-Exact-main Quality 37494657028 is running. Standard release and independent
-model-verification-release/ verifier remain. Prepared seven rollback checks
+Exact-main Quality 37494657028 passed. Standard release 37495795918 is running;
+independent model-verification-release/ verification remains. Prepared seven rollback checks
 use a draft fixture release and never activate it; all pass locally.
 
 9M exact-main Quality 37361374584 passed. Release 37362937477 failed because
