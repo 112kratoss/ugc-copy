@@ -11,6 +11,20 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 
 ## Exact checkpoint
 
+10I adds eight actual signed-refund failure/retry controls: pre-commit RPC 503
+and post-commit acknowledgement loss across live/deleted/Storage-failed/Auth-
+failed creator states. Real telemetry insertion is tracked by returned fixture
+IDs; cleanup removes only those IDs. All eight targeted cases and all 61 actual
+local deletion/access cases pass (168.69 seconds); types/lint pass. No runtime
+or schema change. Preserve in a separate evidence commit after parent 10H.
+
+10H PR #379 is open on 4ee0b8d07a831e5e35338c4d8f0447ced29e04cd;
+Quality 37508493978 is running (DB/mobile/E2E pass, web lint). 10F #377 exact-
+main Quality 37507548395 and standard release 37508809231 passed; independent
+partial-deletion-refund-release/ verification is running. Do not merge #379
+before parent live/function/rollback/cleanup verification and mobile-store idle.
+
+
 10H reproduces a missing committed retained Storage copy being trusted on retry,
 then source Storage/Auth being erased. Four actual regressions cover missing
 copy repair, both copies missing, metadata outage and invalid retained mapping.

@@ -20,7 +20,8 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
   let db: Client, admin: SupabaseClient;
   let userClient: SupabaseClient;
   let owners: string[], accessToken: string;
-  let fail: 'storage' | 'auth' | 'copy' | 'mapping' | 'list' | 'fingerprint' | 'target-auth' | 'revision-list' | 'supplement-read' | 'supplement-write' | 'mapping-read' | 'retained-info' | null;
+  let fail: 'storage' | 'auth' | 'copy' | 'mapping' | 'list' | 'fingerprint' | 'target-auth' | 'revision-list' | 'supplement-read' | 'supplement-write' | 'mapping-read' | 'retained-info' | 'refund-before' | 'refund-after' | null;
+  let telemetryIds: string[];
   let deletedAuth: string[], fixtureFingerprints: string[];
   let extraObjects: { bucket: string; path: string }[], postIds: string[], templateIds: string[], generationIds: string[];
   let bundle: string | null, post: string | null, order: string | null, purchase: string | null, revision: string | null;
@@ -96,6 +97,9 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
     expect((await db.query("select user_id from public.account_deletion_jobs where status<>'completed'")).rows).toEqual([]);
     admin = createClient(config.API_URL, config.SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false }, global: { fetch: async (input, init) => {
       const path = new URL(String(input)).pathname;
+      if (fail === 'refund-before' && path === '/rest/v1/rpc/reconcile_post_resource_cash_adjustment') {
+        return new Response(JSON.stringify({ code: 'XX000', message: 'Injected pre-commit refund outage' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+      }
       if (fail === 'retained-info' && path.startsWith('/storage/v1/object/info/')) {
         return new Response(JSON.stringify({ statusCode: '503', error: 'Injected outage', message: 'Injected retained metadata outage' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
       }
@@ -116,14 +120,27 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
           (fail === 'target-auth' && path === '/auth/v1/admin/users/' + owners[0] && init?.method === 'DELETE')) {
         return new Response(JSON.stringify({ statusCode: '503', code: 'XX000', error: 'Injected outage', message: 'Injected ' + fail + ' outage' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
       }
-      const response = await fetch(input, init);
+      // Observe exact fixture telemetry IDs without changing event fields or
+      // deleting any unrelated local events during cleanup.
+      const telemetry = path === '/rest/v1/provider_dependency_events' && init?.method === 'POST';
+      const headers = new Headers(init?.headers);
+      if (telemetry) headers.set('Prefer', 'return=representation');
+      const response = await fetch(input, telemetry ? { ...init, headers } : init);
+      if (telemetry && response.ok) {
+        const rows = await response.clone().json() as Array<{ id: string }>;
+        telemetryIds.push(...rows.map(row => row.id));
+      }
+      if (fail === 'refund-after' && path === '/rest/v1/rpc/reconcile_post_resource_cash_adjustment' && response.ok) {
+        expect(await response.clone().json()).toMatchObject({ status: 'adjusted' });
+        return new Response(JSON.stringify({ code: 'XX000', message: 'Injected lost committed refund acknowledgement' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+      }
       if (init?.method === 'DELETE' && path.startsWith('/auth/v1/admin/users/') && response.ok) deletedAuth.push(path.split('/').pop()!);
       return response;
     } } });
   });
   afterAll(async () => { await db?.end(); vi.unstubAllEnvs(); });
   beforeEach(async () => {
-    owners = []; deletedAuth = []; fixtureFingerprints = []; extraObjects = []; postIds = []; templateIds = []; generationIds = []; fail = null; bundle = null; post = null; order = null; purchase = null; revision = null;
+    owners = []; deletedAuth = []; fixtureFingerprints = []; telemetryIds = []; extraObjects = []; postIds = []; templateIds = []; generationIds = []; fail = null; bundle = null; post = null; order = null; purchase = null; revision = null;
     for (let index = 0; index < 2; index++) {
       const email = randomUUID() + '@example.invalid', password = randomUUID() + 'aZ!7';
       const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
@@ -138,6 +155,7 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
   });
   afterEach(async () => {
     fail = null;
+    await db.query('delete from public.provider_dependency_events where id=any($1::uuid[])', [telemetryIds]);
     if (order) await db.query('delete from public.cash_purchase_adjustments where post_resource_order_id=$1', [order]);
     for (const object of extraObjects) expect((await admin.storage.from(object.bucket).remove([object.path])).error).toBeNull();
     await db.query('delete from public.posts where id=any($1::uuid[])', [postIds]);
@@ -179,6 +197,7 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
     expect((await db.query('select id from public.generations where id=any($1::uuid[])', [generationIds])).rows).toEqual([]);
     expect((await db.query('select id from public.templates where id=any($1::uuid[])', [templateIds])).rows).toEqual([]);
     if (purchase) expect((await db.query('select id from public.post_resource_bundle_purchases where id=$1', [purchase])).rows).toEqual([]);
+    expect((await db.query('select id from public.provider_dependency_events where id=any($1::uuid[])', [telemetryIds])).rows).toEqual([]);
   });
   const linkGuest = async () => {
     const client = createClient(config.API_URL, config.ANON_KEY, { auth: { persistSession: false } });
@@ -515,6 +534,44 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
       expect(await cleanup()).toMatchObject({ initial: { claimed: 1, resweepScheduled: 1 } });
     }
     if (action === 'restore' && state !== 'live') await buyerFile();
+  });
+  it.each(['live', 'deleted', 'storage', 'auth'].flatMap(state => ['refund-before', 'refund-after'].map(failure => ({ state, failure }))))('retries a signed refund with $failure in creator state $state', async ({ state, failure }) => {
+    await sold({ captured: true });
+    if (state === 'deleted') await initial();
+    if (state === 'storage' || state === 'auth') {
+      fail = state; await expect(initial()).rejects.toThrow();
+      await markAccountDeletionStage(admin, owners[0], 'failed', new Error('Isolated signed refund retry'));
+      fail = null;
+    }
+    const body = JSON.stringify({ event: 'refund.processed', payload: {
+      payment: { entity: { id: 'audit-payment-' + bundle, order_id: 'audit-local-' + bundle, amount: 8300, amount_refunded: 8300, currency: 'INR' } },
+      refund: { entity: { id: 'audit-refund-' + bundle, payment_id: 'audit-payment-' + bundle, amount: 8300, status: 'processed' } },
+    } });
+    const secret = randomUUID();
+    const signature = createHmac('sha256', secret).update(body).digest('hex');
+    const send = () => postRazorpayWebhookRouteResponse({
+      request: new Request('http://audit.local/api/razorpay/webhook', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-razorpay-signature': signature }, body }),
+      dependencies: { createServiceClient: () => admin, getWebhookSecret: () => secret, logError: () => {} },
+    });
+    fail = failure as 'refund-before' | 'refund-after';
+    expect((await send()).status).toBe(500); fail = null;
+    expect(telemetryIds).toHaveLength(1);
+    expect((await db.query('select status,error_name from public.provider_dependency_events where id=$1', [telemetryIds[0]])).rows[0]).toMatchObject({ status: 500, error_name: 'payment_refund_reconciliation_failed' });
+    expect((await db.query('select status from public.post_resource_bundle_orders where id=$1', [order])).rows[0].status).toBe(failure === 'refund-before' ? 'paid' : 'failed');
+    expect((await db.query('select id from public.post_resource_bundle_purchases where id=$1', [purchase])).rows).toHaveLength(failure === 'refund-before' ? 1 : 0);
+    expect((await send()).status).toBe(200); expect((await send()).status).toBe(200);
+    expect((await db.query('select action,outcome from public.cash_purchase_adjustments where post_resource_order_id=$1', [order])).rows).toEqual([{ action: 'refund', outcome: 'adjusted' }]);
+    expect((await db.query('select id from public.post_resource_bundle_purchases where id=$1', [purchase])).rows).toEqual([]);
+    const denied = await createViewerUnlockFileUrl({ adminSupabase: admin, body: { storagePath: owners[0] + '/audit-fixture.png' }, countryCode: 'IN', rateLimitKey: 'audit-' + owners[1], unlockId: purchase!, viewerUserId: owners[1] });
+    expect(denied).toMatchObject({ ok: false, status: 404 });
+    if (state !== 'deleted') {
+      expect((await db.query('select available_token_subunits from public.creator_resource_wallets where user_id=$1', [owners[0]])).rows[0].available_token_subunits).toBe('0');
+      expect((await db.query("select count(*)::integer as n from public.creator_resource_wallet_entries where order_id=$1 and entry_kind='refund'", [order])).rows[0].n).toBe(1);
+    }
+    if (state === 'storage' || state === 'auth') {
+      await db.query("update public.account_deletion_jobs set next_attempt_at=now()-interval '1 second' where user_id=$1", [owners[0]]);
+      expect(await cleanup()).toMatchObject({ initial: { claimed: 1, resweepScheduled: 1 } });
+    }
   });
   it('retains canonical structured purchased resource files', async () => {
     await sold({ structuredBucket: 'post_resource_files' });
