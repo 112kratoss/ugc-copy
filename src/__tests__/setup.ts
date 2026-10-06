@@ -12,4 +12,6 @@ vi.mock('next/cache', () => ({
 // anchors inside requestAnimationFrame callbacks that can fire after a test
 // completes -- an unstubbed call there fails the whole suite as an unhandled
 // error even when every test passes.
-Element.prototype.scrollIntoView ??= () => {};
+if (typeof Element !== 'undefined') {
+  Element.prototype.scrollIntoView ??= () => {};
+}
