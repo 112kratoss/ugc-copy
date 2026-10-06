@@ -119,11 +119,7 @@ export async function verifyPublishedGenerationModels(
   if (rows.length === 0) return { checked: 0, discrepancies: 0, unverifiable: 0 };
 
   const { data: previousRows, error: previousError } = await client
-    .from('generation_model_provider_checks')
-    .select('model_id, status, consecutive_discrepancies')
-    .eq('release_id', release.id)
-    .order('checked_at', { ascending: false })
-    .limit(Math.max(100, rows.length * 3));
+    .rpc('latest_generation_model_provider_checks', { p_release_id: release.id });
   if (previousError) throw previousError;
   const latestByModel = new Map<string, PreviousCheckRow>();
   for (const previous of (previousRows ?? []) as PreviousCheckRow[]) {
