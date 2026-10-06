@@ -89,6 +89,7 @@ export function FeedVideoPreview({
   onReadyChange,
   height,
   radius,
+  outlined = true,
   accent,
   videoBackdrop = 'solid',
   videoContentFit = 'contain',
@@ -131,6 +132,12 @@ export function FeedVideoPreview({
   onReadyChange?: (ready: boolean) => void;
   height: number;
   radius: number;
+  /**
+   * The thin accent line round the tile. Off inside a tile UIKit's zoom shapes
+   * (lib/media-zoom-tile-shape.ts), which draws the tile above the reel as the
+   * reel shrinks into it: the line stood in the middle of the picture there.
+   */
+  outlined?: boolean;
   accent: string;
   /** Where a `contain`-fitted video leaves the tile empty once it plays: `solid` plain black (`mediaColors.mediaGround`), `none` the placeholder. */
   videoBackdrop?: 'solid' | 'none';
@@ -298,7 +305,7 @@ export function FeedVideoPreview({
         overflow: 'hidden',
         borderRadius: radius,
         borderCurve: 'continuous',
-        borderWidth: posterless ? 0 : 1,
+        borderWidth: posterless || !outlined ? 0 : 1,
         borderColor: `${accent}4d`,
         backgroundColor: theme.colors.mediaPlaceholder,
       }}

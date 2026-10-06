@@ -42,6 +42,7 @@ vi.mock('@/components/feed-video-preview', () => ({
 import {
   ShowcaseMediaPreview,
 } from '../components/showcase-media-preview';
+import { MediaZoomTileShapedContext } from '../lib/media-zoom-tile-shape';
 import { getShowcasePreviewMediaItems } from '../lib/showcase-media';
 import type { ShowcaseFeedItem, ShowcaseMediaItem } from '../lib/types';
 
@@ -117,6 +118,63 @@ describe('ShowcaseMediaPreview', () => {
     expect(onCoverLoad).toHaveBeenCalledWith(event);
     expect(findAllByNodeType(tree, 'feed-media-frame').at(-1)!.props.onImageLoad).toBeUndefined();
     renderer.act(() => tree.unmount());
+  });
+
+  describe('inside a tile its zoom source shapes', () => {
+    // The source rounds and clips the tile (`MediaZoomSourceView` under UIKit's
+    // zoom). Media that rounded itself as well, or drew its outline, showed as
+    // a box inside the picture a closing reel shrinks into the tile.
+    function frames(shaped: boolean, mediaItems: ShowcaseMediaItem[]) {
+      const tree = renderPreview(
+        <MediaZoomTileShapedContext.Provider value={shaped}>
+          <ShowcaseMediaPreview accent="#60a5fa" height={180} width={160} radius={16} recyclingKey="shaped" mediaItems={mediaItems} />
+        </MediaZoomTileShapedContext.Provider>
+      );
+      const found = [
+        ...findAllByNodeType(tree, 'feed-video-preview'),
+        ...findAllByNodeType(tree, 'feed-media-frame'),
+      ].map((node) => ({ radius: node.props.radius, outlined: node.props.outlined }));
+      renderer.act(() => tree.unmount());
+      return found;
+    }
+
+    const video = media({ id: 'clip', mediaKind: 'video', previewUrl: 'https://cdn.example.com/poster.webp' });
+    const picture = media({ id: 'picture', previewUrl: 'https://cdn.example.com/picture.webp' });
+
+    it('draws a video as a plain rectangle with no outline', () => {
+      expect(frames(true, [video])).toEqual([{ radius: 0, outlined: false }]);
+      expect(frames(false, [video])).toEqual([{ radius: 16, outlined: true }]);
+    });
+
+    it('draws a picture as a plain rectangle', () => {
+      expect(frames(true, [picture])).toEqual([{ radius: 0, outlined: undefined }]);
+      expect(frames(false, [picture])).toEqual([{ radius: 16, outlined: undefined }]);
+    });
+
+    it('draws every page of a carousel the same way', () => {
+      expect(frames(true, [video, picture])).toEqual([{ radius: 0, outlined: false }, { radius: 0, outlined: undefined }]);
+      expect(frames(false, [video, picture])).toEqual([{ radius: 16, outlined: true }, { radius: 16, outlined: undefined }]);
+    });
+
+    it('draws a picture that is still being prepared with no corners or outline of its own', () => {
+      const plate = (shaped: boolean) => {
+        const tree = renderPreview(
+          <MediaZoomTileShapedContext.Provider value={shaped}>
+            <ShowcaseMediaPreview
+              accent="#60a5fa" height={180} width={160} radius={16} recyclingKey="pending"
+              mediaItems={[media({ previewUrl: null, previewStatus: 'processing' })]}
+            />
+          </MediaZoomTileShapedContext.Provider>
+        );
+        const [view] = findAllByNodeType(tree, 'view');
+        const style = view.props.style as { borderRadius: number; borderWidth: number };
+        renderer.act(() => tree.unmount());
+        return { radius: style.borderRadius, outline: style.borderWidth };
+      };
+
+      expect(plate(true)).toEqual({ radius: 0, outline: 0 });
+      expect(plate(false)).toEqual({ radius: 16, outline: 1 });
+    });
   });
 
   it('renders a pending plate without fetching the original image when a preview is unavailable', () => {

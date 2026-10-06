@@ -67,6 +67,7 @@ import {
   type ZoomUncovering,
   type ZoomVideo,
 } from '@/lib/media-zoom-transition';
+import { MediaZoomTileShapedContext } from '@/lib/media-zoom-tile-shape';
 import {
   MediaZoomTileKeyContext,
   MediaZoomVideoOfferContext,
@@ -1050,7 +1051,9 @@ export function MediaZoomSourceView({
         >
           <MediaZoomVideoOfferContext.Provider value={source.offerVideo}>
             <MediaZoomTileKeyContext.Provider value={source.tileKey}>
-              {children}
+              <MediaZoomTileShapedContext.Provider value={Boolean(source.appleZoomId)}>
+                {children}
+              </MediaZoomTileShapedContext.Provider>
             </MediaZoomTileKeyContext.Provider>
           </MediaZoomVideoOfferContext.Provider>
         </View>
@@ -1374,16 +1377,20 @@ export function useMediaZoomStage({
       releaseVideoLoanHold(player);
     };
   }, [lentVideo, nativeZoom, navigation]);
-  const handBackForNativeClose = useCallback(() => {
+  const handBackForNativeClose = useCallback((still = false) => {
     const video = returnableVideo();
-    if (video && handBackVideoPlayer(video.player, video.tileKey, video.url)) handedBackRef.current = video.player;
+    if (video && handBackVideoPlayer(video.player, video.tileKey, video.url, still)) handedBackRef.current = video.player;
   }, [returnableVideo]);
   useEffect(() => {
     if (!nativeZoom) return;
     return navigation.addListener('beforeRemove', () => {
       // The feed comes back behind the shrinking reel (lib/zoom-veil.ts).
       liftZoomVeil(veil);
-      handBackForNativeClose();
+      // Back: the reel is one frame from here on, a picture of it that
+      // react-native-screens pops in its place, so the tile holds that frame
+      // until UIKit has crossfaded to it (`VIDEO_RETURN_STILL_MS`). A gesture
+      // handed the player over as it began, playing, and this hands nothing.
+      handBackForNativeClose(true);
     });
   }, [handBackForNativeClose, nativeZoom, navigation, veil]);
   // The reel that was pushed under the veil is up: the veil is its to lift.

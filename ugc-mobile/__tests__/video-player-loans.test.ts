@@ -28,6 +28,7 @@ import {
   tileAcceptsVideoReturn,
   VIDEO_LOAN_HOLD_TIMEOUT_MS,
   VIDEO_LOAN_TIMEOUT_MS,
+  VIDEO_RETURN_STILL_MS,
   VIDEO_RETURN_TIMEOUT_MS,
   whenReturnedVideoDrawn,
   zoomTileKey,
@@ -276,6 +277,88 @@ describe('a player the reel hands back to the tile it came from', () => {
     vi.advanceTimersByTime(VIDEO_RETURN_TIMEOUT_MS + RELEASED_LOAN_GRACE_MS);
     expect(player.release).not.toHaveBeenCalled();
     expect(isVideoReturnPending(TILE, STREAM)).toBe(false);
+  });
+
+  // Back under UIKit's zoom: the reel is a single frame from the press on
+  // (react-native-screens pops a picture of it), and UIKit crossfades that
+  // frame into the tile. A tile playing on underneath showed a later moment of
+  // the clip through it: two poses of a dancer at once, filmed on the simulator.
+  describe('handed back to stand still', () => {
+    it('stops on the frame it is showing, and its tile leaves it there until the crossfade is over', () => {
+      const player = adoptedPlayer();
+      expect(handBackVideoPlayer(player, TILE, STREAM, true)).toBe(true);
+      expect(player.pause).toHaveBeenCalledTimes(1);
+
+      // Taken, drawn and the reel gone: all that ends a playing hand-back.
+      claimReturnedVideoPlayer(TILE, STREAM);
+      reportReturnedVideoDrawn(player);
+      endVideoReturn(player);
+      vi.advanceTimersByTime(VIDEO_RETURN_STILL_MS - 1);
+      // Still pending, which is what keeps the tile from starting it.
+      expect(isVideoReturnPending(TILE, STREAM)).toBe(true);
+
+      const changes = vi.fn();
+      const unsubscribe = subscribeToVideoReturns(changes);
+      vi.advanceTimersByTime(1);
+      expect(isVideoReturnPending(TILE, STREAM)).toBe(false);
+      expect(changes).toHaveBeenCalledTimes(1);
+      unsubscribe();
+      // The tile's own to play from here: never paused again, never released.
+      vi.advanceTimersByTime(VIDEO_RETURN_TIMEOUT_MS + RELEASED_LOAN_GRACE_MS);
+      expect(player.pause).toHaveBeenCalledTimes(1);
+      expect(player.release).not.toHaveBeenCalled();
+    });
+
+    it('lets its tile carry on once that is over, even if the tile\'s view reported no frame', () => {
+      const player = adoptedPlayer();
+      handBackVideoPlayer(player, TILE, STREAM, true);
+      claimReturnedVideoPlayer(TILE, STREAM);
+      endVideoReturn(player);
+
+      vi.advanceTimersByTime(VIDEO_RETURN_STILL_MS);
+      // Not the two seconds a playing hand-back waits for a frame.
+      expect(isVideoReturnPending(TILE, STREAM)).toBe(false);
+      expect(player.release).not.toHaveBeenCalled();
+    });
+
+    it('still waits for a tile that has not taken it, and for a reel that has not gone', () => {
+      const untaken = adoptedPlayer();
+      handBackVideoPlayer(untaken, TILE, STREAM, true);
+      endVideoReturn(untaken);
+      vi.advanceTimersByTime(VIDEO_RETURN_STILL_MS);
+      expect(isVideoReturnPending(TILE, STREAM)).toBe(true);
+      expect(claimReturnedVideoPlayer(TILE, STREAM)).toBe(untaken);
+      resetVideoPlayerLoans();
+
+      const underReel = adoptedPlayer();
+      handBackVideoPlayer(underReel, TILE, STREAM, true);
+      claimReturnedVideoPlayer(TILE, STREAM);
+      reportReturnedVideoDrawn(underReel);
+      vi.advanceTimersByTime(VIDEO_RETURN_STILL_MS);
+      expect(isVideoReturnPending(TILE, STREAM)).toBe(true);
+      endVideoReturn(underReel);
+      expect(isVideoReturnPending(TILE, STREAM)).toBe(false);
+    });
+
+    it('plays on untouched when it is handed back the ordinary way', () => {
+      const player = adoptedPlayer();
+      handBackVideoPlayer(player, TILE, STREAM);
+      expect(player.pause).not.toHaveBeenCalled();
+      claimReturnedVideoPlayer(TILE, STREAM);
+      reportReturnedVideoDrawn(player);
+      endVideoReturn(player);
+      expect(isVideoReturnPending(TILE, STREAM)).toBe(false);
+    });
+
+    it('keeps no timer once the reel has taken it back', () => {
+      const player = adoptedPlayer();
+      handBackVideoPlayer(player, TILE, STREAM, true);
+      expect(reclaimVideoPlayer(player)).toBe(true);
+      // Handed back again, playing: the earlier hold must not end this one.
+      handBackVideoPlayer(player, TILE, STREAM);
+      vi.advanceTimersByTime(VIDEO_RETURN_STILL_MS);
+      expect(isVideoReturnPending(TILE, STREAM)).toBe(true);
+    });
   });
 
   it('waits on a tile that has not taken it for as long as the reel is up', () => {
