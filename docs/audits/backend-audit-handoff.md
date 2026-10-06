@@ -6,10 +6,27 @@ Updated 2026-10-06 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/deletion-freeze-refund-audit-10f`, preserving the merged 10D/E and new 10F candidate; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/deleted-cash-webhook-audit-10g`, preserving 10F PR #377 and new 10G evidence; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+10G adds twelve actual local signed webhook controls: refund/dispute/won across
+live/deleted/Storage-failed/Auth-failed creators; real HMAC/tampered bytes,
+dispatcher/SQL, idempotency, entitlement revocation, manual review, retrying
+cleanup and buyer retained-file reads. All twelve targeted controls and the
+expanded 49-case actual suite pass; types/lint pass. No runtime/schema change.
+See signed-cash-webhooks report; no genuine provider called. Preserve evidence
+in a separate batch after parent #377 is released/verified.
+
+10F PR #377 is open on 34abafbe9cb506ff817111d6fff9402741bfa891;
+exact-head Quality 37505858506 passes all four jobs. Parent 10E exact-main
+Quality 37505298701 passed; standard release 37506928664 is running. Independent
+10E detached-refund-release/ verification must pass before merging #377.
+Follow-up partial-deletion-refund-release/ baseline is captured after 10E's
+migration, with exactly one ordered 10F migration pending. Verify mobile-store
+idle immediately before merge.
+
 
 10F reproduces Storage/Auth-failed deletion freezing legitimate cash refunds
 (SQLSTATE 55000). Two actual PostgREST failures pass after the strict sales-count
