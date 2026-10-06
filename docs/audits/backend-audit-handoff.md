@@ -6,10 +6,25 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/admin-collector-limits-audit-11e`, preserving operations #381 and purchase-counter #382 while preparing two independently reproduced API row-ceiling fixes. Prior audit branches and unrelated local evidence remain preserved.
+Current checkout: `codex/admin-collector-coverage-audit-11f`, consolidating the independently reproduced 11D/E/F collector fixes into #382. Prior audit branches and unrelated local evidence remain preserved.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+11F reproduces active catalog disappearance after eleven newer shadow releases.
+The candidate queries active status separately from the bounded history. All
+21 actual API/SQL controls across the six collector modules and 50 focused
+cases pass; types/lint and exact fixture cleanup pass. Production's active
+revision has 38 entries/no newer releases, so no current incident is attributed.
+The initially invalid starting-generation fixture was corrected to SQL-supported
+waiting; no generation lifecycle constraint or runtime was changed.
+
+11D/E/F are consolidated into #382 to use one collector release after #381.
+The final combined head must pass all five Quality jobs, including 107 actual
+API cases. Preserve separate before/after reports. #383's tested code is included
+in #382 and its PR is superseded; it must not merge independently. Runtime
+migration/function verification remains required for 20261006190707. Wallet
+limits and partial collector failures remain audit work; no full signoff.
 
 11E reproduces 1,001-order revenue counted as 1,000 without a truncation warning,
 and a newest failed job missed after 1,000 successes, through actual PostgREST.
@@ -19,13 +34,11 @@ API/SQL cases, 25 focused cases, types/lint pass. A clean replay passes 2,174
 assertions in 101 pgTAP files, including eleven new summary controls. Specific
 fixture cleanup is empty. Read-only production has 939 runs/12 names/zero
 failures, so no current missed failure is attributed. The source migration is
-20261006190707; standard release/function/privilege checks remain. Prepare a
-separate PR stacked on #382 and hold merge until both parents are verified.
+20261006190707; standard release/function/privilege checks remain. This is now consolidated into #382 and held until #381 is verified.
 
 Operations #381 passed fresh exact-head Quality 37515495937 on 5354a3b6 and
 merged with mobile-store idle at October 6 19:12:29 UTC as
-235aca0165500b53d436aef4eb4e54fffb489616. Exact-main Quality 37517212787 is
-running; standard release and independent checks remain. AUTH-02 remains failed
+235aca0165500b53d436aef4eb4e54fffb489616. Exact-main Quality 37517212787 is running; standard release and independent checks remain. AUTH-02 remains failed
 until verified live. #382 is open with its new API CI job running on f0a319f2;
 all 93 actual Linux API cases pass. Initial workflow run 37516028671 was rejected
 before jobs for unavailable runner.temp in job env; the path now resolves in a

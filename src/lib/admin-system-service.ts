@@ -75,7 +75,7 @@ export async function collectAdminSystemSnapshot(
   const now = options.now ?? new Date();
   const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
 
-  const [runs, dayRuns, locks, releases, contact] = await Promise.all([
+  const [runs, dayRuns, locks, releases, active, contact] = await Promise.all([
     client
       .from('backend_job_runs')
       .select('id, job_name, status, started_at, finished_at, duration_ms, skip_reason, error_message')
@@ -94,6 +94,16 @@ export async function collectAdminSystemSnapshot(
       .select('id, revision, status, change_note, created_at, activated_at')
       .order('created_at', { ascending: false })
       .limit(10),
+    // History is bounded; newer shadow/draft releases must not hide the
+    // currently active release or reset its entry count to zero.
+    client
+      .from('generation_model_catalog_releases')
+      .select('id, revision, status, activated_at')
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
     runPagedQuery<Record<string, unknown>>(
       (from, to) => {
         const query = client
@@ -115,7 +125,7 @@ export async function collectAdminSystemSnapshot(
   ]);
 
   // `contact` is omitted: runPagedQuery already threw on any error it saw.
-  for (const result of [runs, dayRuns, locks, releases]) {
+  for (const result of [runs, dayRuns, locks, releases, active]) {
     if (result.error) throw result.error;
   }
 
@@ -129,7 +139,7 @@ export async function collectAdminSystemSnapshot(
   }));
 
   const releaseRows = (releases.data ?? []) as Array<Record<string, unknown>>;
-  const activeRelease = releaseRows.find((row) => String(row.status ?? '') === 'active') ?? null;
+  const activeRelease = active.data as Record<string, unknown> | null;
 
   let entryCount = 0;
   if (activeRelease) {

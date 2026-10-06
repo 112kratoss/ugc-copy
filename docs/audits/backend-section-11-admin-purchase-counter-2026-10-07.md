@@ -37,3 +37,8 @@ OPS-04 remains failed until the known operations findings are released and
 independently verified. Broader semantics for the other admin collectors and
 deployed method behavior remain open. The home dashboard is in SOCIAL-GATE.
 The complete audit remains in progress; this bounded fix does not close it.
+
+The final #382 candidate includes 11E's reproduced API row-limit fixes and 11F's
+active catalog lookup. The API job therefore runs 61 deletion, 25 operations
+and 21 collector cases (107 total). Its earlier 93-case head passed all five
+Quality jobs; the combined final head must be verified again before merge.
