@@ -6,10 +6,26 @@ Updated 2026-10-06 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/account-deletion-audit-10a`, incorporating main `9cbe5815aa94179e90b1c249cd932a4f369b38b4` (#372); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/account-deletion-audit-10b`, incorporating main `b9729ee41f4fc4db1c500bc96283d667eae34847` (#373); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+10B adds ten actual local deletion controls: linked guest order/partial Auth
+failure; all eight owner buckets; template snapshot anonymization/public/private
+post namespaces; poisoned cross-creator generation reference preservation;
+Storage enumeration/fingerprint failure recovery and changed-email claim replay.
+A live child pauses after copy commit and resumes after both real 30-second lease
+expiry and the unchanged two-minute grace; the new worker completes, the buyer's
+file stays readable and the old worker performs no Auth deletion. All 22 actual
+cases, test types and lint pass. Fixture cleanup passes; no runtime/schema change.
+See 10B report. AUTH-03 broader scope remains open. 10B is in PR #374; main #373 is incorporated, preserving the exact tested files.
+
+9O/10A and 9N release evidence are in PR #373, exact head
+31a979fd3d7dc2c69203e96ea4a1a94e6665a9b8, Quality 37496465208 passed.
+It merged with mobile-store release idle October 6 16:45:05 UTC as
+b9729ee41f4fc4db1c500bc96283d667eae34847. Exact-main Quality 37498165169 is
+running; standard release and independent unchanged-schema/live verification remain. The original model-history fix is already independently verified.
 
 10A adds twelve actual local Auth/Storage/PostgREST/SQL deletion controls:
 owner-only files/Auth, capability block and delayed resweep, Storage/Auth
