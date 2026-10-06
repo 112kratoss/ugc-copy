@@ -110,4 +110,47 @@ describe.skipIf(!connectionString)('cash commerce concurrency against PostgreSQL
     expect((await admin.query("select count(*)::int as n from public.creator_resource_wallet_entries where user_id=$1 and entry_kind='refund'", [seller])).rows[0].n).toBe(1);
   });
 
+  it('reconciles a refund waiting behind committed creator deletion', async () => {
+    const deletion = await connect();
+    const refund = await connect();
+    await deletion.query('begin');
+    await deletion.query('delete from auth.users where id=$1', [seller]);
+    const pid = (await refund.query('select pg_backend_pid() as pid')).rows[0].pid;
+    const result = refund.query("select public.reconcile_post_resource_cash_adjustment($1,$2,'refund','local deletion race',$3) as result", [event, oldPayment, oldOrder]);
+    let waiting = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if ((await admin.query('select wait_event_type from pg_stat_activity where pid=$1', [pid])).rows[0]?.wait_event_type === 'Lock') { waiting = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    expect(waiting).toBe(true);
+    await deletion.query('commit');
+    expect((await result).rows[0].result.status).toBe('adjusted');
+    expect((await admin.query('select status,bundle_id from public.post_resource_bundle_orders where razorpay_order_id=$1', [oldOrder])).rows[0]).toMatchObject({ status: 'failed', bundle_id: null });
+    expect((await admin.query('select id from public.post_resource_bundle_purchases where buyer_user_id=$1', [buyer])).rows).toEqual([]);
+  });
+
+  it('finishes refund before an overlapping creator deletion', async () => {
+    const deletion = await connect();
+    const refund = await connect();
+    await refund.query('begin');
+    // Pause at the first live-owner lock used by reconciliation.
+    await refund.query('select id from auth.users where id=$1 for key share', [seller]);
+    await refund.query('select id from public.post_resource_bundles where id=$1 for update', [bundle]);
+    const pid = (await deletion.query('select pg_backend_pid() as pid')).rows[0].pid;
+    const deleted = deletion.query('delete from auth.users where id=$1', [seller])
+      .then(() => ({ ok: true }))
+      .catch((error: { code?: string }) => ({ error: error.code }));
+    let waiting = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if ((await admin.query('select wait_event_type from pg_stat_activity where pid=$1', [pid])).rows[0]?.wait_event_type === 'Lock') { waiting = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    expect(waiting).toBe(true);
+    const result = await refund.query("select public.reconcile_post_resource_cash_adjustment($1,$2,'refund','local deletion race',$3) as result", [event, oldPayment, oldOrder]);
+    await refund.query('commit');
+    expect(result.rows[0].result.status).toBe('adjusted');
+    expect(await deleted).toEqual({ ok: true });
+    expect((await admin.query('select status,bundle_id from public.post_resource_bundle_orders where razorpay_order_id=$1', [oldOrder])).rows[0]).toMatchObject({ status: 'failed', bundle_id: null });
+  });
+
 });
