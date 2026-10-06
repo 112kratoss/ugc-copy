@@ -41,14 +41,22 @@ Quality after consolidation, then immediate idle mobile-store/exact live parent
 checks, exact-main Quality and standard release. The user-error parent is now
 independently verified. Private Auth/health release baselines use that parent.
 
-Combined #388 final head bd5491c4de33ecb0cb8d6189073803f6df4cb448 runs fresh
-Quality 37529823695 against main; all four non-web jobs pass, web remains.
-#387 is CLOSED as consolidated into #388 and must not merge separately.
-Old #388 head 316038ab CI 37528555918 was cancelled after the final refresh;
-its real API and migration jobs passed but it is not the final merge gate.
-Prepared merge/release controls are private under auth-placeholder-release and
-health-cap-release, based on the verified #386 parent. Immediately recheck
-mobile-store idle, current main/live and final Quality before merging.
+Combined #388 final head bd5491c4de33ecb0cb8d6189073803f6df4cb448 passes all
+five Quality jobs in 37529823695, including 140 actual API cases. The immediate
+verified-parent/main/live/mobile-idle guard passed; it merged October 6 21:05:57 UTC
+as f227c69577503d35f04ddfc9dd000d932d10735e. Exact-main Quality 37531415452
+is running; standard release and independent verification remain. #387 is CLOSED
+as consolidated, not separately released. The obsolete #388 head 316038ab run
+was cancelled; its partial passes are not the final merge gate. The CLI watch
+hit a transient GitHub timeout, but direct run readback and merge guard confirm
+the final candidate's five successful jobs. Do not rerun a passed candidate for
+that watcher error. Prepared auth-placeholder-release/health-cap-release probes
+and baselines use the independently verified #386 parent.
+
+Operator evidence PR #389 is attached and now based on main. Its initial head
+7ac0cce3 runs Quality 37531104608; the actual merged #388 parent is incorporated
+locally and requires refreshed exact-head CI after this checkpoint. Hold its
+main merge until #388 is independently verified; preserve the parent gate.
 
 11K adds 22 actual catalog clone controls and 35 mobile catalog operator controls
 (57 total), all passing on the owned clean replay. Actual anon/auth calls deny;
