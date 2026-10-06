@@ -273,6 +273,57 @@ describe('sheet dismiss drag', () => {
     sheet.unmount();
   });
 
+  // The panel is above the grabber's strip, and above a title row that carries
+  // the grabber's handlers, so React Native asks it about every move of a touch
+  // one of them holds. With the list at its top it used to take that pull over
+  // 6 points in: the grabber sprang the sheet back as it let go, and the panel
+  // waited 6 more points before it followed. A slow pull went down, back to
+  // rest, and then with the finger (Pixel 9a emulator films, 2026-10-07: 5, 2,
+  // 0, 5, 19 dp below rest).
+  it('leaves a pull the grabber already has to the grabber, with the list at its top too', () => {
+    const sheet = mount(true);
+    const content = sheet.content();
+    const grabber = sheet.grabber();
+    const pull = touchOn(TITLE);
+
+    // A pull on a button of the sheet's, which nothing of the sheet's own holds, is the panel's to take.
+    expect(content.onMoveShouldSetPanResponderCapture(pull, gesture(20))).toBe(true);
+
+    grabber.onPanResponderGrant(pull, gesture(0));
+    expect(content.onMoveShouldSetPanResponderCapture(pull, gesture(20))).toBe(false);
+    expect(content.onMoveShouldSetPanResponder(pull, gesture(20))).toBe(false);
+    // So the sheet goes with that finger from where it landed, and nothing springs it back on the way.
+    animatedState.spring.mockClear();
+    grabber.onPanResponderMove(pull, gesture(4));
+    grabber.onPanResponderMove(pull, gesture(20));
+    grabber.onPanResponderMove(pull, gesture(140));
+    expect(sheet.offset().value).toBe(140);
+    expect(animatedState.spring).not.toHaveBeenCalled();
+    grabber.onPanResponderRelease(pull, gesture(140));
+    expect(sheet.onDismiss).toHaveBeenCalledOnce();
+
+    // The finger is off: the next pull that begins on a button is the panel's again.
+    expect(content.onMoveShouldSetPanResponderCapture(pull, gesture(20))).toBe(true);
+    sheet.unmount();
+  });
+
+  it('takes a pull again once the grabber has lost its touch, or the sheet is shown again', () => {
+    const sheet = mount(true);
+    const pull = touchOn(TITLE);
+
+    sheet.grabber().onPanResponderGrant(pull, gesture(0));
+    sheet.grabber().onPanResponderTerminate(pull, gesture(0));
+    expect(sheet.content().onMoveShouldSetPanResponderCapture(pull, gesture(20))).toBe(true);
+
+    // A grabber unmounted under a finger never says that it let go: the back
+    // key closing the sheet in the middle of a pull.
+    sheet.grabber().onPanResponderGrant(pull, gesture(0));
+    sheet.show(false);
+    sheet.show(true);
+    expect(sheet.content().onMoveShouldSetPanResponderCapture(pull, gesture(20))).toBe(true);
+    sheet.unmount();
+  });
+
   it('forgets the old scroll position when the sheet is shown again', () => {
     const sheet = mount(true);
     sheet.drag().scrollProps.onScroll!({ nativeEvent: { contentOffset: { y: 300 } } } as never);
