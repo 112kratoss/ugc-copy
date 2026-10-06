@@ -30,3 +30,7 @@ behavior. JOB-01/JOB-02 are not whole-job certificates from these controls.
 After incorporating main #372, the actual local suites pass again: 19 provider
 verification and 12 deletion controls, with test typechecking passing. The merge
 retains the added managed-worker controls; no runtime/schema change is included.
+
+All 19 actual controls also pass on Node 24.21.0 after rebuilding the local
+fs-ext native binary for that ABI. The exact model test/worker source is unchanged
+from #373. See the 9O/10A release record for provenance and limits.

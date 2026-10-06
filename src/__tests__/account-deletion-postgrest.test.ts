@@ -19,7 +19,7 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
   let db: Client, admin: SupabaseClient;
   let userClient: SupabaseClient;
   let owners: string[], accessToken: string;
-  let fail: 'storage' | 'auth' | 'copy' | 'mapping' | 'list' | 'fingerprint' | 'target-auth' | null;
+  let fail: 'storage' | 'auth' | 'copy' | 'mapping' | 'list' | 'fingerprint' | 'target-auth' | 'revision-list' | 'supplement-read' | 'supplement-write' | 'mapping-read' | null;
   let deletedAuth: string[], fixtureFingerprints: string[];
   let extraObjects: { bucket: string; path: string }[], postIds: string[], templateIds: string[], generationIds: string[];
   let bundle: string | null, post: string | null, order: string | null, purchase: string | null, revision: string | null;
@@ -28,19 +28,27 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
   const job = async () => (await db.query('select status,last_error,resweep_after,next_attempt_at from public.account_deletion_jobs where user_id=$1', [owners[0]])).rows[0];
   const authExists = async (owner = owners[0]) => (await db.query('select id from auth.users where id=$1', [owner])).rows.length > 0;
   const initial = () => executeInitialAccountDeletion({ admin, userId: owners[0], accessToken });
-  const sold = async () => {
+  const sold = async (options: { legacy?: boolean } = {}) => {
     [bundle, post, order] = [randomUUID(), randomUUID(), randomUUID()];
     expect((await admin.storage.from('post_resource_files').upload(owners[0] + '/audit-fixture.png', new Blob([Uint8Array.from(png)], { type: 'image/png' }), { contentType: 'image/png' })).error).toBeNull();
-    await db.query("insert into public.posts(id,user_id,visibility,category,source_kind,post_format,review_status,body) values($1,$2,'public','image','magicbooklet','text','visible','Local deletion retention fixture')", [post, owners[0]]);
-    await db.query("insert into public.post_resource_bundles(id,post_id,owner_user_id,access_mode,status,title,price_usd_cents,attachments) values($1,$2,$3,'paid','published','Local retained file',100,$4)", [bundle, post, owners[0], JSON.stringify([{ id: 'fixture-file', kind: 'file', name: 'Reference', storagePath: owners[0] + '/audit-fixture.png', contentType: 'image/png' }])]);
+    let generation: string | null = null;
+    if (options.legacy) {
+      generation = randomUUID(); generationIds.push(generation);
+      await db.query("insert into public.generations(id,user_id,model,status,category) values($1,$2,'audit-inert','succeeded','image')", [generation, owners[0]]);
+      const path = owners[0] + '/' + generation + '/reference.png';
+      await extraUpload('generation_inputs', path);
+      await db.query("insert into public.generation_input_media(generation_id,user_id,media_type,role,label,storage_path,sort_order) values($1,$2,'image','reference_image','Legacy reference',$3,0)", [generation, owners[0], 'generation_inputs/' + path]);
+    }
+    await db.query("insert into public.posts(id,user_id,visibility,category,source_kind,post_format,review_status,body,generation_id) values($1,$2,'public','image','magicbooklet','text','visible','Local deletion retention fixture',$3)", [post, owners[0], generation]);
+    await db.query("insert into public.post_resource_bundles(id,post_id,owner_user_id,access_mode,status,title,price_usd_cents,attachments,allow_remix) values($1,$2,$3,'paid','published','Local retained file',100,$4,$5)", [bundle, post, owners[0], JSON.stringify([{ id: 'fixture-file', kind: 'file', name: 'Reference', storagePath: owners[0] + '/audit-fixture.png', contentType: 'image/png' }]), options.legacy ?? false]);
     await db.query("insert into public.post_resource_bundle_orders(id,bundle_id,buyer_user_id,razorpay_order_id,amount_subunits,currency,status) values($1,$2,$3,$4,100,'INR','paid')", [order, bundle, owners[1], 'audit-local-' + order]);
     const row = (await db.query("insert into public.post_resource_bundle_purchases(bundle_id,buyer_user_id,order_id,price_usd_cents,amount_subunits,currency) values($1,$2,$3,100,100,'INR') returning id,revision_id", [bundle, owners[1], order])).rows[0];
     purchase = row.id; revision = row.revision_id;
     expect(revision).toBeTruthy();
   };
   const retained = async () => (await db.query("select name from storage.objects where bucket_id='post_resource_files' and name like $1", [`retained/${revision}/%`])).rows;
-  const buyerFile = async () => {
-    const result = await createViewerUnlockFileUrl({ adminSupabase: admin, body: { storagePath: owners[0] + '/audit-fixture.png' }, countryCode: 'IN', rateLimitKey: 'audit-' + owners[1], unlockId: purchase!, viewerUserId: owners[1] });
+  const buyerFile = async (storagePath = owners[0] + '/audit-fixture.png') => {
+    const result = await createViewerUnlockFileUrl({ adminSupabase: admin, body: { storagePath }, countryCode: 'IN', rateLimitKey: 'audit-' + owners[1], unlockId: purchase!, viewerUserId: owners[1] });
     expect(result.ok).toBe(true);
     if (!result.ok) throw Error('Purchased file unavailable');
     expect(['localhost', '127.0.0.1']).toContain(new URL(result.body.signedUrl).hostname);
@@ -72,6 +80,12 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
       }
       if ((fail === 'copy' && path === '/storage/v1/object/copy') || (fail === 'mapping' && path === '/rest/v1/post_resource_bundle_revision_files' && init?.method === 'POST')) {
         return new Response(JSON.stringify({ statusCode: '503', code: 'XX000', error: 'Injected outage', message: 'Injected retention ' + fail + ' outage' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+      }
+      if ((fail === 'revision-list' && path === '/rest/v1/rpc/list_creator_purchased_revisions_for_retention') ||
+          (fail === 'supplement-read' && path === '/rest/v1/post_resource_bundle_revision_supplements' && init?.method === 'GET') ||
+          (fail === 'supplement-write' && path === '/rest/v1/post_resource_bundle_revision_supplements' && init?.method === 'POST') ||
+          (fail === 'mapping-read' && path === '/rest/v1/post_resource_bundle_revision_files' && init?.method === 'GET')) {
+        return new Response(JSON.stringify({ code: 'XX000', message: 'Injected retention read/write outage' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
       }
       if ((fail === 'list' && path.startsWith('/storage/v1/object/list-v2/')) ||
           (fail === 'fingerprint' && path === '/rest/v1/credit_grant_identity_fingerprints' && init?.method === 'POST') ||
@@ -364,6 +378,30 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
     expect(await authExists()).toBe(false); expect(await objects()).toEqual([]);
     expect(await retained()).toHaveLength(1); await buyerFile();
   });
+  it('retains actual legacy generation inputs in the purchased revision supplement', async () => {
+    await sold({ legacy: true });
+    const source = 'generation_inputs/' + owners[0] + '/' + generationIds[0] + '/reference.png';
+    expect(await initial()).toMatchObject({ cleanupPending: true, storage: { objectsRemoved: 4 } });
+    expect(await authExists()).toBe(false); expect(await retained()).toHaveLength(2);
+    const supplements = (await db.query('select resource_items from public.post_resource_bundle_revision_supplements where revision_id=$1', [revision])).rows;
+    expect(supplements).toHaveLength(1);
+    expect(supplements[0].resource_items).toHaveLength(1);
+    expect(supplements[0].resource_items[0]).toMatchObject({ type: 'reference_image', storagePath: source });
+    await buyerFile(); await buyerFile(source);
+    expect((await db.query('select id from public.generation_input_media where generation_id=$1', [generationIds[0]])).rows).toEqual([]);
+  });
+  it.each(['revision-list', 'supplement-read', 'supplement-write', 'mapping-read'] as const)('halts deletion on %s failure and retains both files on retry', async boundary => {
+    await sold({ legacy: true });
+    const source = 'generation_inputs/' + owners[0] + '/' + generationIds[0] + '/reference.png';
+    fail = boundary; await expect(initial()).rejects.toThrow(/Could not (enumerate|inspect|preserve)/);
+    expect(await authExists()).toBe(true); expect(await objects()).toHaveLength(4); expect(await retained()).toEqual([]);
+    await markAccountDeletionStage(admin, owners[0], 'failed', new Error('Injected retention boundary outage')); fail = null;
+    await db.query("update public.account_deletion_jobs set next_attempt_at=now()-interval '1 second' where user_id=$1", [owners[0]]);
+    expect(await cleanup()).toMatchObject({ initial: { claimed: 1, resweepScheduled: 1 } });
+    expect(await authExists()).toBe(false); expect(await retained()).toHaveLength(2);
+    await buyerFile(); await buyerFile(source);
+    expect((await db.query('select revision_id from public.post_resource_bundle_revision_supplements where revision_id=$1', [revision])).rows).toHaveLength(1);
+  }, 30000);
   it('preserves a buyer file when a live old cleanup worker resumes after real lease expiry', async () => {
     await sold(); fail = 'copy';
     await expect(initial()).rejects.toThrow('Could not retain purchased resource');
