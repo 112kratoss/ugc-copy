@@ -6,6 +6,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 const getAdminUserDetailMock = vi.fn();
 
+vi.mock('@/lib/admin-auth', () => ({
+  requireAdminIdentity: vi.fn(async () => ({
+    subject: 'master', username: 'admin', reviewerUserId: '10000000-0000-4000-8000-000000000001',
+  })),
+}));
+
 vi.mock('@/lib/admin-users-service', () => ({
   getAdminUserDetail: (client: unknown, userId: string) => getAdminUserDetailMock(client, userId),
 }));

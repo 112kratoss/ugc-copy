@@ -38,7 +38,12 @@ before/after responses and browser evidence are under
 
 Ten regular-CI regressions ensure denied pages cannot construct a privileged
 client. Three helper regressions cover revoked/missing/unavailable sessions.
-All 55 focused auth/page/session cases, app/test types and scoped lint pass.
+All 58 focused auth/page/session cases, app/test types and scoped lint pass.
+The first full candidate CI run (37513911652) found three existing missing-user
+render tests invoking the now-gated page without a request or admin fixture.
+All three reproduce locally; supplying the same authorized identity fixture as
+the other page-render tests restores them. The denial regressions and production
+behavior are unchanged. Exact-head CI must pass again before merge.
 The candidate production build passes. Cleanup deletes only the specific fixture
 IDs and reads back zero Auth users, profiles, posts, generations, contacts,
 admin sessions and rate buckets. The fixture server and browser are stopped.
