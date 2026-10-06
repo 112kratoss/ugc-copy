@@ -495,7 +495,18 @@
     "reportMediaDiagnostics": {
       "method": "POST",
       "path": "/api/mobile/media-diagnostics",
-      "auth": "none"
+      "auth": "none",
+      "eventTimestamp": { "unit": "milliseconds", "minimumExclusive": 0, "maximum": 8640000000000000 },
+      "invalidTimestamp": {
+        "request": {
+          "sessionId": "session-1234",
+          "app": {},
+          "events": [{ "at": 8640000000000001, "kind": "image", "event": "stall", "surface": "viewer", "subject": "8a1f09c2", "attempt": 0 }]
+        },
+        "status": 400,
+        "cacheControl": "private, no-store",
+        "response": { "error": "Invalid media diagnostics." }
+      }
     },
     "reportPlaybackMetrics": {
       "method": "POST",

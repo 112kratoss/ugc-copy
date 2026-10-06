@@ -73,6 +73,8 @@ function parseEvent(value: unknown): MediaDiagnosticEvent | null {
   if (!isRecord(value)) return null;
   const { at, kind, event, surface, subject, attempt, stage, status } = value;
   if (typeof at !== 'number' || !Number.isFinite(at) || at <= 0) return null;
+  const timestamp = new Date(at);
+  if (!Number.isFinite(timestamp.getTime())) return null;
   if (typeof kind !== 'string' || !EVENT_KINDS.has(kind)) return null;
   if (typeof event !== 'string' || !EVENT_NAMES.has(event)) return null;
   if (typeof surface !== 'string' || !TOKEN_PATTERN.test(surface)) return null;
@@ -83,7 +85,7 @@ function parseEvent(value: unknown): MediaDiagnosticEvent | null {
     && (typeof status !== 'number' || !Number.isInteger(status) || status < 400 || status > 599)) return null;
 
   return {
-    at: new Date(at).toISOString(),
+    at: timestamp.toISOString(),
     kind,
     event,
     surface,

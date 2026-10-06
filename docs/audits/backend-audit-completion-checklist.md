@@ -150,7 +150,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | OPS-01 | Exact-main Quality, staged/live health and standard release for Section 6J | passed | [6J release evidence](backend-section-06-staging-locks-release-2026-10-01.md); first attempt mismatch preserved |
 | OPS-02 | Backup restore and rollback/reconciliation exercises | untested | Isolated restoration with consistency checks and measured recovery; no production restore |
 | OPS-03 | Current-build capacity evidence and failure containment | untested | Reconcile [scaling entry point](../scaling-audit.md) with the audited build; local disk probes are not capacity certification |
-| OPS-04 | Admin page collectors, telemetry, app-version, CSP and FX methods | failed | [11A](backend-section-11-fx-provider-payload-2026-10-06.md) reproduces public caching of invalid/missing non-USD rates in 20 actual HTTP cases; candidate passes locally, release remains. Other assigned routes and seven page-only services still require behavioral coverage. |
+| OPS-04 | Admin page collectors, telemetry, app-version, CSP and FX methods | failed | [11A](backend-section-11-fx-provider-payload-2026-10-06.md) reproduces public caching of invalid/missing non-USD rates in 20 actual HTTP cases; candidate passes locally, release remains. [11B](backend-section-11-operations-ingress-2026-10-06.md) reproduces out-of-range diagnostic timestamps throwing RangeError; candidate passes 25 actual HTTP/SQL cases, release remains. Six admin page collectors and deployed method behavior remain; the seventh page-only service is home dashboard under SOCIAL-GATE. |
 
 ## Completion rule and next sequence
 

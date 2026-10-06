@@ -20,6 +20,27 @@ type ContractEndpoint = {
 };
 const contract = mobileApiContract as { endpoints: Record<ContractEndpointKey, ContractEndpoint> };
 
+it('exposes the shared invalid diagnostics timestamp as a typed API error', async () => {
+  const operation = mobileApiOperationsV1.operations.reportMediaDiagnostics;
+  const fixture = operation.invalidTimestamp;
+  const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    expect(new Headers(init?.headers).get('Authorization')).toBeNull();
+    expect(JSON.parse(String(init?.body))).toEqual(fixture.request);
+    return new Response(JSON.stringify(fixture.response), {
+      status: fixture.status,
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': fixture.cacheControl },
+    });
+  });
+  const api = createApiClient({
+    baseUrl: 'https://magicbooklet.test',
+    getAccessToken: async () => 'token-1',
+    fetcher: fetcher as unknown as typeof fetch,
+  });
+  await expect(api.reportMediaDiagnostics(fixture.request as Parameters<MagicbookletApiClient['reportMediaDiagnostics']>[0]))
+    .rejects.toMatchObject({ status: fixture.status, message: fixture.response.error });
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,

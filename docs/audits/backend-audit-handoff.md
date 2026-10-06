@@ -6,10 +6,26 @@ Updated 2026-10-06 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/fx-provider-payload-audit-11a`, preserving parent #379, 10I evidence commit c3500991, and new FX candidate; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/ops-ingress-audit-11b`, preserving parent FX PR #380, 10I evidence commit c3500991, and the new diagnostics candidate; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+11B reproduces finite out-of-range diagnostic timestamps throwing RangeError
+through actual loopback HTTP. The candidate rejects an invalid Date before
+formatting. All 25 actual HTTP/PostgREST/SQL controls pass (23/25 baseline),
+54 focused cases, nine web and 143 mobile contract/diagnostics cases pass;
+app/test/mobile types and scoped lint pass. Contract now documents timestamp
+bounds and invalid response. No schema change. Prepare a separate PR and hold
+merge until parent FX #380 is independently verified; OPS-04 remains failed
+for both findings until their respective releases. Six admin collectors remain
+in OPS-GATE; the seventh page-only service, home dashboard, is SOCIAL-GATE.
+
+11A is open as PR #380 on 6e67f92937586b14c7a5423293beac39a5494fea;
+exact-head Quality 37510388702 is running. Parent #379 exact-main Quality
+37510132894 is running on 75dc4eb7fc8fef7139fc42c1a50b10f3f653f4de.
+Standard release and independent live/schema/advisor checks remain before
+#380 can merge. Preserve unrelated local receipt text and evidence.
 
 11A reproduces 20 actual provider-HTTP FX responses (EUR/GBP/AUD/CAD/SGD
 missing/null/zero/negative) being published/cached with HTTP 200 while USD is
