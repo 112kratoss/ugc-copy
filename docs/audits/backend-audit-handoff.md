@@ -1,73 +1,59 @@
 # Backend audit — session handoff
 
-Updated 2026-10-06 (Asia/Kolkata). Read this first when continuing the section-by-section Magicbooklet backend audit.
+Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-by-section Magicbooklet backend audit.
 
 ## Workspace and authorization
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/admin-page-authority-audit-11c`, preserving operations PR #381 and adding the independently reproduced admin page fix; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/admin-collector-matrix-audit-11d`, preserving operations PR #381 and preparing the separately reproduced overview purchase-counter fix. Prior audit branches and unrelated local evidence remain preserved.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-11C reproduces private fixture data serialized in five revoked-session admin
-HTML redirects in an actual production build; Playwright confirms activity.
-Ten admin pages now await authoritative identity before privileged reads;
-denials redirect. All 20 revoked HTML/RSC and ten active production page checks,
-55 focused auth/page/session cases, production build, types and scoped lint pass.
-Specific fixture cleanup is zero; server/browser stopped. Add this to existing
-operations #381 and rewrite its title/body; no additional PR is needed. AUTH-02
-reopens until release; ledger is 23 passed, 25 untested, 3 failed, 2 external
-(failed AUTH02/OPS04/MEDIA07). Preserve earlier Apple/web login evidence.
+11D reproduces mobile credit ledger mirrors counted as Razorpay orders in the
+admin overview. Two real PostgREST/SQL regressions fail before the filter and
+all seven cases pass after it; 16 existing focused cases, app/test types and
+scoped lint pass. Specific transaction/Auth/profile cleanup is empty. Read-only
+production counts are zero for recent web purchases and mobile mirrors; no
+current production miscount is established. The candidate adds an isolated
+Quality API job to run 61 deletion, 25 operations and seven collector cases
+sequentially against a clean Auth/Storage/PostgREST stack. Pinned Linux CLI and
+exact-head CI must certify that job before merge. Prepare a separate PR stacked
+on operations #381; hold merge until the parent is independently verified.
 
-10G/H #379 is independently verified live on 75dc4eb7 at October 6 18:39:29 UTC:
-Quality 37510132894/release 37511731539 pass; schema and 110 advisors unchanged,
-feed/admin/webhook 200/307/401. MEDIA-09 returns to untested for broader recovery.
-FX #380 passed exact-head Quality 37510388702 and merged with mobile-store idle
-at 18:40:11 UTC as eac420e23b42e804f0307c5c0285b770eacae17b. Exact-main Quality
-37513081761 is running. Another actor's #378 merged immediately before it;
-preserve that mobile change. Standard FX release and independent checks remain
-before operations #381 merges. Incorporate current main into the final candidate.
+11B/C operations PR #381 now includes both timestamp validation and independent
+admin-page gates. Exact candidate d51850c0 failed full CI 37513911652 only in
+three old missing-user render fixtures calling the newly gated page outside a
+request. All three reproduce locally; an authorized identity fixture fixes them
+without changing runtime or denied-page controls. Head 5354a3b619043c111257812eb42b68c8b487608f
+runs fresh Quality 37515495937; all 58 focused cases, types and scoped lint pass.
+All 20 revoked HTML/RSC and ten active page checks pass on the actual production
+candidate; Playwright verifies the activity redirect contains no private marker.
+Cleanup is empty and server/browser stopped. AUTH-02 remains failed until this
+fix is released; prior Apple/Chrome evidence is preserved.
 
-11B reproduces finite out-of-range diagnostic timestamps throwing RangeError
-through actual loopback HTTP. The candidate rejects an invalid Date before
-formatting. All 25 actual HTTP/PostgREST/SQL controls pass (23/25 baseline),
-54 focused cases, nine web and 143 mobile contract/diagnostics cases pass;
-app/test/mobile types and scoped lint pass. Contract now documents timestamp
-bounds and invalid response. No schema change. Prepare a separate PR and hold
-merge until parent FX #380 is independently verified; OPS-04 remains failed
-for both findings until their respective releases. Six admin collectors remain
-in OPS-GATE; the seventh page-only service, home dashboard, is SOCIAL-GATE.
+FX #380 is independently verified live as eac420e23b42e804f0307c5c0285b770eacae17b
+at October 6 19:01:32 UTC. Exact-main Quality 37513081761 and standard release
+37514320846 pass; public schema and 110 security findings unchanged, smoke
+200/307/401, all six live FX rates positive/finite. Vercel exposes cache-control
+public without s-maxage; do not infer effective edge TTL from that header.
+See the 11A release record. Another actor's preceding #378 mobile change is
+preserved. The verified parent gate for #381 is now satisfied; require its fresh
+exact-head CI and an immediate mobile-store idle check before merge.
 
-11A is open as PR #380 on 6e67f92937586b14c7a5423293beac39a5494fea;
-exact-head Quality 37510388702 is running. Parent #379 exact-main Quality
-37510132894 is running on 75dc4eb7fc8fef7139fc42c1a50b10f3f653f4de.
-Standard release and independent live/schema/advisor checks remain before
-#380 can merge. Preserve unrelated local receipt text and evidence.
+Retention #379 is independently verified live at October 6 18:39:29 UTC; Quality
+37510132894/release 37511731539 pass. The release record covers unchanged schema,
+110 unchanged advisors and 200/307/401 smoke. MEDIA-09 returns to untested for
+broader recovery. 10F #377 is independently verified at 18:12:33 UTC on ab9eb3ad,
+with planned trigger only, all 23 rollback controls, zero fixtures and unchanged
+advisors; PAY-04 remains untested for its broader lifecycle matrix.
 
-11A reproduces 20 actual provider-HTTP FX responses (EUR/GBP/AUD/CAD/SGD
-missing/null/zero/negative) being published/cached with HTTP 200 while USD is
-valid. The candidate requires all six supported rates to be finite and positive;
-malformed rates return no-store 503. All 28 actual HTTP and 54 focused cases
-pass; types/lint pass. No incorrect charge/production incident is established;
-read-only live FX baseline has all six positive. No schema or client change.
-A Node test environment is required for actual HTTP; shared setup's DOM-only
-scrollIntoView stub now checks Element exists. 10I evidence is included; no
-runtime/schema change there. Prepare a separate FX PR; hold merge until parent #379 is
-released/verified. OPS-04 is failed until release; ledger stays 24 passed,
-24 untested, 3 failed, 2 external (PAY-04 now untested, failed OPS-04/MEDIA07/09).
-
-10F #377 is independently verified live on ab9eb3ad at October 6 18:12:33 UTC:
-exact-main Quality 37507548395, standard release 37508809231, planned trigger
-only, all 23 rollback controls, zero fixtures and 110 unchanged advisors pass.
-See deletion-freeze cash release record. Prod ledger 20261006180733 maps to
-source 20261006173448. PAY-04 returns to untested for the broader matrix.
-10H #379 passed exact-head Quality 37508493978 and merged with mobile-store
-idle at October 6 18:17:12 UTC as 75dc4eb7fc8fef7139fc42c1a50b10f3f653f4de.
-Exact-main Quality 37510132894 is running. Standard release and independent
-unchanged-schema/advisor/live checks remain.
-
+Current ledger: 53 obligations — 23 passed, 25 untested, 3 failed, 2 external.
+Failed AUTH-02/OPS-04/MEDIA-07. OPS-04 also includes the 11D reporting defect and
+broader collector/method behavior. Six admin collectors belong to OPS-GATE;
+the seventh page-only service, home dashboard, belongs to SOCIAL-GATE. These
+bounded releases do not close the full audit. Preserve receipt text/evidence.
 
 10I adds eight actual signed-refund failure/retry controls: pre-commit RPC 503
 and post-commit acknowledgement loss across live/deleted/Storage-failed/Auth-

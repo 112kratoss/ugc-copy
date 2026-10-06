@@ -218,6 +218,65 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+  supabase-api:
+    name: Supabase API integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AUDIT_STORAGE_CONFIG: ${{ runner.temp }}/supabase-api-status.json
+      SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@v3
+        with:
+          version: 2.109.1
+
+      # The SQL-only job deliberately excludes these API services. This job
+      # replays independently and exercises actual Auth, Storage and PostgREST.
+      # Keep generated local keys in private runner files, never log/artifact them.
+      - name: Start isolated Supabase API stack
+        run: |
+          set -euo pipefail
+          umask 077
+          fixture_dir="$RUNNER_TEMP/supabase-api"
+          mkdir -p "$fixture_dir/supabase"
+          cp supabase/config.api-tests.toml "$fixture_dir/supabase/config.toml"
+          ln -s "$GITHUB_WORKSPACE/supabase/migrations" "$fixture_dir/supabase/migrations"
+          supabase --workdir "$fixture_dir" start --exclude realtime,imgproxy,postgres-meta,studio,edge-runtime,logflare,vector,supavisor > "$RUNNER_TEMP/supabase-api-start.log" 2>&1
+          supabase --workdir "$fixture_dir" db reset --local --no-seed --yes
+          supabase --workdir "$fixture_dir" status -o json > "$AUDIT_STORAGE_CONFIG"
+
+      # Deletion claims are global. Separate invocations keep fixtures sequential;
+      # the suite's explicit process-kill and concurrent-worker cases still run.
+      - name: Test account deletion with real Auth and Storage
+        run: npx vitest run --config vitest.account-deletion-postgrest.config.ts
+
+      - name: Test operations ingress with real PostgREST and SQL
+        run: npx vitest run --config vitest.ops-postgrest.config.ts
+
+      - name: Test admin collectors with real PostgREST and SQL
+        run: npx vitest run --config vitest.admin-collectors-postgrest.config.ts
+
+      - name: Stop isolated Supabase API stack
+        if: always()
+        continue-on-error: true
+        run: |
+          supabase --workdir "$RUNNER_TEMP/supabase-api" stop --no-backup
+          rm -f "$AUDIT_STORAGE_CONFIG" "$RUNNER_TEMP/supabase-api-start.log"
+
   supabase-migrations:
     name: Supabase migration replay
     runs-on: ubuntu-latest

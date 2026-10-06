@@ -30,7 +30,7 @@ function makeClient(options: {
     const builder: Record<string, unknown> = {
       then: (resolve: (value: typeof result) => unknown) => Promise.resolve(result).then(resolve),
     };
-    for (const method of ['select', 'gte', 'eq', 'in']) {
+    for (const method of ['select', 'gte', 'eq', 'in', 'is']) {
       builder[method] = vi.fn(() => builder);
     }
     return builder;
