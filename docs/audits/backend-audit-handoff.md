@@ -6,33 +6,45 @@ Updated 2026-10-06 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/detached-refund-audit-10e`, preserving 10D and 10E candidate work; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/deletion-freeze-refund-audit-10f`, preserving the merged 10D/E and new 10F candidate; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-10E reproduces detached cash refunds returning `not_found` and an actual
-refund/Auth-deletion deadlock. New UTC migration
-20261006172011_reconcile_detached_bundle_cash_refunds.sql locks a live creator's
-Auth row before bundle/order and re-reads surviving detached orders safely.
-35 actual deletion/access controls and five PostgreSQL concurrency cases pass;
-clean replay passes 2,125 assertions in 99 files. Authoritative quote/record/capture
-RPCs are exercised locally. Production rollback baseline is 7/23 passing;
-separate cleanup finds zero fixtures. Three detached paid orders exist, no
-customer repair performed. PAY-04 is failed until release/after verification;
-ledger is 24 passed, 25 untested, 2 failed, 2 external (53 obligations).
-10D retained-access evidence remains preserved in commit 5a5ecbf6 and is included
-in this next candidate; no prior edits should be discarded.
+10F reproduces Storage/Auth-failed deletion freezing legitimate cash refunds
+(SQLSTATE 55000). Two actual PostgREST failures pass after the strict sales-count
+exception candidate; all 37 actual deletion/access cases pass (160.92 seconds).
+Only a positive sales count decreasing by exactly one, with all other fields
+except updated_at identical, bypasses the freeze. Zero/no-op, content, price,
+publication, paths, increments and new captures remain blocked. The initial
+broader rule failed an unchanged freeze regression and was tightened. Clean
+replay passes 2,163 assertions in 100 files (38 new). Production rollback
+baseline is 13/23 passing; separate cleanup finds zero fixtures. See 10F report.
+New migration: 20261006173448_allow_refund_sale_count_during_deletion.sql.
+No customer repair or genuine payment/provider request.
 
-10B #374 exact-main Quality 37500291828 and standard release 37501990835 passed.
-Independent verification at October 6 17:19:25 UTC confirms live
-383c65038daac34ebd7a3f9100846a18b96a6687, unchanged schema/110 advisors and
-feed/admin/webhook boundaries. See the identities release report.
-10C #375 exact-head Quality 37500612971 passed and merged with mobile-store idle
-October 6 17:20:01 UTC as ba6d3ff2c3148dda6d16a9afd29e920ec1f8fde0.
-Exact-main Quality 37502728609 is running; standard release and independent
-account-deletion-references-release/ checks remain. Do not merge the next
-candidate before this parent is independently verified live.
+10E PR #376 passed exact-head Quality 37504089324 on
+f75a0c1642f5ac82fb613dde41dd72f75897a71b and merged with mobile-store idle
+October 6 17:39:55 UTC as b82a7de987ad08212edc12b134be02e2a3d8be6c.
+Exact-main CI, standard release and independent detached-refund-release/ checks
+remain. The saved local function evidence is valid (10F changes only its guard).
+Its verifier re-derives cleanup IDs from each rollback run's actual fixture
+output. Do not merge 10F before the parent is independently verified live.
+
+10E fixes detached refund rejection and refund/erasure deadlock, includes 10D
+retained-access evidence, and passed 35 actual local deletion/access cases
+(final authoritative quote/capture snapshot: 154.77 seconds), five real SQL
+concurrency cases, and clean 2,125 assertions. Baseline rollback was 7/23
+passing, no fixtures remain. Three detached paid orders were observed, no
+customer repair performed. PAY-04 remains failed while 10E/10F verification is
+pending; ledger remains 24 passed, 25 untested, 2 failed, 2 external (53).
+
+10C #375 is independently verified live on
+ba6d3ff2c3148dda6d16a9afd29e920ec1f8fde0 at October 6 17:36:42 UTC.
+Exact-main Quality 37502728609 and standard release 37504283695 passed;
+unchanged schema/all 110 advisors and feed/admin/webhook boundaries pass.
+See purchased-reference release report. 10B #374 is independently verified
+live at October 6 17:19:25 UTC on 383c6503; reports/evidence remain preserved.
 
 10C adds five actual local purchased legacy-generation-input controls. A remix
 revision's supplemental reference and attachment survive creator deletion in
