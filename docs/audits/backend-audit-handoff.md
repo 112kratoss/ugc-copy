@@ -6,54 +6,57 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/admin-collector-errors-audit-11h`, preserving wallet #385's tested candidate while fixing user-detail failure reporting and retry recovery. Prior audit branches and unrelated local evidence remain preserved.
+Current checkout: `codex/auth-placeholder-collision-audit-11j`, preserving tested #385/#386/#387 heads while fixing a reproduced Auth trigger username collision. User receipt/evidence edits remain untouched.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-#381 is independently verified live at October 6 19:30:17 UTC as
-235aca0165500b53d436aef4eb4e54fffb489616. Exact-main Quality 37517212787 and
-standard release 37518758196 pass; schema/110 advisors unchanged, smoke
-200/307/401. Both live out-of-range timestamps return private/no-store 400.
-Released admin runtime matches all eleven production-tested files; all 20 live
-unauthenticated HTML/RSC page checks redirect. Actual signed revoked/active
-session evidence remains the isolated production build/Playwright, with empty
-cleanup; no fresh production admin fixture is claimed. AUTH-02 returns to passed.
-Current ledger: 53 obligations — 24 passed, 25 untested, 2 failed, 2 external.
-Failed OPS-04/MEDIA-07; full audit remains open.
+Wallet #385 is independently verified live October 6 20:34:11 UTC as
+c3995ddc8e5ca1b29fb7a777e62300e844043900. Refreshed candidate 476b2463 passes
+Quality 37523837244; exact-main Quality 37525598535 and standard release
+37526868504 pass. Only the new function/grant changes the schema; existing
+functions/ACLs and all 110 advisors are unchanged. Signed/zero-wallet rollback
+controls pass with zero Auth/profile/wallet fixtures; smoke is 200/307/401.
+Digest cd2b014a27e6b7276f75a26805730069 matches replay. Source 20261006193446
+maps to production 20261006203018 by independent readback without ledger repair.
+See the 11G release report. Other actor's #384 mobile/AGENTS changes are preserved.
 
-Combined #382 is independently verified live October 6 19:52:00 UTC as
-6e7b8ddb51a68841242bbbe491c41e59f1b65d9f. Candidate Quality 37518573233,
-exact-main Quality 37520033768 and standard release 37521541451 pass. Only the
-planned function/grant was added; existing functions/ACLs and all 110 advisors
-are unchanged, rollback controls pass with zero fixtures, smoke is 200/307/401.
-The summary digest matches 9e81773eca4a78073a313259707def79. Source migration
-20261006190707 maps to production ledger 20261006194754; no repair was performed.
+User-error #386 is independently verified live October 6 20:51:29 UTC as
+1be9dabafab48d159303250f48fd21ee58932cd4. Final head c608f035 passes all five
+Quality jobs in 37525678057; exact-main Quality 37527510112 and standard release
+37529011506 pass. Public schema/110 advisors are unchanged, all three runtime
+file digests match the production Next/browser candidate, twenty live
+unauthenticated HTML/RSC admin boundaries pass, both diagnostic timestamps
+return private/no-store 400, and smoke is 200/307/401. The actual signed retry
+proof remains the isolated production build with empty cleanup; no live positive
+support record or fresh signed production session is claimed. See the 11H release.
 
-11G reproduces 1,001 wallets reported as 1,000 through actual PostgREST. The
-candidate uses a service-role-only stable aggregate; 24 actual API/SQL cases,
-50 focused collector cases, two migration guards, app/test types and scoped lint
-pass. Clean replay includes 20261006193446 and all 2,185 SQL assertions in 102
-files pass. The first SQL fixture collided on default username prefixes; distinct
-UUID prefixes corrected the fixture without changing the Auth trigger. Cleanup
-is empty. Read-only production has one wallet, so no current undercount is claimed.
-Wallet PR #385 is attached and exact head 4488deb8292c0986daf78514914b260e63285200
-passes all five Quality jobs in 37521209455. Its merge guard correctly stopped
-when another actor's mobile #384 advanced main to f9ca840f. Preserve that change,
-incorporate the new main into the wallet candidate and require fresh exact-head
-Quality plus independent parent release verification before merging. Parent
-Quality 37522033608/release are pending. Prepared wallet release probes/baselines
-are private; candidate digest cd2b014a27e6b7276f75a26805730069. No merge occurred.
+Health #387 source is included in the combined health/signup PR #388. Refreshed
+health head 68bf19c2534357bba1018824085450e4af5f4036 incorporates the actual
+#386 main merge. All 48 actual collector and 48 focused health cases pass;
+production's three sixty-minute windows were empty in the read-only baseline.
+Preserve #387's source/evidence; do not merge it separately. #388 is retargeted to
+main with both fixes and separate reports/verification. Require final exact-head
+Quality after consolidation, then immediate idle mobile-store/exact live parent
+checks, exact-main Quality and standard release. The user-error parent is now
+independently verified. Private Auth/health release baselines use that parent.
 
-11H reproduces ten user-detail reads converted into empty histories/zero amounts;
-candidate checks every result and removes false-zero follow catches. Actual
-production Next/Playwright also reproduces a profile outage rendered as missing,
-seven-credit spend rendered as zero, suspension disappearing on state outage,
-and Try again failing to refetch restored data. Page failures now reach the
-existing console boundary; its installed Next 16.3.3 retry prop refetches data.
-Eleven user failure controls and six other partial collector controls pass.
-The full 41-case API suite and 65 focused cases pass. All 17 final browser cases and 46 production Next method controls pass; the actual retry button restores the seven credits and suspension. Specific Auth/profile/content/usage/contact/session/rate/telemetry cleanup is empty; browser/server/proxy are stopped. New PR remains. Keep wallet
-and error findings separate; do not push untested work into #385's tested head.
+11J reproduces signup aborts when valid distinct UUIDs share their eight-digit
+placeholder prefix. Original production/local trigger digest agrees. Four final
+baseline collision failures and two normal controls cover real GoTrue creation,
+eight concurrent requests and the anonymous SQL trigger. Candidate allocation
+keeps the generated format and zero balances while using the existing unique
+index and bounded retries. All six actual cases and clean replay/2,207 assertions
+pass; app/test types and scoped lint pass. Early invalid fixtures were corrected
+without changing constraints, and exact failed fixtures were removed. Candidate
+trigger digest 38b2a5ff84299035c88e229345f9cefa; release is not claimed.
+
+Current ledger: 53 obligations — 23 passed, 25 untested, 3 failed, 2 external.
+AUTH-01 is reopened for 11J until release verification; failed OPS-04/MEDIA-07
+remain. AUTH-02 remains passed from independently verified #381. Combined #382
+was independently verified as 6e7b8ddb at October 6 19:52 UTC with the planned
+job-summary function/grant only, unchanged advisors and zero fixtures; see its
+release record. These bounded fixes do not complete the full audit.
 
 GitHub marked #383 merged into its candidate base branch at 19:23:11 UTC when
 its commits were incorporated into #382. It has no separate main merge or

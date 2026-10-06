@@ -8,10 +8,15 @@ import { MAX_COMPLETION_ATTEMPTS } from '@/lib/generation-completion-job-policy'
 type QueryResult = {
   data: unknown[] | null;
   error: Error | null;
+  count?: number | null;
 };
 
 class FakeQueryBuilder {
-  select = vi.fn(() => this);
+  private exactCount = false;
+  select = vi.fn((_columns: string, options?: { count?: string }) => {
+    this.exactCount = options?.count === 'exact';
+    return this;
+  });
   gte = vi.fn(() => this);
   eq = vi.fn(() => this);
   is = vi.fn(() => this);
@@ -36,7 +41,11 @@ class FakeQueryBuilder {
     onfulfilled?: ((value: QueryResult) => TResult1 | PromiseLike<TResult1>) | null,
     onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
   ): Promise<TResult1 | TResult2> {
-    return Promise.resolve(this.result).then(onfulfilled, onrejected);
+    const result = this.exactCount ? {
+      ...this.result,
+      count: this.result.count === undefined ? (this.result.data?.length ?? 0) : this.result.count,
+    } : this.result;
+    return Promise.resolve(result).then(onfulfilled, onrejected);
   }
 }
 
@@ -470,7 +479,7 @@ describe('collectBackendHealth', () => {
       'started_at',
       '2026-06-19T10:00:00.000Z',
     );
-    expect(db.builders.generations[0].select).toHaveBeenCalledWith('status,created_at,cost');
+    expect(db.builders.generations[0].select).toHaveBeenCalledWith('status,created_at,cost', { count: 'exact' });
     expect(db.builders.generations[1].select).toHaveBeenCalledWith('created_at,cost');
     expect(db.builders.generations[1].in).toHaveBeenCalledWith('status', ['pending', 'waiting', 'processing']);
     expect(db.builders.generations[2].select).toHaveBeenCalledWith('created_at,cost');
@@ -613,7 +622,7 @@ describe('collectBackendHealth', () => {
       }),
     ]));
     expect(db.from).toHaveBeenCalledWith('ai_usage_events');
-    expect(db.builders.ai_usage_events[0].select).toHaveBeenCalledWith('feature,status,medium,cost,created_at');
+    expect(db.builders.ai_usage_events[0].select).toHaveBeenCalledWith('feature,status,medium,cost,created_at', { count: 'exact' });
     expect(db.builders.ai_usage_events[0].gte).toHaveBeenCalledWith(
       'created_at',
       '2026-06-21T09:00:00.000Z',
@@ -769,6 +778,7 @@ describe('collectBackendHealth', () => {
     expect(db.from).toHaveBeenCalledWith('provider_dependency_events');
     expect(db.builders.provider_dependency_events[0].select).toHaveBeenCalledWith(
       'service_name,outcome,duration_ms,timeout_ms,status,created_at,model_id',
+      { count: 'exact' },
     );
     expect(db.builders.provider_dependency_events[0].gte).toHaveBeenCalledWith(
       'created_at',

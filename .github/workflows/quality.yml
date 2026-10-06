@@ -271,6 +271,9 @@ jobs:
       - name: Test admin collectors with real PostgREST and SQL
         run: npx vitest run --config vitest.admin-collectors-postgrest.config.ts
 
+      - name: Test signup collisions with real Auth and SQL
+        run: npx vitest run --config vitest.auth-signup-postgrest.config.ts
+
       - name: Stop isolated Supabase API stack
         if: always()
         continue-on-error: true

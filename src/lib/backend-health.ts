@@ -1314,7 +1314,7 @@ export async function collectBackendHealth(
     loadRecentBackendJobRuns(client, jobSince),
     client
       .from('generations')
-      .select('status,created_at,cost')
+      .select('status,created_at,cost', { count: 'exact' })
       .gte('created_at', recentGenerationSince)
       .limit(HEALTH_RECENCY_SAMPLE_LIMIT + 1),
     client
@@ -1356,7 +1356,7 @@ export async function collectBackendHealth(
       .limit(MEDIA_PIPELINE_SAMPLE_LIMIT),
     client
       .from('ai_usage_events')
-      .select('feature,status,medium,cost,created_at')
+      .select('feature,status,medium,cost,created_at', { count: 'exact' })
       .gte('created_at', recentAiUsageSince)
       .limit(HEALTH_RECENCY_SAMPLE_LIMIT + 1),
     client
@@ -1368,7 +1368,7 @@ export async function collectBackendHealth(
       .limit(50),
     client
       .from('provider_dependency_events')
-      .select('service_name,outcome,duration_ms,timeout_ms,status,created_at,model_id')
+      .select('service_name,outcome,duration_ms,timeout_ms,status,created_at,model_id', { count: 'exact' })
       .gte('created_at', recentProviderDependencySince)
       .order('created_at', { ascending: true })
       .limit(HEALTH_RECENCY_SAMPLE_LIMIT + 1),
@@ -1395,13 +1395,15 @@ export async function collectBackendHealth(
   if (stalePendingAiUsageResult.error) throw stalePendingAiUsageResult.error;
   if (recentProviderDependencyResult.error) throw recentProviderDependencyResult.error;
 
-  // The extra probe row is dropped before any builder sees it, so counts stay
-  // consistent with the caps; what survives is the knowledge that a cap hit.
+  // The API may cap a 1,001-row request at 1,000, hiding the extra probe row.
+  // Exact window counts disclose that cut without increasing sample budgets.
   const truncatedHealthSamples: string[] = [];
-  function healthSample<TRow>(source: string, rows: TRow[], cap: number): TRow[] {
-    if (rows.length <= cap) return rows;
-    truncatedHealthSamples.push(source);
-    return rows.slice(0, cap);
+  function healthSample<TRow>(source: string, rows: TRow[], cap: number, totalCount: number | null = rows.length): TRow[] {
+    if (totalCount === null || !Number.isFinite(totalCount) || totalCount < rows.length) {
+      throw new Error(`Health sample count unavailable: ${source}`);
+    }
+    if (rows.length > cap || totalCount > rows.length) truncatedHealthSamples.push(source);
+    return rows.length > cap ? rows.slice(0, cap) : rows;
   }
 
   const jobsWithoutRecentRuns = BACKEND_JOB_REGISTRY
@@ -1415,7 +1417,7 @@ export async function collectBackendHealth(
   ));
   const schedulerResult = buildSchedulerHealth();
   const generationResult = buildGenerationHealth(
-    healthSample('generations', (recentGenerationsResult.data ?? []) as GenerationStatusRow[], HEALTH_RECENCY_SAMPLE_LIMIT),
+    healthSample('generations', (recentGenerationsResult.data ?? []) as GenerationStatusRow[], HEALTH_RECENCY_SAMPLE_LIMIT, recentGenerationsResult.count),
     (stalledGenerationsResult.data ?? []) as StalledGenerationRow[],
     (pendingWithoutProviderTaskResult.data ?? []) as PendingGenerationWithoutProviderTaskRow[],
   );
@@ -1429,11 +1431,11 @@ export async function collectBackendHealth(
     now,
   );
   const aiUsageResult = buildAiUsageHealth(
-    healthSample('ai_usage_events', (recentAiUsageResult.data ?? []) as AiUsageEventRow[], HEALTH_RECENCY_SAMPLE_LIMIT),
+    healthSample('ai_usage_events', (recentAiUsageResult.data ?? []) as AiUsageEventRow[], HEALTH_RECENCY_SAMPLE_LIMIT, recentAiUsageResult.count),
     (stalePendingAiUsageResult.data ?? []) as AiUsageEventRow[],
   );
   const providerDependencyResult = buildProviderDependencyHealth(
-    healthSample('provider_dependency_events', (recentProviderDependencyResult.data ?? []) as ProviderDependencyEventRow[], HEALTH_RECENCY_SAMPLE_LIMIT),
+    healthSample('provider_dependency_events', (recentProviderDependencyResult.data ?? []) as ProviderDependencyEventRow[], HEALTH_RECENCY_SAMPLE_LIMIT, recentProviderDependencyResult.count),
   );
 
   // Deliberately not thrown like its siblings: a failure to read this
