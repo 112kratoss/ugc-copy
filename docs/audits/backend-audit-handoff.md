@@ -6,7 +6,7 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/admin-collector-errors-audit-11h`, preserving wallet #385's tested candidate while fixing user-detail failure reporting and retry recovery. Prior audit branches and unrelated local evidence remain preserved.
+Current checkout: `codex/backend-health-cap-audit-11i`, preserving wallet #385 and user-error #386 candidates while fixing shared health sample disclosure. Prior audit branches and unrelated local evidence remain preserved.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
@@ -42,7 +42,11 @@ passes all five Quality jobs in 37521209455. Its merge guard correctly stopped
 when another actor's mobile #384 advanced main to f9ca840f. Preserve that change,
 incorporate the new main into the wallet candidate and require fresh exact-head
 Quality plus independent parent release verification before merging. Parent
-Quality 37522033608/release are pending. Prepared wallet release probes/baselines
+Quality 37522033608 and release 37523273004 pass; exact live f9ca840f and
+unchanged schema/110 advisors plus 200/307/401 smoke are independently checked.
+Refreshed #385 head 476b2463f15b8905ea52a90a0f16045b344d1195 runs Quality
+37523837244. Its merge guard/baselines now target the verified f9ca840f parent.
+Prepared wallet release probes/baselines
 are private; candidate digest cd2b014a27e6b7276f75a26805730069. No merge occurred.
 
 11H reproduces ten user-detail reads converted into empty histories/zero amounts;
@@ -52,8 +56,22 @@ seven-credit spend rendered as zero, suspension disappearing on state outage,
 and Try again failing to refetch restored data. Page failures now reach the
 existing console boundary; its installed Next 16.3.3 retry prop refetches data.
 Eleven user failure controls and six other partial collector controls pass.
-The full 41-case API suite and 65 focused cases pass. All 17 final browser cases and 46 production Next method controls pass; the actual retry button restores the seven credits and suspension. Specific Auth/profile/content/usage/contact/session/rate/telemetry cleanup is empty; browser/server/proxy are stopped. New PR remains. Keep wallet
+The full 41-case API suite and 65 focused cases pass. All 17 final browser cases and 46 production Next method controls pass; the actual retry button restores the seven credits and suspension. Specific Auth/profile/content/usage/contact/session/rate/telemetry cleanup is empty; browser/server/proxy are stopped. PR #386 is open as detailed below. Keep wallet
 and error findings separate; do not push untested work into #385's tested head.
+User-error PR #386 is attached and stacked on #385. Head
+5a2aad8f248be14e72d785d053fd3fa71e232fa6 runs Quality 37524066591, including
+127 real API cases. Hold until wallet release is independently verified, then
+retarget main/incorporate the merged parent and require fresh exact-head Quality.
+
+11I reproduces three 1,001-row health windows reporting 1,000 without sampling
+disclosure; all three 1,000-row controls pass. A fourth transport regression
+accepts missing exact-count metadata. Candidate requests exact counts without
+increasing sample budgets/queries and rejects missing/inconsistent metadata.
+All 48 real collector cases, 48 focused health cases, app/test types and scoped
+lint pass; specific generation/usage/dependency/Auth/profile cleanup is empty.
+Read-only production has zero rows in the three current sixty-minute windows,
+so no live incident is claimed. Commit/open its separate PR stacked on #386;
+keep OPS-04 failed pending these releases and broader collector/method scope.
 
 GitHub marked #383 merged into its candidate base branch at 19:23:11 UTC when
 its commits were incorporated into #382. It has no separate main merge or

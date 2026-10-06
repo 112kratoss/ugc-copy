@@ -10,6 +10,7 @@ import { collectAdminSystemSnapshot } from '@/lib/admin-system-service';
 import { collectAdminActivity } from '@/lib/admin-activity-service';
 import { collectAdminContentSnapshot } from '@/lib/admin-content-service';
 import { getAdminUserDetail, searchAdminUsers } from '@/lib/admin-users-service';
+import { collectBackendHealth } from '@/lib/backend-health';
 
 const configPath = process.env.AUDIT_STORAGE_CONFIG;
 const connectionString = process.env.SUPABASE_TEST_DB_URL;
@@ -27,6 +28,8 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
   let generationIds: string[];
   let contactIds: string[];
   let walletOwnerIds: string[];
+  let usageIds: string[];
+  let dependencyIds: string[];
   const now = new Date();
   const snapshot = () => collectAdminOverview(admin, { now });
 
@@ -59,6 +62,7 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
     catalogIds = [];
     otherUsers = []; postIds = []; generationIds = []; contactIds = [];
     walletOwnerIds = [];
+    usageIds = []; dependencyIds = [];
     const result = await admin.auth.admin.createUser({ email: 'collector-' + randomUUID() + '@audit.invalid', password: randomUUID(), email_confirm: true });
     expect(result.error).toBeNull();
     owner = result.data.user!.id;
@@ -70,6 +74,8 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
     await db.query('delete from public.contact_messages where id=any($1::uuid[])', [contactIds]);
     await db.query('delete from public.posts where id=any($1::uuid[])', [postIds]);
     await db.query('delete from public.generations where id=any($1::uuid[])', [generationIds]);
+    await db.query('delete from public.ai_usage_events where id=any($1::uuid[])', [usageIds]);
+    await db.query('delete from public.provider_dependency_events where id=any($1::uuid[])', [dependencyIds]);
     await db.query('delete from public.creator_resource_wallets where user_id=any($1::uuid[])', [walletOwnerIds]);
     await db.query('delete from auth.users where id=any($1::uuid[])', [walletOwnerIds]);
     for (const id of otherUsers) expect((await admin.auth.admin.deleteUser(id)).error).toBeNull();
@@ -88,6 +94,8 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
     expect((await db.query('select id from auth.users where id=any($1::uuid[])', [walletOwnerIds])).rows).toEqual([]);
     expect((await db.query('select id from public.profiles where id=any($1::uuid[])', [walletOwnerIds])).rows).toEqual([]);
     expect((await db.query('select user_id from public.creator_resource_wallets where user_id=any($1::uuid[])', [walletOwnerIds])).rows).toEqual([]);
+    expect((await db.query('select id from public.ai_usage_events where id=any($1::uuid[])', [usageIds])).rows).toEqual([]);
+    expect((await db.query('select id from public.provider_dependency_events where id=any($1::uuid[])', [dependencyIds])).rows).toEqual([]);
   });
   afterAll(async () => { await db.end(); });
 
@@ -363,5 +371,49 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
       } },
     });
     await expect(collect(failing)).rejects.toMatchObject({ message: 'Isolated partial collector read denied' });
+  });
+
+  it.each(['generations', 'ai_usage_events', 'provider_dependency_events'].flatMap(table =>
+    [1000, 1001].map(count => ({ table, count })),
+  ))('discloses a $table health window of $count rows across the API ceiling', async ({ table, count }) => {
+    // A controlled clock isolates this window from any older local history.
+    const fixtureNow = new Date(now.getTime() + 86400_000);
+    if (table === 'generations') {
+      const result = await db.query("insert into public.generations(id,user_id,status,model,category,cost,created_at) select gen_random_uuid(),$1,'succeeded','audit-inert','image',0,$2 from generate_series(1,$3) returning id", [owner, fixtureNow, count]);
+      generationIds.push(...result.rows.map(row => row.id));
+    } else if (table === 'ai_usage_events') {
+      const result = await db.query("insert into public.ai_usage_events(id,user_id,feature,provider,model,cost,status,created_at) select gen_random_uuid(),$1,'audit-inert','inert','audit-inert',0,'succeeded',$2 from generate_series(1,$3) returning id", [owner, fixtureNow, count]);
+      usageIds.push(...result.rows.map(row => row.id));
+    } else {
+      const result = await db.query("insert into public.provider_dependency_events(service_name,outcome,method,timeout_ms,duration_ms,status,created_at) select 'audit-inert','success','GET',1000,1,200,$1 from generate_series(1,$2) returning id", [fixtureNow, count]);
+      dependencyIds.push(...result.rows.map(row => row.id));
+    }
+    const exact = await admin.from(table).select('id', { count: 'exact', head: true }).gte('created_at', fixtureNow.toISOString());
+    expect(exact.error).toBeNull(); expect(exact.count).toBe(count);
+    const health = await collectBackendHealth(admin, fixtureNow);
+    const reported = table === 'generations' ? health.generations.recentCounts.succeeded
+      : table === 'ai_usage_events' ? health.aiUsage.recentCounts.succeeded
+        : health.providerDependencies.recentEventCount;
+    expect(reported).toBe(1000);
+    expect(health.issues.some(issue => issue.code === 'HEALTH_SAMPLE_TRUNCATED' && issue.message.includes(table))).toBe(count > 1000);
+  });
+
+  it('rejects a health sample whose exact count metadata is missing', async () => {
+    const config = JSON.parse(readFileSync(configPath!, 'utf8'));
+    const incomplete = createClient(config.API_URL, config.SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { fetch: async (input, init) => {
+        const response = await fetch(input, init);
+        const url = new URL(String(input));
+        if (url.pathname === '/rest/v1/generations' && url.searchParams.get('select') === 'status,created_at,cost') {
+          const headers = new Headers(response.headers);
+          headers.delete('content-range');
+          headers.delete('content-encoding'); headers.delete('content-length');
+          return new Response(await response.arrayBuffer(), { status: response.status, headers });
+        }
+        return response;
+      } },
+    });
+    await expect(collectBackendHealth(incomplete, now)).rejects.toThrow('Health sample count unavailable: generations');
   });
 });
