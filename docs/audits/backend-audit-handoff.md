@@ -20,12 +20,19 @@ test types/lint and fixture cleanup pass. No runtime/schema change; no provider
 called. See 10C report. Local candidate, no PR yet: complete the parent #374
 release first, incorporate main and open the scoped evidence PR.
 
-10B PR #374 exact head de100f062fc08692a327dcf22a370e2a4cfd1ec1 has Quality
-37498287785 running. Mobile/E2E pass; DB replay finishing, web continues.
-9O/10A #373 exact-main Quality 37498165169 has DB/mobile/E2E passes; web
-checks continue. Standard release and private account-deletion-release/
-unchanged schema/security/live verifier remain. Do not merge #374 before #373's
-release is independently verified; keep mobile-store idle immediately at merge.
+9O/10A #373 is independently verified live on
+b9729ee41f4fc4db1c500bc96283d667eae34847. Exact-main Quality 37498165169 and
+standard release 37499514443 passed; unchanged schema/110 security findings and
+feed/admin/webhook checks pass at October 6 17:00:44 UTC. See 10A release record.
+All 19 model and 27 current deletion controls also pass on Node 24.21.0. Local
+fs-ext was rebuilt from its old Node 22 ABI; use Node 24 for subsequent tests.
+
+10B #374 passed exact-head Quality 37498287785 on de100f06 and merged with
+mobile-store idle October 6 17:01:20 UTC as
+383c65038daac34ebd7a3f9100846a18b96a6687. Exact-main Quality, standard release
+and independent account-deletion-identities-release/ verification remain.
+Incorporate main #374 into 10C, preserving the exact tested files, then open its
+scoped PR. Do not merge 10C before the parent release is independently verified.
 
 10B adds ten actual local deletion controls: linked guest order/partial Auth
 failure; all eight owner buckets; template snapshot anonymization/public/private

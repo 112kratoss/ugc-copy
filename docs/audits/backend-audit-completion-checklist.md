@@ -1,7 +1,8 @@
 # Backend audit completion checklist
 
 Updated 2026-10-06. Current independently checked production:
-`9cbe5815aa94179e90b1c249cd932a4f369b38b4`, including Sections 9A–9N.
+`b9729ee41f4fc4db1c500bc96283d667eae34847`, including Sections 9A–9O and 10A.
+[9O/10A release evidence](backend-section-10-account-deletion-release-2026-10-06.md).
 [9M/9N release evidence](backend-section-09-model-verification-release-2026-10-06.md).
 [9L release evidence](backend-section-09-feed-interest-release-2026-10-06.md).
 [9J/K release evidence](backend-section-09-dispatch-release-2026-10-05.md).

@@ -37,3 +37,6 @@ deployed browser/proxy behavior remain outside these cases. AUTH-03 and
 MARKET-03 remain untested for their broader obligations.
 
 Private logs are .audit-evidence/backend-social/account-deletion-retention*.
+
+All 27 actual controls also pass on Node 24.21.0 (147.26 seconds), matching
+the repository runtime. Private evidence: account-deletion-node24.log.
