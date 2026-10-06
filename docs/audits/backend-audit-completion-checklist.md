@@ -27,7 +27,7 @@ unequal effort and risk. Do not turn their pass count into a percentage of backe
 safety or an ETA. New findings attach to these obligations; changes in scope must
 be recorded explicitly instead of silently adding another lettered batch.
 
-Current ledger: **53 obligations — 24 passed, 26 untested, 1 failed, 2 external**.
+Current ledger: **53 obligations — 24 passed, 25 untested, 2 failed, 2 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
 WORKFLOW-02 and WORKFLOW-04 remain untested after their scoped fixes shipped.
 SOCIAL-01/02/04 return to untested after the verified 8F/8G releases.
@@ -102,7 +102,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | PAY-01 | Credit grant identity/idempotency regressions | passed | [Credit grant release](backend-section-05-credit-grants-release-2026-09-28.md) |
 | PAY-02 | Receipt/event identity and reversal target binding regressions | passed | [Receipt release](backend-section-05-receipt-identity-release-2026-09-29.md), [binding release](backend-section-05-credit-event-binding-release-2026-09-29.md), [event history](backend-section-05-mobile-event-history-release-2026-09-29.md) |
 | PAY-03 | Reproduced refund/restore ordering and debt cases | passed | [Refund release](backend-section-05-refund-ordering-release-2026-09-28.md); the full event lifecycle matrix is PAY-04 |
-| PAY-04 | Remaining credit, referral, refund/dispute/restore and reconciliation combinations | untested | Enumerate untested orderings first; real DB rollback and concurrency fixtures |
+| PAY-04 | Remaining credit, referral, refund/dispute/restore and reconciliation combinations | failed | [10E](backend-section-10-detached-cash-refunds-2026-10-06.md) reproduces detached refund rejection and deletion deadlock; candidate passes locally, release verification remains. Broader orderings stay open. |
 | PAY-05 | Genuine purchase/refund/webhook delivery and installed-client restore | external | Provider test credentials/accounts were unavailable in prior batches; synthetic events do not close this row |
 | PAY-06 | Scoped payout transition and detached reporting defects | passed | [Payout release](backend-section-04-payouts-release-2026-09-27.md), [detached reporting](backend-section-05-payout-detached-reporting-release-2026-09-30.md) |
 | PAY-07 | Creator payout crash recovery and reconciliation to external transfer outcome | untested | No actual money transfer is authorized as an incidental probe; use suitable test facilities |

@@ -4,7 +4,7 @@ import sharp from 'sharp';
 import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { executeInitialAccountDeletion, markAccountDeletionStage, processAccountDeletionCleanup } from '@/lib/account-deletion-service';
 import { deleteAccountRouteResponse } from '@/lib/account-deletion-route-adapter-service';
 import { createViewerUnlockFileUrl } from '@/lib/viewer-unlock-file-url-service';
@@ -28,7 +28,7 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
   const job = async () => (await db.query('select status,last_error,resweep_after,next_attempt_at from public.account_deletion_jobs where user_id=$1', [owners[0]])).rows[0];
   const authExists = async (owner = owners[0]) => (await db.query('select id from auth.users where id=$1', [owner])).rows.length > 0;
   const initial = () => executeInitialAccountDeletion({ admin, userId: owners[0], accessToken });
-  const sold = async (options: { legacy?: boolean; structuredBucket?: string } = {}) => {
+  const sold = async (options: { legacy?: boolean; structuredBucket?: string; captured?: boolean } = {}) => {
     [bundle, post, order] = [randomUUID(), randomUUID(), randomUUID()];
     expect((await admin.storage.from('post_resource_files').upload(owners[0] + '/audit-fixture.png', new Blob([Uint8Array.from(png)], { type: 'image/png' }), { contentType: 'image/png' })).error).toBeNull();
     let generation: string | null = null;
@@ -47,8 +47,19 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
       const items = [{ id: 'structured-fixture', scope: { kind: 'all' }, type: 'reference_image', role: 'style_reference', sectionId: null, title: 'Structured reference', description: null, textContent: null, externalUrl: null, storagePath: options.structuredBucket === 'post_resource_files' ? source : options.structuredBucket + '/' + source, contentType: 'image/png', sizeBytes: png.length, workflowSnapshot: null, sortOrder: 0, isPrimary: true, remixUse: 'reference_only' }];
       await db.query('update public.post_resource_bundles set resource_items=$1 where id=$2', [JSON.stringify(items), bundle]);
     }
-    await db.query("insert into public.post_resource_bundle_orders(id,bundle_id,buyer_user_id,razorpay_order_id,amount_subunits,currency,status) values($1,$2,$3,$4,100,'INR','paid')", [order, bundle, owners[1], 'audit-local-' + order]);
-    const row = (await db.query("insert into public.post_resource_bundle_purchases(bundle_id,buyer_user_id,order_id,price_usd_cents,amount_subunits,currency) values($1,$2,$3,100,100,'INR') returning id,revision_id", [bundle, owners[1], order])).rows[0];
+    let row: { id: string; revision_id: string };
+    if (options.captured) {
+      const quote = await admin.rpc('get_post_resource_bundle_cash_quote', { p_post_id: post, p_buyer_user_id: owners[1] });
+      expect(quote.error).toBeNull(); expect(quote.data.status).toBe('quoted');
+      const recorded = await admin.rpc('record_post_resource_bundle_cash_order', { p_post_id: post, p_bundle_id: bundle, p_buyer_user_id: owners[1], p_razorpay_order_id: 'audit-local-' + bundle, p_amount_subunits: 8300, p_currency: 'INR', p_expected_price_usd_cents: quote.data.price_usd_cents, p_expected_revision_id: quote.data.revision_id, p_expected_content_fingerprint: quote.data.content_fingerprint });
+      expect(recorded.error).toBeNull(); expect(recorded.data.status).toBe('created'); order = recorded.data.order_id;
+      const completed = await admin.rpc('complete_post_resource_bundle_purchase', { p_razorpay_order_id: 'audit-local-' + bundle, p_razorpay_payment_id: 'audit-payment-' + bundle });
+      expect(completed.error).toBeNull(); expect(completed.data).toBe(true);
+      row = (await db.query('select id,revision_id from public.post_resource_bundle_purchases where order_id=$1', [order])).rows[0];
+    } else {
+      await db.query("insert into public.post_resource_bundle_orders(id,bundle_id,buyer_user_id,razorpay_order_id,amount_subunits,currency,status) values($1,$2,$3,$4,100,'INR','paid')", [order, bundle, owners[1], 'audit-local-' + order]);
+      row = (await db.query("insert into public.post_resource_bundle_purchases(bundle_id,buyer_user_id,order_id,price_usd_cents,amount_subunits,currency) values($1,$2,$3,100,100,'INR') returning id,revision_id", [bundle, owners[1], order])).rows[0];
+    }
     purchase = row.id; revision = row.revision_id;
     expect(revision).toBeTruthy();
   };
@@ -76,6 +87,9 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
     config = JSON.parse(readFileSync(configPath!, 'utf8'));
     expect(['localhost', '127.0.0.1']).toContain(new URL(config.API_URL).hostname);
     expect(['localhost', '127.0.0.1']).toContain(new URL(connectionString!).hostname);
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', config.API_URL);
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY', config.ANON_KEY);
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', config.SERVICE_ROLE_KEY);
     db = new Client({ connectionString, statement_timeout: 10000 }); await db.connect();
     // Claims are global: refuse to interfere with any preexisting local cleanup.
     expect((await db.query("select user_id from public.account_deletion_jobs where status<>'completed'")).rows).toEqual([]);
@@ -103,7 +117,7 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
       return response;
     } } });
   });
-  afterAll(async () => { await db?.end(); });
+  afterAll(async () => { await db?.end(); vi.unstubAllEnvs(); });
   beforeEach(async () => {
     owners = []; deletedAuth = []; fixtureFingerprints = []; extraObjects = []; postIds = []; templateIds = []; generationIds = []; fail = null; bundle = null; post = null; order = null; purchase = null; revision = null;
     for (let index = 0; index < 2; index++) {
@@ -120,6 +134,7 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
   });
   afterEach(async () => {
     fail = null;
+    if (order) await db.query('delete from public.cash_purchase_adjustments where post_resource_order_id=$1', [order]);
     for (const object of extraObjects) expect((await admin.storage.from(object.bucket).remove([object.path])).error).toBeNull();
     await db.query('delete from public.posts where id=any($1::uuid[])', [postIds]);
     await db.query('delete from public.generations where id=any($1::uuid[])', [generationIds]);
@@ -383,6 +398,19 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
     expect(await cleanup()).toMatchObject({ initial: { claimed: 1, resweepScheduled: 1 } });
     expect(await authExists()).toBe(false); expect(await objects()).toEqual([]);
     expect(await retained()).toHaveLength(1); await buyerFile();
+  });
+  it.each([false, true])('revokes an actually captured cash entitlement after creator deletion=%s', async deleted => {
+    await sold({ captured: true });
+    if (deleted) { await initial(); expect(await authExists()).toBe(false); expect(await retained()).toHaveLength(1); }
+    await buyerFile();
+    const refund = await admin.rpc('reconcile_post_resource_cash_adjustment', { p_provider_event_id: 'audit-refund-' + order, p_payment_id: 'audit-payment-' + bundle, p_action: 'refund', p_reason: 'Isolated local refund', p_provider_order_id: 'audit-local-' + bundle });
+    expect(refund.error).toBeNull(); expect(refund.data).toMatchObject({ status: 'adjusted' });
+    expect((await db.query('select id from public.post_resource_bundle_purchases where id=$1', [purchase])).rows).toEqual([]);
+    expect((await db.query('select status from public.post_resource_bundle_orders where id=$1', [order])).rows[0].status).toBe('failed');
+    const denied = await createViewerUnlockFileUrl({ adminSupabase: admin, body: { storagePath: owners[0] + '/audit-fixture.png' }, countryCode: 'IN', rateLimitKey: 'audit-' + owners[1], unlockId: purchase!, viewerUserId: owners[1] });
+    expect(denied).toMatchObject({ ok: false, status: 404 });
+    const duplicate = await admin.rpc('reconcile_post_resource_cash_adjustment', { p_provider_event_id: 'audit-refund-' + order, p_payment_id: 'audit-payment-' + bundle, p_action: 'refund', p_provider_order_id: 'audit-local-' + bundle });
+    expect(duplicate.error).toBeNull(); expect(duplicate.data).toMatchObject({ status: 'already_adjusted' });
   });
   it('retains canonical structured purchased resource files', async () => {
     await sold({ structuredBucket: 'post_resource_files' });

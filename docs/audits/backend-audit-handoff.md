@@ -6,25 +6,33 @@ Updated 2026-10-06 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/account-deletion-audit-10d`, incorporating main `383c65038daac34ebd7a3f9100846a18b96a6687` (#374); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/detached-refund-audit-10e`, preserving 10D and 10E candidate work; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
-10D adds six actual local retained-access/publication controls: canonical
-structured resource retention; three unsupported bucket-qualified path denials;
-buyer/unlisted/internal-path/retraction mint denials; actual signed-token tamper
-and expiry at the local Storage origin. All 33 actual deletion cases pass on
-Node 24.21.0 (152.01 seconds); test types/lint and tracked cleanup pass. No runtime
-or schema change. See 10D report for signed capability/CDN limits. Next reproduce
-cash refund after creator deletion using the actual quote/capture SQL, not a
-synthetic directly inserted paid order. Broader AUTH/MARKET/MEDIA rows stay open.
+10E reproduces detached cash refunds returning `not_found` and an actual
+refund/Auth-deletion deadlock. New UTC migration
+20261006172011_reconcile_detached_bundle_cash_refunds.sql locks a live creator's
+Auth row before bundle/order and re-reads surviving detached orders safely.
+35 actual deletion/access controls and five PostgreSQL concurrency cases pass;
+clean replay passes 2,125 assertions in 99 files. Authoritative quote/record/capture
+RPCs are exercised locally. Production rollback baseline is 7/23 passing;
+separate cleanup finds zero fixtures. Three detached paid orders exist, no
+customer repair performed. PAY-04 is failed until release/after verification;
+ledger is 24 passed, 25 untested, 2 failed, 2 external (53 obligations).
+10D retained-access evidence remains preserved in commit 5a5ecbf6 and is included
+in this next candidate; no prior edits should be discarded.
 
-10C is in PR #375, head 449c07f03bcaf78b72abe4dc7f36dac87d880f43, Quality
-37500612971 in progress (DB/mobile/E2E pass, web build). #374 exact-main Quality
-37500291828 passed; standard release 37501990835 is running. Independent private
-account-deletion-identities-release/ verifier and smoke checks remain. Do not
-merge #375 before parent live verification; mobile-store idle immediately at merge.
+10B #374 exact-main Quality 37500291828 and standard release 37501990835 passed.
+Independent verification at October 6 17:19:25 UTC confirms live
+383c65038daac34ebd7a3f9100846a18b96a6687, unchanged schema/110 advisors and
+feed/admin/webhook boundaries. See the identities release report.
+10C #375 exact-head Quality 37500612971 passed and merged with mobile-store idle
+October 6 17:20:01 UTC as ba6d3ff2c3148dda6d16a9afd29e920ec1f8fde0.
+Exact-main Quality 37502728609 is running; standard release and independent
+account-deletion-references-release/ checks remain. Do not merge the next
+candidate before this parent is independently verified live.
 
 10C adds five actual local purchased legacy-generation-input controls. A remix
 revision's supplemental reference and attachment survive creator deletion in
