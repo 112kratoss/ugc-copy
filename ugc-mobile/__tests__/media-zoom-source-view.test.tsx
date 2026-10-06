@@ -48,6 +48,7 @@ import {
 } from '../components/media-zoom';
 import type { ImmersivePreviewItem } from '../lib/immersive-preview-view-model';
 import { registerZoomSource, setPendingZoomOrigin, clearPendingZoomOrigin, resetMediaZoomTransitions, subscribeToZoomFlights } from '../lib/media-zoom-transition';
+import { useMediaZoomTileShaped } from '../lib/media-zoom-tile-shape';
 import { useMediaZoomTileKey } from '../lib/media-zoom-video-offer';
 
 /** Stands in for whatever a tile draws; the wrappers around it are the subject. */
@@ -218,6 +219,31 @@ describe('the view a tile hands to the reel', () => {
     });
 
     expect(seen).toBe('surface\u0000post');
+  });
+
+  // UIKit's zoom draws the registered view by itself, above the reel, while the
+  // reel grows out of it and shrinks back into it. Recorded on the simulator,
+  // a Home video tile that still rounded its own corners and drew its accent
+  // line stood in the middle of the shrinking picture as a box of its own, with
+  // the source's black ground showing at its corners.
+  it('gives the tile its shape where UIKit zooms it, and tells the media inside to draw a plain rectangle', () => {
+    const shaped = (appleZoomId: string | null) => {
+      let seen: boolean | null = null;
+      const Reader = () => {
+        seen = useMediaZoomTileShaped();
+        return null;
+      };
+      const { inner } = wrapperStyles(
+        <MediaZoomSourceView source={{ ...source, appleZoomId, radius: 16 }}>
+          <Reader />
+        </MediaZoomSourceView>
+      );
+      return { seen, radius: inner.borderRadius, overflow: inner.overflow };
+    };
+
+    expect(shaped('zoom|surface|post')).toEqual({ seen: true, radius: 16, overflow: 'hidden' });
+    // Where the zoom does not run the tile keeps its own corners and outline.
+    expect(shaped(null)).toEqual({ seen: false, radius: undefined, overflow: undefined });
   });
 
   it('hands its post to the app shell as the finger lands, to ask ahead for what the post draws', () => {

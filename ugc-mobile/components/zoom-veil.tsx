@@ -17,12 +17,13 @@ import {
 /**
  * A screen a reel can grow out of (lib/zoom-veil.ts): names it for the tiles
  * inside, whose taps drop the veil on it, and draws its veil last, over
- * everything else on it — its tab bar or its top bar too.
+ * everything else on it — its tab bar or its top bar too. `fillsWindow` for
+ * the tabs, which come back the moment a close begins; a pushed page waits.
  */
-export function ZoomVeilScope({ children }: { children: ReactNode }) {
+export function ZoomVeilScope({ children, fillsWindow = false }: { children: ReactNode; fillsWindow?: boolean }) {
   const owner = useId();
   const [veil] = useState(createScreenVeil);
-  useEffect(() => registerScreenVeil(owner, veil), [owner, veil]);
+  useEffect(() => registerScreenVeil(owner, veil, fillsWindow), [fillsWindow, owner, veil]);
   return (
     <ZoomVeilOwnerContext.Provider value={owner}>
       {children}

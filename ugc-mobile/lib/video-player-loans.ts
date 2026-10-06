@@ -51,6 +51,31 @@ export const RELEASED_LOAN_GRACE_MS = 100;
  */
 export const VIDEO_RETURN_TIMEOUT_MS = 2000;
 
+/**
+ * How long a player Back hands to its tile stands still there, on the frame it
+ * was showing when Back was pressed.
+ *
+ * Under UIKit's zoom (lib/apple-zoom.ts) Back takes the reel out of React
+ * before the pop runs, and react-native-screens pops a picture of the reel in
+ * its place: the reel is one frame from then on, and UIKit crossfades that
+ * frame into the tile over the first 130 to 170 ms of the shrink. A tile
+ * playing on underneath shows a later moment of the clip, so on a clip that
+ * moves the crossfade is two different pictures at part opacity, a ghost.
+ * Filmed on the simulator: two poses of the dancer at once for five or six
+ * frames. Standing still, the tile shows the frame the reel's picture shows,
+ * and the crossfade is between two copies of it. It plays on once that is
+ * over. A dismissal begun with a gesture keeps the reel itself, playing, and
+ * needs none of this.
+ *
+ * Checking this on the simulator: turn the reel's sound off first. With sound
+ * on, the simulator draws a playing clip about 0.6 s behind the player's own
+ * clock (measured against the clip's scene cuts), while a view handed a
+ * stopped player draws the clock's frame, so the tile shows a later moment
+ * than the reel's picture however still it stands. With sound off the two were
+ * the same frame, three closes of three.
+ */
+export const VIDEO_RETURN_STILL_MS = 250;
+
 interface Loan {
   /** `returning`: handed back to the tile, which has not taken it yet. */
   stage: 'lent' | 'adopted' | 'returning';
@@ -261,6 +286,8 @@ interface VideoReturn {
   drawnListeners: Set<() => void>;
   /** Armed once the reel has gone: a hand-back still unsettled by then is dropped. */
   timeout: ReturnType<typeof setTimeout> | null;
+  /** Running while the player stands still in its tile (`VIDEO_RETURN_STILL_MS`); null otherwise. */
+  still: ReturnType<typeof setTimeout> | null;
 }
 
 const acceptors = new Map<string, number>();
@@ -289,14 +316,16 @@ export function tileAcceptsVideoReturn(tileKey: string, url: string) {
   return acceptors.has(returnKey(tileKey, url));
 }
 
-/** Taken, drawn, and the reel gone: nothing more happens to this hand-back. */
+/** Taken, drawn, the reel gone and no longer standing still: nothing more happens to this hand-back. */
 function finishReturnIfSettled(pending: VideoReturn) {
-  if (pending.claimed && pending.drawn && pending.reelGone) dropReturn(pending);
+  if (pending.claimed && pending.drawn && pending.reelGone && !pending.still) dropReturn(pending);
 }
 
 function dropReturn(pending: VideoReturn) {
   if (pendingReturn !== pending) return;
   if (pending.timeout) clearTimeout(pending.timeout);
+  if (pending.still) clearTimeout(pending.still);
+  pending.still = null;
   pendingReturn = null;
   if (!pending.claimed) {
     loans.delete(pending.player);
@@ -308,8 +337,13 @@ function dropReturn(pending: VideoReturn) {
 /**
  * The reel gives the player it adopted back to the tile it came from. False
  * when it cannot: the player is not the reel's adopted one.
+ *
+ * `still` for a reel that is a single frame from here on (Back under UIKit's
+ * zoom): the player stops on the frame it is showing and its tile leaves it
+ * there for `VIDEO_RETURN_STILL_MS`, the hand-back staying pending meanwhile,
+ * so the tile's own decision to play waits for it.
  */
-export function handBackVideoPlayer(player: VideoPlayer, tileKey: string, url: string): boolean {
+export function handBackVideoPlayer(player: VideoPlayer, tileKey: string, url: string, still = false): boolean {
   const loan = loans.get(player);
   if (!loan || loan.stage !== 'adopted') return false;
   if (pendingReturn) dropReturn(pendingReturn);
@@ -327,7 +361,23 @@ export function handBackVideoPlayer(player: VideoPlayer, tileKey: string, url: s
     // the player back as the gesture begins, and the finger decides how long
     // the reel stays half-shrunk over a tile that is drawing the clip for it.
     timeout: null,
+    still: null,
   };
+  if (still) {
+    try {
+      player.pause();
+    } catch {
+      // Already released, or its native side is gone.
+    }
+    pending.still = setTimeout(() => {
+      pending.still = null;
+      // A view given a player that stands still may report no frame at all,
+      // and the frame was only ever waited on for the crossfade now over: a
+      // tile that has the player, under no reel, carries on with it.
+      if (pending.claimed && pending.reelGone) dropReturn(pending);
+      else finishReturnIfSettled(pending);
+    }, VIDEO_RETURN_STILL_MS);
+  }
   pendingReturn = pending;
   notifyReturnListeners();
   return true;
@@ -424,6 +474,8 @@ export function reclaimVideoPlayer(player: VideoPlayer): boolean {
   const pending = pendingReturn;
   if (!pending || pending.player !== player) return false;
   if (pending.timeout) clearTimeout(pending.timeout);
+  if (pending.still) clearTimeout(pending.still);
+  pending.still = null;
   pendingReturn = null;
   handedBack.delete(player);
   loans.set(player, { stage: 'adopted', lenderMounted: false, giveBack: null, timeout: null });
@@ -440,6 +492,7 @@ export function resetVideoPlayerLoans() {
   holds.forEach((hold) => clearTimeout(hold.timeout));
   holds.clear();
   if (pendingReturn?.timeout) clearTimeout(pendingReturn.timeout);
+  if (pendingReturn?.still) clearTimeout(pendingReturn.still);
   pendingReturn = null;
   acceptors.clear();
 }

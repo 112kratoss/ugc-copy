@@ -10,6 +10,7 @@ import { appTheme, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { IMMERSIVE_HORIZONTAL_LIST_TUNING } from '@/lib/media-performance';
+import { useMediaZoomTileShaped } from '@/lib/media-zoom-tile-shape';
 import { useReducedMotion } from '@/lib/motion';
 import {
   getShowcaseFeedStreamUrl,
@@ -57,6 +58,9 @@ type ShowcaseMediaPreviewProps = {
  */
 type VideoActivation = 'never' | 'prepared' | 'visible' | 'when-poster-missing';
 
+/** Media inside a tile its zoom source shapes: square corners and no outline. */
+const PLAIN_FRAME = { radius: 0, outlined: false } as const;
+
 export function ShowcaseMediaPreview({
   accent,
   height,
@@ -76,6 +80,10 @@ export function ShowcaseMediaPreview({
 }: ShowcaseMediaPreviewProps) {
   const reduceMotionEnabled = useReducedMotion();
   const resolvedVideoActivation = reduceMotionEnabled ? 'never' : videoActivation;
+  // A tile UIKit's zoom grows into the reel gets its corners from its zoom
+  // source (`MediaZoomSourceView`), and the media inside is a plain rectangle.
+  const shaped = useMediaZoomTileShaped();
+  const frame = shaped ? PLAIN_FRAME : { radius, outlined: true };
 
   if (!mediaItems.length) return null;
 
@@ -86,7 +94,8 @@ export function ShowcaseMediaPreview({
         height={height}
         item={mediaItems[0]}
         onLoad={onCoverLoad}
-        radius={radius}
+        radius={frame.radius}
+        outlined={frame.outlined}
         recyclingKey={recyclingKey}
         videoActivation={resolvedVideoActivation}
         onVideoReadyChange={onVideoReadyChange}
@@ -107,7 +116,8 @@ export function ShowcaseMediaPreview({
       onPress={onPress}
       onScrollToggle={onScrollToggle}
       onCoverLoad={onCoverLoad}
-      radius={radius}
+      radius={frame.radius}
+      outlined={frame.outlined}
       recyclingKey={recyclingKey}
       videoActivation={resolvedVideoActivation}
       onVideoReadyChange={onVideoReadyChange}
@@ -136,7 +146,8 @@ function ShowcaseMediaCarousel({
   watchdog = false,
   diagnosticsSurface,
   width,
-}: ShowcaseMediaPreviewProps) {
+  outlined,
+}: ShowcaseMediaPreviewProps & { outlined: boolean }) {
   const theme = useAppTheme();
   const [currentIndex, setCurrentIndex] = useState(0);
   const reportDragging = useCarouselDragReporter(onScrollToggle);
@@ -161,6 +172,7 @@ function ShowcaseMediaCarousel({
               item={mediaItem}
               onLoad={index === 0 ? onCoverLoad : undefined}
               radius={radius}
+              outlined={outlined}
               recyclingKey={`${recyclingKey}:${mediaItem.id}`}
               videoActivation={currentIndex === index ? videoActivation : 'never'}
               onVideoReadyChange={currentIndex === index ? onVideoReadyChange : undefined}
@@ -251,6 +263,7 @@ function ShowcaseMediaSlide({
   item,
   onLoad,
   radius,
+  outlined,
   recyclingKey,
   videoActivation,
   onVideoReadyChange,
@@ -265,6 +278,8 @@ function ShowcaseMediaSlide({
   item: ShowcaseMediaItem;
   onLoad?: ImageProps['onLoad'];
   radius: number;
+  /** Whether a frame with nothing loaded yet, and a video, draw their thin outline. */
+  outlined: boolean;
   recyclingKey: string;
   videoActivation: VideoActivation;
   onVideoReadyChange?: (ready: boolean) => void;
@@ -319,6 +334,7 @@ function ShowcaseMediaSlide({
           onReadyChange={onVideoReadyChange}
           height={height}
           radius={radius}
+          outlined={outlined}
           accent={accent}
           videoBackdrop={videoBackdrop}
           videoContentFit={videoContentFit}
@@ -340,7 +356,7 @@ function ShowcaseMediaSlide({
           overflow: 'hidden',
           borderRadius: radius,
           borderCurve: 'continuous',
-          borderWidth: 1,
+          borderWidth: outlined ? 1 : 0,
           borderColor: `${accent}4d`,
           backgroundColor: theme.colors.mediaPlaceholder,
           alignItems: 'center',

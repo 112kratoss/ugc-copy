@@ -36,7 +36,7 @@ export default function TabLayout() {
     <Animated.View style={[styles.fill, underlayStyle]}>
       {/* Over the tabs and their dock while a reel grows out of one of them or
           shrinks back into it under UIKit's zoom (lib/zoom-veil.ts). */}
-      <ZoomVeilScope>
+      <ZoomVeilScope fillsWindow>
       <Tabs
         backBehavior="history"
         tabBar={(props) => (
