@@ -83,7 +83,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | --- | --- | --- | --- |
 | AUTH-01 | Guest/profile, ban/session/lifecycle and signed-balance merge regressions | passed | [Section 1 report](backend-section-01-auth-2026-09-26.md) and the current handoff, including controlled live identity and merge checks; historical balances were not rewritten |
 | AUTH-02 | Previously exercised native Apple, Chrome web and admin login/logout flows | passed | [Current handoff](backend-audit-handoff.md); this does not certify every provider or recovery flow |
-| AUTH-03 | Disposable-account deletion through provider revocation, cleanup failure and restart | untested | Complete destructive flow and recovery on designated disposable identities |
+| AUTH-03 | Disposable-account deletion through provider revocation, cleanup failure and restart | untested | [10A](backend-section-10-account-deletion-2026-10-06.md): twelve actual local Auth/Storage/SQL controls cover owner cleanup, route identity/reauthentication, buyer file retention, copy/mapping failures and SIGKILL recovery. Linked identities, other namespaces/reference variants and real provider revocation remain open |
 | AUTH-04 | Mobile Google deep-link completion and remaining password/email/session recovery flows | untested | Real client/provider execution; reconcile earlier evidence before repeating checks |
 | AUTH-05 | JWT key rotation/fallback and sessionless-token compatibility | untested | Controlled rotation environment and explicit legacy compatibility decision |
 | AUTH-06 | CAPTCHA/rate configuration rollout compatible with installed clients | untested | Hosted configuration plus old/new client behavior, not configuration presence alone |
