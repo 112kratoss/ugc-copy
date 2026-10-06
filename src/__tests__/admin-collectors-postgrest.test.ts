@@ -303,4 +303,65 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
     });
     await expect(collectAdminRevenueReport(failing, { now })).rejects.toMatchObject({ message: 'Isolated wallet aggregate outage' });
   });
+
+  it.each([
+    ['spend aggregate', '/rest/v1/rpc/get_user_ai_usage_cost_total', ''],
+    ['web purchases', '/rest/v1/transactions', ''],
+    ['mobile purchases', '/rest/v1/mobile_store_transactions', ''],
+    ['credit grants', '/rest/v1/credit_grants', ''],
+    ['creator wallet', '/rest/v1/creator_resource_wallets', ''],
+    ['moderation count', '/rest/v1/moderation_reports', ''],
+    ['recent generation count', '/rest/v1/generations', 'created_at'],
+    ['recent generation list', '/rest/v1/generations', 'limit'],
+    ['follower count', '/rest/v1/follows', 'following_id'],
+    ['following count', '/rest/v1/follows', 'follower_id'],
+  ])('rejects a user detail when its %s read fails', async (_label, pathname, parameter) => {
+    const config = JSON.parse(readFileSync(configPath!, 'utf8'));
+    const failing = createClient(config.API_URL, config.SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { fetch: async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname === pathname && (!parameter || url.searchParams.has(parameter))) {
+          return Response.json({ code: '42501', message: 'Isolated user-detail read denied' }, { status: 403 });
+        }
+        return fetch(input, init);
+      } },
+    });
+    await expect(getAdminUserDetail(failing, owner)).rejects.toMatchObject({ message: 'Isolated user-detail read denied' });
+  });
+
+  it('rejects a user detail when its authoritative Auth read fails', async () => {
+    const config = JSON.parse(readFileSync(configPath!, 'utf8'));
+    const failing = createClient(config.API_URL, config.SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { fetch: async (input, init) => {
+        if (new URL(String(input)).pathname === '/auth/v1/admin/users/' + owner) {
+          return Response.json({ code: 'unexpected_failure', msg: 'Isolated user Auth read failed' }, { status: 403 });
+        }
+        return fetch(input, init);
+      } },
+    });
+    await expect(getAdminUserDetail(failing, owner)).rejects.toMatchObject({ message: 'Isolated user Auth read failed' });
+  });
+
+  it.each([
+    { label: 'overview population', pathname: '/rest/v1/rpc/admin_user_population_counts', collect: collectAdminOverview },
+    { label: 'revenue rail', pathname: '/rest/v1/mobile_store_transactions', collect: collectAdminRevenueReport },
+    { label: 'content totals', pathname: '/rest/v1/posts', collect: collectAdminContentSnapshot },
+    { label: 'system catalog entries', pathname: '/rest/v1/generation_model_catalog_entries', collect: collectAdminSystemSnapshot },
+    { label: 'activity source', pathname: '/rest/v1/admin_user_sanctions', collect: collectAdminActivity },
+    { label: 'user search', pathname: '/rest/v1/profiles', collect: searchAdminUsers },
+  ])('surfaces a partial $label failure instead of an empty collector result', async ({ pathname, collect }) => {
+    const config = JSON.parse(readFileSync(configPath!, 'utf8'));
+    const failing = createClient(config.API_URL, config.SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { fetch: async (input, init) => {
+        if (new URL(String(input)).pathname === pathname) {
+          return Response.json({ code: '42501', message: 'Isolated partial collector read denied' }, { status: 403 });
+        }
+        return fetch(input, init);
+      } },
+    });
+    await expect(collect(failing)).rejects.toMatchObject({ message: 'Isolated partial collector read denied' });
+  });
 });

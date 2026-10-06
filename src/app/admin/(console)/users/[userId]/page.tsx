@@ -45,19 +45,22 @@ export default async function AdminUserDetailPage({
 }) {
   await requireAdminIdentity();
   const { userId } = await params;
+  if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(userId)) {
+    return <UserNotFoundPanel userId={userId} />;
+  }
   const client = createServiceClient();
 
-  const detail = await getAdminUserDetail(client, userId).catch(() => null);
+  const detail = await getAdminUserDetail(client, userId);
   if (!detail) {
     return <UserNotFoundPanel userId={userId} />;
   }
 
-  // These tables only exist after their admin migrations are applied, so a
-  // missing relation degrades rather than taking the whole support record down.
+  // Unknown histories or access state must reach the console's recoverable
+  // error boundary; empty histories and "not suspended" are factual claims.
   const [adjustments, sanctions, accountState] = await Promise.all([
-    listAdminCreditAdjustments(client, userId).catch(() => []),
-    listAdminUserSanctions(client, userId).catch(() => []),
-    getAdminUserAccountState(client, userId).catch(() => ({ isSuspended: false, bannedUntil: null })),
+    listAdminCreditAdjustments(client, userId),
+    listAdminUserSanctions(client, userId),
+    getAdminUserAccountState(client, userId),
   ]);
 
   return (

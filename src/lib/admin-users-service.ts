@@ -203,11 +203,11 @@ export async function getAdminUserDetail(
     walletResult,
     recentGenerationsResult,
   ] = await Promise.all([
-    client.auth.admin.getUserById(userId).catch(() => null),
+    client.auth.admin.getUserById(userId),
     countRows(client, 'generations', 'user_id', userId),
     countRows(client, 'posts', 'user_id', userId),
-    countRows(client, 'follows', 'following_id', userId).catch(() => 0),
-    countRows(client, 'follows', 'follower_id', userId).catch(() => 0),
+    countRows(client, 'follows', 'following_id', userId),
+    countRows(client, 'follows', 'follower_id', userId),
     client
       .from('moderation_reports')
       .select('id', { count: 'exact', head: true })
@@ -257,6 +257,15 @@ export async function getAdminUserDetail(
       .order('created_at', { ascending: false })
       .limit(15),
   ]);
+
+  // A failed read is unknown support data, not an empty history or zero money.
+  for (const result of [
+    authUser, openReportsCount, recentGenerationsCount, spendResult,
+    transactionsResult, mobileTransactionsResult, grantsResult, walletResult,
+    recentGenerationsResult,
+  ]) {
+    if (result.error) throw result.error;
+  }
 
   const spendTotals = (spendResult.data ?? {}) as Record<string, unknown>;
   const lifetimeCreditsSpent = Number(spendTotals.total_cost ?? 0);
