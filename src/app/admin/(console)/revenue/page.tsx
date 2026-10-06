@@ -1,3 +1,4 @@
+import { requireAdminIdentity } from '@/lib/admin-auth';
 import Link from 'next/link';
 import clsx from 'clsx';
 
@@ -35,6 +36,7 @@ export default async function AdminRevenuePage({
 }: {
   searchParams: Promise<{ window?: string; orders?: string }>;
 }) {
+  await requireAdminIdentity();
   const { window, orders } = await searchParams;
   const windowDays = parseWindow(window);
   const orderOffset = parseOffset(orders, ORDER_PAGE_SIZE);

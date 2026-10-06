@@ -1,3 +1,4 @@
+import { requireAdminIdentity } from '@/lib/admin-auth';
 import Link from 'next/link';
 import clsx from 'clsx';
 
@@ -73,6 +74,7 @@ export default async function AdminContentPage({
     generationPage?: string;
   }>;
 }) {
+  await requireAdminIdentity();
   const {
     posts: postsParam,
     generations: generationsParam,

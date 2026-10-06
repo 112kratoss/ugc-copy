@@ -2,6 +2,7 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
+import { redirect } from 'next/navigation';
 
 import { resolveAdminConfig, resolveAdminIdentity, type AdminIdentity } from '@/lib/admin-identity';
 import {
@@ -125,16 +126,16 @@ export async function authenticateAdminPage(
 }
 
 /**
- * Throws when called outside an authenticated admin context. Admin pages call
- * this after the layout has already redirected, so reaching the throw means a
- * routing bug rather than an expected unauthenticated visit.
+ * Require an authoritative session before a page performs privileged reads.
+ * Next renders pages and layouts concurrently, so a layout redirect alone
+ * cannot prevent child data from being serialized into a response.
  */
 export async function requireAdminIdentity(
   options: AdminAuthOptions = {},
 ): Promise<AdminIdentity> {
   const result = await authenticateAdminPage(options);
   if (!result.authenticated) {
-    throw new Error(`Admin identity is unavailable (${result.reason}).`);
+    redirect('/admin/login');
   }
   return result.identity;
 }

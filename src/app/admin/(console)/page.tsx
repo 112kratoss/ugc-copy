@@ -1,3 +1,4 @@
+import { requireAdminIdentity } from '@/lib/admin-auth';
 import Link from 'next/link';
 import {
   AlertTriangle,
@@ -25,6 +26,7 @@ import {
 export const dynamic = 'force-dynamic';
 
 export default async function AdminOverviewPage() {
+  await requireAdminIdentity();
   const overview = await collectAdminOverview(createServiceClient());
   const { counters, dashboard, dashboardError } = overview;
 

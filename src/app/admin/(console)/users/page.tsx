@@ -1,3 +1,4 @@
+import { requireAdminIdentity } from '@/lib/admin-auth';
 import Link from 'next/link';
 import { Search } from 'lucide-react';
 
@@ -28,6 +29,7 @@ export default async function AdminUsersPage({
 }: {
   searchParams: Promise<{ q?: string; offset?: string }>;
 }) {
+  await requireAdminIdentity();
   const { q, offset: offsetParam } = await searchParams;
   const term = (q ?? '').trim();
   const offset = parseOffset(offsetParam, PAGE_SIZE);

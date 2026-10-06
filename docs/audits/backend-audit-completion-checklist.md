@@ -1,7 +1,8 @@
 # Backend audit completion checklist
 
 Updated 2026-10-06. Current independently checked production:
-`ab9eb3ad0ce90e5053e782d9b87231d7a48b57de`, including Sections 9A–9O and 10A–F.
+`75dc4eb7fc8fef7139fc42c1a50b10f3f653f4de`, including Sections 9A–9O and 10A–H.
+[10G/H release evidence](backend-section-10-retention-mapping-release-2026-10-06.md).
 [10F release evidence](backend-section-10-deletion-freeze-refunds-release-2026-10-06.md).
 [10E release evidence](backend-section-10-detached-cash-refunds-release-2026-10-06.md).
 [9O/10A release evidence](backend-section-10-account-deletion-release-2026-10-06.md).
@@ -29,7 +30,7 @@ unequal effort and risk. Do not turn their pass count into a percentage of backe
 safety or an ETA. New findings attach to these obligations; changes in scope must
 be recorded explicitly instead of silently adding another lettered batch.
 
-Current ledger: **53 obligations — 24 passed, 24 untested, 3 failed, 2 external**.
+Current ledger: **53 obligations — 23 passed, 25 untested, 3 failed, 2 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
 WORKFLOW-02 and WORKFLOW-04 remain untested after their scoped fixes shipped.
 SOCIAL-01/02/04 return to untested after the verified 8F/8G releases.
@@ -86,7 +87,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | ID | Obligation and closure evidence | Status | Evidence / next action |
 | --- | --- | --- | --- |
 | AUTH-01 | Guest/profile, ban/session/lifecycle and signed-balance merge regressions | passed | [Section 1 report](backend-section-01-auth-2026-09-26.md) and the current handoff, including controlled live identity and merge checks; historical balances were not rewritten |
-| AUTH-02 | Previously exercised native Apple, Chrome web and admin login/logout flows | passed | [Current handoff](backend-audit-handoff.md); this does not certify every provider or recovery flow |
+| AUTH-02 | Previously exercised native Apple, Chrome web and admin login/logout flows | failed | [11C](backend-section-11-admin-page-authorization-2026-10-07.md) reopens admin authorization: revoked-session redirects serialize private child-page data in an actual production build. Candidate passes all 20 revoked and ten active page checks; release remains. Prior Apple/Chrome evidence is preserved. |
 | AUTH-03 | Disposable-account deletion through provider revocation, cleanup failure and restart | untested | [10A](backend-section-10-account-deletion-2026-10-06.md): twelve actual local Auth/Storage/SQL controls cover owner cleanup, route identity/reauthentication, buyer file retention, copy/mapping failures and SIGKILL recovery. [10B](backend-section-10-account-deletion-identities-2026-10-06.md) adds ten real controls for linked guests, all eight owner buckets, template/public/private post namespaces, durable claim history and a live worker after actual lease/grace expiry (22 total). [10C](backend-section-10-account-deletion-references-2026-10-06.md) adds five real legacy generation-reference retention/failure-retry controls (27 total). [10D](backend-section-10-account-deletion-retained-access-2026-10-06.md) adds six structured-file/publication and retained-read/retraction/signature/expiry controls (33 total). [10E/F](backend-section-10-deletion-freeze-refunds-2026-10-06.md) add four actual cash lifecycle controls; [10G](backend-section-10-signed-cash-webhooks-2026-10-06.md) adds twelve signed-webhook cases (49 total). [10H](backend-section-10-retention-mapping-recovery-2026-10-06.md) covers mapping retry failures. Other reference variants and real provider revocation stay open |
 | AUTH-04 | Mobile Google deep-link completion and remaining password/email/session recovery flows | untested | Real client/provider execution; reconcile earlier evidence before repeating checks |
 | AUTH-05 | JWT key rotation/fallback and sessionless-token compatibility | untested | Controlled rotation environment and explicit legacy compatibility decision |
@@ -133,7 +134,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | MEDIA-06 | Concurrent disk admission/backpressure across cooperating writers | passed | [6R release](backend-section-06-capacity-admission-release-2026-10-03.md): shared atomic claims, enforced output ceilings, completed-source accounting, inherited readers, block/inode headroom and DB retry with stable credits; exact-main CI and standard release passed. Uncoordinated writers and production throughput remain outside this bounded certificate |
 | MEDIA-07 | Other scratch namespaces and metadata/legacy accumulation policy | failed | [6N reproduction/fix](backend-section-06-media-scratch-2026-10-01.md): all five old namespaces retain bytes after owner death. New leased scratch and cancellation ordering pass real FFmpeg locally and in CI; [deployed in #257](backend-section-06-media-scratch-release-2026-10-01.md). [6S release](backend-section-06-metadata-lifecycle-release-2026-10-03.md) fixes interrupted initialization; verified legacy environment-retirement evidence remains open |
 | MEDIA-08 | Upload/import validation, private signed reads, finalization and revocation | untested | Real Storage/HTTP behavior with ownership, expiry, malformed input and replay |
-| MEDIA-09 | Deletion/retention correctness and durable input/output recovery | failed | [10H](backend-section-10-retention-mapping-recovery-2026-10-06.md) reproduces mapping retries deleting sources without a surviving copy. Four actual regressions pass locally after candidate; release remains. Broader recovery matrix stays open. |
+| MEDIA-09 | Deletion/retention correctness and durable input/output recovery | untested | [10H](backend-section-10-retention-mapping-recovery-2026-10-06.md) mapping retry fix is [released and independently verified](backend-section-10-retention-mapping-release-2026-10-06.md). Broader recovery matrix stays open. |
 
 ## Community, jobs and operations
 
@@ -150,7 +151,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | OPS-01 | Exact-main Quality, staged/live health and standard release for Section 6J | passed | [6J release evidence](backend-section-06-staging-locks-release-2026-10-01.md); first attempt mismatch preserved |
 | OPS-02 | Backup restore and rollback/reconciliation exercises | untested | Isolated restoration with consistency checks and measured recovery; no production restore |
 | OPS-03 | Current-build capacity evidence and failure containment | untested | Reconcile [scaling entry point](../scaling-audit.md) with the audited build; local disk probes are not capacity certification |
-| OPS-04 | Admin page collectors, telemetry, app-version, CSP and FX methods | failed | [11A](backend-section-11-fx-provider-payload-2026-10-06.md) reproduces public caching of invalid/missing non-USD rates in 20 actual HTTP cases; candidate passes locally, release remains. [11B](backend-section-11-operations-ingress-2026-10-06.md) reproduces out-of-range diagnostic timestamps throwing RangeError; candidate passes 25 actual HTTP/SQL cases, release remains. Six admin page collectors and deployed method behavior remain; the seventh page-only service is home dashboard under SOCIAL-GATE. |
+| OPS-04 | Admin page collectors, telemetry, app-version, CSP and FX methods | failed | [11A](backend-section-11-fx-provider-payload-2026-10-06.md) reproduces public caching of invalid/missing non-USD rates in 20 actual HTTP cases; candidate passes locally, release remains. [11B](backend-section-11-operations-ingress-2026-10-06.md) reproduces out-of-range diagnostic timestamps throwing RangeError; candidate passes 25 actual HTTP/SQL cases, release remains. [11C](backend-section-11-admin-page-authorization-2026-10-07.md) reproduces private data in revoked-session redirect bodies and gates all ten admin pages before reads; production candidate passes, release remains. Broader collector semantics and deployed method behavior remain; the seventh page-only service is home dashboard under SOCIAL-GATE. |
 
 ## Completion rule and next sequence
 
