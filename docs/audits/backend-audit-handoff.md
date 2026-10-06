@@ -6,7 +6,7 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/auth-placeholder-collision-audit-11j`, preserving tested #385/#386/#387 heads while fixing a reproduced Auth trigger username collision. User receipt/evidence edits remain untouched.
+Current checkout: `codex/catalog-clone-boundaries-audit-11k`, based on final combined #388 and adding only SQL operator tests/evidence. The user receipt/evidence edits remain untouched.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
@@ -40,6 +40,23 @@ main with both fixes and separate reports/verification. Require final exact-head
 Quality after consolidation, then immediate idle mobile-store/exact live parent
 checks, exact-main Quality and standard release. The user-error parent is now
 independently verified. Private Auth/health release baselines use that parent.
+
+Combined #388 final head bd5491c4de33ecb0cb8d6189073803f6df4cb448 runs fresh
+Quality 37529823695 against main; all four non-web jobs pass, web remains.
+#387 is CLOSED as consolidated into #388 and must not merge separately.
+Old #388 head 316038ab CI 37528555918 was cancelled after the final refresh;
+its real API and migration jobs passed but it is not the final merge gate.
+Prepared merge/release controls are private under auth-placeholder-release and
+health-cap-release, based on the verified #386 parent. Immediately recheck
+mobile-store idle, current main/live and final Quality before merging.
+
+11K adds 22 actual catalog clone controls and 35 mobile catalog operator controls
+(57 total), all passing on the owned clean replay. Actual anon/auth calls deny;
+service calls, copied configuration, retries/conflicts and missing tiers pass.
+Independent local cleanup is zero, and four function definitions/role metadata
+match read-only production. No runtime, migration, live configuration, purchase
+or provider operation changes. Keep this SQL/evidence-only follow-up separate
+from #388's final tested runtime head; broader DB-03/MAP-02/GEN-05/PAY scopes stay open.
 
 11J reproduces signup aborts when valid distinct UUIDs share their eight-digit
 placeholder prefix. Original production/local trigger digest agrees. Four final
