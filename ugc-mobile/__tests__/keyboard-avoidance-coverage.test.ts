@@ -73,6 +73,33 @@ describe('keyboard avoidance coverage', () => {
     expect(mismatched).toEqual([]);
   });
 
+  it('holds a hosted sheet’s area still while the sheet slides', () => {
+    // A sheet that owns its entrance and exit (`useSheetPresentation`) slides
+    // while a keyboard is leaving whenever it opens over the page's keyboard
+    // or closes with its own up. An area that follows the keys then moves and
+    // resizes the sheet at every frame of its slide: on the emulator a sheet
+    // opened over a keyboard came into view part-way up, sank and rose again,
+    // and the Reference details sheet did that on main (films, 2026-10-05).
+    // So the area of every such sheet takes `followsKeyboard` from the
+    // presentation that shows it.
+    const areas = screenFiles
+      .map((filePath) => ({ filePath, source: readFileSync(filePath, 'utf8') }))
+      .flatMap(({ filePath, source }) => [...source.matchAll(/<Overlay visible=\{(\w+)\.rendered\}>([\s\S]*?)<\/Overlay>/g)]
+        .flatMap(([, presentation, hosted]) => [...hosted.matchAll(/<KeyboardAvoidingArea\b[^>]*>/g)]
+          .map(([tag]) => ({
+            area: `${relativePath(filePath)}: ${tag.match(/testID="([^"]+)"/)?.[1] ?? tag.slice(0, 60)}`,
+            held: tag.includes(`followsKeyboard={${presentation}.settled}`),
+          }))));
+
+    // The three there are today, so the search above is known to find them.
+    expect(areas.map(({ area }) => area)).toEqual(expect.arrayContaining([
+      'app/post/new.tsx: resource-editor-keyboard-area',
+      'components/media-creation-screen.tsx: model-picker-keyboard-area',
+      'components/media-creation-screen.tsx: reference-details-keyboard-area',
+    ]));
+    expect(areas.filter(({ held }) => !held).map(({ area }) => area)).toEqual([]);
+  });
+
   it('keeps the avoidance geometry in one place', () => {
     // Two mechanisms drifting apart is how the original bug survived: several
     // screens each hand-rolled a keyboardDidShow listener and only some worked.

@@ -46,34 +46,42 @@ export function getKeyboardLift({
  *
  * Reanimated's tracker follows the keyboard frame by frame, but on Android it
  * learns the keyboard has closed only from a closing animation. A keyboard that
- * leaves without one, because a native Modal (the model picker) or another app's
- * window took focus while it was open, leaves the tracker settled open at the old
- * height until the next animation, and the screen keeps a keyboard-sized black
- * hole with no keyboard in it. React Native's keyboard events read the window's
- * insets on every layout, so they see that hide.
+ * leaves without one, because a native Modal (a dialog, the parameters sheet) or
+ * another app's window took focus while it was open, leaves the tracker at the
+ * old height until the next animation, and the screen keeps a keyboard-sized
+ * black hole with no keyboard in it. React Native's keyboard events read the
+ * window's insets on every layout, so they see that hide.
  *
  * So the tracker leads while the keyboard moves, keeping the surface in step with
- * the keys; a reported hide beats a tracker that has settled open; and otherwise
- * the larger source wins, which still covers a keyboard the tracker never saw open.
+ * the keys; a reported hide is believed for as long as the tracker has not moved
+ * since; and otherwise the larger source wins, which still covers a keyboard the
+ * tracker never saw open.
+ *
+ * The tracker's own state (OPEN, CLOSING, …) is deliberately not asked. It is
+ * settled by counting the starts and ends of keyboard animations, and
+ * Reanimated stops listening when its last subscriber unmounts: a sheet that
+ * closes with the keyboard up takes its area away before the keys have finished
+ * leaving, the end is never counted, and from then on the state reads OPENING
+ * or CLOSING for the rest of the process with the keyboard standing still
+ * (Reanimated 4.2.1, Pixel 9a emulator, 2026-10-05). The rule used to wait for
+ * a tracker "settled open", and after that it never fired again: under a dialog
+ * the resource editor stayed shortened over an empty band.
  */
 export function resolveKeyboardHeight({
   trackedHeight,
-  trackerSettledOpen,
   reportedHeight,
   reportedHidden,
 }: {
   /** `useAnimatedKeyboard().height`. */
   trackedHeight: number;
-  /** Whether the tracker's state is OPEN: settled rather than animating. */
-  trackerSettledOpen: boolean;
   /** The height from React Native's keyboard events, eased toward its target. */
   reportedHeight: number;
-  /** Whether those events last said the keyboard is hidden. */
+  /** Whether those events last said the keyboard is hidden, and the tracker has not moved since. */
   reportedHidden: boolean;
 }) {
   'worklet';
 
-  if (trackerSettledOpen && reportedHidden) return reportedHeight;
+  if (reportedHidden) return reportedHeight;
 
   return Math.max(trackedHeight, reportedHeight);
 }

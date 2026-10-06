@@ -63,6 +63,19 @@ const mutationState = vi.hoisted(() => ({
 }));
 const queryClientState = vi.hoisted(() => ({ invalidateQueries: vi.fn(), setQueryData: vi.fn() }));
 const queryOptionsState = vi.hoisted(() => ({ options: [] as Array<{ queryKey: string[]; enabled?: boolean }> }));
+const keyboardState = vi.hoisted(() => ({ dismiss: vi.fn() }));
+// Android's back key, as the screen's own surfaces claim it.
+const backHandlerState = vi.hoisted(() => ({ listeners: new Set<() => boolean>() }));
+// Timed animations end at once unless a case holds them, to look at a sheet
+// while it is still leaving; `finishAnimations` then delivers their ends.
+const animatedState = vi.hoisted(() => ({
+  hold: false,
+  pending: [] as Array<(result: { finished: boolean }) => void>,
+}));
+
+function finishAnimations() {
+  for (const done of animatedState.pending.splice(0)) done({ finished: true });
+}
 
 const generationItem = {
   id: 'gen-1',
@@ -144,8 +157,46 @@ vi.mock('react-native', () => ({
   AccessibilityInfo: { setAccessibilityFocus: vi.fn() },
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   Alert: alertState,
+  Animated: {
+    View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
+    Value: class {
+      constructor(public value: number) {}
+
+      setValue(next: number) {
+        this.value = next;
+      }
+
+      // The composer's toggles and chips stop a value before they move it (`lib/motion`).
+      stopAnimation() {}
+
+      interpolate(config: unknown) {
+        return { interpolate: config };
+      }
+    },
+    add: (a: unknown, b: unknown) => ({ add: [a, b] }),
+    multiply: (a: unknown, b: unknown) => ({ multiply: [a, b] }),
+    timing: () => ({
+      start: (done?: (result: { finished: boolean }) => void) => {
+        if (!done) return;
+        if (animatedState.hold) animatedState.pending.push(done);
+        else done({ finished: true });
+      },
+      stop: () => undefined,
+    }),
+    spring: () => ({
+      start: (done?: (result: { finished: boolean }) => void) => done?.({ finished: true }),
+      stop: () => undefined,
+    }),
+  },
+  BackHandler: {
+    addEventListener: (_name: string, listener: () => boolean) => {
+      backHandlerState.listeners.add(listener);
+      return { remove: () => backHandlerState.listeners.delete(listener) };
+    },
+  },
+  Easing: { in: (fn: unknown) => fn, out: (fn: unknown) => fn, cubic: 'cubic' },
   findNodeHandle: vi.fn(() => 1),
-  Keyboard: { dismiss: vi.fn() },
+  Keyboard: keyboardState,
   KeyboardAvoidingView: ({ children, ...props }: MockProps) => React.createElement('keyboard-avoiding-view', props, children),
   Modal: ({ children, visible, ...props }: MockProps) => visible ? React.createElement('modal', props, children) : null,
   Platform: { OS: 'ios', select: (obj: Record<string, unknown>) => obj.ios || obj.default },
@@ -359,6 +410,10 @@ describe('mobile external post composer', () => {
     shareState.share.mockReset();
     shareState.share.mockResolvedValue({ action: 'sharedAction' });
     authState.api.shareShowcasePost.mockClear();
+    keyboardState.dismiss.mockClear();
+    backHandlerState.listeners.clear();
+    animatedState.hold = false;
+    animatedState.pending.length = 0;
   });
 
   it('opens on a compact details step with one dominant next action', async () => {
@@ -678,7 +733,7 @@ describe('mobile external post composer', () => {
     // It used to rely on KeyboardAvoidingView, which was configured for iOS
     // only and so did nothing on Android once edge-to-edge stopped the window
     // resizing; KeyboardAvoidingArea shrinks the surface on either platform.
-    const keyboardContainer = tree.root.findAll((node) => node.props?.testID === 'keyboard-avoiding-area')[0];
+    const keyboardContainer = tree.root.findAll((node) => node.props?.testID === 'resource-editor-keyboard-area')[0];
     expect(keyboardContainer).toBeTruthy();
     const keyboardScroll = tree.root.findAll((node) => String(node.type) === 'scrollview' && node.props.automaticallyAdjustKeyboardInsets)[0];
     expect(keyboardScroll).toBeTruthy();
@@ -698,6 +753,163 @@ describe('mobile external post composer', () => {
       await Promise.resolve();
     });
     expect(collectText(tree.root)).not.toContain('1 resource card');
+  });
+
+  describe('the resource sheet', () => {
+    /** The Resources step with "Add a resource" open on its list of kinds. */
+    async function openResourceKinds() {
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+      renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+      // Nothing has been asked of the keyboard or the back key by the page alone.
+      expect(keyboardState.dismiss).not.toHaveBeenCalled();
+      expect(backHandlerState.listeners.size).toBe(0);
+      renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
+      return tree;
+    }
+
+    /** The same sheet a step on: the editor of a new prompt resource. */
+    async function openPromptEditor() {
+      const tree = await openResourceKinds();
+      renderer.act(() => findPressableByText(tree.root, 'Prompt or script').props.onPress());
+      return tree;
+    }
+
+    function ancestors(node: renderer.ReactTestInstance) {
+      const found: renderer.ReactTestInstance[] = [];
+      for (let current = node.parent; current; current = current.parent) found.push(current);
+      return found;
+    }
+
+    function flatStyle(style: unknown): Record<string, unknown> {
+      if (Array.isArray(style)) return Object.assign({}, ...style.map(flatStyle));
+      return style && typeof style === 'object' ? (style as Record<string, unknown>) : {};
+    }
+
+    const contentField = (tree: renderer.ReactTestRenderer) => findTextInputByPlaceholder(tree.root, 'This content is revealed only after unlock');
+    const closeButton = (tree: renderer.ReactTestRenderer) => findPressableByAccessibilityLabel(tree.root, 'Close resource editor');
+    /** The editor's own scroll view: the nearest one above its fields. (With no overlay host in a test, the sheet draws in place.) */
+    const editorBody = (tree: renderer.ReactTestRenderer) => ancestors(contentField(tree)).find((node) => String(node.type) === 'scrollview')!;
+    const keyboardArea = (tree: renderer.ReactTestRenderer) => ancestors(closeButton(tree)).find((node) => node.props.testID === 'resource-editor-keyboard-area')!;
+    /** The panel: the view whose first layout the sheet's slide waits for. */
+    const panel = (tree: renderer.ReactTestRenderer) => ancestors(closeButton(tree)).find((node) => typeof node.props.onLayout === 'function')!;
+
+    it('draws in the app’s own window, in an area that gives way to the keyboard and ends under the status bar', async () => {
+      const tree = await openPromptEditor();
+      const above = ancestors(contentField(tree));
+
+      // A Modal is a window of its own on Android, where the keyboard tracker
+      // reads nothing: the area lifted late and short on an event alone.
+      expect(above.some((node) => String(node.type) === 'modal')).toBe(false);
+      expect(above).toContain(keyboardArea(tree));
+
+      // Both halves of the keyboard pairing, for the fields.
+      const body = editorBody(tree);
+      expect(body.props).toEqual(expect.objectContaining({
+        automaticallyAdjustKeyboardInsets: true,
+        keyboardShouldPersistTaps: 'handled',
+      }));
+
+      // The panel was lifted whole, 760pt of it on a tall phone, and its title,
+      // its Close button and its first field left the top of the screen. It
+      // gives up height instead: it may shrink, and the area it shrinks within
+      // stops under the status bar (24 in this double) with a strip to spare.
+      expect(flatStyle(panel(tree).props.style)).toEqual(expect.objectContaining({ flexShrink: 1, maxHeight: 844 * 0.9 }));
+      expect(flatStyle(keyboardArea(tree).props.style)).toEqual(expect.objectContaining({ justifyContent: 'flex-end', paddingTop: 32 }));
+
+      // What must stay where it can be pressed stays out of what scrolls.
+      expect(ancestors(closeButton(tree))).not.toContain(body);
+      expect(ancestors(findPressableByAccessibilityLabel(tree.root, 'Save resource'))).not.toContain(body);
+    });
+
+    it('takes the keyboard from the page as it opens, and puts its own away as it closes', async () => {
+      const tree = await openResourceKinds();
+      // Opening over a field of the page: a Modal's window took the keyboard
+      // by taking the focus, and an overlay takes nothing.
+      expect(keyboardState.dismiss).toHaveBeenCalledTimes(1);
+
+      // The step from the kinds to the editor is the same opening.
+      renderer.act(() => findPressableByText(tree.root, 'Prompt or script').props.onPress());
+      expect(keyboardState.dismiss).toHaveBeenCalledTimes(1);
+
+      renderer.act(() => closeButton(tree).props.onPress());
+      expect(collectText(tree.root)).not.toContain('Contents stay protected until unlock.');
+      expect(keyboardState.dismiss).toHaveBeenCalledTimes(2);
+    });
+
+    it('closes an untouched editor on Android’s back key, and asks first about one with changes', async () => {
+      const tree = await openPromptEditor();
+      expect(backHandlerState.listeners.size).toBe(1);
+
+      renderer.act(() => contentField(tree).props.onChangeText('Unsaved prompt'));
+      let claimed: boolean | undefined;
+      renderer.act(() => {
+        claimed = [...backHandlerState.listeners][0]();
+      });
+      // The key is the sheet's, and it asks what the Close button asks.
+      expect(claimed).toBe(true);
+      expect(alertState.alert).toHaveBeenLastCalledWith('Discard resource changes?', 'This resource has unsaved changes.', expect.any(Array), expect.any(Object));
+      expect(contentField(tree).props.value).toBe('Unsaved prompt');
+      expect(backHandlerState.listeners.size).toBe(1);
+
+      const buttons = alertState.alert.mock.calls.at(-1)?.[2] as Array<{ text: string; onPress?: () => void }>;
+      await renderer.act(async () => {
+        buttons.find((button) => button.text === 'Discard')?.onPress?.();
+        await Promise.resolve();
+      });
+      expect(collectText(tree.root)).not.toContain('Contents stay protected until unlock.');
+      // Closed, it gives the key back to the page.
+      expect(backHandlerState.listeners.size).toBe(0);
+    });
+
+    it('leaves showing the resource it was editing, and takes no press while it does', async () => {
+      const tree = await openPromptEditor();
+      const surface = () => ancestors(closeButton(tree)).find((node) => node.props.pointerEvents !== undefined);
+      expect(surface()?.props.pointerEvents).toBe('auto');
+      renderer.act(() => contentField(tree).props.onChangeText('Exact reusable prompt'));
+
+      animatedState.hold = true;
+      renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Save resource').props.onPress());
+      // Saved: the composer has the card and has dropped the editor's copy
+      // and its step. The panel is still on its way out with its fields, or
+      // it would fall to the height of its title under its own exit.
+      expect(collectText(tree.root)).toContain('1 resource card');
+      expect(collectText(tree.root)).toContain('Contents stay protected until unlock.');
+      expect(contentField(tree).props.value).toBe('Exact reusable prompt');
+      expect(findPressableByAccessibilityLabel(tree.root, 'Save resource')).toBeTruthy();
+      expect(surface()?.props.pointerEvents).toBe('none');
+
+      renderer.act(() => finishAnimations());
+      expect(collectText(tree.root)).not.toContain('Contents stay protected until unlock.');
+      expect(tree.root.findAll((node) => String(node.type) === 'textinput' && node.props.placeholder === 'This content is revealed only after unlock')).toHaveLength(0);
+    });
+
+    it('takes a pull from its title as from its grabber, and leaves a touch-down on its body to the scroll view', async () => {
+      type Handler = (...args: unknown[]) => boolean;
+      const tree = await openPromptEditor();
+      const touch = { nativeEvent: { target: 57 }, stopPropagation: () => undefined };
+      // This suite's PanResponder double hands a responder's config back as its
+      // handlers, so each view shows which responder it carries.
+      const carriesResponder = (node: renderer.ReactTestInstance) => typeof node.props.onStartShouldSetPanResponder === 'function';
+
+      // The title row: taken as it lands, as the grabber's strip is, with no
+      // question about where the body is scrolled to. The panel's own drag
+      // waits for the body to be at its top: a pull from the title did
+      // nothing once the fields had scrolled.
+      const titleRow = ancestors(closeButton(tree)).find(carriesResponder)!;
+      const titleStart = titleRow.props.onStartShouldSetPanResponder as Handler;
+      expect(titleStart(touch, { dy: 0, dx: 0 })).toBe(true);
+      expect(titleRow.props.onMoveShouldSetPanResponderCapture).toBeUndefined();
+
+      // The panel: in its own window nothing above it takes an unowned touch,
+      // so it waits for the pull. Held from its start, the touch is intercepted
+      // from the scroll view inside on Android, and a slow drag that began on
+      // a label scrolled nothing.
+      const sheetPanel = ancestors(titleRow).find((node) => carriesResponder(node) && node.props.onStartShouldSetPanResponder !== titleStart)!;
+      expect(typeof sheetPanel.props.onLayout).toBe('function');
+      expect((sheetPanel.props.onStartShouldSetPanResponder as Handler)(touch, { dy: 0, dx: 0 })).toBe(false);
+      expect((sheetPanel.props.onMoveShouldSetPanResponder as Handler)(touch, { dy: 12, dx: 0 })).toBe(true);
+    });
   });
 
   it('keeps a legacy title private until the creator explicitly edits it', async () => {

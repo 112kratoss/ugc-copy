@@ -59,7 +59,7 @@ describe('S9 — every route to a paid generation states the price', () => {
   });
 
   it('prices the composer button from the same helper', () => {
-    const bar = declaration('function CreatorPersistentBar(', 'function SearchableModelPickerModal(');
+    const bar = declaration('function CreatorPersistentBar(', 'function SearchableModelPickerSheet(');
     expect(bar).toContain("withCreditCost('Generate', cost ?? 0)");
     expect(bar).not.toContain('credits`');
   });
