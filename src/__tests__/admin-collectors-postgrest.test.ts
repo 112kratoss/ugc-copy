@@ -26,6 +26,7 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
   let postIds: string[];
   let generationIds: string[];
   let contactIds: string[];
+  let walletOwnerIds: string[];
   const now = new Date();
   const snapshot = () => collectAdminOverview(admin, { now });
 
@@ -57,6 +58,7 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
     jobIds = [];
     catalogIds = [];
     otherUsers = []; postIds = []; generationIds = []; contactIds = [];
+    walletOwnerIds = [];
     const result = await admin.auth.admin.createUser({ email: 'collector-' + randomUUID() + '@audit.invalid', password: randomUUID(), email_confirm: true });
     expect(result.error).toBeNull();
     owner = result.data.user!.id;
@@ -68,6 +70,8 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
     await db.query('delete from public.contact_messages where id=any($1::uuid[])', [contactIds]);
     await db.query('delete from public.posts where id=any($1::uuid[])', [postIds]);
     await db.query('delete from public.generations where id=any($1::uuid[])', [generationIds]);
+    await db.query('delete from public.creator_resource_wallets where user_id=any($1::uuid[])', [walletOwnerIds]);
+    await db.query('delete from auth.users where id=any($1::uuid[])', [walletOwnerIds]);
     for (const id of otherUsers) expect((await admin.auth.admin.deleteUser(id)).error).toBeNull();
     expect((await admin.auth.admin.deleteUser(owner)).error).toBeNull();
     expect((await db.query('select id from public.transactions where id=any($1::uuid[])', [transactionIds])).rows).toEqual([]);
@@ -81,6 +85,9 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
     }
     expect((await db.query('select id from auth.users where id=any($1::uuid[])', [otherUsers])).rows).toEqual([]);
     expect((await db.query('select id from public.profiles where id=any($1::uuid[])', [otherUsers])).rows).toEqual([]);
+    expect((await db.query('select id from auth.users where id=any($1::uuid[])', [walletOwnerIds])).rows).toEqual([]);
+    expect((await db.query('select id from public.profiles where id=any($1::uuid[])', [walletOwnerIds])).rows).toEqual([]);
+    expect((await db.query('select user_id from public.creator_resource_wallets where user_id=any($1::uuid[])', [walletOwnerIds])).rows).toEqual([]);
   });
   afterAll(async () => { await db.end(); });
 
@@ -262,5 +269,38 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
       expect(result.error).not.toBeNull();
       expect(result.data ?? []).toEqual([]);
     }
+  });
+
+  it('reports creator wallet totals across the actual API row cap', async () => {
+    const before = (await collectAdminRevenueReport(admin, { now })).creatorPayouts;
+    // SQL identities serve only valid wallet foreign keys: no Auth sessions,
+    // payment settlement, provider requests or real customer balance changes.
+    const created = await db.query("insert into auth.users(id,email,created_at,updated_at,raw_app_meta_data,raw_user_meta_data,is_anonymous) select id,id::text||'@audit.invalid',now(),now(),'{\"provider\":\"email\",\"providers\":[\"email\"]}'::jsonb,jsonb_build_object('username','cw'||substring(replace(id::text,'-',''),1,20)),false from (select gen_random_uuid() id from generate_series(1,1001)) t returning id");
+    walletOwnerIds.push(...created.rows.map(row => row.id));
+    await db.query('insert into public.creator_resource_wallets(user_id,available_token_subunits,lifetime_earned_token_subunits) select id,1,1 from unnest($1::uuid[]) id', [walletOwnerIds]);
+    const after = (await collectAdminRevenueReport(admin, { now })).creatorPayouts;
+    expect(after).toEqual({
+      walletCount: before.walletCount + 1001,
+      availableTokenSubunits: before.availableTokenSubunits + 1001,
+      lifetimeEarnedTokenSubunits: before.lifetimeEarnedTokenSubunits + 1001,
+    });
+  }, 20000);
+
+  it('denies the all-wallet aggregate to an anonymous API client', async () => {
+    expect((await anon.rpc('admin_creator_wallet_totals')).error).not.toBeNull();
+  });
+
+  it('surfaces an unavailable wallet aggregate instead of reporting zero money', async () => {
+    const config = JSON.parse(readFileSync(configPath!, 'utf8'));
+    const failing = createClient(config.API_URL, config.SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { fetch: async (input, init) => {
+        if (new URL(String(input)).pathname === '/rest/v1/rpc/admin_creator_wallet_totals') {
+          return Response.json({ code: 'XX000', message: 'Isolated wallet aggregate outage' }, { status: 503 });
+        }
+        return fetch(input, init);
+      } },
+    });
+    await expect(collectAdminRevenueReport(failing, { now })).rejects.toMatchObject({ message: 'Isolated wallet aggregate outage' });
   });
 });

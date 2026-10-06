@@ -6,10 +6,45 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/admin-collector-coverage-audit-11f`, consolidating the independently reproduced 11D/E/F collector fixes into #382. Prior audit branches and unrelated local evidence remain preserved.
+Current checkout: `codex/admin-collector-followup-audit-11g`, preserving the combined tested 11D/E/F #382 candidate while recording release evidence and continuing collector gaps. Prior audit branches and unrelated local evidence remain preserved.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+#381 is independently verified live at October 6 19:30:17 UTC as
+235aca0165500b53d436aef4eb4e54fffb489616. Exact-main Quality 37517212787 and
+standard release 37518758196 pass; schema/110 advisors unchanged, smoke
+200/307/401. Both live out-of-range timestamps return private/no-store 400.
+Released admin runtime matches all eleven production-tested files; all 20 live
+unauthenticated HTML/RSC page checks redirect. Actual signed revoked/active
+session evidence remains the isolated production build/Playwright, with empty
+cleanup; no fresh production admin fixture is claimed. AUTH-02 returns to passed.
+Current ledger: 53 obligations — 24 passed, 25 untested, 2 failed, 2 external.
+Failed OPS-04/MEDIA-07; full audit remains open.
+
+Combined #382 final head d5c0cb0845bfd868eb4329c7ad0455ebffdc0393 passed all five
+Quality jobs in 37518573233, including 107 actual API cases. With independently
+verified #381 and mobile-store idle, it merged October 6 19:34:48 UTC as
+6e7b8ddb51a68841242bbbe491c41e59f1b65d9f. Exact-main Quality 37520033768 is
+running; standard release and independent schema/function/grant/rollback cleanup
+checks remain. Private
+verification scripts/baselines are prepared under admin-collector-release; the
+expected new function digest is 9e81773eca4a78073a313259707def79.
+
+11G reproduces 1,001 wallets reported as 1,000 through actual PostgREST. The
+candidate uses a service-role-only stable aggregate; 24 actual API/SQL cases,
+50 focused collector cases, two migration guards, app/test types and scoped lint
+pass. Clean replay includes 20261006193446 and all 2,185 SQL assertions in 102
+files pass. The first SQL fixture collided on default username prefixes; distinct
+UUID prefixes corrected the fixture without changing the Auth trigger. Cleanup
+is empty. Read-only production has one wallet, so no current undercount is claimed.
+Commit and open a separate PR, incorporating merged main; hold its merge until
+#382 is independently verified. Broader collector failure controls remain open.
+
+GitHub marked #383 merged into its candidate base branch at 19:23:11 UTC when
+its commits were incorporated into #382. It has no separate main merge or
+production release. Preserve that attached evidence. Obsolete #383 CI cancellation
+was requested; only #382's final exact head gates the collector main merge.
 
 11F reproduces active catalog disappearance after eleven newer shadow releases.
 The candidate queries active status separately from the bounded history. All
@@ -35,6 +70,8 @@ assertions in 101 pgTAP files, including eleven new summary controls. Specific
 fixture cleanup is empty. Read-only production has 939 runs/12 names/zero
 failures, so no current missed failure is attributed. The source migration is
 20261006190707; standard release/function/privilege checks remain. This is now consolidated into #382 and held until #381 is verified.
+
+## Earlier checkpoints (historical; current status is above)
 
 Operations #381 passed fresh exact-head Quality 37515495937 on 5354a3b6 and
 merged with mobile-store idle at October 6 19:12:29 UTC as
@@ -82,8 +119,8 @@ broader recovery. 10F #377 is independently verified at 18:12:33 UTC on ab9eb3ad
 with planned trigger only, all 23 rollback controls, zero fixtures and unchanged
 advisors; PAY-04 remains untested for its broader lifecycle matrix.
 
-Current ledger: 53 obligations — 23 passed, 25 untested, 3 failed, 2 external.
-Failed AUTH-02/OPS-04/MEDIA-07. OPS-04 also includes the 11D reporting defect and
+Current ledger: 53 obligations — 24 passed, 25 untested, 2 failed, 2 external.
+Failed OPS-04/MEDIA-07; AUTH-02 is verified as passed above. OPS-04 also includes the 11D reporting defect and
 broader collector/method behavior. Six admin collectors belong to OPS-GATE;
 the seventh page-only service, home dashboard, belongs to SOCIAL-GATE. These
 bounded releases do not close the full audit. Preserve receipt text/evidence.

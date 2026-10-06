@@ -213,10 +213,9 @@ export async function collectAdminRevenueReport(
       .order('created_at', { ascending: false })
       .order('id', { ascending: false })
       .range(from, to), RAIL_FETCH_LIMIT),
-    client
-      .from('creator_resource_wallets')
-      .select('available_token_subunits, lifetime_earned_token_subunits')
-      .limit(5000),
+    // Return aggregate amounts from one database snapshot, without a Data API
+    // row cap silently dropping creator wallets from the operator's totals.
+    client.rpc('admin_creator_wallet_totals'),
   ]);
 
   if (wallets.error) throw wallets.error;
@@ -225,7 +224,7 @@ export async function collectAdminRevenueReport(
   const mobileRows = mobileTransactions.rows;
   const marketplaceRows = marketplaceOrders.rows;
   const bundleRows = bundleOrders.rows;
-  const walletRows = (wallets.data ?? []) as Array<Record<string, unknown>>;
+  const walletTotals = (wallets.data ?? {}) as Record<string, unknown>;
 
   const rails: AdminRevenueRail[] = [
     summarizeRail('razorpay-credits', 'Credit purchases (web)', creditRows.map((row) => ({
@@ -314,15 +313,9 @@ export async function collectAdminRevenueReport(
     ordersTruncated: [creditTransactions, mobileTransactions, marketplaceOrders, bundleOrders]
       .some((result) => result.truncated),
     creatorPayouts: {
-      walletCount: walletRows.length,
-      availableTokenSubunits: walletRows.reduce(
-        (total, row) => total + Number(row.available_token_subunits ?? 0),
-        0,
-      ),
-      lifetimeEarnedTokenSubunits: walletRows.reduce(
-        (total, row) => total + Number(row.lifetime_earned_token_subunits ?? 0),
-        0,
-      ),
+      walletCount: Number(walletTotals.wallet_count ?? 0),
+      availableTokenSubunits: Number(walletTotals.available_token_subunits ?? 0),
+      lifetimeEarnedTokenSubunits: Number(walletTotals.lifetime_earned_token_subunits ?? 0),
     },
   };
 }

@@ -14,6 +14,15 @@ type TableRows = Record<string, Array<Record<string, unknown>>>;
  */
 function createClient(rows: TableRows, filterLog: Record<string, string[]> = {}) {
   return {
+    rpc(name: string) {
+      if (name !== 'admin_creator_wallet_totals') throw new Error('Unexpected test RPC');
+      const wallets = rows.creator_resource_wallets ?? [];
+      return Promise.resolve({ data: {
+        wallet_count: wallets.length,
+        available_token_subunits: wallets.reduce((total, row) => total + Number(row.available_token_subunits ?? 0), 0),
+        lifetime_earned_token_subunits: wallets.reduce((total, row) => total + Number(row.lifetime_earned_token_subunits ?? 0), 0),
+      }, error: null });
+    },
     from(table: string) {
       filterLog[table] ??= [];
       let selected = rows[table] ?? [];

@@ -47,6 +47,6 @@ standard deployment and independent schema/function/privilege checks remain.
 OPS-04 stays failed for known pending defects; the complete audit remains open.
 
 The tested row-limit code from #383 is consolidated into #382 with 11D's web
-counter and 11F's active catalog lookup. #383 is superseded, not separately
-merged/released. The combined final head must pass all five Quality jobs before
+counter and 11F's active catalog lookup. #383 is marked merged into the candidate base branch by GitHub when its
+commits were incorporated; no separate main merge or production release occurred. The combined final head must pass all five Quality jobs before
 the single standard collector release; independent per-finding evidence remains.
