@@ -21,21 +21,25 @@ Digest cd2b014a27e6b7276f75a26805730069 matches replay. Source 20261006193446
 maps to production 20261006203018 by independent readback without ledger repair.
 See the 11G release report. Other actor's #384 mobile/AGENTS changes are preserved.
 
-User-error #386 final head c608f0355c4f2597ff90eb68d99401e96e3b6292 passes all
-five Quality jobs in 37525678057. The verified wallet parent and an immediate
-mobile-store idle guard preceded its October 6 20:34:44 UTC main merge as
-1be9dabafab48d159303250f48fd21ee58932cd4. Exact-main Quality 37527510112 is
-running; standard release and independent verification remain. Private user
-release baselines now use verified wallet schema/advisors. Actual local evidence:
-41 API cases, 65 focused cases, 17 browser cases and 46 production Next method
-controls pass; retry restores seven credits and suspension. Fixture cleanup is
-empty and the browser/server/proxy are stopped. Do not claim live signed retries.
+User-error #386 is independently verified live October 6 20:51:29 UTC as
+1be9dabafab48d159303250f48fd21ee58932cd4. Final head c608f035 passes all five
+Quality jobs in 37525678057; exact-main Quality 37527510112 and standard release
+37529011506 pass. Public schema/110 advisors are unchanged, all three runtime
+file digests match the production Next/browser candidate, twenty live
+unauthenticated HTML/RSC admin boundaries pass, both diagnostic timestamps
+return private/no-store 400, and smoke is 200/307/401. The actual signed retry
+proof remains the isolated production build with empty cleanup; no live positive
+support record or fresh signed production session is claimed. See the 11H release.
 
-Health #387 head 2d5a58d0f13d5144b612bd381a140ca2f28c15ff passes all five jobs
-in Quality 37525342978. Its base is now main; incorporate #386's actual main SHA
-and require fresh exact-head Quality before merging, only after #386's release is
-independently verified. All 48 actual collector and 48 focused cases pass locally;
-production's three current sixty-minute windows were empty at the read-only probe.
+Health #387 source is included in the combined health/signup PR #388. Refreshed
+health head 68bf19c2534357bba1018824085450e4af5f4036 incorporates the actual
+#386 main merge. All 48 actual collector and 48 focused health cases pass;
+production's three sixty-minute windows were empty in the read-only baseline.
+Preserve #387's source/evidence; do not merge it separately. #388 is retargeted to
+main with both fixes and separate reports/verification. Require final exact-head
+Quality after consolidation, then immediate idle mobile-store/exact live parent
+checks, exact-main Quality and standard release. The user-error parent is now
+independently verified. Private Auth/health release baselines use that parent.
 
 11J reproduces signup aborts when valid distinct UUIDs share their eight-digit
 placeholder prefix. Original production/local trigger digest agrees. Four final

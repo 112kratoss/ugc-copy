@@ -37,6 +37,4 @@ missed provider incident is claimed.
 The shared health output feeds the admin overview and operational monitoring.
 This finding attaches to existing OPS-04, with JOB-02 cross-cutting evidence;
 the 53-row ledger is unchanged. Private baseline/after/focused/count evidence is
-under `.audit-evidence/backend-social/backend-health-*`. Exact-head Quality,
-independently verified #386 parent, standard release and independent unchanged
-schema/advisors/live verification remain. Full audit completion is not claimed.
+under `.audit-evidence/backend-social/backend-health-*`. The health source from #387 is consolidated into #388 with the separately reproduced Auth trigger fix. Final exact-head Quality, standard release and independent verification remain; #386 is independently verified. Health adds no schema change; the combined candidate changes only the Auth trigger and preserves grants. Full audit completion is not claimed.

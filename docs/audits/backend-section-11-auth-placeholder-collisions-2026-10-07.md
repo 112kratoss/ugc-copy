@@ -41,7 +41,9 @@ or changing runtime beyond the reproduced trigger. Exact failed fixture IDs were
 removed on the owned loopback database; the final suite independently checks
 empty Auth/profile cleanup after every case.
 
-AUTH-01 is reopened until exact-head CI, independently verified parent,
+The health sample source from #387 is consolidated into [PR #388](https://github.com/112kratoss/ugc-copy/pull/388) with this trigger fix. The independently verified #386 release is the parent; each finding keeps separate verification controls.
+
+AUTH-01 is reopened until final exact-head CI, independently verified parent,
 exact-main CI, standard release and independent live function/rollback/cleanup
 checks pass. The checklist remains 53 obligations: 23 passed, 25 untested,
 3 failed and 2 external. No new obligation or full-audit signoff is claimed.
