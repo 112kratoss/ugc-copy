@@ -82,13 +82,19 @@ describe('admin user detail — unresolvable id', () => {
     expect(html).not.toContain('data-testid="sanction-form"');
   });
 
-  it('treats a lookup failure the same as a missing user rather than throwing', async () => {
+  it('lets a lookup failure reach the recoverable console error boundary', async () => {
     getAdminUserDetailMock.mockRejectedValue(new Error('PostgREST exploded'));
 
-    const html = await renderPageToHtml(
-      await AdminUserDetailPage({ params: Promise.resolve({ userId: MISSING_ID }) }),
-    );
+    await expect(AdminUserDetailPage({ params: Promise.resolve({ userId: MISSING_ID }) }))
+      .rejects.toThrow('PostgREST exploded');
+  });
 
+  it('keeps a malformed id in the missing-record panel without a lookup', async () => {
+    getAdminUserDetailMock.mockClear();
+    const html = await renderPageToHtml(
+      await AdminUserDetailPage({ params: Promise.resolve({ userId: 'invalid-id' }) }),
+    );
     expect(html).toContain('No user with that id');
+    expect(getAdminUserDetailMock).not.toHaveBeenCalled();
   });
 });

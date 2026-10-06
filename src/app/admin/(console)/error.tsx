@@ -22,10 +22,10 @@ import { Surface, Text } from '@/components/DesignSystem';
  */
 export default function AdminConsoleError({
   error,
-  reset,
+  retry,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  retry: () => void;
 }) {
   useEffect(() => {
     // Server Component errors reach the client already redacted, so the console
@@ -51,7 +51,7 @@ export default function AdminConsoleError({
           ) : null}
 
           <div className="mt-4 flex flex-wrap gap-2">
-            <button type="button" onClick={reset} className="ui-button ui-button-primary ui-focus-ring">
+            <button type="button" onClick={retry} className="ui-button ui-button-primary ui-focus-ring">
               <RotateCw className="h-4 w-4" aria-hidden />
               Try again
             </button>
