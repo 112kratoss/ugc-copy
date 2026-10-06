@@ -26,3 +26,7 @@ test typechecking and scoped lint pass. Private logs:
 Remaining scope includes a live old worker continuing after expiry, catalog
 changes during the run, model-set paging/capacity/concurrency and real provider
 behavior. JOB-01/JOB-02 are not whole-job certificates from these controls.
+
+After incorporating main #372, the actual local suites pass again: 19 provider
+verification and 12 deletion controls, with test typechecking passing. The merge
+retains the added managed-worker controls; no runtime/schema change is included.

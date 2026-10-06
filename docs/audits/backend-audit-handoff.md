@@ -20,23 +20,21 @@ blocks/rate keys removed. No runtime/schema change. Route adapter is in-process;
 no Apple/payment provider contacted. AUTH-03 remains untested for its broader
 scope. See account-deletion report. Preserve the separate 9O evidence.
 
-9N #372 passed Quality 37362149076 on 93d7b0a3 and merged with mobile-store idle
-October 6 16:18:24 UTC as 9cbe5815aa94179e90b1c249cd932a4f369b38b4.
-Exact-main Quality 37494657028 passed. Standard release 37495795918 is running;
-independent model-verification-release/ verification remains. Prepared seven rollback checks
-use a draft fixture release and never activate it; all pass locally.
-
-9M exact-main Quality 37361374584 passed. Release 37362937477 failed because
-GitHub's hosted runner never acquired the deployment job (empty steps, cancelled
-job; annotation saved privately). No deployment action occurred. Verify 9M on
-the 9N released descendant after its standard release; do not bypass guards.
+9N #372 is independently verified live on
+9cbe5815aa94179e90b1c249cd932a4f369b38b4. Exact-head Quality 37362149076,
+exact-main Quality 37494657028 and standard release 37495795918 passed.
+Seven rollback controls, planned function/grant only, zero fixtures and 110
+unchanged security findings pass; feed/admin/webhook checks pass. See the
+9M/9N release report. 9M #371 is included as an ancestor; its own release
+37362937477 failed before a hosted runner acquired the deployment job.
+No deployment action occurred in that failed run.
 
 9O adds five actual managed model-verification controls: durable failed/retried
 history reads, overlap, abandoned expiry and SIGKILL after provider response or
 committed snapshot. All 19 actual cases, test types and scoped lint pass. Original
 catalog restored; fixtures/job rows removed; no fixture locks. No new runtime or
 schema change. See model-verification-recovery report. Preserve separately from
-9N PR #372, head 93d7b0a3, exact-head Quality 37362149076 passed; #372 is merged, release verification pending.
+9N PR #372, head 93d7b0a3, exact-head Quality 37362149076 passed; #372 is released and independently verified.
 
 9N implements per-model latest verification history after an actual sparse-history
 regression: 101 observations for one model hide another model's seven-failure
@@ -45,13 +43,13 @@ breaks equal timestamps by identity. Fourteen actual local HTTP/PostgREST cases,
 15 new pgTAP controls, app/test types and lint pass. Clean replay and 2,102 SQL
 assertions across 98 files pass; no public schema drift. Seven bounded rollback
 controls pass locally; model-verification-release/ has the production baseline,
-one-migration plan and verifier. PR #372 passed CI and is merged; release verification pending; see 9N report. Runtime
+one-migration plan and verifier. PR #372 passed CI and release verification; see 9N report. Runtime
 change is only the lookup; no provider contacted. Preserve local edits.
 
 9M #371 passed exact-head Quality 37353739378 on 9cc05bcf and merged with
 mobile-store idle October 5 19:09:32 UTC as c0f33e438800de69b6e99736ac2904141d0a93e1.
 Exact-main Quality 37361374584 passed; standard release failed before a hosted
-runner acquired the job. Independent verification remains on the 9N descendant. Seventeen actual feed-maintenance recovery controls pass;
+runner acquired the job. Independently verified on the released 9N descendant. Seventeen actual feed-maintenance recovery controls pass;
 no runtime/schema change. Production limits/cache/overlong-holder fencing remain.
 
 9L #370 is verified live on 63a2d7fb449844ac656e7d476ccd59646e01025e. Quality
@@ -81,8 +79,8 @@ push-registration-release report. Independent mobile #363/#360/#366/#365 preserv
 planned schema, cleanup and health passed at 13:50 UTC. One expected private-table
 INFO was added to the unchanged 108 prior findings. See push-progress-release.
 
-Current ledger 24 passed / 25 untested / 2 failed / 2 external (53). JOB-02 failed
-for provider-verification history loss (feed-interest progress is released); MEDIA-07 failed for legacy retirement. Full goal active.
+Current ledger 24 passed / 26 untested / 1 failed / 2 external (53). JOB-02 returns
+to untested after the provider-history fix is verified; MEDIA-07 failed for legacy retirement. Full goal active.
 Preserve unrelated receipt edits, Section 1 files and all private evidence.
 
 9F #361 is verified live on 32a3f47336a6ad54ff0c41b667d9ba41be8d12c2.

@@ -49,3 +49,7 @@ welcome-claim fingerprints, provider revocation, expired live worker races and
 additional purchased revision/reference variants. Existing scoped SQL/unit
 coverage is partial evidence; AUTH-03 stays untested until the full obligation
 is proven. No production deletion was performed.
+
+After incorporating main #372, the actual local suites pass again: 19 provider
+verification and 12 deletion controls, with test typechecking passing. The merge
+retains the added managed-worker controls; no runtime/schema change is included.
