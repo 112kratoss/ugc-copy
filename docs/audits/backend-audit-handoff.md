@@ -19,7 +19,7 @@ pass; types/lint pass. No incorrect charge/production incident is established;
 read-only live FX baseline has all six positive. No schema or client change.
 A Node test environment is required for actual HTTP; shared setup's DOM-only
 scrollIntoView stub now checks Element exists. 10I evidence is included; no
-runtime/schema change there. Prepare a separate FX PR after parent #379 is
+runtime/schema change there. Prepare a separate FX PR; hold merge until parent #379 is
 released/verified. OPS-04 is failed until release; ledger stays 24 passed,
 24 untested, 3 failed, 2 external (PAY-04 now untested, failed OPS-04/MEDIA07/09).
 
@@ -28,9 +28,10 @@ exact-main Quality 37507548395, standard release 37508809231, planned trigger
 only, all 23 rollback controls, zero fixtures and 110 unchanged advisors pass.
 See deletion-freeze cash release record. Prod ledger 20261006180733 maps to
 source 20261006173448. PAY-04 returns to untested for the broader matrix.
-10H #379 exact-head Quality 37508493978 is running on
-4ee0b8d07a831e5e35338c4d8f0447ced29e04cd (DB/mobile/E2E pass, web types).
-Parent is independently verified; mobile-store idle still required at merge.
+10H #379 passed exact-head Quality 37508493978 and merged with mobile-store
+idle at October 6 18:17:12 UTC as 75dc4eb7fc8fef7139fc42c1a50b10f3f653f4de.
+Exact-main Quality 37510132894 is running. Standard release and independent
+unchanged-schema/advisor/live checks remain.
 
 
 10I adds eight actual signed-refund failure/retry controls: pre-commit RPC 503
@@ -39,13 +40,6 @@ failed creator states. Real telemetry insertion is tracked by returned fixture
 IDs; cleanup removes only those IDs. All eight targeted cases and all 61 actual
 local deletion/access cases pass (168.69 seconds); types/lint pass. No runtime
 or schema change. Preserve in a separate evidence commit after parent 10H.
-
-10H PR #379 is open on 4ee0b8d07a831e5e35338c4d8f0447ced29e04cd;
-Quality 37508493978 is running (DB/mobile/E2E pass, web lint). 10F #377 exact-
-main Quality 37507548395 and standard release 37508809231 passed; independent
-partial-deletion-refund-release/ verification is running. Do not merge #379
-before parent live/function/rollback/cleanup verification and mobile-store idle.
-
 
 10H reproduces a missing committed retained Storage copy being trusted on retry,
 then source Storage/Auth being erased. Four actual regressions cover missing
