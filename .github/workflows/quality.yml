@@ -223,7 +223,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      AUDIT_STORAGE_CONFIG: ${{ runner.temp }}/supabase-api-status.json
       SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
     steps:
       - name: Check out repository
@@ -252,12 +251,14 @@ jobs:
           set -euo pipefail
           umask 077
           fixture_dir="$RUNNER_TEMP/supabase-api"
+          status_file="$RUNNER_TEMP/supabase-api-status.json"
           mkdir -p "$fixture_dir/supabase"
           cp supabase/config.api-tests.toml "$fixture_dir/supabase/config.toml"
           ln -s "$GITHUB_WORKSPACE/supabase/migrations" "$fixture_dir/supabase/migrations"
           supabase --workdir "$fixture_dir" start --exclude realtime,imgproxy,postgres-meta,studio,edge-runtime,logflare,vector,supavisor > "$RUNNER_TEMP/supabase-api-start.log" 2>&1
           supabase --workdir "$fixture_dir" db reset --local --no-seed --yes
-          supabase --workdir "$fixture_dir" status -o json > "$AUDIT_STORAGE_CONFIG"
+          supabase --workdir "$fixture_dir" status -o json > "$status_file"
+          printf 'AUDIT_STORAGE_CONFIG=%s\n' "$status_file" >> "$GITHUB_ENV"
 
       # Deletion claims are global. Separate invocations keep fixtures sequential;
       # the suite's explicit process-kill and concurrent-worker cases still run.
@@ -275,7 +276,7 @@ jobs:
         continue-on-error: true
         run: |
           supabase --workdir "$RUNNER_TEMP/supabase-api" stop --no-backup
-          rm -f "$AUDIT_STORAGE_CONFIG" "$RUNNER_TEMP/supabase-api-start.log"
+          rm -f "$RUNNER_TEMP/supabase-api-status.json" "$RUNNER_TEMP/supabase-api-start.log"
 
   supabase-migrations:
     name: Supabase migration replay

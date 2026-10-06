@@ -27,6 +27,12 @@ removed, without logging or uploading them. The separate SQL replay/concurrency
 job remains. Exact-head CI must verify this new job before merge; local success
 alone does not certify the Linux stack.
 
+Initial workflow run 37516028671 was rejected before creating jobs because
+`runner.temp` is unavailable in job-level `env`. The path is now resolved inside
+the runner step and passed through `GITHUB_ENV`; this follows GitHub's
+[context availability rules](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#context-availability).
+Fresh exact-head CI remains required.
+
 OPS-04 remains failed until the known operations findings are released and
 independently verified. Broader semantics for the other admin collectors and
 deployed method behavior remain open. The home dashboard is in SOCIAL-GATE.
