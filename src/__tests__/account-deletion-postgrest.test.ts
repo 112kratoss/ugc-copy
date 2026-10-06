@@ -28,7 +28,7 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
   const job = async () => (await db.query('select status,last_error,resweep_after,next_attempt_at from public.account_deletion_jobs where user_id=$1', [owners[0]])).rows[0];
   const authExists = async (owner = owners[0]) => (await db.query('select id from auth.users where id=$1', [owner])).rows.length > 0;
   const initial = () => executeInitialAccountDeletion({ admin, userId: owners[0], accessToken });
-  const sold = async (options: { legacy?: boolean } = {}) => {
+  const sold = async (options: { legacy?: boolean; structuredBucket?: string } = {}) => {
     [bundle, post, order] = [randomUUID(), randomUUID(), randomUUID()];
     expect((await admin.storage.from('post_resource_files').upload(owners[0] + '/audit-fixture.png', new Blob([Uint8Array.from(png)], { type: 'image/png' }), { contentType: 'image/png' })).error).toBeNull();
     let generation: string | null = null;
@@ -41,6 +41,12 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
     }
     await db.query("insert into public.posts(id,user_id,visibility,category,source_kind,post_format,review_status,body,generation_id) values($1,$2,'public','image','magicbooklet','text','visible','Local deletion retention fixture',$3)", [post, owners[0], generation]);
     await db.query("insert into public.post_resource_bundles(id,post_id,owner_user_id,access_mode,status,title,price_usd_cents,attachments,allow_remix) values($1,$2,$3,'paid','published','Local retained file',100,$4,$5)", [bundle, post, owners[0], JSON.stringify([{ id: 'fixture-file', kind: 'file', name: 'Reference', storagePath: owners[0] + '/audit-fixture.png', contentType: 'image/png' }]), options.legacy ?? false]);
+    if (options.structuredBucket) {
+      const source = owners[0] + '/structured.png';
+      await extraUpload(options.structuredBucket, source);
+      const items = [{ id: 'structured-fixture', scope: { kind: 'all' }, type: 'reference_image', role: 'style_reference', sectionId: null, title: 'Structured reference', description: null, textContent: null, externalUrl: null, storagePath: options.structuredBucket === 'post_resource_files' ? source : options.structuredBucket + '/' + source, contentType: 'image/png', sizeBytes: png.length, workflowSnapshot: null, sortOrder: 0, isPrimary: true, remixUse: 'reference_only' }];
+      await db.query('update public.post_resource_bundles set resource_items=$1 where id=$2', [JSON.stringify(items), bundle]);
+    }
     await db.query("insert into public.post_resource_bundle_orders(id,bundle_id,buyer_user_id,razorpay_order_id,amount_subunits,currency,status) values($1,$2,$3,$4,100,'INR','paid')", [order, bundle, owners[1], 'audit-local-' + order]);
     const row = (await db.query("insert into public.post_resource_bundle_purchases(bundle_id,buyer_user_id,order_id,price_usd_cents,amount_subunits,currency) values($1,$2,$3,100,100,'INR') returning id,revision_id", [bundle, owners[1], order])).rows[0];
     purchase = row.id; revision = row.revision_id;
@@ -378,6 +384,46 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
     expect(await authExists()).toBe(false); expect(await objects()).toEqual([]);
     expect(await retained()).toHaveLength(1); await buyerFile();
   });
+  it('retains canonical structured purchased resource files', async () => {
+    await sold({ structuredBucket: 'post_resource_files' });
+    expect(await initial()).toMatchObject({ cleanupPending: true, storage: { objectsRemoved: 4 } });
+    expect(await retained()).toHaveLength(2); expect(await authExists()).toBe(false);
+    await buyerFile(); await buyerFile(owners[0] + '/structured.png');
+  });
+  it.each(['uploads', 'generation_inputs', 'generated_images'])('rejects unsupported bucket-qualified structured paths from %s before publication', async bucket => {
+    await expect(sold({ structuredBucket: bucket })).rejects.toThrow('Uploaded resource files must belong to the creator');
+    expect(await authExists()).toBe(true); expect(await job()).toBeUndefined();
+    expect((await db.query('select resource_items from public.post_resource_bundles where id=$1', [bundle])).rows[0].resource_items).toEqual([]);
+    expect((await db.query('select id from public.post_resource_bundle_purchases where bundle_id=$1', [bundle])).rows).toEqual([]);
+  });
+  it('denies retained reads for another buyer, an unlisted path and a retracted purchase', async () => {
+    await sold(); await initial(); await buyerFile();
+    const other = await admin.auth.admin.createUser({ email: randomUUID() + '@example.invalid', password: randomUUID() + 'aZ!7', email_confirm: true });
+    expect(other.error).toBeNull(); owners.push(other.data.user!.id);
+    const read = (viewer: string, path: string) => createViewerUnlockFileUrl({ adminSupabase: admin, body: { storagePath: path }, countryCode: 'IN', rateLimitKey: 'audit-' + viewer, unlockId: purchase!, viewerUserId: viewer });
+    expect(await read(other.data.user!.id, owners[0] + '/audit-fixture.png')).toMatchObject({ ok: false, status: 404 });
+    expect(await read(owners[1], owners[1] + '/audit-fixture.png')).toMatchObject({ ok: false, status: 404 });
+    const retainedPath = (await retained())[0].name;
+    expect(await read(owners[1], retainedPath)).toMatchObject({ ok: false, status: 404 });
+    await db.query('update public.post_resource_bundle_purchases set moderation_retracted_at=now() where id=$1', [purchase]);
+    expect(await read(owners[1], owners[0] + '/audit-fixture.png')).toMatchObject({ ok: false, status: 404 });
+    expect(await retained()).toHaveLength(1);
+  });
+  it('rejects tampered and actually expired signed retained URLs at the local Storage origin', async () => {
+    await sold(); await initial();
+    const path = (await retained())[0].name;
+    const signed = await admin.storage.from('post_resource_files').createSignedUrl(path, 2);
+    expect(signed.error).toBeNull();
+    const url = new URL(signed.data!.signedUrl);
+    const response = await fetch(url); expect(response.status).toBe(200); expect(Buffer.from(await response.arrayBuffer())).toEqual(png);
+    const token = url.searchParams.get('token')!;
+    const claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
+    const corrupted = new URL(url); corrupted.searchParams.set('token', token.slice(0, -5) + 'AAAAA');
+    expect((await fetch(corrupted)).status).not.toBe(200);
+    await new Promise(resolve => setTimeout(resolve, Math.max(0, claims.exp * 1000 - Date.now()) + 2000));
+    expect((await fetch(url)).status).not.toBe(200);
+    await buyerFile();
+  }, 12000);
   it('retains actual legacy generation inputs in the purchased revision supplement', async () => {
     await sold({ legacy: true });
     const source = 'generation_inputs/' + owners[0] + '/' + generationIds[0] + '/reference.png';

@@ -6,10 +6,25 @@ Updated 2026-10-06 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/account-deletion-audit-10c`, incorporating main `383c65038daac34ebd7a3f9100846a18b96a6687` (#374); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/account-deletion-audit-10d`, incorporating main `383c65038daac34ebd7a3f9100846a18b96a6687` (#374); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+10D adds six actual local retained-access/publication controls: canonical
+structured resource retention; three unsupported bucket-qualified path denials;
+buyer/unlisted/internal-path/retraction mint denials; actual signed-token tamper
+and expiry at the local Storage origin. All 33 actual deletion cases pass on
+Node 24.21.0 (152.01 seconds); test types/lint and tracked cleanup pass. No runtime
+or schema change. See 10D report for signed capability/CDN limits. Next reproduce
+cash refund after creator deletion using the actual quote/capture SQL, not a
+synthetic directly inserted paid order. Broader AUTH/MARKET/MEDIA rows stay open.
+
+10C is in PR #375, head 449c07f03bcaf78b72abe4dc7f36dac87d880f43, Quality
+37500612971 in progress (DB/mobile/E2E pass, web build). #374 exact-main Quality
+37500291828 passed; standard release 37501990835 is running. Independent private
+account-deletion-identities-release/ verifier and smoke checks remain. Do not
+merge #375 before parent live verification; mobile-store idle immediately at merge.
 
 10C adds five actual local purchased legacy-generation-input controls. A remix
 revision's supplemental reference and attachment survive creator deletion in
