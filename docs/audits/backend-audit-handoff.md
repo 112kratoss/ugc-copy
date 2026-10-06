@@ -6,10 +6,31 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/admin-collector-matrix-audit-11d`, preserving operations PR #381 and preparing the separately reproduced overview purchase-counter fix. Prior audit branches and unrelated local evidence remain preserved.
+Current checkout: `codex/admin-collector-limits-audit-11e`, preserving operations #381 and purchase-counter #382 while preparing two independently reproduced API row-ceiling fixes. Prior audit branches and unrelated local evidence remain preserved.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+11E reproduces 1,001-order revenue counted as 1,000 without a truncation warning,
+and a newest failed job missed after 1,000 successes, through actual PostgREST.
+The candidate pages revenue within the existing 2,000-row rail budget with exact
+counts and aggregates daily jobs in a service-role-only SQL RPC. All 14 actual
+API/SQL cases, 25 focused cases, types/lint pass. A clean replay passes 2,174
+assertions in 101 pgTAP files, including eleven new summary controls. Specific
+fixture cleanup is empty. Read-only production has 939 runs/12 names/zero
+failures, so no current missed failure is attributed. The source migration is
+20261006190707; standard release/function/privilege checks remain. Prepare a
+separate PR stacked on #382 and hold merge until both parents are verified.
+
+Operations #381 passed fresh exact-head Quality 37515495937 on 5354a3b6 and
+merged with mobile-store idle at October 6 19:12:29 UTC as
+235aca0165500b53d436aef4eb4e54fffb489616. Exact-main Quality 37517212787 is
+running; standard release and independent checks remain. AUTH-02 remains failed
+until verified live. #382 is open with its new API CI job running on f0a319f2;
+all 93 actual Linux API cases pass. Initial workflow run 37516028671 was rejected
+before jobs for unavailable runner.temp in job env; the path now resolves in a
+runner step. Final candidate must incorporate the parent main revision and
+pass its own exact-head CI; retarget #382 to main, then hold for parent release.
 
 11D reproduces mobile credit ledger mirrors counted as Razorpay orders in the
 admin overview. Two real PostgREST/SQL regressions fail before the filter and
@@ -19,15 +40,14 @@ production counts are zero for recent web purchases and mobile mirrors; no
 current production miscount is established. The candidate adds an isolated
 Quality API job to run 61 deletion, 25 operations and seven collector cases
 sequentially against a clean Auth/Storage/PostgREST stack. Pinned Linux CLI and
-exact-head CI must certify that job before merge. Prepare a separate PR stacked
-on operations #381; hold merge until the parent is independently verified.
+exact-head CI must certify that job before merge. PR #382 is stacked on operations #381; hold merge until the parent is independently verified.
 
 11B/C operations PR #381 now includes both timestamp validation and independent
 admin-page gates. Exact candidate d51850c0 failed full CI 37513911652 only in
 three old missing-user render fixtures calling the newly gated page outside a
 request. All three reproduce locally; an authorized identity fixture fixes them
 without changing runtime or denied-page controls. Head 5354a3b619043c111257812eb42b68c8b487608f
-runs fresh Quality 37515495937; all 58 focused cases, types and scoped lint pass.
+passed fresh Quality 37515495937; all 58 focused cases, types and scoped lint pass.
 All 20 revoked HTML/RSC and ten active page checks pass on the actual production
 candidate; Playwright verifies the activity redirect contains no private marker.
 Cleanup is empty and server/browser stopped. AUTH-02 remains failed until this

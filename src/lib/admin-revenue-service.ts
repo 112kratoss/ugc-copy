@@ -1,6 +1,7 @@
 import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { readBoundedAdminRows } from '@/lib/admin-bounded-query';
 
 /**
  * Read models for the admin Revenue area.
@@ -172,9 +173,9 @@ export async function collectAdminRevenueReport(
     bundleOrders,
     wallets,
   ] = await Promise.all([
-    client
+    readBoundedAdminRows((from, to) => client
       .from('transactions')
-      .select('id, user_id, status, amount, credits, currency, created_at, razorpay_payment_id')
+      .select('id, user_id, status, amount, credits, currency, created_at, razorpay_payment_id', { count: 'exact' })
       // Mobile purchases also land here; they are reported on the mobile rail
       // from `mobile_store_transactions` instead. See the module comment.
       .is('mobile_product_id', null)
@@ -183,45 +184,47 @@ export async function collectAdminRevenueReport(
       .eq('is_test', false)
       .gte('created_at', since)
       .order('created_at', { ascending: false })
-      .limit(RAIL_FETCH_LIMIT),
-    client
+      .order('id', { ascending: false })
+      .range(from, to), RAIL_FETCH_LIMIT),
+    readBoundedAdminRows((from, to) => client
       .from('mobile_store_transactions')
-      .select('id, user_id, status, amount_subunits, currency, credits, created_at, product_id')
+      .select('id, user_id, status, amount_subunits, currency, credits, created_at, product_id', { count: 'exact' })
       // Store-sandbox settlements (App Review, TestFlight, Play internal
       // testing) grant credits but are not money. See `settledPurchaseProvider`
       // in mobile-commerce.ts for why they reach this table at all.
       .neq('provider', 'sandbox')
       .gte('created_at', since)
       .order('created_at', { ascending: false })
-      .limit(RAIL_FETCH_LIMIT),
-    client
+      .order('id', { ascending: false })
+      .range(from, to), RAIL_FETCH_LIMIT),
+    readBoundedAdminRows((from, to) => client
       .from('marketplace_orders')
-      .select('id, buyer_user_id, status, amount_subunits, currency, created_at, razorpay_payment_id')
+      .select('id, buyer_user_id, status, amount_subunits, currency, created_at, razorpay_payment_id', { count: 'exact' })
       .not('razorpay_order_id', 'like', 'mobile\\_%')
       .gte('created_at', since)
       .order('created_at', { ascending: false })
-      .limit(RAIL_FETCH_LIMIT),
-    client
+      .order('id', { ascending: false })
+      .range(from, to), RAIL_FETCH_LIMIT),
+    readBoundedAdminRows((from, to) => client
       .from('post_resource_bundle_orders')
-      .select('id, buyer_user_id, status, amount_subunits, currency, created_at, razorpay_payment_id')
+      .select('id, buyer_user_id, status, amount_subunits, currency, created_at, razorpay_payment_id', { count: 'exact' })
       .not('razorpay_order_id', 'like', 'mobile\\_%')
       .gte('created_at', since)
       .order('created_at', { ascending: false })
-      .limit(RAIL_FETCH_LIMIT),
+      .order('id', { ascending: false })
+      .range(from, to), RAIL_FETCH_LIMIT),
     client
       .from('creator_resource_wallets')
       .select('available_token_subunits, lifetime_earned_token_subunits')
       .limit(5000),
   ]);
 
-  for (const result of [creditTransactions, mobileTransactions, marketplaceOrders, bundleOrders, wallets]) {
-    if (result.error) throw result.error;
-  }
+  if (wallets.error) throw wallets.error;
 
-  const creditRows = (creditTransactions.data ?? []) as Array<Record<string, unknown>>;
-  const mobileRows = (mobileTransactions.data ?? []) as Array<Record<string, unknown>>;
-  const marketplaceRows = (marketplaceOrders.data ?? []) as Array<Record<string, unknown>>;
-  const bundleRows = (bundleOrders.data ?? []) as Array<Record<string, unknown>>;
+  const creditRows = creditTransactions.rows;
+  const mobileRows = mobileTransactions.rows;
+  const marketplaceRows = marketplaceOrders.rows;
+  const bundleRows = bundleOrders.rows;
   const walletRows = (wallets.data ?? []) as Array<Record<string, unknown>>;
 
   const rails: AdminRevenueRail[] = [
@@ -308,8 +311,8 @@ export async function collectAdminRevenueReport(
     orderTotal: recentOrders.length,
     orderOffset: effectiveOrderOffset,
     orderPageSize,
-    ordersTruncated: [creditRows, mobileRows, marketplaceRows, bundleRows]
-      .some((rows) => rows.length >= RAIL_FETCH_LIMIT),
+    ordersTruncated: [creditTransactions, mobileTransactions, marketplaceOrders, bundleOrders]
+      .some((result) => result.truncated),
     creatorPayouts: {
       walletCount: walletRows.length,
       availableTokenSubunits: walletRows.reduce(

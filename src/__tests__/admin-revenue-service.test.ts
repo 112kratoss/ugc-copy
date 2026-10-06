@@ -21,6 +21,7 @@ function createClient(rows: TableRows, filterLog: Record<string, string[]> = {})
         select: () => builder,
         gte: () => builder,
         order: () => builder,
+        range: (from: number, to: number) => Promise.resolve({ data: selected.slice(from, to + 1), error: null, count: selected.length }),
         limit: () => Promise.resolve({ data: selected, error: null }),
         is: (column: string, value: unknown) => {
           filterLog[table].push(`is:${column}=${String(value)}`);
