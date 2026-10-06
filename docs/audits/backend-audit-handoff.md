@@ -6,7 +6,7 @@ Updated 2026-10-06 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/account-deletion-audit-10c`, incorporating main `b9729ee41f4fc4db1c500bc96283d667eae34847` (#373); prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/account-deletion-audit-10c`, incorporating main `383c65038daac34ebd7a3f9100846a18b96a6687` (#374); prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
@@ -17,8 +17,9 @@ neutral Storage; actual buyer signed reads match the source bytes. Four 503
 listing/read/write failures halt deletion and recover from durable failed jobs.
 All 27 actual deletion cases pass (147.56 seconds), including live expiry/grace;
 test types/lint and fixture cleanup pass. No runtime/schema change; no provider
-called. See 10C report. Local candidate, no PR yet: complete the parent #374
-release first, incorporate main and open the scoped evidence PR.
+called. See 10C report. Main #374 is incorporated with the exact tested file
+preserved. Open the scoped evidence PR; merge only after the parent release
+is independently verified.
 
 9O/10A #373 is independently verified live on
 b9729ee41f4fc4db1c500bc96283d667eae34847. Exact-main Quality 37498165169 and
@@ -29,10 +30,9 @@ fs-ext was rebuilt from its old Node 22 ABI; use Node 24 for subsequent tests.
 
 10B #374 passed exact-head Quality 37498287785 on de100f06 and merged with
 mobile-store idle October 6 17:01:20 UTC as
-383c65038daac34ebd7a3f9100846a18b96a6687. Exact-main Quality, standard release
-and independent account-deletion-identities-release/ verification remain.
-Incorporate main #374 into 10C, preserving the exact tested files, then open its
-scoped PR. Do not merge 10C before the parent release is independently verified.
+383c65038daac34ebd7a3f9100846a18b96a6687. Exact-main Quality 37500291828 is
+running; standard release and independent account-deletion-identities-release/
+verification remain. 10C incorporates this main with its tested files preserved. Do not merge 10C before the parent release is independently verified.
 
 10B adds ten actual local deletion controls: linked guest order/partial Auth
 failure; all eight owner buckets; template snapshot anonymization/public/private
