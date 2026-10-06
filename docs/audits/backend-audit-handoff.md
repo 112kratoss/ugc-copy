@@ -6,10 +6,32 @@ Updated 2026-10-06 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/retention-mapping-recovery-audit-10h`, preserving 10G evidence and new 10H retention fix; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/fx-provider-payload-audit-11a`, preserving parent #379, 10I evidence commit c3500991, and new FX candidate; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+11A reproduces 20 actual provider-HTTP FX responses (EUR/GBP/AUD/CAD/SGD
+missing/null/zero/negative) being published/cached with HTTP 200 while USD is
+valid. The candidate requires all six supported rates to be finite and positive;
+malformed rates return no-store 503. All 28 actual HTTP and 54 focused cases
+pass; types/lint pass. No incorrect charge/production incident is established;
+read-only live FX baseline has all six positive. No schema or client change.
+A Node test environment is required for actual HTTP; shared setup's DOM-only
+scrollIntoView stub now checks Element exists. 10I evidence is included; no
+runtime/schema change there. Prepare a separate FX PR after parent #379 is
+released/verified. OPS-04 is failed until release; ledger stays 24 passed,
+24 untested, 3 failed, 2 external (PAY-04 now untested, failed OPS-04/MEDIA07/09).
+
+10F #377 is independently verified live on ab9eb3ad at October 6 18:12:33 UTC:
+exact-main Quality 37507548395, standard release 37508809231, planned trigger
+only, all 23 rollback controls, zero fixtures and 110 unchanged advisors pass.
+See deletion-freeze cash release record. Prod ledger 20261006180733 maps to
+source 20261006173448. PAY-04 returns to untested for the broader matrix.
+10H #379 exact-head Quality 37508493978 is running on
+4ee0b8d07a831e5e35338c4d8f0447ced29e04cd (DB/mobile/E2E pass, web types).
+Parent is independently verified; mobile-store idle still required at merge.
+
 
 10I adds eight actual signed-refund failure/retry controls: pre-commit RPC 503
 and post-commit acknowledgement loss across live/deleted/Storage-failed/Auth-

@@ -1,7 +1,8 @@
 # Backend audit completion checklist
 
 Updated 2026-10-06. Current independently checked production:
-`b82a7de987ad08212edc12b134be02e2a3d8be6c`, including Sections 9A–9O and 10A–E.
+`ab9eb3ad0ce90e5053e782d9b87231d7a48b57de`, including Sections 9A–9O and 10A–F.
+[10F release evidence](backend-section-10-deletion-freeze-refunds-release-2026-10-06.md).
 [10E release evidence](backend-section-10-detached-cash-refunds-release-2026-10-06.md).
 [9O/10A release evidence](backend-section-10-account-deletion-release-2026-10-06.md).
 [9M/9N release evidence](backend-section-09-model-verification-release-2026-10-06.md).
@@ -103,7 +104,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | PAY-01 | Credit grant identity/idempotency regressions | passed | [Credit grant release](backend-section-05-credit-grants-release-2026-09-28.md) |
 | PAY-02 | Receipt/event identity and reversal target binding regressions | passed | [Receipt release](backend-section-05-receipt-identity-release-2026-09-29.md), [binding release](backend-section-05-credit-event-binding-release-2026-09-29.md), [event history](backend-section-05-mobile-event-history-release-2026-09-29.md) |
 | PAY-03 | Reproduced refund/restore ordering and debt cases | passed | [Refund release](backend-section-05-refund-ordering-release-2026-09-28.md); the full event lifecycle matrix is PAY-04 |
-| PAY-04 | Remaining credit, referral, refund/dispute/restore and reconciliation combinations | failed | [10E](backend-section-10-detached-cash-refunds-2026-10-06.md) reproduces detached refund rejection/deletion deadlock; [10E release verified](backend-section-10-detached-cash-refunds-release-2026-10-06.md). [10F](backend-section-10-deletion-freeze-refunds-2026-10-06.md) fixes reproduced refunds frozen during retrying deletion; #377 merged, main CI/release verification remains. Broader orderings stay open. |
+| PAY-04 | Remaining credit, referral, refund/dispute/restore and reconciliation combinations | untested | [10E](backend-section-10-detached-cash-refunds-2026-10-06.md) reproduces detached refund rejection/deletion deadlock; [10E release verified](backend-section-10-detached-cash-refunds-release-2026-10-06.md). [10F](backend-section-10-deletion-freeze-refunds-2026-10-06.md) [10F release verified](backend-section-10-deletion-freeze-refunds-release-2026-10-06.md) fixes retry-state freezes. [10G/I](backend-section-10-cash-webhook-retries-2026-10-06.md) add signed delivery/retry controls. Broader orderings stay open. |
 | PAY-05 | Genuine purchase/refund/webhook delivery and installed-client restore | external | Provider test credentials/accounts were unavailable in prior batches; synthetic events do not close this row |
 | PAY-06 | Scoped payout transition and detached reporting defects | passed | [Payout release](backend-section-04-payouts-release-2026-09-27.md), [detached reporting](backend-section-05-payout-detached-reporting-release-2026-09-30.md) |
 | PAY-07 | Creator payout crash recovery and reconciliation to external transfer outcome | untested | No actual money transfer is authorized as an incidental probe; use suitable test facilities |
@@ -149,7 +150,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | OPS-01 | Exact-main Quality, staged/live health and standard release for Section 6J | passed | [6J release evidence](backend-section-06-staging-locks-release-2026-10-01.md); first attempt mismatch preserved |
 | OPS-02 | Backup restore and rollback/reconciliation exercises | untested | Isolated restoration with consistency checks and measured recovery; no production restore |
 | OPS-03 | Current-build capacity evidence and failure containment | untested | Reconcile [scaling entry point](../scaling-audit.md) with the audited build; local disk probes are not capacity certification |
-| OPS-04 | Admin page collectors, telemetry, app-version, CSP and FX methods | untested | Review assigned routes and seven page-only services; protect data and validate failure behavior |
+| OPS-04 | Admin page collectors, telemetry, app-version, CSP and FX methods | failed | [11A](backend-section-11-fx-provider-payload-2026-10-06.md) reproduces public caching of invalid/missing non-USD rates in 20 actual HTTP cases; candidate passes locally, release remains. Other assigned routes and seven page-only services still require behavioral coverage. |
 
 ## Completion rule and next sequence
 

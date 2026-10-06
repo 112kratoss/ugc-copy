@@ -39,9 +39,10 @@ function pickSupportedRates(rates: Record<string, unknown>) {
 
   for (const currency of SUPPORTED_CURRENCIES) {
     const value = rates[currency];
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      picked[currency] = value;
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+      throw new Error('FX upstream returned an invalid supported currency rate');
     }
+    picked[currency] = value;
   }
 
   return picked;
