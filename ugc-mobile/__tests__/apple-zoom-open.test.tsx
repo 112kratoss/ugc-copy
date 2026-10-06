@@ -197,6 +197,9 @@ describe('a tile opening under the native zoom', () => {
     renderer.act(() => { fire('beforeRemove'); });
 
     expect(isVideoReturnPending(tileKey, STREAM)).toBe(true);
+    // Standing still: Back pops a picture of the reel, one frame, and the tile
+    // holds that frame while UIKit crossfades to it (lib/video-player-loans.ts).
+    expect(player.pause).toHaveBeenCalledTimes(1);
     stopAccepting();
   });
 
@@ -321,6 +324,8 @@ describe('a tile opening under the native zoom', () => {
     renderer.act(() => { fire('transitionStart', { data: { closing: true } }); });
     expect(isVideoReturnPending(tileKey, STREAM)).toBe(true);
     expect(isVideoPlayerHandedBack(player)).toBe(true);
+    // Playing: a gesture keeps the reel itself, and both draw the clip going on.
+    expect(player.pause).not.toHaveBeenCalled();
     expect(feedVeil.cover.get()).toBe(0);
     expect(stage.lentVideo?.reclaimed).toBe(0);
     // The tile takes it and draws the clip under the shrinking reel.
@@ -343,6 +348,8 @@ describe('a tile opening under the native zoom', () => {
     renderer.act(() => { fire('beforeRemove'); });
     expect(isVideoReturnPending(tileKey, STREAM)).toBe(true);
     expect(stage.lentVideo?.reclaimed).toBe(2);
+    // The removal that ends a gesture close hands nothing over, and stops nothing.
+    expect(player.pause).not.toHaveBeenCalled();
     stopAccepting();
   });
 

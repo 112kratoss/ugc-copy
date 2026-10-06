@@ -292,6 +292,25 @@ describe('FeedVideoPreview', () => {
     expect(tree!.root.findAll((node) => String(node.type) === 'play-icon')).toHaveLength(1);
   });
 
+  // The accent line is part of the tile's own look. A tile UIKit's zoom draws
+  // above a closing reel goes without it (lib/media-zoom-tile-shape.ts).
+  it('draws its thin accent outline unless told the tile is shaped from outside', () => {
+    const outline = (outlined: boolean | undefined) => {
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<FeedVideoPreview {...posterProps} active={false} outlined={outlined} />);
+      });
+      const [root] = tree!.root.findAll((node) => String(node.type) === 'view');
+      const width = (root.props.style as { borderWidth: number }).borderWidth;
+      renderer.act(() => tree!.unmount());
+      return width;
+    };
+
+    expect(outline(undefined)).toBe(1);
+    expect(outline(true)).toBe(1);
+    expect(outline(false)).toBe(0);
+  });
+
   it('supports the clean cover presentation used by the Showcase feed', () => {
     let tree: renderer.ReactTestRenderer | undefined;
 

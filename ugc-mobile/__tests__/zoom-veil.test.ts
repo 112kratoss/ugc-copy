@@ -26,6 +26,7 @@ import {
   ZOOM_VEIL_DEADLINE_MS,
   ZOOM_VEIL_LIFT_DELAY_MS,
   ZOOM_VEIL_LIFT_MS,
+  ZOOM_VEIL_RETURN_MS,
   type ScreenVeil,
   type ZoomVeilTransition,
 } from '../lib/zoom-veil';
@@ -113,6 +114,33 @@ describe('the veil under the zoom', () => {
     vi.advanceTimersByTime(ZOOM_VEIL_LIFT_DELAY_MS + ZOOM_VEIL_LIFT_MS);
     expect(set).toHaveBeenCalledWith(0);
     set.mockRestore();
+  });
+
+  // Back used to shrink the reel into a black screen and fade the feed in
+  // round it afterwards. Filmed with no veil at all, a close showed nothing
+  // through the picture, so the tabs are there to be seen as it begins; a
+  // pushed page, which UIKit scales up under the shrinking reel, still waits.
+  it('brings a screen that fills the window back as Back begins, and keeps the wait for a pushed page', () => {
+    vi.useFakeTimers();
+    const uncoveredAfter = (owner: string, fillsWindow: boolean) => {
+      const veil = createScreenVeil();
+      registerScreenVeil(owner, veil, fillsWindow);
+      const drop = dropZoomVeil(owner, TILE)!;
+      claimZoomVeil(drop);
+      liftZoomVeil(drop);
+      const set = vi.spyOn(veil.cover, 'set');
+      let elapsed = 0;
+      while (set.mock.calls.length === 0 && elapsed < 2000) {
+        vi.advanceTimersByTime(10);
+        elapsed += 10;
+      }
+      set.mockRestore();
+      return elapsed;
+    };
+
+    expect(uncoveredAfter('tabs', true)).toBe(ZOOM_VEIL_RETURN_MS);
+    expect(uncoveredAfter('creator page', false)).toBe(ZOOM_VEIL_LIFT_DELAY_MS + ZOOM_VEIL_LIFT_MS);
+    expect(ZOOM_VEIL_RETURN_MS).toBeLessThan(ZOOM_VEIL_LIFT_DELAY_MS);
   });
 
   it('clears when the reel leaves React any other way', () => {
