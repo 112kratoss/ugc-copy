@@ -412,6 +412,21 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
     const duplicate = await admin.rpc('reconcile_post_resource_cash_adjustment', { p_provider_event_id: 'audit-refund-' + order, p_payment_id: 'audit-payment-' + bundle, p_action: 'refund', p_provider_order_id: 'audit-local-' + bundle });
     expect(duplicate.error).toBeNull(); expect(duplicate.data).toMatchObject({ status: 'already_adjusted' });
   });
+  it.each(['storage', 'auth'] as const)('reconciles a cash refund while deletion retries a %s failure', async failure => {
+    await sold({ captured: true }); fail = failure;
+    await expect(initial()).rejects.toThrow();
+    await markAccountDeletionStage(admin, owners[0], 'failed', new Error('Isolated partial deletion'));
+    expect(await authExists()).toBe(true); fail = null;
+    const refund = await admin.rpc('reconcile_post_resource_cash_adjustment', { p_provider_event_id: 'audit-refund-' + order, p_payment_id: 'audit-payment-' + bundle, p_action: 'refund', p_reason: 'Isolated interrupted deletion refund', p_provider_order_id: 'audit-local-' + bundle });
+    expect(refund.error).toBeNull(); expect(refund.data).toMatchObject({ status: 'adjusted' });
+    expect((await db.query('select id from public.post_resource_bundle_purchases where id=$1', [purchase])).rows).toEqual([]);
+    expect((await db.query('select sales_count from public.post_resource_bundles where id=$1', [bundle])).rows[0].sales_count).toBe(0);
+    const denied = await createViewerUnlockFileUrl({ adminSupabase: admin, body: { storagePath: owners[0] + '/audit-fixture.png' }, countryCode: 'IN', rateLimitKey: 'audit-' + owners[1], unlockId: purchase!, viewerUserId: owners[1] });
+    expect(denied).toMatchObject({ ok: false, status: 404 });
+    await db.query("update public.account_deletion_jobs set next_attempt_at=now()-interval '1 second' where user_id=$1", [owners[0]]);
+    expect(await cleanup()).toMatchObject({ initial: { claimed: 1, resweepScheduled: 1 } });
+    expect(await authExists()).toBe(false); expect(await objects()).toEqual([]);
+  });
   it('retains canonical structured purchased resource files', async () => {
     await sold({ structuredBucket: 'post_resource_files' });
     expect(await initial()).toMatchObject({ cleanupPending: true, storage: { objectsRemoved: 4 } });
