@@ -79,6 +79,9 @@ const SHEET_ENTER_DURATION = 300;
 const SHEET_EXIT_DURATION = 220;
 // Keeps the panel's drop shadow past the screen edge while it is closed.
 const SHEET_HIDDEN_SLOP = 24;
+// Where a panel waits before it has been laid out: further below its place than
+// any screen is tall, so nothing drawn that early can show.
+const SHEET_UNMEASURED_OFFSET = 10_000;
 
 // The pill's own geometry, and the target around it. Not spacing tokens: this
 // is the shape of one control, the way `hit-target` owns its own floor.
@@ -384,6 +387,9 @@ function springBack(dragY: ReactNative.Animated.Value | null) {
   }).start();
 }
 
+/** See where `useSheetPresentation` makes its two values. */
+const NATIVE_FROM_THE_START = { useNativeDriver: true };
+
 /**
  * The entrance and exit of a sheet that is not hosted by a `Modal`.
  *
@@ -391,9 +397,28 @@ function springBack(dragY: ReactNative.Animated.Value | null) {
  * nothing for free and used to pop into place — the action sheet did — which
  * is the one thing a sheet must not do: Sheets exist to "help people perform a
  * scoped task" without losing their place, and a surface that appears with no
- * travel reads as a page change. The panel slides its own measured height, so
- * the first opening waits for the measurement, and the caller keeps rendering
- * until `rendered` is false so the exit can play.
+ * travel reads as a page change. The panel slides its own measured height, and
+ * the caller keeps rendering until `rendered` is false so the exit can play.
+ *
+ * Every opening waits for the panel to be laid out before it starts. The slide
+ * is drawn on the main thread, which is also where the sheet's views are
+ * built, and a slide begun while they were still being built lost its first
+ * frames to them: the model picker's sixteen rows took 49 to 133 ms out of a
+ * 300 ms entrance, where the same sheet with no rows was drawn from 15 ms in
+ * (Pixel 9a emulator films, 2026-10-05). Waiting spends that time before the
+ * sheet moves instead, which is what a Modal did: its window is built, then
+ * slid in by the system. It also means the height is this opening's own, for
+ * a sheet that is not always as tall as it was last time.
+ *
+ * How far the closed panel sits below its place is an animated value of its
+ * own, not a number rendered into the transform. Until the panel has been
+ * measured the value is far below the screen, and it is set from the layout
+ * event itself, which puts it on the native side in the same queue as the
+ * slide's start and ahead of it. It used to be an interpolation rebuilt by the
+ * render that followed the measurement, whose first range was the slop alone:
+ * the slide's start could reach the native side a frame or two before the new
+ * interpolation did, and for those frames the whole sheet was drawn at its
+ * resting place, then jumped below the screen and slid in.
  */
 export function useSheetPresentation({
   visible,
@@ -412,13 +437,31 @@ export function useSheetPresentation({
   onExited?: () => void;
 }) {
   const [rendered, setRendered] = useState(visible);
-  const [panelHeight, setPanelHeight] = useState(0);
-  const progress = useRef(animatedApi?.Value ? new animatedApi.Value(visible ? 1 : 0) : null).current;
+  // Whether the panel now on screen has been laid out. Asked again at every opening.
+  const [measured, setMeasured] = useState(false);
+  // Whether the entrance has played. Forgotten in the render that tells the
+  // sheet to leave, not when its exit ends: an opening that cuts the exit short
+  // has its own arrival to wait for.
+  const [arrived, setArrived] = useState(false);
+  if (!visible && arrived) setArrived(false);
+  // Both are the native driver's from their first value. One that is not is
+  // changed from JS until its first native animation, and on Fabric a change
+  // from JS reaches the view through `setNativeProps`, which the view's shadow
+  // node keeps: every later clone of that node for layout applies those props
+  // again, over whatever the native driver has drawn since
+  // (`ShadowNode::clone`, `nativeProps_DEPRECATED`). The panel's first
+  // measurement was such a change, so the first sheet a screen opened kept
+  // that first offset for as long as it was being laid out anew: opened over
+  // the page's keyboard, in an area following the keys down, it was a strip
+  // at the foot of the screen for ten frames and then jumped to rest; closed
+  // with its own keyboard up it stayed at rest, sank 29dp with the area and
+  // was gone (Pixel 9a emulator films, 2026-10-05).
+  const progress = useRef(animatedApi?.Value ? new animatedApi.Value(visible ? 1 : 0, NATIVE_FROM_THE_START) : null).current;
+  const hiddenOffset = useRef(animatedApi?.Value ? new animatedApi.Value(SHEET_UNMEASURED_OFFSET, NATIVE_FROM_THE_START) : null).current;
   const onEnteredRef = useRef(onEntered);
   onEnteredRef.current = onEntered;
   const onExitedRef = useRef(onExited);
   onExitedRef.current = onExited;
-  const measured = panelHeight > 0;
 
   useEffect(() => {
     if (visible) setRendered(true);
@@ -430,10 +473,14 @@ export function useSheetPresentation({
 
     const finish = () => {
       if (visible) {
+        setArrived(true);
         onEnteredRef.current?.();
         return;
       }
       setRendered(false);
+      // The panel is unmounted with this: the next one waits out of sight for its own layout.
+      setMeasured(false);
+      hiddenOffset?.setValue(SHEET_UNMEASURED_OFFSET);
       onExitedRef.current?.();
     };
 
@@ -456,39 +503,53 @@ export function useSheetPresentation({
     });
 
     return () => animation.stop();
-  }, [measured, progress, reducedMotion, rendered, visible]);
+  }, [hiddenOffset, measured, progress, reducedMotion, rendered, visible]);
 
   const onPanelLayout = useCallback((event: ReactNative.LayoutChangeEvent) => {
-    const nextHeight = event.nativeEvent.layout.height;
-    // Ignore sub-pixel churn so a re-layout cannot restart the slide mid-animation.
-    setPanelHeight((current) => (Math.abs(current - nextHeight) > 1 ? nextHeight : current));
-  }, []);
+    // Every layout, not the first alone: the keyboard shortens a panel and a
+    // step can change what it holds, and the exit travels the height it has then.
+    hiddenOffset?.setValue(event.nativeEvent.layout.height + SHEET_HIDDEN_SLOP);
+    setMeasured(true);
+  }, [hiddenOffset]);
+
+  // One node each for as long as the sheet lives: a node made again by a render
+  // has to be connected again on the native side, and the slide does not wait for that.
+  const entryTranslateY = useMemo(() => (
+    progress && hiddenOffset && animatedApi?.multiply
+      ? animatedApi.multiply(progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }), hiddenOffset)
+      : 0
+  ), [hiddenOffset, progress]);
+  // The scrim reaches full strength by the time the panel is 60% of the way
+  // in, so the sheet settles onto an already-dimmed screen rather than
+  // darkening the world as it arrives.
+  const backdropProgress = useMemo(() => (
+    progress
+      ? progress.interpolate({ inputRange: [0, 0.6, 1], outputRange: [0, 1, 1] })
+      : 1
+  ), [progress]);
 
   return {
     /** Keep the sheet in the tree while this is true; it turns false once the exit has played. */
     rendered,
-    /** Fold into the panel's transform, added to the drag offset. */
-    entryTranslateY: progress
-      ? progress.interpolate({ inputRange: [0, 1], outputRange: [panelHeight + SHEET_HIDDEN_SLOP, 0] })
-      : 0,
-    // The scrim reaches full strength by the time the panel is 60% of the way
-    // in, so the sheet settles onto an already-dimmed screen rather than
-    // darkening the world as it arrives.
-    backdropProgress: progress
-      ? progress.interpolate({ inputRange: [0, 0.6, 1], outputRange: [0, 1, 1] })
-      : 1,
-    // No cross-fade: the travel carries the entrance on its own. Opacity only
-    // holds the panel back for the frame before it is measured.
-    panelOpacity: progress ? (measured ? 1 : 0) : 1,
+    /**
+     * True while the sheet is at rest: its entrance has played and it has not
+     * been told to leave. A sheet with a field gives this to its
+     * `KeyboardAvoidingArea` as `followsKeyboard`, so that the area holds still
+     * while the sheet slides (see that prop).
+     */
+    settled: arrived,
+    /** Fold into the panel's transform, added to the drag offset. No cross-fade: the travel carries the entrance on its own. */
+    entryTranslateY,
+    backdropProgress,
     onPanelLayout,
   };
 }
 
 /**
- * A hosted sheet's entrance and its drag as the one transform and the one
- * opacity a view can take: a JS-driven value beside a native-driven one on the
- * same view does not compose, so the two are added and multiplied instead.
- * `panel` goes on the `SheetPanel`, `backdrop` on the `SheetBackdrop`.
+ * A hosted sheet's entrance and its drag as the one transform a panel can take
+ * and the one opacity a scrim can: a JS-driven value beside a native-driven one
+ * on the same view does not compose, so the two are added and multiplied
+ * instead. `panel` goes on the `SheetPanel`, `backdrop` on the `SheetBackdrop`.
  */
 export function sheetMotion(drag: SheetDismissDrag, presentation: ReturnType<typeof useSheetPresentation>) {
   const translateY = drag.translateY && animatedApi?.add && typeof presentation.entryTranslateY !== 'number'
@@ -499,7 +560,7 @@ export function sheetMotion(drag: SheetDismissDrag, presentation: ReturnType<typ
     : presentation.backdropProgress;
 
   return {
-    panel: { opacity: presentation.panelOpacity, transform: [{ translateY }] } as AnimatedViewStyle,
+    panel: { transform: [{ translateY }] } as AnimatedViewStyle,
     backdrop: { opacity: backdropOpacity } as AnimatedViewStyle,
   };
 }

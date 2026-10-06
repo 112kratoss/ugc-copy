@@ -9,6 +9,8 @@ import { describe, expect, it, vi } from 'vitest';
  */
 const animatedState = vi.hoisted(() => ({
   spring: vi.fn(() => ({ start: vi.fn() })),
+  /** Which value each interpolation was made from. */
+  interpolatedFrom: new WeakMap<object, unknown>(),
 }));
 
 vi.mock('react-native', () => ({
@@ -20,12 +22,17 @@ vi.mock('react-native', () => ({
         this.value = next;
       });
 
-      constructor(initial: number) {
+      config: unknown;
+
+      constructor(initial: number, config?: unknown) {
         this.value = initial;
+        this.config = config;
       }
 
       interpolate(config: unknown) {
-        return { interpolate: config };
+        const made = { interpolate: config };
+        animatedState.interpolatedFrom.set(made, this);
+        return made;
       }
     },
     spring: animatedState.spring,
@@ -46,7 +53,7 @@ import { leaveTouchToNativeView } from '../lib/native-touch-owner';
 
 type Handler = (event: unknown, gesture: Record<string, number>) => unknown;
 type Handlers = Record<string, Handler>;
-type MockValue = { value: number; setValue: ReturnType<typeof vi.fn> };
+type MockValue = { value: number; config: unknown; setValue: ReturnType<typeof vi.fn> };
 
 function mount(visible: boolean, onDismiss = vi.fn(), takesTouchDown?: boolean) {
   let latest: SheetDismissDrag | undefined;
@@ -343,14 +350,15 @@ describe('a hosted sheet’s motion', () => {
     return { ...latest!, unmount: () => renderer.act(() => tree!.unmount()) };
   }
 
-  it('folds the entrance and the drag into one transform and one opacity', () => {
+  it('folds the entrance and the drag into one transform, and the scrim’s two fades into one opacity', () => {
     const { drag, presentation, unmount } = mountHosted();
     const motion = sheetMotion(drag, presentation);
 
     // Two transforms, or two opacities, on one view would not compose: one is
-    // driven natively by the timing, the other set from the finger.
+    // driven natively by the timing, the other set from the finger. The panel
+    // has no opacity of its own: until it is laid out it waits below the
+    // screen, which does not depend on a render reaching the native side.
     expect(motion.panel).toEqual({
-      opacity: presentation.panelOpacity,
       transform: [{ translateY: { add: [presentation.entryTranslateY, drag.translateY] } }],
     });
     expect(motion.backdrop).toEqual({
@@ -394,12 +402,22 @@ describe('a hosted sheet’s arrival and departure', () => {
     return {
       onEntered,
       onExited,
+      presentation: () => latest!,
+      /** How far below its place the closed panel sits: the second factor of the travel. */
+      hiddenOffset: () => (latest!.entryTranslateY as unknown as { multiply: [unknown, MockValue] }).multiply[1],
       show: (shown: boolean) => renderer.act(() => tree!.update(<Probe shown={shown} />)),
-      /** The panel's first layout, which the slide waits for: it travels the panel's own height. */
-      measure: () => renderer.act(() => latest!.onPanelLayout({ nativeEvent: { layout: { height: 560 } } } as never)),
+      /** The panel's layout, which the slide waits for: it travels the panel's own height. */
+      measure: (height = 560) => renderer.act(() => latest!.onPanelLayout({ nativeEvent: { layout: { height } } } as never)),
       unmount: () => renderer.act(() => tree!.unmount()),
     };
   }
+
+  const slidesStarted = () => vi.mocked(Animated.timing).mock.calls.length;
+  /** The newest timed animation's `start`, as a spy. */
+  const newestStart = () => {
+    const started = vi.mocked(Animated.timing).mock.results;
+    return (started[started.length - 1].value as unknown as { start: ReturnType<typeof vi.fn> }).start;
+  };
 
   /** Ends the newest timed animation, as the native side does once it has run (or been cut short). */
   function endSlide(finished = true) {
@@ -441,6 +459,139 @@ describe('a hosted sheet’s arrival and departure', () => {
     sheet.measure();
     expect(sheet.onEntered).toHaveBeenCalledTimes(1);
     expect(vi.mocked(Animated.timing).mock.calls.length).toBe(slidesBefore);
+    sheet.unmount();
+  });
+
+  // On a first opening the whole sheet was drawn at its resting place for a
+  // frame or two, then jumped below the screen and slid in (emulator films,
+  // 2026-10-05). The travel was an interpolation rebuilt by the render after
+  // the measurement, and before that render reached the native side the old
+  // one, whose range was the 24pt slop alone, was what the slide drove.
+  it('keeps a panel that has not been laid out far below the screen, and has its travel set before the slide starts', () => {
+    const sheet = mountPresented();
+    sheet.show(true);
+    const offset = sheet.hiddenOffset();
+    // Further down than any screen is tall: nothing drawn this early can show.
+    expect(offset.value).toBeGreaterThan(5_000);
+    const before = slidesStarted();
+    sheet.measure(560);
+    // Its own height and the slop for its shadow.
+    expect(offset.value).toBe(584);
+    expect(slidesStarted()).toBe(before + 1);
+    // Set from the layout event, so it is queued for the native side ahead of the slide's start.
+    expect(offset.setValue.mock.invocationCallOrder.at(-1)!).toBeLessThan(newestStart().mock.invocationCallOrder[0]);
+    sheet.unmount();
+  });
+
+  it('hands every render the same travel, so nothing has to be connected again while the sheet slides', () => {
+    const sheet = mountPresented();
+    sheet.show(true);
+    const travel = sheet.presentation().entryTranslateY;
+    const scrim = sheet.presentation().backdropProgress;
+    sheet.measure(560);
+    expect(sheet.presentation().entryTranslateY).toBe(travel);
+    expect(sheet.presentation().backdropProgress).toBe(scrim);
+    sheet.unmount();
+  });
+
+  // The slide is drawn on the main thread, where the sheet's views are built:
+  // begun before they were, the model picker's entrance was first drawn 49 to
+  // 133 ms in. And a sheet is not always as tall as it was last time.
+  it('waits for the panel’s layout at every opening, not the first alone', () => {
+    const sheet = mountPresented();
+    sheet.show(true);
+    sheet.measure(560);
+    endSlide();
+    sheet.show(false);
+    endSlide();
+    expect(sheet.onExited).toHaveBeenCalledTimes(1);
+    // Gone: the next panel waits out of sight again.
+    expect(sheet.hiddenOffset().value).toBeGreaterThan(5_000);
+
+    const before = slidesStarted();
+    sheet.show(true);
+    expect(slidesStarted()).toBe(before);
+    sheet.measure(700);
+    expect(slidesStarted()).toBe(before + 1);
+    expect(sheet.hiddenOffset().value).toBe(724);
+    sheet.unmount();
+  });
+
+  it('leaves by the height the panel has by then', () => {
+    const sheet = mountPresented();
+    sheet.show(true);
+    sheet.measure(700);
+    endSlide();
+    // The keyboard has shortened it, or a step has changed what it holds.
+    sheet.measure(458);
+    expect(sheet.hiddenOffset().value).toBe(482);
+    // A layout is not a reason to slide again.
+    const before = slidesStarted();
+    sheet.measure(460);
+    expect(slidesStarted()).toBe(before);
+    sheet.unmount();
+  });
+
+  // A value that is not the native driver's is changed from JS until its first
+  // native animation, and on Fabric a change from JS reaches the view through
+  // `setNativeProps`, which the view's shadow node keeps and applies again at
+  // every later layout, over what the native driver has drawn since. The
+  // panel's first measurement was such a change: the first sheet a screen
+  // opened sat at that first offset for as long as it was being laid out anew,
+  // a strip at the foot of the screen, and then jumped to rest (emulator
+  // films, 2026-10-05).
+  it('makes both of its values the native driver’s from their first value', () => {
+    const sheet = mountPresented();
+    const travel = sheet.presentation().entryTranslateY as unknown as { multiply: [object, MockValue] };
+    const progress = animatedState.interpolatedFrom.get(travel.multiply[0]) as MockValue;
+    const hiddenOffset = travel.multiply[1];
+    expect(hiddenOffset.config).toEqual({ useNativeDriver: true });
+    expect(progress.config).toEqual({ useNativeDriver: true });
+    // The scrim is drawn from the same progress.
+    expect(animatedState.interpolatedFrom.get(sheet.presentation().backdropProgress as unknown as object)).toBe(progress);
+    sheet.unmount();
+  });
+
+  // A sheet with a field hands this to its keyboard area, which holds still
+  // while it is false. The keys are leaving whenever a sheet opens over the
+  // page's keyboard or closes with its own up, and an area that followed them
+  // moved and resized the sheet at every frame of its slide: it came into
+  // view part-way up, sank and rose again (emulator films, 2026-10-05).
+  it('is settled from its arrival until it is told to leave, and at no other time', () => {
+    const sheet = mountPresented();
+    expect(sheet.presentation().settled).toBe(false);
+    sheet.show(true);
+    sheet.measure();
+    // On its way in.
+    expect(sheet.presentation().settled).toBe(false);
+    endSlide();
+    expect(sheet.presentation().settled).toBe(true);
+    // Told to leave: not settled from that render on, before its exit has moved.
+    sheet.show(false);
+    expect(sheet.presentation().settled).toBe(false);
+    endSlide();
+    expect(sheet.presentation().settled).toBe(false);
+    // And not during the next entrance either.
+    sheet.show(true);
+    sheet.measure();
+    expect(sheet.presentation().settled).toBe(false);
+    sheet.unmount();
+  });
+
+  it('waits for its own arrival when it is opened again before its exit has played', () => {
+    const sheet = mountPresented();
+    sheet.show(true);
+    sheet.measure();
+    endSlide();
+    expect(sheet.presentation().settled).toBe(true);
+    // Told to leave, and asked for again while it is still on its way out:
+    // the exit is cut short and never says it has played.
+    sheet.show(false);
+    sheet.show(true);
+    expect(sheet.onExited).not.toHaveBeenCalled();
+    expect(sheet.presentation().settled).toBe(false);
+    endSlide();
+    expect(sheet.presentation().settled).toBe(true);
     sheet.unmount();
   });
 

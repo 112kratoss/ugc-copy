@@ -2297,6 +2297,150 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
   });
 
+  describe('the model picker', () => {
+    /** The image composer with its model picker open. */
+    function openPicker() {
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<MediaCreationScreen initialTool="image" />);
+      });
+      // Nothing has been asked of the keyboard or the back key by the page alone.
+      expect(keyboardState.dismiss).not.toHaveBeenCalled();
+      expect(backHandlerState.listeners.size).toBe(0);
+      renderer.act(() => {
+        findPressableByLabelPrefix(tree!.root, 'Selected model').props.onPress();
+      });
+      return tree!;
+    }
+
+    function ancestors(node: renderer.ReactTestInstance) {
+      const found: renderer.ReactTestInstance[] = [];
+      for (let current = node.parent; current; current = current.parent) found.push(current);
+      return found;
+    }
+
+    const searchField = (tree: renderer.ReactTestRenderer) => tree.root.findByProps({ accessibilityLabel: 'Search model names' });
+    const closeButton = (tree: renderer.ReactTestRenderer) => tree.root.findByProps({ accessibilityLabel: 'Close model picker' });
+    /** The picker's list: the scroll view its rows are in. */
+    const modelList = (tree: renderer.ReactTestRenderer) => ancestors(findPressableByText(tree.root, 'Grok Imagine')).find((node) => String(node.type) === 'scrollview')!;
+
+    it('draws in the app’s own window, in an area that gives way to the keyboard, with its list in a scroll view that does', () => {
+      const tree = openPicker();
+      const above = ancestors(searchField(tree));
+
+      // A Modal is a window of its own on Android, where the keyboard tracker
+      // reads nothing, and this one had no avoidance on either platform: with
+      // the keys up the last three rows of sixteen could not be reached.
+      expect(above.some((node) => String(node.type) === 'modal')).toBe(false);
+      expect(above.some((node) => node.props.testID === 'model-picker-keyboard-area')).toBe(true);
+
+      // Both halves of the keyboard pairing: Android shortens the area, and
+      // the panel and its list with it; iOS has the list make the room itself.
+      const list = modelList(tree);
+      expect(list.props).toEqual(expect.objectContaining({
+        automaticallyAdjustKeyboardInsets: true,
+        // A model answers its press with the keyboard up; a touch on anything else in the list puts it away.
+        keyboardShouldPersistTaps: 'handled',
+      }));
+      expect(ancestors(list).some((node) => node.props.testID === 'model-picker-keyboard-area')).toBe(true);
+
+      // The search field and the way out stay put while the list scrolls under them.
+      expect(above).not.toContain(list);
+      expect(ancestors(closeButton(tree))).not.toContain(list);
+    });
+
+    it('takes the keyboard from the page as it opens, and puts its own away as it closes', () => {
+      const tree = openPicker();
+      // Opening over the prompt while it is being typed in: a Modal's window
+      // took the keyboard by taking the focus, and an overlay takes nothing.
+      expect(keyboardState.dismiss).toHaveBeenCalledTimes(1);
+
+      renderer.act(() => {
+        closeButton(tree).props.onPress();
+      });
+      expect(keyboardState.dismiss).toHaveBeenCalledTimes(2);
+    });
+
+    it('closes on Android’s back key, and gives the key back once it is closed', () => {
+      const tree = openPicker();
+      expect(backHandlerState.listeners.size).toBe(1);
+
+      let claimed: boolean | undefined;
+      renderer.act(() => {
+        claimed = [...backHandlerState.listeners][0]();
+      });
+      expect(claimed).toBe(true);
+      expect(collectText(tree.root)).not.toContain('Choose model');
+      expect(backHandlerState.listeners.size).toBe(0);
+    });
+
+    it('leaves on the search it was showing, takes no press while it does, and opens next on every model', () => {
+      const tree = openPicker();
+      const surface = () => ancestors(searchField(tree)).find((node) => node.props.pointerEvents !== undefined);
+      expect(surface()?.props.pointerEvents).toBe('auto');
+
+      renderer.act(() => {
+        searchField(tree).props.onChangeText('grok');
+      });
+      expect(collectText(tree.root)).not.toContain('GPT Image 2');
+
+      animatedState.hold = true;
+      renderer.act(() => {
+        findPressableByText(tree.root, 'Grok Imagine').props.onPress();
+      });
+      // On its way out with the choice made. Cleared now, the search would let
+      // every model back into the list under the sheet's own exit.
+      const leaving = collectText(tree.root);
+      expect(leaving).toContain('Choose model');
+      expect(leaving).toContain('Grok Imagine');
+      expect(leaving).not.toContain('GPT Image 2');
+      expect(searchField(tree).props.value).toBe('grok');
+      expect(surface()?.props.pointerEvents).toBe('none');
+
+      renderer.act(() => finishAnimations());
+      expect(collectText(tree.root)).not.toContain('Choose model');
+
+      // The next opening starts from nothing typed. A Modal's `onDismiss` did
+      // this on iOS only: on Android the picker reopened on its last search.
+      animatedState.hold = false;
+      renderer.act(() => {
+        findPressableByLabelPrefix(tree.root, 'Selected model').props.onPress();
+      });
+      expect(searchField(tree).props.value).toBe('');
+      expect(collectText(tree.root)).toContain('GPT Image 2');
+    });
+
+    it('takes a pull from its title as from its grabber, and leaves a touch-down on its list to the scroll view', () => {
+      type Config = Record<string, (...args: unknown[]) => boolean>;
+      // For this case the double hands each responder's own config back as its
+      // handlers, so the tree shows which view carries which.
+      vi.mocked(PanResponder.create).mockImplementation(((config: unknown) => ({ panHandlers: { panConfig: config } })) as never);
+      try {
+        const tree = openPicker();
+        const touch = { nativeEvent: { target: 57 }, stopPropagation: () => undefined };
+        const title = tree.root.findByProps({ children: 'Choose model' });
+
+        // The title row: taken as it lands, as the grabber's strip is, with no
+        // question about where the list is scrolled to. The panel's own drag
+        // waits for the list to be at its top: a pull from the title did
+        // nothing once the list had scrolled.
+        const titleRow = ancestors(title).find((node) => node.props.panConfig)!;
+        const header = titleRow.props.panConfig as Config;
+        expect(header.onStartShouldSetPanResponder(touch, { dy: 0, dx: 0 })).toBe(true);
+        expect('onMoveShouldSetPanResponderCapture' in header).toBe(false);
+
+        // The panel: in its own window nothing above it takes an unowned
+        // touch, so it waits for the pull. Held from its start, the touch is
+        // intercepted from the list on Android at the finger's next movement.
+        const panel = ancestors(titleRow).find((node) => node.props.panConfig && node.props.panConfig !== header)!.props.panConfig as Config;
+        expect(panel.onStartShouldSetPanResponder(touch, { dy: 0, dx: 0 })).toBe(false);
+        expect(panel.onMoveShouldSetPanResponder(touch, { dy: 12, dx: 0 })).toBe(true);
+      } finally {
+        vi.mocked(PanResponder.create).mockImplementation((() => ({ panHandlers: {} })) as never);
+      }
+    });
+  });
+
   it('keeps model selection out of the parameter sheet', () => {
     authState.credits = 1_234;
     let tree: renderer.ReactTestRenderer | undefined;
