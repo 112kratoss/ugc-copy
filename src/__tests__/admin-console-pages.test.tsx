@@ -8,6 +8,8 @@ const collectAdminSystemSnapshotMock = vi.fn();
 const listOpenCreatorPayoutRequestsMock = vi.fn();
 const listResolvedCreatorPayoutRequestsMock = vi.fn();
 
+vi.mock('@/lib/admin-auth', () => ({ requireAdminIdentity: vi.fn(async () => ({ subject: 'master', username: 'admin', reviewerUserId: '10000000-0000-4000-8000-000000000001' })) }));
+
 vi.mock('@/lib/admin-system-service', () => ({
   CONTACT_PAGE_SIZE: 25,
   collectAdminSystemSnapshot: (client: unknown, options: unknown) => (

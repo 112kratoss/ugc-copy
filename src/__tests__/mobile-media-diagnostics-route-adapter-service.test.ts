@@ -81,6 +81,8 @@ describe('mobile media diagnostics route adapter', () => {
     ['free text in a stage', { events: [stall({ stage: 'Failed https://storage.example/a.webp?token=secret' })] }],
     ['an unknown event name', { events: [stall({ event: 'prompt' })] }],
     ['a status outside 4xx and 5xx', { events: [stall({ status: 200 })] }],
+    ['a timestamp beyond the Date boundary', { events: [stall({ at: 8_640_000_000_000_001 })] }],
+    ['a finite numeric timestamp that cannot be a Date', { events: [stall({ at: Number.MAX_VALUE })] }],
     ['no events', { events: [] }],
     ['too many events', { events: Array.from({ length: MAX_MEDIA_DIAGNOSTIC_EVENTS + 1 }, () => stall()) }],
     ['a malformed session id', { sessionId: 'not a session', events: [stall()] }],

@@ -1,3 +1,4 @@
+import { requireAdminIdentity } from '@/lib/admin-auth';
 import Link from 'next/link';
 import clsx from 'clsx';
 import { CheckCircle2, Mail } from 'lucide-react';
@@ -37,6 +38,7 @@ export default async function AdminSystemPage({
 }: {
   searchParams: Promise<{ contact?: string; queue?: string }>;
 }) {
+  await requireAdminIdentity();
   const { contact, queue } = await searchParams;
   const contactOffset = parseOffset(contact, CONTACT_PAGE_SIZE);
   const contactFilter: AdminContactFilter =

@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { authenticateAdminRequest } from '@/lib/admin-auth';
+import { authenticateAdminRequest, requireAdminIdentity } from '@/lib/admin-auth';
 import {
   ADMIN_SESSION_COOKIE,
   createAdminSessionToken,
   deriveAdminCredentialVersion,
 } from '@/lib/admin-session-token';
+
+const { cookieGet } = vi.hoisted(() => ({ cookieGet: vi.fn() }));
+vi.mock('next/headers', () => ({ cookies: async () => ({ get: cookieGet }) }));
 
 const SECRET = 's'.repeat(48);
 const REVIEWER_ID = '3f1b7c2e-6d4a-4f8b-9c1d-2a5e7b9f0c31';
@@ -52,6 +55,23 @@ async function signedRequest() {
 }
 
 describe('authoritative admin session gate', () => {
+  it.each(['revoked', 'missing', 'unavailable'] as const)('redirects a page before returning an identity when the session is %s', async state => {
+    const { credentialVersion, request } = await signedRequest();
+    cookieGet.mockReturnValue({ value: request.headers.get('cookie')!.split('=')[1] });
+    const database = sessionClient({
+      data: state === 'missing' ? null : {
+        session_id: SESSION_ID,
+        subject: 'master',
+        credential_version: credentialVersion,
+        expires_at: new Date(NOW.getTime() + 3600_000).toISOString(),
+        revoked_at: state === 'revoked' ? NOW.toISOString() : null,
+      },
+      error: state === 'unavailable' ? { message: 'Isolated lookup outage' } : null,
+    });
+    await expect(requireAdminIdentity({ environment: environment(), now: NOW, sessionClient: database.client }))
+      .rejects.toMatchObject({ digest: expect.stringContaining('/admin/login') });
+  });
+
   it('accepts a signed v2 token only while its matching database row is active', async () => {
     const { credentialVersion, request } = await signedRequest();
     const database = sessionClient({

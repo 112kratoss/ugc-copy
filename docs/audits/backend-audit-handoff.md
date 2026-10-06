@@ -6,10 +6,45 @@ Updated 2026-10-06 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/fx-provider-payload-audit-11a`, preserving parent #379, 10I evidence commit c3500991, and new FX candidate; prior audit branches remain preserved. Preserve local evidence.
+Current checkout: `codex/admin-page-authority-audit-11c`, preserving operations PR #381 and adding the independently reproduced admin page fix; prior audit branches remain preserved. Preserve local evidence.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+11C reproduces private fixture data serialized in five revoked-session admin
+HTML redirects in an actual production build; Playwright confirms activity.
+Ten admin pages now await authoritative identity before privileged reads;
+denials redirect. All 20 revoked HTML/RSC and ten active production page checks,
+55 focused auth/page/session cases, production build, types and scoped lint pass.
+Specific fixture cleanup is zero; server/browser stopped. Add this to existing
+operations #381 and rewrite its title/body; no additional PR is needed. AUTH-02
+reopens until release; ledger is 23 passed, 25 untested, 3 failed, 2 external
+(failed AUTH02/OPS04/MEDIA07). Preserve earlier Apple/web login evidence.
+
+10G/H #379 is independently verified live on 75dc4eb7 at October 6 18:39:29 UTC:
+Quality 37510132894/release 37511731539 pass; schema and 110 advisors unchanged,
+feed/admin/webhook 200/307/401. MEDIA-09 returns to untested for broader recovery.
+FX #380 passed exact-head Quality 37510388702 and merged with mobile-store idle
+at 18:40:11 UTC as eac420e23b42e804f0307c5c0285b770eacae17b. Exact-main Quality
+37513081761 is running. Another actor's #378 merged immediately before it;
+preserve that mobile change. Standard FX release and independent checks remain
+before operations #381 merges. Incorporate current main into the final candidate.
+
+11B reproduces finite out-of-range diagnostic timestamps throwing RangeError
+through actual loopback HTTP. The candidate rejects an invalid Date before
+formatting. All 25 actual HTTP/PostgREST/SQL controls pass (23/25 baseline),
+54 focused cases, nine web and 143 mobile contract/diagnostics cases pass;
+app/test/mobile types and scoped lint pass. Contract now documents timestamp
+bounds and invalid response. No schema change. Prepare a separate PR and hold
+merge until parent FX #380 is independently verified; OPS-04 remains failed
+for both findings until their respective releases. Six admin collectors remain
+in OPS-GATE; the seventh page-only service, home dashboard, is SOCIAL-GATE.
+
+11A is open as PR #380 on 6e67f92937586b14c7a5423293beac39a5494fea;
+exact-head Quality 37510388702 is running. Parent #379 exact-main Quality
+37510132894 is running on 75dc4eb7fc8fef7139fc42c1a50b10f3f653f4de.
+Standard release and independent live/schema/advisor checks remain before
+#380 can merge. Preserve unrelated local receipt text and evidence.
 
 11A reproduces 20 actual provider-HTTP FX responses (EUR/GBP/AUD/CAD/SGD
 missing/null/zero/negative) being published/cached with HTTP 200 while USD is

@@ -1,3 +1,4 @@
+import { requireAdminIdentity } from '@/lib/admin-auth';
 import Link from 'next/link';
 
 import { Surface, Text } from '@/components/DesignSystem';
@@ -41,6 +42,7 @@ export default async function AdminPayoutsPage({
 }: {
   searchParams: Promise<{ history?: string }>;
 }) {
+  await requireAdminIdentity();
   const { history: historyParam } = await searchParams;
   const historyOffset = parseOffset(historyParam, HISTORY_PAGE_SIZE);
 

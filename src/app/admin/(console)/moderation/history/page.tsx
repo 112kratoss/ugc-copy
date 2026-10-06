@@ -1,3 +1,4 @@
+import { requireAdminIdentity } from '@/lib/admin-auth';
 import { Fragment } from 'react';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
@@ -77,6 +78,7 @@ export default async function AdminModerationHistoryPage({
 }: {
   searchParams: Promise<{ posts?: string; subjects?: string }>;
 }) {
+  await requireAdminIdentity();
   const { posts, subjects } = await searchParams;
   const postOffset = parseOffset(posts, ADMIN_MODERATION_HISTORY_PAGE_SIZE);
   const subjectOffset = parseOffset(subjects, ADMIN_MODERATION_HISTORY_PAGE_SIZE);

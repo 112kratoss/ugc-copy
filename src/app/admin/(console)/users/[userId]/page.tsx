@@ -1,3 +1,4 @@
+import { requireAdminIdentity } from '@/lib/admin-auth';
 import Link from 'next/link';
 import { ArrowLeft, ExternalLink, ShieldBan } from 'lucide-react';
 
@@ -42,6 +43,7 @@ export default async function AdminUserDetailPage({
 }: {
   params: Promise<{ userId: string }>;
 }) {
+  await requireAdminIdentity();
   const { userId } = await params;
   const client = createServiceClient();
 

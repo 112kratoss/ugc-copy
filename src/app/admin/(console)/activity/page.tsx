@@ -1,3 +1,4 @@
+import { requireAdminIdentity } from '@/lib/admin-auth';
 import { Fragment } from 'react';
 import Link from 'next/link';
 
@@ -38,6 +39,7 @@ export default async function AdminActivityPage({
 }: {
   searchParams: Promise<{ offset?: string }>;
 }) {
+  await requireAdminIdentity();
   const { offset: offsetParam } = await searchParams;
   const feed = await collectAdminActivity(createServiceClient(), {
     offset: parseOffset(offsetParam, PAGE_SIZE),

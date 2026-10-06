@@ -1,3 +1,4 @@
+import { requireAdminIdentity } from '@/lib/admin-auth';
 import Link from 'next/link';
 import { ExternalLink, History } from 'lucide-react';
 
@@ -32,6 +33,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 export default async function AdminModerationPage() {
+  await requireAdminIdentity();
   const queue = await collectAdminModerationQueue(createServiceClient());
 
   return (
