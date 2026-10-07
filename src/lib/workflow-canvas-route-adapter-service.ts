@@ -134,10 +134,16 @@ export async function patchWorkflowCanvasRouteResponse({
     if (rateLimitResponse) return withPrivateNoStoreHeaders(rateLimitResponse, request);
   }
 
-  const body = await request.json().catch(() => ({}));
+  const body: unknown = await request.json().catch(() => null);
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return withPrivateNoStoreHeaders(
+      NextResponse.json({ error: 'Invalid workflow canvas update.' }, { status: 400 }),
+      request,
+    );
+  }
   return withPrivateNoStoreHeaders(
     toJsonResponse(await resolvedDependencies.patchWorkflowCanvasForRoute({
-      body,
+      body: body as Record<string, unknown>,
       canvasId,
       supabase: auth.auth.supabase,
       uploadClient: resolvedDependencies.createServiceClient(),

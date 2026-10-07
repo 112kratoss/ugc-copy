@@ -68,8 +68,8 @@ function validateWorkflowPlannerInput(body: unknown): WorkflowPlannerInput | Wor
     };
   }
 
-  const input = body as unknown as WorkflowPlannerInput;
-  if (!input.productName?.trim() || !input.audience?.trim() || !input.primaryMessage?.trim()) {
+  const requiredFields = ['productName', 'audience', 'primaryMessage'] as const;
+  if (requiredFields.some(field => typeof body[field] !== 'string' || !body[field].trim())) {
     return {
       ok: false,
       body: { error: 'Product name, audience, and primary message are required.' },
@@ -77,7 +77,7 @@ function validateWorkflowPlannerInput(body: unknown): WorkflowPlannerInput | Wor
     };
   }
 
-  return input;
+  return body as unknown as WorkflowPlannerInput;
 }
 
 async function getAuthenticatedUserId(supabase: WorkflowBlueprintRouteClient) {
@@ -154,7 +154,7 @@ export async function planWorkflowBlueprintForRoute(
       return { ok: false, body: { error: 'Unauthorized' }, status: 401 };
     }
 
-    const body = await readRequestBody(input);
+    const body = await readRequestBody(input).catch(() => null);
     const validated = validateWorkflowPlannerInput(body);
     if ('ok' in validated) {
       return validated;

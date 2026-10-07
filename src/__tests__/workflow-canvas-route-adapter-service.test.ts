@@ -179,6 +179,21 @@ describe('workflow canvas route adapter service', () => {
     });
   });
 
+  it.each(['null', '[]', '1', '"text"', '{'])('rejects invalid patch JSON %s before invoking persistence', async body => {
+    const response = await patchWorkflowCanvasRouteResponse({
+      request: new Request('http://localhost/api/workflow-canvases/canvas-1', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body,
+      }),
+      canvasId: 'canvas-1',
+      dependencies: { authenticateRequest, createServiceClient, enforceWorkflowCanvasMutationRateLimit, patchWorkflowCanvasForRoute },
+    });
+    expect(response.status).toBe(400);
+    expect(response.headers.get('cache-control')).toContain('private');
+    expect(response.headers.get('cache-control')).toContain('no-store');
+    expect(patchWorkflowCanvasForRoute).not.toHaveBeenCalled();
+    expect(createServiceClient).not.toHaveBeenCalled();
+  });
+
   it('skips duplicate rate limiting when an internal caller has already checked capacity', async () => {
     await patchWorkflowCanvasRouteResponse({
       request: new Request('http://localhost/api/workflow-canvases/canvas-1', {
