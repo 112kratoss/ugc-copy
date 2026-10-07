@@ -6,10 +6,37 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/backend-revocation-worker-death-11w`, stacked on #397 and adding real process-death recovery controls. The user receipt/evidence edits remain untouched.
+Current checkout: `codex/backend-auth-credit-inputs-11x`, stacked on #398 and fixing reproduced onboarding/admin credit root parsing failures. The user receipt/evidence edits remain untouched.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+11X reproduces four native-handler null-root failures with real GoTrue tokens,
+authoritative admin sessions and SQL. Two adapter modules now validate object
+roots before reading fields. All 37 actual local cases and 37 focused controls,
+app/test types, scoped lint and diff pass. Invalid bodies leave balances/state/
+grants untouched; valid state/events and credit replay/reviewer binding work,
+fixture balances return to 500/0, and independent exact-ID row cleanup is zero.
+No migration/mobile runtime change. See
+backend-section-11-auth-credit-inputs-2026-10-07.md. Own exact-head CI/release and
+independently verified #398 parent remain required. MAP-02 is failed for this
+new input finding until release; broader method/entrypoint coverage remains open.
+Counts are 53: 24 passed, 24 untested, three failed, two external.
+
+#396 is independently verified live as 0df4d065 at 06:22:31 UTC. Exact-main
+Quality 37579524146 and standard release 37580473841 pass, schema/all 110
+advisors are unchanged, and smoke is 200/307/401. Automatic duplicate
+37580101875 skips. See backend-section-11-moderation-storage-release-2026-10-07.md.
+#397 final candidate e4ff29a4 passes all five exact-head jobs in 37579912190.
+Fresh verified #396 parent/schema/advisors/live/main and immediate mobile-store
+idle gates pass. It merged at 06:23:46 UTC as
+26888e1578350e5d2e06fa37d7189584a7457b1e. Exact-main Quality 37581266892 is
+running; standard release and independent source/schema/live readback remain.
+#398 final candidate 24801435 passes all five jobs in 37580073922 and is now
+based on main. Hold its merge for independently verified #397 release.
+
+Previous checkpoints follow; pending statements below are historical where
+superseded by this checkpoint.
 
 #398 is attached. Its child now incorporates corrected #397 parent e4ff29a4
 and the exact merged #396 history. The final child needs new exact-head Quality;

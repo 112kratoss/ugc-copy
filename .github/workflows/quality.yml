@@ -292,6 +292,9 @@ jobs:
       - name: Test background revocation after actual worker death
         run: npx vitest run --config vitest.showcase-revocation-worker-death-postgrest.config.ts
 
+      - name: Test onboarding and admin credit inputs with real Auth and SQL
+        run: npx vitest run --config vitest.auth-credit-inputs-postgrest.config.ts
+
       - name: Stop isolated Supabase API stack
         if: always()
         continue-on-error: true

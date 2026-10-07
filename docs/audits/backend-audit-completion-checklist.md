@@ -1,12 +1,14 @@
 # Backend audit completion checklist
 
 Updated 2026-10-07. Current independently checked production:
-`ebd551b6fe8c84c05e9811b52f6c211a4ac99d52`, including Sections 9A–9O, 10A–I and 11A–T.
+`0df4d065600994e84b8eec7437aa0fd56cd31c6f`, including Sections 9A–9O, 10A–I and 11A–U.
+[11U release evidence](backend-section-11-moderation-storage-release-2026-10-07.md).
 [11T release evidence](backend-section-11-admin-moderation-inputs-release-2026-10-07.md).
 [11Q/R release evidence](backend-section-11-workflow-inputs-release-2026-10-07.md).
 [11S release evidence](backend-section-11-template-publication-release-2026-10-07.md).
-PR #396 is merged; exact-main/release readback remains. #397/#398 await
-verified parents and their own gates.
+PR #397 is merged as 26888e15; exact-main/release readback remains. #398
+passes final-head Quality and awaits its verified parent. 11X input guards pass
+local checks and await their own CI/release.
 [11O/P release evidence](backend-section-11-map-recovery-release-2026-10-07.md).
 [11M/N release evidence](backend-section-11-recovery-evidence-release-2026-10-07.md).
 [11L release evidence](backend-section-11-legacy-binding-release-2026-10-07.md).
@@ -46,7 +48,7 @@ unequal effort and risk. Do not turn their pass count into a percentage of backe
 safety or an ETA. New findings attach to these obligations; changes in scope must
 be recorded explicitly instead of silently adding another lettered batch.
 
-Current ledger: **53 obligations — 24 passed, 25 untested, 2 failed, 2 external**.
+Current ledger: **53 obligations — 24 passed, 24 untested, 3 failed, 2 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
 WORKFLOW-02 remains untested after its scoped fixes shipped. WORKFLOW-04 returns
 to untested after the verified 11Q validation fix. SOCIAL-03 also returns to
@@ -56,7 +58,9 @@ DB-04 passes for the current empty Realtime publication; enabling table streams 
 SOCIAL-03 remains untested for its broader matrix after 11T. MEDIA-07
 remains failed for legacy retirement. MEDIA-09 is failed for the four newly
 reproduced 11V background revocation failures until its release is verified.
-No new obligation was added; these fixes do not complete the broader matrices.
+MAP-02 is failed for four newly reproduced 11X null-root failures until its
+release is verified. No new obligation was added; these fixes do not complete
+the broader matrices.
 
 Status meanings: **passed** has evidence for the stated scope; **failed** has a
 reproduction and remains open; **untested** lacks complete evidence for this
@@ -100,7 +104,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | ID | Obligation and closure evidence | Status | Evidence / next action |
 | --- | --- | --- | --- |
 | MAP-01 | Capture route/service/job/public-catalog inventory and assign review gates | passed | [Current production surface map](backend-audit-surface-map-2026-10-07.json); 162 routes, 201 services, 337 functions, 138 relations, 12 jobs; 0 unassigned routes. [Reconciliation](backend-audit-caller-reconciliation-2026-10-07.md) preserves earlier snapshots and separates inventory from behavior |
-| MAP-02 | Reconcile method-level behaviors, non-API entrypoints, SQL/trigger callers, mobile direct access, edge and operational scripts to this ledger | untested | [Explicit HTTP method map](backend-audit-http-method-map-2026-10-04.md) records 162 routes/186 methods, including 35 social routes/45 methods. Static paths remain scheduling evidence; [Current caller reconciliation](backend-audit-caller-reconciliation-2026-10-07.md) reads 337 production functions and reviews 153 secondary entries; remaining entrypoints, method behavior and table mutation/read paths stay open |
+| MAP-02 | Reconcile method-level behaviors, non-API entrypoints, SQL/trigger callers, mobile direct access, edge and operational scripts to this ledger | failed | [11X input guards](backend-section-11-auth-credit-inputs-2026-10-07.md) reproduce four native Auth/admin-session failures; 37 actual and 37 focused cases pass after validation, with CI/release pending. [Explicit HTTP method map](backend-audit-http-method-map-2026-10-04.md) records 162 routes/186 methods, including 35 social routes/45 methods. Static paths remain scheduling evidence; [Current caller reconciliation](backend-audit-caller-reconciliation-2026-10-07.md) reads 337 production functions and reviews 153 secondary entries; remaining entrypoints, method behavior and table mutation/read paths stay open |
 
 ## Authentication and database
 
