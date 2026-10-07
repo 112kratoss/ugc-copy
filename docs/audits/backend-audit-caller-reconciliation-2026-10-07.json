@@ -1,0 +1,4547 @@
+{
+  "baseline": "3f04cb16f9435d8a20735a2ac7ca7514db9ddb3a",
+  "productionBuild": "3f04cb16f9435d8a20735a2ac7ca7514db9ddb3a",
+  "productionMetadataTimestamp": "2026-10-07T04:25:24.397Z",
+  "scope": "Secondary reconciliation of the current source inventory; current production definitions, bindings and execute privileges, preserving reviewed caller statements from October 4.",
+  "caveats": [
+    "No production row data or raw function definitions are published.",
+    "Missing executable caller evidence does not establish dead code or authorize grant removal.",
+    "Policy dependencies may repeat for distinct expressions; the count is not a number of unique policies.",
+    "Unchanged current SQL caller definitions preserve the reviewed call statements; the changed interest-refresh definition was reviewed again.",
+    "Bindings and names do not close method, RLS, transaction or installed-client behavior."
+  ],
+  "scan": {
+    "productionBuild": "3f04cb16f9435d8a20735a2ac7ca7514db9ddb3a",
+    "timestamp": "2026-10-07T04:25:24.397Z",
+    "sourceHead": "3f04cb16f9435d8a20735a2ac7ca7514db9ddb3a",
+    "functions": 337,
+    "sourceFiles": 1327,
+    "literalRpcSites": 184,
+    "dynamicRpcSites": 11,
+    "triggerBindings": 121,
+    "policyFunctionDependencies": 162,
+    "functionsWithoutLiteralJsCaller": 168
+  },
+  "secondaryReconciliation": [
+    {
+      "name": "advance_nsfw_media_revision",
+      "arguments": "",
+      "definitionDigest": "e18eac5edcf9df310fde3efeeb363e3b",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_media_invalidate_nsfw_reveals",
+          "enabled": "O",
+          "relation": "post_media"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "advance_nsfw_revision",
+      "arguments": "",
+      "definitionDigest": "d4e43f421b8454d2fd2e1f33a2805e63",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "posts_advance_nsfw_revision",
+          "enabled": "O",
+          "relation": "posts"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "anonymize_post_comments_before_auth_user_delete",
+      "arguments": "",
+      "definitionDigest": "0fab6e810ddd3319efdaaa1d00278426",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "auth_users_anonymize_post_comments_before_delete",
+          "enabled": "O",
+          "relation": "auth.users"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "apply_feed_delivery_outcome",
+      "arguments": "",
+      "definitionDigest": "4757bc112c6f5a34b7da597c80486e17",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "feed_events_apply_delivery_outcome",
+          "enabled": "O",
+          "relation": "feed_events"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "apply_marketplace_wallet_purchase_change",
+      "arguments": "",
+      "definitionDigest": "3200de580341dd9c3d9561db8cdd6d98",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "marketplace_purchase_creator_settlement",
+          "enabled": "O",
+          "relation": "marketplace_purchases"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "apply_post_resource_bundle_mutation",
+      "arguments": "p_post_id uuid, p_owner_user_id uuid, p_post_title text, p_post_visibility text, p_bundle jsonb",
+      "definitionDigest": "121d81fda7ef9cc540829ed7113d3bd9",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "update_post_with_resource_bundle_before_nsfw",
+          "args": "p_post_id uuid, p_owner_user_id uuid, p_post_patch jsonb, p_has_bundle boolean, p_bundle jsonb",
+          "definitionLines": [
+            44
+          ],
+          "definitionDigest": "f47c4210822aac1fb6cbef89c6ceae1f",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "upsert_post_with_resource_bundle_before_nsfw",
+          "args": "p_post jsonb, p_bundle jsonb, p_has_bundle boolean",
+          "definitionLines": [
+            77
+          ],
+          "definitionDigest": "51ac696dfcc4989de310ffdeb43da657",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "apply_post_resource_bundle_mutation_unlocked_20260806",
+      "arguments": "p_post_id uuid, p_owner_user_id uuid, p_post_title text, p_post_visibility text, p_bundle jsonb",
+      "definitionDigest": "b9ad341265b8daaff59a3984edc07386",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "apply_post_resource_bundle_mutation",
+          "args": "p_post_id uuid, p_owner_user_id uuid, p_post_title text, p_post_visibility text, p_bundle jsonb",
+          "definitionLines": [
+            33
+          ],
+          "definitionDigest": "121d81fda7ef9cc540829ed7113d3bd9",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "apply_post_resource_wallet_purchase_change",
+      "arguments": "",
+      "definitionDigest": "7027609ea1a33d9b4d218fb35c178492",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_resource_purchase_creator_settlement",
+          "enabled": "O",
+          "relation": "post_resource_bundle_purchases"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "assert_nsfw_private_media",
+      "arguments": "",
+      "definitionDigest": "6263db89c76ff52ebae67bba63284cfb",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_media_nsfw_private_media",
+          "enabled": "O",
+          "relation": "post_media"
+        },
+        {
+          "name": "posts_nsfw_private_media",
+          "enabled": "O",
+          "relation": "posts"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "bind_legacy_mobile_store_transaction_product",
+      "arguments": "p_external_order_id text, p_product_id text",
+      "definitionDigest": "db8efb5b0dad7402f63f00869deb7c8a",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "build_post_resource_items_from_legacy_bundle",
+      "arguments": "p_prompt_text text, p_notes_markdown text, p_workflow_share_url text, p_workflow_snapshot jsonb, p_attachments jsonb, p_allow_remix boolean",
+      "definitionDigest": "54f1a9acf196e02700354ac464fdd073",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "apply_post_resource_bundle_mutation_unlocked_20260806",
+          "args": "p_post_id uuid, p_owner_user_id uuid, p_post_title text, p_post_visibility text, p_bundle jsonb",
+          "definitionLines": [
+            62
+          ],
+          "definitionDigest": "b9ad341265b8daaff59a3984edc07386",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "build_workflow_canvas_library_summary",
+      "arguments": "p_graph jsonb",
+      "definitionDigest": "60c499340c3157797be72486153f4971",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "refresh_workflow_canvas_library_summary",
+          "args": "",
+          "definitionLines": [
+            8
+          ],
+          "definitionDigest": "fd04bbeb6592f04abe7a58a779142f1a",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "can_read_nsfw_post",
+      "arguments": "p_post_id uuid, p_viewer_id uuid",
+      "definitionDigest": "5033c25876459c28bb0579780df6c344",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "can_read_private_post_media",
+          "args": "p_path text, p_viewer_id uuid",
+          "definitionLines": [
+            23
+          ],
+          "definitionDigest": "fedb3af4fa877afc8074ac7938581cea",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "resolve_post_media_read",
+          "args": "p_path text, p_viewer_id uuid",
+          "definitionLines": [
+            22,
+            34
+          ],
+          "definitionDigest": "1e856e23d9a4a62b9a259e2b7f01f161",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "can_read_private_post_media",
+      "arguments": "p_path text, p_viewer_id uuid",
+      "definitionDigest": "fedb3af4fa877afc8074ac7938581cea",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "resolve_post_media_read",
+          "args": "p_path text, p_viewer_id uuid",
+          "definitionLines": [
+            10,
+            15
+          ],
+          "definitionDigest": "1e856e23d9a4a62b9a259e2b7f01f161",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "canonical_account_id",
+      "arguments": "p_user_id uuid",
+      "definitionDigest": "91de8ae855884c9bf95f8bd24de0dff1",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [
+        {
+          "name": "merge_guest_account",
+          "args": "p_guest_user_id uuid, p_target_user_id uuid, p_source_surface text",
+          "reason": "Reference occurs only in a comment."
+        }
+      ],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "capture_post_resource_bundle_revision",
+      "arguments": "",
+      "definitionDigest": "84e31dc4d77fa8cfeb7e8d037774b639",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_resource_bundles_capture_revision",
+          "enabled": "O",
+          "relation": "post_resource_bundles"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "capture_post_resource_purchase_context",
+      "arguments": "",
+      "definitionDigest": "e2d3bbfa709cb8837dce1ebd8f660655",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_resource_bundle_purchases_capture_context",
+          "enabled": "O",
+          "relation": "post_resource_bundle_purchases"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "capture_post_resource_purchase_media",
+      "arguments": "",
+      "definitionDigest": "c01d4cbc06778a58e1f9af6ab1c8d297",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_resource_bundle_purchases_capture_media",
+          "enabled": "O",
+          "relation": "post_resource_bundle_purchases"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "clear_post_resource_bundle_retirement",
+      "arguments": "",
+      "definitionDigest": "b12b6d9f8e511a6b24b1228874cf8d27",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_resource_bundles_clear_retirement",
+          "enabled": "O",
+          "relation": "post_resource_bundles"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "clone_generation_model_catalog",
+      "arguments": "p_source_revision text, p_new_revision text, p_change_note text, p_created_by text",
+      "definitionDigest": "773205a76bad98f4d2ae88d6b89dd76c",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "commit_uploaded_media_private_copy",
+      "arguments": "p_public_path text",
+      "definitionDigest": "9937f2e7c1f6f092760b3e7945f09c4f",
+      "sourceCallers": [
+        {
+          "file": "scripts/backfills/backfill-uploaded-private-media.ts",
+          "line": 43,
+          "name": "commit_uploaded_media_private_copy"
+        },
+        {
+          "file": "scripts/audits/verify-local-media-delivery.ts",
+          "line": 53,
+          "name": "commit_uploaded_media_private_copy"
+        }
+      ],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "source_or_operator_caller"
+    },
+    {
+      "name": "complete_account_deletion_job_after_auth_delete",
+      "arguments": "",
+      "definitionDigest": "89eb056a2a88cdb0aeabc5db552fec88",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "account_deletion_job_after_auth_delete",
+          "enabled": "O",
+          "relation": "auth.users"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "complete_mobile_marketplace_purchase",
+      "arguments": "p_user_id uuid, p_asset_id uuid, p_external_order_id text, p_payment_id text",
+      "definitionDigest": "e118c0185b46eb9736101e0942de1088",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "complete_mobile_post_resource_purchase",
+      "arguments": "p_user_id uuid, p_post_id uuid, p_external_order_id text, p_payment_id text",
+      "definitionDigest": "700ea0c2b1690615b50acbf26f679969",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "consume_upload_byte_reservation",
+      "arguments": "p_user_id uuid, p_bucket_id text, p_storage_path text",
+      "definitionDigest": "d75a35f59eb4fcd920f81e6b81ce2f1f",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "current_identity_is_active",
+      "arguments": "",
+      "definitionDigest": "380ac91a09673fe374d670f6578a838a",
+      "sourceCallers": [
+        {
+          "file": "scripts/ops/verify-client-rpc-boundaries.mjs",
+          "line": 93,
+          "name": "current_identity_is_active"
+        },
+        {
+          "file": "scripts/ops/verify-client-rpc-boundaries.mjs",
+          "line": 112,
+          "name": "current_identity_is_active"
+        },
+        {
+          "file": "scripts/ops/verify-client-rpc-boundaries.mjs",
+          "line": 115,
+          "name": "current_identity_is_active"
+        }
+      ],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [
+        {
+          "name": "authenticated_identity_active",
+          "relation": "ai_usage_events"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "ai_usage_events"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "creator_payout_requests"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "creator_payout_requests"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "creator_resource_wallet_entries"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "creator_resource_wallet_entries"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "creator_resource_wallets"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "creator_resource_wallets"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "follows"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "follows"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "generation_input_media"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "generation_input_media"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "generations"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "generations"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "marketplace_asset_content"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "marketplace_asset_content"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "marketplace_orders"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "marketplace_orders"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "marketplace_purchases"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "marketplace_purchases"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "mobile_notification_preferences"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "mobile_notification_preferences"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "mobile_notifications"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "mobile_notifications"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "mobile_push_tokens"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "mobile_push_tokens"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "post_deletion_audits"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "post_deletion_audits"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "post_save_events"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "post_save_events"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "post_saves"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "post_saves"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "profiles"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "profiles"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "showcase_saves"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "showcase_saves"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "source_tool_models"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "source_tool_models"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "source_tools"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "source_tools"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "storage.buckets"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "storage.buckets"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "storage.objects"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "storage.objects"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "templates"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "templates"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "transactions"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "transactions"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "workflow_canvas_assistant_messages"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "workflow_canvas_assistant_messages"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "workflow_canvas_assistant_proposals"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "workflow_canvas_assistant_proposals"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "workflow_canvas_history"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "workflow_canvas_history"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "workflow_canvas_run_steps"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "workflow_canvas_run_steps"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "workflow_canvas_runs"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "workflow_canvas_runs"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "workflow_canvases"
+        },
+        {
+          "name": "authenticated_identity_active",
+          "relation": "workflow_canvases"
+        }
+      ],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": true,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "current_identity_is_registered",
+      "arguments": "",
+      "definitionDigest": "7201fc57e1c5ad5c20c0910ad8e432ae",
+      "sourceCallers": [
+        {
+          "file": "scripts/ops/verify-client-rpc-boundaries.mjs",
+          "line": 94,
+          "name": "current_identity_is_registered"
+        }
+      ],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [
+        {
+          "name": "registered_identity_only",
+          "relation": "creator_payout_requests"
+        },
+        {
+          "name": "registered_identity_only",
+          "relation": "creator_payout_requests"
+        },
+        {
+          "name": "registered_identity_only",
+          "relation": "creator_resource_wallet_entries"
+        },
+        {
+          "name": "registered_identity_only",
+          "relation": "creator_resource_wallet_entries"
+        },
+        {
+          "name": "registered_identity_only",
+          "relation": "creator_resource_wallets"
+        },
+        {
+          "name": "registered_identity_only",
+          "relation": "creator_resource_wallets"
+        },
+        {
+          "name": "registered_identity_only",
+          "relation": "marketplace_orders"
+        },
+        {
+          "name": "registered_identity_only",
+          "relation": "marketplace_orders"
+        },
+        {
+          "name": "registered_identity_only",
+          "relation": "marketplace_purchases"
+        },
+        {
+          "name": "registered_identity_only",
+          "relation": "marketplace_purchases"
+        },
+        {
+          "name": "registered_identity_only",
+          "relation": "mobile_notification_preferences"
+        },
+        {
+          "name": "registered_identity_only",
+          "relation": "mobile_notification_preferences"
+        },
+        {
+          "name": "registered_identity_only",
+          "relation": "mobile_notifications"
+        },
+        {
+          "name": "registered_identity_only",
+          "relation": "mobile_notifications"
+        },
+        {
+          "name": "registered_identity_only",
+          "relation": "mobile_push_tokens"
+        },
+        {
+          "name": "registered_identity_only",
+          "relation": "mobile_push_tokens"
+        },
+        {
+          "name": "profiles_registered_update",
+          "relation": "profiles"
+        },
+        {
+          "name": "profiles_registered_update",
+          "relation": "profiles"
+        },
+        {
+          "name": "registered_identity_only",
+          "relation": "transactions"
+        },
+        {
+          "name": "registered_identity_only",
+          "relation": "transactions"
+        }
+      ],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": true,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "current_identity_state",
+      "arguments": "",
+      "definitionDigest": "d13da3f1b03c8d8a5a540dfb4853c04a",
+      "sourceCallers": [
+        {
+          "file": "scripts/ops/verify-client-rpc-boundaries.mjs",
+          "line": 92,
+          "name": "current_identity_state"
+        }
+      ],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": true,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "source_or_operator_caller"
+    },
+    {
+      "name": "delete_feed_events_before_auth_user_delete",
+      "arguments": "",
+      "definitionDigest": "d498433b15bf1d2c04766afd198a1f37",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "auth_users_delete_feed_events_before_delete",
+          "enabled": "O",
+          "relation": "auth.users"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "delete_feed_events_before_post_delete",
+      "arguments": "",
+      "definitionDigest": "7adade6f9186d553a8f0a6a09e3d2901",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "posts_delete_feed_events_before_delete",
+          "enabled": "O",
+          "relation": "posts"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "detach_feed_events_before_session_delete",
+      "arguments": "",
+      "definitionDigest": "70cd2d3aee82b5757d8e1d25c52d65ef",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "feed_sessions_detach_events_before_delete",
+          "enabled": "O",
+          "relation": "feed_sessions"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "enforce_mobile_post_resources_credit_only",
+      "arguments": "",
+      "definitionDigest": "1081639c9b291d993ef01f4f2b1d1363",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "mobile_post_resources_credit_only",
+          "enabled": "O",
+          "relation": "mobile_purchase_intents"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "enforce_profile_identity_state_transition",
+      "arguments": "",
+      "definitionDigest": "c047c10884a7153965f2da1b54a04554",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "profiles_enforce_identity_state_transition",
+          "enabled": "O",
+          "relation": "profiles"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "enforce_upload_byte_reservation_lifecycle",
+      "arguments": "",
+      "definitionDigest": "b772a7c5e778842b2f73c0641f974417",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "upload_byte_reservations_enforce_lifecycle",
+          "enabled": "O",
+          "relation": "upload_byte_reservations"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "enqueue_detached_merged_identity_deletion",
+      "arguments": "",
+      "definitionDigest": "b3af06cd3fdd5685a41c14e2995963a2",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "profiles_enqueue_detached_merged_identity_deletion",
+          "enabled": "O",
+          "relation": "profiles"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "enqueue_private_post_media_cleanup",
+      "arguments": "",
+      "definitionDigest": "73e3eb29c4f1cef8c8f4dbff98ed5de3",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_media_private_cleanup",
+          "enabled": "O",
+          "relation": "post_media"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "enqueue_template_run_after_generation_terminal",
+      "arguments": "",
+      "definitionDigest": "2e5c0977d85a4c630371cf87c09e8a93",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "generations_enqueue_template_run_after_terminal",
+          "enabled": "O",
+          "relation": "generations"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "enqueue_template_run_after_state_change",
+      "arguments": "",
+      "definitionDigest": "e307e029dae8a4bd2cf3b6a57df94228",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "template_runs_enqueue_after_state_change",
+          "enabled": "O",
+          "relation": "template_runs"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "forget_completed_post_remix",
+      "arguments": "",
+      "definitionDigest": "971203925e063b4e05fe943afdc896d7",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "forget_completed_post_remix",
+          "enabled": "O",
+          "relation": "completed_post_remixes"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "forward_linked_account_credit_change",
+      "arguments": "",
+      "definitionDigest": "ebc0abd1b8f5064adf1ec2e9306c3211",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "profiles_forward_linked_credit_change",
+          "enabled": "O",
+          "relation": "profiles"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "generation_model_catalog_entry_guard",
+      "arguments": "",
+      "definitionDigest": "b7413b3c2aa041fd5d90b27be2e63531",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "generation_model_catalog_entry_guard_trigger",
+          "enabled": "O",
+          "relation": "generation_model_catalog_entries"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "generation_model_catalog_has_negative_number",
+      "arguments": "p_value jsonb",
+      "definitionDigest": "53618f9d89f0bfd6d1de125c708f9bfc",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "generation_model_catalog_has_negative_number",
+          "args": "p_value jsonb",
+          "definitionLines": [
+            15,
+            21
+          ],
+          "definitionDigest": "53618f9d89f0bfd6d1de125c708f9bfc",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "validate_generation_model_catalog_release",
+          "args": "p_release_id uuid",
+          "definitionLines": [
+            80
+          ],
+          "definitionDigest": "8d20b1847e6e08d5347fb65266b77028",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "generation_model_catalog_release_guard",
+      "arguments": "",
+      "definitionDigest": "6b44213175dc963b221dcd4074730c85",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "generation_model_catalog_release_guard_trigger",
+          "enabled": "O",
+          "relation": "generation_model_catalog_releases"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "generation_model_identity_guard",
+      "arguments": "",
+      "definitionDigest": "2c464b2ec87eecd4e77dda4309a5236c",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "generation_model_identity_guard_trigger",
+          "enabled": "O",
+          "relation": "generation_models"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "get_public_post_resource_bundle_summaries",
+      "arguments": "p_post_ids uuid[]",
+      "definitionDigest": "18fb60a3ffda58574f811dafc197b317",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [
+        "src/lib/posts-server.ts:630 (rpc.call with PUBLIC_BUNDLE_SUMMARY_RPC)"
+      ],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "source_or_operator_caller"
+    },
+    {
+      "name": "guard_marketplace_cash_quote",
+      "arguments": "",
+      "definitionDigest": "7c9986c6fe4342c5447059002f9c9fb1",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "guard_marketplace_cash_quote",
+          "enabled": "O",
+          "relation": "marketplace_orders"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "guard_upload_reservation_delete",
+      "arguments": "",
+      "definitionDigest": "fcd87715bf15ef199cd8785d6eb2a084",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "upload_byte_reservations_guard_delete",
+          "enabled": "O",
+          "relation": "upload_byte_reservations"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "guard_upload_storage_object_write",
+      "arguments": "",
+      "definitionDigest": "d16258c1dbf14cab92b3dc3473687400",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "guard_upload_storage_object_write",
+          "enabled": "O",
+          "relation": "storage.objects"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "handle_new_user",
+      "arguments": "",
+      "definitionDigest": "38b2a5ff84299035c88e229345f9cefa",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "on_auth_user_created",
+          "enabled": "O",
+          "relation": "auth.users"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "hook_block_password_signups_until_smtp",
+      "arguments": "event jsonb",
+      "definitionDigest": "adcda9e73f258dfd1a75092348887601",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": true
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "increment_post_remix_count",
+      "arguments": "p_post_id uuid",
+      "definitionDigest": "4bdc7d0fabe846ba94d96c88ff580051",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "increment_post_report_count",
+      "arguments": "",
+      "definitionDigest": "cdeda0bf16442de99b7d70eb5a17fc0b",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_reports_increment_count",
+          "enabled": "O",
+          "relation": "post_reports"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "increment_remix_count",
+      "arguments": "p_generation_id uuid",
+      "definitionDigest": "2ad26fa8667f4c8c74c7bdcc253f6f83",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "is_meaningful_feed_engagement",
+      "arguments": "p_category text, p_media_progress_max double precision, p_dwell_ms_max bigint, p_saved_at timestamp with time zone, p_remix_started_at timestamp with time zone, p_resource_opened_at timestamp with time zone, p_purchased_at timestamp with time zone",
+      "definitionDigest": "9336e5756fb7994d5612383806232ac5",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "refresh_creator_feed_stats",
+          "args": "p_as_of timestamp with time zone, p_limit integer",
+          "definitionLines": [
+            46
+          ],
+          "definitionDigest": "cb19840552cb3f3fe1ac3400180c0b58",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "refresh_post_feed_engagement_stats",
+          "args": "p_as_of timestamp with time zone, p_limit integer",
+          "definitionLines": [
+            81,
+            103
+          ],
+          "definitionDigest": "216d6b05e8de151d027d9165b2a886d0",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "is_upload_owner_active",
+      "arguments": "p_user_id uuid",
+      "definitionDigest": "1ed56637f95f82f29d5937536131a844",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "claim_upload_byte_reservation_consumption",
+          "args": "p_upload_id uuid, p_user_id uuid, p_lease_id uuid, p_lease_seconds integer, p_disposition text",
+          "definitionLines": [
+            17
+          ],
+          "definitionDigest": "a9e68408c1b5bc57f6043a75650c9d8a",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "mark_upload_byte_reservation_issued",
+          "args": "p_upload_id uuid, p_user_id uuid, p_token_ttl_seconds integer",
+          "definitionLines": [
+            12
+          ],
+          "definitionDigest": "9e69be8d0a4d50d2dfa0cab4fd5e25c0",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "reserve_upload_bytes_v2",
+          "args": "p_upload_id uuid, p_user_id uuid, p_bucket_id text, p_storage_path text, p_declared_bytes bigint, p_reserved_bytes bigint, p_expected_content_type text, p_user_limit_bytes bigint, p_global_limit_bytes bigint, p_ttl_seconds integer",
+          "definitionLines": [
+            30
+          ],
+          "definitionDigest": "cc3d29d927fe0e32076a5c896533c443",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "linked_account_ids",
+      "arguments": "p_user_id uuid",
+      "definitionDigest": "09a22016b9223158fc738de80f1565f6",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [
+        "scripts/ops/guest-checkout-acceptance.sh:101 (explicit SQL acceptance check)"
+      ],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [
+        {
+          "name": "merge_guest_account",
+          "args": "p_guest_user_id uuid, p_target_user_id uuid, p_source_surface text",
+          "reason": "Reference occurs only in a comment."
+        }
+      ],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "source_or_operator_caller"
+    },
+    {
+      "name": "list_media_rendition_repair_candidates",
+      "arguments": "p_limit integer, p_byte_budget bigint, p_max_attempts integer",
+      "definitionDigest": "5a3897b4d56dcd3d90a1f949a8de0914",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "list_mobile_store_product_provisioning_gaps",
+      "arguments": "",
+      "definitionDigest": "e452dcae24c7dd74b087b107bf8b191b",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "list_referenced_post_resource_storage_paths",
+      "arguments": "",
+      "definitionDigest": "148d71895feb2a9b63ebc6db2ddd6e17",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "lock_upload_owner",
+      "arguments": "p_owner_user_id uuid",
+      "definitionDigest": "cbbef18c60f673a3656bf9b468f62885",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "claim_upload_byte_reservation_consumption",
+          "args": "p_upload_id uuid, p_user_id uuid, p_lease_id uuid, p_lease_seconds integer, p_disposition text",
+          "definitionLines": [
+            16
+          ],
+          "definitionDigest": "a9e68408c1b5bc57f6043a75650c9d8a",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "guard_upload_storage_object_write",
+          "args": "",
+          "definitionLines": [
+            24,
+            25,
+            27,
+            28,
+            31,
+            33
+          ],
+          "definitionDigest": "d16258c1dbf14cab92b3dc3473687400",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "mark_account_deleted_upload_reservations",
+          "args": "p_owner_user_ids uuid[]",
+          "definitionLines": [
+            22
+          ],
+          "definitionDigest": "06f5d11099897d3229910171beb91c2e",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "mark_upload_byte_reservation_issued",
+          "args": "p_upload_id uuid, p_user_id uuid, p_token_ttl_seconds integer",
+          "definitionLines": [
+            11
+          ],
+          "definitionDigest": "9e69be8d0a4d50d2dfa0cab4fd5e25c0",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "reserve_upload_bytes",
+          "args": "p_user_id uuid, p_bucket_id text, p_storage_path text, p_declared_bytes bigint, p_user_limit_bytes bigint, p_global_limit_bytes bigint, p_ttl_seconds integer",
+          "definitionLines": [
+            17
+          ],
+          "definitionDigest": "89c996b09f3a61d87db71194bdc3fc67",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "reserve_upload_bytes_v2",
+          "args": "p_upload_id uuid, p_user_id uuid, p_bucket_id text, p_storage_path text, p_declared_bytes bigint, p_reserved_bytes bigint, p_expected_content_type text, p_user_limit_bytes bigint, p_global_limit_bytes bigint, p_ttl_seconds integer",
+          "definitionLines": [
+            29
+          ],
+          "definitionDigest": "cc3d29d927fe0e32076a5c896533c443",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "lock_upload_storage_path",
+      "arguments": "p_bucket_id text, p_storage_path text",
+      "definitionDigest": "b3813e50d0e9165115f35afb7821eb69",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "enforce_upload_byte_reservation_lifecycle",
+          "args": "",
+          "definitionLines": [
+            10
+          ],
+          "definitionDigest": "b772a7c5e778842b2f73c0641f974417",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "guard_upload_reservation_delete",
+          "args": "",
+          "definitionLines": [
+            8
+          ],
+          "definitionDigest": "fcd87715bf15ef199cd8785d6eb2a084",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "guard_upload_storage_object_write",
+          "args": "",
+          "definitionLines": [
+            40,
+            42,
+            45,
+            46,
+            49
+          ],
+          "definitionDigest": "d16258c1dbf14cab92b3dc3473687400",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "reserve_upload_bytes_v2",
+          "args": "p_upload_id uuid, p_user_id uuid, p_bucket_id text, p_storage_path text, p_declared_bytes bigint, p_reserved_bytes bigint, p_expected_content_type text, p_user_limit_bytes bigint, p_global_limit_bytes bigint, p_ttl_seconds integer",
+          "definitionLines": [
+            33
+          ],
+          "definitionDigest": "cc3d29d927fe0e32076a5c896533c443",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "tombstone_upload_path",
+          "args": "p_bucket_id text, p_storage_path text, p_upload_id uuid, p_owner_user_id uuid, p_reason text",
+          "definitionLines": [
+            8
+          ],
+          "definitionDigest": "03d1ac53c4bcfb0019b8684aa407e3d3",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "mark_nsfw_purchase_proof",
+      "arguments": "",
+      "definitionDigest": "ee0ad1c36517f27d20fd6976d1195367",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "purchase_proof_nsfw",
+          "enabled": "O",
+          "relation": "post_resource_purchase_media"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "marketplace_resource_bundle_quality_issue",
+      "arguments": "p_title text, p_summary text, p_preview_text text, p_prompt_text text, p_notes_markdown text, p_workflow_share_url text, p_workflow_snapshot jsonb, p_attachments jsonb, p_allow_remix boolean, p_price_usd_cents integer, p_access_mode text, p_post_title text, p_post_body text, p_post_visibility text, p_post_archived_at timestamp with time zone, p_post_review_status text, p_post_has_media boolean, p_seller_username text, p_seller_display_name text",
+      "definitionDigest": "fcd542a6d26d141ace343d1e76dc8d8a",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "apply_post_resource_bundle_mutation_unlocked_20260806",
+          "args": "p_post_id uuid, p_owner_user_id uuid, p_post_title text, p_post_visibility text, p_bundle jsonb",
+          "definitionLines": [
+            130
+          ],
+          "definitionDigest": "b9ad341265b8daaff59a3984edc07386",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "post_resource_bundle_quality_issue_for",
+          "args": "p_bundle_id uuid",
+          "definitionLines": [
+            7
+          ],
+          "definitionDigest": "351e8cbab9f2dd5cc7d21ea2744a76a7",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "refresh_marketplace_bundle_listings",
+          "args": "p_bundle_ids uuid[]",
+          "definitionLines": [
+            19
+          ],
+          "definitionDigest": "b01fd79a52282a481ba4374c8a67812c",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "marketplace_text_is_placeholder",
+      "arguments": "p_value text",
+      "definitionDigest": "539c79a81f187b7e2ef9dfc5fe146183",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "marketplace_resource_bundle_quality_issue",
+          "args": "p_title text, p_summary text, p_preview_text text, p_prompt_text text, p_notes_markdown text, p_workflow_share_url text, p_workflow_snapshot jsonb, p_attachments jsonb, p_allow_remix boolean, p_price_usd_cents integer, p_access_mode text, p_post_title text, p_post_body text, p_post_visibility text, p_post_archived_at timestamp with time zone, p_post_review_status text, p_post_has_media boolean, p_seller_username text, p_seller_display_name text",
+          "definitionLines": [
+            26,
+            30,
+            36,
+            37,
+            44,
+            70,
+            71,
+            80,
+            85
+          ],
+          "definitionDigest": "fcd542a6d26d141ace343d1e76dc8d8a",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": true,
+        "authenticated": true,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "match_post_content_embeddings",
+      "arguments": "p_query_embedding vector, p_embedding_model text, p_match_threshold double precision, p_limit integer",
+      "definitionDigest": "5efec4e09fcd7ed78bddf274104d3c0e",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "merge_guest_account",
+      "arguments": "p_guest_user_id uuid, p_target_user_id uuid, p_source_surface text",
+      "definitionDigest": "34d94cca36d92b910ec3779de127e207",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "redeem_account_merge_ticket",
+          "args": "p_ticket_hash text, p_target_user_id uuid, p_source_surface text",
+          "definitionLines": [
+            40
+          ],
+          "definitionDigest": "78edbbf80d73ca021154dc48366d7710",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "normalize_feed_interest_category",
+      "arguments": "p_category text",
+      "definitionDigest": "8b689d644be2c501f9497d0920dd1098",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "refresh_user_interest_weights",
+          "args": "p_as_of timestamp with time zone, p_lookback_days integer, p_half_life_days integer, p_limit integer",
+          "definitionLines": [
+            125,
+            143,
+            148,
+            159
+          ],
+          "definitionDigest": "a173d2b6850f6f5c00c6ed1a49e084c2",
+          "revalidation": "four qualified SELECT/WHERE calls inspected in current production definition"
+        },
+        {
+          "name": "seed_user_interest_from_onboarding_goal",
+          "args": "p_user_id uuid, p_goal text, p_weight double precision, p_as_of timestamp with time zone",
+          "definitionLines": [
+            18
+          ],
+          "definitionDigest": "cefad131928c044aa060f19c3b8e9a32",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "normalize_post_resource_items",
+      "arguments": "p_items jsonb",
+      "definitionDigest": "74def563d560c57fd62b2e13a530d5ec",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "apply_post_resource_bundle_mutation_unlocked_20260806",
+          "args": "p_post_id uuid, p_owner_user_id uuid, p_post_title text, p_post_visibility text, p_bundle jsonb",
+          "definitionLines": [
+            71
+          ],
+          "definitionDigest": "b9ad341265b8daaff59a3984edc07386",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "build_post_resource_items_from_legacy_bundle",
+          "args": "p_prompt_text text, p_notes_markdown text, p_workflow_share_url text, p_workflow_snapshot jsonb, p_attachments jsonb, p_allow_remix boolean",
+          "definitionLines": [
+            80
+          ],
+          "definitionDigest": "54f1a9acf196e02700354ac464fdd073",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "validate_post_resource_bundle_write",
+          "args": "",
+          "definitionLines": [
+            51
+          ],
+          "definitionDigest": "da97ccf9e33407522259f729a66f34de",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": true,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "normalize_post_resource_legacy_earnings",
+      "arguments": "",
+      "definitionDigest": "dc3dc718b855aa341c429c270677427e",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_resource_bundle_normalize_legacy_earnings",
+          "enabled": "O",
+          "relation": "post_resource_bundles"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "pin_post_resource_bundle_purchase_revision",
+      "arguments": "",
+      "definitionDigest": "6fbb9e4bbea4973c0cb7d50531e36ce4",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_resource_bundle_purchases_pin_revision",
+          "enabled": "O",
+          "relation": "post_resource_bundle_purchases"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "post_resource_bundle_content_fingerprint",
+      "arguments": "p_bundle post_resource_bundles",
+      "definitionDigest": "febf2e72eaea1b1a9905790b4ac8f67e",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "capture_post_resource_bundle_revision",
+          "args": "",
+          "definitionLines": [
+            10
+          ],
+          "definitionDigest": "84e31dc4d77fa8cfeb7e8d037774b639",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "get_post_resource_bundle_cash_quote",
+          "args": "p_post_id uuid, p_buyer_user_id uuid",
+          "definitionLines": [
+            56
+          ],
+          "definitionDigest": "02ad94a392e3c426b6b41285a2574e0b",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "protect_sold_post_resource_bundle_content",
+          "args": "",
+          "definitionLines": [
+            65,
+            66
+          ],
+          "definitionDigest": "6c5cc582f0355499c5f1e91048907da3",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "record_post_resource_bundle_cash_order",
+          "args": "p_post_id uuid, p_bundle_id uuid, p_buyer_user_id uuid, p_razorpay_order_id text, p_amount_subunits integer, p_currency text, p_expected_price_usd_cents integer, p_expected_revision_id uuid, p_expected_content_fingerprint text",
+          "definitionLines": [
+            88
+          ],
+          "definitionDigest": "493e473fba743972a895c24b899f07b2",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "unlock_free_post_resource_bundle",
+          "args": "p_buyer_user_id uuid, p_post_id uuid, p_order_reference text, p_payment_reference text",
+          "definitionLines": [
+            63
+          ],
+          "definitionDigest": "e8cf3b67400615e6efc281b167d3845d",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "post_resource_bundle_quality_issue_for",
+      "arguments": "p_bundle_id uuid",
+      "definitionDigest": "351e8cbab9f2dd5cc7d21ea2744a76a7",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "sync_post_resource_bundle_exposure",
+          "args": "",
+          "definitionLines": [
+            26
+          ],
+          "definitionDigest": "2676b3f0f158f4be6c9a81a6a908fe9b",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "post_resource_bundle_revision_content_matches",
+      "arguments": "p_old post_resource_bundle_revisions, p_new post_resource_bundle_revisions",
+      "definitionDigest": "24e2f52e18cbab39522d7ebf85a86b2c",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "reject_post_resource_bundle_revision_rewrite",
+          "args": "",
+          "definitionLines": [
+            9
+          ],
+          "definitionDigest": "d317cb51973d08691a08532f534ba556",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "prevent_hidden_generation_republish",
+      "arguments": "",
+      "definitionDigest": "9a54b43a9d8fdffc34f9e495a064cacb",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "generations_prevent_hidden_insert_public",
+          "enabled": "O",
+          "relation": "generations"
+        },
+        {
+          "name": "generations_prevent_hidden_republish",
+          "enabled": "O",
+          "relation": "generations"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "prevent_referral_audit_mutation",
+      "arguments": "",
+      "definitionDigest": "9ff3ffe08f864f48236278a770c6373a",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "credit_purchase_adjustments_append_only",
+          "enabled": "O",
+          "relation": "credit_purchase_adjustments"
+        },
+        {
+          "name": "referral_credit_ledger_append_only",
+          "enabled": "O",
+          "relation": "referral_credit_ledger"
+        },
+        {
+          "name": "referral_reward_adjustments_append_only",
+          "enabled": "O",
+          "relation": "referral_reward_adjustments"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": true,
+        "authenticated": true,
+        "service_role": true,
+        "supabase_auth_admin": true
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "prevent_referral_identity_mutation",
+      "arguments": "",
+      "definitionDigest": "dbcebbd29cd1970c0815fb221084bd21",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "referral_codes_prevent_identity_mutation",
+          "enabled": "O",
+          "relation": "referral_codes"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": true,
+        "authenticated": true,
+        "service_role": true,
+        "supabase_auth_admin": true
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "private_post_media_is_referenced_before_nsfw",
+      "arguments": "p_path text",
+      "definitionDigest": "e1c0360ba62bb0b70ba044c7b3956182",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "private_post_media_is_referenced",
+          "args": "p_path text",
+          "definitionLines": [
+            7
+          ],
+          "definitionDigest": "cc8973c25c70afdc1c5a84a3a98cca68",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "protect_mobile_purchase_intent_authority",
+      "arguments": "",
+      "definitionDigest": "5075c95b711159f42050257cf7f10c21",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "mobile_purchase_intents_protect_authority",
+          "enabled": "O",
+          "relation": "mobile_purchase_intents"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "protect_mobile_store_product_authority",
+      "arguments": "",
+      "definitionDigest": "e315e7b793a0df091b994ce11f7f7106",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "mobile_store_products_protect_authority",
+          "enabled": "O",
+          "relation": "mobile_store_products"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "protect_mobile_store_transaction_identity",
+      "arguments": "",
+      "definitionDigest": "488f67e35411c0de0b5423df6cd60e1a",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "mobile_store_transactions_protect_identity",
+          "enabled": "O",
+          "relation": "mobile_store_transactions"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "protect_nsfw_generation_exposure",
+      "arguments": "",
+      "definitionDigest": "a44f45d7fd7ae295cfe55b091729ff02",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "z_generations_nsfw_exposure",
+          "enabled": "O",
+          "relation": "generations"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "protect_post_resource_bundle_order_quote",
+      "arguments": "",
+      "definitionDigest": "d2ef8d51dfd187834bfe21fca96376f6",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_resource_bundle_orders_protect_quote",
+          "enabled": "O",
+          "relation": "post_resource_bundle_orders"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "protect_sold_post_resource_bundle_content",
+      "arguments": "",
+      "definitionDigest": "6c5cc582f0355499c5f1e91048907da3",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_resource_bundles_protect_sold_content",
+          "enabled": "O",
+          "relation": "post_resource_bundles"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "provision_mobile_store_product",
+      "arguments": "p_product_id text, p_entitlement_type text, p_amount_subunits integer, p_currency text",
+      "definitionDigest": "26475f94e798a64eaf15eb6cf7fc6a79",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "publish_generation_model_catalog",
+      "arguments": "p_release_id uuid, p_expected_active_revision text",
+      "definitionDigest": "6916736946a666b61eda08fc3032498f",
+      "sourceCallers": [
+        {
+          "file": "scripts/ops/generation-model-catalog.ts",
+          "line": 1819,
+          "name": "publish_generation_model_catalog"
+        }
+      ],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "source_or_operator_caller"
+    },
+    {
+      "name": "reconcile_credit_purchase_adjustment",
+      "arguments": "p_transaction_id uuid, p_provider text, p_provider_event_id text, p_cumulative_reversed_subunits bigint, p_action text, p_reason text",
+      "definitionDigest": "e2e3ee24f4b60ce2fffe0ecd50532208",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "reconcile_mobile_credit_purchase_adjustment",
+          "args": "p_external_order_id text, p_user_id uuid, p_product_id text, p_event_id text, p_event_timestamp_ms bigint, p_action text",
+          "definitionLines": [
+            47
+          ],
+          "definitionDigest": "8f3be1793b23ccd95f2cf8a3dff2aa45",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "reconcile_razorpay_credit_purchase_adjustment",
+          "args": "p_transaction_id uuid, p_provider_event_id text, p_payment_id text, p_cumulative_reversed_subunits bigint, p_action text, p_reason text",
+          "definitionLines": [
+            45
+          ],
+          "definitionDigest": "f9deedf9fc6103a63fcd03b1ce3fcbc1",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "reconcile_mobile_credit_refund",
+      "arguments": "p_external_order_id text, p_user_id uuid, p_product_id text, p_event_id text, p_event_timestamp_ms bigint, p_action text",
+      "definitionDigest": "bde8d7969d7ef11507975fcde27a548d",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "record_completed_post_remix",
+      "arguments": "",
+      "definitionDigest": "2d8d8678eb368c6fa1e2542ea52ebf0a",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "record_completed_post_remix",
+          "enabled": "O",
+          "relation": "generations"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "record_credit_purchase_success_timestamp",
+      "arguments": "",
+      "definitionDigest": "c08ae8ee279a33cf0c1473f358a43cbf",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "transactions_record_credit_purchase_success",
+          "enabled": "O",
+          "relation": "transactions"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "record_generation_spend_audit",
+      "arguments": "",
+      "definitionDigest": "011063fb8fe6c242bf577e5c423d2fb7",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "generations_record_spend_audit",
+          "enabled": "O",
+          "relation": "generations"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "refresh_creator_search_documents",
+      "arguments": "p_creator_ids uuid[]",
+      "definitionDigest": "f9e8145b2ca1fd8b5c001df83d6bb09c",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "trg_refresh_creator_search_for_post",
+          "args": "",
+          "definitionLines": [
+            18
+          ],
+          "definitionDigest": "4cb9c359c16b03459ccb5c9a8d623a8c",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "trg_refresh_creator_search_profile",
+          "args": "",
+          "definitionLines": [
+            8
+          ],
+          "definitionDigest": "e3fc4760163c06416e3ca87356f753d4",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "refresh_marketplace_bundle_listings",
+      "arguments": "p_bundle_ids uuid[]",
+      "definitionDigest": "b01fd79a52282a481ba4374c8a67812c",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "trg_refresh_marketplace_listing_for_bundle",
+          "args": "",
+          "definitionLines": [
+            8
+          ],
+          "definitionDigest": "b417ba73fe0e11923746f556e8547003",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "trg_refresh_marketplace_listing_for_post",
+          "args": "",
+          "definitionLines": [
+            8
+          ],
+          "definitionDigest": "b96b1990c48f7f3a13bc8f943f329fd3",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "trg_refresh_marketplace_listing_for_profile",
+          "args": "",
+          "definitionLines": [
+            8
+          ],
+          "definitionDigest": "dd881a16fe123b91370d37099915ca70",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "refresh_marketplace_bundle_search_documents",
+      "arguments": "p_bundle_ids uuid[]",
+      "definitionDigest": "59a88fba784da8675a232076872cf5e5",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "trg_refresh_marketplace_search_for_bundle",
+          "args": "",
+          "definitionLines": [
+            8
+          ],
+          "definitionDigest": "d9de52909a8f9c139619982cf98c99de",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "trg_refresh_marketplace_search_for_post",
+          "args": "",
+          "definitionLines": [
+            8
+          ],
+          "definitionDigest": "f3029a4667c3617c16f740c327aabf1f",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "trg_refresh_marketplace_search_for_profile",
+          "args": "",
+          "definitionLines": [
+            8
+          ],
+          "definitionDigest": "c2e2e5867b803ecb52d6f897cff69133",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "refresh_post_search_documents",
+      "arguments": "p_post_ids uuid[]",
+      "definitionDigest": "cb23f32bbf599df2567556c28e753f5c",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "trg_refresh_post_search_document",
+          "args": "",
+          "definitionLines": [
+            8
+          ],
+          "definitionDigest": "2ee04386ec94e6517c0a4597c4db954c",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "refresh_workflow_canvas_library_summary",
+      "arguments": "",
+      "definitionDigest": "fd04bbeb6592f04abe7a58a779142f1a",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "workflow_canvases_refresh_library_summary",
+          "enabled": "O",
+          "relation": "workflow_canvases"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "refund_ai_usage_event",
+      "arguments": "p_event_id uuid",
+      "definitionDigest": "6a2f3c3702e5864fda8dda8654b00336",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "refund_creation_credit_reservation",
+      "arguments": "p_user_id uuid, p_reservation_key text",
+      "definitionDigest": "c373fc9a2c7d42953c57c86c629f47ca",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "reject_blocked_user_follow",
+      "arguments": "",
+      "definitionDigest": "5ea5d31bb52da838844c0f5a8bcf73d9",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "follows_reject_blocked_relationship",
+          "enabled": "O",
+          "relation": "follows"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "reject_post_resource_bundle_revision_rewrite",
+      "arguments": "",
+      "definitionDigest": "d317cb51973d08691a08532f534ba556",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_resource_bundle_revisions_immutable",
+          "enabled": "O",
+          "relation": "post_resource_bundle_revisions"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "reject_post_resource_bundle_write_during_account_deletion",
+      "arguments": "",
+      "definitionDigest": "71c46931915488dc968917640b7d4688",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_resource_bundles_freeze_for_account_deletion",
+          "enabled": "O",
+          "relation": "post_resource_bundles"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "reject_post_write_during_account_deletion",
+      "arguments": "",
+      "definitionDigest": "74627acfa55b3a111dc2c92273abaeda",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "posts_freeze_for_account_deletion",
+          "enabled": "O",
+          "relation": "posts"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "reject_sold_post_delete",
+      "arguments": "",
+      "definitionDigest": "51b35adf782df7bf4d51d1426b7ab10a",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "posts_reject_sold_delete",
+          "enabled": "O",
+          "relation": "posts"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "reject_template_version_mutation",
+      "arguments": "",
+      "definitionDigest": "79f57f61dfa8fdc8a72652e9aeb62cf5",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "template_versions_reject_delete",
+          "enabled": "O",
+          "relation": "template_versions"
+        },
+        {
+          "name": "template_versions_reject_update",
+          "enabled": "O",
+          "relation": "template_versions"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": true,
+        "authenticated": true,
+        "service_role": true,
+        "supabase_auth_admin": true
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "release_upload_byte_reservation",
+      "arguments": "p_bucket_id text, p_storage_path text",
+      "definitionDigest": "643e67c2f263bd3150679e5f396a3948",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "relink_legacy_generation_media",
+      "arguments": "p_generation_id uuid, p_expected_output_url text, p_new_output_url text",
+      "definitionDigest": "0b3c19ffbbb2357b21fdfda739950f3a",
+      "sourceCallers": [
+        {
+          "file": "scripts/backfills/backfill-legacy-temp-media.mjs",
+          "line": 624,
+          "name": "relink_legacy_generation_media"
+        }
+      ],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "source_or_operator_caller"
+    },
+    {
+      "name": "remove_follows_for_user_block",
+      "arguments": "",
+      "definitionDigest": "6b53fc397f51f1f5843ced7f29f29793",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "user_blocks_remove_follows",
+          "enabled": "O",
+          "relation": "user_blocks"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "remove_post_saves_before_auth_user_delete",
+      "arguments": "",
+      "definitionDigest": "1685cec453925d9c19cd13324609e148",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "auth_users_remove_post_saves_before_delete",
+          "enabled": "O",
+          "relation": "auth.users"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "reserve_ai_usage_promotional_credits",
+      "arguments": "",
+      "definitionDigest": "84fd9808a6992e2a5b5af2f3b3bd6af5",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "ai_usage_events_reserve_promotional_credits",
+          "enabled": "O",
+          "relation": "ai_usage_events"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "reserve_creation_credits",
+      "arguments": "p_user_id uuid, p_cost integer, p_reservation_key text",
+      "definitionDigest": "58e66dbae937acad9a3353058a6bc71d",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "reserve_generation_promotional_credits",
+      "arguments": "",
+      "definitionDigest": "b1b3a74be9e111f506e1180c881acd5a",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "generations_reserve_promotional_credits",
+          "enabled": "O",
+          "relation": "generations"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "reserve_upload_bytes",
+      "arguments": "p_user_id uuid, p_bucket_id text, p_storage_path text, p_declared_bytes bigint, p_user_limit_bytes bigint, p_global_limit_bytes bigint, p_ttl_seconds integer",
+      "definitionDigest": "89c996b09f3a61d87db71194bdc3fc67",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "restore_ai_usage_promotional_credits",
+      "arguments": "",
+      "definitionDigest": "1e6cf5432ec5ff7b1dd309a0cf0a18cc",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "ai_usage_events_restore_promotional_credits",
+          "enabled": "O",
+          "relation": "ai_usage_events"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "restore_generation_promotional_credits",
+      "arguments": "",
+      "definitionDigest": "5c10ad4e6d1037a48f8a607690f67805",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "generations_restore_promotional_credits",
+          "enabled": "O",
+          "relation": "generations"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "retain_creator_payout_identity",
+      "arguments": "",
+      "definitionDigest": "bde8267c568cfcbd0ba001769f238f12",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "creator_payout_requests_retain_identity",
+          "enabled": "O",
+          "relation": "creator_payout_requests"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "retire_sold_post_resource_bundle_instead_of_delete",
+      "arguments": "",
+      "definitionDigest": "5c2a2f05ba143a820203310c6721892e",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "reverse_marketplace_wallet_on_refund",
+      "arguments": "",
+      "definitionDigest": "84ba08b87ebbb2d095eb2b932c343c77",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "marketplace_order_creator_refund",
+          "enabled": "O",
+          "relation": "marketplace_orders"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "reverse_post_resource_wallet_on_refund",
+      "arguments": "",
+      "definitionDigest": "55b52e2535b01ee1856f0f48da237d1c",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_resource_order_creator_refund",
+          "enabled": "O",
+          "relation": "post_resource_bundle_orders"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "rollback_generation_model_catalog",
+      "arguments": "p_target_revision text, p_expected_active_revision text",
+      "definitionDigest": "3d6162c3c395f87b5c032a42fef55d80",
+      "sourceCallers": [
+        {
+          "file": "scripts/ops/generation-model-catalog.ts",
+          "line": 1762,
+          "name": "rollback_generation_model_catalog"
+        }
+      ],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "source_or_operator_caller"
+    },
+    {
+      "name": "set_feed_creator_feedback",
+      "arguments": "p_user_id uuid, p_creator_user_id uuid, p_is_active boolean, p_reason text",
+      "definitionDigest": "3884b093c487f168ee2969e31eac1b51",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "set_feed_post_feedback",
+      "arguments": "p_user_id uuid, p_post_id uuid, p_is_active boolean, p_reason text",
+      "definitionDigest": "8be98b45d70da90ccf212d2c48113380",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "set_mobile_store_product_active",
+      "arguments": "p_product_id text, p_active boolean",
+      "definitionDigest": "0e25649a2e34e77712d6c429efa1c3aa",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "no_current_caller_located"
+    },
+    {
+      "name": "snapshot_post_resource_proof_media",
+      "arguments": "p_post_id uuid",
+      "definitionDigest": "28cbe5eecc9fd39da94ae7c057bf6ed0",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "record_post_resource_bundle_cash_order",
+          "args": "p_post_id uuid, p_bundle_id uuid, p_buyer_user_id uuid, p_razorpay_order_id text, p_amount_subunits integer, p_currency text, p_expected_price_usd_cents integer, p_expected_revision_id uuid, p_expected_content_fingerprint text",
+          "definitionLines": [
+            93
+          ],
+          "definitionDigest": "493e473fba743972a895c24b899f07b2",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "unlock_free_post_resource_bundle",
+          "args": "p_buyer_user_id uuid, p_post_id uuid, p_order_reference text, p_payment_reference text",
+          "definitionLines": [
+            67
+          ],
+          "definitionDigest": "e8cf3b67400615e6efc281b167d3845d",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "stage_generation_model_catalog",
+      "arguments": "p_manifest jsonb, p_expected_active_revision text",
+      "definitionDigest": "dadf45f7e403eb74b60f5567e4f3ab6c",
+      "sourceCallers": [
+        {
+          "file": "scripts/ops/generation-model-catalog.ts",
+          "line": 1855,
+          "name": "stage_generation_model_catalog"
+        }
+      ],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "source_or_operator_caller"
+    },
+    {
+      "name": "start_workflow_canvas_run",
+      "arguments": "p_canvas_id uuid, p_user_id uuid, p_start_node_id text, p_mode text, p_catalog_revision text, p_graph_snapshot jsonb, p_idempotency_key text",
+      "definitionDigest": "fa9a621efafa01aac70603a29524261f",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [
+        "scripts/ops/verify-client-rpc-boundaries.mjs:75 (initialize/start template literal)"
+      ],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": true,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "source_or_operator_caller"
+    },
+    {
+      "name": "sync_generation_exposure_with_post",
+      "arguments": "",
+      "definitionDigest": "e7aed73e4aa4c06997138f4fb5904d3a",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "posts_sync_generation_exposure",
+          "enabled": "O",
+          "relation": "posts"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "sync_nsfw_generation_exposure",
+      "arguments": "",
+      "definitionDigest": "87df7fc1c97d004d3b4acb70f8e963c3",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "z_posts_nsfw_exposure",
+          "enabled": "O",
+          "relation": "posts"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "sync_nsfw_purchase_proofs",
+      "arguments": "",
+      "definitionDigest": "007f861c0677a6f9a4a2beeee0733088",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "posts_nsfw_purchase_proofs",
+          "enabled": "O",
+          "relation": "posts"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "sync_post_resource_bundle_exposure",
+      "arguments": "",
+      "definitionDigest": "2676b3f0f158f4be6c9a81a6a908fe9b",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "posts_sync_resource_bundle_exposure",
+          "enabled": "O",
+          "relation": "posts"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "sync_post_resource_purchase_moderation",
+      "arguments": "",
+      "definitionDigest": "296bac3758704cf1c4504a6583e96e1d",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "posts_sync_purchase_moderation_delete",
+          "enabled": "O",
+          "relation": "posts"
+        },
+        {
+          "name": "posts_sync_purchase_moderation_update",
+          "enabled": "O",
+          "relation": "posts"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "sync_upload_byte_admission_counters",
+      "arguments": "",
+      "definitionDigest": "613245d957f8be47df41bbe65c01f706",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "upload_byte_reservations_sync_admission_counters",
+          "enabled": "O",
+          "relation": "upload_byte_reservations"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "tombstone_upload_path",
+      "arguments": "p_bucket_id text, p_storage_path text, p_upload_id uuid, p_owner_user_id uuid, p_reason text",
+      "definitionDigest": "03d1ac53c4bcfb0019b8684aa407e3d3",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "consume_upload_byte_reservation",
+          "args": "p_user_id uuid, p_bucket_id text, p_storage_path text",
+          "definitionLines": [
+            23
+          ],
+          "definitionDigest": "d75a35f59eb4fcd920f81e6b81ce2f1f",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "enforce_upload_byte_reservation_lifecycle",
+          "args": "",
+          "definitionLines": [
+            241
+          ],
+          "definitionDigest": "b772a7c5e778842b2f73c0641f974417",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "mark_account_deleted_upload_reservations",
+          "args": "p_owner_user_ids uuid[]",
+          "definitionLines": [
+            33
+          ],
+          "definitionDigest": "06f5d11099897d3229910171beb91c2e",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "release_upload_byte_reservation",
+          "args": "p_bucket_id text, p_storage_path text",
+          "definitionLines": [
+            16
+          ],
+          "definitionDigest": "643e67c2f263bd3150679e5f396a3948",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "touch_updated_at_column",
+      "arguments": "",
+      "definitionDigest": "d593f12419db4151500549d5488e286c",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "credit_grant_programs_set_updated_at",
+          "enabled": "O",
+          "relation": "credit_grant_programs"
+        },
+        {
+          "name": "feed_algorithm_versions_set_updated_at",
+          "enabled": "O",
+          "relation": "feed_algorithm_versions"
+        },
+        {
+          "name": "feed_delivery_facts_set_updated_at",
+          "enabled": "O",
+          "relation": "feed_delivery_facts"
+        },
+        {
+          "name": "feed_experiments_set_updated_at",
+          "enabled": "O",
+          "relation": "feed_experiments"
+        },
+        {
+          "name": "feed_user_creator_feedback_set_updated_at",
+          "enabled": "O",
+          "relation": "feed_user_creator_feedback"
+        },
+        {
+          "name": "feed_user_post_feedback_set_updated_at",
+          "enabled": "O",
+          "relation": "feed_user_post_feedback"
+        },
+        {
+          "name": "marketplace_asset_content_set_updated_at",
+          "enabled": "O",
+          "relation": "marketplace_asset_content"
+        },
+        {
+          "name": "marketplace_assets_set_updated_at",
+          "enabled": "O",
+          "relation": "marketplace_assets"
+        },
+        {
+          "name": "marketplace_orders_set_updated_at",
+          "enabled": "O",
+          "relation": "marketplace_orders"
+        },
+        {
+          "name": "mobile_notification_preferences_set_updated_at",
+          "enabled": "O",
+          "relation": "mobile_notification_preferences"
+        },
+        {
+          "name": "mobile_notifications_set_updated_at",
+          "enabled": "O",
+          "relation": "mobile_notifications"
+        },
+        {
+          "name": "mobile_onboarding_states_set_updated_at",
+          "enabled": "O",
+          "relation": "mobile_onboarding_states"
+        },
+        {
+          "name": "mobile_push_deliveries_set_updated_at",
+          "enabled": "O",
+          "relation": "mobile_push_deliveries"
+        },
+        {
+          "name": "mobile_push_tokens_set_updated_at",
+          "enabled": "O",
+          "relation": "mobile_push_tokens"
+        },
+        {
+          "name": "moderation_reports_set_updated_at",
+          "enabled": "O",
+          "relation": "moderation_reports"
+        },
+        {
+          "name": "post_comments_set_updated_at",
+          "enabled": "O",
+          "relation": "post_comments"
+        },
+        {
+          "name": "post_content_embeddings_set_updated_at",
+          "enabled": "O",
+          "relation": "post_content_embeddings"
+        },
+        {
+          "name": "post_reports_set_updated_at",
+          "enabled": "O",
+          "relation": "post_reports"
+        },
+        {
+          "name": "post_resource_bundle_orders_set_updated_at",
+          "enabled": "O",
+          "relation": "post_resource_bundle_orders"
+        },
+        {
+          "name": "post_resource_bundles_set_updated_at",
+          "enabled": "O",
+          "relation": "post_resource_bundles"
+        },
+        {
+          "name": "posts_set_updated_at",
+          "enabled": "O",
+          "relation": "posts"
+        },
+        {
+          "name": "template_runs_set_updated_at",
+          "enabled": "O",
+          "relation": "template_runs"
+        },
+        {
+          "name": "templates_set_updated_at",
+          "enabled": "O",
+          "relation": "templates"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": true,
+        "authenticated": true,
+        "service_role": true,
+        "supabase_auth_admin": true
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "touch_workflow_canvas_updated_at",
+      "arguments": "",
+      "definitionDigest": "1e775a3b38f2e36ca090580ff4614371",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "workflow_canvases_set_updated_at",
+          "enabled": "O",
+          "relation": "workflow_canvases"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": true,
+        "authenticated": true,
+        "service_role": true,
+        "supabase_auth_admin": true
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "trg_refresh_creator_search_for_post",
+      "arguments": "",
+      "definitionDigest": "4cb9c359c16b03459ccb5c9a8d623a8c",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "posts_refresh_creator_search_document",
+          "enabled": "O",
+          "relation": "posts"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "trg_refresh_creator_search_profile",
+      "arguments": "",
+      "definitionDigest": "e3fc4760163c06416e3ca87356f753d4",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "profiles_refresh_public_search_document",
+          "enabled": "O",
+          "relation": "profiles"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "trg_refresh_marketplace_listing_for_bundle",
+      "arguments": "",
+      "definitionDigest": "b417ba73fe0e11923746f556e8547003",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_resource_bundles_refresh_marketplace_listing_insert",
+          "enabled": "O",
+          "relation": "post_resource_bundles"
+        },
+        {
+          "name": "post_resource_bundles_refresh_marketplace_listing_update",
+          "enabled": "O",
+          "relation": "post_resource_bundles"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "trg_refresh_marketplace_listing_for_post",
+      "arguments": "",
+      "definitionDigest": "b96b1990c48f7f3a13bc8f943f329fd3",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "posts_refresh_marketplace_listing",
+          "enabled": "O",
+          "relation": "posts"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "trg_refresh_marketplace_listing_for_profile",
+      "arguments": "",
+      "definitionDigest": "dd881a16fe123b91370d37099915ca70",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "profiles_refresh_marketplace_listing",
+          "enabled": "O",
+          "relation": "profiles"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "trg_refresh_marketplace_search_for_bundle",
+      "arguments": "",
+      "definitionDigest": "d9de52909a8f9c139619982cf98c99de",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_resource_bundles_refresh_marketplace_search_insert",
+          "enabled": "O",
+          "relation": "post_resource_bundles"
+        },
+        {
+          "name": "post_resource_bundles_refresh_marketplace_search_update",
+          "enabled": "O",
+          "relation": "post_resource_bundles"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "trg_refresh_marketplace_search_for_post",
+      "arguments": "",
+      "definitionDigest": "f3029a4667c3617c16f740c327aabf1f",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "posts_refresh_marketplace_search",
+          "enabled": "O",
+          "relation": "posts"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "trg_refresh_marketplace_search_for_profile",
+      "arguments": "",
+      "definitionDigest": "c2e2e5867b803ecb52d6f897cff69133",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "profiles_refresh_marketplace_search",
+          "enabled": "O",
+          "relation": "profiles"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "trg_refresh_post_search_document",
+      "arguments": "",
+      "definitionDigest": "2ee04386ec94e6517c0a4597c4db954c",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "posts_refresh_public_search_document",
+          "enabled": "O",
+          "relation": "posts"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "update_post_with_resource_bundle_before_nsfw",
+      "arguments": "p_post_id uuid, p_owner_user_id uuid, p_post_patch jsonb, p_has_bundle boolean, p_bundle jsonb",
+      "definitionDigest": "f47c4210822aac1fb6cbef89c6ceae1f",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "update_post_with_resource_bundle",
+          "args": "p_post_id uuid, p_owner_user_id uuid, p_post_patch jsonb, p_has_bundle boolean, p_bundle jsonb",
+          "definitionLines": [
+            10
+          ],
+          "definitionDigest": "b3c9ac461fe6763795b1db7e95a9b07f",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "upload_byte_reservation_charge",
+      "arguments": "p_reservation upload_byte_reservations",
+      "definitionDigest": "7f8ec3cf4eb1bcbaa2e9e05220a3ead7",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "reconcile_upload_byte_admission_counters",
+          "args": "p_repair boolean",
+          "definitionLines": [
+            18,
+            24,
+            45,
+            49
+          ],
+          "definitionDigest": "ea6c911bb8e5d9bbc105eec5b878f2dd",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "sync_upload_byte_admission_counters",
+          "args": "",
+          "definitionLines": [
+            9,
+            11
+          ],
+          "definitionDigest": "613245d957f8be47df41bbe65c01f706",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "upload_reservation_intent_held",
+      "arguments": "p_bucket_id text, p_user_id uuid, p_storage_path text, p_finalization_status text, p_consumption_disposition text, p_consumed_at timestamp with time zone, p_client_finalized_at timestamp with time zone, p_now timestamp with time zone, p_include_abandoned boolean",
+      "definitionDigest": "f9278a454cdc8630fafe9d243b194db5",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "get_upload_reclaim_health",
+          "args": "p_now timestamp with time zone, p_include_abandoned boolean",
+          "definitionLines": [
+            22,
+            56
+          ],
+          "definitionDigest": "723c4bcc1862f4f378b4653e2191daa2",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "upload_surface_max_bytes",
+      "arguments": "p_bucket_id text",
+      "definitionDigest": "ae757e63c3c6e9ad07193c5dc8e3b616",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "reserve_upload_bytes",
+          "args": "p_user_id uuid, p_bucket_id text, p_storage_path text, p_declared_bytes bigint, p_user_limit_bytes bigint, p_global_limit_bytes bigint, p_ttl_seconds integer",
+          "definitionLines": [
+            12
+          ],
+          "definitionDigest": "89c996b09f3a61d87db71194bdc3fc67",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "reserve_upload_bytes_v2",
+          "args": "p_upload_id uuid, p_user_id uuid, p_bucket_id text, p_storage_path text, p_declared_bytes bigint, p_reserved_bytes bigint, p_expected_content_type text, p_user_limit_bytes bigint, p_global_limit_bytes bigint, p_ttl_seconds integer",
+          "definitionLines": [
+            13
+          ],
+          "definitionDigest": "cc3d29d927fe0e32076a5c896533c443",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "upsert_post_with_resource_bundle_before_nsfw",
+      "arguments": "p_post jsonb, p_bundle jsonb, p_has_bundle boolean",
+      "definitionDigest": "51ac696dfcc4989de310ffdeb43da657",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "upsert_post_with_resource_bundle",
+          "args": "p_post jsonb, p_bundle jsonb, p_has_bundle boolean",
+          "definitionLines": [
+            10
+          ],
+          "definitionDigest": "a899252102d648986c7e36f223125219",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "validate_feed_event_context",
+      "arguments": "",
+      "definitionDigest": "a50b3347164648a6a1ac87b673931929",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "feed_events_validate_context",
+          "enabled": "O",
+          "relation": "feed_events"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "validate_generation_model_catalog_release",
+      "arguments": "p_release_id uuid",
+      "definitionDigest": "8d20b1847e6e08d5347fb65266b77028",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "publish_generation_model_catalog",
+          "args": "p_release_id uuid, p_expected_active_revision text",
+          "definitionLines": [
+            29
+          ],
+          "definitionDigest": "6916736946a666b61eda08fc3032498f",
+          "revalidation": "caller definition unchanged"
+        },
+        {
+          "name": "stage_generation_model_catalog",
+          "args": "p_manifest jsonb, p_expected_active_revision text",
+          "definitionLines": [
+            127
+          ],
+          "definitionDigest": "dadf45f7e403eb74b60f5567e4f3ab6c",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "validate_post_report_bundle_match",
+      "arguments": "",
+      "definitionDigest": "054b83c0b67d887ca121ceb1c43a42cc",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_reports_validate_bundle_match",
+          "enabled": "O",
+          "relation": "post_reports"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "validate_post_resource_bundle_write",
+      "arguments": "",
+      "definitionDigest": "da97ccf9e33407522259f729a66f34de",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "post_resource_bundles_validate_write",
+          "enabled": "O",
+          "relation": "post_resource_bundles"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": true,
+        "authenticated": true,
+        "service_role": true,
+        "supabase_auth_admin": true
+      },
+      "classification": "catalog_binding"
+    },
+    {
+      "name": "wake_workflow_run_step_job",
+      "arguments": "p_run_id uuid",
+      "definitionDigest": "f51d871063a4b5772b3bf0ed610d7314",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [],
+      "policyBindings": [],
+      "sqlCallers": [
+        {
+          "name": "wake_workflow_runs_after_generation_terminal",
+          "args": "",
+          "definitionLines": [
+            20
+          ],
+          "definitionDigest": "dc96d38ac7011741b9ea0f5042f9649b",
+          "revalidation": "caller definition unchanged"
+        }
+      ],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": true,
+        "supabase_auth_admin": false
+      },
+      "classification": "reviewed_sql_call"
+    },
+    {
+      "name": "wake_workflow_runs_after_generation_terminal",
+      "arguments": "",
+      "definitionDigest": "dc96d38ac7011741b9ea0f5042f9649b",
+      "sourceCallers": [],
+      "reviewedIndirectCallers": [],
+      "triggerBindings": [
+        {
+          "name": "generations_wake_workflow_runs_after_terminal",
+          "enabled": "O",
+          "relation": "generations"
+        }
+      ],
+      "policyBindings": [],
+      "sqlCallers": [],
+      "rejectedSqlCandidates": [],
+      "executeRoles": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false,
+        "supabase_auth_admin": false
+      },
+      "classification": "catalog_binding"
+    }
+  ],
+  "classificationCounts": {
+    "catalog_binding": 86,
+    "reviewed_sql_call": 34,
+    "no_current_caller_located": 24,
+    "source_or_operator_caller": 9
+  }
+}
