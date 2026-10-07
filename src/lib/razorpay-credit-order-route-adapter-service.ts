@@ -52,7 +52,11 @@ async function handleRazorpayCreditOrderPOST(
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
   try {
-    const { clientIntentKey, planId } = await request.json() as RazorpayCreditOrderBody;
+    const decoded: unknown = await request.json().catch(() => null);
+    const { clientIntentKey, planId }: RazorpayCreditOrderBody = decoded
+      && typeof decoded === 'object' && !Array.isArray(decoded)
+      ? decoded as RazorpayCreditOrderBody
+      : {};
 
     if (!planId) {
       return NextResponse.json({ error: 'Missing planId' }, { status: 400 });

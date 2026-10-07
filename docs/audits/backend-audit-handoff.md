@@ -6,10 +6,91 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/backend-revocation-worker-death-11w`, stacked on #397 and adding real process-death recovery controls. The user receipt/evidence edits remain untouched.
+Current checkout: `codex/backend-credit-order-inputs-11z`, combining #399/#400 and the reproduced credit-order root fix for one final release. The user receipt/evidence edits remain untouched.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+Release organization: 11X/11Y/11Z are combined into the final
+codex/backend-credit-order-inputs-11z candidate, based on the verified #398
+main release. #399/#400 are intermediate review heads; their changes are
+included unchanged except the documented 11Y balance correction and additional
+11Z controls. They will be superseded by the final combined PR, not independently
+merged/deployed. The final combined head must pass all five Quality jobs; fresh
+verified #398 schema/advisors/live/main and immediate mobile-store idle gates
+remain mandatory. Exact-main Quality, standard staged production workflow and
+independent six-runtime-source/schema/live readback remain mandatory. This
+changes release grouping only; no test, migration, health or admission gate is
+removed. No financial/customer repair or external/provider evidence is implied.
+
+11Z reproduces six null/malformed/empty credit-order failures on the verified
+/api/razorpay/order native handler, with real bearer headers and unsigned controls.
+The adapter now validates an object root before existing missing-plan validation.
+All 56 actual cases, 33 focused order/provider controls, app/test types, scoped
+lint and diff pass; independent purchase-intent/transaction and owned fixture
+counts are zero. No provider order/charge or production balance change.
+See backend-section-11-credit-order-inputs-2026-10-07.md. Own candidate/main CI,
+standard release and independently verified #398 parent remain required for the combined final candidate.
+MAP-02 includes this finding as well as 11X until verified release.
+
+#397 is independently verified live as 26888e15 at 06:41:18 UTC. All five
+exact-main jobs in 37581266892 and standard release 37582438992 pass. One tested
+runtime digest, schema/all 110 advisors, six private unsigned admin boundaries
+and smoke pass. See backend-section-11-showcase-revocation-release-2026-10-07.md.
+MEDIA-09 returns to untested for broader recovery. Counts are now 53:
+24 passed, 24 untested, three failed, two external: MAP-02, PAY-04, MEDIA-07.
+#398 fresh independently verified #397/schema/advisors/live/main and immediate
+mobile-store idle gates pass; it merged at 06:42:47 UTC as
+ff3a70beebea323b95da6bfc9969fcea12972ba1. Exact-main Quality 37583034551 is
+running; standard release and independent revocation-worker-death-release/
+readback remain. #399/400 must each wait for their verified parent.
+#400 is attached on aeed54bfc59d21d9d7fc54a89591eb6163180a51; Quality
+37582629485 is running. Its tested runtime digests/release verifier are prepared.
+No historical customer grant or repair has been made.
+
+11Y reproduces three actual SQL balance failures and four focused policy/RPC
+failures. Goodwill/clawback now change total and promotional credits equally;
+purchased restoration changes total only. Server and admin confirmation share
+the pure policy. All 42 actual cases, 50 focused/component controls, app/test
+types, scoped lint and diff pass. Own fixture rows are zero; no provider or
+production balance mutation. See backend-section-11-admin-credit-balances-2026-10-07.md.
+The production aggregate contains one historical positive promotional-only row
+among three adjustments; intent/attribution/reconciliation remains operator
+review, not an automatic repair. PAY-04 is failed until prevention release;
+broader financial lifecycle stays open. Counts are 53: 24 passed, 23 untested,
+four failed, two external. Initial concurrent-test syntax and component type
+issues are preserved and corrected before publication.
+
+#399 is attached on 8f5011e9e439f0afe898cdeed277d8f6ecfde663. Exact-head
+Quality 37581746707 is running; independently verified #398 parent and standard
+release remain required. It fixes 11X inputs with 37 actual/37 focused controls.
+
+11X reproduces four native-handler null-root failures with real GoTrue tokens,
+authoritative admin sessions and SQL. Two adapter modules now validate object
+roots before reading fields. All 37 actual local cases and 37 focused controls,
+app/test types, scoped lint and diff pass. Invalid bodies leave balances/state/
+grants untouched; valid state/events and credit replay/reviewer binding work,
+fixture balances return to 500/0, and independent exact-ID row cleanup is zero.
+No migration/mobile runtime change. See
+backend-section-11-auth-credit-inputs-2026-10-07.md. Own exact-head CI/release and
+independently verified #398 parent remain required. MAP-02 is failed for this
+new input finding until release; broader method/entrypoint coverage remains open.
+Counts are 53: 24 passed, 24 untested, three failed, two external.
+
+#396 is independently verified live as 0df4d065 at 06:22:31 UTC. Exact-main
+Quality 37579524146 and standard release 37580473841 pass, schema/all 110
+advisors are unchanged, and smoke is 200/307/401. Automatic duplicate
+37580101875 skips. See backend-section-11-moderation-storage-release-2026-10-07.md.
+#397 final candidate e4ff29a4 passes all five exact-head jobs in 37579912190.
+Fresh verified #396 parent/schema/advisors/live/main and immediate mobile-store
+idle gates pass. It merged at 06:23:46 UTC as
+26888e1578350e5d2e06fa37d7189584a7457b1e. Exact-main Quality 37581266892 is
+running; standard release and independent source/schema/live readback remain.
+#398 final candidate 24801435 passes all five jobs in 37580073922 and is now
+based on main. Hold its merge for independently verified #397 release.
+
+Previous checkpoints follow; pending statements below are historical where
+superseded by this checkpoint.
 
 #398 is attached. Its child now incorporates corrected #397 parent e4ff29a4
 and the exact merged #396 history. The final child needs new exact-head Quality;

@@ -67,7 +67,10 @@ export async function postAdminCreditAdjustment(request: Request): Promise<NextR
     throw error;
   }
 
-  const body = (await request.json().catch(() => ({}))) as AdjustmentBody;
+  const decoded: unknown = await request.json().catch(() => null);
+  const body: AdjustmentBody = decoded && typeof decoded === 'object' && !Array.isArray(decoded)
+    ? decoded as AdjustmentBody
+    : {};
   const userId = typeof body.userId === 'string' ? body.userId : '';
   const intent = INTENTS.includes(body.intent as AdminCreditAdjustmentIntent)
     ? (body.intent as AdminCreditAdjustmentIntent)

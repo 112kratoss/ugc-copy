@@ -292,7 +292,11 @@ export async function patchOnboardingStateRouteResponse({
   try {
     const user = await authenticate(request, resolved);
     if (!user) return privateJson(request, { error: 'Unauthorized' }, 401);
-    const body = await request.json() as { status?: unknown; goal?: unknown };
+    const decoded: unknown = await request.json().catch(() => null);
+    if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
+      return privateJson(request, { error: 'Invalid onboarding state.' }, 400);
+    }
+    const body = decoded as { status?: unknown; goal?: unknown };
     if (body.status !== undefined && !isOnboardingStatus(body.status)) {
       return privateJson(request, { error: 'Invalid onboarding status.' }, 400);
     }
@@ -415,7 +419,11 @@ export async function postWelcomeCreditsClaimRouteResponse({
       );
     }
 
-    const body = await request.json().catch(() => ({})) as { sourceSurface?: unknown };
+    const decoded: unknown = await request.json().catch(() => null);
+    if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
+      return privateJson(request, { error: 'Invalid welcome credit request.' }, 400);
+    }
+    const body = decoded as { sourceSurface?: unknown };
     const sourceSurface = body.sourceSurface === 'web' ? 'web' : 'mobile';
     const admin = resolved.createServiceClient();
     const limited = await rateLimit(request, admin, resolved, WELCOME_CREDIT_CLAIM_RATE_LIMIT, user.id);
@@ -460,7 +468,11 @@ export async function postOnboardingEventRouteResponse({
 }) {
   const resolved = resolveDependencies(dependencies);
   try {
-    const body = await request.json() as Record<string, unknown>;
+    const decoded: unknown = await request.json().catch(() => null);
+    if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
+      return privateJson(request, { error: 'Invalid onboarding event.' }, 400);
+    }
+    const body = decoded as Record<string, unknown>;
     if (
       !isValidOnboardingClientEventId(body.clientEventId)
       || !isValidOnboardingInstallationId(body.installationId)

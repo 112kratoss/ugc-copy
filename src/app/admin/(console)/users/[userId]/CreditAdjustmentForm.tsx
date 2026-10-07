@@ -6,6 +6,7 @@ import { Coins } from 'lucide-react';
 import clsx from 'clsx';
 
 import { Surface, Text } from '@/components/DesignSystem';
+import { planAdminCreditAdjustmentDeltas } from '@/lib/admin-credit-adjustment-policy';
 
 type Intent = 'goodwill' | 'refund' | 'clawback';
 
@@ -38,18 +39,6 @@ const INTENTS: Array<{ value: Intent; label: string; effect: string; caution?: s
 ];
 
 const MAX_AMOUNT = 10_000;
-
-/** Mirrors planAdminCreditAdjustment so the preview matches what the server does. */
-function previewDeltas(intent: Intent, amount: number) {
-  switch (intent) {
-    case 'goodwill':
-      return { creditsDelta: 0, promotionalCreditsDelta: amount };
-    case 'refund':
-      return { creditsDelta: amount, promotionalCreditsDelta: 0 };
-    case 'clawback':
-      return { creditsDelta: 0, promotionalCreditsDelta: -amount };
-  }
-}
 
 const INPUT_CLASSES = 'ui-focus-ring w-full rounded-xl border border-[var(--ui-border-default)] '
   + 'bg-[var(--ui-surface-inset)] px-3 py-2.5 text-sm text-[var(--ui-text-primary)] '
@@ -94,7 +83,7 @@ export function CreditAdjustmentForm({
 
   // Any edit above resets `confirming`, so the previewed numbers always match
   // the values that will be submitted.
-  const deltas = previewDeltas(intent, amountValid ? parsedAmount : 0);
+  const deltas = planAdminCreditAdjustmentDeltas(intent, amountValid ? parsedAmount : 0);
   const nextCredits = credits + deltas.creditsDelta;
   const nextPromotionalCredits = promotionalCredits + deltas.promotionalCreditsDelta;
   const goesNegative = nextCredits < 0 || nextPromotionalCredits < 0;
@@ -238,7 +227,7 @@ export function CreditAdjustmentForm({
             <Text as="p" variant="label">Confirm this adjustment</Text>
             <dl className="mt-2 flex flex-col gap-1">
               <div className="flex items-baseline justify-between gap-3">
-                <dt><Text as="span" variant="caption">Purchased credits</Text></dt>
+                <dt><Text as="span" variant="caption">Total credits</Text></dt>
                 <dd className="font-mono text-[13px] text-[var(--ui-text-secondary)]">
                   {credits.toLocaleString()} →{' '}
                   <span className={nextCredits < 0 ? 'font-bold text-[var(--ui-accent-danger)]' : 'font-bold text-[var(--ui-text-primary)]'}>
