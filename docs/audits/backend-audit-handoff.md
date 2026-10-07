@@ -6,14 +6,36 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/backend-moderation-storage-11u`, stacked on #395 and adding actual Storage recovery controls. The user receipt/evidence edits remain untouched.
+Current checkout: `codex/backend-revocation-recovery-11v`, stacked on #396 and fixing reproduced background Storage revocation defects. The user receipt/evidence edits remain untouched.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
 
+11V reproduces four actual SQL/Storage failures: normal cleanup omits display
+media; failed/no-op Storage removal or reply loss after gallery deletion loses
+retry paths and later reports success with fetchable objects. The shared helper
+now retains gallery inventory until the full owned object set is verified absent.
+All ten actual cases, 93 focused helper/publish/edit/worker controls and sixteen
+direct moderation Storage cases pass. Types/lint/diff and exact-ID fixture
+cleanup pass. Bounded production inventory reports zero current queued and known
+private generation legacy rows; it cannot reconstruct previously lost references.
+No customer repair or schema change. MEDIA-09 is failed until release; broader
+renewed-reference races, fencing and orphan reconciliation stay open. See
+backend-section-11-showcase-revocation-recovery-2026-10-07.md. Own exact-head CI,
+independently verified #396 parent and standard release remain required.
+
+PR #395 passed all five exact-head jobs in 37576758590. Fresh verified #394
+parent/schema/advisors/live/main and immediate mobile-store idle gates passed.
+It merged at 05:45:59 UTC as ebd551b6fe8c84c05e9811b52f6c211a4ac99d52.
+Exact-main Quality 37577951136 is running; standard release and independent
+admin-moderation-release/ readback remain. SOCIAL-03 remains failed until then.
+PR #396 is attached and retargeted to main. Final cleanup head
+024ea1a16d8d98e3ac668bb1a44a891b92eaf7e2 is running Quality 37577628732;
+initial head 5dd7db24 is historical. It must wait for #395's independent release.
+
 PR #395 is attached: aad77b006aa57dc6017719ab37fe9b2b172f6724, Quality
-37576758590 running. It targets main and waits for #394's independent live
-verification. 11U is a separate child branch based on that exact candidate.
+37576758590 passed. That candidate became the merged #395 noted above.
+11U is a separate child branch based on that exact candidate.
 Sixteen actual session/PostgREST/SQL/Storage controls pass for both take-down
 paths, all public/private gallery references, signed URL deletion, repeated
 decisions, four transport fault boundaries, foreign paths, generation ownership,
@@ -38,15 +60,17 @@ same-engine type/value/assignment controls. All six signatures/grants match.
 See backend-section-11-admin-moderation-inputs-2026-10-07.md. Exact-head CI,
 verified parent, standard release and independent readback remain required.
 SOCIAL-03 is failed until this fix is released; WORKFLOW-04 has returned to
-untested after #393. Counts remain 53: 24 passed, 25 untested, two failed, two
-external. MEDIA-07 is the other failed row. The wider audit is not signed off.
+untested after #393. With the new 11V finding, counts are 53: 24 passed, 24
+untested, three failed, two external. MEDIA-07 and MEDIA-09 are the other failed
+rows. The wider audit is not signed off.
 
 PR #394 exact-head Quality 37575031613 passes all five jobs on
 c68443bc9a864d5a3f1db8bd2d5c3fcdf71f0826. Fresh verified #393 parent, schema,
 advisors, live/main and immediate mobile-store idle gates pass. It merged at
 05:25:22 UTC as aaedf1eb8ff8692501ea836cf3076b5d43968ca3. Exact-main Quality
-37576225908 is running; standard release and independent template-publication-
-release/ readback remain. The admin candidate is based on this merged parent
+37576225908 and standard release 37577267512 pass. Independent readback at
+05:42:23 UTC confirms exact live/project, unchanged schema/all 110 advisors and
+200/307/401 smoke. See backend-section-11-template-publication-release-2026-10-07.md. The admin candidate is based on this merged parent
 and must wait for its independent live verification before merging.
 
 PR #392 passed all five exact-head Quality jobs in 37571640504 on
@@ -112,7 +136,7 @@ no hosted Next/browser/provider execution is claimed. New API suite is added
 sequentially to Quality. This candidate must use a separate stacked PR/head;
 hold its merge until #392 is independently verified live.
 
-Current ledger is now 53: 24 passed, 25 untested, two failed, two external.
+Current ledger is now 53: 24 passed, 24 untested, three failed, two external.
 WORKFLOW-04 returned to untested after 11Q release; SOCIAL-03 is failed for 11T
 until released, then returns to untested for its remaining matrix. MEDIA-07
 remains failed. 11T adds only the three input parser modules; no schema/customer

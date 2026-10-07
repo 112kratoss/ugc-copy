@@ -286,6 +286,9 @@ jobs:
       - name: Test moderation revocation and retries with real Storage and SQL
         run: npx vitest run --config vitest.moderation-storage-postgrest.config.ts
 
+      - name: Test background revocation with real Storage and durable SQL paths
+        run: npx vitest run --config vitest.showcase-revocation-postgrest.config.ts
+
       - name: Stop isolated Supabase API stack
         if: always()
         continue-on-error: true
