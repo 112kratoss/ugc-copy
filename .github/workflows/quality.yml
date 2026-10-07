@@ -289,6 +289,9 @@ jobs:
       - name: Test background revocation with real Storage and durable SQL paths
         run: npx vitest run --config vitest.showcase-revocation-postgrest.config.ts
 
+      - name: Test background revocation after actual worker death
+        run: npx vitest run --config vitest.showcase-revocation-worker-death-postgrest.config.ts
+
       - name: Stop isolated Supabase API stack
         if: always()
         continue-on-error: true

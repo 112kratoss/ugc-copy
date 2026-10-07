@@ -6,10 +6,27 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/backend-revocation-recovery-11v`, stacked on #396 and fixing reproduced background Storage revocation defects. The user receipt/evidence edits remain untouched.
+Current checkout: `codex/backend-revocation-worker-death-11w`, stacked on #397 and adding real process-death recovery controls. The user receipt/evidence edits remain untouched.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+#398 is attached. Its child now incorporates corrected #397 parent e4ff29a4
+and the exact merged #396 history. The final child needs new exact-head Quality;
+initial 952b6aff/37579021921 is historical and does not gate the final candidate.
+#397 initial 5d46e7eb/37578516790 failed one fixture due-time case as recorded
+below; its corrected e4ff29a4 head needs complete fresh CI. Hold each merge for
+its independently verified parent and own complete gates.
+
+11W adds three actual Node worker SIGKILL checkpoints before Storage removal,
+after actual removal and after gallery deletion commits. Each has the expected
+durable queue/gallery/object state, completes in a fresh process, and has no
+work on another fresh retry. All three cases, test types and scoped lint pass;
+exact-ID object/row cleanup is zero and balances/usage remain unchanged. This is
+the direct business processor, not managed lease/fencing or hosted CDN evidence.
+No runtime/migration change. See
+backend-section-11-showcase-revocation-worker-death-2026-10-07.md. Own final-head
+CI and independently verified #397 parent remain required.
 
 #395 is independently verified live as ebd551b6 at 06:02:45 UTC: exact-main
 Quality 37577951136 and standard release 37578624582 pass, three tested runtime
