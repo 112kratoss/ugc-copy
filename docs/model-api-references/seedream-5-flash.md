@@ -37,6 +37,16 @@ charge is stated, unlike Qwen 3 ("Input images are charged at 0.5 credits per im
 is billed. No promotional qualifier on the page (`kie-evidence.mjs price seedream-5-0-flash`
 printed none; the only "discount" strings are the site's top-up copy).
 
+## Probes (2026-10-08)
+
+- Empty input to all three ids: `seedream/5-flash-text-to-image` and `…-image-to-image` answered
+  "This field is required" with no task; a made-up id was refused as "not supported".
+- One real task, the exact adapter body at the cheapest setting (`prompt`, `aspect_ratio: 1:1`,
+  `size: 1K`, `output_format: jpeg`, `nsfw_checker: true`): task `ceb4048964a994bb188a4cadea0f690d`,
+  state `success` in 18 s, one JPEG on `tempfile.aiquickdraw.com` (the host every Kie image model
+  serves from; already on `MEDIA_IMPORT_HOST_ALLOWLIST`). Kept in
+  `archive/kie-image-models-2026-10-08/`.
+
 ## Shipped (2026-10-08)
 
 - One catalog entry, `seedream-5-flash`, on the `kie-task-v1` adapter: `aspect_ratio`, `size`

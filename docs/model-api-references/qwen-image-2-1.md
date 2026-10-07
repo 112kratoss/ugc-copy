@@ -40,6 +40,16 @@ page: "Qwen-Image-2.1 is priced at 4 credits per 1K image (≈ $0.02) and 8 cred
 (≈ $0.04)." No per-input-image charge is stated (Qwen 3's page has one: 0.5 credits per input
 image), so none is billed. No promotional qualifier on the page.
 
+## Probes (2026-10-08)
+
+- Empty input to both ids answered "This field is required" with no task; a made-up id under the
+  same vendor segment was refused as "not supported".
+- One real task, the exact adapter body at the cheapest setting (`prompt`, `aspect_ratio: 1:1`,
+  `resolution: 1K`, `output_format: jpeg`, `enhance_prompt: true`, `nsfw_checker: true`): task
+  `b5310f0b82636a216d077cdee04b495c`, state `success` in 18 s, one JPEG on
+  `tempfile.aiquickdraw.com` (already on `MEDIA_IMPORT_HOST_ALLOWLIST`). Kept in
+  `archive/kie-image-models-2026-10-08/`.
+
 ## Shipped (2026-10-08)
 
 - One catalog entry, `qwen-image-2.1`, on the `kie-task-v1` adapter: `aspect_ratio`,
