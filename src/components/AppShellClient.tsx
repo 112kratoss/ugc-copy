@@ -570,7 +570,7 @@ export default function AppShellClient({ children }: { children: React.ReactNode
           {activeItem?.id !== 'search' ? (
             <Form
               action="/search"
-              className="mx-auto hidden w-full max-w-md items-center gap-2.5 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 transition focus-within:border-[var(--ui-border-strong)] focus-within:bg-[var(--ui-surface-3)] md:flex"
+              className="app-shell-search mx-auto min-w-0 basis-md items-center gap-2.5 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 transition focus-within:border-[var(--ui-border-strong)] focus-within:bg-[var(--ui-surface-3)]"
             >
               <button
                 type="submit"
@@ -590,13 +590,14 @@ export default function AppShellClient({ children }: { children: React.ReactNode
             </Form>
           ) : null}
 
-          <div className="ml-auto flex min-w-0 items-center gap-2 sm:gap-3">
+          {/* Never shrinks: the search field gives way (.app-shell-search in globals.css). */}
+          <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
             {activeItem?.id !== 'search' ? (
               <Link
                 href="/search"
                 prefetch={false}
                 aria-label="Search creators, posts, and recipes"
-                className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)] md:hidden"
+                className="app-shell-search-link ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]"
               >
                 <Search className="h-[18px] w-[18px]" aria-hidden />
               </Link>
@@ -612,10 +613,11 @@ export default function AppShellClient({ children }: { children: React.ReactNode
             <Link
               href="/create"
               prefetch={false}
-              className="ui-focus-ring hidden min-h-12 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] md:inline-flex"
+              aria-label="New creation"
+              className="app-shell-create ui-focus-ring min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]"
             >
               <Plus className="h-4 w-4" aria-hidden />
-              New creation
+              <span className="app-shell-create-label">New creation</span>
             </Link>
             <DeferredAppShellAccount />
           </div>

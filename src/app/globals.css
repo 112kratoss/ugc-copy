@@ -988,6 +988,19 @@ button:disabled,
   backdrop-filter: blur(20px);
 }
 
+/* The top bar's controls on the right never shrink; the search field gives way
+   instead. Below 1024px it folds into its search button and "New creation" into
+   its icon, which leaves the title room beside a signed-in account at 768px.
+   These breakpoints live here rather than in md:/lg: utilities: routes that add
+   non-public-utilities.css load it after this sheet, and its own .hidden beats
+   any responsive variant that sheet does not also emit; md:inline-flex hid
+   "New creation" that way on every route that loads the supplement. */
+.app-shell-search,
+.app-shell-create,
+.app-shell-create-label {
+  display: none;
+}
+
 .app-shell-content {
   min-height: calc(100dvh - var(--app-shell-topbar-height));
   padding-bottom: calc(6.25rem + env(safe-area-inset-bottom));
@@ -1084,6 +1097,11 @@ button:disabled,
     padding-inline: 1.7rem;
   }
 
+  .app-shell-create {
+    display: inline-flex;
+    width: 3rem;
+  }
+
   .app-shell-content {
     min-height: calc(100dvh - var(--app-shell-topbar-height));
     padding-bottom: 0;
@@ -1112,6 +1130,25 @@ button:disabled,
 
   .app-shell-bottom-nav {
     display: none;
+  }
+}
+
+@media (min-width: 1024px) {
+  .app-shell-search {
+    display: flex;
+  }
+
+  .app-shell-search-link {
+    display: none;
+  }
+
+  .app-shell-create {
+    width: auto;
+    padding-inline: 1rem;
+  }
+
+  .app-shell-create-label {
+    display: inline;
   }
 }
 

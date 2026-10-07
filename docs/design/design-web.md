@@ -103,7 +103,7 @@ Rules:
 - **Scale:** `--ui-space-1` … `--ui-space-24` run from 4px to 96px (4, 8, 12, 16, 20, 24, 32, 40, 48, 64, 80, 96). Tailwind's own steps match it.
 - **Section gaps:** `.ui-section-gap` spaces page sections from 32px to 48px (`clamp`, 4vw).
 - **Panel padding:** `Surface` pads `sm` 16px, `md` 20px, `lg` 24px.
-- **The top bar:** the sticky app-shell top bar is 64px (`--app-shell-topbar-height`). Anything else pinned below it offsets by that variable.
+- **The top bar:** the sticky app-shell top bar is 64px (`--app-shell-topbar-height`). Anything else pinned below it offsets by that variable. Its controls on the right keep their size and the search field gives way; below 1024px the field folds into its search button and "New creation" into a 48px icon (`.app-shell-search` and `.app-shell-create` in `globals.css`).
 - **Stable dimensions:** fixed-format UI gets stable dimensions with responsive constraints, and media grids hold their aspect ratio so nothing shifts as it loads.
 - **Cards:** page sections are full-width bands or unframed layouts. Cards are for repeated items, tools and modals, and never nest inside decorative cards.
 
