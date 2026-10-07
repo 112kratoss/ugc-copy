@@ -52,6 +52,18 @@ const VERIFIED_PROVIDER_IDS: Partial<Record<ImageModelId, { text: string; refere
     text: 'gpt-image-2-5-sunburst-text-to-image',
     reference: 'gpt-image-2-5-sunburst-image-to-image',
   },
+  // Verified 2026-10-08 against docs.kie.ai/market/seedream/5-flash-{text,image}-to-image.md
+  // (docs/model-api-references/seedream-5-flash.md).
+  'seedream-5-flash': {
+    text: 'seedream/5-flash-text-to-image',
+    reference: 'seedream/5-flash-image-to-image',
+  },
+  // Verified 2026-10-08 against docs.kie.ai/market/qwen2-1/{text,image}-to-image.md: the
+  // vendor segment is dashed `qwen2-1` (docs/model-api-references/qwen-image-2-1.md).
+  'qwen-image-2.1': {
+    text: 'qwen2-1/text-to-image',
+    reference: 'qwen2-1/image-to-image',
+  },
   // UNVERIFIED. No published spec was found for z-image under any probed path
   // on docs.kie.ai, so this records current behaviour rather than a confirmed
   // provider id. It is listed so the completeness check below still forces a

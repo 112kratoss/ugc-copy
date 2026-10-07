@@ -83,6 +83,8 @@ const APP_SOURCE_TOOL: SourceToolOption = sourceTool({
     { slug: 'minimax-h3', label: 'MiniMax H3' },
     { slug: 'gpt-image-2.5-flare', label: 'GPT Image 2.5 Flare' },
     { slug: 'gpt-image-2.5-sunburst', label: 'GPT Image 2.5 Sunburst' },
+    { slug: 'seedream-5-flash', label: 'Seedream 5 Flash' },
+    { slug: 'qwen-image-2.1', label: 'Qwen Image 2.1' },
     // Registration audit 2026-08-16: first-party attribution catalog had drifted
     // to 16 of 29 models; these were the missing shipped models.
     { slug: 'seedream-5-lite', label: 'Seedream 5 Lite' },

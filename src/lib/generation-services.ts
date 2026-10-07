@@ -1391,6 +1391,17 @@ export function getKieImageModelId(model: ImageModelId, referenceCount: number):
   // Character references are mandatory, so both admission modes hit the same endpoint.
   if (model === 'ideogram-character') return 'ideogram/character';
 
+  // Verified 2026-10-08 against docs.kie.ai/market/seedream/5-flash-*.md.
+  if (model === 'seedream-5-flash') {
+    return referenceCount > 0 ? 'seedream/5-flash-image-to-image' : 'seedream/5-flash-text-to-image';
+  }
+
+  // Qwen Image 2.1's vendor segment is `qwen2-1`, dashed, not the dotted app id. Verified
+  // 2026-10-08 against docs.kie.ai/market/qwen2-1/text-to-image.md and .../image-to-image.md.
+  if (model === 'qwen-image-2.1') {
+    return referenceCount > 0 ? 'qwen2-1/image-to-image' : 'qwen2-1/text-to-image';
+  }
+
   // Everything else sends the app id unchanged, which is correct only because
   // those ids are byte-identical to the provider's (nano-banana-2,
   // nano-banana-2-lite, nano-banana-pro, z-image). Adding a model whose

@@ -91,6 +91,16 @@ describe('Model Pricing', () => {
             expect(getImageCost('grok-imagine-image', '1K', { qualityMode: 'quality' })).toBe(5);
             expect(getImageCost('grok-imagine-image', '1K', { qualityMode: 'quality', referenceCount: 1 })).toBe(4);
         });
+        it('prices Seedream 5 Flash flat and Qwen Image 2.1 by resolution, references free on both', () => {
+            // docs/model-api-references/seedream-5-flash.md and qwen-image-2-1.md, read 2026-10-08:
+            // neither page states a per-input-image charge, where Qwen 3's does.
+            expect(getImageCost('seedream-5-flash', '1K')).toBe(3.24);
+            expect(getImageCost('seedream-5-flash', '2K')).toBe(3.24);
+            expect(getImageCost('seedream-5-flash', '2K', { referenceCount: 10 })).toBe(3.24);
+            expect(getImageCost('qwen-image-2.1', '1K')).toBe(4);
+            expect(getImageCost('qwen-image-2.1', '2K')).toBe(8);
+            expect(getImageCost('qwen-image-2.1', '2K', { referenceCount: 10 })).toBe(8);
+        });
         it('prices the expanded non-Runway image catalog', () => {
             expect(getImageCost('seedream-5-lite', '3K')).toBe(5.5);
             expect(getImageCost('wan-2.7-image', '2K')).toBe(4.8);

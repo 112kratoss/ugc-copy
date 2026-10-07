@@ -68,6 +68,12 @@ describe('prompt enhancer playbook contract', () => {
       // `background`), from the same OpenAI model family.
       'gpt-image-2.5-flare': 'gpt-image-2',
       'gpt-image-2.5-sunburst': 'gpt-image-2',
+      // docs.kie.ai/market/seedream/5-flash-*.md, read 2026-10-08: Seedream's grammar with
+      // Lite's budget; the body differs by one field name (`size`).
+      'seedream-5-flash': 'seedream-5-lite',
+      // docs.kie.ai/market/qwen2-1/*.md, read 2026-10-08: the Qwen-Image family's rules;
+      // `aspect_ratio` where Qwen 3 says `image_size`, plus unsent background/seed/mask.
+      'qwen-image-2.1': 'qwen3',
     });
   });
 

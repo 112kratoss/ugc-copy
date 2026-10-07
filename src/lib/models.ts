@@ -439,6 +439,46 @@ export const IMAGE_MODELS = {
             '4K': 16,
         },
     },
+    // docs/model-api-references/seedream-5-flash.md: one flat price at 1K and 2K, no
+    // per-reference charge; the spec's 1.5K is left out (not an ImageResolution).
+    'seedream-5-flash': {
+        id: 'seedream-5-flash' as const,
+        displayName: 'Seedream 5 Flash',
+        description: 'Fastest Seedream tier: generation and multi-image editing at one flat price',
+        badge: 'Value',
+        badgeColor: 'from-cyan-500 to-sky-500',
+        accentColor: 'blue',
+        maxImages: 10,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: true,
+        aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16', '2:3', '3:2', '21:9'] as const,
+        resolutions: ['1K', '2K'] as const,
+        outputFormats: ['jpg', 'png'] as const,
+        pricing: {
+            '1K': 3.24,
+            '2K': 3.24,
+        },
+    },
+    // docs/model-api-references/qwen-image-2-1.md: priced by resolution, no per-reference
+    // charge (Qwen 3 bills 0.5 per input image; 2.1's page states none).
+    'qwen-image-2.1': {
+        id: 'qwen-image-2.1' as const,
+        displayName: 'Qwen Image 2.1',
+        description: 'Low-cost Qwen generation and editing with 2K output',
+        badge: 'Value',
+        badgeColor: 'from-emerald-500 to-teal-500',
+        accentColor: 'blue',
+        maxImages: 10,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: true,
+        aspectRatios: ['1:1', '4:3', '3:4', '3:2', '2:3', '16:9', '9:16', '21:9', '9:21'] as const,
+        resolutions: ['1K', '2K'] as const,
+        outputFormats: ['jpg', 'png'] as const,
+        pricing: {
+            '1K': 4,
+            '2K': 8,
+        },
+    },
 } as const;
 
 export type ImageModelId = keyof typeof IMAGE_MODELS;
