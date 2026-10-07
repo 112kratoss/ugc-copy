@@ -6,10 +6,24 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/backend-admin-moderation-inputs-11t`, based on merged #394 and fixing six reproduced admin input defects. The user receipt/evidence edits remain untouched.
+Current checkout: `codex/backend-moderation-storage-11u`, stacked on #395 and adding actual Storage recovery controls. The user receipt/evidence edits remain untouched.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+PR #395 is attached: aad77b006aa57dc6017719ab37fe9b2b172f6724, Quality
+37576758590 running. It targets main and waits for #394's independent live
+verification. 11U is a separate child branch based on that exact candidate.
+Sixteen actual session/PostgREST/SQL/Storage controls pass for both take-down
+paths, all public/private gallery references, signed URL deletion, repeated
+decisions, four transport fault boundaries, foreign paths, generation ownership,
+external-reference disclosure and provisional hide/restore escalation. Test
+types/scoped lint pass; exact-ID object/row cleanup is zero. An initial teaser
+timestamp fixture error is corrected with the constraint preserved. No new
+runtime defect or migration change; hosted cache/CDN behavior stays open.
+See backend-section-11-moderation-storage-2026-10-07.md. The new suite is added
+sequentially to Quality. Its own CI/release and independently verified #395
+parent remain required before merging.
 
 11T reproduces six null-body failures across post/subject report decisions,
 post/generation moderation, contact triage and user sanctions. Three adapter
