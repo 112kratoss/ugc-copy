@@ -221,6 +221,7 @@ publish.
 
 - `docs/audits/model-onboarding-audit-2026-08-16.md`: why the registration tests and the
   exhaustive video checks exist.
-- `docs/audits/kie-new-models-2026-09-11.md`: the latest scan of Kie models we do not run yet.
+- `docs/audits/kie-new-models-2026-10-07.md`: the latest scan of Kie models we do not run yet
+  (the 2026-09-11 scan is beside it).
 - Worked examples: GPT Image 2.5 (#148, two image tiers on the declarative adapter) and commit
   `c4ab9b10` (seven models, video included).

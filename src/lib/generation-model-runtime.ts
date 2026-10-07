@@ -246,6 +246,19 @@ const IMAGE_PROVIDER_MODELS: Record<ImageModelId, Record<string, string>> = {
     text: 'gpt-image-2-5-sunburst-text-to-image',
     reference: 'gpt-image-2-5-sunburst-image-to-image',
   },
+  // Verified 2026-10-08 against docs.kie.ai/market/seedream/5-flash-*.md: the Flash tier
+  // keeps the Seedream vendor prefix of Pro and Lite.
+  'seedream-5-flash': {
+    text: 'seedream/5-flash-text-to-image',
+    reference: 'seedream/5-flash-image-to-image',
+  },
+  // Verified 2026-10-08 against docs.kie.ai/market/qwen2-1/*.md: the vendor segment is
+  // `qwen2-1`, dashed, where Qwen Image 3.0 lives under `qwen3/`; the dotted app id never
+  // reaches Kie.
+  'qwen-image-2.1': {
+    text: 'qwen2-1/text-to-image',
+    reference: 'qwen2-1/image-to-image',
+  },
 };
 
 /**
@@ -331,6 +344,30 @@ const KIE_TASK_IMAGE_ADAPTER_CONFIGS: Partial<Record<ImageModelId, Record<string
   'gpt-image-2': GPT_IMAGE_ADAPTER_CONFIG,
   'gpt-image-2.5-flare': GPT_IMAGE_ADAPTER_CONFIG,
   'gpt-image-2.5-sunburst': GPT_IMAGE_ADAPTER_CONFIG,
+  // Seedream 5 Flash takes its resolution as `size`, with Pro and Lite's values, and has no
+  // quality ternary, so unlike them it fits the bindings (docs/model-api-references/seedream-5-flash.md).
+  'seedream-5-flash': {
+    settings: {
+      aspectRatio: { field: 'aspect_ratio' },
+      resolution: { field: 'size' },
+      outputFormat: { field: 'output_format', transform: 'jpg-to-jpeg' },
+    },
+    constants: { nsfw_checker: true },
+    slots: { imageReferences: { field: 'image_urls', cardinality: 'many', source: 'url' } },
+    variantSelector: { type: 'slot-presence', slot: 'imageReferences', present: 'reference', absent: 'text' },
+  },
+  // Qwen Image 2.1 names the ratio `aspect_ratio` where Qwen 3 says `image_size`, and calls
+  // Kie's prompt rewrite `enhance_prompt` (docs/model-api-references/qwen-image-2-1.md).
+  'qwen-image-2.1': {
+    settings: {
+      aspectRatio: { field: 'aspect_ratio' },
+      resolution: { field: 'resolution' },
+      outputFormat: { field: 'output_format', transform: 'jpg-to-jpeg' },
+    },
+    constants: { enhance_prompt: true, nsfw_checker: true },
+    slots: { imageReferences: { field: 'image_urls', cardinality: 'many', source: 'url' } },
+    variantSelector: { type: 'slot-presence', slot: 'imageReferences', present: 'reference', absent: 'text' },
+  },
 };
 
 const VIDEO_PROVIDER_MODELS: Record<VideoModelId, Record<string, string>> = {

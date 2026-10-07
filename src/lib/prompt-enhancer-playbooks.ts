@@ -99,6 +99,12 @@ export const MODEL_ALIASES: Record<string, string> = {
   'imagen-4-ultra': 'imagen-4',
   // Same schema and constraints as the fast tier; mini is the draft tier.
   'seedance-2-mini': 'seedance-2-fast',
+  // docs/model-api-references/seedream-5-flash.md: the Seedream prompt grammar with Lite's
+  // budget; the request differs by one field name (`size` for `resolution`).
+  'seedream-5-flash': 'seedream-5-lite',
+  // docs/model-api-references/qwen-image-2-1.md: Qwen-Image's own prompting rules, the same
+  // family as Qwen 3; `aspect_ratio` where Qwen 3's body says `image_size`.
+  'qwen-image-2.1': 'qwen3',
 };
 
 // ─── Image playbooks ─────────────────────────────────────────────────────────

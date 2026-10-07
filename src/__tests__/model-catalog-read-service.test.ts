@@ -102,6 +102,22 @@ describe('bounded public catalog reads', () => {
       p_platform: 'web',
     });
   });
+  it('serves a stored slot with how many of its assets may be named', async () => {
+    // Kling O3's published subjects slot has carried maxNamed: 3 since 2026-08-24, and the
+    // re-parse dropped it, so /details served the slot bare and both creators offered 12
+    // subjects where the server takes 3 (read on the Pixel 9a emulator, 2026-10-08).
+    const klingO3 = buildGenerationModelCatalog({ platform: 'mobile', schemaVersion: 3 })
+      .models.find((model) => model.id === 'kling-o3')!;
+    const storedSubjects = klingO3.inputModes?.find((mode) => mode.key === 'subjects');
+    expect(storedSubjects?.slots[0]).toMatchObject({ key: 'subjectImages', max: 12, maxNamed: 3 });
+    rpc.mockResolvedValueOnce({
+      data: [{ modelId: klingO3.id, releaseSchemaVersion: 2, webEnabled: true, mobileEnabled: true, descriptor: klingO3 }],
+      error: null,
+    });
+    const [served] = await readModelCatalogDetails('shadow-test', [klingO3.id], 'mobile');
+    const servedSubjects = (served as typeof klingO3).inputModes?.find((mode) => mode.key === 'subjects');
+    expect(servedSubjects?.slots[0]).toMatchObject({ key: 'subjectImages', max: 12, maxNamed: 3 });
+  });
   it('evicts old request entries when the bounded server cache fills', async () => {
     rpc.mockResolvedValue({ data: [], error: null });
     const page = (revision: string) =>
