@@ -21,10 +21,10 @@ function createClient(response: unknown, capture?: { args?: Record<string, unkno
 }
 
 describe('credit adjustment policy', () => {
-  it('routes goodwill to promotional credits so granted value stays out of refund math', () => {
+  it('adds goodwill to total credits and its promotional subset', () => {
     expect(planAdminCreditAdjustment({
       userId: USER_ID, intent: 'goodwill', amount: 500, reason: 'ok',
-    })).toEqual({ creditsDelta: 0, promotionalCreditsDelta: 500 });
+    })).toEqual({ creditsDelta: 500, promotionalCreditsDelta: 500 });
   });
 
   it('routes a refund to purchased credits so the user gets back what they paid for', () => {
@@ -35,20 +35,20 @@ describe('credit adjustment policy', () => {
     })).toEqual({ creditsDelta: 500, promotionalCreditsDelta: 0 });
   });
 
-  it('makes a clawback negative and confines it to promotional credits', () => {
+  it('removes clawed-back promotional value from total credits too', () => {
     // The console can only grant into promotional, so clawback undoes a console
     // grant. Reversing a real payment belongs to the reconciliation RPC, which
     // also updates the provider-side transaction record.
     expect(planAdminCreditAdjustment({
       userId: USER_ID, intent: 'clawback', amount: 250, reason: 'ok',
-    })).toEqual({ creditsDelta: 0, promotionalCreditsDelta: -250 });
+    })).toEqual({ creditsDelta: -250, promotionalCreditsDelta: -250 });
   });
 
-  it('never touches both balances in one adjustment', () => {
-    for (const intent of ['goodwill', 'refund', 'clawback'] as const) {
+  it('keeps purchased value unchanged for promotional adjustments', () => {
+    for (const intent of ['goodwill', 'clawback'] as const) {
       const plan = planAdminCreditAdjustment({ userId: USER_ID, intent, amount: 100, reason: 'ok' });
-      const touched = [plan.creditsDelta, plan.promotionalCreditsDelta].filter((delta) => delta !== 0);
-      expect(touched, `${intent} should move exactly one balance`).toHaveLength(1);
+      expect(plan.creditsDelta - plan.promotionalCreditsDelta).toBe(0);
+      expect(plan.creditsDelta).toBe(intent === 'goodwill' ? 100 : -100);
     }
   });
 });
@@ -102,7 +102,7 @@ describe('applying a credit adjustment', () => {
     expect(capture.args).toMatchObject({
       p_user_id: USER_ID,
       p_reviewer_id: REVIEWER_ID,
-      p_credits_delta: 0,
+      p_credits_delta: 500,
       p_promotional_credits_delta: 500,
       p_reason: 'ticket 42',
       p_idempotency_key: 'key-1',

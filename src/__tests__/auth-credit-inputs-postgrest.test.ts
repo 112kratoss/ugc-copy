@@ -130,9 +130,41 @@ describe.skipIf(!configPath || !connectionString)('onboarding and admin credit i
     const first=await routes[0].handler(request(routes[0],JSON.stringify(adjustment)));expect(first.status).toBe(200);const result=await first.json();expect(result.status).toBe('applied');expectedRows.adjustments=1;
     const replay=await routes[0].handler(request(routes[0],JSON.stringify(adjustment)));expect(replay.status).toBe(200);expect(await replay.json()).toMatchObject({status:'already_applied',adjustmentId:result.adjustmentId});
     expect((await db.query('select reviewer_id,credits_delta,promotional_credits_delta from public.admin_credit_adjustments where id=$1',[result.adjustmentId])).rows)
-      .toEqual([{reviewer_id:reviewerId,credits_delta:0,promotional_credits_delta:7}]);
-    expect((await db.query('select credits,promotional_credits from public.profiles where id=$1',[reviewerId])).rows).toEqual([{credits:500,promotional_credits:7}]);
+      .toEqual([{reviewer_id:reviewerId,credits_delta:7,promotional_credits_delta:7}]);
+    expect((await db.query('select credits,promotional_credits from public.profiles where id=$1',[reviewerId])).rows).toEqual([{credits:507,promotional_credits:7}]);
     const reversed=await routes[0].handler(request(routes[0],JSON.stringify({...adjustment,intent:'clawback',idempotencyKey:randomUUID()})));expect(reversed.status).toBe(200);expect(await reversed.json()).toMatchObject({status:'applied',credits:500,promotionalCredits:0});expectedRows.adjustments=2;
+  });
+
+  it.each([
+    {intent:'goodwill',seedCredits:500,seedPromo:0,credits:507,promo:7},
+    {intent:'clawback',seedCredits:507,seedPromo:7,credits:500,promo:0},
+    {intent:'refund',seedCredits:500,seedPromo:0,credits:507,promo:0},
+    {intent:'clawback',seedCredits:3,seedPromo:0,credits:-4,promo:-7},
+  ])('moves total spendable value correctly for $intent from $seedCredits/$seedPromo',async control=>{
+    await db.query('update public.profiles set credits=$2,promotional_credits=$3 where id=$1',[reviewerId,control.seedCredits,control.seedPromo]);
+    const body={userId:reviewerId,intent:control.intent,amount:7,reason:'local balance audit',idempotencyKey:randomUUID()};
+    const response=await routes[0].handler(request(routes[0],JSON.stringify(body)));expect(response.status).toBe(200);const result=await response.json();expectedRows.adjustments=1;
+    const replay=await routes[0].handler(request(routes[0],JSON.stringify(body)));expect(replay.status).toBe(200);expect(await replay.json()).toMatchObject({status:'already_applied',adjustmentId:result.adjustmentId});
+    const actual=(await db.query('select credits,promotional_credits from public.profiles where id=$1',[reviewerId])).rows[0];
+    // Only this disposable fixture is reset; the independently queried result
+    // above, not the cleanup write, is the behavioral evidence.
+    await db.query('update public.profiles set credits=500,promotional_credits=0 where id=$1',[reviewerId]);
+    expect(actual).toEqual({credits:control.credits,promotional_credits:control.promo});
+  });
+
+  it('conserves total and promotional balances across concurrent grants and reversals', async () => {
+    for (const intent of ['goodwill', 'clawback']) {
+      const responses = await Promise.all(Array.from({ length: 8 }, () => routes[0].handler(request(routes[0], JSON.stringify({
+        userId: reviewerId, intent, amount: 1, reason: 'local concurrent balance audit', idempotencyKey: randomUUID(),
+      })))));
+      for (const response of responses) {
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ status: 'applied' });
+      }
+      expectedRows.adjustments += 8;
+      expect((await db.query('select credits,promotional_credits from public.profiles where id=$1', [reviewerId])).rows)
+        .toEqual([{ credits: intent === 'goodwill' ? 508 : 500, promotional_credits: intent === 'goodwill' ? 8 : 0 }]);
+    }
   });
 
 });

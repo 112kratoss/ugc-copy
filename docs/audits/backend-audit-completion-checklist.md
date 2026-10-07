@@ -48,7 +48,7 @@ unequal effort and risk. Do not turn their pass count into a percentage of backe
 safety or an ETA. New findings attach to these obligations; changes in scope must
 be recorded explicitly instead of silently adding another lettered batch.
 
-Current ledger: **53 obligations — 24 passed, 24 untested, 3 failed, 2 external**.
+Current ledger: **53 obligations — 24 passed, 23 untested, 4 failed, 2 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
 WORKFLOW-02 remains untested after its scoped fixes shipped. WORKFLOW-04 returns
 to untested after the verified 11Q validation fix. SOCIAL-03 also returns to
@@ -59,7 +59,9 @@ SOCIAL-03 remains untested for its broader matrix after 11T. MEDIA-07
 remains failed for legacy retirement. MEDIA-09 is failed for the four newly
 reproduced 11V background revocation failures until its release is verified.
 MAP-02 is failed for four newly reproduced 11X null-root failures until its
-release is verified. No new obligation was added; these fixes do not complete
+release is verified. PAY-04 is failed for the three 11Y admin balance failures
+until its prevention release is verified; a historical promotional-only row
+needs review. No new obligation was added; these fixes do not complete
 the broader matrices.
 
 Status meanings: **passed** has evidence for the stated scope; **failed** has a
@@ -129,7 +131,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | PAY-01 | Credit grant identity/idempotency regressions | passed | [Credit grant release](backend-section-05-credit-grants-release-2026-09-28.md) |
 | PAY-02 | Receipt/event identity and reversal target binding regressions | passed | [Receipt release](backend-section-05-receipt-identity-release-2026-09-29.md), [binding release](backend-section-05-credit-event-binding-release-2026-09-29.md), [event history](backend-section-05-mobile-event-history-release-2026-09-29.md) |
 | PAY-03 | Reproduced refund/restore ordering and debt cases | passed | [Refund release](backend-section-05-refund-ordering-release-2026-09-28.md); the full event lifecycle matrix is PAY-04 |
-| PAY-04 | Remaining credit, referral, refund/dispute/restore and reconciliation combinations | untested | [10E](backend-section-10-detached-cash-refunds-2026-10-06.md) reproduces detached refund rejection/deletion deadlock; [10E release verified](backend-section-10-detached-cash-refunds-release-2026-10-06.md). [10F](backend-section-10-deletion-freeze-refunds-2026-10-06.md) [10F release verified](backend-section-10-deletion-freeze-refunds-release-2026-10-06.md) fixes retry-state freezes. [10G/I](backend-section-10-cash-webhook-retries-2026-10-06.md) add signed delivery/retry controls. Broader orderings stay open. |
+| PAY-04 | Remaining credit, referral, refund/dispute/restore and reconciliation combinations | failed | [11Y admin balances](backend-section-11-admin-credit-balances-2026-10-07.md) reproduces three incorrect total balances; 42 actual/50 focused controls pass after shared policy correction, with CI/release and historical review pending. [10E](backend-section-10-detached-cash-refunds-2026-10-06.md) reproduces detached refund rejection/deletion deadlock; [10E release verified](backend-section-10-detached-cash-refunds-release-2026-10-06.md). [10F](backend-section-10-deletion-freeze-refunds-2026-10-06.md) [10F release verified](backend-section-10-deletion-freeze-refunds-release-2026-10-06.md) fixes retry-state freezes. [10G/I](backend-section-10-cash-webhook-retries-2026-10-06.md) add signed delivery/retry controls. Broader orderings stay open. |
 | PAY-05 | Genuine purchase/refund/webhook delivery and installed-client restore | external | Provider test credentials/accounts were unavailable in prior batches; synthetic events do not close this row |
 | PAY-06 | Scoped payout transition and detached reporting defects | passed | [Payout release](backend-section-04-payouts-release-2026-09-27.md), [detached reporting](backend-section-05-payout-detached-reporting-release-2026-09-30.md) |
 | PAY-07 | Creator payout crash recovery and reconciliation to external transfer outcome | untested | No actual money transfer is authorized as an incidental probe; use suitable test facilities |

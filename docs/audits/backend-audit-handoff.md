@@ -6,10 +6,27 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/backend-auth-credit-inputs-11x`, stacked on #398 and fixing reproduced onboarding/admin credit root parsing failures. The user receipt/evidence edits remain untouched.
+Current checkout: `codex/backend-admin-credit-balances-11y`, stacked on #399 and fixing reproduced admin total/promotional balance errors. The user receipt/evidence edits remain untouched.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+11Y reproduces three actual SQL balance failures and four focused policy/RPC
+failures. Goodwill/clawback now change total and promotional credits equally;
+purchased restoration changes total only. Server and admin confirmation share
+the pure policy. All 42 actual cases, 50 focused/component controls, app/test
+types, scoped lint and diff pass. Own fixture rows are zero; no provider or
+production balance mutation. See backend-section-11-admin-credit-balances-2026-10-07.md.
+The production aggregate contains one historical positive promotional-only row
+among three adjustments; intent/attribution/reconciliation remains operator
+review, not an automatic repair. PAY-04 is failed until prevention release;
+broader financial lifecycle stays open. Counts are 53: 24 passed, 23 untested,
+four failed, two external. Initial concurrent-test syntax and component type
+issues are preserved and corrected before publication.
+
+#399 is attached on 8f5011e9e439f0afe898cdeed277d8f6ecfde663. Exact-head
+Quality 37581746707 is running; independently verified #398 parent and standard
+release remain required. It fixes 11X inputs with 37 actual/37 focused controls.
 
 11X reproduces four native-handler null-root failures with real GoTrue tokens,
 authoritative admin sessions and SQL. Two adapter modules now validate object

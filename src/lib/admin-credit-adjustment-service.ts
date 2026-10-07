@@ -3,6 +3,7 @@ import 'server-only';
 import { randomUUID } from 'node:crypto';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { planAdminCreditAdjustmentDeltas } from '@/lib/admin-credit-adjustment-policy';
 
 /**
  * Operator-initiated credit adjustments.
@@ -55,29 +56,25 @@ export const ADMIN_CREDIT_ADJUSTMENT_MAX = 10_000;
 /**
  * Maps an operator's intent onto the two balances Magicbooklet carries.
  *
- *   - `credits`               purchased-equivalent value. Refund reconciliation
+ *   - `credits`               total spendable value. Refund reconciliation
  *                             (`reconcile_credit_purchase_adjustment`) subtracts
  *                             from this column and is allowed to drive it
  *                             negative, so it behaves like a money liability.
- *   - `promotional_credits`   granted value. Welcome and referral bonuses land
- *                             here, spend paths reserve from it first, and
+ *   - `promotional_credits`   the promotional subset of that total. Welcome and
+ *                             referral bonuses increase both columns. Spend
+ *                             paths reserve promotional value first, and
  *                             spending clamps it with `greatest(x, 0)`.
  *
  * The policy:
  *
- *   goodwill  → promotional. Granted value must not inflate the column that
- *               looks like revenue, and must not enter refund math. This is
- *               exactly how welcome and referral bonuses already behave.
- *   refund    → purchased. Returns value the user actually paid for. Sending it
- *               to promotional would under-return it: promotional is spent
- *               first and is never refunded back out.
- *   clawback  → promotional, negative. The console can only ever *grant* into
- *               promotional, so clawback exists to undo a console grant.
+ *   goodwill  → total and promotional equally, preserving purchased value.
+ *   refund    → total only, restoring purchased value without adding promotion.
+ *   clawback  → total and promotional equally, reversing a promotional grant.
  *               Reversing a real payment is deliberately NOT done here — that
  *               belongs to `reconcile_credit_purchase_adjustment`, which also
  *               reconciles the provider-side transaction. Letting an operator
- *               subtract from `credits` by hand would silently desynchronise the
- *               balance from the payment record.
+ *               reverse a payment through this route would desynchronise its
+ *               provider-side transaction record.
  *
  * Kept pure — no balance lookup — so there is no read-then-write race with the
  * RPC, which locks the profile row itself. Clawing back more than the user
@@ -87,20 +84,7 @@ export const ADMIN_CREDIT_ADJUSTMENT_MAX = 10_000;
 export function planAdminCreditAdjustment(
   request: AdminCreditAdjustmentRequest,
 ): AdminCreditAdjustmentPlan {
-  switch (request.intent) {
-    case 'goodwill':
-      return { creditsDelta: 0, promotionalCreditsDelta: request.amount };
-    case 'refund':
-      return { creditsDelta: request.amount, promotionalCreditsDelta: 0 };
-    case 'clawback':
-      return { creditsDelta: 0, promotionalCreditsDelta: -request.amount };
-    default: {
-      // Exhaustiveness guard: a new intent must make an explicit balance choice
-      // rather than silently defaulting to one of the columns.
-      const unhandled: never = request.intent;
-      throw new Error(`Unsupported credit adjustment intent: ${String(unhandled)}`);
-    }
-  }
+  return planAdminCreditAdjustmentDeltas(request.intent, request.amount);
 }
 
 export function validateAdminCreditAdjustment(
