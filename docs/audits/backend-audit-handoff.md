@@ -14,16 +14,43 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 PR #392 passed all five exact-head Quality jobs in 37571640504 on
 1f4b97a311711f06f690e7bcaee364f53c6dfab1. Fresh parent metadata/live/main and
 immediate mobile-store idle gates passed. It merged at 04:41:42 UTC as
-0daff46610c558a921e860f5e69be6427abb1a81. Exact-main Quality 37572688415 passes
-all five jobs. Standard release 37573683409 is running; independent
-map-recovery-release/ schema/advisor/smoke verification remains. Do not merge
-#393 before this parent is verified.
+0daff46610c558a921e860f5e69be6427abb1a81. Exact-main Quality 37572688415 and
+standard release 37573683409 pass. Independent readback at 04:58:14 UTC confirms
+the exact live/project, unchanged public schema/all 110 advisors and smoke
+200/307/401. See backend-section-11-map-recovery-release-2026-10-07.md and private
+map-recovery-release/. This parent release is verified.
 
 PR #393 is attached and automatically retargeted to main after #392 merged.
 Initial head 107e2e69afc8c8f573846c4e368ef145ae539cc7 passes all five jobs in
 Quality 37572636133.
-Final candidate must incorporate the exact merged parent, include 11R controls
-and pass fresh exact-head CI; do not use that initial head as the final gate.
+Final head af4f6941c2d971f4295f8a5fea7155f40b682234 includes the exact merged
+parent and 11R controls. All five exact-head Quality jobs pass in 37573889158.
+Fresh schema/advisors, verified parent/live/main and immediate mobile-store idle
+gates pass. #393 merged at 05:07:28 UTC as
+547b6658acaac7e9234efb1ce3ee2826da3304ec. Exact-main Quality 37574773814 is
+running; standard release and independent workflow-inputs-release/ readback
+remain. WORKFLOW-04 stays failed until that verification passes.
+
+Current checkout branch is codex/backend-template-publication-11s and includes
+the exact merged #393 parent. User receipt edits and private evidence remain
+preserved. Next candidate must wait for #393's independent release verification.
+
+11S adds sixteen actual GoTrue/PostgREST/Storage publication controls with no
+runtime or migration change: owner/foreign/unsigned authoring, exact publication
+preconditions, immutable activation, real signed demo bytes, correctly shaped
+client RPC permission denial, three committed-reply faults, actual SQL constraint
+rejection/copy cleanup, missing/foreign sources, bounded two-publisher barrier and
+disable visibility. All sixteen cases pass; final rejecting-barrier case also
+passes. Types/lint/diff and independent exact-ID/namespace cleanup pass. Two
+production routine definitions/role grants match read-only. Real generation
+provenance, video/fixed-asset variants and hosted execution stay open.
+
+OPS-03 reconciliation confirms no active current-build capacity certificate;
+the August exact-build certificate is historical. The runbook's obsolete next-
+release compatibility removal instruction is reconciled to explicit DB-05
+installed-client review. Both workflow starters currently retain authenticated/
+service grants with prior verified admission controls. No grant removal, cloud
+provisioning, production load or new capacity claim is performed.
 
 11R adds nine actual local blueprint billing cases: duplicate response replay,
 owner-scoped keys, concurrent pending hold, exact bucket refund and new-key retry,

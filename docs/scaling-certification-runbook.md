@@ -91,10 +91,16 @@ Then:
    the expected replay fingerprint.
 4. Run Supabase security and performance advisors.
 5. Verify the deployed product route calls `initialize_workflow_canvas_run(...)`
-   and never the compatibility `start_workflow_canvas_run(...)` RPC. The old RPC
-   stays executable for one schema-first release window and must be revoked or
-   dropped in the immediately following release after production build-ID
-   verification.
+   and never the compatibility `start_workflow_canvas_run(...)` RPC. Compatibility
+   grant retirement is the separate DB-05 rollout in
+   [`audits/backend-audit-completion-checklist.md`](audits/backend-audit-completion-checklist.md).
+   Current production retains authenticated/service execution of both routines;
+   ownership, lifecycle and shared quota admission were verified in the
+   [`Section 3 release`](audits/backend-section-03-rpc-release-2026-09-27.md).
+   Reconcile supported installed clients and record the compatibility decision
+   before revoking or dropping a routine. An absent current source caller or
+   verified build ID alone is not retirement evidence. Record the actual role
+   grants and exercised admission boundaries with the certificate.
 6. Verify `track_io_timing` on both `postgres` and `authenticator`; enable
    `log_temp_files` for the run if the environment permits it.
 
