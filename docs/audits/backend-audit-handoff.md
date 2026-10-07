@@ -11,12 +11,28 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 
 ## Exact checkpoint
 
-PR #392 is OPEN on exact head 1f4b97a311711f06f690e7bcaee364f53c6dfab1.
-Quality 37571640504 is running; four jobs pass and the web job remains active.
-Its private map-recovery-release/ parent baseline and merge guard are prepared
-against independently verified #391. Do not merge before all five exact-head
-jobs pass and immediate live/main/mobile-idle gates pass. Standard release and
-independent schema/advisor/smoke verification are still required.
+PR #392 passed all five exact-head Quality jobs in 37571640504 on
+1f4b97a311711f06f690e7bcaee364f53c6dfab1. Fresh parent metadata/live/main and
+immediate mobile-store idle gates passed. It merged at 04:41:42 UTC as
+0daff46610c558a921e860f5e69be6427abb1a81. Exact-main Quality 37572688415 passes
+all five jobs. Standard release 37573683409 is running; independent
+map-recovery-release/ schema/advisor/smoke verification remains. Do not merge
+#393 before this parent is verified.
+
+PR #393 is attached and automatically retargeted to main after #392 merged.
+Initial head 107e2e69afc8c8f573846c4e368ef145ae539cc7 passes all five jobs in
+Quality 37572636133.
+Final candidate must incorporate the exact merged parent, include 11R controls
+and pass fresh exact-head CI; do not use that initial head as the final gate.
+
+11R adds nine actual local blueprint billing cases: duplicate response replay,
+owner-scoped keys, concurrent pending hold, exact bucket refund and new-key retry,
+invalid provider replies, committed settlement reply loss, insufficient credits
+and mismatched keys. All pass; authoring+billing totals 25 actual API cases,
+with zero independent fixture/rate cleanup. Both ledger routine definitions/
+roles match current production metadata read-only. No additional runtime fix or
+provider request. Broader conservation, pre-submission death/stale pending holds
+and true provider delivery remain open.
 
 11Q adds nine actual local Auth/PostgREST reproductions: canvas PATCH null throws,
 other invalid/unreadable roots return 200, and wrong-type/malformed blueprint

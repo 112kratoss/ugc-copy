@@ -40,7 +40,9 @@ and a real anonymous Auth identity owning/editing/deleting its canvas. Foreign
 DELETE retains its existing generic success response while changing no owner row.
 
 The 38 focused service/adapter cases, app/test types, scoped lint and diff checks
-pass. The new API suite is added sequentially to the existing isolated CI API
+pass. [11R billing controls](backend-section-11-blueprint-billing-2026-10-07.md)
+add nine actual replay/refund/concurrency/settlement-reply cases without another
+runtime change; the combined suite passes 25 actual API cases. The new API suite is added sequentially to the existing isolated CI API
 job; exact-head Linux CI must certify it before merge. No migration or installed
 mobile operation contract changes: these authoring routes have no operation
 entry in the current mobile API contract.
