@@ -6,7 +6,7 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/legacy-mobile-binding-audit-11l`, based on merged #389 and continuing the documented legacy binding operator matrix. The user receipt/evidence edits remain untouched.
+Current checkout: `codex/backend-restore-audit-11m`, based on merged #390 and adding recovery evidence. The user receipt/evidence edits remain untouched.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
@@ -49,9 +49,10 @@ zero fixtures. Separate readback maps source 20261006203443 to production
 SQL/evidence-only operator #389 passed all five exact-head Quality jobs in
 37531592475 at 7af0c783246da6c83eac3cc2bc6b6fc45cb3d16e. Fresh parent/main/live
 and immediate mobile-store idle gates passed. It merged October 7 02:47:43 UTC
-as a171fd76c0dadfef8ce307a62b9188c2c475f055. Exact-main Quality 37563686429 is
-running; standard release and independent unchanged-schema verification remain.
-Do not merge a follow-up before that parent is independently verified.
+as a171fd76c0dadfef8ce307a62b9188c2c475f055. Exact-main Quality 37563686429 and
+standard release 37564295252 pass. Independent verification at 03:00:52 UTC
+confirms exact live/project, unchanged schema/all 110 advisors and smoke
+200/307/401. See the 11K release report.
 
 11K adds 22 actual clone and 35 mobile catalog operator assertions (57 total),
 with actual client-role denial, service calls, copy/activation/retry/conflict
@@ -63,8 +64,33 @@ bind_legacy_mobile_store_transaction_product. All pass, the full replay suite
 passes 2,304 assertions in 106 files, and independent fixture cleanup is zero.
 Four production/local operator/trigger definitions and grants agree read-only.
 No defect or runtime/migration/catalog/provider change. See the 11L report;
-its next candidate must pass exact-head CI and wait for verified #389.
+PR #390 final head 4e0ea817e648e7bfef8007041e9def56690d5ce5 passes all five
+Quality jobs in 37564312876. Verified parent/live/main and mobile-store idle
+gates passed; it merged at 03:08:25 UTC as 2ee4066b3d763714d379e43ad2945e67e6c47f77.
+Exact-main Quality 37565354138 and standard release 37566336430 pass all jobs.
+The release completes at 03:24:44 UTC; independent verification at 03:25:27 UTC
+confirms exact live/project, unchanged schema/all 110 advisors, smoke200/307/401.
+See the 11L release report. No release work remains pending for #390.
 Broader DB-03/MAP-02/GEN-05/PAY scope stays open.
+
+11M local logical backup/restore and credit reconciliation pass at 03:12:39 UTC.
+The target had no network/published ports. All 167 table row digests, 175 relation
+owners/ACLs, 356 routine owners/ACLs, 15 roles/23 memberships match. All 940 public
+constraints match semantically; ten nested-AND CHECKs normalize on restore,
+verified by engine reparse, so raw constraints fingerprint differs. Fifteen
+other schema-class hashes match. Duplicate/other-owner/missing post-backup credit
+controls pass, balances 500 then reconciled 1,000, and client reads deny.
+All source table digests return to baseline; the whole owned target is retired.
+Archive/scripts/failed attempts remain private in backup-restore/. Production
+read-only metadata shows seven completed physical backups/PITR disabled.
+11N adds twenty read-only deployed protocol/admission controls, all passing on
+both a171 and the released 2ee build. GET/HEAD/preflight, native compatibility,
+CORS origin headers and unauthenticated profile/admin boundaries pass. This is
+server-response evidence, not positive client/browser/provider delivery.
+
+No actual production backup or Storage recovery is verified; OPS-02 remains
+untested. Local/live column-order/extensions/functions differ. See the 11M report;
+no runtime, migration, provider request or customer operation changes.
 
 Current ledger: 53 obligations — 24 passed, 26 untested, 1 failed, 2 external.
 AUTH-01 returns to passed after verified 11J; OPS-04 returns to untested after
