@@ -409,7 +409,7 @@ export async function removeGenerationShowcaseDerivative({
    * The post the derivative served. Creation posts from before the 2026-06
    * gallery backfill carry post_media rows copied from their derivative
    * (newer ones carry none, and the owner's surfaces fall back to a signed URL
-   * of the durable copy). Those rows' main, preview, rendition and teaser
+   * of the durable copy). Those rows' main, preview, rendition, display and teaser
    * objects all live in the public bucket, so they go with the derivative: a
    * row left behind would keep the owner's own list pointed at a URL that now
    * 404s while a downscaled copy stayed public.
@@ -426,10 +426,11 @@ export async function removeGenerationShowcaseDerivative({
   if (derivativePath) removablePaths.add(derivativePath);
 
   let removedMediaRows = 0;
+  const legacyMediaIds: string[] = [];
   if (postId) {
     const { data, error: loadError } = await adminSupabase
       .from('post_media')
-      .select('id, storage_path, preview_storage_path, rendition_storage_path, teaser_storage_path')
+      .select('id, storage_path, preview_storage_path, rendition_storage_path, display_storage_path, teaser_storage_path')
       .eq('post_id', postId);
     if (loadError) {
       return { removed: false, removedPaths: [], removedMediaRows: 0, error: loadError };
@@ -439,29 +440,19 @@ export async function removeGenerationShowcaseDerivative({
       storage_path: string | null;
       preview_storage_path?: string | null;
       rendition_storage_path?: string | null;
+      display_storage_path?: string | null;
       teaser_storage_path?: string | null;
     };
     const legacyRows = ((data ?? []) as LegacyMediaRow[]).filter((row) => (
       Boolean(getCanonicalGenerationShowcaseAssetPath(row.storage_path, generationId))
     ));
     for (const row of legacyRows) {
-      for (const candidate of [row.storage_path, row.preview_storage_path, row.rendition_storage_path, row.teaser_storage_path]) {
+      for (const candidate of [row.storage_path, row.preview_storage_path, row.rendition_storage_path, row.display_storage_path, row.teaser_storage_path]) {
         const canonicalPath = getCanonicalGenerationShowcaseAssetPath(candidate, generationId);
         if (canonicalPath) removablePaths.add(canonicalPath);
       }
     }
-    if (legacyRows.length > 0) {
-      // Rows go first so a row never outlives its objects; if the delete
-      // fails the objects stay too and the row keeps working.
-      const { error: deleteError } = await adminSupabase
-        .from('post_media')
-        .delete()
-        .in('id', legacyRows.map((row) => row.id));
-      if (deleteError) {
-        return { removed: false, removedPaths: [], removedMediaRows: 0, error: deleteError };
-      }
-      removedMediaRows = legacyRows.length;
-    }
+    legacyMediaIds.push(...legacyRows.map((row) => row.id));
   }
 
   if (removablePaths.size === 0) {
@@ -469,10 +460,35 @@ export async function removeGenerationShowcaseDerivative({
   }
   const paths = [...removablePaths];
   const result = await removePostMediaObjects(adminSupabase, paths);
+  if (result.error) {
+    return { removed: false, removedPaths: [], removedMediaRows: 0, error: result.error };
+  }
+
+  // The gallery is the durable inventory for retries. Keep its paths until
+  // every object is verified absent, including a failed or no-op deletion.
+  // If the final row cleanup fails, a retry can safely repeat the removals.
+  try {
+    const verification = await Promise.all(paths.map((objectPath) => (
+      adminSupabase.storage.from(postMediaStorageBucket(objectPath)).exists(objectPath)
+    )));
+    if (verification.some((item) => item.data !== false)) {
+      return { removed: false, removedPaths: [], removedMediaRows: 0, error: { message: 'Generation showcase media still exists after removal.' } };
+    }
+  } catch (verificationError) {
+    return { removed: false, removedPaths: [], removedMediaRows: 0, error: { message: verificationError instanceof Error ? verificationError.message : 'Unable to verify generation showcase media removal.' } };
+  }
+
+  if (legacyMediaIds.length > 0) {
+    const { error: deleteError } = await adminSupabase.from('post_media').delete().in('id', legacyMediaIds);
+    if (deleteError) {
+      return { removed: false, removedPaths: paths, removedMediaRows: 0, error: deleteError };
+    }
+    removedMediaRows = legacyMediaIds.length;
+  }
   return {
-    removed: !result.error,
-    removedPaths: result.error ? [] : paths,
+    removed: true,
+    removedPaths: paths,
     removedMediaRows,
-    error: result.error ?? null,
+    error: null,
   };
 }

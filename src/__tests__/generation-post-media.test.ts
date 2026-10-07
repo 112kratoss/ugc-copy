@@ -46,6 +46,7 @@ function createAdminClient({
             removals.push(paths);
             return { data: removeError ? null : paths.map((name) => ({ name })), error: removeError };
           },
+          exists: async () => ({ data: false, error: { status: 404 } }),
         };
       },
     },
@@ -118,7 +119,7 @@ describe('removeGenerationShowcaseDerivative', () => {
     ]]);
   });
 
-  it('keeps the objects when the row delete fails so the row keeps working', async () => {
+  it('retains the media inventory when final row cleanup fails after verified removal', async () => {
     const { removeGenerationShowcaseDerivative } = await import('@/lib/generation-post-media');
     const { client, removals } = createAdminClient({
       mediaRows: [{ id: 'media-row-1', storage_path: 'showcase/gen-1/generated_abc.jpg' }],
@@ -132,8 +133,8 @@ describe('removeGenerationShowcaseDerivative', () => {
       postId: 'post-1',
     });
 
-    expect(result).toEqual({ removed: false, removedPaths: [], removedMediaRows: 0, error: { message: 'delete rejected' } });
-    expect(removals).toEqual([]);
+    expect(result).toEqual({ removed: false, removedPaths: ['showcase/gen-1/generated_abc.jpg'], removedMediaRows: 0, error: { message: 'delete rejected' } });
+    expect(removals).toEqual([['showcase/gen-1/generated_abc.jpg']]);
   });
 
   it('ignores paths outside the generation folder and skips the storage call when nothing remains', async () => {

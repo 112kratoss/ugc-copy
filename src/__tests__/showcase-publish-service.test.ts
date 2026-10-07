@@ -70,7 +70,7 @@ function createCanonicalTemplateAdminClientMock({
       throw new Error(`Unexpected admin table: ${table}`);
     },
     storage: {
-      from: vi.fn(() => ({ remove: removeMock })),
+      from: vi.fn(() => ({ remove: removeMock, exists: vi.fn(async () => ({ data: false, error: { status: 404 } })) })),
     },
   } as unknown as SupabaseClient;
 
@@ -155,6 +155,7 @@ function createAdminClientMock(
       storage: {
         from: vi.fn(() => ({
           remove: removeMock,
+          exists: vi.fn(async () => ({ data: false, error: { status: 404 } })),
           // An exposed publish copies the generation's output into the public
           // bucket before it writes the post; a private one never gets here.
           download: downloadMock,
