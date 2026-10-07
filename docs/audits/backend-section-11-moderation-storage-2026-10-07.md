@@ -32,7 +32,11 @@ is not exercised. An initial gallery fixture omitted the required teaser
 generation timestamp; it was corrected without changing the constraint, and
 the earlier log is retained. Fixture balances stay 500 and usage stays empty.
 Every case deletes only its own objects and rows, then independently checks
-empty Storage/Auth/profile/session/rate/post/media/report/audit fixtures.
+empty Storage/Auth/profile/session/rate/post/media/report/audit/revocation fixtures.
+Final cleanup also covers revocations enqueued by deleting the generation-backed
+fixture post. Two earlier local runs left those queue rows after their other
+cleanup checks; their exact paths were corroborated in the local Storage logs
+and their own IDs removed. The final run verifies no such queue rows remain.
 
 The sixteen local cases pass. Test types and scoped lint pass. Exact-head CI,
 verified parent, standard release and independent readback remain required.

@@ -79,6 +79,7 @@ describe.skipIf(!configPath || !connectionString)('moderation take-down through 
       for (const table of ['admin_post_moderation_actions','admin_generation_moderation_actions','admin_user_sanctions']) await db.query(`delete from public.${table} where reviewer_id=$1`, [reviewerId]);
       await db.query('delete from public.contact_messages where id=any($1::uuid[])', [contactIds]);
       await db.query('delete from public.posts where id=any($1::uuid[])', [postIds]);
+      await db.query('delete from public.showcase_media_revocations where generation_id=any($1::uuid[])', [generationIds]);
       await db.query('delete from public.generations where id=any($1::uuid[])', [generationIds]);
       await db.query('delete from public.admin_sessions where session_id=$1', [sessionId]);
       await db.query('delete from auth.users where id=any($1::uuid[])', [fixtureUsers]);
@@ -92,6 +93,7 @@ describe.skipIf(!configPath || !connectionString)('moderation take-down through 
       (select count(*) from public.backend_rate_limits where subject_key=any($1::text[]))::int as rates,
       (select count(*) from public.posts where id=any($3::uuid[]))::int as posts,
       (select count(*) from public.post_media where post_id=any($3::uuid[]))::int as post_media,
+      (select count(*) from public.showcase_media_revocations where generation_id=any($4::uuid[]))::int as revocations,
       (select count(*) from public.generations where id=any($4::uuid[]))::int as generations,
       (select count(*) from public.contact_messages where id=any($5::uuid[]))::int as contacts,
       (select count(*) from public.post_reports where id=any($6::uuid[]))::int as post_reports,
@@ -100,7 +102,7 @@ describe.skipIf(!configPath || !connectionString)('moderation take-down through 
       (select count(*) from public.admin_generation_moderation_actions where reviewer_id=$8)::int as generation_actions,
       (select count(*) from public.admin_user_sanctions where reviewer_id=$8)::int as sanctions,
       (select count(*) from public.ai_usage_events where user_id=any($1::uuid[]))::int as usage`, [fixtureUsers,sessionId,postIds,generationIds,contactIds,postReportIds,subjectReportIds,reviewerId])).rows[0])
-      .toEqual({users:0,profiles:0,sessions:0,rates:0,posts:0,post_media:0,generations:0,contacts:0,post_reports:0,subject_reports:0,post_actions:0,generation_actions:0,sanctions:0,usage:0});
+      .toEqual({users:0,profiles:0,sessions:0,rates:0,posts:0,post_media:0,revocations:0,generations:0,contacts:0,post_reports:0,subject_reports:0,post_actions:0,generation_actions:0,sanctions:0,usage:0});
   });
   const upload = async (bucket: 'showcase_media'|'post_media', path: string) => {
     objects.push({bucket,path});
