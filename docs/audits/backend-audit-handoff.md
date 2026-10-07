@@ -11,6 +11,24 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 
 ## Exact checkpoint
 
+#403 is attached at https://github.com/112kratoss/ugc-copy/pull/403 on candidate
+1ddddc668a05ec5b8ec8fd6679fd22e90dc32f3b, branch
+codex/backend-referral-notification-recovery-12b. Initial exact-head Quality 37644567466 passes mobile/browser/migration/API jobs
+and all web tests, but web lint rejects the new CJS worker require import. It is
+corrected to a dynamic import and the 18-case suite is rerun before a new head. Independent local fixture cleanup is zero for users,
+transactions, programs, outbox, jobs and injected triggers. Release preparation
+is under .audit-evidence/backend-social/referral-notification-release/: fresh
+production baseline, complete migration plan (only the new migration), exact
+new-object signatures/three function definitions and ACLs from clean replay,
+four runtime hashes, strict verifier and merge guard. The guard expects verified
+#402 parent aea29967, Quality 37640696352 and standard 37642306396 attempt 2.
+Run it only after exact candidate CI succeeds. The verifier requires unchanged
+old schema, exact new object signatures/functions/ACLs and only one new INFO
+rls_enabled_no_policy finding for the private outbox; do not accept other drift.
+Release documents for #401/#402 and RevenueCat/admin browser readbacks are
+committed in #403. This new checkpoint can be carried in the next audit PR.
+
+
 12A #402 is independently verified at 15:25:36 UTC on
 aea299676ff0f17a5b5c93eff8bbeef03caac0eb. All five exact-main jobs in 37640696352
 pass. Standard 37642306396 attempt 1 ended after successful authorization with

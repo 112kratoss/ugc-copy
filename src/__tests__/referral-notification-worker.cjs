@@ -1,5 +1,5 @@
-const { Client } = require('pg');
 (async () => {
+  const { Client } = await import('pg');
   const connectionString = process.env.SUPABASE_TEST_DB_URL;
   if (!['localhost', '127.0.0.1'].includes(new URL(connectionString).hostname)) throw Error('Local database required');
   const db = new Client({ connectionString, statement_timeout: 10000 }); await db.connect();
