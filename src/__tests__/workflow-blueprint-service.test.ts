@@ -200,6 +200,29 @@ describe('workflow blueprint service', () => {
     expect(providerFetch).not.toHaveBeenCalled();
   });
 
+  it.each(['productName', 'audience', 'primaryMessage'])('rejects a non-string %s before privileged work', async field => {
+    const { planWorkflowBlueprintForRoute } = await import('@/lib/workflow-blueprint-service');
+    const result = await planWorkflowBlueprintForRoute({
+      createAdminSupabase, createUserSupabase, kieApiKey: 'kie-key', providerFetch,
+      readRequestBody: async () => ({ ...validBlueprintInput, [field]: 42 }),
+      request: new Request('http://localhost/api/workflow-blueprint'),
+    });
+    expect(result).toMatchObject({ ok: false, status: 400 });
+    expect(createAdminSupabase).not.toHaveBeenCalled();
+    expect(providerFetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed JSON before privileged work', async () => {
+    const { planWorkflowBlueprintForRoute } = await import('@/lib/workflow-blueprint-service');
+    const result = await planWorkflowBlueprintForRoute({
+      createAdminSupabase, createUserSupabase, kieApiKey: 'kie-key', providerFetch,
+      request: new Request('http://localhost/api/workflow-blueprint', { method: 'POST', body: '{' }),
+    });
+    expect(result).toMatchObject({ ok: false, status: 400 });
+    expect(createAdminSupabase).not.toHaveBeenCalled();
+    expect(providerFetch).not.toHaveBeenCalled();
+  });
+
   it('maps Supabase-backed rate limits before charging or provider work', async () => {
     adminClient = createAdminClient({ rateLimitAllowed: false });
     createAdminSupabase.mockReturnValueOnce(adminClient);

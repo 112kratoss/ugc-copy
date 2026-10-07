@@ -6,10 +6,48 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/backend-map-recovery-11o`, based on verified #391 and adding current catalog/caller mapping and canvas worker recovery evidence. The user receipt/evidence edits remain untouched.
+Current checkout: `codex/backend-workflow-inputs-11q`, stacked on #392 and fixing reproduced workflow validation defects. The user receipt/evidence edits remain untouched.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+PR #392 passed all five exact-head Quality jobs in 37571640504 on
+1f4b97a311711f06f690e7bcaee364f53c6dfab1. Fresh parent metadata/live/main and
+immediate mobile-store idle gates passed. It merged at 04:41:42 UTC as
+0daff46610c558a921e860f5e69be6427abb1a81. Exact-main Quality 37572688415 passes
+all five jobs. Standard release 37573683409 is running; independent
+map-recovery-release/ schema/advisor/smoke verification remains. Do not merge
+#393 before this parent is verified.
+
+PR #393 is attached and automatically retargeted to main after #392 merged.
+Initial head 107e2e69afc8c8f573846c4e368ef145ae539cc7 passes all five jobs in
+Quality 37572636133.
+Final candidate must incorporate the exact merged parent, include 11R controls
+and pass fresh exact-head CI; do not use that initial head as the final gate.
+
+11R adds nine actual local blueprint billing cases: duplicate response replay,
+owner-scoped keys, concurrent pending hold, exact bucket refund and new-key retry,
+invalid provider replies, committed settlement reply loss, insufficient credits
+and mismatched keys. All pass; authoring+billing totals 25 actual API cases,
+with zero independent fixture/rate cleanup. Both ledger routine definitions/
+roles match current production metadata read-only. No additional runtime fix or
+provider request. Broader conservation, pre-submission death/stale pending holds
+and true provider delivery remain open.
+
+11Q adds nine actual local Auth/PostgREST reproductions: canvas PATCH null throws,
+other invalid/unreadable roots return 200, and wrong-type/malformed blueprint
+inputs return 500. Candidate validation returns private/no-store 400 before
+authoring or billing work. All 16 actual API cases and 38 focused cases pass;
+app/test types, lint and diff checks pass. Every fixture balance stays 500, usage
+is empty and independent cleanup is zero. Native handlers are invoked directly;
+no hosted Next/browser/provider execution is claimed. New API suite is added
+sequentially to Quality. This candidate must use a separate stacked PR/head;
+hold its merge until #392 is independently verified live.
+
+Current ledger is now 53: 24 passed, 25 untested, two failed, two external.
+WORKFLOW-04 is failed for 11Q until released, then returns to untested for the
+remaining matrix. MEDIA-07 remains failed. No runtime/schema/customer changes
+outside the two candidate input validators are introduced.
 
 Recovery/protocol evidence #391 is independently verified live as
 3f04cb16f9435d8a20735a2ac7ca7514db9ddb3a at October 7 04:24:57 UTC.
