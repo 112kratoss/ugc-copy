@@ -6,10 +6,27 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/backend-revocation-recovery-11v`, stacked on #396 and fixing reproduced background Storage revocation defects. The user receipt/evidence edits remain untouched.
+Current checkout: `codex/backend-revocation-worker-death-11w`, stacked on #397 and adding real process-death recovery controls. The user receipt/evidence edits remain untouched.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+11W adds three actual Node worker SIGKILL checkpoints before Storage removal,
+after actual removal and after gallery deletion commits. Each has the expected
+durable queue/gallery/object state, completes in a fresh process, and has no
+work on another fresh retry. All three cases, test types and scoped lint pass;
+exact-ID object/row cleanup is zero and balances/usage remain unchanged. This is
+the direct business processor, not managed lease/fencing or hosted CDN evidence.
+No runtime/migration change. Own candidate gates and independently verified #397
+parent remain required. See backend-section-11-showcase-revocation-worker-death-2026-10-07.md.
+
+PR #397 is attached, stacked on #396, head
+5d46e7eb75d25385e88c5339302c01f1741fbb29, Quality 37578516790 running.
+#396 final-head Quality 37577628732 passes all five jobs on 024ea1a1.
+#395 exact-main Quality 37577951136 passes all five jobs; automatic standard
+release 37578624582 is running with 37578732709 also queued for the same SHA.
+Neither is a manual dispatch; wait for standard success and independent readback
+before merging #396. Do not duplicate deployment or treat a queued run as success.
 
 11V reproduces four actual SQL/Storage failures: normal cleanup omits display
 media; failed/no-op Storage removal or reply loss after gallery deletion loses
@@ -27,10 +44,10 @@ independently verified #396 parent and standard release remain required.
 PR #395 passed all five exact-head jobs in 37576758590. Fresh verified #394
 parent/schema/advisors/live/main and immediate mobile-store idle gates passed.
 It merged at 05:45:59 UTC as ebd551b6fe8c84c05e9811b52f6c211a4ac99d52.
-Exact-main Quality 37577951136 is running; standard release and independent
+Exact-main Quality 37577951136 passes; standard release and independent
 admin-moderation-release/ readback remain. SOCIAL-03 remains failed until then.
 PR #396 is attached and retargeted to main. Final cleanup head
-024ea1a16d8d98e3ac668bb1a44a891b92eaf7e2 is running Quality 37577628732;
+024ea1a16d8d98e3ac668bb1a44a891b92eaf7e2 passes all five Quality 37577628732 jobs;
 initial head 5dd7db24 is historical. It must wait for #395's independent release.
 
 PR #395 is attached: aad77b006aa57dc6017719ab37fe9b2b172f6724, Quality
