@@ -43,7 +43,8 @@ empty Auth/profile cleanup after every case.
 
 The health sample source from #387 is consolidated into [PR #388](https://github.com/112kratoss/ugc-copy/pull/388) with this trigger fix. The independently verified #386 release is the parent; each finding keeps separate verification controls.
 
-AUTH-01 is reopened until final exact-head CI, independently verified parent,
-exact-main CI, standard release and independent live function/rollback/cleanup
-checks pass. The checklist remains 53 obligations: 23 passed, 25 untested,
-3 failed and 2 external. No new obligation or full-audit signoff is claimed.
+The [11I/J release](backend-section-11-auth-health-release-2026-10-07.md) passes
+final exact-head/main CI, standard release after an unchanged failed-job retry,
+and independent live function/rollback/cleanup checks. AUTH-01 returns to passed.
+The 53-row checklist is 24 passed, 26 untested, 1 failed and 2 external. No new
+obligation or full-audit signoff is claimed.

@@ -325,7 +325,7 @@ jobs:
           SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
 
       - name: Test cash commerce concurrency
-        run: npx vitest run src/__tests__/commerce-cash-concurrency.test.ts src/__tests__/mobile-credit-concurrency.test.ts src/__tests__/mobile-adjustment-event-concurrency.test.ts src/__tests__/mobile-marketplace-lifecycle-concurrency.test.ts
+        run: npx vitest run src/__tests__/commerce-cash-concurrency.test.ts src/__tests__/mobile-credit-concurrency.test.ts src/__tests__/mobile-adjustment-event-concurrency.test.ts src/__tests__/mobile-marketplace-lifecycle-concurrency.test.ts src/__tests__/mobile-legacy-binding-concurrency.test.ts
         env:
           SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
 

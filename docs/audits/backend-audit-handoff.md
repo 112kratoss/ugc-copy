@@ -6,7 +6,7 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/catalog-clone-boundaries-audit-11k`, based on final combined #388 and adding only SQL operator tests/evidence. The user receipt/evidence edits remain untouched.
+Current checkout: `codex/legacy-mobile-binding-audit-11l`, based on merged #389 and continuing the documented legacy binding operator matrix. The user receipt/evidence edits remain untouched.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
@@ -31,57 +31,45 @@ return private/no-store 400, and smoke is 200/307/401. The actual signed retry
 proof remains the isolated production build with empty cleanup; no live positive
 support record or fresh signed production session is claimed. See the 11H release.
 
-Health #387 source is included in the combined health/signup PR #388. Refreshed
-health head 68bf19c2534357bba1018824085450e4af5f4036 incorporates the actual
-#386 main merge. All 48 actual collector and 48 focused health cases pass;
-production's three sixty-minute windows were empty in the read-only baseline.
-Preserve #387's source/evidence; do not merge it separately. #388 is retargeted to
-main with both fixes and separate reports/verification. Require final exact-head
-Quality after consolidation, then immediate idle mobile-store/exact live parent
-checks, exact-main Quality and standard release. The user-error parent is now
-independently verified. Private Auth/health release baselines use that parent.
+Combined health/signup #388 is independently verified live as
+f227c69577503d35f04ddfc9dd000d932d10735e after standard release 37532928397
+attempt 2 passed at October 7 02:43:55 UTC. Exact-head Quality 37529823695 and
+exact-main Quality 37531415452 pass all five jobs. Attempt 1 failed its final
+protected health build-id check after promotion; preserve that log and do not
+claim a cause. The unchanged failed-job retry passed protected health.
 
-Combined #388 final head bd5491c4de33ecb0cb8d6189073803f6df4cb448 passes all
-five Quality jobs in 37529823695, including 140 actual API cases. The immediate
-verified-parent/main/live/mobile-idle guard passed; it merged October 6 21:05:57 UTC
-as f227c69577503d35f04ddfc9dd000d932d10735e. Exact-main Quality 37531415452
-is running; standard release and independent verification remain. #387 is CLOSED
-as consolidated, not separately released. The obsolete #388 head 316038ab run
-was cancelled; its partial passes are not the final merge gate. The CLI watch
-hit a transient GitHub timeout, but direct run readback and merge guard confirm
-the final candidate's five successful jobs. Do not rerun a passed candidate for
-that watcher error. Prepared auth-placeholder-release/health-cap-release probes
-and baselines use the independently verified #386 parent.
+Fresh independent verification at 02:47:11 UTC confirms the planned Auth trigger
+only, unchanged ACLs/all other functions and all 110 advisors, matching digest
+38b2a5ff84299035c88e229345f9cefa, passing collision/welcome rollback controls and
+zero fixtures. Separate readback maps source 20261006203443 to production
+20261006211856 without repair. At 02:47:26 UTC the live health source matches the
+48-case actual API candidate. Smoke is 200/307/401. See the 11I/J release report.
+#387 is CLOSED as consolidated, with no separate main release.
 
-Operator evidence PR #389 is attached and now based on main. Its initial head
-7ac0cce3 runs Quality 37531104608; the actual merged #388 parent is incorporated
-locally and requires refreshed exact-head CI after this checkpoint. Hold its
-main merge until #388 is independently verified; preserve the parent gate.
+SQL/evidence-only operator #389 passed all five exact-head Quality jobs in
+37531592475 at 7af0c783246da6c83eac3cc2bc6b6fc45cb3d16e. Fresh parent/main/live
+and immediate mobile-store idle gates passed. It merged October 7 02:47:43 UTC
+as a171fd76c0dadfef8ce307a62b9188c2c475f055. Exact-main Quality 37563686429 is
+running; standard release and independent unchanged-schema verification remain.
+Do not merge a follow-up before that parent is independently verified.
 
-11K adds 22 actual catalog clone controls and 35 mobile catalog operator controls
-(57 total), all passing on the owned clean replay. Actual anon/auth calls deny;
-service calls, copied configuration, retries/conflicts and missing tiers pass.
-Independent local cleanup is zero, and four function definitions/role metadata
-match read-only production. No runtime, migration, live configuration, purchase
-or provider operation changes. Keep this SQL/evidence-only follow-up separate
-from #388's final tested runtime head; broader DB-03/MAP-02/GEN-05/PAY scopes stay open.
+11K adds 22 actual clone and 35 mobile catalog operator assertions (57 total),
+with actual client-role denial, service calls, copy/activation/retry/conflict
+controls, zero local fixtures and read-only production definition/role parity.
+It changes no runtime, migration or live catalog.
 
-11J reproduces signup aborts when valid distinct UUIDs share their eight-digit
-placeholder prefix. Original production/local trigger digest agrees. Four final
-baseline collision failures and two normal controls cover real GoTrue creation,
-eight concurrent requests and the anonymous SQL trigger. Candidate allocation
-keeps the generated format and zero balances while using the existing unique
-index and bounded retries. All six actual cases and clean replay/2,207 assertions
-pass; app/test types and scoped lint pass. Early invalid fixtures were corrected
-without changing constraints, and exact failed fixtures were removed. Candidate
-trigger digest 38b2a5ff84299035c88e229345f9cefa; release is not claimed.
+11L adds 40 actual SQL assertions and three actual connection-lock races for
+bind_legacy_mobile_store_transaction_product. All pass, the full replay suite
+passes 2,304 assertions in 106 files, and independent fixture cleanup is zero.
+Four production/local operator/trigger definitions and grants agree read-only.
+No defect or runtime/migration/catalog/provider change. See the 11L report;
+its next candidate must pass exact-head CI and wait for verified #389.
+Broader DB-03/MAP-02/GEN-05/PAY scope stays open.
 
-Current ledger: 53 obligations — 23 passed, 25 untested, 3 failed, 2 external.
-AUTH-01 is reopened for 11J until release verification; failed OPS-04/MEDIA-07
-remain. AUTH-02 remains passed from independently verified #381. Combined #382
-was independently verified as 6e7b8ddb at October 6 19:52 UTC with the planned
-job-summary function/grant only, unchanged advisors and zero fixtures; see its
-release record. These bounded fixes do not complete the full audit.
+Current ledger: 53 obligations — 24 passed, 26 untested, 1 failed, 2 external.
+AUTH-01 returns to passed after verified 11J; OPS-04 returns to untested after
+all known reproduced defects are released, with the broader matrix still open.
+MEDIA-07 legacy environment retirement remains failed. No full audit signoff.
 
 GitHub marked #383 merged into its candidate base branch at 19:23:11 UTC when
 its commits were incorporated into #382. It has no separate main merge or
