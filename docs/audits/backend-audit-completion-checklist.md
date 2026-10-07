@@ -1,7 +1,8 @@
 # Backend audit completion checklist
 
 Updated 2026-10-07. Current independently checked production:
-`2ee4066b3d763714d379e43ad2945e67e6c47f77`, including Sections 9A–9O, 10A–I and 11A–L.
+`3f04cb16f9435d8a20735a2ac7ca7514db9ddb3a`, including Sections 9A–9O, 10A–I and 11A–N.
+[11M/N release evidence](backend-section-11-recovery-evidence-release-2026-10-07.md).
 [11L release evidence](backend-section-11-legacy-binding-release-2026-10-07.md).
 [11K release evidence](backend-section-11-catalog-operators-release-2026-10-07.md).
 [11I/J release evidence](backend-section-11-auth-health-release-2026-10-07.md).
@@ -30,7 +31,8 @@ The nine historical count mismatches were reconciled; independent readback is ze
 [8C #338 release is verified](backend-section-08-follow-block-release-2026-10-04.md). 8D reproduces comment-thread
 reads across a creator block; eight real transport and 46 focused cases pass
 after the fix; [8D release is verified](backend-section-08-comment-lifecycle-release-2026-10-04.md). Broader social behavior coverage remains open.
-Surface inventory baseline remains `5934bd7d`; Section 6L changed no surfaces.
+The current production catalog and source inventory are refreshed at `3f04cb16`;
+the October 1 `5934bd7d` inventory remains historical.
 
 This is the closure ledger for the audit, replacing section numbers as a progress
 measure. A row is a bounded obligation, not a subsystem percentage. The rows have
@@ -52,15 +54,16 @@ reproduction and remains open; **untested** lacks complete evidence for this
 obligation (it may have earlier partial tests); **external** needs provider,
 operator, device or environment evidence that local fixtures cannot supply.
 
-The [surface map](backend-audit-surface-map-2026-10-01.json) records every current
-API route and `*service.ts` file, the isolated database's public functions and
+The [current surface map](backend-audit-surface-map-2026-10-07.json) records every current
+API route and `*service.ts` file, production's public functions and
 relations, and all registered jobs. File-level static reachability deliberately
 over-approximates callers. Seven services without API callers have reviewed page
-callers; eight indirect RPC sites have reviewed function names. The [October 4 caller reconciliation](backend-audit-caller-reconciliation-2026-10-04.md)
-classifies the earlier 152 no-JS-caller functions as 85 catalog-bound, nine with
-source/operator callers, 34 with reviewed SQL calls and 24 without a current caller
-located. None is presumed unused; behavior and compatibility remain MAP-02/DB-03 work. The local
-catalog is not a fresh production snapshot.
+callers; nine indirect RPC sites have reviewed function names. The [October 7 caller reconciliation](backend-audit-caller-reconciliation-2026-10-07.md)
+classifies 153 secondary-review entries as 86 catalog-bound, nine with
+source/operator callers, 34 with reviewed SQL calls and the same 24 without a
+current executable caller located. It reads current production metadata without
+row data and maps all 14 added routines/two added tables to existing test/release
+evidence. None is presumed unused; behavior and compatibility remain MAP-02/DB-03 work.
 
 ## Closure gates
 
@@ -73,7 +76,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | Gate | Included surfaces |
 | --- | --- |
 | AUTH-GATE | Account, onboarding, admin session; shared identity admission on all protected routes |
-| DB-GATE | All 323 public functions and 136 public relations; grants, policies, triggers and callers |
+| DB-GATE | All 337 public functions and 138 public relations; grants, policies, triggers and callers |
 | PAY-GATE | Credits, Razorpay, mobile commerce, referrals, admin credits, creator/admin payouts |
 | MARKET-GATE | Marketplace, entitlements, resource bundles and resource files |
 | GEN-GATE | Generation, provider callback, model catalog, prompt/source tools, generation lifecycle |
@@ -87,8 +90,8 @@ coverage includes shared helpers that do not end in `service.ts`.
 
 | ID | Obligation and closure evidence | Status | Evidence / next action |
 | --- | --- | --- | --- |
-| MAP-01 | Capture route/service/job/public-catalog inventory and assign review gates | passed | [Surface map](backend-audit-surface-map-2026-10-01.json); 162 routes, 201 services, 323 functions, 136 relations, 12 jobs; 0 unassigned routes |
-| MAP-02 | Reconcile method-level behaviors, non-API entrypoints, SQL/trigger callers, mobile direct access, edge and operational scripts to this ledger | untested | [Explicit HTTP method map](backend-audit-http-method-map-2026-10-04.md) records 162 routes/186 methods, including 35 social routes/45 methods. Static paths remain scheduling evidence; [Caller reconciliation](backend-audit-caller-reconciliation-2026-10-04.md) reviews the earlier 152 entries; remaining entrypoints, method behavior and table mutation/read paths stay open |
+| MAP-01 | Capture route/service/job/public-catalog inventory and assign review gates | passed | [Current production surface map](backend-audit-surface-map-2026-10-07.json); 162 routes, 201 services, 337 functions, 138 relations, 12 jobs; 0 unassigned routes. [Reconciliation](backend-audit-caller-reconciliation-2026-10-07.md) preserves earlier snapshots and separates inventory from behavior |
+| MAP-02 | Reconcile method-level behaviors, non-API entrypoints, SQL/trigger callers, mobile direct access, edge and operational scripts to this ledger | untested | [Explicit HTTP method map](backend-audit-http-method-map-2026-10-04.md) records 162 routes/186 methods, including 35 social routes/45 methods. Static paths remain scheduling evidence; [Current caller reconciliation](backend-audit-caller-reconciliation-2026-10-07.md) reads 337 production functions and reviews 153 secondary entries; remaining entrypoints, method behavior and table mutation/read paths stay open |
 
 ## Authentication and database
 
@@ -131,8 +134,8 @@ coverage includes shared helpers that do not end in `service.ts`.
 | GEN-04 | Genuine provider/edge delivery, replay and lost-response behavior | external | Provider-controlled fixture/event evidence remains absent; no paid generation as an incidental probe |
 | GEN-05 | Remaining catalog/quote/admission/model verification and generation lifecycle behaviors | untested | Review the 19 assigned API routes and shared quota/cost paths; reuse existing certificates where applicable |
 | WORKFLOW-01 | Canvas/child/run-step ownership and start admission fixes | passed | [Workflow ownership](backend-section-02-workflow-release-2026-09-27.md), [RPC admission](backend-section-03-rpc-release-2026-09-27.md) |
-| WORKFLOW-02 | Execute, partially fail, restart, retry, approve and cancel runs | untested | [7E](backend-section-07-canvas-persistence-2026-10-03.md) reproduces accepted-task loss from a failed link write; [7F](backend-section-07-atomic-approval-2026-10-03.md) reproduces stranded partial approval. Both are released: [7E](backend-section-07-canvas-persistence-release-2026-10-03.md), [7F](backend-section-07-atomic-approval-release-2026-10-03.md). Template completion/worker death evidence is in [7C/D](backend-section-07-completion-recovery-release-2026-10-03.md); broader canvas recovery remains open |
-| WORKFLOW-03 | Billing conservation and idempotency across retry/cancel/recovery | untested | 7A/7C/D template SQL evidence and 7E/7F real canvas image/video holds, refunds, retries and duplicate settlement are recorded; remaining interruption and provider/Storage cases stay open |
+| WORKFLOW-02 | Execute, partially fail, restart, retry, approve and cancel runs | untested | [7E](backend-section-07-canvas-persistence-release-2026-10-03.md) and [7F](backend-section-07-atomic-approval-release-2026-10-03.md) fixes are released. Template completion/worker death evidence is in [7C/D](backend-section-07-completion-recovery-release-2026-10-03.md). [11P](backend-section-11-canvas-worker-recovery-2026-10-07.md) adds real SIGKILL/restart after claim, task attachment and step linking; all 21 actual database cases pass locally with zero fixtures. Wider action, transport and provider/Storage recovery remain open |
+| WORKFLOW-03 | Billing conservation and idempotency across retry/cancel/recovery | untested | 7A/7C/D template SQL evidence and 7E/7F real canvas image/video holds, refunds, retries and duplicate settlement are recorded. [11P actual worker death](backend-section-11-canvas-worker-recovery-2026-10-07.md) adds three restart boundaries with one accepted image/hold and exact duplicate settlement/video refund conservation; all 21 database cases pass locally. Remaining provider/Storage and action orderings stay open |
 | WORKFLOW-04 | Template publication, sharing/import, assistant proposal application and input ownership | untested | [7G](backend-section-07-assistant-discard-2026-10-03.md) reproduces applied-state overwrite and false discard success; [7G release verified](backend-section-07-assistant-discard-release-2026-10-04.md). [7H](backend-section-07-canvas-authoring-2026-10-03.md) also reproduces stale restore overwrite and publication revision regression; [7H release verified](backend-section-07-canvas-authoring-release-2026-10-04.md). [7I](backend-section-07-share-import-count-2026-10-04.md) reproduces two imported copies counted as one; eight SQL cases pass and [7I is released](backend-section-07-share-import-release-2026-10-04.md). [7J](backend-section-07-assistant-apply-2026-10-04.md) adds ten permanent apply controls; [7J release verified](backend-section-07-assistant-apply-release-2026-10-04.md). [7K](backend-section-07-template-inputs-2026-10-04.md) reproduces concurrent finalization orphaning; seven real local Storage/HTTP and five service controls pass; [7K release verified](backend-section-07-template-inputs-release-2026-10-04.md). [7B publication fix released](backend-section-07-publication-release-2026-10-03.md); [36-method inventory](backend-section-07-method-matrix-2026-10-03.md) records remaining actual Storage, cross-user, stale-version and authoring cases |
 | MEDIA-01 | Cleanup retry/concurrency and allocation-failure source cancellation | passed | [6H release](backend-section-06-staging-cleanup-release-2026-10-01.md) |
 | MEDIA-02 | Published dead-owner cleanup and inherited reader protection | passed | [6J release](backend-section-06-staging-locks-release-2026-10-01.md); no claim about legacy scratch |

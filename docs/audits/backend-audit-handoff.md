@@ -6,10 +6,34 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/backend-restore-audit-11m`, based on merged #390 and adding recovery evidence. The user receipt/evidence edits remain untouched.
+Current checkout: `codex/backend-map-recovery-11o`, based on verified #391 and adding current catalog/caller mapping and canvas worker recovery evidence. The user receipt/evidence edits remain untouched.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+Recovery/protocol evidence #391 is independently verified live as
+3f04cb16f9435d8a20735a2ac7ca7514db9ddb3a at October 7 04:24:57 UTC.
+Exact-head Quality 37567181374, exact-main Quality 37567982126 and standard
+release 37568927963 pass all jobs. It merged at 03:42:15 UTC, and the standard
+release completed 03:57:45 UTC. Exact live/project, unchanged schema/all 110
+advisors and 200/307/401 smoke pass. See the 11M/N release report. No runtime
+or migration change; actual managed backup recovery remains open.
+
+11O refreshes production/source mapping on that same build at 04:25:24 UTC:
+162 routes, 201 services, 337 functions, 138 relations, 12 jobs and zero
+unassigned routes. All 14 added functions/two added tables have existing test
+and release links; the 14 function definitions/role grants match clean replay.
+153 secondary entries classify as 86 catalog-bound, nine source/operator,
+34 inspected SQL and the same 24 retained compatibility entries. Earlier
+snapshots are preserved; no grant/function removal or behavioral closure.
+
+11P adds three real owned worker SIGKILL/restart cases after queue claim,
+provider-task attachment and step linking, with exactly one accepted image/hold,
+duplicate settlement, downstream approval/video refund and independent zero
+fixture cleanup. The full 21-case canvas DB suite, test types, lint and diff
+checks pass locally. The first harness assertion used a nonexistent DTO field;
+the corrected stored-settlement assertion passes without a runtime fix. The
+next exact-head CI/release gates remain; broader WORKFLOW-02/03 stay untested.
 
 Wallet #385 is independently verified live October 6 20:34:11 UTC as
 c3995ddc8e5ca1b29fb7a777e62300e844043900. Refreshed candidate 476b2463 passes

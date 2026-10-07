@@ -1,4 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
+import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { Client } from 'pg';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,6 +37,7 @@ vi.mock('@/lib/generation-input-media', async (original) => ({
   persistGenerationInputMedia: async () => undefined,
 }));
 const connectionString = process.env.SUPABASE_TEST_DB_URL;
+const crashWorker = process.env.CANVAS_AUDIT_WORKER === 'true';
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 /** Functions that return rows and are read as a table. Every other one returns a single value. */
 const ROW_FUNCTIONS = new Set(['initialize_workflow_canvas_run', 'claim_workflow_run_step_jobs', 'list_stalled_workflow_runs_without_live_jobs']);
@@ -54,7 +60,7 @@ function databaseError(error: unknown) {
 }
 
 /** The PostgREST calls the run worker, the start service and the job queue make, over one connection. */
-function databaseClient(db: Client, afterWrite?: (table: string, updates: Record<string, unknown>) => void, afterRpc?: (name: string, data: unknown) => void): SupabaseClient {
+function databaseClient(db: Client, afterWrite?: (table: string, updates: Record<string, unknown>) => void | Promise<void>, afterRpc?: (name: string, data: unknown) => void | Promise<void>): SupabaseClient {
   return {
     from(table: string) {
       identifier(table);
@@ -81,7 +87,7 @@ function databaseClient(db: Client, afterWrite?: (table: string, updates: Record
             `update public.${table} set ${keys.map((key, index) => `${key}=$${values.length + index + 1}`).join(',')}${where} returning *`,
             [...values, ...Object.values(update).map(writable)],
           )).rows;
-          afterWrite?.(table, update);
+          await afterWrite?.(table, update);
           return rows;
         }
         return (await db.query(
@@ -154,7 +160,7 @@ function databaseClient(db: Client, afterWrite?: (table: string, updates: Record
           Object.values(args).map(writable),
         );
         const data = ROW_FUNCTIONS.has(name) ? rows : rows[0].result;
-        afterRpc?.(name, data);
+        await afterRpc?.(name, data);
         return { data, error: null };
       } catch (error) {
         return { data: null, error: databaseError(error) };
@@ -177,7 +183,39 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
-describe.skipIf(!connectionString)('canvas execution and billing with real PostgreSQL', () => {
+it.skipIf(!connectionString || !crashWorker)('isolated canvas audit worker', async () => {
+  expect(['localhost', '127.0.0.1']).toContain(new URL(connectionString!).hostname);
+  const directory = process.env.CANVAS_AUDIT_DIRECTORY!;
+  const db = new Client({ connectionString, statement_timeout: 10_000 });
+  await db.connect();
+  async function barrier(name: string) {
+    if (name !== process.env.CANVAS_AUDIT_POINT) return;
+    await writeFile(join(directory, 'barrier.json'), JSON.stringify({ name, pid: process.pid }));
+    await new Promise<void>(() => {});
+  }
+  try {
+    await db.query('set role service_role');
+    const client = databaseClient(db, async (table, updates) => {
+      if (table === 'workflow_canvas_run_steps' && updates.generation_id) await barrier(table);
+    }, async (name, data) => {
+      if (name === 'claim_workflow_run_step_jobs' && !Array.isArray(data)) throw new Error('Invalid claim result');
+      await barrier(name);
+    });
+    service.client = client;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      await appendFile(join(directory, 'provider-calls'), 'accepted\n');
+      return json({ code: 200, data: { taskId: `task-${randomUUID()}` } });
+    }));
+    const result = await processWorkflowRunStepJobs({ supabase: client, lockedBy: randomUUID(), limit: 1, concurrency: 1 });
+    await writeFile(join(directory, 'result.json'), JSON.stringify(result));
+  } finally {
+    service.client = null;
+    vi.unstubAllGlobals();
+    await db.end();
+  }
+}, 30_000);
+
+describe.skipIf(!connectionString || crashWorker)('canvas execution and billing with real PostgreSQL', () => {
   let admin: Client;
   let worker: Client;
   let owner: Client;
@@ -244,6 +282,14 @@ describe.skipIf(!connectionString)('canvas execution and billing with real Postg
     await admin.query('delete from public.workflow_canvases where id=$1', [canvasId]);
     await admin.query('delete from public.generations where user_id=$1', [userId]);
     await admin.query('delete from auth.users where id=$1', [userId]);
+    expect((await admin.query(`select
+      (select count(*) from auth.users where id=$1)::int as users,
+      (select count(*) from public.profiles where id=$1)::int as profiles,
+      (select count(*) from public.generations where user_id=$1)::int as generations,
+      (select count(*) from public.workflow_canvases where id=$2)::int as canvases,
+      (select count(*) from public.workflow_canvas_runs where canvas_id=$2)::int as runs,
+      (select count(*) from public.workflow_run_step_jobs where canvas_id=$2)::int as jobs`, [userId, canvasId])).rows[0])
+      .toEqual({ users: 0, profiles: 0, generations: 0, canvases: 0, runs: 0, jobs: 0 });
   });
   async function start(key = 'canvas-fixture', mode: 'branch' | 'node' = 'branch') {
     const result = await executeWorkflowRun({ supabase: client, userId, canvasId, graph, startNodeId: imageId, mode, idempotencyKey: key });
@@ -282,6 +328,84 @@ describe.skipIf(!connectionString)('canvas execution and billing with real Postg
     expect((await details()).status).toBe('awaiting_approval');
     return generations[0];
   }
+
+  it.each(['claim_workflow_run_step_jobs', 'attach_generation_provider_task', 'workflow_canvas_run_steps'])
+    ('recovers an actually killed canvas worker after %s without duplicate billing', async point => {
+      await start();
+      // A processor claims globally. Refuse to exercise any unrelated fixture.
+      expect((await admin.query("select count(*)::int as count from public.workflow_run_step_jobs where run_id<>$1 and status in ('pending','processing')", [runId])).rows[0].count).toBe(0);
+      const directory = await mkdtemp(join(tmpdir(), 'canvas-audit-crash-'));
+      const children = new Set<ChildProcess>();
+      function launch(stopAt = '') {
+        const child = spawn(process.execPath, [resolve('node_modules/vitest/vitest.mjs'), 'run',
+          'src/__tests__/workflow-run-lifecycle-database.test.ts', '-t', '^isolated canvas audit worker$'], {
+          detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+          env: { ...process.env, CANVAS_AUDIT_WORKER: 'true', CANVAS_AUDIT_POINT: stopAt, CANVAS_AUDIT_DIRECTORY: directory },
+        });
+        children.add(child);
+        let output = '';
+        child.stdout.on('data', chunk => { output += chunk.toString(); });
+        child.stderr.on('data', chunk => { output += chunk.toString(); });
+        const closed = once(child, 'close').then(([code, signal]) => { children.delete(child); return { code, signal }; });
+        return { child, closed, output: () => output };
+      }
+      async function recover() {
+        const worker = launch();
+        expect((await worker.closed).code, worker.output()).toBe(0);
+        return JSON.parse(await readFile(join(directory, 'result.json'), 'utf8'));
+      }
+      try {
+        const worker = launch(point);
+        const deadline = Date.now() + 20_000;
+        while (Date.now() < deadline) {
+          if (await readFile(join(directory, 'barrier.json'), 'utf8').catch(() => '')) break;
+          if (!children.has(worker.child)) throw new Error(worker.output());
+          await new Promise(resolve => setTimeout(resolve, 40));
+        }
+        const barrier = JSON.parse(await readFile(join(directory, 'barrier.json'), 'utf8'));
+        expect(barrier).toMatchObject({ name: point, pid: expect.any(Number) });
+        process.kill(-worker.child.pid!, 'SIGKILL');
+        expect((await worker.closed).signal).toBe('SIGKILL');
+        const before = await rows();
+        expect(before).toHaveLength(point === 'claim_workflow_run_step_jobs' ? 0 : 1);
+        expect((await admin.query('select status from public.workflow_run_step_jobs where run_id=$1', [runId])).rows)
+          .toEqual([{ status: 'processing' }]);
+        expect(await balance()).toBe(initialCredits - before.reduce((sum, row) => sum + row.cost, 0));
+        expect(await recover()).toMatchObject({ claimed: 0 });
+        // Age only this fixture's lease. This proves TTL eligibility, not actual elapsed time.
+        await admin.query("update public.workflow_run_step_jobs set locked_at=now()-interval '301 seconds',heartbeat_at=now()-interval '301 seconds' where run_id=$1 and status='processing'", [runId]);
+        expect(await recover()).toMatchObject({ claimed: 1, deferred: 1, retried: 0, exhausted: 0 });
+        const [image] = await rows();
+        expect(await rows()).toHaveLength(1);
+        if (before.length) expect(image).toEqual(before[0]);
+        expect(image.status).toBe('processing');
+        expect(await balance()).toBe(initialCredits - image.cost);
+        expect((await details()).steps.find(step => step.node_id === imageId)?.generation_id).toBe(image.id);
+        expect((await readFile(join(directory, 'provider-calls'), 'utf8')).trim().split('\n')).toEqual(['accepted']);
+        expect(await recover()).toMatchObject({ claimed: 0 });
+        await settle(image, true); await settle(image, true); await tick();
+        expect((await details()).status).toBe('awaiting_approval');
+        await approve(); await tick();
+        const generations = await rows();
+        expect(generations).toHaveLength(2);
+        const video = generations.find(row => row.id !== image.id)!;
+        expect(await balance()).toBe(initialCredits - image.cost - video.cost);
+        await settle(video, false); await settle(video, false); await tick();
+        expect((await details()).status).toBe('failed');
+        expect((await rows()).find(row => row.id === image.id)).toMatchObject({ status: 'succeeded', refunded: false });
+        expect((await rows()).find(row => row.id === video.id)).toMatchObject({ status: 'failed', refunded: true });
+        expect(await balance()).toBe(initialCredits - image.cost);
+        expect(fetch).toHaveBeenCalledTimes(1);
+      } finally {
+        const remaining = [...children];
+        const closed = remaining.map(child => once(child, 'close'));
+        for (const child of remaining) {
+          try { process.kill(-child.pid!, 'SIGKILL'); } catch { /* Already exited. */ }
+        }
+        await Promise.all(closed);
+        await rm(directory, { recursive: true, force: true });
+      }
+    }, 60_000);
 
   it('starts one durable run, executes real nodes through approval and video, and settles duplicate callbacks once', async () => {
     const first = await start();
