@@ -6,10 +6,31 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/backend-credit-order-inputs-11z`, combining #399/#400 and the reproduced credit-order root fix for one final release. The user receipt/evidence edits remain untouched.
+Current checkout: `codex/backend-marketplace-order-inputs-12a`, extending the verified-parent release chain with reproduced commerce parsing fixes. The user receipt/evidence edits remain untouched.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+12A reproduces eleven actual exception/500 cases across marketplace/resource
+orders and three payment-verification handlers, plus a resource null-root lookup
+ordering case. Object guards/SyntaxError handling now preserve private 400s.
+All 97 actual Auth/session/PostgREST/SQL cases and 91 focused cases, app/test
+types, scoped lint and diff pass; independent order/transaction/intent/fixture
+counts are zero. No provider or production balance mutation. Read
+backend-section-12-commerce-inputs-2026-10-07.md. MAP-02 remains failed until
+this and the combined input release are independently verified.
+
+#398 is independently verified live as ff3a70be at 07:34:16 UTC. Exact-main
+Quality 37583034551 and standard release 37583940527 pass, schema/all 110
+advisors unchanged, smoke 200/307/401. See
+backend-section-11-showcase-worker-death-release-2026-10-07.md.
+#401 combined 11X/Y/Z head ae248eb8105d5a55460ec6be753e4531d07a8dcc passes
+all five jobs in Quality 37583632596. Fresh independently verified #398/schema/
+advisors/live/main and immediate mobile-store idle gates pass. It merged at
+07:35:23 UTC as 0dbef436224bafae647f8a40979daad8a4d5bb90. Exact-main Quality
+37588261608 is running; standard release and credit-inputs-combined-release/
+independent readback remain. #399/#400 are closed as superseded, their changes
+included in #401. No customer historical adjustment was repaired.
 
 Release organization: 11X/11Y/11Z are combined into the final
 codex/backend-credit-order-inputs-11z candidate, based on the verified #398

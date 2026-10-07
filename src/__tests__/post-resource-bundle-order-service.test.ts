@@ -9,7 +9,9 @@ import { ExternalServiceTimeoutError } from '@/lib/provider-fetch';
 type CreateBundleOrderInput = Parameters<typeof createPostResourceBundleOrderForRouteImpl>[0];
 
 function createPostResourceBundleOrderForRoute(
-  input: Omit<CreateBundleOrderInput, 'fetchRazorpayOrderByReceipt'>,
+  input: Omit<CreateBundleOrderInput, 'fetchRazorpayOrderByReceipt' | 'readBody'> & {
+    readBody: () => Promise<Record<string, unknown>>;
+  },
 ) {
   const originalReadBody = input.readBody;
   return createPostResourceBundleOrderForRouteImpl({

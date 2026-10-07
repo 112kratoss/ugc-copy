@@ -6,6 +6,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { deriveAccountIdentityFingerprints } from '@/lib/account-identity-fingerprint';
 import { ADMIN_SESSION_COOKIE, createAdminSessionToken, deriveAdminCredentialVersion } from '@/lib/admin-session-token';
 import { insertAdminSession } from '@/lib/admin-session-store';
+import { postMarketplaceVerifyRouteResponse } from '@/lib/marketplace-verify-route-adapter-service';
+import { postPostResourceBundleVerifyRouteResponse } from '@/lib/post-resource-bundle-verify-route-adapter-service';
+import { postRazorpayCreditVerifyRouteResponse } from '@/lib/razorpay-credit-verify-route-adapter-service';
+import { postMarketplaceOrderRouteResponse } from '@/lib/marketplace-order-route-adapter-service';
+import { postPostResourceBundleOrderRouteResponse } from '@/lib/post-resource-bundle-order-route-adapter-service';
 import { postRazorpayCreditOrderRouteResponse } from '@/lib/razorpay-credit-order-route-adapter-service';
 import { postAdminCreditAdjustment } from '@/lib/admin-credit-route-adapter-service';
 import { patchOnboardingStateRouteResponse, postWelcomeCreditsClaimRouteResponse, postOnboardingEventRouteResponse } from '@/lib/onboarding-route-adapter-service';
@@ -71,10 +76,12 @@ describe.skipIf(!configPath || !connectionString)('onboarding and admin credit i
         (select count(*) from public.admin_credit_adjustments where user_id=$1 or reviewer_id=$1)::int as adjustments,
         (select count(*) from public.credit_grants where user_id=$1)::int as grants,
         (select count(*) from public.credit_grant_identity_fingerprints where fingerprint=any($3::text[]))::int as fingerprints,
-        (select count(*) from public.transactions where user_id=$1)::int as transactions,
+        (select count(*) from public.marketplace_orders where buyer_user_id=$1)::int as marketplace_orders,
+      (select count(*) from public.post_resource_bundle_orders where buyer_user_id=$1)::int as resource_orders,
+      (select count(*) from public.transactions where user_id=$1)::int as transactions,
       (select count(*) from public.razorpay_checkout_intents where user_id=$1)::int as checkout_intents,
       (select count(*) from public.ai_usage_events where user_id=$1)::int as usage`, [reviewerId,eventIds,fingerprints])).rows[0])
-        .toEqual({...expectedRows,grants:0,fingerprints:0,transactions:0,checkout_intents:0,usage:0});
+        .toEqual({...expectedRows,grants:0,fingerprints:0,transactions:0,checkout_intents:0,marketplace_orders:0,resource_orders:0,usage:0});
     } finally {
       await db.query('delete from public.onboarding_events where client_event_id=any($1::uuid[])', [eventIds]);
       await db.query('delete from public.admin_credit_adjustments where user_id=$1 or reviewer_id=$1', [reviewerId]);
@@ -93,10 +100,12 @@ describe.skipIf(!configPath || !connectionString)('onboarding and admin credit i
       (select count(*) from public.admin_credit_adjustments where user_id=$1 or reviewer_id=$1)::int as adjustments,
       (select count(*) from public.credit_grants where user_id=$1)::int as grants,
       (select count(*) from public.credit_grant_identity_fingerprints where fingerprint=any($5::text[]))::int as fingerprints,
+      (select count(*) from public.marketplace_orders where buyer_user_id=$1)::int as marketplace_orders,
+      (select count(*) from public.post_resource_bundle_orders where buyer_user_id=$1)::int as resource_orders,
       (select count(*) from public.transactions where user_id=$1)::int as transactions,
       (select count(*) from public.razorpay_checkout_intents where user_id=$1)::int as checkout_intents,
       (select count(*) from public.ai_usage_events where user_id=$1)::int as usage`, [reviewerId,sessionId,[reviewerId,...installationIds],eventIds,fingerprints])).rows[0])
-      .toEqual({users:0,profiles:0,sessions:0,rates:0,states:0,events:0,adjustments:0,grants:0,fingerprints:0,transactions:0,checkout_intents:0,usage:0});
+      .toEqual({users:0,profiles:0,sessions:0,rates:0,states:0,events:0,adjustments:0,grants:0,fingerprints:0,transactions:0,checkout_intents:0,marketplace_orders:0,resource_orders:0,usage:0});
   });
 
   it.each(routes)('rejects null before a state, reward or credit mutation: $path',async route=>{
@@ -178,6 +187,52 @@ describe.skipIf(!configPath || !connectionString)('onboarding and admin credit i
     })});
     expect(response.status).toBe(400);expect(response.headers.get('cache-control')).toContain('no-store');
     expect((await db.query('select id from public.transactions where user_id=$1',[reviewerId])).rows).toEqual([]);
+  });
+
+  it.each(['null','[]','5','true','"scalar"','{',''])('rejects marketplace order root %s before provider activity',async raw=>{
+    const response=await postMarketplaceOrderRouteResponse({request:new Request('http://127.0.0.1/api/marketplace/order',{
+      method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${bearer}`},body:raw,
+    })});
+    expect(response.status).toBe(400);expect(response.headers.get('cache-control')).toContain('no-store');
+  });
+  it.each(['null','[]','5','true','"scalar"','{',''])('rejects resource order root %s before lookup/provider activity',async raw=>{
+    const postId=randomUUID();
+    const response=await postPostResourceBundleOrderRouteResponse({request:new Request(`http://127.0.0.1/api/posts/${postId}/resource-bundle/order`,{
+      method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${bearer}`},body:raw,
+    }),context:{params:Promise.resolve({postId})}});
+    expect(response.status).toBe(400);expect(response.headers.get('cache-control')).toContain('no-store');
+  });
+
+  it.each(['marketplace','resource'])('authenticates %s order requests before reading malformed JSON',async kind=>{
+    const postId=randomUUID();
+    const request=new Request(kind==='marketplace'?'http://127.0.0.1/api/marketplace/order':`http://127.0.0.1/api/posts/${postId}/resource-bundle/order`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{'});
+    const response=kind==='marketplace'?await postMarketplaceOrderRouteResponse({request}):await postPostResourceBundleOrderRouteResponse({request,context:{params:Promise.resolve({postId})}});
+    expect(response.status).toBe(401);expect(response.headers.get('cache-control')).toContain('no-store');
+  });
+  it('preserves a valid object resource request and missing-resource response',async()=>{
+    const postId=randomUUID();
+    const response=await postPostResourceBundleOrderRouteResponse({request:new Request(`http://127.0.0.1/api/posts/${postId}/resource-bundle/order`,{
+      method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${bearer}`},body:'{}',
+    }),context:{params:Promise.resolve({postId})}});
+    expect(response.status).toBe(404);expect(response.headers.get('cache-control')).toContain('no-store');
+  });
+
+  it.each([
+    {path:'/api/marketplace/verify',handler:postMarketplaceVerifyRouteResponse},
+    {path:'/api/posts/10000000-0000-4000-8000-000000000001/resource-bundle/verify',handler:postPostResourceBundleVerifyRouteResponse},
+    {path:'/api/razorpay/verify',handler:postRazorpayCreditVerifyRouteResponse},
+  ].flatMap(route=>['null','[]','5','true','"scalar"','{',''].map(raw=>({...route,raw}))))('rejects payment verification root $raw on $path before provider activity',async({path,handler,raw})=>{
+    const response=await handler({request:new Request('http://127.0.0.1'+path,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${bearer}`},body:raw})});
+    expect(response.status).toBe(400);expect(response.headers.get('cache-control')).toContain('no-store');
+  });
+
+  it.each([
+    {path:'/api/marketplace/verify',handler:postMarketplaceVerifyRouteResponse,status:401},
+    {path:'/api/posts/10000000-0000-4000-8000-000000000001/resource-bundle/verify',handler:postPostResourceBundleVerifyRouteResponse,status:401},
+    {path:'/api/razorpay/verify',handler:postRazorpayCreditVerifyRouteResponse,status:400},
+  ])('preserves unsigned native validation ordering at $path',async({path,handler,status})=>{
+    const response=await handler({request:new Request('http://127.0.0.1'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:'{'})});
+    expect(response.status).toBe(status);expect(response.headers.get('cache-control')).toContain('no-store');
   });
 
 });

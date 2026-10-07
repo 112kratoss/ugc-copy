@@ -102,7 +102,10 @@ export async function verifyPostResourceBundlePaymentForRoute({
     return { ok: false, status: 500, body: { error: 'Failed to verify order.' } };
   }
 
-  const body = normalizeBody(await readBody());
+  const body = normalizeBody(await readBody().catch((error: unknown) => {
+    if (error instanceof SyntaxError) return null;
+    throw error;
+  }));
   const razorpayOrderId = normalizeString(body.razorpay_order_id);
   const razorpayPaymentId = normalizeString(body.razorpay_payment_id);
   const razorpaySignature = normalizeString(body.razorpay_signature);
