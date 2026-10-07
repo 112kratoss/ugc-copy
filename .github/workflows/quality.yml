@@ -295,6 +295,9 @@ jobs:
       - name: Test onboarding and admin credit inputs with real Auth and SQL
         run: npx vitest run --config vitest.auth-credit-inputs-postgrest.config.ts
 
+      - name: Test referral notification recovery with real SQL and local HTTP
+        run: npx vitest run --config vitest.referral-recovery-postgrest.config.ts
+
       - name: Stop isolated Supabase API stack
         if: always()
         continue-on-error: true

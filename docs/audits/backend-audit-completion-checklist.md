@@ -1,16 +1,18 @@
 # Backend audit completion checklist
 
 Updated 2026-10-07. Current independently checked production:
-`ff3a70beebea323b95da6bfc9969fcea12972ba1`, including Sections 9A–9O, 10A–I and 11A–W.
+`aea299676ff0f17a5b5c93eff8bbeef03caac0eb`, including Sections 9A–9O, 10A–I, 11A–Z and 12A.
+[12A release evidence](backend-section-12-commerce-inputs-release-2026-10-07.md).
+[11X–Z release evidence](backend-section-11-credit-inputs-release-2026-10-07.md).
 [11W release evidence](backend-section-11-showcase-worker-death-release-2026-10-07.md).
 [11V release evidence](backend-section-11-showcase-revocation-release-2026-10-07.md).
 [11U release evidence](backend-section-11-moderation-storage-release-2026-10-07.md).
 [11T release evidence](backend-section-11-admin-moderation-inputs-release-2026-10-07.md).
 [11Q/R release evidence](backend-section-11-workflow-inputs-release-2026-10-07.md).
 [11S release evidence](backend-section-11-template-publication-release-2026-10-07.md).
-PR #401 combines 11X/Y/Z and is merged as 0dbef436; exact-main CI, standard
-release and independent readback remain. #399/#400 are superseded and closed.
-12A commerce parsing passes local checks and awaits its own gates/verified parent.
+PR #401 is independently verified; #399/#400 are superseded and closed.
+12A #402 is independently verified after candidate/main CI and the unchanged
+second standard release attempt. Referral notification recovery 12B remains local.
 [11O/P release evidence](backend-section-11-map-recovery-release-2026-10-07.md).
 [11M/N release evidence](backend-section-11-recovery-evidence-release-2026-10-07.md).
 [11L release evidence](backend-section-11-legacy-binding-release-2026-10-07.md).
@@ -50,7 +52,7 @@ unequal effort and risk. Do not turn their pass count into a percentage of backe
 safety or an ETA. New findings attach to these obligations; changes in scope must
 be recorded explicitly instead of silently adding another lettered batch.
 
-Current ledger: **53 obligations — 24 passed, 24 untested, 3 failed, 2 external**.
+Current ledger: **53 obligations — 24 passed, 25 untested, 2 failed, 2 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
 WORKFLOW-02 remains untested after its scoped fixes shipped. WORKFLOW-04 returns
 to untested after the verified 11Q validation fix. SOCIAL-03 also returns to
@@ -60,10 +62,9 @@ DB-04 passes for the current empty Realtime publication; enabling table streams 
 SOCIAL-03 remains untested for its broader matrix after 11T. MEDIA-07
 remains failed for legacy retirement. MEDIA-09 returns to untested after its
 independently verified 11V revocation fix; broader recovery remains open.
-MAP-02 is failed for the reproduced 11X/11Z input failures until both releases
-are verified. PAY-04 is failed for the three 11Y admin balance failures
-until its prevention release is verified; a historical promotional-only row
-needs review. No new obligation was added; these fixes do not complete
+MAP-02 returns to untested after the verified 11X/11Z/12A releases. PAY-04 retains its failed status for historical reconciliation: the three 11Y
+admin balance failures have a verified prevention release, but a historical
+promotional-only row still needs intent/activity review. No new obligation was added; these fixes do not complete
 the broader matrices.
 
 Status meanings: **passed** has evidence for the stated scope; **failed** has a
@@ -108,7 +109,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | ID | Obligation and closure evidence | Status | Evidence / next action |
 | --- | --- | --- | --- |
 | MAP-01 | Capture route/service/job/public-catalog inventory and assign review gates | passed | [Current production surface map](backend-audit-surface-map-2026-10-07.json); 162 routes, 201 services, 337 functions, 138 relations, 12 jobs; 0 unassigned routes. [Reconciliation](backend-audit-caller-reconciliation-2026-10-07.md) preserves earlier snapshots and separates inventory from behavior |
-| MAP-02 | Reconcile method-level behaviors, non-API entrypoints, SQL/trigger callers, mobile direct access, edge and operational scripts to this ledger | failed | [12A commerce inputs](backend-section-12-commerce-inputs-2026-10-07.md) reproduces eleven exception/500 cases; 97 actual/91 focused controls pass, with release pending. [11Z order inputs](backend-section-11-credit-order-inputs-2026-10-07.md) reproduce six malformed-root cases; 56 actual/33 focused controls pass, with release pending. [11X input guards](backend-section-11-auth-credit-inputs-2026-10-07.md) reproduce four native Auth/admin-session failures; 37 actual and 37 focused cases pass after validation, with CI/release pending. [Explicit HTTP method map](backend-audit-http-method-map-2026-10-04.md) records 162 routes/186 methods, including 35 social routes/45 methods. Static paths remain scheduling evidence; [Current caller reconciliation](backend-audit-caller-reconciliation-2026-10-07.md) reads 337 production functions and reviews 153 secondary entries; remaining entrypoints, method behavior and table mutation/read paths stay open |
+| MAP-02 | Reconcile method-level behaviors, non-API entrypoints, SQL/trigger callers, mobile direct access, edge and operational scripts to this ledger | untested | [12A commerce inputs](backend-section-12-commerce-inputs-2026-10-07.md) reproduces eleven exception/500 cases; 97 actual/91 focused controls pass, with [release verified](backend-section-12-commerce-inputs-release-2026-10-07.md). [11Z order inputs](backend-section-11-credit-order-inputs-2026-10-07.md) reproduce six malformed-root cases; 56 actual/33 focused controls pass, with [release verified](backend-section-11-credit-inputs-release-2026-10-07.md). [11X input guards](backend-section-11-auth-credit-inputs-2026-10-07.md) reproduce four native Auth/admin-session failures; 37 actual and 37 focused cases pass after validation, with verified release. [Explicit HTTP method map](backend-audit-http-method-map-2026-10-04.md) records 162 routes/186 methods, including 35 social routes/45 methods. Static paths remain scheduling evidence; [Current caller reconciliation](backend-audit-caller-reconciliation-2026-10-07.md) reads 337 production functions and reviews 153 secondary entries; remaining entrypoints, method behavior and table mutation/read paths stay open |
 
 ## Authentication and database
 
@@ -133,8 +134,8 @@ coverage includes shared helpers that do not end in `service.ts`.
 | PAY-01 | Credit grant identity/idempotency regressions | passed | [Credit grant release](backend-section-05-credit-grants-release-2026-09-28.md) |
 | PAY-02 | Receipt/event identity and reversal target binding regressions | passed | [Receipt release](backend-section-05-receipt-identity-release-2026-09-29.md), [binding release](backend-section-05-credit-event-binding-release-2026-09-29.md), [event history](backend-section-05-mobile-event-history-release-2026-09-29.md) |
 | PAY-03 | Reproduced refund/restore ordering and debt cases | passed | [Refund release](backend-section-05-refund-ordering-release-2026-09-28.md); the full event lifecycle matrix is PAY-04 |
-| PAY-04 | Remaining credit, referral, refund/dispute/restore and reconciliation combinations | failed | [11Y admin balances](backend-section-11-admin-credit-balances-2026-10-07.md) reproduces three incorrect total balances; 42 actual/50 focused controls pass after shared policy correction, with CI/release and historical review pending. [10E](backend-section-10-detached-cash-refunds-2026-10-06.md) reproduces detached refund rejection/deletion deadlock; [10E release verified](backend-section-10-detached-cash-refunds-release-2026-10-06.md). [10F](backend-section-10-deletion-freeze-refunds-2026-10-06.md) [10F release verified](backend-section-10-deletion-freeze-refunds-release-2026-10-06.md) fixes retry-state freezes. [10G/I](backend-section-10-cash-webhook-retries-2026-10-06.md) add signed delivery/retry controls. Broader orderings stay open. |
-| PAY-05 | Genuine purchase/refund/webhook delivery and installed-client restore | external | Provider test credentials/accounts were unavailable in prior batches; synthetic events do not close this row |
+| PAY-04 | Remaining credit, referral, refund/dispute/restore and reconciliation combinations | failed | [12B referral notifications](backend-section-12-referral-notification-recovery-2026-10-07.md) reproduces lost notification recovery after committed settlement; local prevention and release gates are in progress.  [11Y admin balances](backend-section-11-admin-credit-balances-2026-10-07.md) reproduces three incorrect total balances; 42 actual/50 focused controls pass after shared policy correction, with [prevention release verified](backend-section-11-credit-inputs-release-2026-10-07.md) and real browser confirmation; historical reconciliation remains pending. [10E](backend-section-10-detached-cash-refunds-2026-10-06.md) reproduces detached refund rejection/deletion deadlock; [10E release verified](backend-section-10-detached-cash-refunds-release-2026-10-06.md). [10F](backend-section-10-deletion-freeze-refunds-2026-10-06.md) [10F release verified](backend-section-10-deletion-freeze-refunds-release-2026-10-06.md) fixes retry-state freezes. [10G/I](backend-section-10-cash-webhook-retries-2026-10-06.md) add signed delivery/retry controls. Broader orderings stay open. |
+| PAY-05 | Genuine purchase/refund/webhook delivery and installed-client restore | external | [Read-only RevenueCat check](backend-section-12-revenuecat-readback-2026-10-07.md) confirms six credit SKUs, default packages, production-only webhook and all eight sandbox receipts matching the current ledger; event history is empty. Real refund delivery and installed-client restore remain unverified; synthetic events do not close this row |
 | PAY-06 | Scoped payout transition and detached reporting defects | passed | [Payout release](backend-section-04-payouts-release-2026-09-27.md), [detached reporting](backend-section-05-payout-detached-reporting-release-2026-09-30.md) |
 | PAY-07 | Creator payout crash recovery and reconciliation to external transfer outcome | untested | No actual money transfer is authorized as an incidental probe; use suitable test facilities |
 | MARKET-01 | Scoped marketplace/bundle ownership and protected projection boundaries | passed | [Social/marketplace release](backend-section-02-social-marketplace-release-2026-09-27.md), [commerce release](backend-section-05-commerce-release-2026-09-28.md) |

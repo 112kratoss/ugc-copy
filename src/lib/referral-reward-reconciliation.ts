@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
 
 import { notifyReferralReward } from '@/lib/mobile-notifications';
+import { deliverReferralRewardNotifications, hasPendingReferralRewardNotifications, type ReferralNotificationDeliverySummary } from '@/lib/referral-reward-notifications';
 import {
   getReferralRewardNotifications,
   settleReferralPurchaseRewards,
@@ -24,7 +25,15 @@ export type ReferralRewardReconciliationSummary = {
   settled: number;
   failed: number;
   failures: ReferralRewardReconciliationFailure[];
+  notificationDelivery: ReferralNotificationDeliverySummary;
 };
+
+export class ReferralRewardReconciliationError extends Error {
+  constructor(readonly summary: ReferralRewardReconciliationSummary) {
+    super('Referral reconciliation has retryable failures');
+    this.name = 'ReferralRewardReconciliationError';
+  }
+}
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -91,7 +100,7 @@ export async function hasUnsettledReferralPurchaseTransactions(
   const transactionIds = await listUnsettledReferralPurchaseTransactionIds(adminSupabase, {
     limit: 1,
   });
-  return transactionIds.length > 0;
+  return transactionIds.length > 0 || await hasPendingReferralRewardNotifications(adminSupabase);
 }
 
 export async function reconcileReferralPurchaseRewards(
@@ -131,16 +140,22 @@ export async function reconcileReferralPurchaseRewards(
       };
       failures.push(failure);
       logBackendError('referral_reward_reconciliation_item_failed', {
-    transactionId,
+        transactionId,
         error: failure.error,
-  });
+      });
     });
   }
 
-  return {
+  const notificationDelivery = await deliverReferralRewardNotifications(adminSupabase);
+  const summary = {
     processed: transactionIds.length,
     settled,
     failed: failures.length,
     failures,
+    notificationDelivery,
   };
+  if (summary.failed > 0 || notificationDelivery.failed > 0) {
+    throw new ReferralRewardReconciliationError(summary);
+  }
+  return summary;
 }

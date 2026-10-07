@@ -1,0 +1,18 @@
+begin;
+create extension if not exists pgtap with schema extensions;
+set local search_path = public, extensions;
+select plan(12);
+select ok((select relrowsecurity from pg_class where oid='public.referral_reward_notification_outbox'::regclass), 'queue has RLS');
+select ok(not has_table_privilege('anon','public.referral_reward_notification_outbox','SELECT,INSERT,UPDATE,DELETE'), 'anonymous queue inaccessible');
+select ok(not has_table_privilege('authenticated','public.referral_reward_notification_outbox','SELECT,INSERT,UPDATE,DELETE'), 'authenticated queue inaccessible');
+select ok(has_table_privilege('service_role','public.referral_reward_notification_outbox','SELECT'), 'service can inspect queue');
+select ok(not has_table_privilege('service_role','public.referral_reward_notification_outbox','INSERT,UPDATE,DELETE'), 'service cannot forge queue state directly');
+select ok(not has_function_privilege('anon','public.has_pending_referral_reward_notifications()','EXECUTE'), 'anonymous work check denied');
+select ok(not has_function_privilege('authenticated','public.deliver_referral_reward_notifications(integer, text)','EXECUTE'), 'authenticated delivery denied');
+select ok(has_function_privilege('service_role','public.deliver_referral_reward_notifications(integer, text)','EXECUTE'), 'service delivery granted');
+select is(public.has_pending_referral_reward_notifications(), false, 'no historical replay queue');
+select is(public.deliver_referral_reward_notifications(100), '{"processed":0,"delivered":0,"failed":0}'::jsonb, 'empty delivery bounded');
+select throws_ok($$select public.deliver_referral_reward_notifications(101)$$, '22023', null, 'reject excessive batch');
+select throws_ok($$select public.deliver_referral_reward_notifications(null)$$, '22023', null, 'reject null batch');
+select * from finish();
+rollback;

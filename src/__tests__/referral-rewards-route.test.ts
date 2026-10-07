@@ -9,8 +9,9 @@ const reconciliationState = vi.hoisted(() => ({
   reconcile: vi.fn(async () => ({
     processed: 3,
     settled: 2,
-    failed: 1,
-    failures: [{ transactionId: 'transaction-2', error: 'temporary failure' }],
+    failed: 0,
+    failures: [],
+    notificationDelivery: { processed: 2, delivered: 2, failed: 0 },
   })),
 }));
 
@@ -33,7 +34,8 @@ const jobRunState = vi.hoisted(() => ({
   }) => ({ id: 'run-referral-1', ...options })),
 }));
 
-vi.mock('@/lib/referral-reward-reconciliation', () => ({
+vi.mock('@/lib/referral-reward-reconciliation', async () => ({
+  ...await vi.importActual<typeof import('@/lib/referral-reward-reconciliation')>('@/lib/referral-reward-reconciliation'),
   REFERRAL_REWARD_RECONCILIATION_BATCH_LIMIT: 100,
   hasUnsettledReferralPurchaseTransactions: reconciliationState.hasWork,
   reconcileReferralPurchaseRewards: reconciliationState.reconcile,
@@ -62,8 +64,9 @@ describe('referral reward reconciliation cron', () => {
     reconciliationState.reconcile.mockResolvedValue({
       processed: 3,
       settled: 2,
-      failed: 1,
-      failures: [{ transactionId: 'transaction-2', error: 'temporary failure' }],
+      failed: 0,
+      failures: [],
+    notificationDelivery: { processed: 2, delivered: 2, failed: 0 },
     });
     lockState.withLock.mockReset();
     lockState.withLock.mockImplementation(async (_client, _options, task: () => Promise<unknown>): Promise<LockMockResult> => ({
@@ -90,7 +93,7 @@ describe('referral reward reconciliation cron', () => {
     expect(reconciliationState.hasWork).not.toHaveBeenCalled();
   });
 
-  it('runs a bounded reconciliation and keeps per-item failures in a successful summary', async () => {
+  it('runs a bounded successful reconciliation and records notification delivery', async () => {
     vi.stubEnv('CRON_SECRET', 'secret');
     const { GET } = await import('@/app/api/cron/referral-rewards/route');
 
@@ -107,8 +110,9 @@ describe('referral reward reconciliation cron', () => {
       summary: {
         processed: 3,
         settled: 2,
-        failed: 1,
-        failures: [{ transactionId: 'transaction-2', error: 'temporary failure' }],
+        failed: 0,
+        failures: [],
+    notificationDelivery: { processed: 2, delivered: 2, failed: 0 },
       },
     });
     expect(jobRunState.start).toHaveBeenCalledWith(
@@ -136,7 +140,7 @@ describe('referral reward reconciliation cron', () => {
       expect.objectContaining({ id: 'run-referral-1' }),
       expect.objectContaining({
         status: 'succeeded',
-        summary: expect.objectContaining({ processed: 3, settled: 2, failed: 1 }),
+        summary: expect.objectContaining({ processed: 3, settled: 2, failed: 0 }),
       }),
     );
   });
@@ -166,6 +170,20 @@ describe('referral reward reconciliation cron', () => {
         status: 'skipped',
         skipReason: 'no_unsettled_referral_rewards',
       }),
+    );
+  });
+
+  it('fails the HTTP job and retains partial delivery evidence when an event is deferred', async () => {
+    vi.stubEnv('CRON_SECRET', 'secret');
+    const { ReferralRewardReconciliationError } = await import('@/lib/referral-reward-reconciliation');
+    const summary = { processed: 0, settled: 0, failed: 0, failures: [], notificationDelivery: { processed: 2, delivered: 1, failed: 1 } };
+    reconciliationState.reconcile.mockRejectedValueOnce(new ReferralRewardReconciliationError(summary));
+    const { GET } = await import('@/app/api/cron/referral-rewards/route');
+    const response = await GET(new Request('http://localhost/api/cron/referral-rewards', { headers: { authorization: 'Bearer secret' } }));
+    expect(response.status).toBe(500);
+    expect(jobRunState.finish).toHaveBeenCalledWith(
+      { service: true }, expect.objectContaining({ id: 'run-referral-1' }),
+      expect.objectContaining({ status: 'failed', summary }),
     );
   });
 

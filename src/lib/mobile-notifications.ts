@@ -1,3 +1,4 @@
+import { deliverReferralRewardNotifications } from '@/lib/referral-reward-notifications';
 import { MobilePushMaintenanceError } from '@/lib/mobile-push-maintenance-error';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
@@ -1825,24 +1826,18 @@ export async function notifyReferralReward(
     eventKey?: string;
   }
 ) {
-  const credits = Math.max(0, Math.trunc(params.credits));
-  const reversed = Boolean(params.reversed);
-  const eventKey = params.eventKey?.trim() || (reversed ? 'reversed' : 'granted');
-
-  return createMobileNotificationSafely({
-    adminSupabase,
-    userId: params.userId,
-    type: reversed ? 'referral_reward_reversed' : 'referral_reward_earned',
-    category: 'commerce',
-    title: reversed ? 'Referral reward reversed' : 'Referral credits earned',
-    body: reversed
-      ? `${credits.toLocaleString('en-IN')} referral ${credits === 1 ? 'credit was' : 'credits were'} removed after a payment reversal.`
-      : `You earned ${credits.toLocaleString('en-IN')} bonus ${credits === 1 ? 'credit' : 'credits'} from Invite & Earn.`,
-    deepLink: '/invite',
-    objectType: 'referral_reward',
-    objectId: params.rewardId,
-    dedupeKey: `referral-reward:${params.rewardId}:${eventKey}`,
-  });
+  // Financial ledger data supplies notification content. The same transaction
+  // persists history and push work, so a process death cannot split them.
+  try {
+    const eventKey = params.eventKey?.trim();
+    if (!eventKey) throw new Error('Referral notification event identity is required');
+    const result = await deliverReferralRewardNotifications(adminSupabase, eventKey);
+    if (result.failed > 0) throw new Error('Referral notification delivery deferred');
+    return result;
+  } catch (error) {
+    logBackendError('failed_to_create_mobile_notification', { error });
+    return null;
+  }
 }
 
 export async function notifyMobilePurchasesRestored(adminSupabase: SupabaseClient, userId: string) {

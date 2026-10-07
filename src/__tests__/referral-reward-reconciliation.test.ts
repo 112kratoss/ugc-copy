@@ -17,6 +17,11 @@ vi.mock('@/lib/mobile-notifications', () => ({
   notifyReferralReward: (...args: unknown[]) => rewardState.notify(...args),
 }));
 
+vi.mock('@/lib/referral-reward-notifications', () => ({
+  hasPendingReferralRewardNotifications: vi.fn(async () => false),
+  deliverReferralRewardNotifications: vi.fn(async () => ({ processed: 0, delivered: 0, failed: 0 })),
+}));
+
 import {
   hasUnsettledReferralPurchaseTransactions,
   listUnsettledReferralPurchaseTransactionIds,
@@ -88,7 +93,8 @@ describe('referral reward reconciliation', () => {
       return { status: 'already_settled', rewards: [] };
     });
 
-    await expect(reconcileReferralPurchaseRewards(db.client)).resolves.toEqual({
+    await expect(reconcileReferralPurchaseRewards(db.client)).rejects.toMatchObject({ summary: {
+      notificationDelivery: { processed: 0, delivered: 0, failed: 0 },
       processed: 3,
       settled: 1,
       failed: 1,
@@ -96,7 +102,7 @@ describe('referral reward reconciliation', () => {
         transactionId: 'transaction-2',
         error: 'temporary notification failure',
       }],
-    });
+    } });
     expect(db.rpc).toHaveBeenCalledWith('list_unsettled_referral_purchase_transactions', {
       p_limit: REFERRAL_REWARD_RECONCILIATION_BATCH_LIMIT,
     });
