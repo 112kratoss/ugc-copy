@@ -59,3 +59,11 @@ add 57 actual SQL assertions for catalog cloning and three mobile catalog
 operations, with read-only production definition/role parity and empty local
 rollback cleanup. This is bounded behavior evidence for four listed routines;
 it does not establish recent hosted operator use or retire compatibility entries.
+
+[11L legacy binding controls](backend-section-11-legacy-mobile-binding-2026-10-07.md)
+add 40 actual SQL assertions and three independently blocked connection races
+for the remaining documented mobile operator. Product authority, idempotency,
+atomic failure, retired products and detached/revoked receipt state are preserved;
+all local fixtures are removed and production definitions/grants match read-only.
+This does not establish historical provider order verification or permit retiring
+the compatibility routines. The wider caller and behavior matrix remains open.
