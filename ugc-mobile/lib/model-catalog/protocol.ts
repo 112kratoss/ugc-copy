@@ -148,6 +148,86 @@ export function parseModelCatalogCurrent(value: unknown): ModelCatalogCurrent {
   }
   return v;
 }
+/**
+ * What both creators draw. The server's catalog build is held to these lists
+ * (`src/__tests__/model-catalog-client-parity.test.ts`), the native parser accepts
+ * exactly them and drops a descriptor that uses anything else
+ * (`ugc-mobile/__tests__/model-catalog-client-parity.test.ts`), and the web creator's
+ * affordances answer for every input mode named here. A capability one client cannot
+ * render therefore cannot be published at all: teach both clients first, then add it
+ * here, then release the descriptor that uses it.
+ */
+export const CLIENT_RENDERED_CONTROL_TYPES = ['choice', 'boolean', 'integer'] as const;
+export const CLIENT_RENDERED_INPUT_MODE_KEYS = [
+  'prompt-only',
+  'references',
+  'frames',
+  'video-elements',
+  'subjects',
+  'prepared-assets',
+  'motion-inputs',
+] as const;
+export const CLIENT_RENDERED_INPUT_SLOT_KINDS = [
+  'image',
+  'video',
+  'audio',
+  'character',
+  'preparedVoice',
+] as const;
+export const CLIENT_RENDERED_INPUT_SLOT_ROLES = [
+  'reference',
+  'startFrame',
+  'endFrame',
+] as const;
+export const CLIENT_RENDERED_INPUT_CONSTRAINT_TYPES = [
+  'total-count',
+  'weighted-count',
+  'combined-duration',
+] as const;
+/**
+ * A named subject is several pictures of one person or thing that the provider
+ * fuses into one identity, mentioned in the prompt as `@handle`. They travel in the
+ * `subjectImages` slot, one asset per picture, grouped by a shared handle. The
+ * server refuses a group outside this range (Kling O3's contract, live-verified
+ * 2026-08-24), so both creators hold a subject to it before anything is sent.
+ */
+export const SUBJECT_IMAGES_SLOT_KEY = 'subjectImages';
+export const SUBJECT_IMAGES_PER_NAME = { min: 2, max: 4 } as const;
+/**
+ * How many subjects a run takes, from its slot. The slot is sized for that many
+ * subjects of the most pictures each, so a descriptor published before `maxNamed`
+ * existed still answers 3 for a slot of 12, which is the count the server enforces.
+ */
+export function subjectsPerRun(slot: { max: number; maxNamed?: number }): number {
+  const fromSlot = slot.maxNamed ?? Math.floor(slot.max / SUBJECT_IMAGES_PER_NAME.max);
+  return Math.max(0, Math.min(fromSlot, slot.max));
+}
+/**
+ * The setting values a descriptor's input modes are gated on, by setting key. A mode
+ * is a shape the model takes whether or not a control lists it: Kling O3's subjects
+ * mode was published on 2026-08-24 beside an Input mode control naming frames and
+ * references only, and both the server's quote and the native draft turned a subjects
+ * run back into frames until each learned to read the modes through this.
+ */
+export function modeGatedSettingValues(
+  inputModes: readonly { conditions?: readonly CatalogConditionLike[] }[] | undefined,
+): Map<string, Set<string>> {
+  const values = new Map<string, Set<string>>();
+  for (const mode of inputModes ?? []) {
+    for (const condition of mode.conditions ?? []) {
+      if (
+        condition.source !== 'setting' ||
+        condition.operator !== 'equals' ||
+        typeof condition.value !== 'string'
+      )
+        continue;
+      const named = values.get(condition.key) ?? new Set<string>();
+      named.add(condition.value);
+      values.set(condition.key, named);
+    }
+  }
+  return values;
+}
 export function parseModelCatalogPage(
   value: unknown,
   revision: string,

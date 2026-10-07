@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { modeGatedSettingValues } from '../../ugc-mobile/lib/model-catalog/protocol';
+
 import {
   IMAGE_MODELS,
   MOTION_MODELS,
@@ -934,6 +936,9 @@ function normalizeDescriptorSettings(
       normalizeControlCandidate(control, rawSettings),
     ]),
   );
+  // A value an input mode is gated on is a shape the model takes, whether or not the
+  // control lists it; the native draft reads the modes the same way.
+  const modeGatedValues = modeGatedSettingValues(descriptor.inputModes);
   for (const control of descriptor.controls) {
     if (!conditionsMatch(control.conditions, conditionSettings, inputs)) continue;
     const rawValue = rawSettings[control.key];
@@ -960,7 +965,11 @@ function normalizeDescriptorSettings(
     const value = rawValue === undefined ? control.defaultValue : rawValue;
     const stringValue = typeof value === 'string' || typeof value === 'number' ? String(value) : '';
     if (!control.options.some((option) => option.value === stringValue)) {
-      fieldErrors[control.key] = `${descriptor.displayName} does not support ${control.key} ${String(value)}.`;
+      if (modeGatedValues.get(control.key)?.has(stringValue)) {
+        normalizedSettings[control.key] = stringValue;
+      } else {
+        fieldErrors[control.key] = `${descriptor.displayName} does not support ${control.key} ${String(value)}.`;
+      }
     } else {
       normalizedSettings[control.key] = control.normalizedValueType === 'number'
         ? Number(stringValue)

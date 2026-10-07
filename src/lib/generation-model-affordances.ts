@@ -9,6 +9,11 @@ import type {
   CatalogInputSlot,
   GenerationModelDescriptor,
 } from '@/lib/generation-model-catalog';
+import {
+  SUBJECT_IMAGES_PER_NAME,
+  SUBJECT_IMAGES_SLOT_KEY,
+  subjectsPerRun,
+} from '../../ugc-mobile/lib/model-catalog/protocol';
 
 /**
  * What a selected model can actually do, derived from its catalog descriptor.
@@ -58,6 +63,20 @@ export type VideoInputAffordances = {
   combineFramesWithReferences: boolean;
   /** Named video elements (Kling), which are a distinct slot from reference clips. */
   namedVideoElements: { enabled: boolean; max: number };
+  /**
+   * Named subjects: several pictures of one person or thing that the provider fuses
+   * into one identity, mentioned in the prompt as @handle. Read off the descriptor's
+   * `subjects` mode, which is how the native creator finds them too, so the editor
+   * appears on exactly the models the catalog publishes it for.
+   */
+  subjects: {
+    enabled: boolean;
+    /** Pictures across every subject. */
+    maxImages: number;
+    /** Subjects per run. */
+    maxNamed: number;
+    imagesPerSubject: { min: number; max: number };
+  };
   preparedAssets: { voices: number; characters: number } | null;
   /** Condition-filtered constraints; their `message` is the copy the UI should show. */
   activeConstraints: CatalogInputConstraint[];
@@ -176,11 +195,21 @@ function legacyFallbackAffordances(
     },
     combineFramesWithReferences: modelId === 'wan-2.7' && activeMode === 'elements',
     namedVideoElements: { enabled: isKling, max: isKling ? references.videos : 0 },
+    subjects: modelId === 'kling-o3'
+      ? { enabled: true, maxImages: 12, maxNamed: 3, imagesPerSubject: SUBJECT_IMAGES_PER_NAME }
+      : NO_SUBJECTS,
     preparedAssets: modelId === 'gemini-omni-video' ? { voices: 3, characters: 3 } : null,
     activeConstraints: [],
     descriptorDriven: false,
   };
 }
+
+const NO_SUBJECTS: VideoInputAffordances['subjects'] = {
+  enabled: false,
+  maxImages: 0,
+  maxNamed: 0,
+  imagesPerSubject: SUBJECT_IMAGES_PER_NAME,
+};
 
 export function getVideoInputAffordances(
   descriptor: GenerationModelDescriptor | null | undefined,
@@ -234,6 +263,9 @@ export function getVideoInputAffordances(
 
   const active = activeSlots(descriptor, conditionSettings);
   const videoElementSlot = active.get('videoElements');
+  // Declared, like the frames: the editor is offered wherever the model takes subjects,
+  // and the run enters the subjects mode once one is attached.
+  const subjectSlot = declared.get(SUBJECT_IMAGES_SLOT_KEY);
   // Frame slots report DECLARED capability, not activation: callers combine them with
   // `activeMode`/`combineFramesWithReferences` themselves, and a model does not stop
   // supporting an end frame just because the user is currently on the references tab.
@@ -281,6 +313,14 @@ export function getVideoInputAffordances(
       enabled: Boolean(videoElementSlot) && videoElementSlot!.max > 0,
       max: videoElementSlot?.max ?? 0,
     },
+    subjects: subjectSlot && subjectSlot.max > 0
+      ? {
+          enabled: true,
+          maxImages: subjectSlot.max,
+          maxNamed: subjectsPerRun(subjectSlot),
+          imagesPerSubject: SUBJECT_IMAGES_PER_NAME,
+        }
+      : NO_SUBJECTS,
     preparedAssets: active.has('preparedVoices') || active.has('characters')
       ? {
           voices: active.get('preparedVoices')?.max ?? 0,
