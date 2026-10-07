@@ -99,6 +99,13 @@ const VIDEO_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {
   'happyhorse-1.1': 150_000,
   'gemini-omni-video': 180_000,
   'hailuo-2.3': 120_000,
+  // 2026-10-08: neighbours' figures until real runs give each its own. Flash is Omni's
+  // faster tier; Wan 3.0 renders up to 30 s and Prime is its high-speed variant.
+  'gemini-omni-1.1-flash': 150_000,
+  'wan-3.0': 180_000,
+  'wan-3.0-prime': 120_000,
+  'grok-imagine-video-1.5': 120_000,
+  'pixverse-v6': 120_000,
 };
 
 const MOTION_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {

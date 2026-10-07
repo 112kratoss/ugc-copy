@@ -358,6 +358,19 @@ const VIDEO_INPUT_LIMITS: Record<VideoModelId, VideoInputLimits> = {
   'hailuo-2.3': { images: 0, videos: 0, audios: 0, startFrame: true, endFrame: false },
   // Veo previously received the silent default; these are its live effective values.
   'veo-3.1': { images: 3, videos: 0, audios: 0, startFrame: true, endFrame: true },
+  // google/gemini-omni-flash-1-1 (2026-10-08): 7 image_urls or one video_list item (two
+  // slots), exclusive with first_frame_url; last_frame_url needs the first.
+  'gemini-omni-1.1-flash': { images: 7, videos: 1, audios: 0, startFrame: true, endFrame: true },
+  // wan/3-0-video and -prime (2026-10-08): 10 reference images, 5 clips (15 s total),
+  // 5 audio files (15 s total), exclusive with the frame pair.
+  'wan-3.0': { images: 10, videos: 5, audios: 5, startFrame: true, endFrame: true },
+  'wan-3.0-prime': { images: 10, videos: 5, audios: 5, startFrame: true, endFrame: true },
+  // grok-imagine-video-1-5-preview (2026-10-08): image_urls up to 7; a single one is the
+  // first frame.
+  'grok-imagine-video-1.5': { images: 7, videos: 0, audios: 0, startFrame: true, endFrame: false },
+  // pixverse-v6 (2026-10-08): image-to-video takes one start frame, transition a frame
+  // pair, reference-to-video up to 7 named image_references.
+  'pixverse-v6': { images: 7, videos: 0, audios: 0, startFrame: true, endFrame: true },
 };
 
 /**
@@ -381,6 +394,8 @@ function referenceAssetCapSeconds(modelId: VideoModelId): number | undefined {
   if (modelId === 'seedance-2-5') return 30;
   if (modelId.startsWith('seedance-2')) return 15;
   if (modelId === 'minimax-h3') return 15;
+  // wan/3-0-video: each reference clip and audio file 1–15 s, each kind 15 s in total.
+  if (modelId === 'wan-3.0' || modelId === 'wan-3.0-prime') return 15;
   return undefined;
 }
 
@@ -576,6 +591,15 @@ function videoInputConstraints(modelId: VideoModelId): CatalogInputConstraint[] 
       message: 'Gemini Omni supports seven reference slots; videos use two and characters use one.',
     }];
   }
+  if (modelId === 'gemini-omni-1.1-flash') {
+    return [{
+      type: 'weighted-count',
+      slotKeys: ['imageReferences', 'videoReferences'],
+      weights: { imageReferences: 1, videoReferences: 2 },
+      max: 7,
+      message: 'Gemini Omni 1.1 Flash supports seven reference slots; a video uses two.',
+    }];
+  }
   // Kie caps the *combined* duration of reference videos independently of how many
   // files it accepts, so raising a file cap never buys more usable footage.
   const max = referenceAssetCapSeconds(modelId);
@@ -657,7 +681,10 @@ function videoDescriptors(): GenerationModelDescriptor[] {
       kind: 'video',
       displayName: model.displayName,
       description: model.description,
-      badge: ['grok-imagine-video', 'kling-3.0-turbo', 'seedance-2-mini', 'wan-2.7', 'hailuo-2.3'].includes(model.id) ? 'New' : null,
+      badge: [
+        'grok-imagine-video', 'kling-3.0-turbo', 'seedance-2-mini', 'wan-2.7', 'hailuo-2.3',
+        'gemini-omni-1.1-flash', 'wan-3.0', 'wan-3.0-prime', 'grok-imagine-video-1.5', 'pixverse-v6',
+      ].includes(model.id) ? 'New' : null,
       recommended: model.id === DEFAULT_MODEL_IDS.video,
       sortOrder: index * 10,
       minClientSchemaVersion: 1,
@@ -679,7 +706,11 @@ function videoDescriptors(): GenerationModelDescriptor[] {
         endFrame: limits.endFrame,
         combineFramesWithReferences: model.id === 'wan-2.7',
       },
-      availability: { web: true, mobile: true },
+      // PixVerse is a maker the installed apps do not yet name in the AI-data question
+      // (ugc-mobile/lib/ai-data-consent.ts), so its model stays off mobile until an app
+      // update that names it has shipped on both platforms; the web privacy policy reads
+      // the maker list and names it from this build on.
+      availability: { web: true, mobile: model.id !== 'pixverse-v6' },
       inputModes: videoInputModes(model.id, limits),
       inputConstraints: videoInputConstraints(model.id),
     };

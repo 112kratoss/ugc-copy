@@ -959,7 +959,7 @@ describe('CreateVideoClient Kling video elements', () => {
       const ids = Object.keys(VIDEO_MODELS);
       expect(ids.filter((id) => publishedLimit(id, 'audioReferences') > 0)).toContain('minimax-h3');
       expect(ids.filter((id) => publishedLimit(id, 'videoReferences') > 0 && publishedLimit(id, 'audioReferences') === 0))
-        .toEqual(['gemini-omni-video']);
+        .toEqual(['gemini-omni-video', 'gemini-omni-1.1-flash']);
       expect(ids.filter((id) => publishedLimit(id, 'videoReferences') === 0)).toEqual(expect.arrayContaining([
         'kling-3.0-video',
         'kling-o3',
@@ -2591,7 +2591,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
       expect(videoModelIds.filter((modelId) => takes(modelId) === '- - -').sort()).toEqual(['hailuo-2.3', 'kling-3.0-turbo', 'kling-3.0-video']);
       expect(videoModelIds.filter((modelId) => takes(modelId) === 'images - -').length).toBeGreaterThan(2);
-      expect(videoModelIds.filter((modelId) => takes(modelId) === 'images clips -')).toEqual(['gemini-omni-video']);
+      expect(videoModelIds.filter((modelId) => takes(modelId) === 'images clips -')).toEqual(['gemini-omni-video', 'gemini-omni-1.1-flash']);
       expect(videoModelIds.filter((modelId) => takes(modelId) === 'images clips tracks').length).toBeGreaterThan(2);
     });
 

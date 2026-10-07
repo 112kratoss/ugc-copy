@@ -26,14 +26,26 @@ a browser User-Agent (`scripts/ops/kie-evidence.mjs price <slug>`), and the Open
 - Chat and TTS listings (GPT-6 Sol, Claude Opus 5.5 and Sonnet 5.5, Grok 4.7, DeepSeek V4.1 Flash,
   Kimi K3, Gemini 3.8 Flash TTS and Flash-Lite TTS) are not media models.
 
-## Still ready from the 2026-09-11 scan, prices unchanged on 2026-10-07
+## The five video models from the 2026-09-11 scan — shipped by release `kie-video-models-20261008`
 
-Gemini Omni 1.1 Flash (63/84/105/126 credits for 4/6/8/10 s; 147–210 at 4K), Wan 3.0 Video
-(8/16/32 per s) and Video Prime (12.2/25.2/50.4 per s), Grok Imagine Video 1.5 Preview (2.4/4.5
-per s at 480p/720p), PixVerse V6 (4.0–18.4 per s by resolution and audio; reference mode 12.5 %
-more). Each is a video model with its own request body, so each is its own release; the catches
-listed on 2026-09-11 still apply (Wan 3.0's `duration: -1`, Grok 1.5's unpriced 1080p, Omni's
-unpriced helper endpoints, PixVerse's `extend`).
+Prices re-read on 2026-10-08, unchanged since 2026-09-11:
+
+| Model | App id | Provider ids | Credits | Evidence |
+| --- | --- | --- | --- | --- |
+| **Gemini Omni 1.1 Flash** | `gemini-omni-1.1-flash` | `google/gemini-omni-flash-1-1` | 63/84/105/126 for 4/6/8/10 s at 360p–1080p, 147–210 at 4K, flat 168/252 with a clip | `docs/model-api-references/gemini-omni-1-1-flash.md` |
+| **Wan 3.0** | `wan-3.0` | `wan/3-0-video` | 8/16/32 per s (480P/720P/1080P), output plus reference-clip seconds | `docs/model-api-references/wan-3-0.md` |
+| **Wan 3.0 Prime** | `wan-3.0-prime` | `wan/3-0-video-prime` | 12.2/25.2/50.4 per s | same file |
+| **Grok Imagine Video 1.5 Preview** | `grok-imagine-video-1.5` | `grok-imagine-video-1-5-preview` | 2.4/4.5 per s at 480p/720p | `docs/model-api-references/grok-imagine-video-1-5.md` |
+| **PixVerse V6** | `pixverse-v6` | `pixverse-v6/{text-to-video,image-to-video,transition,reference-to-video}` | 4.0–18.4 per s by resolution and audio; reference-to-video 12.5 % more | `docs/model-api-references/pixverse-v6.md` |
+
+How the 2026-09-11 catches were handled: Wan 3.0's `duration: -1` is not a value the duration
+control or `isValidVideoDuration` accepts, and a reference run keeps its output to 15 s so the
+clips (15 s in total) and the output fit the spec's 30; Grok 1.5's unpriced 1080p is not
+offered; Omni's unpriced `audio_ids` / `character_ids` helpers are not sent; PixVerse's `extend`,
+`template_id` and `generate_multi_clip_switch` are not offered. PixVerse is a maker the installed
+apps do not yet name in their AI-data question, so `pixverse-v6` is web-only in this release
+(`availability` in `generation-model-catalog.ts`); a later release turns mobile on once an app
+update naming PixVerse has shipped on both platforms.
 
 ## Also found on the way
 

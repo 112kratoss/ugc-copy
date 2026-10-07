@@ -126,8 +126,11 @@ export function emitManifest(options: EmitManifestOptions) {
       // Existing releases stamp schemaVersion onto each descriptor; mirror that
       // or the shadow projection diff flags every entry.
       publicDescriptor: { schemaVersion: 2, ...(descriptor as unknown as Record<string, unknown>) },
-      webEnabled: true,
-      mobileEnabled: true,
+      // The code catalog decides where a model is offered (`availability` in
+      // generation-model-catalog.ts); a web-only model must not reach phones through
+      // a release flag that the descriptor contradicts.
+      webEnabled: descriptor.availability?.web ?? true,
+      mobileEnabled: descriptor.availability?.mobile ?? true,
       adapterKey: operation.adapterKey,
       adapterConfig: operation.adapterConfig,
       providerModelMap: operation.providerModelMap,

@@ -105,6 +105,14 @@ export const MODEL_ALIASES: Record<string, string> = {
   // docs/model-api-references/qwen-image-2-1.md: Qwen-Image's own prompting rules, the same
   // family as Qwen 3; `aspect_ratio` where Qwen 3's body says `image_size`.
   'qwen-image-2.1': 'qwen3',
+  // docs/model-api-references/gemini-omni-1-1-flash.md: Gemini Omni Video's prompt,
+  // image_urls, video_list, duration, aspect_ratio and resolution body plus a frame pair.
+  'gemini-omni-1.1-flash': 'gemini-omni-video',
+  // docs/model-api-references/wan-3-0.md: the Prime tier takes the identical body.
+  'wan-3.0-prime': 'wan-3.0',
+  // docs/model-api-references/grok-imagine-video-1-5.md: Grok Imagine's prompt, image_urls,
+  // aspect_ratio, resolution and duration body without the mode field; the same audio rule.
+  'grok-imagine-video-1.5': 'grok-imagine-video',
 };
 
 // ─── Image playbooks ─────────────────────────────────────────────────────────
@@ -1108,6 +1116,77 @@ const VIDEO_PLAYBOOKS: Record<string, EnhancerPlaybook> = {
       defaultSafeguards: [
         { code: 'single_clip_focus', message: 'Keep Grok video prompts focused on one filmable clip.' },
         { code: 'audio_always_scripted', message: 'Always script the Grok video audio track.' },
+      ],
+    },
+  },
+  'wan-3.0': {
+    modelId: 'wan-3.0',
+    label: 'Wan 3.0',
+    medium: 'video',
+    plannerMode: 'structured-video',
+    compilerProfile: 'single-clip',
+    budget: { targetWords: [60, 220] },
+    audioBehavior: 'optional',
+    strategyRules: [
+      'Treat Wan 3.0 by the Wan rewriter’s rules: entity, scene, motion, camera, then at most four aesthetic settings (time of day, light source, shot size, camera angle, composition).',
+      'Describe motion as an unfolding process with speed and direction; if the user gave no motion, add a subtle one plus background motion (drifting clouds, wind in leaves).',
+      'One camera instruction per clip; if the user specified a camera move, do not also add a camera-angle keyword.',
+      'Never add new subjects and never write literary mood prose ("a scene full of energy"); there is no negative-prompt field, so fold avoidances into positive phrasing.',
+      'Audio is a switch: when it is on, script the voice line with emotion, tone, and speed, plus effects and music style; when it is off, write nothing about sound.',
+      'In reference runs address the attachments positionally as Image1, Video1 and Audio1 in the order they are attached, one role each; frames and references never mix.',
+      'Scale the beats to the duration (two to thirty seconds): one beat per five seconds, and a single unbroken scene unless the user asks for cuts.',
+      'Rewrite impossible asks (legible in-video text, named real people, word-accurate lip-sync) into achievable equivalents.',
+    ],
+    workflowRules: [
+      'If primaryModel is wan-3.0, write entity, scene, motion, camera, and up to four aesthetic settings, then script the audio only when sound is on.',
+    ],
+    plannerNotes: [
+      'For image-to-video output dynamics only, under 100 words, deleting every clause that restates the input frame.',
+      'A frame pair is a start and an end: describe the path between them, not either picture.',
+    ],
+    agent: {
+      id: 'wan-30-film-director',
+      label: 'Wan 3.0 film director',
+      strategyRules: [
+        'No server-side extender runs on this body — deliver final-form precision, never padding.',
+        'Positional references (Image1, Video1, Audio1) are the only handle the model reads.',
+      ],
+      defaultSafeguards: [
+        { code: 'positional_references', message: 'Address Wan 3.0 references as Image1, Video1 and Audio1.' },
+      ],
+    },
+  },
+  'pixverse-v6': {
+    modelId: 'pixverse-v6',
+    label: 'PixVerse V6',
+    medium: 'video',
+    plannerMode: 'structured-video',
+    compilerProfile: 'single-clip',
+    budget: { targetWords: [40, 160] },
+    audioBehavior: 'optional',
+    strategyRules: [
+      'Treat PixVerse V6 as a single-clip director: subject, one clear action, setting, one camera move, and a style line, in that order and in plain sentences.',
+      'Keep one subject transformation at most and one scene; sequence a longer clip as a simple progression ("first…, then…"), never as timestamps.',
+      'In reference runs keep every @name the user wrote exactly as written: the provider matches @name to the attached picture; describe what the named subject does, not what it looks like.',
+      'For a start frame or a frame pair describe only what changes and the path between the frames; never restate the pictures.',
+      'When audio is on, close with one Audio line naming ambience, effects and any spoken line; when it is off, write nothing about sound.',
+      'No quality-word spam ("8k", "masterpiece") and no negative prompts; phrase avoidances positively.',
+    ],
+    workflowRules: [
+      'If primaryModel is pixverse-v6, write subject, action, setting, camera and style as plain sentences, keep @names verbatim, and add an Audio line only when sound is on.',
+    ],
+    plannerNotes: [
+      'One to fifteen seconds: one action beat per five seconds.',
+      'Up to seven named references; a name in the prompt must match an attached reference.',
+    ],
+    agent: {
+      id: 'pixverse-v6-director',
+      label: 'PixVerse V6 director',
+      strategyRules: [
+        'Plain, concrete sentences beat adjectives; the model follows nouns and verbs.',
+      ],
+      defaultSafeguards: [
+        { code: 'named_references_verbatim', message: 'Keep PixVerse @names exactly as the user wrote them.' },
       ],
     },
   },
