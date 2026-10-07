@@ -1,0 +1,18 @@
+BEGIN;
+CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
+SET LOCAL search_path = public, extensions;
+SELECT plan(12);
+SELECT ok(NOT has_function_privilege('anon','public.retain_referral_account_identity()','EXECUTE'), 'anonymous detachment denied');
+SELECT ok(NOT has_function_privilege('authenticated','public.retain_referral_account_identity()','EXECUTE'), 'authenticated detachment denied');
+SELECT ok(NOT has_function_privilege('service_role','public.retain_referral_account_identity()','EXECUTE'), 'service cannot invoke detachment directly');
+SELECT ok(NOT has_function_privilege('service_role','public.cancel_deleted_account_referrals()','EXECUTE'), 'service cannot directly cancel another account referrals');
+SELECT ok(NOT has_function_privilege('authenticated','public.prevent_referral_audit_mutation()','EXECUTE'), 'append-only trigger not executable by clients');
+SELECT is((SELECT confdeltype::text FROM pg_constraint WHERE conname='transactions_user_id_fkey' AND conrelid='public.transactions'::regclass), 'n', 'transaction live owner detaches');
+SELECT is((SELECT confdeltype::text FROM pg_constraint WHERE conname='referral_credit_ledger_user_id_fkey'), 'n', 'ledger live owner detaches');
+SELECT is((SELECT count(*)::int FROM pg_constraint WHERE contype='f' AND confrelid='auth.users'::regclass AND conrelid IN ('public.referral_codes'::regclass,'public.referral_visits'::regclass,'public.referral_attributions'::regclass,'public.referral_rewards'::regclass,'public.referral_purchase_events'::regclass,'public.referral_credit_ledger'::regclass) AND confdeltype='c'), 0, 'no referral history cascades from Auth');
+SELECT ok(NOT has_table_privilege('authenticated','public.referral_credit_ledger','SELECT,INSERT,UPDATE,DELETE'), 'retained ledger stays private');
+SELECT ok(NOT has_table_privilege('anon','public.referral_attributions','SELECT,INSERT,UPDATE,DELETE'), 'retained attribution stays private');
+SELECT ok((SELECT prosecdef AND proconfig=ARRAY['search_path=""'] FROM pg_proc WHERE oid='public.retain_referral_account_identity()'::regprocedure), 'identity guard uses qualified definer access');
+SELECT ok(EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='cancel_deleted_account_referrals' AND tgrelid='auth.users'::regclass AND tgenabled='O'), 'Auth deletion cancels queued notifications');
+SELECT * FROM finish();
+ROLLBACK;
