@@ -41,6 +41,7 @@ describe.skipIf(!configPath||!connectionString)('background showcase revocation 
     await db.query("insert into public.posts(id,user_id,generation_id,visibility,category,source_kind,review_status,post_format,title,body,showcase_asset_path) values($1,$2,$3,'public','text','external','visible','text','Fixture','Fixture body long enough for public text.',$4)",[postId,owner,generationId,paths[0]]);
     await db.query("insert into public.post_media(post_id,media_kind,storage_path,preview_storage_path,rendition_storage_path,display_storage_path,teaser_storage_path,teaser_generated_at) values($1,'image',$2,$3,$4,$5,$6,now())",[postId,...paths.slice(1)]);
     await db.query("update public.posts set visibility='private',showcase_asset_path=null where id=$1",[postId]);
+    await db.query("update public.showcase_media_revocations set next_attempt_at=now()-interval '1 minute' where generation_id=$1",[generationId]);
     expect((await db.query('select reason from public.showcase_media_revocations where generation_id=$1',[generationId])).rows).toEqual([{reason:'post_unexposed'}]);
   });
   afterEach(async()=>{
@@ -129,7 +130,7 @@ describe.skipIf(!configPath||!connectionString)('background showcase revocation 
   it('settles an invalid-prefix row without deleting its object or blocking healthy work',async()=>{
     const foreign=`showcase/${randomUUID()}/unrelated.png`;paths.push(foreign);
     expect((await admin.storage.from('showcase_media').upload(foreign,new Blob([bytes],{type:'image/png'}),{contentType:'image/png'})).error).toBeNull();
-    await db.query("insert into public.showcase_media_revocations(generation_id,showcase_asset_path,reason) values($1,$2,'post_deleted')",[generationId,foreign]);
+    await db.query("insert into public.showcase_media_revocations(generation_id,showcase_asset_path,reason,next_attempt_at) values($1,$2,'post_deleted',now()-interval '1 minute')",[generationId,foreign]);
     expect(await processShowcaseMediaRevocations(admin,{now:new Date()})).toMatchObject({due:2,removed:1,outsidePrefix:1});
     expect((await admin.storage.from('showcase_media').download(foreign)).error).toBeNull();
     for(const path of paths.slice(0,-1))expect((await admin.storage.from('showcase_media').download(path)).data).toBeNull();

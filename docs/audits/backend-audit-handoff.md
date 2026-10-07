@@ -11,22 +11,46 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 
 ## Exact checkpoint
 
+#398 is attached. Its child now incorporates corrected #397 parent e4ff29a4
+and the exact merged #396 history. The final child needs new exact-head Quality;
+initial 952b6aff/37579021921 is historical and does not gate the final candidate.
+#397 initial 5d46e7eb/37578516790 failed one fixture due-time case as recorded
+below; its corrected e4ff29a4 head needs complete fresh CI. Hold each merge for
+its independently verified parent and own complete gates.
+
 11W adds three actual Node worker SIGKILL checkpoints before Storage removal,
 after actual removal and after gallery deletion commits. Each has the expected
 durable queue/gallery/object state, completes in a fresh process, and has no
 work on another fresh retry. All three cases, test types and scoped lint pass;
 exact-ID object/row cleanup is zero and balances/usage remain unchanged. This is
 the direct business processor, not managed lease/fencing or hosted CDN evidence.
-No runtime/migration change. Own candidate gates and independently verified #397
-parent remain required. See backend-section-11-showcase-revocation-worker-death-2026-10-07.md.
+No runtime/migration change. See
+backend-section-11-showcase-revocation-worker-death-2026-10-07.md. Own final-head
+CI and independently verified #397 parent remain required.
 
-PR #397 is attached, stacked on #396, head
-5d46e7eb75d25385e88c5339302c01f1741fbb29, Quality 37578516790 running.
-#396 final-head Quality 37577628732 passes all five jobs on 024ea1a1.
-#395 exact-main Quality 37577951136 passes all five jobs; automatic standard
-release 37578624582 is running with 37578732709 also queued for the same SHA.
-Neither is a manual dispatch; wait for standard success and independent readback
-before merging #396. Do not duplicate deployment or treat a queued run as success.
+#395 is independently verified live as ebd551b6 at 06:02:45 UTC: exact-main
+Quality 37577951136 and standard release 37578624582 pass, three tested runtime
+digests match, schema/all 110 advisors are unchanged, all six unsigned mutation
+boundaries are private 401 and smoke is 200/307/401. Automatic duplicate
+37578732709 skips. Fetching the exact Git commit resolved an initial source
+verification prerequisite; no runtime/production change for that issue. See
+backend-section-11-admin-moderation-inputs-release-2026-10-07.md. SOCIAL-03
+returns to untested; counts are now 53: 24 passed, 25 untested, two failed, two
+external. MEDIA-07/MEDIA-09 remain failed.
+
+#396 final-head Quality 37577628732 passes all five jobs on 024ea1a1. Fresh
+verified #395 parent/schema/advisors/live/main and immediate mobile-store idle
+gates pass. It merged at 06:04:12 UTC as 0df4d065600994e84b8eec7437aa0fd56cd31c6f.
+Exact-main Quality 37579524146 is running; standard release and independent
+moderation-storage-release/ verification remain. #397 must wait for that parent.
+
+#397 initial Quality 37578516790 passed four jobs; the API job passed nine of
+ten cases and caught the invalid-prefix fixture's database/app clock due-time
+assumption. Its own queue rows are now explicitly due in the past. All ten
+local cases pass with constraints intact and no application change for this
+fixture issue. The candidate includes the exact merged #396 parent and must
+pass new exact-head CI before release. #398 is attached with three actual
+SIGKILL controls; its child branch must incorporate this corrected parent.
 
 11V reproduces four actual SQL/Storage failures: normal cleanup omits display
 media; failed/no-op Storage removal or reply loss after gallery deletion loses
@@ -44,10 +68,10 @@ independently verified #396 parent and standard release remain required.
 PR #395 passed all five exact-head jobs in 37576758590. Fresh verified #394
 parent/schema/advisors/live/main and immediate mobile-store idle gates passed.
 It merged at 05:45:59 UTC as ebd551b6fe8c84c05e9811b52f6c211a4ac99d52.
-Exact-main Quality 37577951136 passes; standard release and independent
-admin-moderation-release/ readback remain. SOCIAL-03 remains failed until then.
+Exact-main Quality 37577951136 and standard release 37578624582 pass;
+independent readback is verified as recorded above. SOCIAL-03 is untested.
 PR #396 is attached and retargeted to main. Final cleanup head
-024ea1a16d8d98e3ac668bb1a44a891b92eaf7e2 passes all five Quality 37577628732 jobs;
+024ea1a16d8d98e3ac668bb1a44a891b92eaf7e2 is running Quality 37577628732;
 initial head 5dd7db24 is historical. It must wait for #395's independent release.
 
 PR #395 is attached: aad77b006aa57dc6017719ab37fe9b2b172f6724, Quality
@@ -76,10 +100,10 @@ exactly; the sixth differs only by four empty UUID-array casts, with reviewed
 same-engine type/value/assignment controls. All six signatures/grants match.
 See backend-section-11-admin-moderation-inputs-2026-10-07.md. Exact-head CI,
 verified parent, standard release and independent readback remain required.
-SOCIAL-03 is failed until this fix is released; WORKFLOW-04 has returned to
-untested after #393. With the new 11V finding, counts are 53: 24 passed, 24
-untested, three failed, two external. MEDIA-07 and MEDIA-09 are the other failed
-rows. The wider audit is not signed off.
+SOCIAL-03 returned to untested after this verified release; WORKFLOW-04
+also returned to untested after #393. With the 11V finding, counts are 53:
+24 passed, 25 untested, two failed, two external. MEDIA-07 and MEDIA-09 are
+the failed rows. The wider audit is not signed off.
 
 PR #394 exact-head Quality 37575031613 passes all five jobs on
 c68443bc9a864d5a3f1db8bd2d5c3fcdf71f0826. Fresh verified #393 parent, schema,
@@ -153,9 +177,9 @@ no hosted Next/browser/provider execution is claimed. New API suite is added
 sequentially to Quality. This candidate must use a separate stacked PR/head;
 hold its merge until #392 is independently verified live.
 
-Current ledger is now 53: 24 passed, 24 untested, three failed, two external.
-WORKFLOW-04 returned to untested after 11Q release; SOCIAL-03 is failed for 11T
-until released, then returns to untested for its remaining matrix. MEDIA-07
+Current ledger is now 53: 24 passed, 25 untested, two failed, two external.
+WORKFLOW-04 and SOCIAL-03 returned to untested after their verified scoped
+input fixes; their remaining matrices stay open. MEDIA-07
 remains failed. 11T adds only the three input parser modules; no schema/customer
 changes are introduced.
 

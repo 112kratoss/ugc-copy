@@ -42,6 +42,7 @@ describe.skipIf(!configPath||!connectionString)('background showcase revocation 
     await db.query("insert into public.posts(id,user_id,generation_id,visibility,category,source_kind,review_status,post_format,title,body,showcase_asset_path) values($1,$2,$3,'public','text','external','visible','text','Fixture','Fixture body long enough for public text.',$4)",[postId,owner,generationId,paths[0]]);
     await db.query("insert into public.post_media(post_id,media_kind,storage_path,preview_storage_path,rendition_storage_path,display_storage_path,teaser_storage_path,teaser_generated_at) values($1,'image',$2,$3,$4,$5,$6,now())",[postId,...paths.slice(1)]);
     await db.query("update public.posts set visibility='private',showcase_asset_path=null where id=$1",[postId]);
+    await db.query("update public.showcase_media_revocations set next_attempt_at=now()-interval '1 minute' where generation_id=$1",[generationId]);
     expect((await db.query('select reason from public.showcase_media_revocations where generation_id=$1',[generationId])).rows).toEqual([{reason:'post_unexposed'}]);
   });
   afterEach(async()=>{

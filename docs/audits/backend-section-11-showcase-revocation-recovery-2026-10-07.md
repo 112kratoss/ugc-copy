@@ -40,6 +40,13 @@ lint and diff checks pass. The publish test double initially lacked the newly
 used SDK verification operation; it was completed and the full focused set
 rerun. Before/failure/after logs are retained privately.
 
+Initial exact-head Linux CI passed four jobs and nine of the ten actual cases.
+The invalid-prefix case inserted a default database due time immediately before
+using the application clock, so its second row could still be in the future.
+The fixtures now explicitly set their own queue rows due one minute ago; no production
+clock, queue or processor behavior is changed. A new candidate head must pass
+the complete gates. The original failure is retained.
+
 Bounded read-only production inventory reports zero queued/old-queued revocations
 and zero currently known private generation legacy/display rows. The exposure
 trigger's definition and execution grants match the local API database exactly.
