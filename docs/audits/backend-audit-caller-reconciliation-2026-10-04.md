@@ -53,3 +53,9 @@ read/write paths, SQL callers of other functions, edge/operator entrypoints and
 installed mobile access. DB-03 still needs positive/negative behavioral fixtures
 for uncovered policies, triggers and transactions. Raw definitions and the
 reproducible private mapping scripts are preserved under `.audit-evidence/backend-map-02/`.
+
+[11K operator controls](backend-section-11-catalog-clone-boundaries-2026-10-07.md)
+add 57 actual SQL assertions for catalog cloning and three mobile catalog
+operations, with read-only production definition/role parity and empty local
+rollback cleanup. This is bounded behavior evidence for four listed routines;
+it does not establish recent hosted operator use or retire compatibility entries.

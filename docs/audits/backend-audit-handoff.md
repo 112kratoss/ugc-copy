@@ -6,7 +6,7 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/auth-placeholder-collision-audit-11j`, preserving tested #385/#386/#387 heads while fixing a reproduced Auth trigger username collision. User receipt/evidence edits remain untouched.
+Current checkout: `codex/catalog-clone-boundaries-audit-11k`, based on final combined #388 and adding only SQL operator tests/evidence. The user receipt/evidence edits remain untouched.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
@@ -40,6 +40,31 @@ main with both fixes and separate reports/verification. Require final exact-head
 Quality after consolidation, then immediate idle mobile-store/exact live parent
 checks, exact-main Quality and standard release. The user-error parent is now
 independently verified. Private Auth/health release baselines use that parent.
+
+Combined #388 final head bd5491c4de33ecb0cb8d6189073803f6df4cb448 passes all
+five Quality jobs in 37529823695, including 140 actual API cases. The immediate
+verified-parent/main/live/mobile-idle guard passed; it merged October 6 21:05:57 UTC
+as f227c69577503d35f04ddfc9dd000d932d10735e. Exact-main Quality 37531415452
+is running; standard release and independent verification remain. #387 is CLOSED
+as consolidated, not separately released. The obsolete #388 head 316038ab run
+was cancelled; its partial passes are not the final merge gate. The CLI watch
+hit a transient GitHub timeout, but direct run readback and merge guard confirm
+the final candidate's five successful jobs. Do not rerun a passed candidate for
+that watcher error. Prepared auth-placeholder-release/health-cap-release probes
+and baselines use the independently verified #386 parent.
+
+Operator evidence PR #389 is attached and now based on main. Its initial head
+7ac0cce3 runs Quality 37531104608; the actual merged #388 parent is incorporated
+locally and requires refreshed exact-head CI after this checkpoint. Hold its
+main merge until #388 is independently verified; preserve the parent gate.
+
+11K adds 22 actual catalog clone controls and 35 mobile catalog operator controls
+(57 total), all passing on the owned clean replay. Actual anon/auth calls deny;
+service calls, copied configuration, retries/conflicts and missing tiers pass.
+Independent local cleanup is zero, and four function definitions/role metadata
+match read-only production. No runtime, migration, live configuration, purchase
+or provider operation changes. Keep this SQL/evidence-only follow-up separate
+from #388's final tested runtime head; broader DB-03/MAP-02/GEN-05/PAY scopes stay open.
 
 11J reproduces signup aborts when valid distinct UUIDs share their eight-digit
 placeholder prefix. Original production/local trigger digest agrees. Four final
