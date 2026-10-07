@@ -66,7 +66,10 @@ async function handleMarketplaceOrderPOST(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const body = await request.json();
+    const decoded: unknown = await request.json().catch(() => null);
+    const body = decoded && typeof decoded === 'object' && !Array.isArray(decoded)
+      ? decoded as Record<string, unknown>
+      : {};
     const assetId = typeof body.assetId === 'string' ? body.assetId.trim() : '';
     const clientIntentKey = typeof body.clientIntentKey === 'string'
       ? body.clientIntentKey.trim()

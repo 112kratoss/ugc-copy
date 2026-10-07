@@ -56,10 +56,7 @@ type CashOrderRecordResult = {
   order_id?: string;
 };
 
-type ReadOrderBody = () => Promise<{
-  clientIntentKey?: string | null;
-  locale?: string | null;
-}>;
+type ReadOrderBody = () => Promise<unknown>;
 
 type GetBundleForOrderByPostId = (postId: string) => Promise<BundleForOrder | null>;
 
@@ -210,7 +207,17 @@ export async function createPostResourceBundleOrderForRoute({
     };
   }
 
-  const body = await readBody();
+  let decoded: unknown;
+  try {
+    decoded = await readBody();
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    return { ok: false, status: 400, body: { error: 'Invalid checkout request.' } };
+  }
+  if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
+    return { ok: false, status: 400, body: { error: 'Invalid checkout request.' } };
+  }
+  const body = decoded as { clientIntentKey?: unknown; locale?: unknown };
   const bundle = await getBundleForOrderByPostId(postId);
   if (!bundle || bundle.status !== 'published') {
     return { ok: false, status: 404, body: { error: 'Unlock not found.' } };

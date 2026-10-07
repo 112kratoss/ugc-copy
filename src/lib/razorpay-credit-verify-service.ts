@@ -86,7 +86,10 @@ export async function verifyCreditRazorpayPaymentForRoute({
    */
   runAfterResponse?: RunAfterResponse;
 }): Promise<CreditRazorpayVerifyRouteResult> {
-  const body = normalizeBody(await readBody());
+  const body = normalizeBody(await readBody().catch((error: unknown) => {
+    if (error instanceof SyntaxError) return null;
+    throw error;
+  }));
   const razorpayOrderId = normalizeString(body.razorpay_order_id);
   const razorpayPaymentId = normalizeString(body.razorpay_payment_id);
   const razorpaySignature = normalizeString(body.razorpay_signature);
