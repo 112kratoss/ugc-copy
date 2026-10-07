@@ -66,7 +66,10 @@ export async function postAdminUserSanction(request: Request): Promise<NextRespo
     throw error;
   }
 
-  const body = (await request.json().catch(() => ({}))) as SanctionBody;
+  const rawBody: unknown = await request.json().catch(() => null);
+  const body: SanctionBody = rawBody && typeof rawBody === 'object' && !Array.isArray(rawBody)
+    ? rawBody as SanctionBody
+    : {};
   const userId = typeof body.userId === 'string' ? body.userId : '';
   const action: AdminUserSanctionAction | null =
     body.action === 'suspend' || body.action === 'reinstate' ? body.action : null;

@@ -74,7 +74,10 @@ export async function postAdminPostReportDecision(request: Request): Promise<Nex
   const headers = createApiResponseHeaders(request, API_CACHE_CONTROL.privateNoStore);
 
   return withAdminSession(request, async (reviewerId) => {
-    const body = (await request.json().catch(() => ({}))) as DecisionBody;
+    const rawBody: unknown = await request.json().catch(() => null);
+    const body: DecisionBody = rawBody && typeof rawBody === 'object' && !Array.isArray(rawBody)
+      ? rawBody as DecisionBody
+      : {};
     const reportId = typeof body.reportId === 'string' ? body.reportId : '';
     const action = body.action === 'take_down' || body.action === 'dismiss' ? body.action : null;
     const note = typeof body.note === 'string' ? body.note : '';
@@ -98,7 +101,10 @@ export async function postAdminSubjectReportDecision(request: Request): Promise<
   const headers = createApiResponseHeaders(request, API_CACHE_CONTROL.privateNoStore);
 
   return withAdminSession(request, async (reviewerId) => {
-    const body = (await request.json().catch(() => ({}))) as DecisionBody;
+    const rawBody: unknown = await request.json().catch(() => null);
+    const body: DecisionBody = rawBody && typeof rawBody === 'object' && !Array.isArray(rawBody)
+      ? rawBody as DecisionBody
+      : {};
     const reportId = typeof body.reportId === 'string' ? body.reportId : '';
     const action = body.action === 'resolve' || body.action === 'dismiss' ? body.action : null;
     const note = typeof body.note === 'string' ? body.note : '';
@@ -141,7 +147,10 @@ export async function postAdminPostModeration(request: Request): Promise<NextRes
       throw error;
     }
 
-    const body = (await request.json().catch(() => ({}))) as ModerationBody;
+    const rawBody: unknown = await request.json().catch(() => null);
+    const body: ModerationBody = rawBody && typeof rawBody === 'object' && !Array.isArray(rawBody)
+      ? rawBody as ModerationBody
+      : {};
     const postId = typeof body.postId === 'string' ? body.postId : '';
     const action = body.action === 'hide' || body.action === 'take_down' || body.action === 'restore'
       ? body.action
