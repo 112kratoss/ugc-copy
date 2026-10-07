@@ -6,10 +6,47 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/backend-admin-credit-balances-11y`, stacked on #399 and fixing reproduced admin total/promotional balance errors. The user receipt/evidence edits remain untouched.
+Current checkout: `codex/backend-credit-order-inputs-11z`, combining #399/#400 and the reproduced credit-order root fix for one final release. The user receipt/evidence edits remain untouched.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+Release organization: 11X/11Y/11Z are combined into the final
+codex/backend-credit-order-inputs-11z candidate, based on the verified #398
+main release. #399/#400 are intermediate review heads; their changes are
+included unchanged except the documented 11Y balance correction and additional
+11Z controls. They will be superseded by the final combined PR, not independently
+merged/deployed. The final combined head must pass all five Quality jobs; fresh
+verified #398 schema/advisors/live/main and immediate mobile-store idle gates
+remain mandatory. Exact-main Quality, standard staged production workflow and
+independent six-runtime-source/schema/live readback remain mandatory. This
+changes release grouping only; no test, migration, health or admission gate is
+removed. No financial/customer repair or external/provider evidence is implied.
+
+11Z reproduces six null/malformed/empty credit-order failures on the verified
+/api/razorpay/order native handler, with real bearer headers and unsigned controls.
+The adapter now validates an object root before existing missing-plan validation.
+All 56 actual cases, 33 focused order/provider controls, app/test types, scoped
+lint and diff pass; independent purchase-intent/transaction and owned fixture
+counts are zero. No provider order/charge or production balance change.
+See backend-section-11-credit-order-inputs-2026-10-07.md. Own candidate/main CI,
+standard release and independently verified #398 parent remain required for the combined final candidate.
+MAP-02 includes this finding as well as 11X until verified release.
+
+#397 is independently verified live as 26888e15 at 06:41:18 UTC. All five
+exact-main jobs in 37581266892 and standard release 37582438992 pass. One tested
+runtime digest, schema/all 110 advisors, six private unsigned admin boundaries
+and smoke pass. See backend-section-11-showcase-revocation-release-2026-10-07.md.
+MEDIA-09 returns to untested for broader recovery. Counts are now 53:
+24 passed, 24 untested, three failed, two external: MAP-02, PAY-04, MEDIA-07.
+#398 fresh independently verified #397/schema/advisors/live/main and immediate
+mobile-store idle gates pass; it merged at 06:42:47 UTC as
+ff3a70beebea323b95da6bfc9969fcea12972ba1. Exact-main Quality 37583034551 is
+running; standard release and independent revocation-worker-death-release/
+readback remain. #399/400 must each wait for their verified parent.
+#400 is attached on aeed54bfc59d21d9d7fc54a89591eb6163180a51; Quality
+37582629485 is running. Its tested runtime digests/release verifier are prepared.
+No historical customer grant or repair has been made.
 
 11Y reproduces three actual SQL balance failures and four focused policy/RPC
 failures. Goodwill/clawback now change total and promotional credits equally;

@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { deriveAccountIdentityFingerprints } from '@/lib/account-identity-fingerprint';
 import { ADMIN_SESSION_COOKIE, createAdminSessionToken, deriveAdminCredentialVersion } from '@/lib/admin-session-token';
 import { insertAdminSession } from '@/lib/admin-session-store';
+import { postRazorpayCreditOrderRouteResponse } from '@/lib/razorpay-credit-order-route-adapter-service';
 import { postAdminCreditAdjustment } from '@/lib/admin-credit-route-adapter-service';
 import { patchOnboardingStateRouteResponse, postWelcomeCreditsClaimRouteResponse, postOnboardingEventRouteResponse } from '@/lib/onboarding-route-adapter-service';
 
@@ -70,8 +71,10 @@ describe.skipIf(!configPath || !connectionString)('onboarding and admin credit i
         (select count(*) from public.admin_credit_adjustments where user_id=$1 or reviewer_id=$1)::int as adjustments,
         (select count(*) from public.credit_grants where user_id=$1)::int as grants,
         (select count(*) from public.credit_grant_identity_fingerprints where fingerprint=any($3::text[]))::int as fingerprints,
-        (select count(*) from public.ai_usage_events where user_id=$1)::int as usage`, [reviewerId,eventIds,fingerprints])).rows[0])
-        .toEqual({...expectedRows,grants:0,fingerprints:0,usage:0});
+        (select count(*) from public.transactions where user_id=$1)::int as transactions,
+      (select count(*) from public.razorpay_checkout_intents where user_id=$1)::int as checkout_intents,
+      (select count(*) from public.ai_usage_events where user_id=$1)::int as usage`, [reviewerId,eventIds,fingerprints])).rows[0])
+        .toEqual({...expectedRows,grants:0,fingerprints:0,transactions:0,checkout_intents:0,usage:0});
     } finally {
       await db.query('delete from public.onboarding_events where client_event_id=any($1::uuid[])', [eventIds]);
       await db.query('delete from public.admin_credit_adjustments where user_id=$1 or reviewer_id=$1', [reviewerId]);
@@ -90,8 +93,10 @@ describe.skipIf(!configPath || !connectionString)('onboarding and admin credit i
       (select count(*) from public.admin_credit_adjustments where user_id=$1 or reviewer_id=$1)::int as adjustments,
       (select count(*) from public.credit_grants where user_id=$1)::int as grants,
       (select count(*) from public.credit_grant_identity_fingerprints where fingerprint=any($5::text[]))::int as fingerprints,
+      (select count(*) from public.transactions where user_id=$1)::int as transactions,
+      (select count(*) from public.razorpay_checkout_intents where user_id=$1)::int as checkout_intents,
       (select count(*) from public.ai_usage_events where user_id=$1)::int as usage`, [reviewerId,sessionId,[reviewerId,...installationIds],eventIds,fingerprints])).rows[0])
-      .toEqual({users:0,profiles:0,sessions:0,rates:0,states:0,events:0,adjustments:0,grants:0,fingerprints:0,usage:0});
+      .toEqual({users:0,profiles:0,sessions:0,rates:0,states:0,events:0,adjustments:0,grants:0,fingerprints:0,transactions:0,checkout_intents:0,usage:0});
   });
 
   it.each(routes)('rejects null before a state, reward or credit mutation: $path',async route=>{
@@ -165,6 +170,14 @@ describe.skipIf(!configPath || !connectionString)('onboarding and admin credit i
       expect((await db.query('select credits,promotional_credits from public.profiles where id=$1', [reviewerId])).rows)
         .toEqual([{ credits: intent === 'goodwill' ? 508 : 500, promotional_credits: intent === 'goodwill' ? 8 : 0 }]);
     }
+  });
+
+  it.each([true,false].flatMap(signed=>['null','[]','5','true','"scalar"','{',''].map(raw=>({signed,raw}))))('rejects credit-order root $raw with signed=$signed before provider activity',async({signed,raw})=>{
+    const response=await postRazorpayCreditOrderRouteResponse({request:new Request('http://127.0.0.1/api/razorpay/order',{
+      method:'POST',headers:{'Content-Type':'application/json',...(signed?{Authorization:`Bearer ${bearer}`}:{})},body:raw,
+    })});
+    expect(response.status).toBe(400);expect(response.headers.get('cache-control')).toContain('no-store');
+    expect((await db.query('select id from public.transactions where user_id=$1',[reviewerId])).rows).toEqual([]);
   });
 
 });

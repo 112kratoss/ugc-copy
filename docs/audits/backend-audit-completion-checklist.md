@@ -1,14 +1,15 @@
 # Backend audit completion checklist
 
 Updated 2026-10-07. Current independently checked production:
-`0df4d065600994e84b8eec7437aa0fd56cd31c6f`, including Sections 9A–9O, 10A–I and 11A–U.
+`26888e1578350e5d2e06fa37d7189584a7457b1e`, including Sections 9A–9O, 10A–I and 11A–V.
+[11V release evidence](backend-section-11-showcase-revocation-release-2026-10-07.md).
 [11U release evidence](backend-section-11-moderation-storage-release-2026-10-07.md).
 [11T release evidence](backend-section-11-admin-moderation-inputs-release-2026-10-07.md).
 [11Q/R release evidence](backend-section-11-workflow-inputs-release-2026-10-07.md).
 [11S release evidence](backend-section-11-template-publication-release-2026-10-07.md).
-PR #397 is merged as 26888e15; exact-main/release readback remains. #398
-passes final-head Quality and awaits its verified parent. 11X input guards pass
-local checks and await their own CI/release.
+PR #398 is merged as ff3a70be; exact-main/release readback remains. #399/#400 are intermediate heads included in the final combined 11X/Y/Z
+candidate; its full Quality, verified #398 parent and standard release remain. 11Z order input controls pass
+locally and await their own CI/release.
 [11O/P release evidence](backend-section-11-map-recovery-release-2026-10-07.md).
 [11M/N release evidence](backend-section-11-recovery-evidence-release-2026-10-07.md).
 [11L release evidence](backend-section-11-legacy-binding-release-2026-10-07.md).
@@ -48,7 +49,7 @@ unequal effort and risk. Do not turn their pass count into a percentage of backe
 safety or an ETA. New findings attach to these obligations; changes in scope must
 be recorded explicitly instead of silently adding another lettered batch.
 
-Current ledger: **53 obligations — 24 passed, 23 untested, 4 failed, 2 external**.
+Current ledger: **53 obligations — 24 passed, 24 untested, 3 failed, 2 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
 WORKFLOW-02 remains untested after its scoped fixes shipped. WORKFLOW-04 returns
 to untested after the verified 11Q validation fix. SOCIAL-03 also returns to
@@ -56,10 +57,10 @@ untested after the independently verified 11T admin input fix.
 SOCIAL-01/02/04 return to untested after the verified 8F/8G releases.
 DB-04 passes for the current empty Realtime publication; enabling table streams or application channels requires reopening it.
 SOCIAL-03 remains untested for its broader matrix after 11T. MEDIA-07
-remains failed for legacy retirement. MEDIA-09 is failed for the four newly
-reproduced 11V background revocation failures until its release is verified.
-MAP-02 is failed for four newly reproduced 11X null-root failures until its
-release is verified. PAY-04 is failed for the three 11Y admin balance failures
+remains failed for legacy retirement. MEDIA-09 returns to untested after its
+independently verified 11V revocation fix; broader recovery remains open.
+MAP-02 is failed for the reproduced 11X/11Z input failures until both releases
+are verified. PAY-04 is failed for the three 11Y admin balance failures
 until its prevention release is verified; a historical promotional-only row
 needs review. No new obligation was added; these fixes do not complete
 the broader matrices.
@@ -106,7 +107,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | ID | Obligation and closure evidence | Status | Evidence / next action |
 | --- | --- | --- | --- |
 | MAP-01 | Capture route/service/job/public-catalog inventory and assign review gates | passed | [Current production surface map](backend-audit-surface-map-2026-10-07.json); 162 routes, 201 services, 337 functions, 138 relations, 12 jobs; 0 unassigned routes. [Reconciliation](backend-audit-caller-reconciliation-2026-10-07.md) preserves earlier snapshots and separates inventory from behavior |
-| MAP-02 | Reconcile method-level behaviors, non-API entrypoints, SQL/trigger callers, mobile direct access, edge and operational scripts to this ledger | failed | [11X input guards](backend-section-11-auth-credit-inputs-2026-10-07.md) reproduce four native Auth/admin-session failures; 37 actual and 37 focused cases pass after validation, with CI/release pending. [Explicit HTTP method map](backend-audit-http-method-map-2026-10-04.md) records 162 routes/186 methods, including 35 social routes/45 methods. Static paths remain scheduling evidence; [Current caller reconciliation](backend-audit-caller-reconciliation-2026-10-07.md) reads 337 production functions and reviews 153 secondary entries; remaining entrypoints, method behavior and table mutation/read paths stay open |
+| MAP-02 | Reconcile method-level behaviors, non-API entrypoints, SQL/trigger callers, mobile direct access, edge and operational scripts to this ledger | failed | [11Z order inputs](backend-section-11-credit-order-inputs-2026-10-07.md) reproduce six malformed-root cases; 56 actual/33 focused controls pass, with release pending. [11X input guards](backend-section-11-auth-credit-inputs-2026-10-07.md) reproduce four native Auth/admin-session failures; 37 actual and 37 focused cases pass after validation, with CI/release pending. [Explicit HTTP method map](backend-audit-http-method-map-2026-10-04.md) records 162 routes/186 methods, including 35 social routes/45 methods. Static paths remain scheduling evidence; [Current caller reconciliation](backend-audit-caller-reconciliation-2026-10-07.md) reads 337 production functions and reviews 153 secondary entries; remaining entrypoints, method behavior and table mutation/read paths stay open |
 
 ## Authentication and database
 
@@ -160,7 +161,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | MEDIA-06 | Concurrent disk admission/backpressure across cooperating writers | passed | [6R release](backend-section-06-capacity-admission-release-2026-10-03.md): shared atomic claims, enforced output ceilings, completed-source accounting, inherited readers, block/inode headroom and DB retry with stable credits; exact-main CI and standard release passed. Uncoordinated writers and production throughput remain outside this bounded certificate |
 | MEDIA-07 | Other scratch namespaces and metadata/legacy accumulation policy | failed | [6N reproduction/fix](backend-section-06-media-scratch-2026-10-01.md): all five old namespaces retain bytes after owner death. New leased scratch and cancellation ordering pass real FFmpeg locally and in CI; [deployed in #257](backend-section-06-media-scratch-release-2026-10-01.md). [6S release](backend-section-06-metadata-lifecycle-release-2026-10-03.md) fixes interrupted initialization; verified legacy environment-retirement evidence remains open |
 | MEDIA-08 | Upload/import validation, private signed reads, finalization and revocation | untested | [11S publication](backend-section-11-template-publication-2026-10-07.md) adds sixteen actual Auth/PostgREST/Storage controls with signed PNG delivery, committed activation reply faults, actual constraint rejection and copied-object cleanup. Exact-head CI/release remain; [11U](backend-section-11-moderation-storage-2026-10-07.md) adds sixteen actual moderation Storage deletion, signed-access, replay and fault controls; broader upload/import, expiry, video/fixed-asset variants and hosted revocation behavior stay open |
-| MEDIA-09 | Deletion/retention correctness and durable input/output recovery | failed | [11V revocation recovery](backend-section-11-showcase-revocation-recovery-2026-10-07.md) reproduces four fetchable-object failures after reported removal; ten actual SQL/Storage cases, 93 focused and sixteen direct controls pass after retaining paths until full verification. CI/release verification remains. [11W process death](backend-section-11-showcase-revocation-worker-death-2026-10-07.md) adds three actual SIGKILL checkpoints with fresh-process completion and independent zero fixtures; own CI/release remain. [10H](backend-section-10-retention-mapping-recovery-2026-10-06.md) mapping retry fix is [released and independently verified](backend-section-10-retention-mapping-release-2026-10-06.md). Broader recovery matrix stays open. |
+| MEDIA-09 | Deletion/retention correctness and durable input/output recovery | untested | [11V revocation recovery](backend-section-11-showcase-revocation-recovery-2026-10-07.md) reproduces four fetchable-object failures after reported removal; ten actual SQL/Storage cases, 93 focused and sixteen direct controls pass after retaining paths until full verification. [11V release is independently verified](backend-section-11-showcase-revocation-release-2026-10-07.md). [11W process death](backend-section-11-showcase-revocation-worker-death-2026-10-07.md) adds three actual SIGKILL checkpoints with fresh-process completion and independent zero fixtures; own CI/release remain. [10H](backend-section-10-retention-mapping-recovery-2026-10-06.md) mapping retry fix is [released and independently verified](backend-section-10-retention-mapping-release-2026-10-06.md). Broader recovery matrix stays open. |
 
 ## Community, jobs and operations
 
