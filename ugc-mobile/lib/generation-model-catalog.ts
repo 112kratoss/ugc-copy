@@ -1,6 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { catalogConditionsMatch as sharedCatalogConditionsMatch } from './model-catalog/protocol';
+import {
+  CLIENT_RENDERED_CONTROL_TYPES,
+  CLIENT_RENDERED_INPUT_CONSTRAINT_TYPES,
+  CLIENT_RENDERED_INPUT_SLOT_KINDS,
+  CLIENT_RENDERED_INPUT_SLOT_ROLES,
+  catalogConditionsMatch as sharedCatalogConditionsMatch,
+  modeGatedSettingValues,
+} from './model-catalog/protocol';
 
 export const LEGACY_GENERATION_MODEL_CATALOG_SCHEMA_VERSION = 1;
 export const GENERATION_MODEL_CATALOG_SCHEMA_VERSION = 3;
@@ -251,6 +258,10 @@ function parseControl(value: unknown): CatalogControl | null {
 
 function parseBaseControl(value: unknown): CatalogControl | null {
   if (!isRecord(value) || !isString(value.key) || !isString(value.label)) return null;
+  // The branches below are the whole of what this app draws; the shared list says so
+  // to the server's build as well, so a control type the web creator gains has to be
+  // taught here before the catalog may publish it.
+  if (!(CLIENT_RENDERED_CONTROL_TYPES as readonly string[]).includes(String(value.type))) return null;
   if (value.type === 'choice') {
     if (
       (value.presentation !== 'chips' && value.presentation !== 'select')
@@ -362,8 +373,8 @@ function parseInputSlot(value: unknown): CatalogInputSlot | null {
   if (
     !isRecord(value)
     || !isString(value.key)
-    || !['image', 'video', 'audio', 'character', 'preparedVoice'].includes(String(value.kind))
-    || !['reference', 'startFrame', 'endFrame'].includes(String(value.role))
+    || !(CLIENT_RENDERED_INPUT_SLOT_KINDS as readonly string[]).includes(String(value.kind))
+    || !(CLIENT_RENDERED_INPUT_SLOT_ROLES as readonly string[]).includes(String(value.role))
     || !isString(value.label)
     || !Number.isInteger(value.min)
     || !Number.isInteger(value.max)
@@ -424,7 +435,7 @@ function parseInputMode(value: unknown): CatalogInputMode | null {
 function parseInputConstraint(value: unknown): CatalogInputConstraint | null {
   if (
     !isRecord(value)
-    || !['total-count', 'weighted-count', 'combined-duration'].includes(String(value.type))
+    || !(CLIENT_RENDERED_INPUT_CONSTRAINT_TYPES as readonly string[]).includes(String(value.type))
     || !Array.isArray(value.slotKeys)
     || value.slotKeys.length === 0
     || !value.slotKeys.every(isString)
@@ -756,12 +767,17 @@ export function normalizeCatalogSettings(
   model: GenerationModelDescriptor,
   settings: Record<string, CatalogPrimitive>,
 ): Record<string, CatalogPrimitive> {
+  // A value an input mode is gated on is a shape the model takes whether or not the
+  // control lists it, as the server's quote reads it; a draft in that shape is not
+  // "no longer supported".
+  const modeGated = modeGatedSettingValues(model.inputModes);
   return Object.fromEntries(model.controls.map((control) => {
     const current = settings[control.key];
     if (control.type === 'choice') {
       return [
         control.key,
-        typeof current === 'string' && control.options.some((option) => option.value === current)
+        typeof current === 'string'
+          && (control.options.some((option) => option.value === current) || modeGated.get(control.key)?.has(current))
           ? current
           : control.defaultValue,
       ];

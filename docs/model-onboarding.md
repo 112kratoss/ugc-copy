@@ -203,6 +203,14 @@ know. A mobile release is needed only for:
 
 New optional keys are fine.
 
+The first of those is also a web change: both creators render only what the shared lists in
+`ugc-mobile/lib/model-catalog/protocol.ts` name (`CLIENT_RENDERED_CONTROL_TYPES`,
+`CLIENT_RENDERED_INPUT_MODE_KEYS`, `CLIENT_RENDERED_INPUT_SLOT_KINDS`, `CLIENT_RENDERED_INPUT_SLOT_ROLES`,
+`CLIENT_RENDERED_INPUT_CONSTRAINT_TYPES`), and `src/__tests__/model-catalog-client-parity.test.ts` fails a
+catalog build that publishes anything else. Teach both creators the new value, add it to the list, then
+emit the release that uses it. A value that an input mode is gated on (`referenceMode: subjects`) counts as
+supported by the quote and by the native draft whether or not an `Input mode` control lists it.
+
 ## Changing a model we already run
 
 A new price, cap or option follows the same path without the id work: change the code, emit a

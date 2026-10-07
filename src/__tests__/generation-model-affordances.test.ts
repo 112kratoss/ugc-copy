@@ -262,6 +262,21 @@ describe('descriptor-driven affordances', () => {
     expect(affordances.elements.maxNamed).toBe(3);
   });
 
+  it('offers named subjects on exactly the models whose descriptor publishes a subjects mode', () => {
+    // The native creator reads the same slot, so the two cannot disagree about which
+    // models take subjects. The fallback table answers the same way before the catalog loads.
+    for (const modelId of videoModelIds) {
+      const publishesSubjects = (descriptorFor(modelId)?.inputModes ?? []).some((mode) => mode.key === 'subjects');
+      const fromDescriptor = getVideoInputAffordances(descriptorFor(modelId), modelId, {});
+      const fromFallback = getVideoInputAffordances(null, modelId, {});
+      expect(fromDescriptor.subjects.enabled, `${modelId} subjects from the descriptor`).toBe(publishesSubjects);
+      expect(fromFallback.subjects.enabled, `${modelId} subjects from the fallback`).toBe(publishesSubjects);
+    }
+    const o3 = getVideoInputAffordances(descriptorFor('kling-o3'), 'kling-o3', {}).subjects;
+    expect(o3).toEqual({ enabled: true, maxImages: 12, maxNamed: 3, imagesPerSubject: { min: 2, max: 4 } });
+    expect(getVideoInputAffordances(descriptorFor('seedance-2'), 'seedance-2', {}).subjects.enabled).toBe(false);
+  });
+
   it('keeps Kling O3 references across multi-shot and drops them elsewhere', () => {
     const o3 = getVideoInputAffordances(descriptorFor('kling-o3'), 'kling-o3', { referenceMode: 'elements', isMultiShot: true });
     const seedance = getVideoInputAffordances(descriptorFor('seedance-2'), 'seedance-2', { referenceMode: 'elements', isMultiShot: true });

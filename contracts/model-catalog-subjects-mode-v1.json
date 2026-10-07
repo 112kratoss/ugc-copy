@@ -1,0 +1,25 @@
+{
+  "$comment": "The named-subjects input mode as the server publishes it for a model that takes them (Kling O3 today). src/__tests__/model-catalog-client-parity.test.ts pins it equal to the catalog build; ugc-mobile/__tests__/model-catalog-client-parity.test.ts proves the native parser keeps it and the draft can enter it. Pictures travel in the subjectImages slot, one asset per picture, grouped by a shared @handle; the server fuses each group into one subject.",
+  "modelId": "kling-o3",
+  "inputMode": {
+    "key": "subjects",
+    "label": "Named subjects",
+    "default": false,
+    "conditions": [
+      { "source": "setting", "key": "referenceMode", "operator": "equals", "value": "subjects" }
+    ],
+    "slots": [
+      {
+        "key": "subjectImages",
+        "kind": "image",
+        "role": "reference",
+        "label": "Subject images",
+        "min": 0,
+        "max": 12,
+        "supportsNaming": true,
+        "maxNamed": 3
+      }
+    ]
+  },
+  "imagesPerSubject": { "min": 2, "max": 4 }
+}

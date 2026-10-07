@@ -545,6 +545,13 @@ export interface RemixResolvedImageElement extends GenerationElementDescriptor {
   url: string | null;
 }
 
+/** A named subject a run kept: its handle, its name and the pictures that made it. */
+export interface RemixResolvedSubject {
+  handle: string;
+  displayName: string;
+  images: RemixResolvedAsset[];
+}
+
 export interface GenerationInputMediaItem {
   id?: string;
   generationId?: string;
@@ -586,6 +593,8 @@ export interface RemixSourceBundle {
       elements: RemixResolvedImageElement[];
       referenceVideos?: RemixResolvedAsset[];
       referenceAudios?: RemixResolvedAsset[];
+      /** Named subjects. Their pictures are not among `elements`. */
+      subjects?: RemixResolvedSubject[];
     };
     motion?: {
       characterImage: RemixResolvedAsset | null;
@@ -648,7 +657,7 @@ export interface VideoGenerationRequest {
   duration?: number;
   resolution?: string;
   fixedLens?: boolean;
-  referenceMode?: 'frames' | 'elements';
+  referenceMode?: 'frames' | 'elements' | 'subjects';
   startFrame?: RemixMediaAssetDescriptor | null;
   endFrame?: RemixMediaAssetDescriptor | null;
   seedanceAssets?: unknown | null;

@@ -62,6 +62,7 @@ import {
   buildCatalogGenerationPayload,
   buildCatalogQuoteRequest,
   buildUnifiedCatalogGenerationRequest,
+  catalogSubjectSlot,
   getCatalogDraftSettings,
   hasCreatorEditedPromptDuringRemix,
   hydrateCatalogCreationDraftFromRemixSource,
@@ -86,10 +87,13 @@ import {
   buildPromptEnhancementRequest,
   createDefaultCreationDraft,
   createMediaDraftFromUpload,
+  createSubjectDraft,
   getMotionDuration,
   REMIX_RESTORE_WARNING_MESSAGE,
   renameMediaDraft,
+  renameSubjectDraft,
   replaceMediaDraftMedia,
+  subjectAsReference,
   type CreationDraft,
   type ImageCreationDraft,
   type ImageModelId,
@@ -97,9 +101,12 @@ import {
   type MotionCreationDraft,
   type MotionModelId,
   type ReferenceMode,
+  type SubjectDraft,
   type VideoCreationDraft,
   type VideoModelId,
+  videoDraftHandles,
   videoDraftReferenceMode,
+  videoSubjects,
 } from '@/lib/media-creation-view-model';
 import { assetDurationSeconds, pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia } from '@/lib/media';
 import {
@@ -116,7 +123,7 @@ import { hexWithAlpha } from '@/lib/eased-fade';
 import { accentColor, appTheme, mediaColors, type ToolAccent } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse, PromptEnhancementLevel } from '@/lib/types';
-import type { ModelCatalogSummary } from '@/lib/model-catalog/protocol';
+import { SUBJECT_IMAGES_PER_NAME, subjectsPerRun, type ModelCatalogSummary } from '@/lib/model-catalog/protocol';
 import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
 import { invalidateActiveGenerations } from '@/lib/active-generations';
 import { verticalHitSlop } from '@/lib/hit-target';
@@ -1281,6 +1288,58 @@ function IdentityCreationScreen({
     }
   };
 
+  // A named subject: several pictures of one person or thing, picked together, which
+  // the provider fuses into one identity the prompt mentions as @name. Offered where
+  // the model's catalog descriptor publishes a subjects slot, as the web creator's
+  // editor is, so the two cannot disagree about which models take them.
+  const uploadSubject = async () => {
+    setMessage(null);
+    setPromptMessage(null);
+    const selectedModel = catalog ? getCatalogModel(catalog, videoDraft.model) : null;
+    const slot = catalogSubjectSlot(selectedModel);
+    if (!slot) {
+      setMessage('This model does not take named subjects.');
+      return;
+    }
+    const maxNamed = subjectsPerRun(slot);
+    if (videoSubjects(videoDraft).length >= maxNamed) {
+      setMessage(`This model takes up to ${maxNamed} named subject${maxNamed === 1 ? '' : 's'} per run.`);
+      return;
+    }
+    setIsUploading(true);
+    try {
+      const picked = await pickMediaList('image', { allowsMultipleSelection: true });
+      if (picked.length === 0) return;
+      if (picked.length < SUBJECT_IMAGES_PER_NAME.min) {
+        setMessage(`Pick ${SUBJECT_IMAGES_PER_NAME.min} to ${SUBJECT_IMAGES_PER_NAME.max} pictures of the same person or thing.`);
+        return;
+      }
+      const uploaded: MediaDraft[] = [];
+      for (const asset of picked.slice(0, SUBJECT_IMAGES_PER_NAME.max)) {
+        const media = await uploadPickedMedia(asset.uri, {
+          api,
+          fileName: asset.fileName,
+          mimeType: asset.mimeType,
+          kind: 'image',
+          sizeBytes: asset.fileSize ?? null,
+        });
+        uploaded.push(createMediaDraftFromUpload(media));
+      }
+      if (picked.length > SUBJECT_IMAGES_PER_NAME.max) {
+        setMessage(`Kept the first ${SUBJECT_IMAGES_PER_NAME.max} pictures: a subject is made of ${SUBJECT_IMAGES_PER_NAME.min} to ${SUBJECT_IMAGES_PER_NAME.max}.`);
+      }
+      setVideoDraft((draft) => {
+        const subjects = videoSubjects(draft);
+        const subject = createSubjectDraft(uploaded, `Subject ${subjects.length + 1}`, videoDraftHandles(draft));
+        return normalizeCatalogDraft({ ...draft, subjects: [...subjects, subject] });
+      });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Upload failed.');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   const enhancePrompt = async () => {
     if (!currentDraft.prompt.trim()) {
       setPromptMessage('Add a prompt before enhancing.');
@@ -1747,6 +1806,7 @@ function IdentityCreationScreen({
               onUploadEnd={() => uploadSingleImage('end')}
               onUploadVideo={() => uploadReferenceVideo('video')}
               onUploadAudio={uploadReferenceAudio}
+              onAddSubject={() => void uploadSubject()}
               onReplaceReference={(id) => {
                 void replaceImageReference('video', id);
               }}
@@ -2843,6 +2903,7 @@ function VideoCreatorComposer({
   onUploadEnd,
   onUploadVideo,
   onUploadAudio,
+  onAddSubject,
   onReplaceReference,
   replacingReferenceId,
   onReferenceNotice,
@@ -2868,6 +2929,7 @@ function VideoCreatorComposer({
   onUploadEnd: () => void;
   onUploadVideo: () => void;
   onUploadAudio: () => void;
+  onAddSubject: () => void;
   onReplaceReference: (id: string) => void;
   replacingReferenceId: string | null;
   onReferenceNotice: (message: string | null) => void;
@@ -2913,13 +2975,32 @@ function VideoCreatorComposer({
     && modeGatedReferenceSlots(model)
     && model?.inputs.combineFramesWithReferences !== true;
   const hasFrameAttachment = Boolean(draft.startFrame || draft.endFrame);
-  const hasReferenceAttachment = referenceMode === 'elements';
+  const hasPlainReferences = draft.references.length > 0
+    || draft.referenceVideos.length > 0
+    || draft.referenceAudios.length > 0
+    || draft.preparedAudioIds.length > 0
+    || draft.characterIds.length > 0;
+  const hasReferenceAttachment = referenceMode === 'elements' || hasPlainReferences;
   // Only ever lock the empty side. A restored draft can hold both — the previous surface
   // kept the frames while you worked in references — and locking each against the other
   // leaves a panel where nothing can be removed, so nothing can be unlocked either.
   const framesLockedByReferences = framesExcludeReferences && hasReferenceAttachment && !hasFrameAttachment;
   const referencesLockedByFrames = framesExcludeReferences && hasFrameAttachment && !hasReferenceAttachment;
   const framesAndReferencesConflict = framesExcludeReferences && hasFrameAttachment && hasReferenceAttachment;
+  // Named subjects, where the model's descriptor publishes a slot for them. They replace
+  // frames and references for the run, as the server's quote reads them, so the same
+  // empty-side locks hold between the subjects group and the other two.
+  const subjectSlot = catalogSubjectSlot(model);
+  const subjects = videoSubjects(draft);
+  const maxSubjects = subjectSlot ? subjectsPerRun(subjectSlot) : 0;
+  const subjectsAttached = subjects.length > 0;
+  const framesLockedBySubjects = subjectsAttached && !hasFrameAttachment;
+  const referencesLockedBySubjects = subjectsAttached && !hasReferenceAttachment;
+  const subjectsLockedByOthers = !subjectsAttached && (hasFrameAttachment || hasReferenceAttachment);
+  const subjectsConflict = subjectsAttached && (hasFrameAttachment || hasReferenceAttachment);
+  const subjectModeLabel = model?.inputModes?.find((mode) => (
+    mode.slots.some((slot) => slot.key === subjectSlot?.key)
+  ))?.label ?? 'Named subjects';
   const imageLimit = catalogInputLimit(
     model,
     draft,
@@ -2961,12 +3042,18 @@ function VideoCreatorComposer({
   const reusableModeLabel = model?.inputModes?.find((mode) => (
     mode.slots.some((slot) => slot.role === 'reference')
   ))?.label ?? 'Reusable';
-  const selectedReference = [
-    ...draft.references,
-    ...draft.referenceVideos,
-    draft.startFrame,
-    draft.endFrame,
-  ].find((media): media is MediaDraft => Boolean(media && media.id === referenceId)) ?? null;
+  // A subject opens the same details sheet a reference does, wearing a reference's
+  // shape: its first picture under its own id, name and handle, with its other
+  // pictures beside it.
+  const selectedSubject = subjects.find((subject) => subject.id === referenceId) ?? null;
+  const selectedReference = selectedSubject
+    ? subjectAsReference(selectedSubject)
+    : [
+      ...draft.references,
+      ...draft.referenceVideos,
+      draft.startFrame,
+      draft.endFrame,
+    ].find((media): media is MediaDraft => Boolean(media && media.id === referenceId)) ?? null;
   const detectedMention = useMemo(
     () => !draft.isMultiShot && promptFocused ? findActiveReferenceMention(draft.prompt, promptSelection) : null,
     [draft.isMultiShot, draft.prompt, promptFocused, promptSelection],
@@ -2976,13 +3063,16 @@ function VideoCreatorComposer({
   const mentionReferences = useMemo(() => {
     if (!activeMention) return [];
     const query = activeMention.query.toLowerCase();
-    const namedReferences = model?.id === 'kling-3.0-video'
-      ? [...draft.references, ...draft.referenceVideos]
-      : draft.references;
+    const namedReferences = [
+      ...(model?.id === 'kling-3.0-video'
+        ? [...draft.references, ...draft.referenceVideos]
+        : draft.references),
+      ...subjects.map(subjectAsReference),
+    ];
     return namedReferences.filter((media) => media.handle && (
       media.handle.slice(1).toLowerCase().includes(query) || media.displayName.toLowerCase().includes(query)
     ));
-  }, [activeMention, draft.referenceVideos, draft.references, model?.id]);
+  }, [activeMention, draft.referenceVideos, draft.references, model?.id, subjects]);
 
   useEffect(() => {
     promptTextRef.current = draft.prompt;
@@ -3030,6 +3120,14 @@ function VideoCreatorComposer({
 
   const renameSelectedReference = (displayName: string) => {
     if (!selectedReference) return;
+    if (selectedSubject) {
+      const renamedSubject = renameSubjectDraft(selectedSubject, displayName, videoDraftHandles(draft));
+      const prompt = promptContainsHandle(draft.prompt, selectedSubject.handle)
+        ? replacePromptHandle(draft.prompt, selectedSubject.handle, renamedSubject.handle)
+        : draft.prompt;
+      onChange({ ...draft, prompt, subjects: subjects.map((subject) => (subject.id === selectedSubject.id ? renamedSubject : subject)) });
+      return;
+    }
     const renamed = renameMediaDraft(selectedReference, displayName);
     if (draft.references.some((media) => media.id === selectedReference.id)) {
       const prompt = selectedReference.handle && promptContainsHandle(draft.prompt, selectedReference.handle)
@@ -3051,7 +3149,17 @@ function VideoCreatorComposer({
 
   const removeSelectedReference = () => {
     if (!selectedReference) return;
-    if (draft.references.some((media) => media.id === selectedReference.id)) {
+    if (selectedSubject) {
+      const handleUsed = promptContainsHandle(draft.prompt, selectedSubject.handle);
+      onReferenceNotice(handleUsed
+        ? `${selectedSubject.displayName} and ${selectedSubject.handle} were removed from this draft.`
+        : `${selectedSubject.displayName} was removed from this draft.`);
+      onChange({
+        ...draft,
+        prompt: handleUsed ? replacePromptHandle(draft.prompt, selectedSubject.handle) : draft.prompt,
+        subjects: subjects.filter((subject) => subject.id !== selectedSubject.id),
+      });
+    } else if (draft.references.some((media) => media.id === selectedReference.id)) {
       const handleUsed = promptContainsHandle(draft.prompt, selectedReference.handle);
       onReferenceNotice(handleUsed && selectedReference.handle
         ? `${selectedReference.displayName} and ${selectedReference.handle} were removed from this draft.`
@@ -3079,7 +3187,9 @@ function VideoCreatorComposer({
     setReferenceId(null);
   };
 
-  const primaryReferenceAction = referenceMode === 'elements'
+  const primaryReferenceAction = referenceMode === 'subjects'
+    ? onAddSubject
+    : referenceMode === 'elements'
     ? imageLimit > 0 ? onUploadImages : videoLimit > 0 ? onUploadVideo : onUploadAudio
     : draft.isMultiShot
       ? onUploadStart
@@ -3181,7 +3291,11 @@ function VideoCreatorComposer({
           <View style={{ gap: 2 }}>
             <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '800' }}>{draft.isMultiShot ? 'Story inputs' : 'Visual inputs'}</Text>
             <Text style={{ color: theme.colors.muted, fontSize: 11 }}>
-              {framesAndReferencesConflict
+              {subjectsConflict
+                ? `Clear frames and references — this run will use ${subjectModeLabel.toLowerCase()}`
+                : framesLockedBySubjects || referencesLockedBySubjects
+                ? `${subjectModeLabel} replace frames and references`
+                : framesAndReferencesConflict
                 ? `Clear one — this run will use ${reusableModeLabel.toLowerCase()}`
                 : framesLockedByReferences
                 ? `${frameModeLabel} unavailable with references attached`
@@ -3196,8 +3310,8 @@ function VideoCreatorComposer({
 
         {supportsFrames ? (
           <View
-            pointerEvents={framesLockedByReferences ? 'none' : 'auto'}
-            style={{ gap: 6, opacity: framesLockedByReferences ? 0.4 : 1 }}
+            pointerEvents={framesLockedByReferences || framesLockedBySubjects ? 'none' : 'auto'}
+            style={{ gap: 6, opacity: framesLockedByReferences || framesLockedBySubjects ? 0.4 : 1 }}
           >
             <View testID="video-frame-slots" style={{ flexDirection: 'row', gap: 9 }}>
               {supportsStartFrame ? (
@@ -3224,8 +3338,8 @@ function VideoCreatorComposer({
         {supportsReusable ? (
           <View
             testID="video-reusable-reference-rail"
-            pointerEvents={referencesLockedByFrames ? 'none' : 'auto'}
-            style={{ gap: 10, opacity: referencesLockedByFrames ? 0.4 : 1 }}
+            pointerEvents={referencesLockedByFrames || referencesLockedBySubjects ? 'none' : 'auto'}
+            style={{ gap: 10, opacity: referencesLockedByFrames || referencesLockedBySubjects ? 0.4 : 1 }}
           >
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingRight: 6 }}>
               {draft.references.map((media) => (
@@ -3266,18 +3380,48 @@ function VideoCreatorComposer({
           </View>
         ) : null}
 
-        {supportsFrames || supportsReusable ? null : (
+        {subjectSlot ? (
+          <View
+            testID="video-subjects-group"
+            pointerEvents={subjectsLockedByOthers ? 'none' : 'auto'}
+            style={{ gap: 8, opacity: subjectsLockedByOthers ? 0.4 : 1 }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700' }}>{subjectModeLabel}</Text>
+              <Text style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '700' }}>{subjects.length} / {maxSubjects}</Text>
+            </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingRight: 6 }}>
+              {subjects.map((subject) => (
+                <Pressable key={subject.id} accessibilityRole="button" accessibilityLabel={`Open details for ${subject.displayName}, ${subject.handle}`} onPress={() => setReferenceId(subject.id)} style={({ pressed }) => ({ width: 72, gap: 4, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+                  <SubjectPreview subject={subject} size={72} />
+                  <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700', textAlign: 'center' }}>{subject.displayName}</Text>
+                </Pressable>
+              ))}
+              {subjects.length < maxSubjects ? (
+                <CompactRailAddButton label={`Subject ${subjects.length}/${maxSubjects}`} onPress={onAddSubject} disabled={isUploading} />
+              ) : null}
+            </ScrollView>
+            <Text style={{ color: theme.colors.muted, fontSize: 11 }}>
+              {`${SUBJECT_IMAGES_PER_NAME.min} to ${SUBJECT_IMAGES_PER_NAME.max} pictures of one person or thing, mentioned in the prompt as @name.`}
+            </Text>
+          </View>
+        ) : null}
+
+        {supportsFrames || supportsReusable || subjectSlot ? null : (
           <Text style={{ color: theme.colors.muted, fontSize: 11 }}>This model creates from text without reference media.</Text>
         )}
       </View>
 
       <ReferenceDetailsOverlay
         media={selectedReference}
+        gallery={selectedSubject?.images ?? null}
+        noun={selectedSubject ? 'subject' : 'reference'}
         handleUsedInPrompt={promptContainsHandle(draft.prompt, selectedReference?.handle)}
         onClose={() => setReferenceId(null)}
         onRename={renameSelectedReference}
         onUseHandle={selectedReference && (
-          draft.references.some((media) => media.id === selectedReference.id)
+          selectedSubject !== null
+          || draft.references.some((media) => media.id === selectedReference.id)
           || (model?.id === 'kling-3.0-video' && draft.referenceVideos.some((media) => media.id === selectedReference.id))
         )
           ? (handle) => {
@@ -3617,11 +3761,21 @@ function ComposerToolbarButton({ icon, label, onPress, disabled, accent, quiet }
 }
 
 /** What the Reference details sheet draws: the reference, and which of its optional rows it has. */
-type ReferenceDetailsContent = { media: MediaDraft; insertsHandle: boolean; replaces: boolean; isReplacing: boolean };
+type ReferenceDetailsContent = {
+  media: MediaDraft;
+  /** A subject's pictures, drawn in place of the one preview. */
+  gallery: MediaDraft[] | null;
+  noun: 'reference' | 'subject';
+  insertsHandle: boolean;
+  replaces: boolean;
+  isReplacing: boolean;
+};
 
 function sameReferenceDetails(held: ReferenceDetailsContent | null, live: ReferenceDetailsContent) {
   return held !== null
     && held.media === live.media
+    && held.gallery === live.gallery
+    && held.noun === live.noun
     && held.insertsHandle === live.insertsHandle
     && held.replaces === live.replaces
     && held.isReplacing === live.isReplacing;
@@ -3649,6 +3803,8 @@ function sameReferenceDetails(held: ReferenceDetailsContent | null, live: Refere
  */
 function ReferenceDetailsOverlay({
   media,
+  gallery = null,
+  noun = 'reference',
   handleUsedInPrompt,
   onClose,
   onRename,
@@ -3658,6 +3814,9 @@ function ReferenceDetailsOverlay({
   onRemove,
 }: {
   media: MediaDraft | null;
+  /** A subject's pictures: the sheet then draws all of them in place of the one preview. */
+  gallery?: MediaDraft[] | null;
+  noun?: 'reference' | 'subject';
   handleUsedInPrompt: boolean;
   onClose: () => void;
   onRename: (displayName: string) => void;
@@ -3675,7 +3834,7 @@ function ReferenceDetailsOverlay({
   // or it would change height under its own exit.
   const [held, setHeld] = useState<ReferenceDetailsContent | null>(null);
   const live: ReferenceDetailsContent | null = media
-    ? { media, insertsHandle: Boolean(onUseHandle), replaces: Boolean(onReplace), isReplacing: Boolean(isReplacing) }
+    ? { media, gallery, noun, insertsHandle: Boolean(onUseHandle), replaces: Boolean(onReplace), isReplacing: Boolean(isReplacing) }
     : null;
   if (live && !sameReferenceDetails(held, live)) setHeld(live);
   const content = live ?? held;
@@ -3748,9 +3907,11 @@ function ReferenceDetailsOverlay({
     renameTimerRef.current = setTimeout(() => setRenameStatus('saved'), 650);
   };
 
+  const nounLabel = content.noun === 'subject' ? 'Subject' : 'Reference';
+
   const confirmRemove = () => {
     void showConfirmDialog({
-      title: 'Remove reference?',
+      title: `Remove ${content.noun}?`,
       message: handleUsedInPrompt && shown.handle
         ? `${accessibleName} and ${shown.handle} will be removed from this draft.`
         : `${accessibleName} will be removed from this draft.`,
@@ -3772,23 +3933,30 @@ function ReferenceDetailsOverlay({
             {/* The title takes a pull as the grabber does, wherever the body is scrolled to. The panel's own
                 drag waits for the body to be at its top, and with the keyboard up the body never quite is. */}
             <View {...drag.panHandlers} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-              <Text style={{ color: theme.colors.text, fontSize: 20, fontWeight: '800' }}>Reference details</Text>
-              <Pressable accessibilityRole="button" accessibilityLabel="Close reference details" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+              <Text style={{ color: theme.colors.text, fontSize: 20, fontWeight: '800' }}>{`${nounLabel} details`}</Text>
+              <Pressable accessibilityRole="button" accessibilityLabel={`Close ${content.noun} details`} onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
                 <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
               </Pressable>
             </View>
             {/* `handled`: a press on a row answers with the keyboard up, and a touch on anything else in the body puts the keyboard away. */}
             <ScrollView {...drag.scrollProps} automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 14 }}>
-              {/* The whole reference, centred across the sheet: it is what the model is given, so none of it is cropped away. */}
-              <MediaPreview url={shown.url} kind={shown.kind === 'video' ? 'video' : 'image'} height={300} radius={22} letterbox playerHeld={!arrived} />
+              {content.gallery ? (
+                /* A subject is all of its pictures; the sheet draws each, as the model is given each. */
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9 }} testID="subject-details-gallery">
+                  {content.gallery.map((image) => <ReferenceMediaPreview key={image.id} media={image} size={132} />)}
+                </ScrollView>
+              ) : (
+                /* The whole reference, centred across the sheet: it is what the model is given, so none of it is cropped away. */
+                <MediaPreview url={shown.url} kind={shown.kind === 'video' ? 'video' : 'image'} height={300} radius={22} letterbox playerHeld={!arrived} />
+              )}
               <View style={{ gap: 7 }}>
-                <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>Reference name</Text>
+                <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>{`${nounLabel} name`}</Text>
                 <TextInput
-                  accessibilityLabel={`Reference name for ${accessibleName}`}
+                  accessibilityLabel={`${nounLabel} name for ${accessibleName}`}
                   value={shown.displayName}
                   onChangeText={handleRename}
                   onBlur={renameStatus === 'saving' ? markRenameSaved : undefined}
-                  placeholder="Reference name"
+                  placeholder={`${nounLabel} name`}
                   placeholderTextColor={theme.colors.faint}
                   style={{ minHeight: 52, borderRadius: 16, borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.surfaceInset, color: theme.colors.text, paddingHorizontal: 14, fontSize: 14, fontWeight: '700' }}
                 />
@@ -3816,7 +3984,7 @@ function ReferenceDetailsOverlay({
               ) : null}
               <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${accessibleName}`} onPress={confirmRemove} style={({ pressed }) => ({ minHeight: 52, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.danger, 0.34), alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
                 <Trash2 size={17} color={theme.colors.danger} />
-                <Text style={{ color: theme.colors.danger, fontSize: 13, fontWeight: '800' }}>Remove reference</Text>
+                <Text style={{ color: theme.colors.danger, fontSize: 13, fontWeight: '800' }}>{`Remove ${content.noun}`}</Text>
               </Pressable>
             </ScrollView>
           </SheetPanel>
@@ -4935,6 +5103,35 @@ function ToggleRow({ title, value, onValueChange }: { title: string; value: bool
 
 /** Renews a reference's link from where it came from. The creator screen supplies it. */
 const ReferenceLinkRenewal = createContext<((media: MediaDraft) => Promise<string>) | null>(null);
+
+/**
+ * A subject's tile: its pictures in a two-by-two collage. One picture would read as
+ * one reference, and a subject is its several pictures together.
+ */
+function SubjectPreview({ subject, size = 72 }: { subject: SubjectDraft; size?: number }) {
+  const theme = useAppTheme();
+  const renewLink = useContext(ReferenceLinkRenewal);
+  const gap = 2;
+  const cell = (size - gap) / 2;
+  return (
+    <View
+      testID={`subject-preview-${subject.id}`}
+      style={{ width: size, height: size, borderRadius: 16, borderCurve: 'continuous', overflow: 'hidden', backgroundColor: theme.colors.surfaceStrong, flexDirection: 'row', flexWrap: 'wrap', gap }}
+    >
+      {subject.images.slice(0, 4).map((image) => (
+        <StableMediaImage
+          key={image.id}
+          url={image.url}
+          cacheKey={`reference-thumbnail:${image.id}:${image.url}`}
+          contentFit="cover"
+          transition={80}
+          style={{ width: cell, height: cell }}
+          resolveRetryUrl={renewLink ? () => renewLink(image) : undefined}
+        />
+      ))}
+    </View>
+  );
+}
 
 function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: number }) {
   const theme = useAppTheme();
