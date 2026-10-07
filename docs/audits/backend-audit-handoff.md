@@ -6,10 +6,90 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/backend-marketplace-order-inputs-12a`, extending the verified-parent release chain with reproduced commerce parsing fixes. The user receipt/evidence edits remain untouched.
+Current checkout: `codex/backend-referral-notification-recovery-12b`, extending the verified-parent release chain with reproduced commerce parsing fixes. The user receipt/evidence edits remain untouched.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+#403 is attached at https://github.com/112kratoss/ugc-copy/pull/403 on candidate
+1ddddc668a05ec5b8ec8fd6679fd22e90dc32f3b, branch
+codex/backend-referral-notification-recovery-12b. Initial exact-head Quality 37644567466 passes mobile/browser/migration/API jobs
+and all web tests, but web lint rejects the new CJS worker require import. It is
+corrected to a dynamic import and the 18-case suite is rerun before a new head. Independent local fixture cleanup is zero for users,
+transactions, programs, outbox, jobs and injected triggers. Release preparation
+is under .audit-evidence/backend-social/referral-notification-release/: fresh
+production baseline, complete migration plan (only the new migration), exact
+new-object signatures/three function definitions and ACLs from clean replay,
+four runtime hashes, strict verifier and merge guard. The guard expects verified
+#402 parent aea29967, Quality 37640696352 and standard 37642306396 attempt 2.
+Run it only after exact candidate CI succeeds. The verifier requires unchanged
+old schema, exact new object signatures/functions/ACLs and only one new INFO
+rls_enabled_no_policy finding for the private outbox; do not accept other drift.
+Release documents for #401/#402 and RevenueCat/admin browser readbacks are
+committed in #403. This new checkpoint can be carried in the next audit PR.
+
+
+12A #402 is independently verified at 15:25:36 UTC on
+aea299676ff0f17a5b5c93eff8bbeef03caac0eb. All five exact-main jobs in 37640696352
+pass. Standard 37642306396 attempt 1 ended after successful authorization with
+no deploy job/failed-step diagnostic; first rerun API returned HTTP 500. The later
+unchanged rerun succeeded as attempt 2. Independent five-runtime/schema/all110
+advisor and live smoke checks pass. MAP-02 returns to untested; ledger counts
+53: 24 passed, 25 untested, two failed (PAY-04/MEDIA-07), two external.
+See backend-section-12-commerce-inputs-release-2026-10-07.md.
+
+12B now reproduces two actual SQL/PostgREST lost-referral-notification cases.
+Local candidate queues future financial events transactionally, delivers history
+and push work atomically, and preserves retryability after settlement. All 18
+actual cases include two SIGKILL checkpoints, managed partial failure, reversal/
+restoration, poison backoff, concurrent drains, and real local HTTP push delivery.
+151 focused cases and 2,316 SQL assertions pass; clean isolated replay, app/test
+types and lint pass. Full local web suite: 7,495 passed/two stale-test failures; updated cron error mock
+and SQL deep-link inventory with 11 focused repair cases passing. Candidate CI
+must rerun the full suite. New migration
+20261007150522_referral_reward_notification_outbox.sql is the only pending
+production migration and sorts after the complete applied ledger. Production
+referral ledger/reward/purchase-event counts are zero. No historical backfill or
+production DDL. Review backend-section-12-referral-notification-recovery-2026-10-07.md.
+Current checkout branch has uncommitted candidate and release/evidence docs;
+retain user receipt edits and private/untracked Section 1 files. Candidate CI,
+PR, fresh verified-parent/mobile-idle gates, main CI, standard release and exact
+SQL/schema/advisor/runtime readback remain mandatory.
+
+RevenueCat read-only inspection matches all eight current production receipt
+rows to provider purchases with exact store ID/owner/product bindings. All are
+sandbox and owned; source transactions successful/applied. Both app credential
+flags, six credit products, default packages and production-only webhook are
+configured. Three customer event lists are empty, which is not delivery proof.
+See backend-section-12-revenuecat-readback-2026-10-07.md; PAY-05 stays external.
+
+
+#401 is independently verified at 14:54:13 UTC on 0dbef436. Exact-main Quality
+37588261608 and standard release 37589599345 pass; all six runtime digests,
+schema/all 110 advisors, input/auth boundaries and smoke pass. The original
+credit-order verifier incorrectly assumed proxy rejection for an absent bearer;
+source-confirmed validation-before-Auth returns private 400, while unsigned
+valid-plan and invalid-bearer controls both return private 401. Both verifier
+versions and the correction are retained. See
+backend-section-11-credit-inputs-release-2026-10-07.md and the actual local
+admin-credit browser report; fixture cleanup is zero. Historical reconciliation
+remains open and no customer balance was changed.
+
+#402 candidate 9c60e9e255b37bc240e1199ec3a5e4dd00cd0c2b passes all five jobs in
+37588642236. Fresh #401 verification/schema/advisor/live/main and immediate
+mobile-store-idle gates pass. It merged at 14:54:46 UTC as
+aea299676ff0f17a5b5c93eff8bbeef03caac0eb. Exact-main Quality, automatic standard
+release and commerce-inputs-release/ independent readback remain. Its credit
+verify null response is expected to be private 400 (required fields precede
+signature/Auth), other unsigned commerce cases remain 401.
+
+RevenueCat MCP read-only discovery now works for the Magicbooklet project.
+Both store credential flags and all six credit products/default packages are
+configured. The single webhook targets the expected URL, all event/app types,
+production environment only. Configuration is not provider-delivery proof;
+PAY-05 remains external. No provider configuration was changed.
+
+Earlier checkpoints follow; the newer release status above supersedes them.
 
 12A reproduces eleven actual exception/500 cases across marketplace/resource
 orders and three payment-verification handlers, plus a resource null-root lookup

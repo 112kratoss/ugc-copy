@@ -1,4 +1,5 @@
 import { MobilePushMaintenanceError } from '@/lib/mobile-push-maintenance-error';
+import { ReferralRewardReconciliationError } from '@/lib/referral-reward-reconciliation';
 import { hasPendingUploadedMediaMaintenance, processUploadedMediaMaintenance } from '@/lib/uploaded-media-maintenance';
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -345,7 +346,7 @@ async function runManagedBackendJob<TSummary>({
     };
     } catch (error) {
       const finishedAtMs = Date.now();
-      const partialSummary = error instanceof MobilePushMaintenanceError ? error.summary : undefined;
+      const partialSummary = error instanceof MobilePushMaintenanceError || error instanceof ReferralRewardReconciliationError ? error.summary : undefined;
       if (currentServiceClient) {
         await finishBackendJobRun(currentServiceClient, jobRun, {
           status: 'failed',
@@ -699,7 +700,7 @@ export function runReferralRewardReconciliationBackendJob(options: {
       failed: 'referral_reward_reconciliation_failed',
     },
     hasWork: (client) => hasUnsettledReferralPurchaseTransactions(client),
-    onNoWork: async () => ({ processed: 0, settled: 0, failed: 0, failures: [] }),
+    onNoWork: async () => ({ processed: 0, settled: 0, failed: 0, failures: [], notificationDelivery: { processed: 0, delivered: 0, failed: 0 } }),
     run: (client) => reconcileReferralPurchaseRewards(client, {
       limit: REFERRAL_REWARD_RECONCILIATION_BATCH_LIMIT,
     }),

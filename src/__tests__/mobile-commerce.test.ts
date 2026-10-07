@@ -1533,7 +1533,7 @@ function createSettledPurchaseClient(
   ));
 
   return {
-    adminSupabase: { rpc, from: (table: string) => history.from(table) } as unknown as SupabaseClient,
+    adminSupabase: withMobileNotificationHistory({ rpc, from: (table: string) => history.from(table) } as unknown as SupabaseClient, history),
     rpc,
   };
 }

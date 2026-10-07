@@ -13,6 +13,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 export function createMobileNotificationHistory() {
   const started: string[] = [];
   const sent: Array<Record<string, unknown>> = [];
+  const referralEvents = new Map<string, Array<Record<string, unknown>>>();
   let held: Promise<void> | null = null;
   let releaseHeld = () => {};
 
@@ -35,6 +36,15 @@ export function createMobileNotificationHistory() {
     started,
     /** Notification rows, in the order they were written. */
     sent,
+    enqueueReferralRewards(rewards: Array<Record<string, unknown>>) {
+      for (const reward of rewards) {
+        const eventKey = String(reward.event_key ?? reward.eventKey);
+        const events = referralEvents.get(eventKey) ?? [];
+        events.push({ user_id: reward.user_id ?? reward.userId, type: 'referral_reward_earned',
+          dedupe_key: `referral-reward:${reward.id ?? reward.rewardId}:${eventKey}` });
+        referralEvents.set(eventKey, events);
+      }
+    },
     /** Every notification from here on waits at its first step until `release()`. */
     hold() {
       held = new Promise<void>((resolve) => {
@@ -105,7 +115,7 @@ export function createMobileNotificationHistory() {
       throw new Error(`Unexpected notification table: ${table}`);
     },
     handlesRpc(name: string) {
-      return name === 'upsert_mobile_notification';
+      return name === 'upsert_mobile_notification' || name === 'deliver_referral_reward_notifications';
     },
     /**
      * A grouped notification (a save or a share) is written by one call that
@@ -113,6 +123,14 @@ export function createMobileNotificationHistory() {
      * is the case that goes on to push.
      */
     async rpc(name: string, args: Record<string, unknown> = {}) {
+      if (name === 'deliver_referral_reward_notifications') {
+        const event = referralEvents.get(String(args.p_event_key))?.shift();
+        if (!event) return { data: { processed: 0, delivered: 0, failed: 0 }, error: null };
+        started.push(String(event.dedupe_key));
+        await held;
+        sent.push(event);
+        return { data: { processed: 1, delivered: 1, failed: 0 }, error: null };
+      }
       if (name !== 'upsert_mobile_notification') {
         throw new Error(`Unexpected notification call: ${name}`);
       }
@@ -148,9 +166,14 @@ export function withMobileNotificationHistory(
 ): SupabaseClient {
   return {
     from: (table: string) => (history.handles(table) ? history.from(table) : client.from(table)),
-    rpc: (name: string, args?: Record<string, unknown>) => (
-      history.handlesRpc(name) ? history.rpc(name, args) : client.rpc(name, args)
-    ),
+    rpc: async (name: string, args?: Record<string, unknown>) => {
+      if (history.handlesRpc(name)) return history.rpc(name, args);
+      const result = await client.rpc(name, args);
+      if (name === 'settle_referral_purchase_rewards' && result.data?.rewards) {
+        history.enqueueReferralRewards(result.data.rewards);
+      }
+      return result;
+    },
   } as unknown as SupabaseClient;
 }
 

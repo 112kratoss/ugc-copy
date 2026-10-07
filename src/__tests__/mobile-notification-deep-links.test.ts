@@ -66,8 +66,14 @@ describe('the links the server writes into notifications', () => {
     ));
 
     // The scan is reading the code it thinks it is.
-    expect(written).toEqual(expect.arrayContaining(['/profile', '/invite']));
+    expect(written).toEqual(expect.arrayContaining(['/profile']));
     expect(written.filter((link) => !Object.values(deepLinks).includes(link))).toEqual([]);
+  });
+
+  it('keeps SQL-created referral notification links in the same mobile contract', () => {
+    const sql = fs.readFileSync(path.resolve('supabase/migrations/20261007150522_referral_reward_notification_outbox.sql'), 'utf8');
+    const link = /'(\/[^']+)', 'referral_reward', v_event\.reward_id/.exec(sql)?.[1];
+    expect(link).toBe(deepLinks.invite);
   });
 
   it('opens each of them on the web as well', () => {

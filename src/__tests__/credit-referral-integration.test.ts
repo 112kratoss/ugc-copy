@@ -137,6 +137,7 @@ describe('credit purchase referral notifications', () => {
   const settled = { status: 'settled', purchaserBonusCredits: 5, rewarded: true };
 
   function settle(history: MobileNotificationHistory, runAfterResponse?: (task: () => Promise<unknown>) => void) {
+    history.enqueueReferralRewards(referredSettlement.rewards);
     return settleCreditPurchaseReferralRewards({
       adminSupabase: withMobileNotificationHistory({} as SupabaseClient, history),
       purchaserUserId: 'buyer-1',
