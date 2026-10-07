@@ -11,6 +11,30 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 
 ## Exact checkpoint
 
+12C candidate expanded before release: actual App/Play Store refund after buyer
+deletion reproduced identity_mismatch, leaving the inviter credited. The same
+unapplied migration now retains mobile receipt identity and matches detached
+original owners only for credit adjustments; cross-owner adjustment and purchase
+restore stay rejected. Actual authenticated webhook handler cases use local
+PostgREST/SQL.16 lifecycle cases,18 existing payment SQL cases and final2328 SQL
+assertions/clean replay pass. Release expected signatures now include10 functions
+and the mobile receipt identity column/trigger. Old0013c34c CI is superseded once
+the expanded head is pushed; do not merge it merely because it passes.
+
+12C PR #407 is attached: candidate0013c34c59ef137c93dc4dfb70dfc92327baeb21,
+Quality37678774653. Includes independently released #405 catalog changes; main
+parent d4b76910762b0d46f3cc416ba87fa0c985c283d3 passes Quality37677022593 and
+standard37678605859. New AGENTS contract note read. Independent backend readback
+passes on this parent under referral-deletion-parent-release. Private merge guard
+expects this exact parent/candidate/run and fresh schema/advisors/mobile idle.
+Only run after all5 candidate jobs pass. Standard main CI/release/readback remain.
+Prepared strict verifier/changed signatures/8 function bodies+ACLs/Auth trigger,
+complete migration plan, and 8-check rollback probe under referral-deletion-release.
+Probe passes locally with zero cleanup.14 actual lifecycle,61 existing deletion,
+18 notification recovery,45 focused,2328 SQL assertions/clean replay and types/lint
+pass. Independent cleanup has zero users/programs/transactions/pending jobs.
+User receipt diff hash remains bb579a5c0a2ee1540000d57c7e7580feeb4c0cb0ff1e9427f2c9bf41025007fc.
+
 12B #403 is independently verified in production as 98f55011c8e820ae6e11acdb9d5f4dfb609b496e.
 Candidate37659876117/main37661798356 all5 pass; standard37663113075 succeeds.
 Independent 19:55:24 UTC readback, schema/function/ACL/runtime checks, expected

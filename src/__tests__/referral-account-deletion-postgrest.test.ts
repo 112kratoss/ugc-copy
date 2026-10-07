@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { postRevenueCatWebhookRouteResponse } from '@/lib/revenuecat-webhook-route-adapter-service';
 import { executeInitialAccountDeletion } from '@/lib/account-deletion-service';
 import { deliverReferralRewardNotifications } from '@/lib/referral-reward-notifications';
 import { settleReferralPurchaseRewards } from '@/lib/referral-reward-service';
@@ -13,6 +14,7 @@ const connectionString = process.env.SUPABASE_TEST_DB_URL;
 describe.skipIf(!configPath || !connectionString)('referral account deletion through actual Auth and SQL', () => {
   let db: Client, admin: SupabaseClient;
   let inviter: string, invitee: string, program: string, code: string, visit: string, attribution: string, transaction: string;
+  let mobileReceipt: string | null = null, mobileIntent: string | null = null;
   const notifications = async () => (await db.query('select user_id,dedupe_key from public.mobile_notifications where user_id=any($1::uuid[]) order by user_id', [[inviter, invitee]])).rows;
   const balances = async () => (await db.query('select credits,promotional_credits from public.profiles where id=any($1::uuid[])', [[inviter, invitee]])).rows;
   const queue = async () => (await db.query('select q.completed_at,q.attempts,q.last_error_code from public.referral_reward_notification_outbox q join public.referral_credit_ledger l on l.id=q.ledger_id where l.transaction_id=$1', [transaction])).rows;
@@ -34,6 +36,7 @@ describe.skipIf(!configPath || !connectionString)('referral account deletion thr
   });
   afterAll(async () => { await db?.end(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
   beforeEach(async () => {
+    mobileReceipt = null; mobileIntent = null;
     [inviter, invitee, program, code, visit, attribution, transaction] = Array.from({ length: 7 }, () => randomUUID());
     const users = [];
     for (let index = 0; index < 2; index++) {
@@ -55,6 +58,11 @@ describe.skipIf(!configPath || !connectionString)('referral account deletion thr
     try {
       await db.query('set local session_replication_role=replica');
       await db.query('delete from public.referral_reward_notification_outbox where ledger_id in (select id from public.referral_credit_ledger where transaction_id=$1)', [transaction]);
+      if (mobileReceipt) {
+        await db.query('delete from public.mobile_purchase_adjustment_events where mobile_store_transaction_id=$1', [mobileReceipt]);
+        await db.query('delete from public.mobile_store_transactions where id=$1', [mobileReceipt]);
+        await db.query('delete from public.mobile_purchase_intents where id=$1', [mobileIntent]);
+      }
       for (const table of ['credit_purchase_adjustments', 'referral_credit_ledger', 'referral_reward_adjustments', 'referral_rewards', 'referral_purchase_events']) {
         await db.query(`delete from public.${table} where transaction_id=$1`, [transaction]);
       }
@@ -178,6 +186,40 @@ describe.skipIf(!configPath || !connectionString)('referral account deletion thr
     expect(JSON.stringify(work.data)).toContain(transaction);
     expect(await settleReferralPurchaseRewards(admin, transaction)).toMatchObject({ status: 'settled', rewards: [expect.objectContaining({ userId: inviter, credits: 25 })] });
     expect(await balances()).toEqual([{ credits: 525, promotional_credits: 25 }]);
+  });
+
+  it.each(['app_store', 'play_store'] as const)('reconciles %s refund and restoration after the buyer deletes without allowing another receipt owner', async provider => {
+    await db.query('delete from public.transactions where id=$1', [transaction]);
+    await db.query('update public.profiles set credits=0,promotional_credits=0 where id=any($1::uuid[])', [[inviter, invitee]]);
+    const storeId = 'audit-deleted-' + randomUUID(), external = 'mobile_' + provider + '_' + storeId;
+    const purchased = await admin.rpc('complete_mobile_purchase', { p_user_id: invitee, p_purchase_intent_id: null, p_product_id: 'magicbooklet.credits.starter', p_provider: provider, p_store_transaction_id: storeId, p_external_order_id: external, p_payment_id: storeId });
+    expect(purchased.error).toBeNull(); expect(purchased.data).toMatchObject({ status: 'completed' });
+    const receipt = (await db.query('select id,purchase_intent_id,source_record_id from public.mobile_store_transactions where external_order_id=$1', [external])).rows[0];
+    mobileReceipt = receipt.id; mobileIntent = receipt.purchase_intent_id; transaction = receipt.source_record_id;
+    await settleReferralPurchaseRewards(admin, transaction);
+    await executeInitialAccountDeletion({ admin, userId: invitee });
+    const adjust = (userId: string, action: string, time: number, event = action + storeId) => admin.rpc('reconcile_mobile_purchase_adjustment', { p_external_order_id: external, p_user_id: userId, p_product_id: 'magicbooklet.credits.starter', p_event_id: event, p_event_timestamp_ms: time, p_action: action });
+    expect((await adjust(inviter, 'refund', 1000)).data).toMatchObject({ status: 'identity_mismatch' });
+    const webhook = async (action: 'refund' | 'restore', time: number) => {
+      const response = await postRevenueCatWebhookRouteResponse({
+        request: new Request('http://audit.local/api/mobile/commerce/revenuecat-webhook', {
+          method: 'POST', headers: { authorization: 'local-audit-token' },
+          body: JSON.stringify({ event: { id: action + storeId, type: action === 'refund' ? 'CANCELLATION' : 'REFUND_REVERSED', app_user_id: invitee, product_id: 'magicbooklet.credits.starter', transaction_id: storeId, original_transaction_id: storeId, store: provider.toUpperCase(), environment: 'PRODUCTION', event_timestamp_ms: time } }),
+        }),
+        dependencies: { getExpectedAuthorization: () => 'local-audit-token', createServiceClient: () => admin, logError: () => {}, recordPaymentWebhookProcessingFailure: vi.fn().mockResolvedValue(undefined) },
+      });
+      expect(response.status).toBe(200); return response.json();
+    };
+    expect(await webhook('refund', 1000)).toMatchObject({ result: 'refunded' });
+    expect(await balances()).toEqual([{ credits: 0, promotional_credits: 0 }]);
+    expect((await adjust(invitee, 'refund', 1000)).data).toMatchObject({ status: 'duplicate_event' });
+    expect(await webhook('restore', 2000)).toMatchObject({ result: 'restored' });
+    expect(await balances()).toEqual([{ credits: 25, promotional_credits: 25 }]);
+    expect((await db.query('select id from auth.users where id=$1', [invitee])).rows).toEqual([]);
+    expect((await adjust(inviter, 'restore', 3000, 'other-owner-' + storeId)).data).toMatchObject({ status: 'identity_mismatch' });
+    const stolen = await admin.rpc('complete_mobile_purchase', { p_user_id: inviter, p_purchase_intent_id: null, p_product_id: 'magicbooklet.credits.starter', p_provider: provider, p_store_transaction_id: storeId, p_external_order_id: external, p_payment_id: storeId });
+    expect(stolen.error).toBeNull(); expect(stolen.data).toMatchObject({ status: 'transaction_conflict' });
+    expect(await balances()).toEqual([{ credits: 25, promotional_credits: 25 }]);
   });
 
 });

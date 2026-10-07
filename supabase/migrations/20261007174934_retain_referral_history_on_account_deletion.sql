@@ -56,6 +56,17 @@ END;
 $$;
 REVOKE ALL ON FUNCTION public.retain_referral_account_identity() FROM PUBLIC, anon, authenticated, service_role;
 
+ALTER TABLE public.mobile_store_transactions
+  ADD COLUMN detached_user_id uuid,
+  ALTER COLUMN user_id DROP NOT NULL,
+  DROP CONSTRAINT mobile_store_transactions_user_id_fkey;
+ALTER TABLE public.mobile_store_transactions ADD CONSTRAINT mobile_store_transactions_user_id_fkey
+  FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+COMMENT ON COLUMN public.mobile_store_transactions.detached_user_id IS
+  'Original account UUID retained for financial reconciliation after Auth deletion; never an active account reference.';
+CREATE TRIGGER aa_mobile_store_transactions_retain_account_identity BEFORE INSERT OR UPDATE ON public.mobile_store_transactions
+  FOR EACH ROW EXECUTE FUNCTION public.retain_referral_account_identity('user_id');
+
 ALTER TABLE public.transactions
   ADD COLUMN detached_user_id uuid,
   ALTER COLUMN user_id DROP NOT NULL,
@@ -185,6 +196,20 @@ CREATE INDEX referral_attributions_detached_invitee_idx ON public.referral_attri
 DO $migration$
 DECLARE definition text; old_block text; new_block text;
 BEGIN
+  SELECT pg_get_functiondef('public.reconcile_mobile_purchase_adjustment(text,uuid,text,text,bigint,text)'::regprocedure) INTO definition;
+  old_block := $old$IF v_ledger.user_id IS DISTINCT FROM p_user_id THEN$old$;
+  new_block := $new$IF coalesce(v_ledger.user_id, CASE WHEN v_ledger.entitlement_type = 'credits' THEN v_ledger.detached_user_id END) IS DISTINCT FROM p_user_id THEN$new$;
+  IF (length(definition) - length(replace(definition, old_block, ''))) / length(old_block) <> 1 THEN
+    RAISE EXCEPTION 'Expected one referral deletion block in reconcile_mobile_purchase_adjustment(text,uuid,text,text,bigint,text)';
+  END IF;
+  EXECUTE replace(definition, old_block, new_block);
+  SELECT pg_get_functiondef('public.reconcile_mobile_credit_purchase_adjustment(text,uuid,text,text,bigint,text)'::regprocedure) INTO definition;
+  old_block := $old$    AND user_id = p_user_id$old$;
+  new_block := $new$    AND coalesce(user_id, detached_user_id) = p_user_id$new$;
+  IF (length(definition) - length(replace(definition, old_block, ''))) / length(old_block) <> 1 THEN
+    RAISE EXCEPTION 'Expected one referral deletion block in reconcile_mobile_credit_purchase_adjustment(text,uuid,text,text,bigint,text)';
+  END IF;
+  EXECUTE replace(definition, old_block, new_block);
   SELECT pg_get_functiondef('public.prevent_referral_identity_mutation()'::regprocedure) INTO definition;
   old_block := $old$IF NEW.user_id IS DISTINCT FROM OLD.user_id$old$;
   new_block := $new$IF (NEW.user_id IS DISTINCT FROM OLD.user_id

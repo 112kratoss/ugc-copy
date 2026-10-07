@@ -32,6 +32,11 @@ in the recovery selector; their surviving inviter can receive a reward even when
 settlement was interrupted until after buyer deletion. An index supports detached
 attribution lookup.
 
+Mobile credit receipts also retain the original account UUID for late adjustment
+identity. This permits only the original owner’s credit adjustment; it does not
+make the receipt available for another account’s restore, and does not broaden
+noncredit entitlement restoration.
+
 The change retains all transaction history after account deletion, including
 transactions without referral rewards, because purchase adjustments may depend on
 it. Existing admin revenue mapping already accepts null live owner IDs. Original
@@ -41,18 +46,22 @@ provider-backed evidence.
 
 ## Verification
 
-- **14 actual local Auth/PostgREST/SQL cases pass**, including the two reproduced
+- **16 actual local Auth/PostgREST/SQL cases pass**, including the two reproduced
   failures, three positive controls, late refund/restore for either deleted party,
   duplicate refunds, accurate returned balances, deleted-recipient notification
   cancellation, both beneficiaries deleting, ungranted purchase protection,
   immutable ledger/identity rejection, interrupted settlement recovery, and
-  concurrent deletion versus settlement/notification delivery with retry.
+  concurrent deletion versus settlement/notification delivery with retry. App Store
+  and Play Store cases use the actual authenticated webhook handler with local
+  PostgREST/SQL, verify late refund/restore after buyer deletion, and reject a
+  different receipt owner. Both cases failed with identity_mismatch before the
+  mobile receipt and transaction reconciliation guards were extended.
 - Candidate response verification caught a stale `remaining_credits` value after
   referral reconciliation; the response now rereads the final balance. A separate
   failing candidate test exposed missing recovery for an unsettled deleted buyer;
   the final selector/settlement changes pass that regression.
 - **61 existing account-deletion Auth/Storage cases**, **18 notification recovery
-  cases**, and **32 focused cases** pass. The final clean migration replay and
+  cases**, and **45 focused cases** and **18 existing payment-database cases** pass. The final clean migration replay and
   **2,328 SQL assertions across 108 files** pass. CI runs the new Auth/SQL suite.
 - New trigger functions deny direct client/service execution; retained referral
   tables remain private. Application/test type checks and scoped lint are gated
