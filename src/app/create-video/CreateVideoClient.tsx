@@ -32,7 +32,7 @@ import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSe
 import PublicShareButton from '@/components/PublicShareButton';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
-import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, getVideoElementSupport, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/client-generation-models';
+import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/client-generation-models';
 import { getVideoInputAffordances, getVideoRunAffordances } from '@/lib/generation-model-affordances';
 import type { GenerationModelDescriptor } from '@/lib/generation-model-catalog';
 import {
@@ -270,21 +270,26 @@ type KlingSubjectDraft = {
 // has given up its handle to take the handle of its new name.
 type KlingSubjectSeed = Omit<KlingSubjectDraft, 'handle'> & { handle?: string | null };
 
-const KLING_SUBJECT_LIMIT = 3;
-const KLING_SUBJECT_MIN_IMAGES = 2;
-const KLING_SUBJECT_MAX_IMAGES = 4;
+// How many subjects a run takes, and how many pictures make one. Read off the model's
+// catalog descriptor, which is how the native creator reads them too.
+type SubjectLimits = { maxNamed: number; imagesPerSubject: { min: number; max: number } };
 
 function KlingSubjectsEditor({
     subjects,
+    limits,
     disabled,
     onChange,
     onRename,
 }: {
     subjects: KlingSubjectDraft[];
+    limits: SubjectLimits;
     disabled: boolean;
     onChange: (next: KlingSubjectSeed[]) => void;
     onRename: (subjectId: string, displayName: string) => void;
 }) {
+    const KLING_SUBJECT_LIMIT = limits.maxNamed;
+    const KLING_SUBJECT_MIN_IMAGES = limits.imagesPerSubject.min;
+    const KLING_SUBJECT_MAX_IMAGES = limits.imagesPerSubject.max;
     // A name while it is being typed. It becomes the subject's name, and the
     // handle and the prompt follow it, when the field is left or Enter is pressed.
     const names = useNameDrafts();
@@ -1070,8 +1075,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         activeReferenceMode === 'elements'
             ? runElements.length + runReferenceVideos.length + runReferenceAudios.length + (isGeminiOmniVideoModel ? preparedAudioIds.length + characterIds.length : 0) + (combinesFrameWithReferences && (startImageUrl || startImageFile) ? 1 : 0)
             : frameReferenceCount + (isKlingVideoModel ? klingVideoElements.length : 0);
-    const klingSubjectsActive = isKlingO3Model && klingSubjects.length > 0;
-    const klingSubjectHandles = isKlingO3Model
+    // Named subjects are offered on the models whose descriptor publishes them, which is
+    // how the native creator finds them; a model id written here would reach one client
+    // and not the other.
+    const supportsNamedSubjects = affordances.subjects.enabled;
+    const klingSubjectsActive = supportsNamedSubjects && klingSubjects.length > 0;
+    const klingSubjectHandles = supportsNamedSubjects
         ? klingSubjects.map((subject) => subject.handle)
         : [];
     const additionalSettings = useAdditionalCatalogSettings(catalogDescriptor, CATALOG_HANDLED_KEYS);
@@ -1198,7 +1207,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 kind: 'video' as const,
             }))
             : []),
-        ...(isKlingO3Model
+        ...(supportsNamedSubjects
             ? klingSubjects.map((subject, index) => ({
                 id: subject.id,
                 displayName: subject.displayName,
@@ -1536,14 +1545,19 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     }] : []),
                 }))));
 
+                // How many references the restored model takes: its catalog descriptor
+                // once the catalog has reached the registry, the fallback tables before,
+                // read the way referenceMediaLimits reads its clip and track limits.
+                const restoredElementSupport = getVideoInputAffordances(
+                    (VIDEO_MODELS[nextModelId] as { catalogDescriptor?: GenerationModelDescriptor }).catalogDescriptor,
+                    nextModelId,
+                    { mode: nextMode, isMultiShot: nextIsMultiShot },
+                ).elements;
+
                 if (isSeedance2VideoModelId(nextModelId)) {
-                    const elementSupport = getVideoElementSupport(nextModelId, {
-                        mode: nextMode,
-                        isMultiShot: nextIsMultiShot,
-                    });
                     const restoredSeeds = createRemixElementSeeds(
                         restoredVideoInputs?.elements ?? [],
-                        elementSupport.maxElements
+                        restoredElementSupport.maxTotal
                     ).map((seed, index) => ({
                         ...seed,
                         file: null,
@@ -1630,15 +1644,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     // image references come back under the handles the prompt
                     // mentions them by, as many as the model takes. A multi-shot run
                     // gets none: the page shows no reference card there and sends
-                    // none. (The table leaves Kling O3 on in multi-shot for its
+                    // none. (The descriptor leaves Kling O3 on in multi-shot for its
                     // named subjects.)
-                    const elementSupport = getVideoElementSupport(nextModelId, {
-                        mode: nextMode,
-                        isMultiShot: nextIsMultiShot,
-                    });
                     commitElements(hydrateVideoElements(createRemixElementSeeds(
                         restoredVideoInputs?.elements ?? [],
-                        nextIsMultiShot ? 0 : elementSupport.maxElements
+                        nextIsMultiShot ? 0 : restoredElementSupport.maxTotal
                     ).map((seed) => ({ ...seed, file: null }))));
                     // Its clips and tracks come back where the model has a slot for
                     // them. Kling 3.0's clips are its video elements, restored below.
@@ -2822,14 +2832,15 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         }
 
         if (klingSubjectsActive) {
-            if (klingSubjects.length > KLING_SUBJECT_LIMIT) {
-                setError(`Kling O3 supports up to ${KLING_SUBJECT_LIMIT} named subjects per run.`);
+            const { maxNamed, imagesPerSubject } = affordances.subjects;
+            if (klingSubjects.length > maxNamed) {
+                setError(`${videoModel.displayName} supports up to ${maxNamed} named subjects per run.`);
                 return;
             }
             const invalidSubject = klingSubjects.find((subject) =>
-                subject.images.length < KLING_SUBJECT_MIN_IMAGES || subject.images.length > KLING_SUBJECT_MAX_IMAGES);
+                subject.images.length < imagesPerSubject.min || subject.images.length > imagesPerSubject.max);
             if (invalidSubject) {
-                setError(`${invalidSubject.displayName || 'Each subject'} needs ${KLING_SUBJECT_MIN_IMAGES}–${KLING_SUBJECT_MAX_IMAGES} images of the same subject.`);
+                setError(`${invalidSubject.displayName || 'Each subject'} needs ${imagesPerSubject.min}–${imagesPerSubject.max} images of the same subject.`);
                 return;
             }
             if (frameReferenceCount > 0 || (activeReferenceMode === 'elements' && hasReferenceAttachment)) {
@@ -3850,7 +3861,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             </motion.div>
                         )}
 
-	                        {isKlingO3Model && (
+	                        {supportsNamedSubjects && (
 	                            <motion.div
 	                                initial={{ opacity: 0, y: 16 }}
 	                                animate={{ opacity: 1, y: 0 }}
@@ -3858,6 +3869,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                            >
 	                                <KlingSubjectsEditor
 	                                    subjects={klingSubjects}
+	                                    limits={affordances.subjects}
 	                                    disabled={isGenerating}
 	                                    onChange={commitKlingSubjects}
 	                                    onRename={handleKlingSubjectRename}

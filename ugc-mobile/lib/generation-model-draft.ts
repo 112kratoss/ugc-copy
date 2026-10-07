@@ -19,6 +19,8 @@ import {
   extractPromptHandles,
   hydrateCreationDraftFromRemixSource,
   REMIX_RESTORE_WARNING_MESSAGE,
+  subjectHandles,
+  videoSubjects,
   type CatalogDraftInputAsset,
   type CatalogDraftInputSlots,
   type CreationDraft,
@@ -29,6 +31,12 @@ import {
   type MotionCreationDraft,
   type VideoCreationDraft,
 } from './media-creation-view-model';
+import {
+  modeGatedSettingValues,
+  SUBJECT_IMAGES_PER_NAME,
+  SUBJECT_IMAGES_SLOT_KEY,
+  subjectsPerRun,
+} from './model-catalog/protocol';
 import type {
   GenerationElementDescriptor,
   ImageGenerationRequest,
@@ -68,10 +76,15 @@ function characterIds(draft: VideoCreationDraft): string[] {
   return Array.isArray(draft.characterIds) ? draft.characterIds : [];
 }
 
-function normalizedControlValue(draft: CreationDraft, control: CatalogControl): CatalogPrimitive {
+function normalizedControlValue(
+  draft: CreationDraft,
+  control: CatalogControl,
+  modeGated: Map<string, Set<string>>,
+): CatalogPrimitive {
   const current = currentControlValue(draft, control);
   if (control.type === 'choice') {
-    return typeof current === 'string' && control.options.some((option) => option.value === current)
+    return typeof current === 'string'
+      && (control.options.some((option) => option.value === current) || modeGated.get(control.key)?.has(current))
       ? current
       : control.defaultValue;
   }
@@ -87,8 +100,9 @@ function normalizedControlValue(draft: CreationDraft, control: CatalogControl): 
 
 function writeControlValues(draft: CreationDraft, model: GenerationModelDescriptor) {
   const values: Record<string, CatalogPrimitive> = {};
+  const modeGated = modeGatedSettingValues(model.inputModes);
   for (const control of model.controls) {
-    const value = normalizedControlValue(draft, control);
+    const value = normalizedControlValue(draft, control, modeGated);
     const key = draftKey(draft, control.key);
     values[key] = control.key === 'duration' && control.type === 'choice' ? Number(value) : value;
   }
@@ -134,6 +148,17 @@ function legacyAssetsForSlot(
   }
   if (slot.role === 'endFrame') {
     return draft.tool === 'video' && draft.endFrame ? [mediaDraftAsset(draft.endFrame)] : [];
+  }
+  if (slot.key === SUBJECT_IMAGES_SLOT_KEY) {
+    // One asset per picture, each under its subject's handle and name: the server
+    // groups them back into subjects by the handle, and labels each by the name.
+    return draft.tool === 'video'
+      ? videoSubjects(draft).flatMap((subject) => subject.images.map((image) => ({
+          ...mediaDraftAsset(image),
+          displayName: subject.displayName,
+          handle: subject.handle,
+        })))
+      : [];
   }
   if (slot.kind === 'image') {
     if (draft.tool === 'image' || draft.tool === 'video') return draft.references.map(mediaDraftAsset);
@@ -187,11 +212,27 @@ function hasReusableVideoInputs(model: GenerationModelDescriptor) {
   return reusableInputs.some((input) => Boolean(input && input.max > 0));
 }
 
+/**
+ * The slot a model's named subjects travel in, when its descriptor publishes one. The
+ * same descriptor gives the web creator its editor, so subjects appear on exactly the
+ * models the catalog says take them.
+ */
+export function catalogSubjectSlot(model: GenerationModelDescriptor | null | undefined): CatalogInputSlot | null {
+  for (const mode of model?.inputModes ?? []) {
+    const slot = mode.slots.find((candidate) => candidate.key === SUBJECT_IMAGES_SLOT_KEY);
+    if (slot && slot.max > 0) return slot;
+  }
+  return null;
+}
+
 function normalizedVideoReferenceMode(
   draft: VideoCreationDraft,
   model: GenerationModelDescriptor,
   isMultiShot: boolean
 ): VideoCreationDraft['referenceMode'] {
+  // Subjects are the run's shape while one is attached, across multi-shot too: the
+  // subjects mode is gated on nothing but its own reference mode.
+  if (videoSubjects(draft).length > 0 && catalogSubjectSlot(model)) return 'subjects';
   if (isMultiShot) return 'frames';
 
   const supportsFrames = model.inputs.startFrame || model.inputs.endFrame;
@@ -233,6 +274,7 @@ export function applyCatalogModelDefaults(
   }
   if (draft.tool === 'video') {
     const isMultiShot = model.capabilities.multiShot ? Boolean(values.isMultiShot ?? draft.isMultiShot) : false;
+    const subjectSlot = catalogSubjectSlot(model);
     return {
       ...draft,
       ...values,
@@ -251,6 +293,9 @@ export function applyCatalogModelDefaults(
         : [],
       referenceAudios: model.inputs.audioReferences
         ? draft.referenceAudios.slice(0, model.inputs.audioReferences.max)
+        : [],
+      subjects: subjectSlot
+        ? videoSubjects(draft).slice(0, subjectsPerRun(subjectSlot))
         : [],
       preparedAudioIds: model.inputs.preparedAudioReferences
         ? preparedAudioIds(draft).slice(0, model.inputs.preparedAudioReferences.max)
@@ -341,14 +386,23 @@ function unknownPromptMentions(draft: CreationDraft, model: GenerationModelDescr
         ...draft.references,
         ...(model.id === 'kling-3.0-video' && draft.referenceMode === 'elements' ? draft.referenceVideos : []),
       ];
-  const knownHandles = references.map((reference) => reference.handle).filter((handle): handle is string => Boolean(handle));
+  const knownHandles = [
+    ...references.map((reference) => reference.handle).filter((handle): handle is string => Boolean(handle)),
+    ...(draft.tool === 'video' ? subjectHandles(draft) : []),
+  ];
   return extractPromptHandles(draft.prompt).filter((handle) => !knownHandles.includes(handle));
 }
 
 function validateControls(draft: CreationDraft, model: GenerationModelDescriptor, errors: string[]) {
+  // A value an input mode is gated on is a shape the model takes, listed by the
+  // control or not; the server's quote accepts it the same way.
+  const modeGated = modeGatedSettingValues(model.inputModes);
   for (const control of model.controls) {
     const value = currentControlValue(draft, control);
-    if (control.type === 'choice' && (typeof value !== 'string' || !control.options.some((option) => option.value === value))) {
+    if (
+      control.type === 'choice'
+      && (typeof value !== 'string' || !(control.options.some((option) => option.value === value) || modeGated.get(control.key)?.has(value)))
+    ) {
       errors.push(`${model.displayName} does not support ${control.label.toLowerCase()} ${String(value ?? '')}.`);
     }
     if (control.type === 'boolean' && typeof value !== 'boolean') {
@@ -440,6 +494,32 @@ function validateCatalogV2Inputs(
     if (!catalogConditionsMatch(constraint.conditions, settings, inputCounts)) continue;
     if (catalogInputConstraintValue(constraint, slots) > constraint.max) {
       errors.push(constraint.message);
+    }
+  }
+  if (draft.tool === 'video' && settings.referenceMode === 'subjects') {
+    validateSubjects(draft, model, errors);
+  }
+}
+
+/**
+ * What the slot's count cannot say about subjects: how many there are, and that each
+ * is made of enough pictures to fuse and not more than the provider reads. The server
+ * refuses both; a run refused there would have had its credits held first.
+ */
+function validateSubjects(draft: VideoCreationDraft, model: GenerationModelDescriptor, errors: string[]) {
+  const slot = catalogSubjectSlot(model);
+  const subjects = videoSubjects(draft);
+  if (!slot) {
+    if (subjects.length > 0) errors.push(`${model.displayName} does not take named subjects.`);
+    return;
+  }
+  const maxNamed = subjectsPerRun(slot);
+  if (subjects.length > maxNamed) {
+    errors.push(`${model.displayName} takes up to ${maxNamed} named subject${maxNamed === 1 ? '' : 's'} per run.`);
+  }
+  for (const subject of subjects) {
+    if (subject.images.length < SUBJECT_IMAGES_PER_NAME.min || subject.images.length > SUBJECT_IMAGES_PER_NAME.max) {
+      errors.push(`${subject.displayName} needs ${SUBJECT_IMAGES_PER_NAME.min} to ${SUBJECT_IMAGES_PER_NAME.max} pictures of the same person or thing.`);
     }
   }
 }
@@ -572,15 +652,18 @@ export function buildCatalogQuoteRequest(
   }
   if (draft.tool === 'video') {
     const usesReusableReferences = draft.referenceMode === 'elements';
+    const usesSubjects = draft.referenceMode === 'subjects';
     return {
       schemaVersion,
       kind: 'video',
       modelId: model.id,
       settings,
       inputCounts: {
-        images: usesReusableReferences
-          ? draft.references.length
-          : (draft.startFrame ? 1 : 0) + (!draft.isMultiShot && draft.endFrame ? 1 : 0),
+        images: usesSubjects
+          ? videoSubjects(draft).reduce((count, subject) => count + subject.images.length, 0)
+          : usesReusableReferences
+            ? draft.references.length
+            : (draft.startFrame ? 1 : 0) + (!draft.isMultiShot && draft.endFrame ? 1 : 0),
         videos: usesReusableReferences ? draft.referenceVideos.length : 0,
         audios: usesReusableReferences ? draft.referenceAudios.length : 0,
         preparedAudios: usesReusableReferences ? preparedAudioIds(draft).length : 0,
@@ -812,6 +895,7 @@ export function hasStartedCreationDraft(draft: CreationDraft) {
     return draft.references.length > 0
       || draft.referenceVideos.length > 0
       || draft.referenceAudios.length > 0
+      || videoSubjects(draft).length > 0
       || Boolean(draft.startFrame)
       || Boolean(draft.endFrame)
       || draft.multiPrompts.some((shot) => shot.prompt.trim());

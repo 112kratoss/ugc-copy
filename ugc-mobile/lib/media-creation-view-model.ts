@@ -8,6 +8,7 @@ import type {
   RemixMediaAssetDescriptor,
   RemixResolvedAsset,
   RemixResolvedImageElement,
+  RemixResolvedSubject,
   RemixSourceBundle,
   VideoGenerationRequest,
   VideoMultiPromptInput,
@@ -297,7 +298,11 @@ export type ImageResolution = '1K' | '2K' | '3K' | '4K';
 export type ImageOutputFormat = 'jpg' | 'png';
 export type ImageQualityMode = 'standard' | 'turbo' | 'balanced' | 'quality';
 export type MotionResolution = '720p' | '1080p';
-export type ReferenceMode = 'frames' | 'elements';
+/**
+ * The shape of a video run's visual inputs: frames, reusable references, or named
+ * subjects. Read off what is attached (`videoDraftReferenceMode`), never chosen.
+ */
+export type ReferenceMode = 'frames' | 'elements' | 'subjects';
 export type MediaKind = 'image' | 'video' | 'audio';
 export type CatalogDraftPrimitive = string | number | boolean;
 
@@ -364,6 +369,19 @@ export interface VideoShotDraft {
   duration: number;
 }
 
+/**
+ * A named subject: several pictures of one person or thing that the provider fuses
+ * into one identity, mentioned in the prompt as @handle. Its pictures travel in the
+ * catalog's `subjectImages` slot, each carrying the subject's handle and name, which
+ * is how the server groups them back into a subject.
+ */
+export interface SubjectDraft {
+  id: string;
+  displayName: string;
+  handle: string;
+  images: MediaDraft[];
+}
+
 export interface VideoCreationDraft extends CatalogBackedDraftFields {
   tool: 'video';
   model: VideoModelId;
@@ -373,6 +391,8 @@ export interface VideoCreationDraft extends CatalogBackedDraftFields {
   references: MediaDraft[];
   referenceVideos: MediaDraft[];
   referenceAudios: MediaDraft[];
+  /** Absent on drafts saved by builds that had no subjects; read through `videoSubjects`. */
+  subjects?: SubjectDraft[];
   preparedAudioIds: string[];
   characterIds: string[];
   startFrame: MediaDraft | null;
@@ -685,7 +705,17 @@ function isImageQualityMode(value: string | null): value is ImageQualityMode {
 }
 
 function isReferenceMode(value: string | null): value is ReferenceMode {
-  return value === 'frames' || value === 'elements';
+  return value === 'frames' || value === 'elements' || value === 'subjects';
+}
+
+/** The named subjects a video draft holds; a draft saved before subjects existed holds none. */
+export function videoSubjects(draft: VideoCreationDraft): SubjectDraft[] {
+  return Array.isArray(draft.subjects) ? draft.subjects : [];
+}
+
+/** The @handles a draft's subjects answer to, for mention suggestions and the unknown-mention check. */
+export function subjectHandles(draft: VideoCreationDraft): string[] {
+  return videoSubjects(draft).map((subject) => subject.handle);
 }
 
 function isMotionResolution(value: string | null): value is MotionResolution {
@@ -817,6 +847,31 @@ function hydrateRemixAssets(
   return { drafts, skipped };
 }
 
+/**
+ * A run's named subjects, each with the pictures that came back. A picture without a
+ * link is skipped and counted, as a plain reference's is; a subject left with none is
+ * dropped whole, since a handle with nothing behind it has nothing to restore.
+ */
+function hydrateRemixSubjects(subjects: RemixResolvedSubject[] | undefined) {
+  let skipped = 0;
+  const drafts = (subjects ?? []).flatMap((subject, subjectIndex): SubjectDraft[] => {
+    if (typeof subject.handle !== 'string' || !subject.handle.startsWith('@')) return [];
+    const images = (subject.images ?? []).flatMap((asset, index) => {
+      const draft = createMediaDraftFromRemixAsset(asset, `${subject.displayName || subject.handle.slice(1)} ${index + 1}`);
+      if (!draft) skipped += 1;
+      return draft ? [{ ...draft, handle: subject.handle }] : [];
+    });
+    if (images.length === 0) return [];
+    return [{
+      id: `subject-${subjectIndex + 1}-${subject.handle.slice(1)}`,
+      displayName: subject.displayName || subject.handle.slice(1),
+      handle: subject.handle,
+      images,
+    }];
+  });
+  return { drafts, skipped };
+}
+
 function hydrateOptionalRemixAsset(
   asset: RemixResolvedAsset | null | undefined,
   fallbackDisplayName: string
@@ -856,6 +911,79 @@ export function renameMediaDraft(media: MediaDraft, displayName: string): MediaD
  * name, and the handle — an @mention already written into the prompt keeps
  * pointing at the same slot, now backed by the new file.
  */
+/** A handle made from a name that no reference or subject in the draft holds yet. */
+function uniqueHandle(displayName: string, takenHandles: readonly string[]) {
+  const base = toHandleBase(displayName) || 'subject';
+  const taken = new Set(takenHandles);
+  let handle = `@${base}`;
+  let suffix = 2;
+  while (taken.has(handle)) {
+    handle = `@${base}_${suffix}`;
+    suffix += 1;
+  }
+  return handle;
+}
+
+/** Every @handle a video draft's references and subjects answer to. */
+export function videoDraftHandles(draft: VideoCreationDraft): string[] {
+  return [
+    ...[...draft.references, ...draft.referenceVideos].map((media) => media.handle).filter((handle): handle is string => Boolean(handle)),
+    ...subjectHandles(draft),
+  ];
+}
+
+/**
+ * A named subject from the pictures just picked. Its pictures take the subject's
+ * handle, which is how the catalog slot carries them, and the subject's own id so a
+ * tile can open it.
+ */
+export function createSubjectDraft(
+  images: MediaDraft[],
+  displayName: string,
+  takenHandles: readonly string[],
+): SubjectDraft {
+  const name = displayName.trim() || 'Subject';
+  const handle = uniqueHandle(name, takenHandles);
+  return {
+    id: createDraftId('subject', `${handle}:${images.map((image) => image.id).join(',')}`),
+    displayName: name,
+    handle,
+    images: images.map((image) => ({ ...image, handle })),
+  };
+}
+
+/** Renames a subject; its handle follows the name, as a reference's does, and stays unique. */
+export function renameSubjectDraft(
+  subject: SubjectDraft,
+  displayName: string,
+  takenHandles: readonly string[],
+): SubjectDraft {
+  const name = displayName.trim();
+  if (!name) return subject;
+  const handle = uniqueHandle(name, takenHandles.filter((handle) => handle !== subject.handle));
+  return {
+    ...subject,
+    displayName: name,
+    handle,
+    images: subject.images.map((image) => ({ ...image, handle })),
+  };
+}
+
+/**
+ * A subject as a reference tile sees it: its first picture, under the subject's own
+ * id, name and handle. The details sheet and the mention suggestions take references;
+ * a subject wearing this shape goes through them unchanged.
+ */
+export function subjectAsReference(subject: SubjectDraft): MediaDraft {
+  const [first] = subject.images;
+  return {
+    ...(first ?? { kind: 'image' as const, url: '', fileName: subject.displayName }),
+    id: subject.id,
+    displayName: subject.displayName,
+    handle: subject.handle,
+  };
+}
+
 export function replaceMediaDraftMedia(media: MediaDraft, upload: UploadedMediaInput): MediaDraft {
   return {
     ...media,
@@ -904,6 +1032,7 @@ export function createDefaultCreationDraft(tool: CreatorToolId): CreationDraft {
       references: [],
       referenceVideos: [],
       referenceAudios: [],
+      subjects: [],
       preparedAudioIds: [],
       characterIds: [],
       startFrame: null,
@@ -1028,15 +1157,20 @@ function hydrateVideoDraftFromRemixSource(
   const restoredEndFrame = hydrateOptionalRemixAsset(videoInputs?.endFrame, 'End Frame');
   const restoredReferenceVideos = hydrateRemixAssets(videoInputs?.referenceVideos, 'Video reference');
   const restoredReferenceAudios = hydrateRemixAssets(videoInputs?.referenceAudios, 'Audio reference');
+  const restoredSubjects = hydrateRemixSubjects(videoInputs?.subjects);
   const mode = stringSetting(settings, 'mode');
   const isMultiShot = booleanSetting(settings, 'isMultiShot');
   const multiPrompts = hydrateVideoMultiPrompts(settings.multiPrompts);
   const referenceModeSetting = isReferenceMode(stringSetting(settings, 'referenceMode'))
     ? stringSetting(settings, 'referenceMode') as ReferenceMode
     : null;
-  const referenceMode = videoInputs?.referenceMode ?? referenceModeSetting ?? (
-    restoredElements.drafts.length > 0 ? 'elements' : baseDraft.referenceMode
-  );
+  // A run that kept subjects is a subjects run, whatever its settings recorded: the
+  // bundle's own mode never names subjects, as the server reads them off the slot.
+  const referenceMode: ReferenceMode = restoredSubjects.drafts.length > 0
+    ? 'subjects'
+    : videoInputs?.referenceMode ?? referenceModeSetting ?? (
+      restoredElements.drafts.length > 0 ? 'elements' : baseDraft.referenceMode
+    );
 
   let nextDraft: VideoCreationDraft = {
     ...baseDraft,
@@ -1045,6 +1179,7 @@ function hydrateVideoDraftFromRemixSource(
     references: restoredElements.drafts,
     referenceVideos: restoredReferenceVideos.drafts,
     referenceAudios: restoredReferenceAudios.drafts,
+    subjects: restoredSubjects.drafts,
     preparedAudioIds: Array.isArray(settings.preparedAudioIds) ? settings.preparedAudioIds.filter((value): value is string => typeof value === 'string' && Boolean(value.trim())).slice(0, 3) : [],
     characterIds: Array.isArray(settings.characterIds) ? settings.characterIds.filter((value): value is string => typeof value === 'string' && Boolean(value.trim())).slice(0, 3) : [],
     startFrame: restoredStartFrame.draft,
@@ -1193,6 +1328,9 @@ export function hydrateCreationDraftFromRemixSource(
  * slots at all, so it is always in the reference shape.
  */
 export function videoDraftReferenceMode(draft: VideoCreationDraft): ReferenceMode {
+  // Subjects replace frames and references for the run, as the server's quote reads
+  // them: only the subjects mode's slot is active while one is attached.
+  if (videoSubjects(draft).length > 0) return 'subjects';
   if (draft.model === 'gemini-omni-video') return 'elements';
   const hasReferences = draft.references.length > 0
     || draft.referenceVideos.length > 0
