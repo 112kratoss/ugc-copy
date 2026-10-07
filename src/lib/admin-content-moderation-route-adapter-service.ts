@@ -81,7 +81,10 @@ export async function postAdminGenerationModeration(request: Request): Promise<N
   const headers = createApiResponseHeaders(request, API_CACHE_CONTROL.privateNoStore);
 
   return withAdminOperator(request, 'admin_generation_moderation_failed', async (reviewerId, client) => {
-    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    const rawBody: unknown = await request.json().catch(() => null);
+    const body: Record<string, unknown> = rawBody && typeof rawBody === 'object' && !Array.isArray(rawBody)
+      ? rawBody as Record<string, unknown>
+      : {};
     const generationId = typeof body.generationId === 'string' ? body.generationId : '';
     const action: AdminGenerationModerationAction | null =
       body.action === 'remove' || body.action === 'restore' ? body.action : null;
@@ -115,7 +118,10 @@ export async function postAdminContactTriage(request: Request): Promise<NextResp
   const headers = createApiResponseHeaders(request, API_CACHE_CONTROL.privateNoStore);
 
   return withAdminOperator(request, 'admin_contact_triage_failed', async (reviewerId, client) => {
-    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    const rawBody: unknown = await request.json().catch(() => null);
+    const body: Record<string, unknown> = rawBody && typeof rawBody === 'object' && !Array.isArray(rawBody)
+      ? rawBody as Record<string, unknown>
+      : {};
     const messageId = typeof body.messageId === 'string' ? body.messageId : '';
     if (!messageId || typeof body.handled !== 'boolean') {
       return NextResponse.json(

@@ -6,10 +6,34 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/backend-workflow-inputs-11q`, stacked on #392 and fixing reproduced workflow validation defects. The user receipt/evidence edits remain untouched.
+Current checkout: `codex/backend-admin-moderation-inputs-11t`, based on merged #394 and fixing six reproduced admin input defects. The user receipt/evidence edits remain untouched.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+11T reproduces six null-body failures across post/subject report decisions,
+post/generation moderation, contact triage and user sanctions. Three adapter
+modules now admit only object bodies before reading fields. All 60 actual
+GoTrue/session/PostgREST/SQL cases and 33 focused controls pass, including valid
+actions, replay, reviewer binding, stored-session rejection and independent zero
+fixture cleanup. App/test types, scoped lint and diff pass. Initial expiry,
+self-report and revocation-clock fixture mistakes are preserved and corrected
+without weakening constraints. Five routine definitions match production
+exactly; the sixth differs only by four empty UUID-array casts, with reviewed
+same-engine type/value/assignment controls. All six signatures/grants match.
+See backend-section-11-admin-moderation-inputs-2026-10-07.md. Exact-head CI,
+verified parent, standard release and independent readback remain required.
+SOCIAL-03 is failed until this fix is released; WORKFLOW-04 has returned to
+untested after #393. Counts remain 53: 24 passed, 25 untested, two failed, two
+external. MEDIA-07 is the other failed row. The wider audit is not signed off.
+
+PR #394 exact-head Quality 37575031613 passes all five jobs on
+c68443bc9a864d5a3f1db8bd2d5c3fcdf71f0826. Fresh verified #393 parent, schema,
+advisors, live/main and immediate mobile-store idle gates pass. It merged at
+05:25:22 UTC as aaedf1eb8ff8692501ea836cf3076b5d43968ca3. Exact-main Quality
+37576225908 is running; standard release and independent template-publication-
+release/ readback remain. The admin candidate is based on this merged parent
+and must wait for its independent live verification before merging.
 
 PR #392 passed all five exact-head Quality jobs in 37571640504 on
 1f4b97a311711f06f690e7bcaee364f53c6dfab1. Fresh parent metadata/live/main and
@@ -27,13 +51,16 @@ Final head af4f6941c2d971f4295f8a5fea7155f40b682234 includes the exact merged
 parent and 11R controls. All five exact-head Quality jobs pass in 37573889158.
 Fresh schema/advisors, verified parent/live/main and immediate mobile-store idle
 gates pass. #393 merged at 05:07:28 UTC as
-547b6658acaac7e9234efb1ce3ee2826da3304ec. Exact-main Quality 37574773814 is
-running; standard release and independent workflow-inputs-release/ readback
-remain. WORKFLOW-04 stays failed until that verification passes.
+547b6658acaac7e9234efb1ce3ee2826da3304ec. Exact-main Quality 37574773814 and
+standard release 37575379640 pass. Independent readback at 05:21:27 UTC confirms
+exact live/project, unchanged schema/all 110 advisors, both tested runtime
+digests, private authoring boundaries and 200/307/401 smoke. See
+backend-section-11-workflow-inputs-release-2026-10-07.md. WORKFLOW-04 returns to
+untested for the broader matrix.
 
-Current checkout branch is codex/backend-template-publication-11s and includes
-the exact merged #393 parent. User receipt edits and private evidence remain
-preserved. Next candidate must wait for #393's independent release verification.
+The preceding template-publication branch included the exact merged #393 parent
+and preserved user receipt edits/private evidence. Its final candidate became
+PR #394 after #393's independent release verification.
 
 11S adds sixteen actual GoTrue/PostgREST/Storage publication controls with no
 runtime or migration change: owner/foreign/unsigned authoring, exact publication
@@ -72,9 +99,10 @@ sequentially to Quality. This candidate must use a separate stacked PR/head;
 hold its merge until #392 is independently verified live.
 
 Current ledger is now 53: 24 passed, 25 untested, two failed, two external.
-WORKFLOW-04 is failed for 11Q until released, then returns to untested for the
-remaining matrix. MEDIA-07 remains failed. No runtime/schema/customer changes
-outside the two candidate input validators are introduced.
+WORKFLOW-04 returned to untested after 11Q release; SOCIAL-03 is failed for 11T
+until released, then returns to untested for its remaining matrix. MEDIA-07
+remains failed. 11T adds only the three input parser modules; no schema/customer
+changes are introduced.
 
 Recovery/protocol evidence #391 is independently verified live as
 3f04cb16f9435d8a20735a2ac7ca7514db9ddb3a at October 7 04:24:57 UTC.
