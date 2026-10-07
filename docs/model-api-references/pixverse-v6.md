@@ -81,3 +81,12 @@ the order above is the page's.)
 - Price: the table above; the reference block applies when the run is in references mode with a
   picture attached (`pixverse-v6` in `getVideoCost` and `videoPricingExpression`).
 - Enhancer: a playbook of its own (plain sentences, @names kept verbatim, optional Audio line).
+
+## Probes (2026-10-08)
+
+Empty-input probes of all four ids answered with their required fields ("This field is
+required", "first_frame_image_url is required", "image_references is a required parameter") and
+no task; a made-up id answered `422` "not supported". The exact text body (`prompt`,
+`quality: 360p`, `duration: 1`, `generate_audio_switch: false`, `aspect_ratio: 16:9`) ran once:
+task `ff1bda6ae66a36a11bbef8dda54f2200` succeeded in 16 s and delivered a 640×360, 1.04 s MP4
+with no audio track from `tempfile.aiquickdraw.com` (`archive/kie-video-models-2026-10-08/`).

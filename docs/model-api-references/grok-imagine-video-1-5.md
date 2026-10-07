@@ -52,3 +52,11 @@ the schema and carries no published price, so it does not ship** (README rule 2)
 - Price: 2.4 / 4.5 credits per second (`grok-imagine-video-1.5` in `getVideoCost` and
   `videoPricingExpression`).
 - Enhancer: alias of `grok-imagine-video` (same prompt grammar; audio always generated).
+
+## Probes (2026-10-08)
+
+No empty-input probe (nothing is required, so one would start a paid run). The exact text body
+(`prompt`, `duration: 1`, `resolution: 480p`, `nsfw_checker: true`, `aspect_ratio: 16:9`) ran
+once: task `d822c1f1a3d87c87ade323274df8fc16` succeeded in 94 s and delivered a 752×416, 1.04 s
+MP4 with an AAC audio track (the page's "audio cannot be turned off") from
+`tempfile.aiquickdraw.com` (`archive/kie-video-models-2026-10-08/`).

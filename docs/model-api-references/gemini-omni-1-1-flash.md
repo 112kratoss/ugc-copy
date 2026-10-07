@@ -60,3 +60,12 @@ qualifier.
 - Price: the table above (`gemini-omni-1.1-flash` in `getVideoCost` and
   `videoPricingExpression`); a run with a clip quotes the flat figure.
 - Enhancer: alias of `gemini-omni-video` (same body and prompt grammar).
+
+## Probes (2026-10-08)
+
+The empty-input probe answered "This field is required" and no task. The exact text body
+(`prompt`, `duration: "4"`, `aspect_ratio: 16:9`, `resolution: 360p`) ran once: task
+`187a1ef3184d12f74fdb257fc0403d92` was accepted (`code 200`), ran for 64 s and ended in
+`state: fail`, `failCode: 500`, `failMsg: "Internal Error, Please try again later."`, with
+Kie's `param` echoing exactly that body. A schema problem answers `422` at creation, so this
+reads as a provider-side failure; a second run has not been sent (`archive/kie-video-models-2026-10-08/`).

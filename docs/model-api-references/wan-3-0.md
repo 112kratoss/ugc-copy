@@ -72,3 +72,12 @@ seconds.
   `reference_link_urls` are never sent.
 - Enhancer: `wan-3.0` has a playbook of its own (positional Image1 / Video1 / Audio1 references,
   no server-side extender, audio as a switch); `wan-3.0-prime` is its alias.
+
+## Probes (2026-10-08)
+
+Empty-input probes were not sent: the schema lists no required field, so one would start a paid
+run. The exact text body (`prompt`, `resolution: 480P`, `duration: 2`, `audio: false`,
+`aspect_ratio: 16:9`) ran once per id: `wan/3-0-video` task `f0dcdd6c15320677129bd3ff609e0cfa`
+succeeded in 108 s, `wan/3-0-video-prime` task `dc0ff84dacf4d931751393559766fdf5` in 78 s; both
+delivered an 854×480, 2.0 s MP4 with no audio track from `tempfile.aiquickdraw.com`
+(`archive/kie-video-models-2026-10-08/`).
