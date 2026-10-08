@@ -25,12 +25,12 @@ vi.mock('@/components/navigation-progress-state', () => ({
 vi.mock('@/app/feed/FeedPostCard', () => ({
     default: ({ card, onOpenPost, onPrefetchPost }: {
         card: { id: string; title: string };
-        onOpenPost: () => void;
-        onPrefetchPost: () => void;
+        onOpenPost: (postId: string) => void;
+        onPrefetchPost: (postId: string) => void;
     }) => (
         <article>
-            <button type="button" onClick={onOpenPost}>{`open:${card.id}`}</button>
-            <button type="button" onClick={onPrefetchPost}>{`warm:${card.id}`}</button>
+            <button type="button" onClick={() => onOpenPost(card.id)}>{`open:${card.id}`}</button>
+            <button type="button" onClick={() => onPrefetchPost(card.id)}>{`warm:${card.id}`}</button>
         </article>
     ),
 }));

@@ -80,12 +80,15 @@ export async function sharePublicGeneration({
   description,
   sourceSurface,
   accessToken,
+  viewerIsOwner = false,
 }: {
   generationId: string;
   title: string;
   description?: string | null;
   sourceSurface: GenerationShareSourceSurface;
   accessToken?: string | null;
+  /** Only the creator's own share may claim the work ("Look what I created"). */
+  viewerIsOwner?: boolean;
 }): Promise<GenerationShareChannel | null> {
   if (typeof window === 'undefined') {
     return null;
@@ -96,10 +99,14 @@ export async function sharePublicGeneration({
   const normalizedDescription = description?.trim() || null;
   const shareText =
     normalizedTitle
-      ? `Look what I created on magicbooklet: ${normalizedTitle}`
+      ? viewerIsOwner
+        ? `Look what I created on magicbooklet: ${normalizedTitle}`
+        : `See "${normalizedTitle}" on magicbooklet`
       : normalizedDescription && normalizedDescription.length <= 80
         ? normalizedDescription
-        : `Look what I created on magicbooklet: ${buildShowcaseDetailPath(generationId)}`;
+        : viewerIsOwner
+          ? `Look what I created on magicbooklet: ${buildShowcaseDetailPath(generationId)}`
+          : `See this creation on magicbooklet: ${buildShowcaseDetailPath(generationId)}`;
 
   if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
     try {

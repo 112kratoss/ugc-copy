@@ -3,11 +3,10 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useState } from 'react';
-import { Archive, Loader2, PencilLine, Sparkles, Trash2, Wand2 } from 'lucide-react';
+import { Archive, Loader2, PencilLine, Sparkles, Trash2 } from 'lucide-react';
 
 import { useAuth } from '@/components/AuthProvider';
 import PostVisibilityMenu from '@/components/PostVisibilityMenu';
-import PublicShareButton from '@/components/PublicShareButton';
 import {
   usePostLifecycle,
   type PostLifecycleEvent,
@@ -16,44 +15,31 @@ import {
 } from '@/components/usePostLifecycle';
 import type { PostVisibility } from '@/lib/post-lifecycle-client';
 import { getCurrentInternalPath } from '@/lib/share';
-import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 
 interface ShowcaseDetailActionsProps {
   postId: string;
   generationId: string | null;
   title: string;
-  description: string;
   creatorUsername: string | null;
-  canRemix: boolean;
   visibility: 'public' | 'unlisted';
   viewerIsOwner: boolean;
   hasResourceBundle: boolean;
   /** The owner's bundle, so lifecycle policy can see what a change affects. */
   bundle?: PostLifecycleTarget['bundle'];
-  /** The document's engagement row renders Share instead. */
-  showShare?: boolean;
-  /** The document's engagement row renders Remix instead. */
-  showRemix?: boolean;
 }
 
 export default function ShowcaseDetailActions({
   postId,
   generationId,
   title,
-  description,
   creatorUsername,
-  canRemix,
   visibility,
   viewerIsOwner,
   hasResourceBundle,
   bundle = null,
-  showShare = true,
-  showRemix = true,
 }: ShowcaseDetailActionsProps) {
   const router = useRouter();
-  const { session, user } = useAuth();
-  const [isWorking, setIsWorking] = useState<string | null>(null);
-  const [remixError, setRemixError] = useState<string | null>(null);
+  const { session } = useAuth();
   // The page is server-rendered for the visibility it was opened at; this
   // mirror lets the menu move first and the refresh catch up.
   const [ownerVisibility, setOwnerVisibility] = useState<PostVisibility>(visibility);
@@ -108,59 +94,9 @@ export default function ShowcaseDetailActions({
   };
   const lifecyclePending = postLifecycle.pendingAction(postId);
 
-  const handleRemix = async () => {
-    if (!user || !session?.access_token) {
-      router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(`/showcase/${postId}`))}`);
-      return;
-    }
-
-    setRemixError(null);
-    setIsWorking('remix');
-
-    try {
-      const { redirectTo } = await requestShowcaseRemix({
-        accessToken: session.access_token,
-        postId,
-      });
-      router.push(redirectTo);
-    } catch (error) {
-      console.error('Failed to remix shared creation:', error);
-      setRemixError(
-        error instanceof Error && error.message
-          ? error.message
-          : 'Could not start the remix. Please try again.',
-      );
-    } finally {
-      setIsWorking(null);
-    }
-  };
-
   return (
     <div className="space-y-4">
       <div className="grid gap-2 sm:grid-cols-2">
-        {showShare ? (
-          <PublicShareButton
-            generationId={postId}
-            title={title}
-            description={description}
-            sourceSurface="detail-page"
-            accessToken={session?.access_token ?? null}
-            className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08]"
-          />
-        ) : null}
-
-        {canRemix && showRemix ? (
-          <button
-            type="button"
-            onClick={handleRemix}
-            disabled={isWorking === 'remix'}
-            className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 py-2 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isWorking === 'remix' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-            {isWorking === 'remix' ? 'Starting…' : 'Remix'}
-          </button>
-        ) : null}
-
         {creatorUsername ? (
           <Link
             href={`/creators/${creatorUsername}`}
@@ -178,12 +114,6 @@ export default function ShowcaseDetailActions({
           Create your own
         </Link>
       </div>
-
-      {remixError ? (
-        <div role="alert" className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-          {remixError}
-        </div>
-      ) : null}
 
       {viewerIsOwner ? (
         // Chrome-less: the rail card already draws the border, so a nested

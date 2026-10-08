@@ -152,7 +152,6 @@ const REGISTERED_ROUTES = [
 
   // Authoring and sharing templates is a published artifact with an author.
   '/api/templates',
-  '/api/templates/mine',
   '/api/templates/[id]',
   '/api/templates/[id]/publish',
   '/api/templates/[id]/disable',

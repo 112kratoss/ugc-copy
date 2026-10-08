@@ -1448,18 +1448,20 @@ export async function getShowcaseFeedItemById(options: {
   const adminSupabase = createServiceClient();
   let result = await adminSupabase
     .from('posts')
-    .select('id, output_url, showcase_asset_path, prompt, title, body, category, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id')
+    .select('id, output_url, showcase_asset_path, prompt, title, body, category, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility')
     .eq('id', postId)
-    .in('visibility', options.revealNsfw ? ['public', 'unlisted'] : ['public'])
+    // Unlisted means "anyone with the link": the web post page reads it, and
+    // the app receives the same share links, so the by-id read does too.
+    .in('visibility', ['public', 'unlisted'])
     .is('archived_at', null)
     .maybeSingle();
 
   if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status/))) {
     result = await adminSupabase
       .from('posts')
-      .select('id, output_url, showcase_asset_path, prompt, title, category, save_count, remix_count, created_at, user_id, source_kind, source_tool, generation_id')
+      .select('id, output_url, showcase_asset_path, prompt, title, category, save_count, remix_count, created_at, user_id, source_kind, source_tool, generation_id, visibility')
       .eq('id', postId)
-      .in('visibility', options.revealNsfw ? ['public', 'unlisted'] : ['public'])
+      .in('visibility', ['public', 'unlisted'])
       .is('archived_at', null)
       .maybeSingle();
 
@@ -1473,6 +1475,7 @@ export async function getShowcaseFeedItemById(options: {
           post_format: normalizeLegacyPostFormat((result.data as LegacyPostRow).category),
           source_tool_slug: slugifySourceTool((result.data as LegacyPostRow).source_tool),
           review_status: 'visible',
+          visibility: (result.data as { visibility?: string | null }).visibility ?? 'public',
         },
       };
     }
@@ -1509,8 +1512,12 @@ export async function getShowcaseFeedItemById(options: {
   }, countryCode);
   const hydratedFeed = await attachViewerStateToFeed(pricedFeed, viewerUserId, adminSupabase);
   const sanitizedFeed = sanitizeShowcaseFeedPage(hydratedFeed);
+  const sanitizedItem = sanitizedFeed.items[0];
+  if (!sanitizedItem) return null;
 
-  return sanitizedFeed.items[0] ?? null;
+  // Comments are public-only on the server; the client reads this to hide them.
+  const visibility = (row as { visibility?: string | null }).visibility === 'unlisted' ? 'unlisted' : 'public';
+  return { ...sanitizedItem, visibility };
 }
 
 /**

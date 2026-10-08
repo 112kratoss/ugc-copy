@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, Stack } from 'expo-router';
@@ -103,11 +103,15 @@ function inputSummary(template: Pick<MediaTemplateSummary, 'inputSlots'>) {
 export function MediaTemplateCatalogScreen() {
   const theme = useAppTheme();
   const { api, user } = useAuth();
-  const templatesQuery = useQuery({
+  // Paged like the web catalog: the server stops at 48, and one request
+  // could never show template 49 or later.
+  const templatesQuery = useInfiniteQuery({
     queryKey: ['media-templates'],
-    queryFn: () => api.listMediaTemplates(),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => api.listMediaTemplates(pageParam ? { cursor: pageParam } : undefined),
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   });
-  const templates = templatesQuery.data?.templates ?? [];
+  const templates = templatesQuery.data?.pages.flatMap((page) => page.templates) ?? [];
   const [failedPreviewAt, setFailedPreviewAt] = useState<number | null>(null);
   const hasFailedPreview = failedPreviewAt === templatesQuery.dataUpdatedAt;
   const activeRunQuery = useQuery({
@@ -207,6 +211,13 @@ export function MediaTemplateCatalogScreen() {
               onPreviewError={() => setFailedPreviewAt(templatesQuery.dataUpdatedAt)}
             />
           ))}
+          {templatesQuery.hasNextPage ? (
+            <SecondaryButton
+              label={templatesQuery.isFetchingNextPage ? 'Loading more templates…' : templatesQuery.isFetchNextPageError ? 'Try again' : 'Load more templates'}
+              disabled={templatesQuery.isFetchingNextPage}
+              onPress={() => void templatesQuery.fetchNextPage()}
+            />
+          ) : null}
         </View>
       )}
     </Screen>

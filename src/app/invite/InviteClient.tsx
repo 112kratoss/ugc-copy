@@ -152,11 +152,13 @@ async function readJson(response: Response) {
 
 function formatRewardKind(kind: string) {
   const normalized = kind.toLowerCase();
+  // The list holds the viewer's own rewards: as an invitee they earned a bonus
+  // on their first top-up; as an inviter, a reward on a friend's top-up.
   if (normalized.includes('invitee') || normalized.includes('friend')) {
-    return 'Friend first top-up bonus';
+    return 'First top-up bonus';
   }
   if (normalized.includes('inviter') || normalized.includes('purchase')) {
-    return 'Referral top-up reward';
+    return 'Friend top-up reward';
   }
   return 'Referral reward';
 }
@@ -553,7 +555,7 @@ export default function InviteClient() {
                   ))}
                 </ol>
                 <p className="mt-6 border-t border-white/8 pt-5 text-xs leading-5 text-zinc-500">
-                  Bonus credits have no cash value. Refunds or chargebacks can reverse rewards. Eligibility and program terms apply.
+                  Bonus credits are for creation tools, have no cash value, and cannot unlock marketplace resources. Refunds or chargebacks can reverse rewards. Eligibility and program terms apply.
                 </p>
               </Surface>
             </section>

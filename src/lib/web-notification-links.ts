@@ -30,7 +30,9 @@ export function resolveWebNotificationPath(deepLink: string | null | undefined) 
       // A workflow run's notification. The app has no canvas, so the link is
       // its Alerts route with the canvas on it, and the canvas is here.
       const canvasId = url.searchParams.get('workflowCanvas');
-      return canvasId ? `/create-workflow?canvas=${encodeURIComponent(canvasId)}` : '/creations';
+      // A bare /studio is the app's Alerts tab itself ("New follower" links
+      // there): the alert is read and the viewer stays on Alerts, as in the app.
+      return canvasId ? `/create-workflow?canvas=${encodeURIComponent(canvasId)}` : null;
     }
 
     if (!url.pathname.startsWith('/')) return null;

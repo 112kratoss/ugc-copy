@@ -1037,10 +1037,13 @@ export default function OwnerProfileMediaHub({
         ] : []}
         actions={selectedGeneration ? (
           <>
-            <Link href={`/post/new?generationId=${encodeURIComponent(selectedGeneration.id)}&from=profile&returnTo=%2Fprofile%3Ftab%3Dposts`} className="inline-flex min-h-11 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-bold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]">
-              <Plus className="h-4 w-4" />
-              {selectedGeneration.linked_post_id ? 'Create another post' : 'Turn into post'}
-            </Link>
+            {/* A creation holds one post: a second "new post" from it overwrote the first. */}
+            {selectedGeneration.linked_post_id ? null : (
+              <Link href={`/post/new?generationId=${encodeURIComponent(selectedGeneration.id)}&from=profile&returnTo=%2Fprofile%3Ftab%3Dposts`} className="inline-flex min-h-11 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-bold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]">
+                <Plus className="h-4 w-4" />
+                Turn into post
+              </Link>
+            )}
             {selectedGeneration.linked_post_id ? (
               <Link href={`/post/${selectedGeneration.linked_post_id}/edit`} className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]">
                 <PencilLine className="h-4 w-4" />

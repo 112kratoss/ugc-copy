@@ -87,7 +87,7 @@ describe('the links the server writes into notifications', () => {
       showcasePost: '/showcase/post-1',
       marketplaceResource: '/marketplace/resource-1',
       creatorProfile: '/creators/batman',
-      notifications: '/creations',
+      notifications: null,
       profile: '/profile',
       invite: '/invite',
     });

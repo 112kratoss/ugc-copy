@@ -18,6 +18,8 @@ interface PublicShareButtonProps {
   disabledReason?: string;
   onShared?: () => void;
   iconOnly?: boolean;
+  /** The creator sharing their own post; the share text then claims the work. */
+  viewerIsOwner?: boolean;
 }
 
 export default function PublicShareButton({
@@ -32,6 +34,7 @@ export default function PublicShareButton({
   disabledReason,
   onShared,
   iconOnly = false,
+  viewerIsOwner = false,
 }: PublicShareButtonProps) {
   const {
     state,
@@ -50,6 +53,7 @@ export default function PublicShareButton({
         description,
         sourceSurface,
         accessToken,
+        viewerIsOwner,
       }),
   });
 

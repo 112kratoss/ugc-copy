@@ -242,7 +242,6 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
         viewerUserId={auth.session?.user?.id ?? null}
         accessToken={auth.session?.access_token ?? null}
         returnContext={returnContext}
-        variant="page"
       />
     </>
   );

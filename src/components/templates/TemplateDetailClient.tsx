@@ -39,7 +39,11 @@ export default function TemplateDetailClient({ slug }: { slug: string }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Wait for the session: a signed-in visitor fetched once anonymously and
+    // again with the token, throwing the first answer away.
+    if (isAuthLoading) return;
     let active = true;
+    setError(null);
     void getTemplate(slug, session?.access_token)
       .then((nextTemplate) => { if (active) setTemplate(nextTemplate); })
       .catch((reason: unknown) => {

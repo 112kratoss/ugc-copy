@@ -39,6 +39,7 @@ vi.mock('@/components/ui', () => ({
   SecondaryButton: (props: MockProps) => React.createElement('secondary-button', props),
   SectionTitle: (props: MockProps) => React.createElement('section-title', props),
   StatusBlock: (props: MockProps) => React.createElement('status-block', props),
+  WebLinkButton: (props: MockProps) => React.createElement('web-link-button', props),
 }));
 
 vi.mock('@/lib/auth', () => ({

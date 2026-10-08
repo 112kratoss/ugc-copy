@@ -42,7 +42,6 @@ export const revalidate = 3600;
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     const baseUrl = siteConfig.siteUrl;
-    const now = new Date();
     const posts = getSortedPostsData();
 
     // Independent reads; one round trip rather than three sequential ones. Each
@@ -56,9 +55,11 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     ]);
 
     return [
+        // No lastModified for pages whose change date is unknown: the sitemap
+        // regenerates hourly, and a stamp of "now" on every one taught crawlers
+        // to ignore the accurate dates below.
         ...INDEXABLE_ROUTES.map((route) => ({
             url: `${baseUrl}${route.path === '/' ? '' : route.path}`,
-            lastModified: now,
             changeFrequency: route.changeFrequency,
             priority: route.priority,
         })),
@@ -76,25 +77,23 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
         })),
         ...creators.map((creator) => ({
             url: `${baseUrl}/creators/${creator.username}`,
-            lastModified: creator.lastPostedAt ? new Date(creator.lastPostedAt) : now,
+            ...(creator.lastPostedAt ? { lastModified: new Date(creator.lastPostedAt) } : {}),
             changeFrequency: 'weekly' as const,
             priority: 0.5,
         })),
         ...templates.map((template) => ({
             url: `${baseUrl}/templates/${template.slug}`,
-            lastModified: template.updated_at ? new Date(template.updated_at) : now,
+            ...(template.updated_at ? { lastModified: new Date(template.updated_at) } : {}),
             changeFrequency: 'weekly' as const,
             priority: 0.55,
         })),
         ...ALTERNATIVES.map((entry) => ({
             url: `${baseUrl}/alternatives/${entry.slug}`,
-            lastModified: now,
             changeFrequency: 'monthly' as const,
             priority: 0.7,
         })),
         ...models.map((model) => ({
             url: `${baseUrl}/models/${toModelSlug(model.id)}`,
-            lastModified: now,
             changeFrequency: 'weekly' as const,
             priority: 0.65,
         })),

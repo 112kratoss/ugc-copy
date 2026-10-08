@@ -428,3 +428,14 @@ export function toOrdinal(value: number): string {
         default: return `${value}th`;
     }
 }
+
+/** "an image", "a video", "an AI image generation": the article the noun takes. */
+export function withArticle(noun: string): string {
+    return `${/^[aeiou]/i.test(noun) ? 'an' : 'a'} ${noun}`;
+}
+
+/** Catalog descriptions end without a period; a sentence that follows needs one. */
+export function endSentence(text: string): string {
+    const trimmed = text.trim();
+    return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}

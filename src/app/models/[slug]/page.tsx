@@ -12,6 +12,8 @@ import {
     MODEL_KIND_GUIDANCE,
     MODEL_KIND_LABELS,
     MODEL_KIND_NOUNS,
+    endSentence,
+    withArticle,
     buildScaleCosts,
     describeModelCapabilities,
     findModelBySlug,
@@ -56,6 +58,13 @@ type ModelPageProps = {
  */
 export const revalidate = 3600;
 
+// With no params listed, every slug renders on its first request and is then
+// cached for `revalidate`; without this the route rendered on every request,
+// loading the catalog and quoting the model twice per visit.
+export async function generateStaticParams() {
+    return [];
+}
+
 export async function generateMetadata({ params }: ModelPageProps): Promise<Metadata> {
     const { slug } = await params;
     const model = await findModelBySlug(slug);
@@ -67,7 +76,7 @@ export async function generateMetadata({ params }: ModelPageProps): Promise<Meta
     const cost = await getBaselineCost(model);
     const noun = MODEL_KIND_NOUNS[model.kind];
     const costSentence = cost
-        ? ` A ${noun} starts at ${cost.credits} credits, about ₹${cost.inr.toFixed(2)}.`
+        ? ` ${withArticle(noun).replace(/^./, (first) => first.toUpperCase())} starts at ${cost.credits} credits, about ₹${cost.inr.toFixed(2)}.`
         : '';
 
     return createMetadata({
@@ -122,12 +131,12 @@ export default async function ModelPage({ params }: ModelPageProps) {
             ? [{
                 question: `How much does one ${model.displayName} generation cost?`,
                 answer:
-                    `At its default settings, a ${noun} costs ${formatCost(cost)}. Cost changes with resolution, duration, and quality, and the exact figure is shown in the studio before a generation runs.`,
+                    `At its default settings, ${withArticle(noun)} costs ${formatCost(cost)}. Cost changes with resolution, duration, and quality, and the exact figure is shown before a generation runs.`,
             }]
             : []),
         {
             question: `What is ${model.displayName} best at?`,
-            answer: `${model.description} It runs as a ${kindLabel.toLowerCase()} model.`,
+            answer: `${endSentence(model.description)} It runs as ${withArticle(kindLabel)} model.`,
         },
         ...(controls.length > 0
             ? [{
@@ -169,7 +178,7 @@ export default async function ModelPage({ params }: ModelPageProps) {
                 ]}
             />
 
-            <main className="studio-shell ui-section-gap relative py-20">
+            <div className="studio-shell ui-section-gap relative py-20">
                 <section className="space-y-6">
                     <Kicker>{kindLabel}</Kicker>
                     <Text as="h1" variant="display" className="max-w-4xl">
@@ -190,14 +199,14 @@ export default async function ModelPage({ params }: ModelPageProps) {
                             </div>
                             <Text variant="bodySm" className="mt-4 leading-6">
                                 At this model&apos;s default settings. Resolution, duration, and quality
-                                move the number, and the exact cost is shown in the studio before a
+                                move the number, and the exact cost is shown before a
                                 generation runs — nothing is spent before you see it.
                             </Text>
                         </Surface>
                     ) : null}
 
                     <div className="flex flex-col gap-4 pt-2 sm:flex-row">
-                        <Button href={createPath} variant="primary" icon={ArrowRight} className="min-h-12 px-7">
+                        <Button href={`${createPath}?model=${encodeURIComponent(model.id)}`} variant="primary" icon={ArrowRight} className="min-h-12 px-7">
                             Generate with {model.displayName}
                         </Button>
                         <Button href="/pricing" variant="secondary" className="min-h-12 px-7">
@@ -395,7 +404,7 @@ export default async function ModelPage({ params }: ModelPageProps) {
                         </Link>
                     </div>
                 </section>
-            </main>
+            </div>
         </div>
     );
 }

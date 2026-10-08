@@ -71,6 +71,7 @@ const DETAIL_CONTEXT = { from: 'community', returnTo: '/feed' };
 
 function renderCard(overrides: Partial<ShowcaseFeedItem> = {}, props: Record<string, unknown> = {}) {
     const handlers = {
+        cardIndex: 0,
         onToggleExpanded: vi.fn(),
         onToggleComments: vi.fn(),
         onToggleSave: vi.fn(),
@@ -159,7 +160,7 @@ describe('FeedPostCard click routing', () => {
 
         fireEvent.click(screen.getByRole('button', { name: 'A launch frame' }));
 
-        expect(onOpenMedia).toHaveBeenCalledWith(0);
+        expect(onOpenMedia).toHaveBeenCalledWith('post-1', 0);
         expect(onOpenPost).not.toHaveBeenCalled();
     });
 

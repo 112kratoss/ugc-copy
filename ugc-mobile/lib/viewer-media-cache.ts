@@ -43,7 +43,6 @@ export async function applyPostVisibilityToCaches(
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] }),
     queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
-    queryClient.invalidateQueries({ queryKey: ['home-generations', userId] }),
     // The header counts and the seller total ride on the profile.
     invalidateProfileStats(queryClient, userId),
   ]);
@@ -70,7 +69,6 @@ export async function refreshViewerMediaCaches(
     queryClient.invalidateQueries({ queryKey: ['profile-saved-media', userId] }),
     queryClient.invalidateQueries({ queryKey: ['profile-generations', userId] }),
     queryClient.invalidateQueries({ queryKey: ['profile-owner-posts', userId] }),
-    queryClient.invalidateQueries({ queryKey: ['home-generations', userId] }),
     // The header counts and the seller total ride on the profile.
     invalidateProfileStats(queryClient, userId),
   ]);

@@ -54,7 +54,7 @@ import {
   verifyRazorpayCheckoutUntilSettled,
 } from '@/lib/razorpay-checkout-client';
 import { getCurrentInternalPath } from '@/lib/share';
-import { isGenerationRecipeAssetId, type ShowcaseFeedItem, type ShowcaseMediaItem } from '@/lib/showcase';
+import { isGenerationRecipeAssetId, type ShowcaseFeedItem, type ShowcaseMediaItem, getShowcaseItemMediaItems } from '@/lib/showcase';
 
 declare global {
   interface Window {
@@ -214,27 +214,6 @@ function getMediaTypeLabel(item: ShowcaseFeedItem): string {
   return 'Image';
 }
 
-function getItemMediaItems(item: ShowcaseFeedItem): ShowcaseMediaItem[] {
-  if (item.mediaItems?.length) {
-    return item.mediaItems.slice().sort((left, right) => left.sortOrder - right.sortOrder);
-  }
-
-  if (!item.mediaUrl || !item.mediaKind) {
-    return [];
-  }
-
-  return [{
-    id: `${item.id}:cover`,
-    url: item.mediaUrl,
-    mediaKind: item.mediaKind,
-    contentType: null,
-    originalName: null,
-    width: null,
-    height: null,
-    durationSeconds: null,
-    sortOrder: 0,
-  }];
-}
 
 function getReelMediaLifecycleKey(postId: string, mediaItem: ShowcaseMediaItem): string {
   return JSON.stringify([postId, mediaItem.id, mediaItem.url]);
@@ -306,7 +285,7 @@ export default function ShowcaseReelViewer({
   const flushMediaProgressRef = useRef<() => void>(() => {});
   const selectedAssetId = item?.asset?.id ?? null;
   const isPublicRecipeAsset = Boolean(selectedAssetId && isGenerationRecipeAssetId(selectedAssetId));
-  const mediaItems = useMemo(() => item ? getItemMediaItems(item) : [], [item]);
+  const mediaItems = useMemo(() => item ? getShowcaseItemMediaItems(item) : [], [item]);
   const activeMediaItem = mediaItems[Math.min(activeMediaIndex, Math.max(0, mediaItems.length - 1))] ?? mediaItems[0] ?? null;
 
   const moveToItem = useCallback((targetItem: ShowcaseFeedItem, direction: ReelTransitionDirection) => {
@@ -984,7 +963,7 @@ export default function ShowcaseReelViewer({
     }
 
     if (hasKnownInsufficientTokens) {
-      setUnlockError(`This recipe needs ${tokenCost.toLocaleString()} tokens.`);
+      setUnlockError(`This recipe needs ${tokenCost.toLocaleString()} credits.`);
       return;
     }
 
@@ -1001,7 +980,7 @@ export default function ShowcaseReelViewer({
       const data = await response.json();
 
       if (!response.ok || !data?.success) {
-        throw new Error(data.error || 'Failed to unlock with tokens.');
+        throw new Error(data.error || 'Failed to unlock with credits.');
       }
 
       if (typeof data.credits === 'number') {
@@ -1010,7 +989,7 @@ export default function ShowcaseReelViewer({
 
       await finishReelUnlock();
     } catch (unlockError) {
-      setUnlockError(unlockError instanceof Error ? unlockError.message : 'Failed to unlock with tokens.');
+      setUnlockError(unlockError instanceof Error ? unlockError.message : 'Failed to unlock with credits.');
     } finally {
       setUnlockWorkingAction(null);
     }
@@ -1326,7 +1305,7 @@ export default function ShowcaseReelViewer({
               className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-emerald-50 transition hover:border-emerald-300/45 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-55"
             >
               {unlockWorkingAction === 'tokens' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              Pay with tokens
+              {`Use ${tokenCost.toLocaleString()} credits`}
             </button>
           </div>
         )}
@@ -1635,6 +1614,7 @@ export default function ShowcaseReelViewer({
             description={item.body || item.prompt}
             sourceSurface="showcase-reel"
             accessToken={accessToken ?? null}
+            viewerIsOwner={Boolean(item.creator.id && item.creator.id === user?.id)}
             onShared={() => {
               void sendShowcaseFeedEvent({
                 item,

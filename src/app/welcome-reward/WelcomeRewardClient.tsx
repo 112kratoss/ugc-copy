@@ -133,7 +133,14 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
   // (since deleted) account. Nothing was paid out here, so no celebration and
   // no headline number — both would announce credits that do not exist.
   const identityAlreadyClaimed = welcome?.status === 'identity_already_claimed';
+  const notEligible = welcome?.status === 'not_eligible';
+  const unavailable = welcome?.status === 'unavailable';
   const displayedCredits = animatedCredits ?? welcome?.amount ?? 25;
+  // The figure means something only to someone about to receive it or who just
+  // did. For every other status `amount` is the program default, so an account
+  // that predates the program read "Your welcome credits are ready — 25" for
+  // credits it never had (the mobile onboarding draws the same line).
+  const showAmount = !loading && (welcome?.status === 'eligible' || claimed);
   // "Welcome credits", as the server and the mobile app call them (mobile #209,
   // App Review 2.1(b)). This page called the free grant the "Creator Pack", the
   // name of the paid Creator credit pack, and told guests to "unlock" it.
@@ -143,7 +150,11 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
       ? 'Your welcome credits'
       : claimed || legacy
         ? 'Your welcome credits are ready'
-        : 'Claim your welcome credits';
+        : notEligible
+          ? 'Finish your creator profile first'
+          : unavailable
+            ? 'Welcome credits are unavailable right now'
+            : 'Claim your welcome credits';
 
   return (
     <main className="ui-page ui-page-ambient min-h-screen py-10 sm:py-16">
@@ -163,14 +174,18 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
                 ? 'Create an account to claim your welcome credits. Guest sessions cannot hold a welcome reward.'
                 : claimed
                   ? 'Your creation credits are ready for your first project.'
-                  : 'Claim creation-only credits for images, video, and motion.'}
+                  : notEligible
+                    ? 'Choose your creator name, then come back to claim your welcome credits.'
+                    : unavailable
+                      ? 'Your welcome credits are temporarily unavailable. You can start creating and claim them later.'
+                      : 'Claim creation-only credits for images, video, and motion.'}
           </p>
 
           {loading ? (
             <div className="mt-10 flex items-center justify-center gap-3 text-sm font-bold text-[var(--ui-text-muted)]">
               <Loader2 className="h-5 w-5 animate-spin" aria-hidden /> Checking your reward…
             </div>
-          ) : identityAlreadyClaimed ? null : (
+          ) : !showAmount ? null : (
             <div className="mt-8">
               <div className={`welcome-reward-count relative inline-block${celebrating ? ' is-celebrating' : ''}`}>
                 {celebrating ? (
@@ -216,6 +231,14 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
                 className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 text-sm font-black text-[var(--ui-primary-on)]"
               >
                 Create an account <ArrowRight className="h-4 w-4" aria-hidden />
+              </Link>
+            ) : null}
+            {notEligible ? (
+              <Link
+                href="/profile/edit"
+                className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 text-sm font-black text-[var(--ui-primary-on)]"
+              >
+                Finish creator profile <ArrowRight className="h-4 w-4" aria-hidden />
               </Link>
             ) : null}
             {(welcome?.status !== 'eligible' && !requiresAccount) || error ? (

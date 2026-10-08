@@ -25,13 +25,16 @@ interface WebNotification {
   body: string;
   deepLink: string | null;
   isRead: boolean;
+  /** How many events this alert groups ("Someone saved your post" × 7). */
+  eventCount?: number;
   createdAt: string;
   updatedAt: string;
 }
 
 const CATEGORY_META = {
   generation: { color: 'text-[#ff9b7f] border-[#ff7a59]/25 bg-[#ff7a59]/10', Icon: Sparkles, label: 'Generation' },
-  commerce: { color: 'text-amber-400 border-amber-500/20 bg-amber-500/10', Icon: CreditCard, label: 'Recipes' },
+  // 'Unlocks', as the app labels it: the category also carries credit purchases.
+  commerce: { color: 'text-amber-400 border-amber-500/20 bg-amber-500/10', Icon: CreditCard, label: 'Unlocks' },
   social: { color: 'text-rose-400 border-rose-500/20 bg-rose-500/10', Icon: Heart, label: 'Creator' },
   system: { color: 'text-cyan-400 border-cyan-500/20 bg-cyan-500/10', Icon: Bell, label: 'System' },
 };
@@ -56,7 +59,9 @@ export default function NotificationsPage() {
   const [notifications, setNotifications] = useState<WebNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  // null until the session check answers: a signed-in visitor used to see
+  // "Sign in required" for the first few hundred milliseconds of every visit.
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [currentTimeMs, setCurrentTimeMs] = useState<number | null>(null);
   const [, startTransition] = useTransition();
@@ -94,11 +99,9 @@ export default function NotificationsPage() {
   }, []);
 
   useEffect(() => {
-    const initialFetchTimer = window.setTimeout(() => {
-      void fetchNotifications();
-    }, 0);
-
-    // Listen for auth state changes
+    // The listener fires once on subscription with the current session
+    // (INITIAL_SESSION), so this is the first load too; a separate first fetch
+    // sent the list request twice on every visit.
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (session) {
         setIsAuthenticated(true);
@@ -111,7 +114,6 @@ export default function NotificationsPage() {
     });
 
     return () => {
-      window.clearTimeout(initialFetchTimer);
       subscription.unsubscribe();
     };
   }, [fetchNotifications]);
@@ -150,12 +152,25 @@ export default function NotificationsPage() {
     }
   };
 
-  const handlePressNotification = async (notification: WebNotification) => {
-    if (!notification.isRead) {
+  const handlePressNotification = (notification: WebNotification) => {
+    // Navigate at once and mark read in the background, as the app does; the
+    // tap used to wait for a session check and the write before moving.
+    const webPath = resolveWebNotificationPath(notification.deepLink);
+    if (webPath) {
+      startTransition(() => {
+        router.push(webPath);
+      });
+    }
+    if (notification.isRead) return;
+
+    setNotifications((current) =>
+      current.map((n) => (n.id === notification.id ? { ...n, isRead: true } : n))
+    );
+    setUnreadCount((prev) => Math.max(0, prev - 1));
+    void (async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session?.access_token) return;
-
         const response = await fetch('/api/mobile/notifications/read', {
           method: 'POST',
           headers: {
@@ -164,23 +179,15 @@ export default function NotificationsPage() {
           },
           body: JSON.stringify({ ids: [notification.id] }),
         });
-        if (response.ok) {
-          setNotifications((current) =>
-            current.map((n) => (n.id === notification.id ? { ...n, isRead: true } : n))
-          );
-          setUnreadCount((prev) => Math.max(0, prev - 1));
-        }
+        if (!response.ok) throw new Error(`Mark-read failed with ${response.status}`);
       } catch (error) {
         console.error('Failed to mark notification read:', error);
+        setNotifications((current) =>
+          current.map((n) => (n.id === notification.id ? { ...n, isRead: false } : n))
+        );
+        setUnreadCount((prev) => prev + 1);
       }
-    }
-
-    const webPath = resolveWebNotificationPath(notification.deepLink);
-    if (webPath) {
-      startTransition(() => {
-        router.push(webPath);
-      });
-    }
+    })();
   };
 
   return (
@@ -190,9 +197,11 @@ export default function NotificationsPage() {
         <div>
           <h1 className="text-3xl font-extrabold tracking-tight text-[var(--ui-text-primary)]">Alerts</h1>
           <p className="mt-1 text-sm text-zinc-400">
-            {isAuthenticated
-              ? `${unreadCount} unread ${unreadCount === 1 ? 'alert' : 'alerts'}`
-              : 'Sign in to view alerts'}
+            {isAuthenticated === null
+              ? '\u00a0'
+              : isAuthenticated
+                ? `${unreadCount} unread ${unreadCount === 1 ? 'alert' : 'alerts'}`
+                : 'Sign in to view alerts'}
           </p>
         </div>
 
@@ -218,7 +227,7 @@ export default function NotificationsPage() {
         )}
       </div>
 
-      {!isAuthenticated ? (
+      {isAuthenticated === false ? (
         <div className="rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-8 text-center">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-white/5 text-zinc-400">
             <Bell className="h-6 w-6" />
@@ -285,6 +294,12 @@ export default function NotificationsPage() {
                     <span className="inline-flex items-center rounded-full bg-white/5 px-2.5 py-0.5 text-[11px] font-medium text-zinc-300">
                       {meta.label}
                     </span>
+                    {(notification.eventCount ?? 1) > 1 ? (
+                      // Grouped alerts ("Someone saved your post" × 7) read as one event without this; the app shows the same chip.
+                      <span className="inline-flex items-center rounded-full border border-[var(--ui-border-default)] px-2 py-0.5 text-[11px] font-semibold text-[var(--ui-text-secondary)]">
+                        {`${notification.eventCount} updates`}
+                      </span>
+                    ) : null}
                     <span className="inline-flex items-center gap-1 text-[11px] text-zinc-500 font-medium">
                       <Clock className="h-3 w-3" />
                       {formatNotificationTime(notification.updatedAt, currentTimeMs)}

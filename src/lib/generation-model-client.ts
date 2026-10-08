@@ -675,9 +675,14 @@ export async function requestWebGenerationQuote(
   return body;
 }
 
-export function useWebGenerationModelQuote(input: GenerationModelQuoteInput | null, accessToken?: string | null) {
+export function useWebGenerationModelQuote(
+  input: GenerationModelQuoteInput | null,
+  accessToken?: string | null,
+  /** Bumped by a "Retry quote" press: a failed quote otherwise stayed failed until a setting changed. */
+  attempt = 0,
+) {
   const serializedInput = input ? JSON.stringify(input) : null;
-  const requestKey = serializedInput ? `${accessToken ?? ''}\n${serializedInput}` : null;
+  const requestKey = serializedInput ? `${accessToken ?? ''}\n${attempt}\n${serializedInput}` : null;
   const [state, setState] = useState<{
     key: string;
     status: 'idle' | 'pending' | 'ready' | 'error';
