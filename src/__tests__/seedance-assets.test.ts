@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { getSeedanceAssetSourceName } from '@/lib/seedance-assets';
+import { getSeedanceAssetSourceName, readSeedanceAssetCollections, readSeedanceAssetMetadata } from '@/lib/seedance-assets';
 
 const OWNER_ID = '0b9f6c2e-51d7-4c3a-9e84-2f6a1d7c5b90';
 const GENERATION_ID = '7c1e4a58-93bd-4f06-8a27-d5e0b6f3a914';
@@ -46,5 +46,38 @@ describe('getSeedanceAssetSourceName', () => {
     expect(getSeedanceAssetSourceName(undefined)).toBeNull();
     expect(getSeedanceAssetSourceName('   ')).toBeNull();
     expect(getSeedanceAssetSourceName('?token=only')).toBeNull();
+  });
+});
+
+describe('reading recorded Seedance assets back', () => {
+  // Both creators read `workflowSettings.seedanceAssets` from a remix bundle, where
+  // it is untyped; the shared reader keeps each list at its full length so an entry
+  // still pairs with its reference by index.
+  it('keeps every position, with null where an entry is not asset metadata', () => {
+    const collections = readSeedanceAssetCollections({
+      images: [
+        { assetId: ' asset-1 ', assetType: 'Image', status: 'active', sourceUrl: 'https://signed.example.com/a.png', error: null, lastCheckedAt: '2026-10-08T00:00:00.000Z' },
+        'not an asset',
+        { status: 'processing' },
+      ],
+      videos: 'not a list',
+    });
+
+    expect(collections).toEqual({
+      images: [
+        { assetId: 'asset-1', assetType: 'Image', status: 'active', sourceUrl: 'https://signed.example.com/a.png', error: null, lastCheckedAt: '2026-10-08T00:00:00.000Z' },
+        null,
+        { assetId: null, assetType: null, status: 'processing', sourceUrl: null, error: null, lastCheckedAt: null },
+      ],
+      videos: [],
+      audios: [],
+    });
+  });
+
+  it('reads nothing from a value that is not a collection, or an entry with an unknown status', () => {
+    expect(readSeedanceAssetCollections(null)).toBeNull();
+    expect(readSeedanceAssetCollections([])).toBeNull();
+    expect(readSeedanceAssetMetadata({ status: 'ready', assetId: 'asset-1' })).toBeNull();
+    expect(readSeedanceAssetMetadata({ assetId: 'asset-1' })).toBeNull();
   });
 });

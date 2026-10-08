@@ -492,6 +492,66 @@ describe('media creation view model', () => {
     expect(draft.referenceAudios[0]).toMatchObject({ displayName: 'Voice Reference', kind: 'audio' });
   });
 
+  it('restores the Seedance assets a run prepared beside their references, paired by index past a skipped one', () => {
+    const element = (name: string, url: string | null) => ({
+      id: name, displayName: name, handle: `@${name}`, url, storagePath: `inputs/${name}.png`, sourceGenerationId: 'gen-source',
+    });
+    const activeAsset = (assetId: string, assetType: 'Image' | 'Video' | 'Audio') => ({
+      assetId, assetType, status: 'active', sourceUrl: `https://signed.example.com/${assetId}`, error: null, lastCheckedAt: '2026-10-08T00:00:00.000Z',
+    });
+    const source = remixSourceBundle({
+      generation: { category: 'video', model: 'seedance-2' },
+      workflowSettings: {
+        model: 'seedance-2',
+        referenceMode: 'elements',
+        // One entry per reference the run sent, in the run's order; the second
+        // picture has lost its link, so its asset must not land on the third.
+        seedanceAssets: {
+          images: [activeAsset('asset-first', 'Image'), activeAsset('asset-lost', 'Image'), activeAsset('asset-third', 'Image')],
+          videos: [{ status: 'processing', assetId: 'asset-clip', assetType: 'Video' }],
+          audios: ['not an asset'],
+        },
+      },
+      inputs: {
+        video: {
+          referenceMode: 'elements',
+          startFrame: null,
+          endFrame: null,
+          elements: [element('first', 'https://cdn.example.com/first.png'), element('lost', null), element('third', 'https://cdn.example.com/third.png')],
+          referenceVideos: [{ kind: 'video', label: 'Clip', url: 'https://cdn.example.com/clip.mp4', storagePath: 'inputs/clip.mp4', sourceGenerationId: 'gen-source' }],
+          referenceAudios: [{ kind: 'audio', label: 'Voice', url: 'https://cdn.example.com/voice.mp3', storagePath: 'inputs/voice.mp3', sourceGenerationId: 'gen-source' }],
+        },
+      },
+    });
+
+    const { draft } = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('video'), source);
+
+    expect(draft.references.map((media) => [media.displayName, media.seedanceAsset?.assetId])).toEqual([
+      ['first', 'asset-first'],
+      ['third', 'asset-third'],
+    ]);
+    expect(draft.referenceVideos[0].seedanceAsset).toMatchObject({ assetId: 'asset-clip', status: 'processing', assetType: 'Video' });
+    // An entry that is not asset metadata restores the reference as never prepared.
+    expect(draft.referenceAudios[0].seedanceAsset).toBeUndefined();
+  });
+
+  it('restores a run that recorded no Seedance assets as before', () => {
+    const source = remixSourceBundle({
+      generation: { category: 'video', model: 'seedance-2' },
+      workflowSettings: { model: 'seedance-2', referenceMode: 'elements' },
+      inputs: {
+        video: {
+          referenceMode: 'elements', startFrame: null, endFrame: null,
+          elements: [{ id: 'hero', displayName: 'Hero', handle: '@hero', url: 'https://cdn.example.com/hero.png', storagePath: 'inputs/hero.png', sourceGenerationId: 'gen-source' }],
+          referenceVideos: [], referenceAudios: [],
+        },
+      },
+    });
+
+    const { draft } = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('video'), source);
+    expect(draft.references[0]).not.toHaveProperty('seedanceAsset');
+  });
+
   it('hydrates motion remix source character image and reference video', () => {
     const source = remixSourceBundle({
       generation: {

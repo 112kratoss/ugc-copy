@@ -46,6 +46,8 @@ const authState = vi.hoisted(() => ({
     quoteGenerationModel: vi.fn(),
     getRemixSourceBundle: vi.fn(),
     createMediaReadUrl: vi.fn(),
+    createSeedanceAsset: vi.fn(),
+    getSeedanceAsset: vi.fn(),
   },
 }));
 
@@ -367,6 +369,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     authState.api.quoteGenerationModel.mockReset();
     authState.api.getRemixSourceBundle.mockReset();
     authState.api.createMediaReadUrl.mockReset();
+    authState.api.createSeedanceAsset.mockReset();
+    authState.api.getSeedanceAsset.mockReset();
     authState.api.quoteGenerationModel.mockResolvedValue({
       modelId: 'nano-banana-2',
       catalogRevision: 'test-catalog-rev',
@@ -1085,6 +1089,99 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(2);
     expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('Restored prompt');
     expect(collectText(tree.root)).not.toContain('Restoring the original prompt, settings, and references…');
+  });
+
+  // The Seedance 2 family takes a reference prepared with the provider once (an asset
+  // id in place of the link on every run), which the web creator has offered since the
+  // family shipped and the native creator sent as `seedanceAssets: null`.
+  describe('Seedance assets on the native creator', () => {
+    const element = { id: 'girl', displayName: 'Girl', handle: '@girl', url: 'https://cdn.example.com/girl.png', storagePath: 'generation_inputs/owner/gen-girl/girl.png', sourceGenerationId: null };
+    const voice = { kind: 'audio', label: 'Voice', url: 'https://cdn.example.com/voice.mp3', storagePath: 'generation_inputs/owner/gen-girl/voice.mp3', sourceGenerationId: null };
+    const remixOf = (model: string) => ({
+      generation: { id: 'gen-girl', title: 'Original', prompt: 'The girl from @girl is crying', category: 'video', model },
+      result: null,
+      inputs: { video: { referenceMode: 'elements', startFrame: null, endFrame: null, elements: [element], referenceVideos: [], referenceAudios: [voice] } },
+      workflowSettings: { model, referenceMode: 'elements', duration: 4, aspectRatio: '16:9', resolution: '480p' },
+      restoreIssues: [],
+    });
+    const assetAnswer = (status: 'processing' | 'active' | 'failed', assetType: 'Image' | 'Audio') => ({
+      success: true, assetId: assetType === 'Image' ? 'asset-girl' : 'asset-voice', assetType, status, rawStatus: status, error: null, sourceUrl: null, lastCheckedAt: '2026-10-08T00:00:00.000Z',
+    });
+    const settle = () => renderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
+    const openEditor = async (model: string) => {
+      // The production descriptors, plus a copy of Seedance 2 under another id: a model
+      // with the same slots that is not in the family.
+      const catalog = createRemixRestoreCatalog();
+      const seedance = catalog.models.find((entry) => entry.id === 'seedance-2')!;
+      catalogState.catalog = { ...catalog, models: [...catalog.models, { ...seedance, id: 'wan-2.7', displayName: 'Wan 2.7' }] };
+      authState.api.getRemixSourceBundle.mockResolvedValue(remixOf(model));
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(<MediaCreationScreen initialTool="video" remixSource={{ generationId: 'gen-girl', postId: 'post-girl' }} />); });
+      await settle();
+      return tree;
+    };
+    /** Everything on screen as one string: a status line is a sentence, not a word. */
+    const text = (tree: renderer.ReactTestRenderer) => collectText(tree.root).join('\n');
+    const press = (tree: renderer.ReactTestRenderer, label: string) => renderer.act(async () => {
+      tree.root.findByProps({ accessibilityLabel: label }).props.onPress();
+    });
+
+    it('prepares a Seedance 2 reference from its details sheet, checks on it, and sends the asset id on the run', async () => {
+      authState.api.createSeedanceAsset.mockResolvedValue(assetAnswer('processing', 'Image'));
+      authState.api.getSeedanceAsset.mockResolvedValue(assetAnswer('active', 'Image'));
+      const tree = await openEditor('seedance-2');
+      expect(text(tree)).toContain('Open a reference to prepare it with Seedance once.');
+
+      renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Open details for Girl' }).props.onPress(); });
+      expect(tree.root.findAllByProps({ testID: 'seedance-asset-row' })).not.toHaveLength(0);
+      expect(text(tree)).toContain('Not prepared.');
+
+      await press(tree, 'Prepare for Seedance for Girl');
+      // The creator's own file goes by its storage path; the server resolves and owns it.
+      expect(authState.api.createSeedanceAsset).toHaveBeenCalledWith({ url: 'generation_inputs/owner/gen-girl/girl.png', assetType: 'Image' });
+      expect(text(tree)).toContain('Seedance is processing the file.');
+
+      await press(tree, 'Check status for Girl');
+      expect(authState.api.getSeedanceAsset).toHaveBeenCalledWith('asset-girl');
+      expect(text(tree)).toContain('Ready. Runs send the prepared asset in place of the file.');
+
+      // The run sends the asset id where the link was, and says what was prepared.
+      authState.api.startVideoGeneration.mockResolvedValue({ predictionId: 'pred-1', status: 'starting' } as never);
+      await press(tree, 'Close reference details');
+      await settle();
+      await renderer.act(async () => { findPressableByLabelPrefix(tree.root, 'Generate ·').props.onPress(); });
+      await settle();
+      expect(authState.api.startVideoGeneration).toHaveBeenCalledTimes(1);
+      expect(authState.api.startVideoGeneration.mock.calls[0][0]).toMatchObject({
+        model: 'seedance-2',
+        imageUrls: ['asset-girl'],
+        elementImageUrls: ['asset-girl'],
+        seedanceAssets: { images: [expect.objectContaining({ assetId: 'asset-girl', status: 'active' })] },
+      });
+      tree.unmount();
+    });
+
+    it('prepares an audio reference from its tile, and shows a refusal as failed on that reference', async () => {
+      authState.api.createSeedanceAsset.mockRejectedValue(new Error('Asset media must belong to the authenticated user.'));
+      const tree = await openEditor('seedance-2');
+
+      await press(tree, 'Prepare for Seedance for Voice');
+      expect(authState.api.createSeedanceAsset).toHaveBeenCalledWith({ url: 'generation_inputs/owner/gen-girl/voice.mp3', assetType: 'Audio' });
+      const retry = tree.root.findByProps({ accessibilityLabel: 'Try again for Voice' });
+      expect(collectText(retry).join(' ')).toContain('Retry');
+      // The picture beside it is untouched.
+      renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Open details for Girl' }).props.onPress(); });
+      expect(text(tree)).toContain('Not prepared.');
+      tree.unmount();
+    });
+
+    it('offers no Seedance asset on a model outside the family', async () => {
+      const tree = await openEditor('wan-2.7');
+      expect(text(tree)).not.toContain('Open a reference to prepare it with Seedance once.');
+      renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Open details for Girl' }).props.onPress(); });
+      expect(tree.root.findAllByProps({ testID: 'seedance-asset-row' })).toHaveLength(0);
+      tree.unmount();
+    });
   });
 
   // The "Restoring…" state belongs to one run of the restore, and a run that has been cancelled

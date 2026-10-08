@@ -99,7 +99,7 @@ Only when it applies:
 | --- | --- | --- |
 | Image resolutions depend on the aspect ratio | `src/lib/models.ts`, `src/lib/client-generation-models.ts` | `getImageResolutionOptions` |
 | The model joins the GPT Image 2.5 family | `src/lib/models.ts` | `isGptImage25ModelId` |
-| The model joins the Seedance 2 family | `src/lib/seedance-assets.ts` | `isSeedance2VideoModelId` |
+| The model joins the Seedance 2 family | `ugc-mobile/lib/model-catalog/seedance-assets.ts` (shared; `src/lib/seedance-assets.ts` re-exports it) | `isSeedance2VideoModelId` |
 | Reference clips or audio have a length cap | `src/lib/generation-model-catalog.ts` | `referenceAssetCapSeconds` |
 
 - **Image request body.** When the body is settings mapped to fields, reference images as one URL
