@@ -68,4 +68,7 @@ The empty-input probe answered "This field is required" and no task. The exact t
 `187a1ef3184d12f74fdb257fc0403d92` was accepted (`code 200`), ran for 64 s and ended in
 `state: fail`, `failCode: 500`, `failMsg: "Internal Error, Please try again later."`, with
 Kie's `param` echoing exactly that body. A schema problem answers `422` at creation, so this
-reads as a provider-side failure; a second run has not been sent (`archive/kie-video-models-2026-10-08/`).
+reads as a provider-side failure. The same body ran again at 07:4x IST: task
+`151e384fcf0b2bc134b11eb301c72360` succeeded in 34 s and delivered a 640×360, 4.0 s MP4 with an
+AAC audio track from `tempfile.aiquickdraw.com` (`archive/kie-video-models-2026-10-08/`), so the
+first failure was transient on Kie's side.
