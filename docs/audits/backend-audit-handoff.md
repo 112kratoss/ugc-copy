@@ -6,10 +6,94 @@ Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-b
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/backend-referral-notification-recovery-12b`, extending the verified-parent release chain with reproduced commerce parsing fixes. The user receipt/evidence edits remain untouched.
+Current checkout: `codex/backend-referral-account-deletion-12c`, investigating referral history across account deletion. The user receipt/evidence edits remain untouched.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+#407 expanded8871bd69 CI37679833609 passes web/mobile/browser/API but fails
+pgTAP guest_account_link test9: new receipt identity trigger changes established
+error text while still rejecting reassignment. Local expanded pgTAP also failed;
+a later preparation command had masked its exit status. Preserve failed logs and
+correct claims: run standalone pgTAP. Candidate now names the mobile detachment
+trigger zz_..., after the existing immutable-receipt guard, preserving its error
+contract.16 actualcases and clean replay pass; standalone final SQL running.
+Main additionally advanced through#406/#408 to b4ceb0881a5f47705e452b13aa3694e502c7828b,
+Quality37716917060 running. Both independent model changes merged locally without
+conflicts; no new migrations/AGENTS. Guard still has stale d4b parent and8871head:
+MUST update after final commit/CI and independently verify released b4ceb parent.
+Do not use prior passing checks to merge the corrected candidate.
+
+#407 final expanded candidate8871bd699750ba6fe56f8f68d82c8019bc4b27b2,
+Quality37679833609. The old0013c34c run37678774653 is superseded. Strict private
+merge guard and candidate migration digest now expect8871bd69/newrun. All16
+actual cases pass, including authenticated App/Play webhook refund/restore and
+cross-owner purchase restore denial. Final clean replay/2328 SQL assertions,
+18 payment-database regressions and types/lint pass. The active full audit goal
+remains incomplete; wait for final candidate all5 then normal guarded release.
+
+12C candidate expanded before release: actual App/Play Store refund after buyer
+deletion reproduced identity_mismatch, leaving the inviter credited. The same
+unapplied migration now retains mobile receipt identity and matches detached
+original owners only for credit adjustments; cross-owner adjustment and purchase
+restore stay rejected. Actual authenticated webhook handler cases use local
+PostgREST/SQL.16 lifecycle cases,18 existing payment SQL cases and final2328 SQL
+assertions/clean replay pass. Release expected signatures now include10 functions
+and the mobile receipt identity column/trigger. Old0013c34c CI is superseded once
+the expanded head is pushed; do not merge it merely because it passes.
+
+12C PR #407 is attached: candidate0013c34c59ef137c93dc4dfb70dfc92327baeb21,
+Quality37678774653. Includes independently released #405 catalog changes; main
+parent d4b76910762b0d46f3cc416ba87fa0c985c283d3 passes Quality37677022593 and
+standard37678605859. New AGENTS contract note read. Independent backend readback
+passes on this parent under referral-deletion-parent-release. Private merge guard
+expects this exact parent/candidate/run and fresh schema/advisors/mobile idle.
+Only run after all5 candidate jobs pass. Standard main CI/release/readback remain.
+Prepared strict verifier/changed signatures/8 function bodies+ACLs/Auth trigger,
+complete migration plan, and 8-check rollback probe under referral-deletion-release.
+Probe passes locally with zero cleanup.14 actual lifecycle,61 existing deletion,
+18 notification recovery,45 focused,2328 SQL assertions/clean replay and types/lint
+pass. Independent cleanup has zero users/programs/transactions/pending jobs.
+User receipt diff hash remains bb579a5c0a2ee1540000d57c7e7580feeb4c0cb0ff1e9427f2c9bf41025007fc.
+
+12B #403 is independently verified in production as 98f55011c8e820ae6e11acdb9d5f4dfb609b496e.
+Candidate37659876117/main37661798356 all5 pass; standard37663113075 succeeds.
+Independent 19:55:24 UTC readback, schema/function/ACL/runtime checks, expected
+110+1 INFO advisor delta, five rollback checks and zero cleanup all pass. See
+backend-section-12-referral-notification-release-2026-10-08.md.
+
+Current branch codex/backend-referral-account-deletion-12c starts at this merge.
+12C reproduces actual Auth deletion failures for both settled referral parties
+(append-only ledger cascade); three unsettled/no-referral controls pass. Candidate
+migration20261007174934 retains nullable live identities plus immutable detached
+UUIDs, cancels deleted-recipient outbox work, disables codes, preserves buyer
+purchase evidence and reconciles surviving rewards after refund/restore. Local
+61 existing deletion cases,18 notification recovery cases and2328 SQL assertions
+pass. Expanded candidate tests caught and corrected stale remaining_credits and
+missing unsettled recovery after buyer deletion. Final reruns/clean replay,
+release preparation/CI/PR/gates remain. No production DDL for12C has run.
+Private generator build-referral-deletion-migration.py generates the migration
+from captured baseline definitions; do not rerun against changed definitions.
+Preserve all user receipt/Section1/private evidence edits.
+
+Earlier checkpoints below are superseded by the verified release above.
+
+#403 current candidate is e381ca8d502aa5b060b8668a1725929c57186cb3, Quality
+37659876117. Initial 1ddddc66 passes 7,499 web tests and four other jobs but lint
+rejects require() in the CJS test worker; corrected dynamic import passes local
+lint and all18 actual cases. Intermediate0ad9c7c2 run37659606745 was cancelled
+by normal concurrency after merging the independently released #404 top-bar fix.
+New parent/live main89504467850df7e7f37b4552bf12e0ce2ad2d210 passes exact-main
+Quality37652119339 and standard37653758032. Fresh independent five commerce
+runtime/schema/all110 advisor/smoke checks pass on this parent; #404 changes
+only AppShell/CSS/browser tests/design/AGENTS. Its new AGENTS CSS guidance was
+read. The private referral merge guard now expects this exact parent/candidate
+and run37659876117. Wait for all5 candidate jobs, then run fresh guard; do not
+merge on the stale 1ddddc66/0ad9c7c2 checks. Schema/migration/runtime remain the
+same as the prepared release verifier. A bounded exact-ID production ROLLBACK
+probe is prepared and tested locally (five checks, independent zero cleanup);
+run only after the deployed definitions verifier passes.
+
 
 #403 is attached at https://github.com/112kratoss/ugc-copy/pull/403 on candidate
 1ddddc668a05ec5b8ec8fd6679fd22e90dc32f3b, branch
