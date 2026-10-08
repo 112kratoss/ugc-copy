@@ -86,8 +86,6 @@ export const AI_MODEL_MAKER_BY_MODEL_ID = {
   'wan-3.0': 'Alibaba',
   'wan-3.0-prime': 'Alibaba',
   'grok-imagine-video-1.5': 'xAI',
-  // Web only until the installed apps name PixVerse in their AI-data question
-  // (`availability` in generation-model-catalog.ts).
   'pixverse-v6': 'PixVerse',
   // Voice and sound effects, in web workflows only
   'text-to-speech-turbo-2-5': 'ElevenLabs',
@@ -110,6 +108,6 @@ export const AI_MODEL_MAKERS: ReadonlyArray<{ maker: AiModelMaker; models: strin
   { maker: 'xAI', models: 'Grok Imagine' },
   { maker: 'Ideogram', models: 'Ideogram' },
   { maker: 'Black Forest Labs', models: 'FLUX' },
-  { maker: 'PixVerse', models: 'PixVerse, on the web' },
+  { maker: 'PixVerse', models: 'PixVerse' },
   { maker: 'ElevenLabs', models: 'voice and sound effects in web workflows' },
 ];
