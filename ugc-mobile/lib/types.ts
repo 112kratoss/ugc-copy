@@ -379,6 +379,7 @@ export interface MediaTemplateDetail extends MediaTemplateSummary {
 export interface MediaTemplateListResponse {
   success: boolean;
   templates: MediaTemplateSummary[];
+  nextCursor?: string | null;
 }
 
 export interface MediaTemplateDetailResponse {

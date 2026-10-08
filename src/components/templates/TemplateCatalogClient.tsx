@@ -56,6 +56,8 @@ export default function TemplateCatalogClient({
   const [inputFilter, setInputFilter] = useState<InputFilter>('all');
   const [nextCursor, setNextCursor] = useState(initialNextCursor);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  // Apart from the first-load error, which replaces the grid.
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const posterRecovery = useTemplatePosterRecovery(setTemplates, session?.access_token);
 
   useEffect(() => {
@@ -100,7 +102,7 @@ export default function TemplateCatalogClient({
   async function loadMore() {
     if (!nextCursor || isLoadingMore) return;
     setIsLoadingMore(true);
-    setError(null);
+    setLoadMoreError(null);
     try {
       const page = await listTemplatePage({ cursor: nextCursor, limit: 48 });
       setTemplates((current) => {
@@ -110,7 +112,7 @@ export default function TemplateCatalogClient({
       });
       setNextCursor(page.nextCursor);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Could not load more templates.');
+      setLoadMoreError(reason instanceof Error ? reason.message : 'Could not load more templates.');
     } finally {
       setIsLoadingMore(false);
     }
@@ -191,7 +193,10 @@ export default function TemplateCatalogClient({
       <div className="mt-7">
         {isLoading ? <CatalogSkeleton /> : null}
         {!isLoading && error ? (
-          <StatusCallout tone="danger" title="Templates are unavailable" body={error} />
+          <div className="flex flex-col items-start gap-4">
+            <StatusCallout tone="danger" title="Templates are unavailable" body={error} />
+            <Button variant="secondary" onClick={() => window.location.reload()}>Try again</Button>
+          </div>
         ) : null}
         {!isLoading && !error && filteredTemplates.length > 0 ? (
           <>
@@ -201,9 +206,10 @@ export default function TemplateCatalogClient({
               ))}
             </div>
             {!isOwnerMode && nextCursor ? (
-              <div className="mt-8 flex justify-center">
+              <div className="mt-8 flex flex-col items-center gap-3">
+                {loadMoreError ? <div role="alert"><Text variant="bodySm">{loadMoreError}</Text></div> : null}
                 <Button variant="secondary" onClick={loadMore} disabled={isLoadingMore}>
-                  {isLoadingMore ? 'Loading…' : 'Load more templates'}
+                  {isLoadingMore ? 'Loading…' : loadMoreError ? 'Try again' : 'Load more templates'}
                 </Button>
               </div>
             ) : null}
@@ -218,10 +224,19 @@ export default function TemplateCatalogClient({
                 : 'No matching templates'}
             </Text>
             <Text variant="bodySm" className="mx-auto mt-2 max-w-md">
-              {templates.length === 0 && isOwnerMode
-                ? 'Open the workflow canvas, define the public inputs and output, test it, then publish.'
-                : 'Try another search or media filter.'}
+              {templates.length === 0
+                ? isOwnerMode
+                  ? 'Open the workflow canvas, define the public inputs and output, test it, then publish.'
+                  : 'Creators have not published a template yet. Check back soon.'
+                : nextCursor
+                  ? 'Search and filters look at the templates loaded so far. Load more to search the rest.'
+                  : 'Try another search or media filter.'}
             </Text>
+            {!isOwnerMode && templates.length > 0 && nextCursor ? (
+              <Button variant="secondary" onClick={loadMore} disabled={isLoadingMore} className="mt-6">
+                {isLoadingMore ? 'Loading…' : 'Load more templates'}
+              </Button>
+            ) : null}
             {isOwnerMode && templates.length === 0 ? (
               <Button href="/templates/new" variant="primary" icon={Plus} className="mt-6">
                 Create template

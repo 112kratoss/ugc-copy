@@ -1,6 +1,7 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { BarChart3, ChevronRight, DollarSign, PackageCheck } from 'lucide-react-native';
+import { useEffect } from 'react';
 import { Pressable, View } from 'react-native';
 
 import { CardListSkeleton } from '@/components/skeleton';
@@ -47,6 +48,14 @@ export default function SellerDashboardScreen() {
   const posts = data?.pages.flatMap((page) => page.posts) ?? [];
   const summary = data?.pages[0]?.summary ?? getOwnerPostSalesSummary(posts);
   const listings = posts.filter((post) => post.bundle);
+  // Listings are posts with a bundle, found by paging every owner post; the
+  // page-0 summary already knows how many there are, so keep paging until
+  // they are all on screen and never call the account empty before then.
+  const listingCount = data?.pages[0]?.summary?.listingCount ?? listings.length;
+  const hasUnlistedListings = listings.length < listingCount && Boolean(hasNextPage);
+  useEffect(() => {
+    if (hasUnlistedListings && !isFetchingNextPage) void fetchNextPage();
+  }, [fetchNextPage, hasUnlistedListings, isFetchingNextPage]);
 
   return (
     <Screen>
@@ -70,8 +79,8 @@ export default function SellerDashboardScreen() {
       {!isLoading && !error ? (
         <>
           <View style={{ flexDirection: 'row', gap: 12 }}>
-            <MetricCard icon={<DollarSign size={appTheme.icon.feature} color={theme.colors.info} />} label="Total sales" value={formatUsdCents(summary.earningsUsdCents)} />
-            <MetricCard icon={<BarChart3 size={appTheme.icon.feature} color={theme.colors.primary} />} label="Unlocks sold" value={String(summary.salesCount)} />
+            <MetricCard icon={<DollarSign size={appTheme.icon.feature} color={theme.colors.info} />} label="Tracked earnings" value={formatUsdCents(summary.earningsUsdCents)} />
+            <MetricCard icon={<BarChart3 size={appTheme.icon.feature} color={theme.colors.primary} />} label="Sales" value={String(summary.salesCount)} />
           </View>
 
           <SecondaryButton label="Refresh dashboard" onPress={() => void refetch()} />
@@ -94,10 +103,10 @@ export default function SellerDashboardScreen() {
                     <ChevronRight size={20} color={theme.colors.faint} />
                   </View>
                   <AppText variant="bodySm" color="muted">
-                    {item.bundle?.salesCount ?? 0} sales · {formatUsdCents(item.bundle?.earningsUsdCents)} tracked earnings
+                    {(item.bundle?.salesCount ?? 0) === 1 ? '1 sale' : `${item.bundle?.salesCount ?? 0} sales`} · {formatUsdCents(item.bundle?.earningsUsdCents)} tracked earnings
                   </AppText>
                   <AppText variant="caption" color="faint">
-                    {sentenceLabel(item.bundle?.status ?? 'draft')} · {sentenceLabel(item.visibility)}
+                    {item.archivedAt ? 'Archived post' : `${sentenceLabel(item.bundle?.status ?? 'draft')} · ${sentenceLabel(item.visibility)}`}
                   </AppText>
                 </Card>
               </Pressable>
@@ -112,7 +121,7 @@ export default function SellerDashboardScreen() {
             />
           ) : null}
 
-          {listings.length === 0 ? (
+          {listingCount === 0 && !hasUnlistedListings ? (
             <View style={{ gap: appTheme.spacing.gap }}>
               <StatusBlock title="No seller listings yet" body="Publish a post with reusable resources to start tracking sales here." />
               <PrimaryButton label="Create a listing" accent="primary" onPress={() => router.push('/post/new' as never)} />

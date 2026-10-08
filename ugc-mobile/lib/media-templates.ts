@@ -98,11 +98,6 @@ function templateRecord(value: unknown): UnknownRecord {
 
 export function normalizeMediaTemplate(value: unknown): MediaTemplateSummary {
   const template = templateRecord(value);
-  const legacyCredits = asRecord(firstValue(template, ['estimatedStageCredits', 'estimated_stage_credits']));
-  const legacyFrameCredits = numberValue(template, ['estimatedFrameCredits', 'estimated_frame_credits'])
-    ?? numberValue(legacyCredits, ['keyframesTotal', 'keyframes_total']);
-  const legacyVideoCredits = numberValue(template, ['estimatedVideoCredits', 'estimated_video_credits'])
-    ?? numberValue(legacyCredits, ['video']);
   const rawStatus = stringValue(template, ['status'], 'active');
 
   return {
@@ -118,11 +113,7 @@ export function normalizeMediaTemplate(value: unknown): MediaTemplateSummary {
     inputSlots: normalizeInputSlots(firstValue(template, ['inputSlots', 'input_slots'])),
     outputKind: mediaKind(firstValue(template, ['outputKind', 'output_kind']), 'video'),
     status: rawStatus === 'draft' || rawStatus === 'disabled' ? rawStatus : 'active',
-    estimatedTotalCredits: numberValue(template, ['estimatedTotalCredits', 'estimated_total_credits'])
-      ?? numberValue(legacyCredits, ['total'])
-      ?? (legacyFrameCredits !== null || legacyVideoCredits !== null
-        ? (legacyFrameCredits ?? 0) + (legacyVideoCredits ?? 0)
-        : null),
+    estimatedTotalCredits: numberValue(template, ['estimatedTotalCredits', 'estimated_total_credits']),
     useCount: numberValue(template, ['useCount', 'use_count']) ?? 0,
   };
 }
@@ -130,7 +121,8 @@ export function normalizeMediaTemplate(value: unknown): MediaTemplateSummary {
 export function normalizeMediaTemplateListResponse(value: unknown): MediaTemplateListResponse {
   const response = asRecord(value);
   const templates = asArray(firstValue(response, ['templates', 'items', 'data'])).map(normalizeMediaTemplate);
-  return { success: response.success !== false, templates };
+  // The server pages at 48; without the cursor the catalog stopped there.
+  return { success: response.success !== false, templates, nextCursor: nullableString(response, ['nextCursor', 'next_cursor']) };
 }
 
 export function normalizeMediaTemplateDetailResponse(value: unknown): MediaTemplateDetailResponse {
