@@ -18,7 +18,9 @@ describe('blog content loader', () => {
   it('renders markdown content after stripping front matter', async () => {
     const post = await getPostData('ai-image-generator-for-ugc-ads');
 
-    expect(post.seoTitle).toBe('AI Image Generator for UGC Ads');
+    // No seoTitle: it duplicated the feature page's <title>, so the article's own title is used.
+    expect(post.seoTitle).toBeUndefined();
+    expect(post.title).toBe('AI Image Generator for UGC Ads: What to Make First');
     expect(post.content).toContain('<h2>Start With the Highest-Leverage Assets</h2>');
     expect(post.content).not.toContain('seoDescription:');
   });

@@ -115,6 +115,17 @@ function AnonymousFooter() {
     <footer className="relative z-10 border-t border-[var(--ui-border-subtle)] bg-[var(--ui-bg-app)] px-6 py-8 text-sm text-[var(--ui-text-faint)]">
       <div className="studio-shell flex flex-col items-center justify-between gap-4 sm:flex-row">
         <p>© {new Date().getFullYear()} magicbooklet.</p>
+        {/* The model price list, comparisons, guides and feature pages were
+            reachable only through sitemap.xml. */}
+        <nav className="flex flex-wrap justify-center gap-x-5 gap-y-2" aria-label="Product">
+          <Link href="/models" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Models</Link>
+          <Link href="/alternatives" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Compare</Link>
+          <Link href="/blog" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Blog</Link>
+          <Link href="/ai-image-generator" prefetch={false} className="hover:text-[var(--ui-text-primary)]">AI images</Link>
+          <Link href="/ai-video-generator" prefetch={false} className="hover:text-[var(--ui-text-primary)]">AI video</Link>
+          <Link href="/ai-motion-transfer" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Motion transfer</Link>
+          <Link href="/ai-workflow-builder" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Workflows</Link>
+        </nav>
         <nav className="flex flex-wrap justify-center gap-x-5 gap-y-2" aria-label="Legal and support">
           <Link href="/contact" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Contact</Link>
           <Link href="/child-safety" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Child safety</Link>

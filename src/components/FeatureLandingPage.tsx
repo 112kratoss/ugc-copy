@@ -109,7 +109,7 @@ export default function FeatureLandingPage({
                 <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.08),transparent_40%)]" />
             </div>
 
-            <main className="studio-shell ui-section-gap relative py-20">
+            <div className="studio-shell ui-section-gap relative py-20">
                 <section className="grid gap-10 lg:grid-cols-[1.2fr_0.8fr] lg:items-center">
                     <div className="space-y-8">
                         <Kicker icon={Sparkles} className="rounded-full border border-[rgba(255,122,89,0.28)] bg-[var(--ui-primary-soft)] px-4 py-2 text-[var(--ui-primary-strong)]">
@@ -254,7 +254,7 @@ export default function FeatureLandingPage({
                         ))}
                     </div>
                 </section>
-            </main>
+            </div>
         </div>
     );
 }

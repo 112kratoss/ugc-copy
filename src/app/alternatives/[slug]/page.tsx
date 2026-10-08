@@ -66,7 +66,7 @@ export default async function AlternativePage({ params }: AlternativePageProps) 
                 ]}
             />
 
-            <main className="studio-shell ui-section-gap relative py-20">
+            <div className="studio-shell ui-section-gap relative py-20">
                 <section className="space-y-6">
                     <Kicker>Comparison</Kicker>
                     <Text as="h1" variant="display" className="max-w-4xl">
@@ -141,6 +141,9 @@ export default async function AlternativePage({ params }: AlternativePageProps) 
                         <Button href="/showcase" variant="secondary" className="min-h-12 px-7">
                             Browse real output
                         </Button>
+                        <Button href="/create" variant="secondary" className="min-h-12 px-7">
+                            Start creating
+                        </Button>
                     </div>
                 </section>
 
@@ -176,7 +179,7 @@ export default async function AlternativePage({ params }: AlternativePageProps) 
                         </div>
                     </section>
                 ) : null}
-            </main>
+            </div>
         </div>
     );
 }

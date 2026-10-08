@@ -2,7 +2,6 @@
 title: "AI Video Generator for Product Ads: A Better Testing Workflow"
 date: "2026-03-12"
 excerpt: "Learn how to use an AI video generator to test ad angles, pacing, and visual direction before committing to a full production cycle."
-seoTitle: "AI Video Generator for Product Ads"
 seoDescription: "A practical framework for using an AI video generator to create product ads, compare concepts, and scale faster creative testing."
 coverImage: "/opengraph-image.png"
 ---

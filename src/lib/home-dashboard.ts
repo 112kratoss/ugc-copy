@@ -194,9 +194,12 @@ export function selectWhatsNewModels(
     return [];
   }
 
-  const flaggedNew = models.filter(
-    (model) => model.badge?.trim().toLowerCase() === 'new',
-  );
+  // Newest first: models are appended to the catalog, so the highest
+  // sortOrder is the latest launch. Thirteen models still carry "New" since
+  // August, and catalog order put those ahead of this week's.
+  const flaggedNew = models
+    .filter((model) => model.badge?.trim().toLowerCase() === 'new')
+    .sort((left, right) => right.sortOrder - left.sortOrder);
   const selected = flaggedNew.length > 0 ? flaggedNew : models;
 
   return selected.slice(0, limit).map(toHomeWhatsNewModel);

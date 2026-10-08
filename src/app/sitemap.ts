@@ -56,9 +56,11 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     ]);
 
     return [
+        // No lastModified for pages whose change date is unknown: the sitemap
+        // regenerates hourly, and a stamp of "now" on every one taught crawlers
+        // to ignore the accurate dates below.
         ...INDEXABLE_ROUTES.map((route) => ({
             url: `${baseUrl}${route.path === '/' ? '' : route.path}`,
-            lastModified: now,
             changeFrequency: route.changeFrequency,
             priority: route.priority,
         })),
@@ -88,13 +90,11 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
         })),
         ...ALTERNATIVES.map((entry) => ({
             url: `${baseUrl}/alternatives/${entry.slug}`,
-            lastModified: now,
             changeFrequency: 'monthly' as const,
             priority: 0.7,
         })),
         ...models.map((model) => ({
             url: `${baseUrl}/models/${toModelSlug(model.id)}`,
-            lastModified: now,
             changeFrequency: 'weekly' as const,
             priority: 0.65,
         })),

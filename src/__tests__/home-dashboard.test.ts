@@ -219,6 +219,16 @@ describe('selectWhatsNewModels', () => {
     expect(selected.map((model) => model.id)).toEqual(['fresh-video', 'fresh-motion']);
   });
 
+  it('puts the latest launch first among New-badged models', () => {
+    const models = [
+      buildModel({ id: 'august-launch', badge: 'New', sortOrder: 10 }),
+      buildModel({ id: 'this-week', kind: 'video', badge: 'New', sortOrder: 190 }),
+      buildModel({ id: 'last-week', kind: 'motion', badge: 'New', sortOrder: 150 }),
+    ];
+
+    expect(selectWhatsNewModels(models, 2).map((model) => model.id)).toEqual(['this-week', 'last-week']);
+  });
+
   it('falls back to catalog head order when nothing is badged New', () => {
     const models = [
       buildModel({ id: 'first' }),

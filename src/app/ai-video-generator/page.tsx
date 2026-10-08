@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 
 import FeatureLandingPage from '@/components/FeatureLandingPage';
 import { createMetadata } from '@/lib/seo';
+import { PRICING_PLAN_MAP } from '@/lib/pricing';
 
 export const metadata: Metadata = createMetadata({
     title: 'AI Video Generator for Product Ads',
@@ -92,7 +93,7 @@ export default function AIVideoGeneratorPage() {
                     body: [
                         'There is no single best video model, and choosing by leaderboard position leads teams to overpay for qualities their creative does not need. The useful question is which failure mode you can least afford.',
                         'Models tuned for cinematic realism produce the most convincing footage and cost the most per second, which makes them a poor fit for wide exploratory testing and a good fit for the final cut of an angle you have already validated. Faster, cheaper models produce rougher output but let you look at ten angles instead of one — which is the correct trade when you are still deciding what to make.',
-                        'The workflow that wastes the least is tiered: explore broadly on inexpensive generations, then re-run only the winning structure on a higher-fidelity model. Current per-generation credit costs are shown in the studio before you run anything, so the cost of each tier is visible at the point of decision rather than discovered afterwards.',
+                        'The workflow that wastes the least is tiered: explore broadly on inexpensive generations, then re-run only the winning structure on a higher-fidelity model. Current per-generation credit costs are shown before you run anything, so the cost of each tier is visible at the point of decision rather than discovered afterwards.',
                     ],
                 },
                 {
@@ -124,7 +125,7 @@ export default function AIVideoGeneratorPage() {
                 {
                     question: 'Which model should I use?',
                     answer:
-                        'Explore broadly on faster, cheaper models while you are still deciding on an angle, then re-run only the winning structure on a higher-fidelity model. Per-generation credit costs are shown in the studio before you run anything.',
+                        'Explore broadly on faster, cheaper models while you are still deciding on an angle, then re-run only the winning structure on a higher-fidelity model. Per-generation credit costs are shown before you run anything.',
                 },
                 {
                     question: 'How long does a generation take?',
@@ -134,7 +135,7 @@ export default function AIVideoGeneratorPage() {
                 {
                     question: 'How much does AI video generation cost?',
                     answer:
-                        'Generations are billed in credits, with the cost varying by model, duration, and quality. Credit packs start at ₹415 for 500 credits and do not expire while your account is active.',
+                        `Generations are billed in credits, with the cost varying by model, duration, and quality. Credit packs start at ₹${PRICING_PLAN_MAP.starter.priceInr} for ${PRICING_PLAN_MAP.starter.credits} credits and do not expire while your account is active.`,
                 },
                 {
                     question: 'Can I use generated video in paid advertising?',

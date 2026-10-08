@@ -44,7 +44,7 @@ export default function AlternativesIndexPage() {
                 ]}
             />
 
-            <main className="studio-shell ui-section-gap relative py-20">
+            <div className="studio-shell ui-section-gap relative py-20">
                 <section className="space-y-5">
                     <Kicker>Comparisons</Kicker>
                     <Text as="h1" variant="display" className="max-w-4xl">
@@ -106,7 +106,7 @@ export default function AlternativesIndexPage() {
                         </Surface>
                     </div>
                 </section>
-            </main>
+            </div>
         </div>
     );
 }
