@@ -29,7 +29,8 @@ import { showConfirmDialog } from '@/lib/dialog';
  * Raise when what is sent, or who receives it, changes materially. A stored
  * answer from another version is ignored, so everyone is asked again.
  */
-export const AI_DATA_CONSENT_VERSION = 1;
+// 2: PixVerse joined the makers (PixVerse V6, 2026-10-08).
+export const AI_DATA_CONSENT_VERSION = 2;
 
 export const AI_DATA_CONSENT_STORAGE_KEY = 'magicbooklet.ai-data-consent.v1';
 
@@ -48,6 +49,7 @@ export const AI_MODEL_MAKERS = [
   'xAI',
   'Ideogram',
   'Black Forest Labs',
+  'PixVerse',
 ] as const;
 
 export function formatAiModelMakers(conjunction: 'or' | 'and' = 'or') {

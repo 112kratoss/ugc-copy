@@ -65,11 +65,14 @@ the order above is the page's.)
 - App id `pixverse-v6`, provider `pixverse`, maker PixVerse (new in `ai-data-recipients.ts`),
   on `video-v1`. Resolutions 360p, 540p, 720p, 1080p; duration 1–15 s as a stepper, default 5;
   the eight ratios; a Sound toggle (`generate_audio_switch`).
-- **Web only for now** (`availability` in `generation-model-catalog.ts`, which the release
-  emitter follows): the installed apps' AI-data question names each maker, PixVerse is new, and
-  the iOS update is held behind App Review. A later release flips `mobile` on once an app update
-  naming PixVerse has shipped on both platforms (`AI_MODEL_MAKERS` and
-  `AI_DATA_CONSENT_VERSION` in `ugc-mobile/lib/ai-data-consent.ts`).
+- **Web only in release `kie-video-models-20261008`** (`availability` in
+  `generation-model-catalog.ts`, which the release emitter follows): the installed apps' AI-data
+  question names each maker, and PixVerse was new there. The apps name it from consent version 2
+  on (`AI_MODEL_MAKERS` and `AI_DATA_CONSENT_VERSION` in `ugc-mobile/lib/ai-data-consent.ts`,
+  2026-10-08), and release `pixverse-mobile-20261008` (`2026-10-08-pixverse-mobile.json`, pinned
+  by `pixverse-mobile-manifest.test.ts`) turns `mobile` on. It is published only once that app
+  update is in users' hands on both platforms, so nobody is offered PixVerse before the question
+  names it.
 - Inputs: 7 reference images (named), or a start frame with an optional end frame. The shape
   picks the id: references → `reference-to-video`; two frames → `transition`; one frame →
   `image-to-video`; none → `text-to-video`. A lone end frame is refused.
