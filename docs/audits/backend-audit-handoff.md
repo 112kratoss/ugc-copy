@@ -11,6 +11,27 @@ Read the parent and repository AGENTS.md. The user authorized section-by-section
 
 ## Exact checkpoint
 
+#407 expanded8871bd69 CI37679833609 passes web/mobile/browser/API but fails
+pgTAP guest_account_link test9: new receipt identity trigger changes established
+error text while still rejecting reassignment. Local expanded pgTAP also failed;
+a later preparation command had masked its exit status. Preserve failed logs and
+correct claims: run standalone pgTAP. Candidate now names the mobile detachment
+trigger zz_..., after the existing immutable-receipt guard, preserving its error
+contract.16 actualcases and clean replay pass; standalone final SQL running.
+Main additionally advanced through#406/#408 to b4ceb0881a5f47705e452b13aa3694e502c7828b,
+Quality37716917060 running. Both independent model changes merged locally without
+conflicts; no new migrations/AGENTS. Guard still has stale d4b parent and8871head:
+MUST update after final commit/CI and independently verify released b4ceb parent.
+Do not use prior passing checks to merge the corrected candidate.
+
+#407 final expanded candidate8871bd699750ba6fe56f8f68d82c8019bc4b27b2,
+Quality37679833609. The old0013c34c run37678774653 is superseded. Strict private
+merge guard and candidate migration digest now expect8871bd69/newrun. All16
+actual cases pass, including authenticated App/Play webhook refund/restore and
+cross-owner purchase restore denial. Final clean replay/2328 SQL assertions,
+18 payment-database regressions and types/lint pass. The active full audit goal
+remains incomplete; wait for final candidate all5 then normal guarded release.
+
 12C candidate expanded before release: actual App/Play Store refund after buyer
 deletion reproduced identity_mismatch, leaving the inviter credited. The same
 unapplied migration now retains mobile receipt identity and matches detached

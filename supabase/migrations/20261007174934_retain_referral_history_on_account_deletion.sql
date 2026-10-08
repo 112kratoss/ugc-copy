@@ -64,7 +64,7 @@ ALTER TABLE public.mobile_store_transactions ADD CONSTRAINT mobile_store_transac
   FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 COMMENT ON COLUMN public.mobile_store_transactions.detached_user_id IS
   'Original account UUID retained for financial reconciliation after Auth deletion; never an active account reference.';
-CREATE TRIGGER aa_mobile_store_transactions_retain_account_identity BEFORE INSERT OR UPDATE ON public.mobile_store_transactions
+CREATE TRIGGER zz_mobile_store_transactions_retain_account_identity BEFORE INSERT OR UPDATE ON public.mobile_store_transactions
   FOR EACH ROW EXECUTE FUNCTION public.retain_referral_account_identity('user_id');
 
 ALTER TABLE public.transactions

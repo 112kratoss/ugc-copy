@@ -63,6 +63,13 @@ provider-backed evidence.
 - **61 existing account-deletion Auth/Storage cases**, **18 notification recovery
   cases**, and **45 focused cases** and **18 existing payment-database cases** pass. The final clean migration replay and
   **2,328 SQL assertions across 108 files** pass. CI runs the new Auth/SQL suite.
+- Expanded candidate CI passed web/mobile/browser/API jobs but failed one SQL
+  assertion: the new receipt detachment trigger rejected reassignment before the
+  existing immutable-receipt trigger, changing its established error message.
+  The detachment trigger now runs afterward, retaining both guards and the
+  original error contract. An earlier combined local command masked this same
+  pgTAP failure behind a successful preparation command; that run is not counted
+  as passing. Final standalone pgTAP results and candidate CI are required.
 - New trigger functions deny direct client/service execution; retained referral
   tables remain private. Application/test type checks and scoped lint are gated
   before release. Owned fixtures are cleaned using exact IDs in the local suite.
