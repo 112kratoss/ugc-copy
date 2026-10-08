@@ -301,6 +301,9 @@ jobs:
       - name: Test referral account deletion and retained reconciliation with real Auth and SQL
         run: npx vitest run --config vitest.referral-account-deletion-postgrest.config.ts
 
+      - name: Test referral intake ownership and admission with real Auth and SQL
+        run: npx vitest run --config vitest.referral-intake-postgrest.config.ts
+
       - name: Stop isolated Supabase API stack
         if: always()
         continue-on-error: true
