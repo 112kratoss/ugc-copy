@@ -1759,8 +1759,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         />
                                     ) : referenceLimitMessage ? (
                                         <p className="text-sm text-red-400">{referenceLimitMessage}</p>
-                                    ) : quoteState.status === 'error' ? (
-                                        <p className="text-sm text-amber-300">{quoteUi.message}<button type="button" onClick={() => setQuoteAttempt((current) => current + 1)} className="ml-2 underline underline-offset-2 hover:text-amber-100">Retry quote</button></p>
                                     ) : error ? (
                                         <p className="text-sm text-red-400">{error}</p>
                                     ) : staleElementMentions.length > 0 ? (
@@ -1768,6 +1766,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                             Resolve the unknown element mention{staleElementMentions.length > 1 ? 's' : ''} before generating:{' '}
                                             <StudioElementHandleList handles={staleElementMentions} />
                                         </p>
+                                    ) : quoteState.status === 'error' ? (
+                                        <p className="text-sm text-amber-300">{quoteUi.message}<button type="button" onClick={() => setQuoteAttempt((current) => current + 1)} className="ml-2 underline underline-offset-2 hover:text-amber-100">Retry quote</button></p>
                                     ) : (
                                         <p className="text-sm text-zinc-500">Your latest image will appear in the workspace as soon as the run finishes.</p>
                                     )}
