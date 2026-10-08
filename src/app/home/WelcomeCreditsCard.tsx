@@ -8,9 +8,12 @@ import { supabase } from '@/lib/supabase';
 
 type WelcomeStatus = { status: string; amount: number };
 
-// One read per page load, shared by the strip and the rail (one of the two is
-// hidden at any width).
+// One read shared by the strip and the rail (one of the two is hidden at any
+// width), kept only for a few seconds: a claim or a sign-in change later in
+// the session must be seen on the next visit to Home.
+const SHARED_READ_TTL_MS = 5_000;
 let welcomeStatusPromise: Promise<WelcomeStatus | null> | null = null;
+let welcomeStatusReadAt = 0;
 
 async function readWelcomeStatus(): Promise<WelcomeStatus | null> {
   const { data } = await supabase.auth.getSession();
@@ -32,7 +35,10 @@ export default function WelcomeCreditsCard() {
 
   useEffect(() => {
     let active = true;
-    welcomeStatusPromise ??= readWelcomeStatus().catch(() => null);
+    if (!welcomeStatusPromise || Date.now() - welcomeStatusReadAt > SHARED_READ_TTL_MS) {
+      welcomeStatusPromise = readWelcomeStatus().catch(() => null);
+      welcomeStatusReadAt = Date.now();
+    }
     void welcomeStatusPromise.then((result) => {
       if (active) setWelcome(result);
     });

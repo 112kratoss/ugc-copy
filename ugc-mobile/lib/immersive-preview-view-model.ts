@@ -612,7 +612,7 @@ function showcaseToImmersiveItem(
     linkedPostTitle: null,
     linkedPostVisibility: null,
     archivedAt: null,
-    visibility: 'public',
+    visibility: item.visibility ?? 'public',
     availableActions: [
       // The creator reaches their own post from the feed, a link or an alert as
       // often as from Profile; the web post page offers Edit there too.
