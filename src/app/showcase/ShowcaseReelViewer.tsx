@@ -54,7 +54,7 @@ import {
   verifyRazorpayCheckoutUntilSettled,
 } from '@/lib/razorpay-checkout-client';
 import { getCurrentInternalPath } from '@/lib/share';
-import { isGenerationRecipeAssetId, type ShowcaseFeedItem, type ShowcaseMediaItem } from '@/lib/showcase';
+import { isGenerationRecipeAssetId, type ShowcaseFeedItem, type ShowcaseMediaItem, getShowcaseItemMediaItems } from '@/lib/showcase';
 
 declare global {
   interface Window {
@@ -214,27 +214,6 @@ function getMediaTypeLabel(item: ShowcaseFeedItem): string {
   return 'Image';
 }
 
-function getItemMediaItems(item: ShowcaseFeedItem): ShowcaseMediaItem[] {
-  if (item.mediaItems?.length) {
-    return item.mediaItems.slice().sort((left, right) => left.sortOrder - right.sortOrder);
-  }
-
-  if (!item.mediaUrl || !item.mediaKind) {
-    return [];
-  }
-
-  return [{
-    id: `${item.id}:cover`,
-    url: item.mediaUrl,
-    mediaKind: item.mediaKind,
-    contentType: null,
-    originalName: null,
-    width: null,
-    height: null,
-    durationSeconds: null,
-    sortOrder: 0,
-  }];
-}
 
 function getReelMediaLifecycleKey(postId: string, mediaItem: ShowcaseMediaItem): string {
   return JSON.stringify([postId, mediaItem.id, mediaItem.url]);
@@ -306,7 +285,7 @@ export default function ShowcaseReelViewer({
   const flushMediaProgressRef = useRef<() => void>(() => {});
   const selectedAssetId = item?.asset?.id ?? null;
   const isPublicRecipeAsset = Boolean(selectedAssetId && isGenerationRecipeAssetId(selectedAssetId));
-  const mediaItems = useMemo(() => item ? getItemMediaItems(item) : [], [item]);
+  const mediaItems = useMemo(() => item ? getShowcaseItemMediaItems(item) : [], [item]);
   const activeMediaItem = mediaItems[Math.min(activeMediaIndex, Math.max(0, mediaItems.length - 1))] ?? mediaItems[0] ?? null;
 
   const moveToItem = useCallback((targetItem: ShowcaseFeedItem, direction: ReelTransitionDirection) => {

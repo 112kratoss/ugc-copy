@@ -859,9 +859,11 @@ export default function ShowcaseScreen() {
           ) : isFirstLoad ? (
             <ShowcaseSkeletonGrid layout={gridLayout} />
           ) : (
-            <StatusBlock title="No posts loaded" body={activeToolLabel
-              ? `No posts made with ${activeToolLabel} matched this view.`
-              : `No posts matched ${activeFilter.label.toLowerCase()} yet. Pull to refresh or switch filters.`} />
+            <StatusBlock title="Nothing in this lane yet" body={activeToolLabel
+              ? `No posts made with ${activeToolLabel} yet. Pull to refresh or switch filters.`
+              : activeFilterId === 'all'
+                ? 'Pull to refresh, or share the first post from Create.'
+                : `No ${activeFilter.label.toLowerCase()} posts yet. Pull to refresh or switch filters.`} />
           )
         }
         ListFooterComponent={

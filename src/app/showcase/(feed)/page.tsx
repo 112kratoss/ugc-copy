@@ -116,7 +116,8 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
 
     const timing = createShowcaseLoadTiming('page_data');
     const initialFeedPromise = timing.measure('feed', () => getShowcaseFeedPage({
-        category,
+        // The grid shows media only; `all` in the URL means every media post.
+        category: category === 'all' ? 'media' : category,
         sort,
         offset,
         limit: initialLimit,

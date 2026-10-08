@@ -743,7 +743,7 @@ describe('ShowcaseReelViewer pagination', () => {
     fireEvent.click(unlockButtons[0]);
 
     expect(screen.getByRole('button', { name: /pay with cash/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /pay with tokens/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /use [\d,]+ credits/i })).toBeInTheDocument();
     expect(screen.queryByText(/buyer trust/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/included after unlock/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/digital recipes are final sale/i)).not.toBeInTheDocument();
@@ -1075,7 +1075,7 @@ describe('ShowcaseReelViewer pagination', () => {
 
     renderPaidReel();
     fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
-    fireEvent.click(screen.getByRole('button', { name: /pay with tokens/i }));
+    fireEvent.click(screen.getByRole('button', { name: /use [\d,]+ credits/i }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/unlock-with-credits', expect.objectContaining({

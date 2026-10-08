@@ -1,7 +1,6 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, LoaderCircle, MessageCircle, RefreshCcw, Sparkles } from 'lucide-react';
 
@@ -75,7 +74,10 @@ function PostSearchCard({ item, returnTo }: { item: ShowcaseFeedItem; returnTo: 
 }
 
 function RecipeSearchCard({ recipe, returnTo }: { recipe: RecipeSearchResult; returnTo: string }) {
-  const preview = recipe.post?.mediaPreviewUrl ?? recipe.post?.mediaUrl ?? null;
+  // The server leaves the preview empty until a video has a poster; its
+  // media URL is not an image, so only an image post falls back to it.
+  const preview = recipe.post?.mediaPreviewUrl
+    ?? (recipe.post?.mediaKind === 'image' ? recipe.post.mediaUrl : null);
   return (
     <Link
       href={buildShowcaseDetailPath(recipe.postId, { from: 'search', returnTo, section: 'resources' })}
@@ -108,7 +110,6 @@ export default function SearchClient({
   initialQuery: string;
   initialType: PublicSearchType;
 }) {
-  const router = useRouter();
   const [query, setQuery] = useState(initialQuery);
   const [activeType, setActiveType] = useState(initialType);
   const [result, setResult] = useState<PublicSearchResponse>(() => emptyResponse(initialQuery, initialType));
@@ -182,7 +183,9 @@ export default function SearchClient({
       setResult(emptyResponse(normalizedQuery, activeType));
       setLoading(false);
       setError(null);
-      router.replace('/search', { scroll: false });
+      // history.replaceState keeps Next's router in step without a server
+      // render; this page is dynamic, so router.replace re-rendered it per keystroke.
+      window.history.replaceState(null, '', '/search');
       return;
     }
     if (normalizedQuery.length === 2 && (activeType === 'posts' || activeType === 'recipes')) {
@@ -190,11 +193,11 @@ export default function SearchClient({
       return;
     }
     const timer = window.setTimeout(() => {
-      router.replace(searchPath(normalizedQuery, activeType), { scroll: false });
+      window.history.replaceState(null, '', searchPath(normalizedQuery, activeType));
       void requestSearch();
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [activeType, normalizedQuery, requestSearch, router]);
+  }, [activeType, normalizedQuery, requestSearch]);
 
   const resultCount = result.creators.items.length + result.posts.items.length + result.recipes.items.length;
   const hasResults = resultCount > 0;

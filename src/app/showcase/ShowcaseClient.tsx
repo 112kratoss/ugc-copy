@@ -30,12 +30,12 @@ import {
     type ShowcaseCategory,
     type ShowcaseFeedItem,
     type ShowcaseFeedPage,
-    type ShowcaseMediaItem,
     type ShowcasePriorityPosterData,
     type ShowcaseResourceFilter,
     type ShowcaseSort,
     type ShowcaseUnlockFilter,
     isGenerationRecipeAssetId,
+    getShowcaseItemMediaItems,
 } from '@/lib/showcase';
 import {
     getBundleAccessLabel,
@@ -141,7 +141,7 @@ function formatShowcaseDate(value: string): string {
 
 const UNLOCK_FILTERS: Array<{ id: ShowcaseUnlockFilter; label: string }> = [
     { id: 'all', label: 'All' },
-    { id: 'with-unlock', label: 'Recipes' },
+    { id: 'with-unlock', label: 'Unlocks' },
     { id: 'free', label: 'Free' },
     { id: 'paid', label: 'Paid' },
 ];
@@ -152,7 +152,7 @@ const RESOURCE_FILTERS: Array<{ id: ShowcaseResourceFilter; label: string }> = [
     { id: 'workflow', label: 'Workflows' },
     { id: 'files', label: 'Files' },
     { id: 'notes', label: 'Notes' },
-    { id: 'remix', label: 'Remix' },
+    { id: 'remix', label: 'Remixable' },
 ];
 
 interface ShowcaseClientProps {
@@ -182,33 +182,22 @@ function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>)
     return `Unlock for ${asset.priceQuote?.formatted ?? getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+(?:unlock|recipe)$/i, '')}`;
 }
 
+/**
+ * Explore is the media grid, so its requests ask the server for media when the
+ * lane is "all" (the URL keeps `all`). It used to fetch every post and drop the
+ * text ones in the browser: a lane of text posts drew a blank grid with no
+ * message, and each page carried posts the grid threw away.
+ */
+function requestCategoryFor(category: ShowcaseCategory): ShowcaseCategory {
+    return category === 'all' ? 'media' : category;
+}
+
 function setNonDefaultParam(params: URLSearchParams, key: string, value: string, defaultValue: string) {
     if (value !== defaultValue) {
         params.set(key, value);
     }
 }
 
-function getItemMediaItems(item: ShowcaseFeedItem): ShowcaseMediaItem[] {
-    if (item.mediaItems?.length) {
-        return item.mediaItems;
-    }
-
-    if (!item.mediaUrl || !item.mediaKind) {
-        return [];
-    }
-
-    return [{
-        id: `${item.id}:cover`,
-        url: item.mediaUrl,
-        mediaKind: item.mediaKind,
-        contentType: null,
-        originalName: null,
-        width: null,
-        height: null,
-        durationSeconds: null,
-        sortOrder: 0,
-    }];
-}
 
 function filterSessionHiddenItems(
     feedItems: ShowcaseFeedItem[],
@@ -336,6 +325,8 @@ export default function ShowcaseClient({
         return Number.isInteger(value) && value >= 0 ? value : 0;
     });
     const isLoadingMoreRef = useRef(false);
+    // Bumped by the server-page reset so a load-more reply for the old lane is dropped.
+    const loadMoreGenerationRef = useRef(0);
     const anonymousHiddenPostIdsRef = useRef(new Set<string>());
     const anonymousHiddenCreatorIdsRef = useRef(new Set<string>());
     const anonymousPersonalizationStartedRef = useRef(false);
@@ -396,8 +387,12 @@ export default function ShowcaseClient({
     const renderedItems = tileableItems.slice(0, renderedItemCount);
     const hasDeferredItems = renderedItemCount < tileableItems.length;
     const hasAuthenticatedSession = Boolean(user && session?.access_token);
+    // Effects key on these, not on the objects: the auth provider replaces the
+    // session object at every token refresh.
+    const accessToken = session?.access_token ?? null;
+    const userId = user?.id ?? null;
     const priorityMediaItemId = renderedItems.find((item) => (
-        item.postFormat !== 'text' && getItemMediaItems(item).length > 0
+        item.postFormat !== 'text' && getShowcaseItemMediaItems(item).length > 0
     ))?.id ?? null;
 
     useEffect(() => {
@@ -608,6 +603,7 @@ export default function ShowcaseClient({
         setIsLoadingMore(false);
         setLoadMoreError(null);
         isLoadingMoreRef.current = false;
+        loadMoreGenerationRef.current += 1;
         anonymousPersonalizationStartedRef.current = false;
         setCategory(initialCategory);
         setSort(initialSort);
@@ -688,8 +684,21 @@ export default function ShowcaseClient({
             return;
         }
 
+        // A filter click changes the local lane first and the server page
+        // follows by navigation; refreshing on both fetched every lane twice.
+        // Wait for the props to agree with the lane.
         if (
-            (user && !hasAuthenticatedSession)
+            category !== initialCategory
+            || sort !== initialSort
+            || tool !== (initialTool ?? 'all')
+            || unlock !== initialUnlock
+            || resource !== initialResource
+        ) {
+            return;
+        }
+
+        if (
+            (userId && !hasAuthenticatedSession)
             || (!hasAuthenticatedSession && anonymousPersonalizationStartedRef.current)
         ) {
             return;
@@ -700,15 +709,15 @@ export default function ShowcaseClient({
         const params = new URLSearchParams({
             limit: String(SHOWCASE_PAGE_SIZE),
         });
-        setNonDefaultParam(params, 'category', category, 'all');
+        setNonDefaultParam(params, 'category', requestCategoryFor(category), 'all');
         setNonDefaultParam(params, 'tool', tool, 'all');
         setNonDefaultParam(params, 'unlock', unlock, 'all');
         setNonDefaultParam(params, 'resource', resource, 'all');
 
         const refreshPersonalizedFeed = (retryCount = 0) => {
             void fetch(`/api/showcase/feed?${params.toString()}`, {
-                headers: session?.access_token
-                    ? { Authorization: `Bearer ${session.access_token}` }
+                headers: accessToken
+                    ? { Authorization: `Bearer ${accessToken}` }
                     : undefined,
                 signal: controller.signal,
             })
@@ -724,7 +733,7 @@ export default function ShowcaseClient({
                         return;
                     }
 
-                    const visiblePersonalizedItems = user
+                    const visiblePersonalizedItems = userId
                         ? personalizedFeed.items
                         : filterSessionHiddenItems(
                             personalizedFeed.items,
@@ -814,19 +823,24 @@ export default function ShowcaseClient({
             controller.abort();
         };
     }, [
+        accessToken,
         category,
         hasAnonymousPersonalizationDemand,
         hasAuthenticatedSession,
+        initialCategory,
         initialFeed,
+        initialResource,
+        initialSort,
+        initialTool,
+        initialUnlock,
         isAuthLoading,
         resource,
-        session,
         setItems,
         setSavedItemIds,
         sort,
         tool,
         unlock,
-        user,
+        userId,
     ]);
 
     useEffect(() => {
@@ -888,6 +902,7 @@ export default function ShowcaseClient({
         isLoadingMoreRef.current = true;
         setIsLoadingMore(true);
         setLoadMoreError(null);
+        const loadMoreGeneration = loadMoreGenerationRef.current;
 
         try {
             const params = new URLSearchParams({ limit: String(SHOWCASE_PAGE_SIZE) });
@@ -896,15 +911,15 @@ export default function ShowcaseClient({
             } else if (nextOffset !== null) {
                 params.set('offset', String(nextOffset));
             }
-            setNonDefaultParam(params, 'category', category, 'all');
+            setNonDefaultParam(params, 'category', requestCategoryFor(category), 'all');
             setNonDefaultParam(params, 'sort', sort, DEFAULT_SHOWCASE_SORT);
             setNonDefaultParam(params, 'tool', tool, 'all');
             setNonDefaultParam(params, 'unlock', unlock, 'all');
             setNonDefaultParam(params, 'resource', resource, 'all');
 
-            const response = await fetch(`/api/showcase/feed?${params.toString()}`, session?.access_token ? {
+            const response = await fetch(`/api/showcase/feed?${params.toString()}`, accessToken ? {
                 headers: {
-                    Authorization: `Bearer ${session.access_token}`,
+                    Authorization: `Bearer ${accessToken}`,
                 },
             } : undefined);
             if (!response.ok) {
@@ -912,7 +927,12 @@ export default function ShowcaseClient({
             }
 
             const nextFeed: ShowcaseFeedPage = await response.json();
-            const visibleNextItems = user
+            // The lane changed while this page was in flight: a server
+            // navigation reset the feed, and this page belongs to the old one.
+            if (loadMoreGeneration !== loadMoreGenerationRef.current) {
+                return;
+            }
+            const visibleNextItems = userId
                 ? nextFeed.items
                 : filterSessionHiddenItems(
                     nextFeed.items,
@@ -946,18 +966,18 @@ export default function ShowcaseClient({
             setIsLoadingMore(false);
         }
     }, [
+        accessToken,
         category,
         pageInfo.hasMore,
         pageInfo.nextCursor,
         pageInfo.nextOffset,
         resource,
-        session,
         setItems,
         setSavedItemIds,
         sort,
         tool,
         unlock,
-        user,
+        userId,
     ]);
 
     useEffect(() => {
@@ -1355,7 +1375,7 @@ export default function ShowcaseClient({
                             </div>
                         ))}
                     </div>
-                ) : items.length === 0 ? (
+                ) : tileableItems.length === 0 ? (
                     <div className="rounded-[28px] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-6 py-16 text-center text-[var(--ui-text-muted)]">
                         <span className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--ui-surface-2)] text-[var(--ui-text-faint)]">
                             <ImageIcon className="h-6 w-6" aria-hidden />
@@ -1375,7 +1395,7 @@ export default function ShowcaseClient({
                             {renderedItems.map((item, itemIndex) => {
                                 const resourceKinds = getItemResourceKinds(item);
                                 const isSaved = savedItemIds.has(item.id);
-                                const mediaItems = getItemMediaItems(item);
+                                const mediaItems = getShowcaseItemMediaItems(item);
                                 const isMixedMedia = new Set(mediaItems.map((mediaItem) => mediaItem.mediaKind)).size > 1;
 
                                 return (

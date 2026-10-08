@@ -85,7 +85,9 @@ describe('SearchClient', () => {
 
     expect(await screen.findByText('Luna Studio')).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('1 result for luna');
-    expect(replaceMock).toHaveBeenCalledWith('/search?q=luna', { scroll: false });
+    // The URL follows the query through history.replaceState, not a server render.
+    expect(replaceMock).not.toHaveBeenCalled();
+    expect(`${window.location.pathname}${window.location.search}`).toBe('/search?q=luna');
   });
 
   it('forces a two-character query onto the creators tab and disables content tabs', async () => {

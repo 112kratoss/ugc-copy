@@ -62,19 +62,26 @@ interface FeedPostCardProps {
      * the /feed page; the embedded home-dashboard feed passes its own.
      */
     detailContext?: FeedDetailContext;
-    onToggleExpanded: () => void;
-    onToggleComments: () => void;
-    onToggleSave: () => void;
-    onShared?: () => void;
-    onCommentCountChange: (commentCount: number) => void;
-    onOpenMedia: (mediaIndex: number) => void;
+    /** The card's position in the lane, reported with a share. */
+    cardIndex: number;
+    /*
+     * Every handler takes the post id, so the lane can hand one stable
+     * function to every card. Inline closures per card re-rendered all 24
+     * mounted cards on every scroll frame, memo or not.
+     */
+    onToggleExpanded: (postId: string) => void;
+    onToggleComments: (postId: string) => void;
+    onToggleSave: (postId: string) => void;
+    onShared?: (postId: string, cardIndex: number) => void;
+    onCommentCountChange: (postId: string, commentCount: number) => void;
+    onOpenMedia: (postId: string, mediaIndex: number) => void;
     /** Opens the post page. Fired by a click on the card outside any control. */
-    onOpenPost: () => void;
+    onOpenPost: (postId: string) => void;
     /**
      * Warms the post page on hover or focus, so the click that follows is a
      * cache hit rather than a cold round trip. Safe to call repeatedly.
      */
-    onPrefetchPost: () => void;
+    onPrefetchPost: (postId: string) => void;
 }
 
 /**
@@ -91,6 +98,7 @@ function FeedPostCardView({
     commentsOpen,
     accessToken,
     viewerIsOwner = false,
+    cardIndex,
     priorityMedia = false,
     priorityPoster = null,
     detailContext = DEFAULT_DETAIL_CONTEXT,
@@ -132,8 +140,8 @@ function FeedPostCardView({
             // to be opened. Warming here is why the click feels instant; the
             // post links stay `prefetch={false}` so nothing is fetched for
             // cards the viewer merely scrolled past.
-            onPointerEnter={onPrefetchPost}
-            onFocus={onPrefetchPost}
+            onPointerEnter={() => onPrefetchPost(item.id)}
+            onFocus={() => onPrefetchPost(item.id)}
             onClick={(event) => {
                 if (event.defaultPrevented) return;
                 // A double or triple click is selecting text, not navigating.
@@ -149,7 +157,7 @@ function FeedPostCardView({
                 }
                 // Shift (new window) and Alt (download) are the browser's.
                 if (event.shiftKey || event.altKey) return;
-                onOpenPost();
+                onOpenPost(item.id);
             }}
             onAuxClick={(event) => {
                 if (event.button !== 1) return;
@@ -213,7 +221,7 @@ function FeedPostCardView({
                         clampLines={card.clampLines}
                         canExpand={card.canExpandBody}
                         expanded={expanded}
-                        onToggle={onToggleExpanded}
+                        onToggle={() => onToggleExpanded(item.id)}
                     />
                 ) : null}
             </div>
@@ -242,7 +250,7 @@ function FeedPostCardView({
                         // fills it edge to edge, tall portraits sit centered — and
                         // the tighter cap keeps the next post within reach.
                         viewportClassName="w-full max-h-[min(60vh,35rem)] rounded-2xl border border-[var(--ui-border-subtle)]"
-                        onOpen={onOpenMedia}
+                        onOpen={(mediaIndex) => onOpenMedia(item.id, mediaIndex)}
                     />
                 </div>
             ) : null}
@@ -277,14 +285,14 @@ function FeedPostCardView({
                     ariaLabel={`${isSaved ? 'Remove save from' : 'Save'} ${card.title}`}
                     pressed={isSaved}
                     disabled={saving}
-                    onClick={onToggleSave}
+                    onClick={() => onToggleSave(item.id)}
                     icon={<Heart className={`h-4 w-4 ${isSaved ? 'fill-current text-[var(--ui-primary)]' : ''}`} />}
                 />
                 <ActionButton
                     label={card.commentLabel}
                     ariaLabel={`${commentsOpen ? 'Hide' : 'Show'} comments on ${card.title}`}
                     pressed={commentsOpen}
-                    onClick={onToggleComments}
+                    onClick={() => onToggleComments(item.id)}
                     icon={<MessageCircle className="h-4 w-4" />}
                 />
                 <PublicShareButton
@@ -294,7 +302,7 @@ function FeedPostCardView({
                     sourceSurface="feed"
                     accessToken={accessToken}
                     viewerIsOwner={viewerIsOwner}
-                    onShared={onShared}
+                    onShared={onShared ? () => onShared(item.id, cardIndex) : undefined}
                     iconOnly
                     className="ui-focus-ring inline-flex h-11 w-11 items-center justify-center rounded-full text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
                 />
@@ -308,7 +316,7 @@ function FeedPostCardView({
                         postId={item.id}
                         postCreatorId={item.creator.id}
                         commentCount={item.commentCount}
-                        onCommentCountChange={onCommentCountChange}
+                        onCommentCountChange={(commentCount) => onCommentCountChange(item.id, commentCount)}
                     />
                 </div>
             ) : null}

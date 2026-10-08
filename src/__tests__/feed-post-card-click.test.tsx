@@ -159,7 +159,7 @@ describe('FeedPostCard click routing', () => {
 
         fireEvent.click(screen.getByRole('button', { name: 'A launch frame' }));
 
-        expect(onOpenMedia).toHaveBeenCalledWith(0);
+        expect(onOpenMedia).toHaveBeenCalledWith('post-1', 0);
         expect(onOpenPost).not.toHaveBeenCalled();
     });
 

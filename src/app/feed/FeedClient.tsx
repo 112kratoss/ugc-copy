@@ -18,7 +18,7 @@ import {
     getShowcaseFeedSessionId,
     sendShowcaseFeedEvent,
 } from '@/app/showcase/ShowcaseFeedInteraction';
-import { buildShowcaseDetailPath } from '@/lib/share';
+import { buildShowcaseDetailPath, getCurrentInternalPath } from '@/lib/share';
 import type { ShowcaseFeedItem, ShowcaseFeedPage, ShowcaseMediaItem } from '@/lib/showcase';
 import {
     buildShowcaseClientCacheKey,
@@ -179,7 +179,8 @@ export default function FeedClient({
         initialItems: seedFeed.items,
         accessToken,
         isSignedIn: Boolean(user),
-        onAuthRequired: () => { router.push('/login'); },
+        // With the way back: a bare /login landed the viewer on /create afterwards.
+        onAuthRequired: () => { router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath('/feed'))}`); },
         onError: (error) => {
             console.error('Failed to save feed post:', error);
             setLoadError('Could not update that save. Try again.');
@@ -372,6 +373,61 @@ export default function FeedClient({
             : item)));
     }, [setItems]);
 
+    // The save hook returns a new toggleSave on every render; the cards get one
+    // function that reads the latest through a ref.
+    const toggleSaveRef = useRef(toggleSave);
+    toggleSaveRef.current = toggleSave;
+    const handleToggleSave = useCallback((postId: string) => {
+        void toggleSaveRef.current(postId);
+    }, []);
+    const cardsRef = useRef(cards);
+    cardsRef.current = cards;
+    // The 'recent' lane is unranked, so its cards carry no deliveryId and
+    // sendShowcaseFeedEvent drops the event. That is correct, not a bug to fix:
+    // an unranked impression has nothing to attribute the share to.
+    const handleShared = useCallback((postId: string, cardIndex: number) => {
+        const card = cardsRef.current.find((candidate) => candidate.id === postId);
+        if (!card) return;
+        void sendShowcaseFeedEvent({
+            item: card.item,
+            eventType: 'share',
+            sourceSurface: 'feed',
+            accessToken,
+            feedSessionId,
+            fallbackPosition: cardIndex,
+        }).catch(() => undefined);
+    }, [accessToken, feedSessionId]);
+    const handleOpenMedia = useCallback((postId: string, mediaIndex: number) => {
+        const card = cardsRef.current.find((candidate) => candidate.id === postId);
+        if (!card) return;
+        setLightbox({
+            postId: card.id,
+            title: card.title,
+            // Sorted to match the card's own carousel, so the index refers to
+            // the slide that was clicked.
+            mediaItems: (card.item.mediaItems ?? [])
+                .slice()
+                .sort((left, right) => left.sortOrder - right.sortOrder),
+            index: mediaIndex,
+        });
+    }, []);
+    const handleOpenPost = useCallback((postId: string) => {
+        // An imperative push raises no link status, so the progress bar has to
+        // be told the click happened. Client-side navigation keeps the shell
+        // alive; a full document load here made every post click pay for a
+        // cold reload out and another one back.
+        publishNavigationStart();
+        router.push(buildShowcaseDetailPath(postId, detailContext));
+    }, [detailContext, router]);
+    const handlePrefetchPost = useCallback((postId: string) => {
+        if (prefetchedIdsRef.current.has(postId)) return;
+        prefetchedIdsRef.current.add(postId);
+        router.prefetch(buildShowcaseDetailPath(postId, detailContext));
+    }, [detailContext, router]);
+    const priorityPoster = useMemo(() => (initialPriorityPreview
+        ? { mediaId: initialPriorityPreview.mediaId, dataUrl: initialPriorityPreview.dataUrl }
+        : null), [initialPriorityPreview]);
+
     const chipRow = (
         <div className="flex flex-wrap items-center gap-2">
             {FEED_CHIPS.map((chip) => (
@@ -475,56 +531,18 @@ export default function FeedClient({
                             commentsOpen={commentsOpenIds.has(card.id)}
                             accessToken={accessToken}
                             priorityMedia={cardIndex === 0}
-                            priorityPoster={card.id === initialPriorityPreview?.postId
-                                ? {
-                                    mediaId: initialPriorityPreview.mediaId,
-                                    dataUrl: initialPriorityPreview.dataUrl,
-                                }
-                                : null}
+                            priorityPoster={card.id === initialPriorityPreview?.postId ? priorityPoster : null}
                             detailContext={detailContext}
                             viewerIsOwner={Boolean(user && card.item.creator.id === user.id)}
-                            onToggleExpanded={() => toggleExpanded(card.id)}
-                            onToggleComments={() => toggleComments(card.id)}
-                            onToggleSave={() => void toggleSave(card.id)}
-                            // The 'recent' lane is unranked, so its cards carry no
-                            // deliveryId and sendShowcaseFeedEvent drops the event.
-                            // That is correct, not a bug to fix: an unranked
-                            // impression has nothing to attribute the share to.
-                            onShared={() => {
-                                void sendShowcaseFeedEvent({
-                                    item: card.item,
-                                    eventType: 'share',
-                                    sourceSurface: 'feed',
-                                    accessToken,
-                                    feedSessionId,
-                                    fallbackPosition: cardIndex,
-                                }).catch(() => undefined);
-                            }}
-                            onCommentCountChange={(commentCount) => applyCommentCount(card.id, commentCount)}
-                            onOpenMedia={(mediaIndex) => setLightbox({
-                                postId: card.id,
-                                title: card.title,
-                                // Sorted to match the card's own carousel, so the
-                                // index refers to the slide that was clicked.
-                                mediaItems: (card.item.mediaItems ?? [])
-                                    .slice()
-                                    .sort((left, right) => left.sortOrder - right.sortOrder),
-                                index: mediaIndex,
-                            })}
-                            onOpenPost={() => {
-                                // An imperative push raises no link status, so the
-                                // progress bar has to be told the click happened.
-                                publishNavigationStart();
-                                // Client-side navigation keeps the shell alive; a full
-                                // document load here made every post click pay for a
-                                // cold reload out and another one back.
-                                router.push(buildShowcaseDetailPath(card.id, detailContext));
-                            }}
-                            onPrefetchPost={() => {
-                                if (prefetchedIdsRef.current.has(card.id)) return;
-                                prefetchedIdsRef.current.add(card.id);
-                                router.prefetch(buildShowcaseDetailPath(card.id, detailContext));
-                            }}
+                            cardIndex={cardIndex}
+                            onToggleExpanded={toggleExpanded}
+                            onToggleComments={toggleComments}
+                            onToggleSave={handleToggleSave}
+                            onShared={handleShared}
+                            onCommentCountChange={applyCommentCount}
+                            onOpenMedia={handleOpenMedia}
+                            onOpenPost={handleOpenPost}
+                            onPrefetchPost={handlePrefetchPost}
                         />
                     )}
                 />
