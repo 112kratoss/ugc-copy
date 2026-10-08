@@ -59,6 +59,7 @@ function clientDouble({
 
   const updateChain: Record<string, unknown> = {
     in: vi.fn(() => updateChain),
+    is: vi.fn(() => updateChain),
     then: (resolve: (r: { error: null }) => unknown) => Promise.resolve(resolve({ error: null })),
   };
 
@@ -257,7 +258,7 @@ describe('reclaimAbandonedMediaUploads', () => {
     });
 
     expect(summary).toMatchObject({ reclaimed: 0, bytesReclaimed: 0 });
-    expect(sweep.updates).toHaveLength(0);
+    expect(sweep.updates).toEqual([{ reclaim_checked_at: expect.any(String) }]);
   });
 
   it('keeps a non-canonical owner-changing row away from privileged storage calls', async () => {
@@ -281,7 +282,7 @@ describe('reclaimAbandonedMediaUploads', () => {
 
     expect(summary).toMatchObject({ scanned: 1, reclaimed: 0, rowsDropped: 0, kept: 1 });
     expect(sweep.removed).toEqual([]);
-    expect(sweep.updates).toHaveLength(0);
+    expect(sweep.updates).toEqual([{ reclaim_checked_at: expect.any(String) }]);
   });
 
   it('reports no work without touching storage when nothing is due', async () => {
@@ -406,7 +407,7 @@ describe('legacy generation reference guard', () => {
     });
 
     expect(sweep.removed).toEqual([]);
-    expect(sweep.updates).toHaveLength(0);
+    expect(sweep.updates).toEqual([{ reclaim_checked_at: expect.any(String) }]);
     expect(summary).toMatchObject({ scanned: 1, reclaimed: 0, rowsDropped: 0, kept: 1 });
   });
 });

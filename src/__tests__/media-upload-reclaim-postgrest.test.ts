@@ -4,7 +4,7 @@ import { Client } from 'pg';
 import { createClient } from '@supabase/supabase-js';
 import { it, expect, vi } from 'vitest';
 import { reclaimAbandonedMediaUploads } from '@/lib/media-upload-reclaim-service';
-it.skipIf(!process.env.AUDIT_STORAGE_CONFIG || !process.env.SUPABASE_TEST_DB_URL).each(['normal', 'remove-error', 'lost-ack', 'mark-error', 'protected', 'unverifiable', 'legacy-path', 'legacy-url', 'protection-error'] as const)('recovers staged upload reclaim: %s', async (mode) => {
+it.skipIf(!process.env.AUDIT_STORAGE_CONFIG || !process.env.SUPABASE_TEST_DB_URL).each(['normal', 'remove-error', 'lost-ack', 'mark-error', 'protected', 'unverifiable', 'legacy-path', 'legacy-url', 'protection-error', 'scan-error'] as const)('recovers staged upload reclaim: %s', async (mode) => {
     const cfg = JSON.parse(readFileSync(process.env.AUDIT_STORAGE_CONFIG!, 'utf8')), url = process.env.SUPABASE_TEST_DB_URL!;
     expect(['localhost', '127.0.0.1']).toContain(new URL(cfg.API_URL).hostname);
     expect(['localhost', '127.0.0.1']).toContain(new URL(url).hostname);
@@ -19,8 +19,11 @@ it.skipIf(!process.env.AUDIT_STORAGE_CONFIG || !process.env.SUPABASE_TEST_DB_URL
             throw Error('External calls forbidden');
         const removal = init?.method === 'DELETE' && target.pathname === '/storage/v1/object/uploads';
         const protection = target.pathname === '/rest/v1/rpc/list_generations_missing_durable_input_media';
-        const mark = init?.method === 'PATCH' && target.pathname === '/rest/v1/media_upload_intents';
-        if (armed && !injected && ((removal && ['remove-error', 'lost-ack'].includes(mode)) || (mark && mode === 'mark-error') || (protection && mode === 'protection-error'))) {
+        const scan = init?.method === 'PATCH' && target.pathname === '/rest/v1/media_upload_intents'
+            && typeof init.body === 'string' && 'reclaim_checked_at' in JSON.parse(init.body);
+        const mark = init?.method === 'PATCH' && target.pathname === '/rest/v1/media_upload_intents'
+            && typeof init.body === 'string' && 'storage_cleared_at' in JSON.parse(init.body);
+        if (armed && !injected && ((removal && ['remove-error', 'lost-ack'].includes(mode)) || (mark && mode === 'mark-error') || (protection && mode === 'protection-error') || (scan && mode === 'scan-error'))) {
             injected = true;
             if (mode === 'lost-ack')
                 expect((await originalFetch(input, init)).ok).toBe(true);
@@ -36,13 +39,24 @@ it.skipIf(!process.env.AUDIT_STORAGE_CONFIG || !process.env.SUPABASE_TEST_DB_URL
         await db.query("insert into auth.users(id,email,aud,role,created_at)values($1,$2,'authenticated','authenticated',now())", [user, user + '@upload-reclaim.invalid']);
         expect((await admin.storage.from('uploads').upload(path, new Blob(['local disposable bytes'], { type: 'image/png' }))).error).toBeNull();
         await db.query("insert into public.media_upload_intents(id,user_id,storage_path,kind,declared_bytes,created_at,consumed_at,consumed_by)values($1,$2,$3,'image',22,now()-interval '72 hours',now()-interval '71 hours','generation_input')", [intent, user, path]);
-        const discoversProtection = ['legacy-path', 'legacy-url', 'protection-error'].includes(mode);
+        const discoversProtection = ['legacy-path', 'legacy-url', 'protection-error', 'scan-error'].includes(mode);
         if (mode === 'legacy-path' || mode === 'legacy-url') {
             const reference = mode === 'legacy-path' ? 'uploads/' + path
                 : cfg.API_URL + '/storage/v1/object/sign/uploads/' + path + '?token=inert-local-reference';
             await db.query("insert into public.generations(id,user_id,model,status,category,workflow_settings,created_at) values($1,$2,'audit-inert','succeeded','image',$3,now()-interval '2 hours')", [generation, user, { reference_image: reference }]);
         }
         armed = true;
+        if (mode === 'scan-error') {
+            await expect(reclaimAbandonedMediaUploads(admin, { protectedPaths: new Set() }))
+                .rejects.toThrow('Injected local reclaim failure');
+            expect(injected).toBe(true);
+            expect(await state()).toEqual({ cleared: false, object_exists: true });
+            expect((await db.query('select reclaim_checked_at from public.media_upload_intents where id=$1', [intent])).rows).toEqual([{ reclaim_checked_at: null }]);
+            armed = false;
+            expect((await reclaimAbandonedMediaUploads(admin, { protectedPaths: new Set() })).reclaimed).toBe(1);
+            expect(await state()).toEqual({ cleared: true, object_exists: false });
+            return;
+        }
         const first = await reclaimAbandonedMediaUploads(admin, discoversProtection ? {} : { protectedPaths: mode === 'unverifiable' ? null : new Set(mode === 'protected' ? [path] : []) });
         const firstState = await state();
         if (mode === 'normal')
