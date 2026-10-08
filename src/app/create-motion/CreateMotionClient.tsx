@@ -1283,6 +1283,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                                 <>
                                                     <PublicShareButton
                                                         generationId={latestGenerationId}
+                                                        viewerIsOwner
                                                         title={shareTitle}
                                                         description={shareDescription}
                                                         sourceSurface="create-motion"

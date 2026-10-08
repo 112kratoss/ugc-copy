@@ -59,8 +59,8 @@ vi.mock('@/lib/supabase-server', () => ({
 }));
 
 vi.mock('@/app/showcase/[id]/ShowcaseDetailActions', () => ({
-  default: ({ postId, canRemix }: { postId: string; canRemix: boolean }) => (
-    <div data-testid="showcase-detail-actions">{`${postId}:${canRemix}`}</div>
+  default: ({ postId }: { postId: string }) => (
+    <div data-testid="showcase-detail-actions">{postId}</div>
   ),
 }));
 
@@ -136,7 +136,7 @@ describe('Showcase detail page', () => {
     expect(screen.getByRole('heading', { name: /shared creation/i })).toBeInTheDocument();
     expect(screen.getByText('A polished showcase description.')).toBeInTheDocument();
     expect(screen.getByText('A creator holds the product by a bright window.')).toBeInTheDocument();
-    expect(screen.getByTestId('showcase-detail-actions')).toHaveTextContent('post-1:true');
+    expect(screen.getByTestId('showcase-detail-actions')).toHaveTextContent('post-1');
     // The marker names where the share came from. The landing page cannot infer
     // that, and before it existed every visit was filed as 'detail-page'.
     expect(recordPostShareEventMock).toHaveBeenCalledWith({
@@ -448,7 +448,7 @@ describe('Showcase detail page', () => {
     expect(screen.getAllByText(/open with tension/i)).toHaveLength(1);
     expect(screen.queryByTestId('media-detail-frame')).not.toBeInTheDocument();
     expect(screen.queryByTestId('post-body-panel')).not.toBeInTheDocument();
-    expect(screen.getByTestId('showcase-detail-actions')).toHaveTextContent('post-text:false');
+    expect(screen.getByTestId('showcase-detail-actions')).toHaveTextContent('post-text');
 
     // The writing is the page: one document column carrying its own byline,
     // with no identity card printing the title a second time.

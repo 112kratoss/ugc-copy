@@ -19,6 +19,7 @@ import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 export default function ShowcaseDetailEngagementRow({
   postId,
   generationId,
+  creatorId,
   title,
   shareDescription,
   canRemix,
@@ -30,6 +31,8 @@ export default function ShowcaseDetailEngagementRow({
 }: {
   postId: string;
   generationId: string | null;
+  /** The post's creator, so a share by them may claim the work. */
+  creatorId: string | null;
   title: string;
   shareDescription: string;
   canRemix: boolean;
@@ -142,6 +145,7 @@ export default function ShowcaseDetailEngagementRow({
           description={shareDescription}
           sourceSurface="detail-page"
           accessToken={session?.access_token ?? null}
+          viewerIsOwner={Boolean(creatorId && user?.id === creatorId)}
           className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full px-2 text-xs font-semibold text-zinc-400 transition hover:text-white"
         />
         {shareVisitCount > 0 ? (

@@ -144,6 +144,8 @@ export interface ShowcaseFeedItem {
     remixTarget?: PostRemixTarget;
     savedAt?: string;
     recommendation?: ShowcaseRecommendationContext;
+    /** Set by the by-id read; feed pages list public posts only. */
+    visibility?: 'public' | 'unlisted';
 }
 
 interface ShowcaseFeedPageInfo {

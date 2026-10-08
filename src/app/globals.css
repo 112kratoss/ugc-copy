@@ -810,27 +810,6 @@ button:disabled,
   container-type: inline-size;
 }
 
-/*
- * The same post body rendered inside the intercepting-route overlay. The
- * layout itself is container-query driven, so it reflows to the panel width on
- * its own; only the page-level padding and the sticky column's topbar offset
- * need correcting, because inside the panel there is no app topbar to clear.
- */
-.canonical-post-shell-overlay {
-  width: 100%;
-  padding: 1.25rem 1rem 1.5rem;
-}
-
-@media (min-width: 40rem) {
-  .canonical-post-shell-overlay {
-    padding: 1.5rem;
-  }
-}
-
-.canonical-post-shell-overlay .canonical-post-actions {
-  top: 1rem;
-}
-
 .canonical-post-layout {
   display: grid;
   min-width: 0;

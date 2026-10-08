@@ -18,16 +18,9 @@ import ShowcaseDetailBackLink from './ShowcaseDetailBackLink';
 import ShowcaseDetailEngagementRow from './ShowcaseDetailEngagementRow';
 
 /**
- * The post detail, rendered identically by the full page (`/showcase/[id]`)
- * and by the intercepting-route overlay that opens above the feed.
- *
- * `page` owns the standalone chrome — full-bleed background, ambient glow, the
- * return link, and a viewport-fixed unlock CTA. `overlay` drops all four: the
- * modal shell supplies the surface and the Close control, and a `fixed` CTA
- * inside a scrolling panel would pin to the viewport instead of the panel.
- * Everything between those two is shared, so the two surfaces cannot drift.
+ * The post detail page body: full-bleed background, ambient glow, the return
+ * link, and a viewport-fixed unlock CTA around the shared document layout.
  */
-export type ShowcaseDetailVariant = 'page' | 'overlay';
 
 function formatResourceKinds(kinds: PostResourceKind[]): string {
   if (kinds.length === 0) {
@@ -78,17 +71,13 @@ export default function ShowcaseDetailBody({
   viewerUserId,
   accessToken,
   returnContext,
-  variant = 'page',
 }: {
   detail: PublicPostDetail;
   viewerUserId: string | null;
   accessToken: string | null;
-  /** Required by the `page` variant, which renders the return link. */
   returnContext?: ShowcaseReturnContext;
-  variant?: ShowcaseDetailVariant;
 }) {
   if (detail.isNsfw && !detail.nsfwRevealed) return <div className="px-4 py-12"><NsfwPostReveal key={detail.id} postId={detail.id} /></div>;
-  const isOverlay = variant === 'overlay';
   const bundle = detail.resourceBundle;
   const isPublicRecipeBundle = Boolean(bundle && isGenerationRecipeAssetId(bundle.id));
   const previewKinds = bundle?.lockedPreview?.resourceKinds ?? bundle?.resourceKinds ?? [];
@@ -229,23 +218,15 @@ export default function ShowcaseDetailBody({
   ) : null;
 
   return (
-    <div className={isOverlay
-      ? 'text-white'
-      : 'min-h-screen overflow-x-clip bg-[#050506] py-6 text-white'}
-    >
-      {isOverlay ? null : (
-        <div className="fixed inset-0 z-0 pointer-events-none">
-          <div className="absolute left-[8%] top-[-18%] h-[34rem] w-[34rem] rounded-full bg-blue-600/10 blur-[150px] mix-blend-screen" />
-          <div className="absolute bottom-[-18%] right-[-8%] h-[34rem] w-[34rem] rounded-full bg-emerald-500/10 blur-[150px] mix-blend-screen" />
-          <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
-        </div>
-      )}
+    <div className="min-h-screen overflow-x-clip bg-[#050506] py-6 text-white">
+      <div className="fixed inset-0 z-0 pointer-events-none">
+        <div className="absolute left-[8%] top-[-18%] h-[34rem] w-[34rem] rounded-full bg-blue-600/10 blur-[150px] mix-blend-screen" />
+        <div className="absolute bottom-[-18%] right-[-8%] h-[34rem] w-[34rem] rounded-full bg-emerald-500/10 blur-[150px] mix-blend-screen" />
+        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+      </div>
 
-      <div className={isOverlay
-        ? 'canonical-post-shell canonical-post-shell-overlay relative z-10'
-        : 'canonical-post-shell studio-shell-wide relative z-10 pt-4 sm:pt-6'}
-      >
-        {returnContext && !isOverlay ? (
+      <div className="canonical-post-shell studio-shell-wide relative z-10 pt-4 sm:pt-6">
+        {returnContext ? (
           <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
             <ShowcaseDetailBackLink href={returnContext.href} label={returnContext.label} />
           </div>
@@ -356,6 +337,7 @@ export default function ShowcaseDetailBody({
                 <ShowcaseDetailEngagementRow
                   postId={detail.id}
                   generationId={detail.generationId}
+                  creatorId={detail.creator.id}
                   title={displayTitle}
                   shareDescription={getPublicPostMetaDescription(detail)}
                   canRemix={detail.canRemix}
@@ -408,17 +390,13 @@ export default function ShowcaseDetailBody({
                   postId={detail.id}
                   generationId={detail.generationId}
                   title={displayTitle}
-                  description={getPublicPostMetaDescription(detail)}
                   creatorUsername={detail.creator.username}
-                  canRemix={detail.canRemix}
                   visibility={detail.visibility}
                   viewerIsOwner={Boolean(viewerUserId && viewerUserId === detail.creator.id)}
                   hasResourceBundle={Boolean(detail.resourceBundle)}
                   bundle={bundle
                     ? { accessMode: bundle.accessMode, status: bundle.status, salesCount: bundle.salesCount }
                     : null}
-                  showShare={false}
-                  showRemix={false}
                 />
               </div>
 
@@ -446,9 +424,7 @@ export default function ShowcaseDetailBody({
       {bundle && lockedViewer ? (
         <Link
           href="#recipe"
-          className={isOverlay
-            ? 'canonical-post-mobile-cta sticky inset-x-0 bottom-3 z-40 mx-3 flex items-center justify-between gap-3 rounded-[22px] border border-emerald-300/25 bg-emerald-300 px-4 py-3 text-slate-950 shadow-[0_18px_60px_rgba(0,0,0,0.45)]'
-            : 'canonical-post-mobile-cta fixed inset-x-3 bottom-3 z-40 flex items-center justify-between gap-3 rounded-[22px] border border-emerald-300/25 bg-emerald-300 px-4 py-3 text-slate-950 shadow-[0_18px_60px_rgba(0,0,0,0.45)]'}
+          className="canonical-post-mobile-cta fixed inset-x-3 bottom-3 z-40 flex items-center justify-between gap-3 rounded-[22px] border border-emerald-300/25 bg-emerald-300 px-4 py-3 text-slate-950 shadow-[0_18px_60px_rgba(0,0,0,0.45)]"
         >
           <span>
             <span className="block text-sm font-bold">

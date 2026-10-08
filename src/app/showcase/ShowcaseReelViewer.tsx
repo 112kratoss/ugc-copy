@@ -984,7 +984,7 @@ export default function ShowcaseReelViewer({
     }
 
     if (hasKnownInsufficientTokens) {
-      setUnlockError(`This recipe needs ${tokenCost.toLocaleString()} tokens.`);
+      setUnlockError(`This recipe needs ${tokenCost.toLocaleString()} credits.`);
       return;
     }
 
@@ -1001,7 +1001,7 @@ export default function ShowcaseReelViewer({
       const data = await response.json();
 
       if (!response.ok || !data?.success) {
-        throw new Error(data.error || 'Failed to unlock with tokens.');
+        throw new Error(data.error || 'Failed to unlock with credits.');
       }
 
       if (typeof data.credits === 'number') {
@@ -1010,7 +1010,7 @@ export default function ShowcaseReelViewer({
 
       await finishReelUnlock();
     } catch (unlockError) {
-      setUnlockError(unlockError instanceof Error ? unlockError.message : 'Failed to unlock with tokens.');
+      setUnlockError(unlockError instanceof Error ? unlockError.message : 'Failed to unlock with credits.');
     } finally {
       setUnlockWorkingAction(null);
     }
@@ -1326,7 +1326,7 @@ export default function ShowcaseReelViewer({
               className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-emerald-50 transition hover:border-emerald-300/45 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-55"
             >
               {unlockWorkingAction === 'tokens' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              Pay with tokens
+              {`Use ${tokenCost.toLocaleString()} credits`}
             </button>
           </div>
         )}
@@ -1635,6 +1635,7 @@ export default function ShowcaseReelViewer({
             description={item.body || item.prompt}
             sourceSurface="showcase-reel"
             accessToken={accessToken ?? null}
+            viewerIsOwner={Boolean(item.creator.id && item.creator.id === user?.id)}
             onShared={() => {
               void sendShowcaseFeedEvent({
                 item,

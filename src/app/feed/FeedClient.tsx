@@ -482,6 +482,7 @@ export default function FeedClient({
                                 }
                                 : null}
                             detailContext={detailContext}
+                            viewerIsOwner={Boolean(user && card.item.creator.id === user.id)}
                             onToggleExpanded={() => toggleExpanded(card.id)}
                             onToggleComments={() => toggleComments(card.id)}
                             onToggleSave={() => void toggleSave(card.id)}

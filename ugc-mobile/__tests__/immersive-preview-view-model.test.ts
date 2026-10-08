@@ -343,6 +343,27 @@ describe('immersive preview view model', () => {
     expect(items[1].availableActions[0]).toBe('unsave');
   });
 
+  it("offers Edit post on the viewer's own showcase post and on no one else's", () => {
+    const [own, other] = buildImmersiveShowcaseItems('showcase-feed', [
+      showcaseItem({ id: 'post-own', creator: { id: 'viewer-1', username: 'me', name: 'Me', avatar: null } }),
+      showcaseItem({ id: 'post-other' }),
+    ], 'viewer-1');
+    expect(own.availableActions[0]).toBe('edit-post');
+    expect(other.availableActions).not.toContain('edit-post');
+    // Signed out, nothing is editable.
+    const [anonymous] = buildImmersiveShowcaseItems('showcase-feed', [showcaseItem({ id: 'post-own' })]);
+    expect(anonymous.availableActions).not.toContain('edit-post');
+  });
+
+  it('turns comments off on an unlisted post, which the server takes no comments on', () => {
+    const [unlisted, listed] = buildImmersiveShowcaseItems('showcase-feed', [
+      showcaseItem({ id: 'post-unlisted', visibility: 'unlisted' }),
+      showcaseItem({ id: 'post-public', visibility: 'public' }),
+    ]);
+    expect(unlisted.canComment).toBe(false);
+    expect(listed.canComment).toBe(true);
+  });
+
   it('maps owner post bundle metadata for viewer details', () => {
     const [item] = buildImmersiveOwnerPostItems('profile-posts', [
       ownerPost({

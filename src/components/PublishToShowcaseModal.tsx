@@ -512,6 +512,7 @@ export default function PublishToShowcaseModal({
             description: normalizedDescription || shareAfterPublish.description || null,
             sourceSurface: shareAfterPublish.sourceSurface,
             accessToken,
+            viewerIsOwner: true,
           });
         } catch (shareError) {
           // Publishing is already complete. A canceled or unavailable share

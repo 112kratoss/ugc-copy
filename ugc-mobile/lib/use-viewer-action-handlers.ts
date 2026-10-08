@@ -2,7 +2,9 @@ import { useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { Linking } from 'react-native';
 
+import type { createApiClient } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
+import { showActionSheet } from '@/lib/action-sheet';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
 import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
@@ -45,6 +47,17 @@ export interface ViewerActionCallbacks {
  * viewer-actions-menu.tsx`) and `ViewerActionSheet`, its fallback where native
  * menus are missing. `onClose` is the sheet's: it runs before every action.
  */
+type PostReportReason = Parameters<ReturnType<typeof createApiClient>['reportPost']>[1]['reason'];
+
+const POST_REPORT_REASONS: Array<{ label: string; value: PostReportReason }> = [
+  { label: 'Spam', value: 'spam' },
+  { label: 'Stolen content', value: 'stolen_content' },
+  { label: 'Misleading recipe', value: 'misleading_unlock' },
+  { label: 'Unsafe content', value: 'unsafe_content' },
+  { label: 'Payment issue', value: 'payment_issue' },
+  { label: 'Something else', value: 'other' },
+];
+
 export function useViewerActionHandlers({
   item,
   onClose,
@@ -287,27 +300,33 @@ export function useViewerActionHandlers({
     }
     if (action === 'report-content' && item.showcasePostId) {
       if (!requireSignedIn()) return;
-      void showConfirmDialog({
-        title: 'Report content?',
-        message: 'Magicbooklet will send this post to the moderation team for a safety review.',
-        confirmLabel: 'Report content',
-        destructive: true,
-      }).then(async (confirmed) => {
-        if (!confirmed) return;
-        try {
-          await api.reportPost(item.showcasePostId!, {
-            reason: 'unsafe_content',
-            details: 'Reported from the mobile Showcase viewer.',
-          });
-          haptic.success();
-          showMessageDialog({
-            title: 'Report received',
-            message: 'Thank you. Our moderation team will review this content.',
-          });
-        } catch (error) {
-          haptic.error();
-          showErrorDialog('Could not report content', error);
-        }
+      const postId = item.showcasePostId;
+      // The same six reasons the web post page offers, so a stolen-work or
+      // misleading-recipe report reaches moderation filed as one.
+      showActionSheet({
+        title: 'Why are you reporting this?',
+        message: 'Choose the closest reason so the moderation team can review it correctly.',
+        actions: POST_REPORT_REASONS.map((reason) => ({
+          label: reason.label,
+          onPress: () => {
+            void (async () => {
+              try {
+                await api.reportPost(postId, {
+                  reason: reason.value,
+                  details: 'Reported from the mobile Showcase viewer.',
+                });
+                haptic.success();
+                showMessageDialog({
+                  title: 'Report received',
+                  message: 'Thank you. Our moderation team will review this content.',
+                });
+              } catch (error) {
+                haptic.error();
+                showErrorDialog('Could not report content', error);
+              }
+            })();
+          },
+        })),
       });
       return;
     }

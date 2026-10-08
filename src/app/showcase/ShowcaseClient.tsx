@@ -1434,6 +1434,7 @@ export default function ShowcaseClient({
                                                         description={item.body || item.prompt}
                                                         sourceSurface="showcase"
                                                         accessToken={session?.access_token ?? null}
+                                                        viewerIsOwner={Boolean(user && item.creator.id === user.id)}
                                                         onShared={() => {
                                                             void sendShowcaseFeedEvent({
                                                                 item,

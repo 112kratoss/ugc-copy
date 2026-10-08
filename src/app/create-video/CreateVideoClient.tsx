@@ -4823,6 +4823,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                 <>
                                                     <PublicShareButton
                                                         generationId={latestGenerationId}
+                                                        viewerIsOwner
                                                         title={shareTitle}
                                                         description={primarySharePrompt}
                                                         sourceSurface="create-video"

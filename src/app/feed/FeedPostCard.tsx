@@ -48,6 +48,8 @@ interface FeedPostCardProps {
     expanded: boolean;
     commentsOpen: boolean;
     accessToken: string | null;
+    /** The viewer wrote this post, so a share by them may claim the work. */
+    viewerIsOwner?: boolean;
     /** Prioritizes the above-the-fold cover that can become the page LCP. */
     priorityMedia?: boolean;
     /** Bounded server-inlined data URL for that priority cover. */
@@ -88,6 +90,7 @@ function FeedPostCardView({
     expanded,
     commentsOpen,
     accessToken,
+    viewerIsOwner = false,
     priorityMedia = false,
     priorityPoster = null,
     detailContext = DEFAULT_DETAIL_CONTEXT,
@@ -290,6 +293,7 @@ function FeedPostCardView({
                     description={card.body || item.prompt}
                     sourceSurface="feed"
                     accessToken={accessToken}
+                    viewerIsOwner={viewerIsOwner}
                     onShared={onShared}
                     iconOnly
                     className="ui-focus-ring inline-flex h-11 w-11 items-center justify-center rounded-full text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"

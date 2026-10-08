@@ -1853,6 +1853,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                                 <>
                                                     <PublicShareButton
                                                         generationId={latestGenerationId}
+                                                        viewerIsOwner
                                                         title={shareTitle}
                                                         description={shareDescription}
                                                         sourceSurface="create-image"

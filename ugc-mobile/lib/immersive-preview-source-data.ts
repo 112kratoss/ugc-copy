@@ -104,7 +104,7 @@ export function buildViewerItems(
   if (source === 'profile-posts') {
     return buildImmersiveOwnerPostItems(source, data?.ownerPosts ?? [], owner);
   }
-  return buildImmersiveShowcaseItems(source, data?.showcaseItems ?? []);
+  return buildImmersiveShowcaseItems(source, data?.showcaseItems ?? [], owner.creatorId ?? null);
 }
 
 export function isGenerationSource(source: PreviewViewerSource) {
@@ -190,14 +190,17 @@ export async function loadImmersiveSourceData({
     return { showcaseItems: detail?.item ? [detail.item] : [] };
   }
 
-  const response = await api.getShowcaseFeed({ limit: 48, sort: 'for-you', ...(mediaOnly ? { category: 'media' } : {}) });
+  // A cold link or notification opens a post that is rarely in the first
+  // page of For You, so the post is read beside the feed rather than after
+  // it: one round trip instead of two before anything shows.
+  const [response, detail] = await Promise.all([
+    api.getShowcaseFeed({ limit: 48, sort: 'for-you', ...(mediaOnly ? { category: 'media' } : {}) }),
+    initialId ? api.getShowcasePost(initialId).catch(() => null) : Promise.resolve(null),
+  ]);
   let showcaseItems = response.items;
 
-  if (initialId && !showcaseItems.some((item) => item.id === initialId)) {
-    const detail = await api.getShowcasePost(initialId).catch(() => null);
-    if (detail?.item) {
-      showcaseItems = [detail.item, ...showcaseItems];
-    }
+  if (initialId && detail?.item && !showcaseItems.some((item) => item.id === initialId)) {
+    showcaseItems = [detail.item, ...showcaseItems];
   }
 
   return {

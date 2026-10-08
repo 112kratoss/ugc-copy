@@ -26,10 +26,6 @@ vi.mock('@/components/AuthProvider', () => ({
   }),
 }));
 
-vi.mock('@/components/PublicShareButton', () => ({
-  default: () => <button type="button">Share</button>,
-}));
-
 vi.mock('@/lib/post-lifecycle-client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/post-lifecycle-client')>()),
   ...clientMocks,
@@ -46,9 +42,7 @@ function renderOwnerTools(overrides: Partial<React.ComponentProps<typeof Showcas
         postId="post-1"
         generationId="gen-1"
         title="Sunset study"
-        description="A study of light."
         creatorUsername="creator"
-        canRemix={false}
         visibility="public"
         viewerIsOwner
         hasResourceBundle
