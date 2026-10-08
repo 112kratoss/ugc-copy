@@ -183,4 +183,28 @@ describe('AppShellAccount', () => {
     expect(screen.getByText('77 credits')).toBeInTheDocument();
     expect(screen.queryByText('9999 credits')).toBeNull();
   });
+  it('invalidates a pending credit refresh immediately when another account starts verification', async () => {
+    render(<AppShellAccount />);
+    expect(await screen.findByText('1295 credits')).toBeInTheDocument();
+    let resolveCredits!: (value: { data: { credits: number } }) => void;
+    mocks.maybeSingle.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveCredits = resolve;
+    }));
+    await waitFor(() => {
+      if (mocks.maybeSingle.mock.calls.length < 2) {
+        act(() => window.dispatchEvent(new Event('credits_updated')));
+      }
+      expect(mocks.maybeSingle).toHaveBeenCalledTimes(2);
+    });
+    // Hold verification open: effect cleanup cannot protect this interval.
+    mocks.getUser.mockImplementationOnce(() => new Promise(() => {}));
+    act(() => appShellAuthCallback?.('SIGNED_IN', {
+      ...authenticatedSession,
+      access_token: 'second-access-token',
+      user: { ...authenticatedSession.user, id: 'user-2' },
+    }));
+    await act(async () => resolveCredits({ data: { credits: 9999 } }));
+    expect(screen.queryByText('9999 credits')).toBeNull();
+  });
+
 });

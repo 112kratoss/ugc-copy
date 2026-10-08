@@ -1,8 +1,6 @@
 # Section 12F — bounded referral settlement progress
 
-Status: reproduced against the actual local reconciliation service and SQL;
-candidate passes local regression, clean replay and permission checks. Candidate
-CI, standard production release and independent live verification remain pending.
+Status: deployed and independently verified. See the [release evidence](backend-section-12-referral-settlement-progress-release-2026-10-08.md). Local actual-service regressions, clean replay, permission checks and all five CI jobs passed.
 
 The bounded settlement selector always chose the oldest 100 transactions without
 recording failed attempts. A full batch of persistent failures therefore prevented

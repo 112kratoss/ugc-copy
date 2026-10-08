@@ -45,3 +45,20 @@ Forty-three existing preview/repair-capacity tests, app/test typechecking and sc
 JOB-02 remains failed until the prevention release is independently verified;
 the full media recovery and job matrices remain open. Private evidence is under
 `.audit-evidence/backend-social/media-rendition-budget-*`.
+
+## CI account-switch regression
+
+Candidate Quality 37722931809 passed API integration, SQL replay, E2E and mobile,
+but failed the existing account credit isolation test. Latest main Quality
+37784965464 failed that same test: a delayed first-account credit response can
+replace the displayed second-account balance. A deterministic additional local
+control resolves the old response while the next account's verification is held
+open; it failed before the fix. This is a display race, not a database credit write.
+
+The account component now invalidates its credit-request identity synchronously
+on auth changes, checks it before sending refreshes, and rechecks it inside the
+React state updater. Each verified account load gets a fresh identity, including
+returning to the same user. Sign-out and unmount invalidate it as well. The
+existing assertions remain intact; 25 account/shell tests, app/test types and
+scoped lint pass. The candidate incorporates main through #417; final CI and
+release remain required for both runtime corrections.

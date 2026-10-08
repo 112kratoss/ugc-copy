@@ -64,6 +64,7 @@ export default function AppShellAccount() {
   const [profile, setProfile] = useState<ProfileSummary | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
+  const creditIdentityRef = useRef<{ userId: string } | null>(null);
   const credits = profile?.credits;
   const displayName = getCreatorDisplayName({
     displayName: profile?.display_name ?? null,
@@ -81,6 +82,7 @@ export default function AppShellAccount() {
 
     function clearAccountState() {
       authSequence += 1;
+      creditIdentityRef.current = null;
       acceptedAccessToken = null;
       acceptedUserId = null;
       pendingAccessTokens.clear();
@@ -134,6 +136,7 @@ export default function AppShellAccount() {
       }
 
       const verifiedSession = { ...nextSession, user: verifiedUser };
+      creditIdentityRef.current = { userId: verifiedUser.id };
       acceptedAccessToken = nextSession.access_token;
       acceptedUserId = verifiedUser.id;
       publishAppShellAuthentication(true);
@@ -183,6 +186,8 @@ export default function AppShellAccount() {
         pendingAccessTokens.add(accessToken);
       }
 
+      // Invalidate credit responses before deferred verification or effect cleanup.
+      creditIdentityRef.current = null;
       const timeoutId = window.setTimeout(() => {
         deferredAuthSyncIds.delete(timeoutId);
         void loadProfile(nextSession);
@@ -198,6 +203,7 @@ export default function AppShellAccount() {
 
     return () => {
       mounted = false;
+      creditIdentityRef.current = null;
       deferredAuthSyncIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
       subscription.unsubscribe();
     };
@@ -228,7 +234,8 @@ export default function AppShellAccount() {
 
     function refreshCredits() {
       const userId = session?.user?.id;
-      if (!userId) return;
+      const identity = creditIdentityRef.current;
+      if (!userId || identity?.userId !== userId) return;
 
       supabase
         .from('profiles')
@@ -236,11 +243,12 @@ export default function AppShellAccount() {
         .eq('id', userId)
         .maybeSingle()
         .then(({ data }) => {
-          if (isActive && typeof data?.credits === 'number') {
-            setProfile((current) => ({
+          if (isActive && creditIdentityRef.current === identity && typeof data?.credits === 'number') {
+            // React may apply this updater after a newer account state is queued.
+            setProfile((current) => creditIdentityRef.current === identity ? {
               ...(current ?? { display_name: null, avatar_url: null }),
               credits: data.credits,
-            }));
+            } : current);
           }
         });
     }
@@ -256,6 +264,7 @@ export default function AppShellAccount() {
     // This browser only. The default (global) also ends the account's session
     // on the person's phone, which then has every request refused.
     await supabase.auth.signOut({ scope: 'local' });
+    creditIdentityRef.current = null;
     publishAppShellAuthentication(false);
     setSession(null);
     setProfile(null);
