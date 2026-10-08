@@ -276,6 +276,8 @@ const extendedOperationCases: Array<{
   { key: 'getContentPreferences', call: (api) => api.getContentPreferences() },
   { key: 'revealNsfwPost', call: (api) => api.revealNsfwPost('post-1') },
   { key: 'getGenerationDetails', call: (api) => api.getGenerationDetails('generation-1') },
+  { key: 'createSeedanceAsset', call: (api) => api.createSeedanceAsset({ url: 'uploads/user/reference.mp4', assetType: 'Video' }) },
+  { key: 'getSeedanceAsset', call: (api) => api.getSeedanceAsset('asset-1') },
   {
     key: 'startGeneration',
     call: (api) => api.startGeneration?.({

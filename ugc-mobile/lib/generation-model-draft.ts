@@ -37,6 +37,12 @@ import {
   SUBJECT_IMAGES_SLOT_KEY,
   subjectsPerRun,
 } from './model-catalog/protocol';
+import {
+  createSeedanceAssetMetadata,
+  getPreferredSeedanceReferenceValue,
+  isSeedance2VideoModelId,
+  type SeedanceAssetKind,
+} from './model-catalog/seedance-assets';
 import type {
   GenerationElementDescriptor,
   ImageGenerationRequest,
@@ -1119,7 +1125,21 @@ export function buildCatalogGenerationPayload(
     const usesReusableReferences = draft.referenceMode === 'elements';
     const usesKlingVideoElements = usesReusableReferences && model.id === 'kling-3.0-video';
     const activeReferences = usesReusableReferences ? draft.references : [];
-    const imageUrls = activeReferences.map((reference) => reference.url);
+    // The Seedance 2 family takes a prepared asset's id in place of a reference's
+    // link, and is told what each reference had prepared, by index, as the web
+    // creator does; every other model gets the links and no asset collections.
+    const preparesSeedanceAssets = usesReusableReferences && isSeedance2VideoModelId(model.id);
+    const referenceValue = (media: MediaDraft) => (preparesSeedanceAssets
+      ? getPreferredSeedanceReferenceValue(media.url, media.seedanceAsset) ?? media.url
+      : media.url);
+    const seedanceAssetOf = (assetType: SeedanceAssetKind) => (media: MediaDraft) => createSeedanceAssetMetadata({
+      ...media.seedanceAsset,
+      assetType,
+      sourceUrl: media.url,
+    });
+    const activeReferenceVideos = usesReusableReferences && !usesKlingVideoElements ? draft.referenceVideos : [];
+    const activeReferenceAudios = usesReusableReferences ? draft.referenceAudios : [];
+    const imageUrls = activeReferences.map(referenceValue);
     return {
       model: model.id,
       isMultiShot: model.capabilities.multiShot ? draft.isMultiShot : false,
@@ -1132,7 +1152,7 @@ export function buildCatalogGenerationPayload(
       elements: usesReusableReferences ? elementDescriptors(draft) : [],
       elementImageUrls: imageUrls,
       imageUrls,
-      referenceVideoUrls: usesReusableReferences && !usesKlingVideoElements ? draft.referenceVideos.map((media) => media.url) : [],
+      referenceVideoUrls: activeReferenceVideos.map(referenceValue),
       klingVideoElements: usesKlingVideoElements ? draft.referenceVideos.map((media) => ({
         id: media.id,
         url: media.url,
@@ -1141,7 +1161,7 @@ export function buildCatalogGenerationPayload(
         storagePath: media.storagePath ?? null,
         sourceGenerationId: media.sourceGenerationId ?? null,
       })) : [],
-      referenceAudioUrls: usesReusableReferences ? draft.referenceAudios.map((media) => media.url) : [],
+      referenceAudioUrls: activeReferenceAudios.map(referenceValue),
       preparedAudioIds: usesReusableReferences ? preparedAudioIds(draft) : [],
       characterIds: usesReusableReferences ? characterIds(draft) : [],
       startImageUrl: usesReusableReferences && !model.inputs.combineFramesWithReferences ? null : draft.startFrame?.url ?? null,
@@ -1155,7 +1175,13 @@ export function buildCatalogGenerationPayload(
       resolution: draft.resolution,
       fixedLens: model.capabilities.fixedLens ? draft.fixedLens : false,
       referenceMode: draft.referenceMode,
-      seedanceAssets: null,
+      seedanceAssets: preparesSeedanceAssets
+        ? {
+            images: activeReferences.map(seedanceAssetOf('Image')),
+            videos: activeReferenceVideos.map(seedanceAssetOf('Video')),
+            audios: activeReferenceAudios.map(seedanceAssetOf('Audio')),
+          }
+        : null,
       sourceGenerationId: draft.sourceGenerationId ?? null,
       catalogRevision,
       settings: normalizedSettings,

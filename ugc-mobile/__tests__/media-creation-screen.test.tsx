@@ -46,6 +46,8 @@ const authState = vi.hoisted(() => ({
     quoteGenerationModel: vi.fn(),
     getRemixSourceBundle: vi.fn(),
     createMediaReadUrl: vi.fn(),
+    createSeedanceAsset: vi.fn(),
+    getSeedanceAsset: vi.fn(),
   },
 }));
 
@@ -367,6 +369,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     authState.api.quoteGenerationModel.mockReset();
     authState.api.getRemixSourceBundle.mockReset();
     authState.api.createMediaReadUrl.mockReset();
+    authState.api.createSeedanceAsset.mockReset();
+    authState.api.getSeedanceAsset.mockReset();
     authState.api.quoteGenerationModel.mockResolvedValue({
       modelId: 'nano-banana-2',
       catalogRevision: 'test-catalog-rev',
@@ -1085,6 +1089,99 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(2);
     expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('Restored prompt');
     expect(collectText(tree.root)).not.toContain('Restoring the original prompt, settings, and references…');
+  });
+
+  // The Seedance 2 family takes a reference prepared with the provider once (an asset
+  // id in place of the link on every run), which the web creator has offered since the
+  // family shipped and the native creator sent as `seedanceAssets: null`.
+  describe('Seedance assets on the native creator', () => {
+    const element = { id: 'girl', displayName: 'Girl', handle: '@girl', url: 'https://cdn.example.com/girl.png', storagePath: 'generation_inputs/owner/gen-girl/girl.png', sourceGenerationId: null };
+    const voice = { kind: 'audio', label: 'Voice', url: 'https://cdn.example.com/voice.mp3', storagePath: 'generation_inputs/owner/gen-girl/voice.mp3', sourceGenerationId: null };
+    const remixOf = (model: string) => ({
+      generation: { id: 'gen-girl', title: 'Original', prompt: 'The girl from @girl is crying', category: 'video', model },
+      result: null,
+      inputs: { video: { referenceMode: 'elements', startFrame: null, endFrame: null, elements: [element], referenceVideos: [], referenceAudios: [voice] } },
+      workflowSettings: { model, referenceMode: 'elements', duration: 4, aspectRatio: '16:9', resolution: '480p' },
+      restoreIssues: [],
+    });
+    const assetAnswer = (status: 'processing' | 'active' | 'failed', assetType: 'Image' | 'Audio') => ({
+      success: true, assetId: assetType === 'Image' ? 'asset-girl' : 'asset-voice', assetType, status, rawStatus: status, error: null, sourceUrl: null, lastCheckedAt: '2026-10-08T00:00:00.000Z',
+    });
+    const settle = () => renderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
+    const openEditor = async (model: string) => {
+      // The production descriptors, plus a copy of Seedance 2 under another id: a model
+      // with the same slots that is not in the family.
+      const catalog = createRemixRestoreCatalog();
+      const seedance = catalog.models.find((entry) => entry.id === 'seedance-2')!;
+      catalogState.catalog = { ...catalog, models: [...catalog.models, { ...seedance, id: 'wan-2.7', displayName: 'Wan 2.7' }] };
+      authState.api.getRemixSourceBundle.mockResolvedValue(remixOf(model));
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(<MediaCreationScreen initialTool="video" remixSource={{ generationId: 'gen-girl', postId: 'post-girl' }} />); });
+      await settle();
+      return tree;
+    };
+    /** Everything on screen as one string: a status line is a sentence, not a word. */
+    const text = (tree: renderer.ReactTestRenderer) => collectText(tree.root).join('\n');
+    const press = (tree: renderer.ReactTestRenderer, label: string) => renderer.act(async () => {
+      tree.root.findByProps({ accessibilityLabel: label }).props.onPress();
+    });
+
+    it('prepares a Seedance 2 reference from its details sheet, checks on it, and sends the asset id on the run', async () => {
+      authState.api.createSeedanceAsset.mockResolvedValue(assetAnswer('processing', 'Image'));
+      authState.api.getSeedanceAsset.mockResolvedValue(assetAnswer('active', 'Image'));
+      const tree = await openEditor('seedance-2');
+      expect(text(tree)).toContain('Open a reference to prepare it with Seedance once.');
+
+      renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Open details for Girl' }).props.onPress(); });
+      expect(tree.root.findAllByProps({ testID: 'seedance-asset-row' })).not.toHaveLength(0);
+      expect(text(tree)).toContain('Not prepared.');
+
+      await press(tree, 'Prepare for Seedance for Girl');
+      // The creator's own file goes by its storage path; the server resolves and owns it.
+      expect(authState.api.createSeedanceAsset).toHaveBeenCalledWith({ url: 'generation_inputs/owner/gen-girl/girl.png', assetType: 'Image' });
+      expect(text(tree)).toContain('Seedance is processing the file.');
+
+      await press(tree, 'Check status for Girl');
+      expect(authState.api.getSeedanceAsset).toHaveBeenCalledWith('asset-girl');
+      expect(text(tree)).toContain('Ready. Runs send the prepared asset in place of the file.');
+
+      // The run sends the asset id where the link was, and says what was prepared.
+      authState.api.startVideoGeneration.mockResolvedValue({ predictionId: 'pred-1', status: 'starting' } as never);
+      await press(tree, 'Close reference details');
+      await settle();
+      await renderer.act(async () => { findPressableByLabelPrefix(tree.root, 'Generate ·').props.onPress(); });
+      await settle();
+      expect(authState.api.startVideoGeneration).toHaveBeenCalledTimes(1);
+      expect(authState.api.startVideoGeneration.mock.calls[0][0]).toMatchObject({
+        model: 'seedance-2',
+        imageUrls: ['asset-girl'],
+        elementImageUrls: ['asset-girl'],
+        seedanceAssets: { images: [expect.objectContaining({ assetId: 'asset-girl', status: 'active' })] },
+      });
+      tree.unmount();
+    });
+
+    it('prepares an audio reference from its tile, and shows a refusal as failed on that reference', async () => {
+      authState.api.createSeedanceAsset.mockRejectedValue(new Error('Asset media must belong to the authenticated user.'));
+      const tree = await openEditor('seedance-2');
+
+      await press(tree, 'Prepare for Seedance for Voice');
+      expect(authState.api.createSeedanceAsset).toHaveBeenCalledWith({ url: 'generation_inputs/owner/gen-girl/voice.mp3', assetType: 'Audio' });
+      const retry = tree.root.findByProps({ accessibilityLabel: 'Try again for Voice' });
+      expect(collectText(retry).join(' ')).toContain('Retry');
+      // The picture beside it is untouched.
+      renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Open details for Girl' }).props.onPress(); });
+      expect(text(tree)).toContain('Not prepared.');
+      tree.unmount();
+    });
+
+    it('offers no Seedance asset on a model outside the family', async () => {
+      const tree = await openEditor('wan-2.7');
+      expect(text(tree)).not.toContain('Open a reference to prepare it with Seedance once.');
+      renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Open details for Girl' }).props.onPress(); });
+      expect(tree.root.findAllByProps({ testID: 'seedance-asset-row' })).toHaveLength(0);
+      tree.unmount();
+    });
   });
 
   // The "Restoring…" state belongs to one run of the restore, and a run that has been cancelled
@@ -2438,6 +2535,100 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       } finally {
         vi.mocked(PanResponder.create).mockImplementation((() => ({ panHandlers: {} })) as never);
       }
+    });
+  });
+
+  describe('the parameter sheet', () => {
+    type Config = Record<string, (...args: unknown[]) => unknown>;
+
+    /**
+     * The image composer with its parameter sheet open. The double hands each
+     * responder's own config back as its handlers, so the tree shows which
+     * view carries which.
+     */
+    function openParameters() {
+      vi.mocked(PanResponder.create).mockImplementation(((config: unknown) => ({ panHandlers: { panConfig: config } })) as never);
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<MediaCreationScreen initialTool="image" />);
+      });
+      renderer.act(() => {
+        findPressableByLabelPrefix(tree!.root, 'Generation parameters.').props.onPress();
+      });
+      return tree!;
+    }
+
+    afterEach(() => {
+      vi.mocked(PanResponder.create).mockImplementation((() => ({ panHandlers: {} })) as never);
+    });
+
+    function ancestors(node: renderer.ReactTestInstance) {
+      const found: renderer.ReactTestInstance[] = [];
+      for (let current = node.parent; current; current = current.parent) found.push(current);
+      return found;
+    }
+
+    const touch = { nativeEvent: { target: 57 }, stopPropagation: () => undefined };
+    const sheetPanel = (tree: renderer.ReactTestRenderer) => tree.root.findByProps({ testID: 'creator-parameter-sheet' });
+    const isOpen = (tree: renderer.ReactTestRenderer) => tree.root.findAllByProps({ testID: 'creator-parameter-sheet' }).length > 0;
+    /** The row the title and the close button are in, and the responder it carries. */
+    const titleRow = (tree: renderer.ReactTestRenderer) => (
+      ancestors(sheetPanel(tree).findByProps({ children: 'Generation parameters' })).find((node) => node.props.panConfig)!
+    );
+
+    it('takes a pull from its title as from its grabber, wherever its list is scrolled to', () => {
+      const tree = openParameters();
+      const panel = sheetPanel(tree).props.panConfig as Config;
+      const header = titleRow(tree).props.panConfig as Config;
+
+      // The title row has a responder of its own, the grabber's: taken as the
+      // touch lands, with no question about the list. Left to the panel, a pull
+      // from the title waited for the list to be at its top, and did nothing
+      // once the list had scrolled.
+      expect(header).not.toBe(panel);
+      expect('onMoveShouldSetPanResponderCapture' in header).toBe(false);
+
+      const list = sheetPanel(tree).find((node) => String(node.type) === 'scrollview');
+      renderer.act(() => {
+        list.props.onScroll({ nativeEvent: { contentOffset: { y: 120 } } });
+      });
+      // Scrolled into the list, a downward pull on the panel is the list's to scroll back.
+      expect(panel.onMoveShouldSetPanResponderCapture(touch, { dy: 12, dx: 0 })).toBe(false);
+      // The row still takes the touch-down, and a pull that began on its close
+      // button, which reaches the row as a move.
+      expect(header.onStartShouldSetPanResponder(touch, { dy: 0, dx: 0 })).toBe(true);
+      expect(header.onMoveShouldSetPanResponder(touch, { dy: 12, dx: 0 })).toBe(true);
+
+      renderer.act(() => {
+        header.onPanResponderGrant(touch, { dy: 0, dx: 0 });
+        header.onPanResponderMove(touch, { dy: 140, dx: 0 });
+        header.onPanResponderRelease(touch, { dy: 140, dx: 0, vy: 0 });
+      });
+      expect(isOpen(tree)).toBe(false);
+    });
+
+    it('keeps its panel taking a touch-down, as a sheet in a Modal has to, and its close button a press', () => {
+      const tree = openParameters();
+      const panel = sheetPanel(tree).props.panConfig as Config;
+
+      // It holds no field, so it is still a Modal, and the two go together:
+      // inside a Modal on Android a view that declines a touch-down is never
+      // asked about the moves after it, so the panel takes a touch nothing
+      // below it wanted. The three sheets drawn in the app's own window ask
+      // their panels to wait instead; moved there, this one would have to too.
+      expect(ancestors(sheetPanel(tree)).some((node) => String(node.type) === 'modal')).toBe(true);
+      expect(panel.onStartShouldSetPanResponder(touch, { dy: 0, dx: 0 })).toBe(true);
+
+      // The way out sits in the title row, below the row's responder: a press
+      // that lands on it is asked of the button first.
+      const close = tree.root.findByProps({ accessibilityLabel: 'Close generation parameters' });
+      expect(String(close.type)).not.toBe('view');
+      expect(ancestors(close)).toContain(titleRow(tree));
+      expect(titleRow(tree).props.panConfig).not.toBe(panel);
+      renderer.act(() => {
+        close.props.onPress();
+      });
+      expect(isOpen(tree)).toBe(false);
     });
   });
 

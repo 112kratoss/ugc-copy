@@ -1,3 +1,5 @@
+import type { SeedanceAssetCollections, SeedanceAssetKind, SeedanceAssetStatus } from './model-catalog/seedance-assets';
+
 export type CreatorToolId = 'image' | 'video' | 'motion';
 
 export interface MobileCompatibilityPolicy {
@@ -660,10 +662,23 @@ export interface VideoGenerationRequest {
   referenceMode?: 'frames' | 'elements' | 'subjects';
   startFrame?: RemixMediaAssetDescriptor | null;
   endFrame?: RemixMediaAssetDescriptor | null;
-  seedanceAssets?: unknown | null;
+  /** The Seedance 2 family: what each reusable reference had prepared with the provider, by index. */
+  seedanceAssets?: SeedanceAssetCollections | null;
   sourceGenerationId?: string | null;
   catalogRevision?: string | null;
   settings?: Record<string, string | number | boolean>;
+}
+
+/** `/api/seedance-assets`: a reference registered with the provider, as the server read it back. */
+export interface SeedanceAssetResponse {
+  success: true;
+  assetId: string | null;
+  assetType: SeedanceAssetKind | null;
+  status: SeedanceAssetStatus;
+  rawStatus: string;
+  error: string | null;
+  sourceUrl: string | null;
+  lastCheckedAt: string;
 }
 
 export interface MotionGenerationRequest {

@@ -13,7 +13,7 @@ import {
   createMediaDraftFromUpload,
   type VideoCreationDraft,
 } from '../lib/media-creation-view-model';
-import { createTestGenerationModelCatalog, remoteImageModel } from './fixtures/generation-model-catalog';
+import { createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel } from './fixtures/generation-model-catalog';
 
 describe('catalog-backed mobile creation drafts', () => {
   it('applies remote model defaults and reference limits without bundled model data', () => {
@@ -433,6 +433,82 @@ describe('catalog-backed mobile creation drafts', () => {
  * ("studio@example.com") for mentions, found no reference under either, and
  * refused a prompt the server accepts as it stands (2026-10-03).
  */
+describe('Seedance assets in a catalog payload', () => {
+  const upload = (fileName: string, kind: 'image' | 'video' | 'audio') => createMediaDraftFromUpload({
+    signedUrl: `https://cdn.example.com/${fileName}`,
+    storagePath: `uploads/user/${fileName}`,
+    mimeType: kind === 'image' ? 'image/png' : kind === 'video' ? 'video/mp4' : 'audio/mpeg',
+    fileName,
+    kind,
+  }, { displayName: fileName.replace(/\..+$/, '') });
+  const seedance = createRemixRestoreCatalog().models.find((model) => model.id === 'seedance-2');
+  if (!seedance) throw new Error('Expected the Seedance 2 fixture.');
+  const activeAsset = { assetId: 'asset-hero', assetType: 'Image' as const, status: 'active' as const, sourceUrl: 'https://cdn.example.com/hero.png', error: null, lastCheckedAt: '2026-10-08T00:00:00.000Z' };
+  const processingAsset = { assetId: 'asset-voice', assetType: 'Audio' as const, status: 'processing' as const, sourceUrl: null, error: null, lastCheckedAt: '2026-10-08T00:00:00.000Z' };
+
+  it('sends a prepared asset in place of its link, and tells the server what each reference had prepared', () => {
+    // Mirrors the web creator: an active asset's id replaces the link; a reference
+    // still processing, or never prepared, goes as its link; and every reusable
+    // reference is listed in `seedanceAssets` by index so a remix restores the ids.
+    const draft = applyCatalogModelDefaults({
+      ...createDefaultCreationDraft('video'),
+      model: 'seedance-2',
+      prompt: 'The product from @hero spins.',
+      referenceMode: 'elements',
+      references: [{ ...upload('hero.png', 'image'), seedanceAsset: activeAsset }],
+      referenceVideos: [upload('motion.mp4', 'video')],
+      referenceAudios: [{ ...upload('voice.mp3', 'audio'), seedanceAsset: processingAsset }],
+    }, seedance);
+    if (draft.tool !== 'video') throw new Error('Expected a video draft.');
+
+    expect(buildCatalogGenerationPayload(draft, seedance, 'revision-1')).toMatchObject({
+      imageUrls: ['asset-hero'],
+      elementImageUrls: ['asset-hero'],
+      referenceVideoUrls: ['https://cdn.example.com/motion.mp4'],
+      referenceAudioUrls: ['https://cdn.example.com/voice.mp3'],
+      seedanceAssets: {
+        images: [{ assetId: 'asset-hero', assetType: 'Image', status: 'active', sourceUrl: 'https://cdn.example.com/hero.png' }],
+        videos: [{ assetId: null, assetType: 'Video', status: 'idle', sourceUrl: 'https://cdn.example.com/motion.mp4' }],
+        audios: [{ assetId: 'asset-voice', assetType: 'Audio', status: 'processing', sourceUrl: 'https://cdn.example.com/voice.mp3' }],
+      },
+    });
+  });
+
+  it('sends links and no asset collections to a model outside the Seedance 2 family, whatever a reference carries', () => {
+    const other = { ...seedance, id: 'other-video', displayName: 'Other video' };
+    const draft = applyCatalogModelDefaults({
+      ...createDefaultCreationDraft('video'),
+      model: 'other-video',
+      prompt: 'The product from @hero spins.',
+      referenceMode: 'elements',
+      references: [{ ...upload('hero.png', 'image'), seedanceAsset: activeAsset }],
+    }, other);
+    if (draft.tool !== 'video') throw new Error('Expected a video draft.');
+
+    expect(buildCatalogGenerationPayload(draft, other, 'revision-1')).toMatchObject({
+      imageUrls: ['https://cdn.example.com/hero.png'],
+      elementImageUrls: ['https://cdn.example.com/hero.png'],
+      seedanceAssets: null,
+    });
+  });
+
+  it('sends links and no asset collections for a frames run of a Seedance model', () => {
+    const draft = applyCatalogModelDefaults({
+      ...createDefaultCreationDraft('video'),
+      model: 'seedance-2',
+      prompt: 'Animate from the opening frame.',
+      referenceMode: 'frames',
+      startFrame: { ...upload('start.png', 'image'), seedanceAsset: activeAsset },
+    }, seedance);
+    if (draft.tool !== 'video') throw new Error('Expected a video draft.');
+
+    expect(buildCatalogGenerationPayload(draft, seedance, 'revision-1')).toMatchObject({
+      startImageUrl: 'https://cdn.example.com/start.png',
+      seedanceAssets: null,
+    });
+  });
+});
+
 describe('the mentions a catalog draft is checked for', () => {
   const product = {
     id: 'ref-product',

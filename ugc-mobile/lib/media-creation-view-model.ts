@@ -13,6 +13,7 @@ import type {
   VideoGenerationRequest,
   VideoMultiPromptInput,
 } from './types';
+import { readSeedanceAssetCollections, type SeedanceAssetMetadata } from './model-catalog/seedance-assets';
 
 export const IMAGE_MODELS = {
   'nano-banana-2-lite': {
@@ -348,6 +349,12 @@ export interface MediaDraft {
   durationSeconds?: number | null;
   sizeBytes?: number | null;
   sourceGenerationId?: string | null;
+  /**
+   * What the Seedance 2 family had prepared for this file with the provider
+   * (an asset id a run sends in place of the link). Absent or null on a
+   * reference never prepared, and on drafts saved by builds without it.
+   */
+  seedanceAsset?: SeedanceAssetMetadata | null;
 }
 
 export interface ImageCreationDraft extends CatalogBackedDraftFields {
@@ -824,27 +831,41 @@ function createMediaDraftFromRemixImageElement(
   };
 }
 
-function hydrateRemixImageElements(elements: RemixResolvedImageElement[] | undefined) {
+/**
+ * `prepared`: what the run had registered with the provider for each item, by the
+ * same index (`workflowSettings.seedanceAssets`). Paired before an item without a
+ * link is skipped, so a gap in the restored list never shifts an asset onto the
+ * wrong reference.
+ */
+function hydrateRemixImageElements(
+  elements: RemixResolvedImageElement[] | undefined,
+  prepared?: Array<SeedanceAssetMetadata | null>,
+) {
   let skipped = 0;
   const drafts = (elements ?? []).flatMap((element, index) => {
     const draft = createMediaDraftFromRemixImageElement(element, index);
     if (!draft) skipped += 1;
-    return draft ? [draft] : [];
+    return draft ? [withPreparedSeedanceAsset(draft, prepared?.[index])] : [];
   });
   return { drafts, skipped };
 }
 
 function hydrateRemixAssets(
   assets: RemixResolvedAsset[] | undefined,
-  labelPrefix: string
+  labelPrefix: string,
+  prepared?: Array<SeedanceAssetMetadata | null>,
 ) {
   let skipped = 0;
   const drafts = (assets ?? []).flatMap((asset, index) => {
     const draft = createMediaDraftFromRemixAsset(asset, `${labelPrefix} ${index + 1}`);
     if (!draft) skipped += 1;
-    return draft ? [draft] : [];
+    return draft ? [withPreparedSeedanceAsset(draft, prepared?.[index])] : [];
   });
   return { drafts, skipped };
+}
+
+function withPreparedSeedanceAsset(draft: MediaDraft, asset: SeedanceAssetMetadata | null | undefined): MediaDraft {
+  return asset ? { ...draft, seedanceAsset: asset } : draft;
 }
 
 /**
@@ -995,6 +1016,8 @@ export function replaceMediaDraftMedia(media: MediaDraft, upload: UploadedMediaI
     sizeBytes: upload.sizeBytes ?? null,
     // The swapped-in file is a fresh upload, not a copy of a generation.
     sourceGenerationId: null,
+    // And a file the provider has not seen: an asset prepared from the old one would send the old picture.
+    seedanceAsset: null,
   };
 }
 
@@ -1152,11 +1175,14 @@ function hydrateVideoDraftFromRemixSource(
   const model = modelSetting && isVideoModelId(modelSetting) ? modelSetting : baseDraft.model;
   const config = bundledVideoModel(model);
   const videoInputs = bundle.inputs.video;
-  const restoredElements = hydrateRemixImageElements(videoInputs?.elements);
+  // The assets the run prepared with Seedance, restored beside the references they
+  // were made from so the remix sends the same ids instead of registering the files again.
+  const preparedAssets = readSeedanceAssetCollections(settings.seedanceAssets);
+  const restoredElements = hydrateRemixImageElements(videoInputs?.elements, preparedAssets?.images);
   const restoredStartFrame = hydrateOptionalRemixAsset(videoInputs?.startFrame, 'Start Frame');
   const restoredEndFrame = hydrateOptionalRemixAsset(videoInputs?.endFrame, 'End Frame');
-  const restoredReferenceVideos = hydrateRemixAssets(videoInputs?.referenceVideos, 'Video reference');
-  const restoredReferenceAudios = hydrateRemixAssets(videoInputs?.referenceAudios, 'Audio reference');
+  const restoredReferenceVideos = hydrateRemixAssets(videoInputs?.referenceVideos, 'Video reference', preparedAssets?.videos);
+  const restoredReferenceAudios = hydrateRemixAssets(videoInputs?.referenceAudios, 'Audio reference', preparedAssets?.audios);
   const restoredSubjects = hydrateRemixSubjects(videoInputs?.subjects);
   const mode = stringSetting(settings, 'mode');
   const isMultiShot = booleanSetting(settings, 'isMultiShot');
