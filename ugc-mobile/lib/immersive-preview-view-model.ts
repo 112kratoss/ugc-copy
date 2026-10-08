@@ -773,8 +773,11 @@ function getGenerationAvailableActions(
     return ['recreate', 'archive', 'view-details'];
   }
 
+  // Download, as on owned posts and on the web Studio card; audio has no file to save.
+  const download = isAudio ? [] : ['download'];
+
   if (!linkedPostId) {
-    return ['publish', 'recreate', 'archive', 'share', 'view-details'];
+    return ['publish', 'recreate', 'archive', 'share', ...download, 'view-details'];
   }
 
   // The linked post gets the same three-state control as a post of its own;
@@ -784,7 +787,7 @@ function getGenerationAvailableActions(
     linkedActions.push('change-linked-visibility');
   }
 
-  return [...linkedActions, 'view-linked', 'recreate', 'archive', 'share', 'view-details'];
+  return [...linkedActions, 'view-linked', 'recreate', 'archive', 'share', ...download, 'view-details'];
 }
 
 function ownerPostToImmersiveItem(

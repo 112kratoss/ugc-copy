@@ -694,7 +694,7 @@ describe('immersive preview view model', () => {
       const [item] = buildImmersiveGenerationItems('profile-creations', [
         generation({ id: 'unposted-gen', linked_post_id: null, archived_at: null }),
       ], { creatorLabel: '@batman' });
-      expect(item.availableActions).toEqual(['publish', 'recreate', 'archive', 'share', 'view-details']);
+      expect(item.availableActions).toEqual(['publish', 'recreate', 'archive', 'share', 'download', 'view-details']);
       expect(item.disabledActions).toEqual({});
     });
 
@@ -742,7 +742,7 @@ describe('immersive preview view model', () => {
           },
         }),
       ]);
-      expect(item.availableActions).toEqual(['edit-linked-resources', 'change-linked-visibility', 'view-linked', 'recreate', 'archive', 'share', 'view-details']);
+      expect(item.availableActions).toEqual(['edit-linked-resources', 'change-linked-visibility', 'view-linked', 'recreate', 'archive', 'share', 'download', 'view-details']);
       expect(item.linkedPostBundle).toMatchObject({ id: 'bundle-1', accessMode: 'paid' });
       expect(item.linkedPostVisibility).toBe('public');
       expect(item.disabledActions).toEqual({});
@@ -761,7 +761,7 @@ describe('immersive preview view model', () => {
         }),
       ]);
 
-      expect(item.availableActions).toEqual(['edit-linked-resources', 'change-linked-visibility', 'view-linked', 'recreate', 'archive', 'share', 'view-details']);
+      expect(item.availableActions).toEqual(['edit-linked-resources', 'change-linked-visibility', 'view-linked', 'recreate', 'archive', 'share', 'download', 'view-details']);
       expect(item.linkedPostBundle).toBeNull();
       expect(item.linkedPostVisibility).toBe('private');
     });
@@ -781,7 +781,7 @@ describe('immersive preview view model', () => {
         }),
       ]);
 
-      expect(item.availableActions).toEqual(['edit-linked-resources', 'change-linked-visibility', 'view-linked', 'recreate', 'archive', 'share', 'view-details']);
+      expect(item.availableActions).toEqual(['edit-linked-resources', 'change-linked-visibility', 'view-linked', 'recreate', 'archive', 'share', 'download', 'view-details']);
       expect(item.linkedPostVisibility).toBe('unlisted');
       expect(item.linkedPostPath).toBe('/showcase/post-unlisted');
     });

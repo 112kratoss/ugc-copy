@@ -115,6 +115,8 @@ export default function UnlockLibrary() {
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const loadPage = useCallback(async (offset: number) => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -133,6 +135,8 @@ export default function UnlockLibrary() {
 
   useEffect(() => {
     let cancelled = false;
+    setIsLoading(true);
+    setError(null);
 
     (async () => {
       try {
@@ -155,17 +159,20 @@ export default function UnlockLibrary() {
     return () => {
       cancelled = true;
     };
-  }, [loadPage]);
+  }, [loadPage, reloadKey]);
 
   const loadMore = async () => {
     if (nextOffset === null || isLoadingMore) return;
     setIsLoadingMore(true);
+    setLoadMoreError(null);
     try {
       const page = await loadPage(nextOffset);
       setItems((current) => [...current, ...page.items]);
       setNextOffset(page.pageInfo.nextOffset);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Failed to load more unlocks.');
+      // Kept apart from the first-load error: that one replaces the grid,
+      // and a failed page 2 used to wipe the unlocks already on screen.
+      setLoadMoreError(loadError instanceof Error ? loadError.message : 'Failed to load more unlocks.');
     } finally {
       setIsLoadingMore(false);
     }
@@ -182,8 +189,15 @@ export default function UnlockLibrary() {
 
   if (error) {
     return (
-      <div className="rounded-2xl border border-red-400/20 bg-red-500/5 px-4 py-6 text-sm text-red-200">
+      <div role="alert" className="flex flex-col items-start gap-4 rounded-2xl border border-red-400/20 bg-red-500/5 px-4 py-6 text-sm text-red-200">
         {error}
+        <button
+          type="button"
+          onClick={() => setReloadKey((current) => current + 1)}
+          className="ui-focus-ring inline-flex min-h-10 items-center gap-2 rounded-full border border-red-300/30 px-4 text-xs font-bold text-red-100 transition hover:bg-red-500/10"
+        >
+          Retry
+        </button>
       </div>
     );
   }
@@ -236,7 +250,7 @@ export default function UnlockLibrary() {
               <>
                 <StudioChip tone={item.purchasePriceUsdCents > 0 ? 'emerald' : 'sky'}>
                   {item.purchasePriceUsdCents > 0
-                    ? `${item.purchasePriceUsdCents} tokens (${formatUsdCents(item.purchasePriceUsdCents)})`
+                    ? `${item.purchasePriceUsdCents} credits (${formatUsdCents(item.purchasePriceUsdCents)})`
                     : 'Free'}
                 </StudioChip>
                 <UnlockStateBadge item={item} />
@@ -250,6 +264,9 @@ export default function UnlockLibrary() {
         ))}
       </ul>
 
+      {loadMoreError ? (
+        <p role="alert" className="text-center text-sm text-red-200">{loadMoreError}</p>
+      ) : null}
       {nextOffset !== null ? (
         <div className="flex justify-center pt-2">
           <button
@@ -259,7 +276,7 @@ export default function UnlockLibrary() {
             className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-zinc-900/60 px-5 py-2.5 text-sm font-semibold text-zinc-200 transition hover:border-white/20 hover:bg-zinc-800 disabled:opacity-60"
           >
             {isLoadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Load more
+            {loadMoreError ? 'Retry' : 'Load more'}
           </button>
         </div>
       ) : null}

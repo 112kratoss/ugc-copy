@@ -212,6 +212,8 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
   const [resolvedDownload, setResolvedDownload] = useState<{ outputUrl: string; url: string } | null>(null);
   const [isPublishOpen, setIsPublishOpen] = useState(false);
+  // "Publish & share": the modal shares the new public post once it exists.
+  const [shareAfterPublish, setShareAfterPublish] = useState(false);
   const [publishedPost, setPublishedPost] = useState<{
     path: string;
     visibility: 'public' | 'unlisted' | 'private';
@@ -431,19 +433,19 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
     }
   };
 
+  // Only a public Explore post is shared. The private result used to be
+  // shared as its signed storage address, which dies within the hour and has
+  // no landing page; the app dropped that in August.
   const handleShare = async () => {
-    if (!run?.result?.url) return;
-    const hasPublicFeedPost = publishedPost?.visibility === 'public';
-    const shareUrl = hasPublicFeedPost
-      ? new URL(publishedPost.path, window.location.origin).toString()
-      : run.result.url;
+    if (!run?.result?.url || publishedPost?.visibility !== 'public') return;
+    const shareUrl = new URL(publishedPost.path, window.location.origin).toString();
     try {
       if (navigator.share) {
         await navigator.share({ title: template?.name || run.templateTitle, url: shareUrl });
         setShareFeedback('Share sheet opened.');
       } else {
         await navigator.clipboard.writeText(shareUrl);
-        setShareFeedback(hasPublicFeedPost ? 'Explore post link copied.' : 'Result link copied.');
+        setShareFeedback('Explore post link copied.');
       }
     } catch (reason) {
       if (reason instanceof DOMException && reason.name === 'AbortError') return;
@@ -813,9 +815,23 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
                   <Download className="h-4 w-4" aria-hidden />
                   Download {result.kind}
                 </a>
-                <Button variant="secondary" icon={Share2} onClick={handleShare} className="mt-3 w-full">
-                  {publishedPost?.visibility === 'public' ? 'Share Explore post' : `Share ${result.kind}`}
-                </Button>
+                {publishedPost?.visibility === 'public' ? (
+                  <Button variant="secondary" icon={Share2} onClick={handleShare} className="mt-3 w-full">
+                    Share Explore post
+                  </Button>
+                ) : result.generationId && !isTestRun ? (
+                  <Button
+                    variant="secondary"
+                    icon={Share2}
+                    onClick={() => {
+                      setShareAfterPublish(true);
+                      setIsPublishOpen(true);
+                    }}
+                    className="mt-3 w-full"
+                  >
+                    Publish &amp; share
+                  </Button>
+                ) : null}
                 <Button href={createAnotherHref} variant="ghost" icon={RotateCcw} className="mt-2 w-full">Create another version</Button>
               </>
             )}
@@ -851,13 +867,21 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
       {!isTestRun && result?.generationId ? (
         <PublishToShowcaseModal
           isOpen={isPublishOpen}
-          onClose={() => setIsPublishOpen(false)}
+          onClose={() => {
+            setIsPublishOpen(false);
+            setShareAfterPublish(false);
+          }}
           generationId={result.generationId}
           accessToken={session?.access_token ?? null}
           defaultTitle={template?.name || run.templateTitle}
           defaultDescription=""
           showPaidShortcut={false}
           mediaOnly
+          shareAfterPublish={shareAfterPublish ? {
+            title: template?.name || run.templateTitle,
+            description: null,
+            sourceSurface: 'my-creations',
+          } : undefined}
           onPublished={(payload) => {
             const visibility = payload.visibility ?? 'private';
             const stablePath = payload.showcasePath

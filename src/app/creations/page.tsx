@@ -38,7 +38,10 @@ import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import { resolvePlaybackUrl } from '@/lib/media-descriptor';
 import { getStoredMediaLocation } from '@/lib/media-urls';
 import { isAudioModel, isImageModel } from '@/lib/client-generation-models';
+import { pushToast, requestConfirmation } from '@/components/feedback-state';
+import { HOME_WORKSPACE_ACTIVE_STATUSES } from '@/lib/home-dashboard';
 import { getCreatorProfileReadiness, type ProfileApiResponse } from '@/lib/profile';
+import { resolveRemixTool } from '@/lib/remix-tools';
 import { formatUsdCents, getPostResourceKindLabel } from '@/lib/post-resource-bundles';
 import UnlockLibrary from './UnlockLibrary';
 import { buildShowcaseDetailPath, supportsPublicCreationSharing } from '@/lib/share';
@@ -262,6 +265,15 @@ function getSignedMediaUrlExpirationMs(url: string): number | null {
     }
 }
 
+function isActiveGenerationStatus(status: string): boolean {
+    return (HOME_WORKSPACE_ACTIVE_STATUSES as readonly string[]).includes(status);
+}
+
+/** The creator for a Recreate of this creation, with the remix prefill. */
+function recreateHref(generation: Generation): string {
+    return `/create-${resolveRemixTool(generation.category)}?remix=${encodeURIComponent(generation.id)}`;
+}
+
 function preserveStableMediaUrl(
     previousUrl: string | null | undefined,
     incomingUrl: string | null | undefined
@@ -358,6 +370,8 @@ function mergeGenerationRefresh(
         return {
             ...incomingGeneration,
             output_url: preserveStableMediaUrl(previousGeneration.output_url, incomingGeneration.output_url),
+            // The tiles draw this one; a fresh signed address per refresh re-downloaded every tile.
+            preview_url: preserveStableMediaUrl(previousGeneration.preview_url, incomingGeneration.preview_url),
             output_urls: mergedOutputUrls,
             output_count: incomingGeneration.output_count ?? previousGeneration.output_count,
             input_media: incomingGeneration.input_media ?? previousGeneration.input_media,
@@ -437,6 +451,7 @@ export default function CreationsPage() {
     const [posts, setPosts] = useState<OwnerPost[]>([]);
     const [profile, setProfile] = useState<ProfileApiResponse | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [loadError, setLoadError] = useState<string | null>(null);
     const [generationsNextCursor, setGenerationsNextCursor] = useState<string | null>(null);
     const [isLoadingMoreGenerations, setIsLoadingMoreGenerations] = useState(false);
     const [generationsLoadMoreError, setGenerationsLoadMoreError] = useState<string | null>(null);
@@ -451,7 +466,6 @@ export default function CreationsPage() {
     const [previewGen, setPreviewGen] = useState<Generation | null>(null);
     const requestedGenerationRef = useRef<string | null>(null);
     const [publishTarget, setPublishTarget] = useState<Generation | null>(null);
-    const [shareAfterPublish, setShareAfterPublish] = useState(false);
     const [showPaidShortcutInPublishModal, setShowPaidShortcutInPublishModal] = useState(true);
     const [restoreTarget, setRestoreTarget] = useState<Generation | null>(null);
     const [restoringGenerationId, setRestoringGenerationId] = useState<string | null>(null);
@@ -586,6 +600,7 @@ export default function CreationsPage() {
             return;
         }
 
+        setLoadError(null);
         try {
             const [generationsRes, postsRes, profileRes] = await Promise.all([
                 fetch(buildGenerationsPageUrl(), {
@@ -610,6 +625,8 @@ export default function CreationsPage() {
                 setGenerations(nextGenerations);
                 setGenerationsNextCursor(getNextGenerationCursor(generationsData));
                 setGenerationsLoadMoreError(null);
+            } else {
+                setLoadError('Could not load your creations. Check your connection and try again.');
             }
 
             const postsData = await postsRes.json() as OwnerPostsApiResponse;
@@ -641,6 +658,8 @@ export default function CreationsPage() {
             }
         } catch (err) {
             console.error('Failed to fetch creations:', err);
+            // A failed load used to end in the empty state, which reads as an empty account.
+            setLoadError('Could not load your creations. Check your connection and try again.');
         } finally {
             setIsLoading(false);
         }
@@ -693,7 +712,7 @@ export default function CreationsPage() {
         const activeIds = generationsRef.current
             .filter((generation) => (
                 !generation.archived_at
-                && (generation.status === 'processing' || generation.status === 'waiting')
+                && isActiveGenerationStatus(generation.status)
             ))
             .map((generation) => generation.id);
         if (activeIds.length === 0) return;
@@ -869,7 +888,7 @@ export default function CreationsPage() {
     }, [fetchCreations]);
 
     const hasProcessingGenerations = generations.some(
-        (generation) => !generation.archived_at && (generation.status === 'processing' || generation.status === 'waiting')
+        (generation) => !generation.archived_at && isActiveGenerationStatus(generation.status)
     );
 
     useEffect(() => {
@@ -902,19 +921,11 @@ export default function CreationsPage() {
     // The publish modal only opens for a generation that has no post yet.
     // Recipe changes on an existing post link to the editor instead, which
     // loads the stored bundle rather than rebuilding one from the prefill.
-    const openPublishModal = useCallback(async (generation: Generation, options?: {
-        shareAfterPublish?: boolean;
-        showPaidShortcut?: boolean;
-    }) => {
+    const openPublishModal = useCallback(async (generation: Generation) => {
         try {
             const detailedGeneration = await loadGenerationDetail(generation);
             setPublishTarget(detailedGeneration);
-            setShareAfterPublish(Boolean(options?.shareAfterPublish));
-            setShowPaidShortcutInPublishModal(
-                detailedGeneration.origin === 'template'
-                    ? false
-                    : options?.showPaidShortcut ?? true
-            );
+            setShowPaidShortcutInPublishModal(detailedGeneration.origin !== 'template');
         } catch {
             // Error state is stored in generationDetailError for the page-level notice.
         }
@@ -922,7 +933,6 @@ export default function CreationsPage() {
 
     const closePublishModal = () => {
         setPublishTarget(null);
-        setShareAfterPublish(false);
         setShowPaidShortcutInPublishModal(true);
     };
 
@@ -982,7 +992,7 @@ export default function CreationsPage() {
             setRestoreTarget(null);
         } catch (error) {
             console.error('Failed to restore creation preview:', error);
-            window.alert(error instanceof Error ? error.message : 'Failed to restore preview.');
+            pushToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not restore the preview.' });
         } finally {
             setRestoringGenerationId(null);
         }
@@ -991,8 +1001,10 @@ export default function CreationsPage() {
     const copyPostLink = async (path: string) => {
         try {
             await navigator.clipboard.writeText(`${window.location.origin}${path}`);
+            pushToast({ tone: 'success', message: 'Post link copied.' });
         } catch (error) {
             console.error('Failed to copy post link:', error);
+            pushToast({ tone: 'error', message: 'Could not copy the post link.' });
         }
     };
 
@@ -1002,7 +1014,11 @@ export default function CreationsPage() {
             return;
         }
 
-        const confirmed = window.confirm('Archive this creation? It will leave the active workspace until you restore it.');
+        const confirmed = await requestConfirmation({
+            title: 'Archive this creation?',
+            message: 'It leaves the active workspace until you restore it.',
+            confirmLabel: 'Archive',
+        });
         if (!confirmed) {
             return;
         }
@@ -1022,6 +1038,7 @@ export default function CreationsPage() {
             await fetchCreations();
         } catch (error) {
             console.error('Failed to archive creation:', error);
+            pushToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not archive the creation.' });
         }
     };
 
@@ -1046,6 +1063,7 @@ export default function CreationsPage() {
             await fetchCreations();
         } catch (error) {
             console.error('Failed to restore creation:', error);
+            pushToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not restore the creation.' });
         }
     };
 
@@ -1055,9 +1073,12 @@ export default function CreationsPage() {
             return;
         }
 
-        const confirmed = window.confirm(
-            'Delete this raw creation from your workspace? Any linked post will stay intact, but generation-based remix linkage may stop working.'
-        );
+        const confirmed = await requestConfirmation({
+            title: 'Delete this creation?',
+            message: 'Any linked post stays intact, but remixes based on this creation may stop working.',
+            confirmLabel: 'Delete',
+            tone: 'danger',
+        });
         if (!confirmed) {
             return;
         }
@@ -1077,6 +1098,7 @@ export default function CreationsPage() {
             await fetchCreations();
         } catch (error) {
             console.error('Failed to delete creation:', error);
+            pushToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not delete the creation.' });
         }
     };
 
@@ -1366,7 +1388,7 @@ export default function CreationsPage() {
     // explicit note: the API withholds its address, so `output_url` alone
     // would silently hide it, which reads as deletion.
     const successfulGenerations = activeGenerations.filter(g => g.status === 'succeeded' && (g.output_url || g.source_unavailable_at));
-    const processingGenerations = activeGenerations.filter(g => g.status === 'processing' || g.status === 'waiting');
+    const processingGenerations = activeGenerations.filter(g => isActiveGenerationStatus(g.status));
     const failedGenerations = activeGenerations.filter(g => g.status === 'failed');
 
     const filteredSuccessful = successfulGenerations.filter(g => {
@@ -1470,7 +1492,7 @@ export default function CreationsPage() {
                             </h1>
                             <p className="text-sm text-zinc-500 font-medium tracking-wide">
                                 {activeView === 'creations'
-                                    ? `${successfulGenerations.length} CREATION${successfulGenerations.length !== 1 ? 'S' : ''} TOTAL`
+                                    ? `${profile?.stats?.creations ?? `${successfulGenerations.length}${generationsNextCursor ? '+' : ''}`} CREATION${(profile?.stats?.creations ?? successfulGenerations.length) !== 1 ? 'S' : ''} TOTAL`
                                     : activeView === 'posts'
                                         ? `${activePostCount} POST${activePostCount !== 1 ? 'S' : ''}${archivedPostCount > 0 ? ` · ${archivedPostCount} ARCHIVED` : ''}`
                                         : 'YOUR UNLOCKS'}
@@ -1678,8 +1700,25 @@ export default function CreationsPage() {
                     </div>
                 )}
 
+                {activeView === 'creations' && !isLoading && loadError ? (
+                    <div role="alert" className="mb-10 flex flex-col items-center gap-4 rounded-[28px] border border-rose-500/20 bg-rose-500/5 px-6 py-10 text-center">
+                        <p className="text-base font-semibold text-rose-100">{loadError}</p>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setIsLoading(true);
+                                void fetchCreations();
+                            }}
+                            className={studioActionClass('secondary', { size: 'md' })}
+                        >
+                            <RotateCcw className="h-4 w-4" />
+                            Retry
+                        </button>
+                    </div>
+                ) : null}
+
                 {/* Empty State */}
-                {activeView === 'creations' && !isLoading && activeGenerations.length === 0 && archivedGenerations.length === 0 && (
+                {activeView === 'creations' && !isLoading && !loadError && activeGenerations.length === 0 && archivedGenerations.length === 0 && (
                     <div className="flex flex-col items-center justify-center gap-6 py-24">
                         <div className="rounded-full border border-white/5 bg-zinc-900/50 p-6">
                             <Film className="w-12 h-12 text-zinc-600" />
@@ -1823,6 +1862,7 @@ export default function CreationsPage() {
                                     : null;
                                 const hasPrimaryAction =
                                     canManageFromCreation &&
+                                    !gen.source_unavailable_at &&
                                     workspaceState.primaryAction.type !== 'none' &&
                                     Boolean(workspaceState.primaryAction.label);
                                 const primaryIsPublish = workspaceState.primaryAction.type === 'publish';
@@ -1860,6 +1900,14 @@ export default function CreationsPage() {
                                         download: `creation_${gen.id}.${inferDownloadExtension(gen)}`,
                                     });
                                 }
+                                if (!isTemplateResult && !isAudio) {
+                                    overflowItems.push({
+                                        key: 'recreate',
+                                        label: 'Recreate',
+                                        icon: <RotateCcw className="h-4 w-4" />,
+                                        href: recreateHref(gen),
+                                    });
+                                }
                                 if (!isTemplateResult) {
                                     overflowItems.push(
                                         {
@@ -1890,7 +1938,9 @@ export default function CreationsPage() {
                                                 key={primaryMediaUrl}
                                                 id={gen.id}
                                                 mediaKind={mediaKind}
-                                                src={resolvePlaybackUrl({ url: primaryMediaUrl, renditionUrl: gen.media?.renditionUrl })}
+                                                src={isImage
+                                                    ? gen.preview_url ?? primaryMediaUrl
+                                                    : resolvePlaybackUrl({ url: primaryMediaUrl, renditionUrl: gen.media?.renditionUrl })}
                                                 posterSrc={gen.preview_url}
                                                 alt={isImage ? 'Generated image' : `${badgeLabel} generation`}
                                                 outputCount={Math.max(outputUrls.length, gen.output_count ?? 0)}
@@ -1995,7 +2045,8 @@ export default function CreationsPage() {
                                                 <button
                                                     type="button"
                                                     onClick={() => void openPreviewModal(gen)}
-                                                    disabled={isGenerationDetailLoading}
+                                                    disabled={isGenerationDetailLoading || Boolean(gen.source_unavailable_at)}
+                                                    title={gen.source_unavailable_at ? 'The source file is no longer available' : undefined}
                                                     className={studioActionClass('secondary')}
                                                 >
                                                     {isGenerationDetailLoading ? (
@@ -2059,6 +2110,11 @@ export default function CreationsPage() {
                                             <StudioOverflowMenu
                                                 label={`More actions for ${failedTitle}`}
                                                 items={[{
+                                                    key: 'retry',
+                                                    label: 'Try again',
+                                                    icon: <RotateCcw className="h-4 w-4" />,
+                                                    href: recreateHref(gen),
+                                                }, {
                                                     key: 'delete',
                                                     label: 'Delete creation',
                                                     icon: <Trash2 className="h-4 w-4" />,
@@ -2276,7 +2332,7 @@ export default function CreationsPage() {
                                                 />
                                             ) : (
                                                 // eslint-disable-next-line @next/next/no-img-element
-                                                <img src={post.mediaUrl} alt={post.title} loading="lazy" decoding="async" className="aspect-[4/5] w-full object-cover" />
+                                                <img src={post.mediaItems?.[0]?.previewUrl ?? post.mediaUrl} alt={post.title} loading="lazy" decoding="async" className="aspect-[4/5] w-full object-cover" />
                                             )
                                         ) : (
                                             <div className="flex aspect-[4/5] w-full items-center justify-center p-4 text-sm leading-6 text-zinc-400">
@@ -2427,11 +2483,6 @@ export default function CreationsPage() {
                 showPaidShortcut={showPaidShortcutInPublishModal}
                 mediaOnly={publishTarget?.origin === 'template'}
                 paywallPrefill={publishTarget?.paywallPrefill ?? null}
-                shareAfterPublish={shareAfterPublish ? {
-                    title: publishTarget ? getPreviewTitle(publishTarget) : 'Creation',
-                    description: publishTarget?.description ?? publishTarget?.prompt ?? null,
-                    sourceSurface: 'my-creations',
-                } : undefined}
                 onPublished={() => {
                     if (!publishTarget) {
                         return;
