@@ -1,7 +1,6 @@
 # Section 12C — referral history across account deletion
 
-Status: reproduced through actual local Auth/SQL; candidate verified locally.
-CI, standard release and independent production readback remain required.
+Status: [deployed and independently verified](backend-section-12-referral-deletion-release-2026-10-08.md). Local/CI Auth/SQL controls, standard release, exact live readback and both bounded production rollback probes pass.
 
 Deleting either participant after referral settlement failed in Auth because its
 cascades attempted to delete append-only financial ledger rows. Two actual
@@ -74,8 +73,7 @@ provider-backed evidence.
   tables remain private. Application/test type checks and scoped lint are gated
   before release. Owned fixtures are cleaned using exact IDs in the local suite.
 - Production read-only inventory has zero referral attributions, rewards and
-  ledger rows. The complete migration plan contains only this migration. No
-  production DDL or real customer repair has been performed for this candidate.
+  ledger rows. The complete migration plan contains only this migration. The migration was subsequently applied by the standard release; no real customer repair was needed.
 
 Private evidence is under `.audit-evidence/backend-social/referral-deletion-*`.
 AUTH-03 and PAY-04 remain open. This is not a certificate for all provider
