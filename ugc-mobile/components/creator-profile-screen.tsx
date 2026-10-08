@@ -118,12 +118,23 @@ export function CreatorProfileScreen({
     ];
   }, [activeTab, currentTabItems, data?.stats.toolsUsed]);
 
+  // Coming back to the screen refreshes the first page only. Invalidating the
+  // whole list refetched every loaded page in sequence (the profile dashboard
+  // fixed the same pattern, audit C7); pull-to-refresh already trims this way.
+  const refreshFirstPage = useCallback(() => {
+    queryClient.setQueryData<InfiniteData<CreatorProfileResponse>>(queryKey, (current) => {
+      if (!current?.pages.length) return current;
+      return { pages: current.pages.slice(0, 1), pageParams: current.pageParams.slice(0, 1) };
+    });
+    void queryClient.invalidateQueries({ queryKey });
+  }, [queryClient, queryKey]);
+
   useEffect(() => {
     if (isFocused && !previousFocusRef.current) {
-      void queryClient.invalidateQueries({ queryKey });
+      refreshFirstPage();
     }
     previousFocusRef.current = isFocused;
-  }, [isFocused, queryClient, queryKey]);
+  }, [isFocused, refreshFirstPage]);
 
   useEffect(() => {
     setActiveVideoItemId(null);
@@ -152,7 +163,7 @@ export function CreatorProfileScreen({
       setFollowError('Could not update follow. Your previous state was restored.');
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey });
+      refreshFirstPage();
     },
   });
 

@@ -3,11 +3,6 @@ import type { CreatorProfileResponse, ShowcaseAssetSummary, ShowcaseFeedItem } f
 
 export type CreatorProfileTab = 'creations' | 'unlocks' | 'tools';
 
-export type CreatorProfileVideoPreviewLayout = {
-  height: number;
-  y: number;
-};
-
 export const CREATOR_PROFILE_TABS: Array<{ id: CreatorProfileTab; label: string }> = [
   { id: 'creations', label: 'Posts' },
   { id: 'unlocks', label: 'Recipes' },
@@ -64,57 +59,6 @@ export function creatorProfileSocialLinks(profile: CreatorProfileResponse['profi
     profile.tiktokHandle ? { label: 'TikTok', url: socialUrl('https://tiktok.com/@', profile.tiktokHandle) } : null,
     profile.twitterHandle ? { label: 'X', url: socialUrl('https://x.com/', profile.twitterHandle) } : null,
   ].filter((link): link is { label: string; url: string } => Boolean(link));
-}
-
-export function creatorProfileUnlockSummary(asset: ShowcaseAssetSummary | null) {
-  if (!asset) return null;
-
-  const labels = (asset.resourceKinds ?? []).reduce<string[]>((current, kind) => {
-    const label = creatorUnlockResourceLabel(kind);
-    if (label) current.push(label);
-    return current;
-  }, []);
-
-  if (asset.allowRemix && !labels.includes('Remix')) {
-    labels.push('Remix');
-  }
-
-  if (labels.length) return labels.join(' + ');
-
-  const previewText = asset.previewText.trim();
-  return previewText || null;
-}
-
-export function selectActiveCreatorProfileVideoId(
-  items: ShowcaseFeedItem[],
-  layouts: Record<string, CreatorProfileVideoPreviewLayout>,
-  gridTop: number | null,
-  scrollOffsetY: number,
-  viewportHeight: number
-) {
-  if (gridTop === null || viewportHeight <= 0) return null;
-
-  const viewportTop = Math.max(0, scrollOffsetY);
-  const viewportBottom = viewportTop + viewportHeight;
-  let selected: { id: string; top: number; visibleRatio: number } | null = null;
-
-  for (const item of items) {
-    if (!hasShowcaseVideoWithoutPreview(item)) continue;
-    const layout = layouts[item.id];
-    if (!layout || layout.height <= 0) continue;
-
-    const top = gridTop + layout.y;
-    const bottom = top + layout.height;
-    const visibleHeight = Math.max(0, Math.min(bottom, viewportBottom) - Math.max(top, viewportTop));
-    const visibleRatio = visibleHeight / layout.height;
-
-    if (!visibleRatio) continue;
-    if (!selected || visibleRatio > selected.visibleRatio || (visibleRatio === selected.visibleRatio && top < selected.top)) {
-      selected = { id: item.id, top, visibleRatio };
-    }
-  }
-
-  return selected?.id ?? null;
 }
 
 function withProtocol(value: string) {

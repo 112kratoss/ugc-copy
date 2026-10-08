@@ -5,11 +5,9 @@ import {
   creatorInitial,
   creatorProfileSocialLinks,
   creatorProfileTabItems,
-  creatorProfileUnlockSummary,
   flattenCreatorProfilePages,
   getNextCreatorProfileOffset,
   normalizeCreatorProfileTab,
-  selectActiveCreatorProfileVideoId,
 } from '../lib/creator-profile-view-model';
 import type { CreatorProfileResponse, ShowcaseFeedItem } from '../lib/types';
 
@@ -124,57 +122,5 @@ describe('creator profile view model', () => {
       { label: 'TikTok', url: 'https://tiktok.com/@luna.tok' },
       { label: 'X', url: 'https://x.com/luna' },
     ]);
-  });
-
-  it('describes what an unlock includes before falling back to preview copy', () => {
-    const resourceAsset = {
-      ...item('post-1', true).asset!,
-      resourceKinds: ['prompt', 'notes'],
-      allowRemix: true,
-    };
-
-    expect(creatorProfileUnlockSummary(resourceAsset)).toBe('Prompt + Notes + Remix');
-    expect(creatorProfileUnlockSummary({ ...resourceAsset, resourceKinds: [], allowRemix: false })).toBe('Reusable prompt.');
-  });
-
-  it('activates only the most visible video that lacks a poster frame', () => {
-    const posterVideo = {
-      ...item('poster-video'),
-      category: 'video' as const,
-      mediaKind: 'video' as const,
-      mediaUrl: 'https://example.com/poster-video.mp4',
-      mediaItems: [{
-        id: 'poster-video:media',
-        url: 'https://example.com/poster-video.mp4',
-        previewUrl: 'https://example.com/poster-video.jpg',
-        mediaKind: 'video' as const,
-        contentType: 'video/mp4',
-        originalName: null,
-        width: null,
-        height: null,
-        durationSeconds: null,
-        sortOrder: 0,
-      }],
-    };
-    const firstVideo = {
-      ...item('first-video'),
-      category: 'video' as const,
-      mediaKind: 'video' as const,
-      mediaUrl: 'https://example.com/first-video.mp4',
-    };
-    const secondVideo = {
-      ...item('second-video'),
-      category: 'video' as const,
-      mediaKind: 'video' as const,
-      mediaUrl: 'https://example.com/second-video.mp4',
-    };
-    const layouts = {
-      'poster-video': { y: 0, height: 140 },
-      'first-video': { y: 150, height: 140 },
-      'second-video': { y: 310, height: 140 },
-    };
-
-    expect(selectActiveCreatorProfileVideoId([posterVideo, firstVideo, secondVideo], layouts, 100, 0, 330)).toBe('first-video');
-    expect(selectActiveCreatorProfileVideoId([posterVideo, firstVideo, secondVideo], layouts, 100, 330, 330)).toBe('second-video');
   });
 });
