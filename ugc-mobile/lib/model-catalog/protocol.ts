@@ -256,3 +256,11 @@ export function parseModelCatalogPage(
   }
   return v;
 }
+
+/**
+ * The longest prompt the generation route accepts (`GENERATION_PROMPT_MAX_LENGTH`
+ * in src/lib/generation-services.ts). The web image composer allowed 20,000 and
+ * the app's inputs had no limit, so the server refused after the references
+ * had already uploaded.
+ */
+export const GENERATION_PROMPT_MAX_LENGTH = 10000;

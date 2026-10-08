@@ -418,12 +418,10 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     }, [maxVideoDuration, referenceVideo]);
 
     // Generation Recovery & Persistence
-    useEffect(() => {
-        return () => {
-            revokeObjectUrl(characterImage);
-            revokeObjectUrl(referenceVideo);
-        };
-    }, [characterImage, referenceVideo]);
+    // One effect per URL: a shared cleanup revoked the image's URL when the
+    // clip was added after it, and "Preview image" opened a broken image.
+    useEffect(() => () => revokeObjectUrl(characterImage), [characterImage]);
+    useEffect(() => () => revokeObjectUrl(referenceVideo), [referenceVideo]);
 
     useEffect(() => {
         const loadSavedFiles = async () => {
@@ -571,10 +569,10 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
 
     const handleGenerate = async () => {
         if (activeGenerationRequestKeyRef.current) return;
-        if (!characterImageFile && !characterImage) { alert('Please upload a character image'); return; }
-        if (!referenceVideoFile && !referenceVideo) { alert('Please upload a reference video'); return; }
+        // The button is disabled until both inputs and a duration exist.
+        if ((!characterImageFile && !characterImage) || (!referenceVideoFile && !referenceVideo)) return;
         const effectiveDuration = Math.ceil(duration);
-        if (effectiveDuration <= 0) { alert('Invalid video duration'); return; }
+        if (effectiveDuration <= 0) return;
         if (quotePending) { setError(quoteUi.message ?? 'Wait for the current generation cost before continuing.'); return; }
         if (insufficientCredits) { setError(`Insufficient credits. This costs ${estimatedCost} credits.`); return; }
 
@@ -686,10 +684,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                     setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
                     modelCatalog.refetch();
                 }
-                const errorMessage = data.details
-                    ? `${data.error}: ${data.details} (Code: ${data.code})`
-                    : (data.error || 'Failed to start generation');
-                throw new Error(errorMessage);
+                throw new Error(data.error || 'Failed to start generation');
             }
             setLatestGenerationId(data.generationId ?? null);
             setLatestIsPublic(false);
@@ -720,11 +715,14 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const quoteRequest = useMemo(() => modelCatalog.catalog && modelCatalog.detailsReady ? {
         kind: 'motion' as const,
         modelId: selectedModel,
-        settings: { resolution: mode, characterOrientation, duration, ...additionalSettings.settings },
+        // Whole seconds, as the submit sends: the duration control is an
+        // integer, and a 7.3 s clip made the quote a 422 with no reason shown.
+        settings: { resolution: mode, characterOrientation, duration: Math.ceil(duration), ...additionalSettings.settings },
         inputCounts: { images: characterImage ? 1 : 0, videos: referenceVideo ? 1 : 0, audios: 0 },
         catalogRevision: modelCatalog.catalog.revision,
     } : null, [characterImage, characterOrientation, duration, mode, modelCatalog.catalog, referenceVideo, selectedModel, modelCatalog.detailsReady, additionalSettings.settings]);
-    const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token);
+    const [quoteAttempt, setQuoteAttempt] = useState(0);
+    const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token, quoteAttempt);
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED' && quoteState.error?.code !== 'MODEL_UNAVAILABLE') return;
         // The quote response is the external signal that the local catalog is stale.
@@ -1231,6 +1229,8 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                         />
                                     ) : videoError ? (
                                         <p className="text-sm text-rose-300">{videoError}</p>
+                                    ) : quoteState.status === 'error' ? (
+                                        <p className="text-sm text-amber-300">{quoteUi.message}<button type="button" onClick={() => setQuoteAttempt((current) => current + 1)} className="ml-2 underline underline-offset-2 hover:text-amber-100">Retry quote</button></p>
                                     ) : error ? (
                                         <p className="text-sm text-rose-300">{error}</p>
                                     ) : (

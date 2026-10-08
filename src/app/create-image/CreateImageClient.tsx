@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { Sparkles, Loader2, Download, X, Image as ImageIcon, Zap, ChevronDown, Check, Share2, Expand } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
+import { GENERATION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
 import {
     GeneratorPageHeader,
     MediaStudioShell,
@@ -793,7 +794,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         inputCounts: { images: elements.length, videos: 0, audios: 0 },
         catalogRevision: modelCatalog.catalog.revision,
     } : null, [aspectRatio, elements.length, googleSearch, modelCatalog.catalog, qualityMode, resolution, selectedModel, modelCatalog.detailsReady, additionalSettings.settings]);
-    const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token);
+    const [quoteAttempt, setQuoteAttempt] = useState(0);
+    const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token, quoteAttempt);
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED' && quoteState.error?.code !== 'MODEL_UNAVAILABLE') return;
         // The quote response is the external signal that the local catalog is stale.
@@ -1387,11 +1389,11 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 onClick={syncPromptCaretState}
                                 onKeyUp={syncPromptCaretState}
                                 placeholder="Describe the image you want to create..."
-                                maxLength={20000}
+                                maxLength={GENERATION_PROMPT_MAX_LENGTH}
                                 className={`w-full bg-black/50 text-white rounded-2xl p-5 border border-white/10 ${accentStyles.ring} focus:ring-4 outline-none resize-y min-h-[150px] placeholder:text-zinc-600 transition-all text-sm leading-relaxed`}
                             />
                             <div className="mt-2 flex items-center justify-between gap-3 text-xs">
-                                <p className="text-zinc-600">{prompt.length}/20000 characters</p>
+                                <p className="text-zinc-600">{prompt.length}/{GENERATION_PROMPT_MAX_LENGTH} characters</p>
                                 {staleElementMentions.length > 0 ? (
                                     <p className="min-w-0 text-right text-rose-300">
                                         Unknown element mention{staleElementMentions.length > 1 ? 's' : ''}:{' '}
@@ -1757,6 +1759,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         />
                                     ) : referenceLimitMessage ? (
                                         <p className="text-sm text-red-400">{referenceLimitMessage}</p>
+                                    ) : quoteState.status === 'error' ? (
+                                        <p className="text-sm text-amber-300">{quoteUi.message}<button type="button" onClick={() => setQuoteAttempt((current) => current + 1)} className="ml-2 underline underline-offset-2 hover:text-amber-100">Retry quote</button></p>
                                     ) : error ? (
                                         <p className="text-sm text-red-400">{error}</p>
                                     ) : staleElementMentions.length > 0 ? (

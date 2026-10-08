@@ -116,14 +116,14 @@ import {
   type TextSelection,
 } from '@/lib/reference-mentions';
 import { formatCreditAmount } from '@/lib/pricing';
-import { withCreditCost } from '@/lib/generation-action-label';
+import { withCreditCost, formatCreditCost } from '@/lib/generation-action-label';
 import { generationWaitDetail, generationWaitPhase, generationWaitTitle } from '@/lib/generation-wait';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { accentColor, appTheme, mediaColors, type ToolAccent } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse, PromptEnhancementLevel, SeedanceAssetResponse } from '@/lib/types';
-import { SUBJECT_IMAGES_PER_NAME, subjectsPerRun, type ModelCatalogSummary } from '@/lib/model-catalog/protocol';
+import { SUBJECT_IMAGES_PER_NAME, subjectsPerRun, type ModelCatalogSummary, GENERATION_PROMPT_MAX_LENGTH } from '@/lib/model-catalog/protocol';
 import { createSeedanceAssetMetadata, isSeedance2VideoModelId, type SeedanceAssetKind, type SeedanceAssetMetadata } from '@/lib/model-catalog/seedance-assets';
 import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
 import { invalidateActiveGenerations } from '@/lib/active-generations';
@@ -2664,6 +2664,7 @@ function ImagePromptComposer({
         </View>
         <View testID="prompt-scroll-viewport" style={{ height: 190, overflow: 'hidden' }}>
           <TextInput
+            maxLength={GENERATION_PROMPT_MAX_LENGTH}
             ref={promptInputRef}
             accessibilityLabel="Generation prompt"
             value={draft.prompt}
@@ -3363,6 +3364,7 @@ function VideoCreatorComposer({
             <Text style={{ color: theme.colors.video, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Prompt</Text>
           </View>
           <TextInput
+            maxLength={GENERATION_PROMPT_MAX_LENGTH}
             ref={promptInputRef}
             testID="video-prompt-input"
             accessibilityLabel="Generation prompt"
@@ -3687,6 +3689,7 @@ function MotionCreatorComposer({
           <Text style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '800' }}>Optional</Text>
         </View>
         <TextInput
+          maxLength={GENERATION_PROMPT_MAX_LENGTH}
           testID="motion-prompt-input"
           accessibilityLabel="Optional motion prompt"
           value={draft.prompt}
@@ -4231,6 +4234,19 @@ function CreatorPersistentBar({
         <View testID="creator-contextual-blocker" accessibilityRole="alert" style={{ minHeight: 40, borderRadius: 14, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.amber, 0.28), backgroundColor: theme.colors.panelSoft, paddingHorizontal: 12, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: theme.colors.amber }} />
           <Text numberOfLines={2} style={{ flex: 1, color: theme.colors.textSecondary, fontSize: 11, fontWeight: '700', lineHeight: 15 }}>{blocker}</Text>
+          {blocker.startsWith('Insufficient credits') ? (
+            // The creator stack has no tab bar and no balance in its header, so
+            // this was a dead end; the web shows "Top Up Credits" here.
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Get credits"
+              hitSlop={8}
+              onPress={() => router.push('/(tabs)/pricing' as never)}
+              style={({ pressed }) => ({ minHeight: 32, paddingHorizontal: 10, borderRadius: 10, backgroundColor: theme.colors.primaryFill, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+            >
+              <Text style={{ color: theme.colors.onPrimary, fontSize: 11, fontWeight: '900' }}>Get credits</Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : null}
       <View style={{ minHeight: 72, borderRadius: 24, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.panel, padding: 8, flexDirection: 'row', alignItems: 'center', gap: 8, boxShadow: theme.shadow.floating.boxShadow }}>
@@ -4435,7 +4451,7 @@ function CreatorParameterSheet({
   // `takesTouchDown`, and what that costs a list on Android: a slow drag that begins on a label or in
   // a gap of this one scrolls nothing. Pixel 9a emulator, 2026-10-07; not what this change is for).
   const drag = useSheetDismissDrag({ onDismiss: onClose, visible });
-  const quoteLabel = quoteStatus === 'ready' ? `${cost ?? 0} credits` : quoteStatus === 'error' ? 'Unavailable' : 'Calculating…';
+  const quoteLabel = quoteStatus === 'ready' ? formatCreditCost(cost ?? 0) : quoteStatus === 'error' ? 'Unavailable' : 'Calculating…';
   const balanceLabel = typeof availableCredits === 'number'
     ? `${formatCreditAmount(availableCredits)} credits`
     : 'Unavailable';
@@ -4495,7 +4511,7 @@ function CreatorParameterSheet({
               <Text style={{ color: theme.colors.textSecondary, fontSize: 13, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{balanceLabel}</Text>
             </View>
             <PrimaryButton
-              label={quoteStatus === 'ready' ? `Generate · ${cost ?? 0} credits` : quoteStatus === 'error' ? retryLabel : quoteLabel}
+              label={quoteStatus === 'ready' ? withCreditCost('Generate', cost ?? 0) : quoteStatus === 'error' ? retryLabel : quoteLabel}
               onPress={quoteStatus === 'error' ? onRetryQuote : onGenerate}
               disabled={quoteStatus === 'error' ? false : generateDisabled}
             />
