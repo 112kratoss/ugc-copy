@@ -40,7 +40,7 @@ The tests allow network access only to isolated Supabase, use exact disposable
 IDs and verify zero users/posts/media after cleanup. The source objects are
 deliberately absent, so no encoder or provider is invoked. These checks verify
 claim/budget/release behavior, not rendition quality or genuine worker death.
-Forty-three existing preview/repair-capacity tests also pass.
+Forty-three existing preview/repair-capacity tests, app/test typechecking and scoped lint also pass. A bounded read-only production inventory found nine video media rows, all ready with attempt count one and no expired leases. No historical repair is indicated by that current inventory.
 
 JOB-02 remains failed until the prevention release is independently verified;
 the full media recovery and job matrices remain open. Private evidence is under
