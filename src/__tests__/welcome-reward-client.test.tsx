@@ -133,4 +133,35 @@ describe('WelcomeRewardClient', () => {
     expect(screen.queryByRole('button', { name: /claim/i })).toBeNull();
     expect(screen.getByText(/guest sessions cannot hold a welcome reward/i)).toBeTruthy();
   });
+
+  it('calls the grant "welcome credits", never the paid Creator pack', async () => {
+    // Mobile renamed it in #209 (App Review 2.1(b)): the free grant was named
+    // "Creator Pack" like the paid Creator credit pack, and a guest was told to
+    // "unlock" it by creating an account. The web page kept the old copy.
+    const cases: Array<[WelcomeBody, string]> = [
+      [welcomeBody(), 'Claim your welcome credits'],
+      [welcomeBody({ status: 'claimed', credits: 25, promotionalCredits: 25, claimedAt: '2026-08-25T00:00:00.000Z' }), 'Your welcome credits are ready'],
+      [welcomeBody({ status: 'legacy_ineligible', credits: 25 }), 'Your welcome credits are ready'],
+      [welcomeBody({ status: 'requires_account', identityComplete: false }), 'Claim your welcome credits'],
+      [welcomeBody({ status: 'identity_already_claimed' }), 'Welcome credits already claimed'],
+    ];
+    for (const [body, heading] of cases) {
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body), { status: 200 })));
+      const { unmount } = render(<WelcomeRewardClient nextPath="/create" />);
+      expect(await screen.findByRole('heading', { level: 1, name: heading })).toBeTruthy();
+      expect(screen.queryByText(/creator pack/i)).toBeNull();
+      expect(screen.queryByText(/unlock/i)).toBeNull();
+      unmount();
+    }
+  });
+
+  it('names the welcome credits when they cannot be loaded', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: '' }), { status: 503 })));
+
+    render(<WelcomeRewardClient nextPath="/create" />);
+
+    expect((await screen.findByRole('alert')).textContent).toBe('Could not load your welcome credits.');
+    expect(screen.getByRole('heading', { level: 1, name: 'Your welcome credits' })).toBeTruthy();
+    expect(screen.queryByText(/creator pack/i)).toBeNull();
+  });
 });
