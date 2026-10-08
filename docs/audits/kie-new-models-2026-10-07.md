@@ -28,7 +28,7 @@ a browser User-Agent (`scripts/ops/kie-evidence.mjs price <slug>`), and the Open
 
 ## The five video models from the 2026-09-11 scan — shipped by release `kie-video-models-20261008`
 
-Prices re-read on 2026-10-08, unchanged since 2026-09-11:
+Code merged as `b4ceb088` (#408) and the release published on 2026-10-08 at 08:01 IST: `/api/model-catalog/v1/current` reports 20 video models on web and 19 on mobile (PixVerse web-only). Prices re-read on 2026-10-08, unchanged since 2026-09-11:
 
 | Model | App id | Provider ids | Credits | Evidence |
 | --- | --- | --- | --- | --- |
