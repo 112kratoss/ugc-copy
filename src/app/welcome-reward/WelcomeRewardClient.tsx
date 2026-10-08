@@ -35,7 +35,7 @@ async function authorizedRequest(path: string, init?: RequestInit) {
     },
   });
   const body = await response.json();
-  if (!response.ok) throw new Error(body.error || 'Could not load your Creator Pack.');
+  if (!response.ok) throw new Error(body.error || 'Could not load your welcome credits.');
   return body as WelcomeCreditResponse;
 }
 
@@ -84,7 +84,7 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
     try {
       setWelcome(await authorizedRequest('/api/credits/welcome'));
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Could not load your Creator Pack.');
+      setError(nextError instanceof Error ? nextError.message : 'Could not load your welcome credits.');
     } finally {
       setLoading(false);
     }
@@ -97,7 +97,7 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
         if (active) setWelcome(result);
       })
       .catch((nextError) => {
-        if (active) setError(nextError instanceof Error ? nextError.message : 'Could not load your Creator Pack.');
+        if (active) setError(nextError instanceof Error ? nextError.message : 'Could not load your welcome credits.');
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -134,6 +134,16 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
   // no headline number — both would announce credits that do not exist.
   const identityAlreadyClaimed = welcome?.status === 'identity_already_claimed';
   const displayedCredits = animatedCredits ?? welcome?.amount ?? 25;
+  // "Welcome credits", as the server and the mobile app call them (mobile #209,
+  // App Review 2.1(b)). This page called the free grant the "Creator Pack", the
+  // name of the paid Creator credit pack, and told guests to "unlock" it.
+  const heading = identityAlreadyClaimed
+    ? 'Welcome credits already claimed'
+    : welcome == null
+      ? 'Your welcome credits'
+      : claimed || legacy
+        ? 'Your welcome credits are ready'
+        : 'Claim your welcome credits';
 
   return (
     <main className="ui-page ui-page-ambient min-h-screen py-10 sm:py-16">
@@ -142,15 +152,15 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
           <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-[var(--ui-primary-soft)] text-[var(--ui-primary)]">
             <Sparkles className="h-9 w-9" aria-hidden />
           </div>
-          <div className="mt-6 text-xs font-black uppercase tracking-[0.2em] text-[var(--ui-primary)]">Creator Pack</div>
-          <h1 className="mt-3 text-3xl font-extrabold tracking-tight text-[var(--ui-text-primary)] sm:text-4xl">{identityAlreadyClaimed ? 'Creator Pack already claimed' : 'Your Creator Pack is ready'}</h1>
+          <div className="mt-6 text-xs font-black uppercase tracking-[0.2em] text-[var(--ui-primary)]">Welcome credits</div>
+          <h1 className="mt-3 text-3xl font-extrabold tracking-tight text-[var(--ui-text-primary)] sm:text-4xl">{heading}</h1>
           <p className="mx-auto mt-3 max-w-lg text-sm leading-7 text-[var(--ui-text-secondary)]">
             {identityAlreadyClaimed
-              ? 'This sign-in already received the one-time Creator Pack on a previous account, so it cannot be claimed again.'
+              ? 'This sign-in already received the one-time welcome credits on a previous account, so they cannot be claimed again.'
               : legacy
               ? 'Your existing welcome credits are already active.'
               : requiresAccount
-                ? 'Create an account to unlock your Creator Pack. Guest sessions cannot hold a welcome reward.'
+                ? 'Create an account to claim your welcome credits. Guest sessions cannot hold a welcome reward.'
                 : claimed
                   ? 'Your creation credits are ready for your first project.'
                   : 'Claim creation-only credits for images, video, and motion.'}

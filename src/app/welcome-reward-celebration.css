@@ -1,5 +1,5 @@
 /*
- * Creator Pack claim celebration (/welcome-reward).
+ * Welcome credits claim celebration (/welcome-reward).
  *
  * Named classes in their own file rather than inline utilities: the keyframes
  * have to travel with the route whose CSS gets inlined, and `globals.css` is
