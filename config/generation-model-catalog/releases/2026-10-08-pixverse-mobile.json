@@ -1,0 +1,452 @@
+{
+  "manifestVersion": 1,
+  "mode": "clone-active",
+  "release": {
+    "schemaVersion": 2,
+    "revision": "pixverse-mobile-20261008",
+    "basedOnRevision": "kie-video-models-20261008",
+    "changeNote": "Offer PixVerse V6 on mobile: the apps name PixVerse in their AI-data question from consent version 2 on (Android OTA; iOS once build 59 ships), so its availability turns on for mobile.",
+    "createdBy": "catalog-operations"
+  },
+  "upgrade": {
+    "legacyDescriptorsToV2": true
+  },
+  "expectedModelIds": [
+    "flux-2-pro",
+    "gemini-omni-1.1-flash",
+    "gemini-omni-video",
+    "gpt-image-2",
+    "gpt-image-2.5-flare",
+    "gpt-image-2.5-sunburst",
+    "grok-imagine-image",
+    "grok-imagine-image-2",
+    "grok-imagine-video",
+    "grok-imagine-video-1.5",
+    "hailuo-2.3",
+    "happyhorse-1.1",
+    "ideogram-character",
+    "ideogram-v3",
+    "imagen-4",
+    "imagen-4-fast",
+    "imagen-4-ultra",
+    "kling-2.6",
+    "kling-3.0",
+    "kling-3.0-turbo",
+    "kling-3.0-video",
+    "kling-o3",
+    "minimax-h3",
+    "nano-banana-2",
+    "nano-banana-2-lite",
+    "nano-banana-pro",
+    "pixverse-v6",
+    "qwen-image-2.1",
+    "qwen3",
+    "qwen3-pro",
+    "seedance-1.5-pro",
+    "seedance-2",
+    "seedance-2-5",
+    "seedance-2-fast",
+    "seedance-2-mini",
+    "seedream-5-flash",
+    "seedream-5-lite",
+    "seedream-5-pro",
+    "veo-3.1",
+    "wan-2.7",
+    "wan-2.7-image",
+    "wan-2.7-image-pro",
+    "wan-3.0",
+    "wan-3.0-prime",
+    "z-image"
+  ],
+  "defaults": {
+    "web": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    },
+    "mobile": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    }
+  },
+  "entries": [
+    {
+      "modelId": "pixverse-v6",
+      "kind": "video",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "pixverse-v6",
+        "kind": "video",
+        "displayName": "PixVerse V6",
+        "description": "PixVerse video from text, a start frame, a frame pair, or named references, with optional audio",
+        "badge": "New",
+        "recommended": false,
+        "sortOrder": 190,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "16:9",
+            "options": [
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              },
+              {
+                "value": "3:2",
+                "label": "3:2"
+              },
+              {
+                "value": "2:3",
+                "label": "2:3"
+              },
+              {
+                "value": "21:9",
+                "label": "21:9"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "360p",
+            "options": [
+              {
+                "value": "360p",
+                "label": "360p"
+              },
+              {
+                "value": "540p",
+                "label": "540p"
+              },
+              {
+                "value": "720p",
+                "label": "720p"
+              },
+              {
+                "value": "1080p",
+                "label": "1080p"
+              }
+            ]
+          },
+          {
+            "key": "duration",
+            "label": "Duration",
+            "type": "integer",
+            "presentation": "stepper",
+            "defaultValue": 5,
+            "min": 1,
+            "max": 15,
+            "step": 1,
+            "unit": "seconds"
+          },
+          {
+            "key": "sound",
+            "label": "Sound",
+            "type": "boolean",
+            "presentation": "toggle",
+            "defaultValue": false
+          },
+          {
+            "key": "referenceMode",
+            "label": "Input mode",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "frames",
+            "options": [
+              {
+                "value": "frames",
+                "label": "Frames"
+              },
+              {
+                "value": "elements",
+                "label": "References"
+              }
+            ],
+            "minClientSchemaVersion": 2
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": true,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 7,
+            "supportsNaming": true
+          },
+          "videoReferences": null,
+          "audioReferences": null,
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": true,
+          "endFrame": true,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "frames",
+            "label": "Frames",
+            "default": true,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ],
+            "slots": [
+              {
+                "key": "startFrame",
+                "kind": "image",
+                "role": "startFrame",
+                "label": "Start frame",
+                "min": 0,
+                "max": 1
+              },
+              {
+                "key": "endFrame",
+                "kind": "image",
+                "role": "endFrame",
+                "label": "End frame",
+                "min": 0,
+                "max": 1
+              }
+            ]
+          },
+          {
+            "key": "references",
+            "label": "Reusable references",
+            "default": false,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 7,
+                "supportsNaming": true
+              }
+            ]
+          }
+        ],
+        "inputConstraints": []
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "video-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "pixverse-v6/text-to-video",
+        "text": "pixverse-v6/text-to-video",
+        "image": "pixverse-v6/image-to-video",
+        "transition": "pixverse-v6/transition",
+        "reference": "pixverse-v6/reference-to-video"
+      },
+      "pricingStrategy": "conditional",
+      "pricingConfig": {
+        "branches": [
+          {
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              },
+              {
+                "source": "inputCount",
+                "key": "images",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "pricing": {
+              "strategy": "per-second",
+              "config": {
+                "durationSettingKey": "duration",
+                "rate": {
+                  "strategy": "lookup",
+                  "config": {
+                    "dimensions": [
+                      {
+                        "source": "setting",
+                        "key": "resolution",
+                        "defaultValue": "360p"
+                      },
+                      {
+                        "source": "setting",
+                        "key": "sound",
+                        "defaultValue": false
+                      }
+                    ],
+                    "table": {
+                      "360p": {
+                        "false": 4.5,
+                        "true": 6.3
+                      },
+                      "540p": {
+                        "false": 6.3,
+                        "true": 8.1
+                      },
+                      "720p": {
+                        "false": 8.1,
+                        "true": 10.8
+                      },
+                      "1080p": {
+                        "false": 16.2,
+                        "true": 20.7
+                      }
+                    }
+                  }
+                },
+                "rounding": "ceil"
+              }
+            }
+          }
+        ],
+        "fallback": {
+          "strategy": "per-second",
+          "config": {
+            "durationSettingKey": "duration",
+            "rate": {
+              "strategy": "lookup",
+              "config": {
+                "dimensions": [
+                  {
+                    "source": "setting",
+                    "key": "resolution",
+                    "defaultValue": "360p"
+                  },
+                  {
+                    "source": "setting",
+                    "key": "sound",
+                    "defaultValue": false
+                  }
+                ],
+                "table": {
+                  "360p": {
+                    "false": 4,
+                    "true": 5.6
+                  },
+                  "540p": {
+                    "false": 5.6,
+                    "true": 7.2
+                  },
+                  "720p": {
+                    "false": 7.2,
+                    "true": 9.6
+                  },
+                  "1080p": {
+                    "false": 14.4,
+                    "true": 18.4
+                  }
+                }
+              }
+            },
+            "rounding": "ceil"
+          }
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "passthroughSettingKeys": [
+          "referenceMode"
+        ],
+        "normalizedDefaults": {
+          "mode": "",
+          "resolution": "",
+          "sound": false,
+          "fixedLens": false,
+          "referenceMode": "frames"
+        },
+        "rules": [
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 2,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 7,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ]
+          },
+          {
+            "type": "min-slot-count",
+            "slotKey": "startFrame",
+            "min": 1,
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "endFrame",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "field": "startFrame",
+            "message": "Add a start frame to use an end frame with this model."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    }
+  ]
+}
