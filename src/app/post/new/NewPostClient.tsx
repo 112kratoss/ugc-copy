@@ -214,6 +214,8 @@ interface GenerationDraft {
   category: PostMediaCategory;
   model: string;
   paywallPrefill: GenerationPaywallPrefill | null;
+  /** A template result shares its media only; its private recipe stays protected. */
+  origin: 'template' | 'direct' | null;
   /**
    * Edit mode seeds a draft from the server-rendered post before the
    * generations fetch resolves. The paywall prefill must only conclude
@@ -597,6 +599,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const [didFocusPriceInput, setDidFocusPriceInput] = useState(false);
   const [error, setError] = useState<ComposerError | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [didPublish, setDidPublish] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<MediaUploadProgress | null>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
   const [createdPost, setCreatedPost] = useState<CreatedPostState | null>(null);
@@ -611,6 +614,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           category: initialCategory,
           model: 'magicbooklet',
           paywallPrefill: null,
+          origin: null,
           source: 'seed',
         }
       : null
@@ -626,13 +630,29 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const resourceSectionRef = useRef<HTMLDivElement | null>(null);
   const publishSectionRef = useRef<HTMLDivElement | null>(null);
 
-  const mediaPreviewItems = useMemo(
-    () => mediaItems.map((item) => ({
-      ...item,
-      previewUrl: item.file ? URL.createObjectURL(item.file) : item.existingUrl,
-    })),
-    [mediaItems]
-  );
+  // One object URL per picked file, kept until the file leaves the list. The
+  // URLs were rebuilt for every file on every change (a reorder, an upload
+  // finishing), so each thumbnail re-decoded and the cover video restarted.
+  const objectUrlsRef = useRef(new Map<string, string>());
+  const mediaPreviewItems = useMemo(() => {
+    const urls = objectUrlsRef.current;
+    const liveIds = new Set(mediaItems.map((item) => item.id));
+    for (const [id, url] of urls) {
+      if (!liveIds.has(id)) {
+        URL.revokeObjectURL(url);
+        urls.delete(id);
+      }
+    }
+    return mediaItems.map((item) => {
+      if (!item.file) return { ...item, previewUrl: item.existingUrl };
+      let url = urls.get(item.id);
+      if (!url) {
+        url = URL.createObjectURL(item.file);
+        urls.set(item.id, url);
+      }
+      return { ...item, previewUrl: url };
+    });
+  }, [mediaItems]);
   const coverPreviewItem = mediaPreviewItems[0] ?? null;
 
   // Reordering swaps DOM nodes, which the browser paints instantly — the cards
@@ -696,6 +716,22 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     mediaCardLeftsRef.current = nextLefts;
   }, [mediaPreviewItems]);
   const hasGeneratedProof = Boolean(prefilledGeneration);
+  const [generationLoadAttempt, setGenerationLoadAttempt] = useState(0);
+  // Typed title or caption, or picked files, not yet published: a reload or a
+  // closed tab dropped them silently. (The app autosaves a draft instead.)
+  const hasUnsavedWork = !didPublish && !isSubmitting && (
+    (!isEditMode && (title.trim().length > 0 || description.trim().length > 0))
+    || mediaItems.some((item) => Boolean(item.file))
+  );
+  useEffect(() => {
+    if (!hasUnsavedWork) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [hasUnsavedWork]);
   const trimmedBody = body.trim();
   const bodyCount = body.length;
   const titleCount = title.trim().length;
@@ -814,12 +850,12 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const stepBadgeLabel = hasGeneratedProof ? 'Generated media attached' : proofMode === 'text' ? 'Text post' : 'Media post';
 
   useEffect(() => () => {
-    for (const item of mediaPreviewItems) {
-      if (item.file && item.previewUrl) {
-        URL.revokeObjectURL(item.previewUrl);
-      }
+    const urls = objectUrlsRef.current;
+    for (const url of urls.values()) {
+      URL.revokeObjectURL(url);
     }
-  }, [mediaPreviewItems]);
+    urls.clear();
+  }, []);
 
   useEffect(() => {
     // A different generation or entry intent starts a fresh paywall-prefill session.
@@ -955,6 +991,15 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           return;
         }
 
+        // The publish RPC upserts the post linked to this creation, so a
+        // second "new post" from it silently overwrote the first (title,
+        // caption, visibility) and dropped its recipe. The app redirects too.
+        const linkedPostId = typeof generation.linked_post_id === 'string' ? generation.linked_post_id : null;
+        if (!isEditMode && linkedPostId) {
+          router.replace(`/post/${encodeURIComponent(linkedPostId)}/edit`);
+          return;
+        }
+
         const nextGeneration: GenerationDraft = {
           id: generation.id,
           title: typeof generation.title === 'string' ? generation.title : '',
@@ -966,6 +1011,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           paywallPrefill: isGenerationPaywallPrefill(generation.paywallPrefill)
             ? generation.paywallPrefill
             : null,
+          origin: generation.origin === 'template' ? 'template' : generation.origin === 'direct' ? 'direct' : null,
           source: 'fetched',
         };
 
@@ -997,7 +1043,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     return () => {
       cancelled = true;
     };
-  }, [generationId, session?.access_token]);
+  }, [generationId, generationLoadAttempt, isEditMode, router, session?.access_token]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1841,6 +1887,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
   const completePublish = (nextPost: CreatedPostState, options: { redirect?: boolean } = {}) => {
     setCreatedPost(nextPost);
+    setDidPublish(true);
     trackProductEvent(isEditMode ? 'post_update_success' : 'post_publish_success', {
       visibility: nextPost.visibility,
       recipe_access: nextPost.resourceAccessMode,
@@ -2577,7 +2624,25 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
                 {proofMode === 'media' ? (
                   <div className="mt-5">
-                    {hasGeneratedProof ? (
+                    {!hasGeneratedProof && generationId && isLoadingGeneration ? (
+                      // The creation is still loading: no drop zone, which read
+                      // as "upload something" and whose files the publish ignored.
+                      <div className="flex min-h-[240px] items-center justify-center rounded-[28px] border border-white/10 bg-white/[0.02]" aria-busy="true" aria-label="Loading your creation">
+                        <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
+                      </div>
+                    ) : !hasGeneratedProof && generationId && generationError ? (
+                      <div role="alert" className="rounded-[28px] border border-rose-500/20 bg-rose-500/5 p-5">
+                        <div className="text-sm font-semibold text-rose-100">Could not load this creation</div>
+                        <p className="mt-1.5 text-sm leading-6 text-rose-100/80">{generationError}</p>
+                        <button
+                          type="button"
+                          onClick={() => setGenerationLoadAttempt((current) => current + 1)}
+                          className="mt-4 inline-flex min-h-11 items-center rounded-full border border-rose-300/30 px-4 text-xs font-bold text-rose-50 transition hover:bg-rose-500/10"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    ) : hasGeneratedProof ? (
                       <div className="rounded-[28px] border border-white/10 bg-white/[0.02] p-5">
                         <div className="flex flex-wrap items-start justify-between gap-4">
                           <div>
@@ -3005,6 +3070,13 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
                 {renderSectionError('resources')}
 
+                {prefilledGeneration?.origin === 'template' ? (
+                  // The server refuses a recipe on a template result at publish
+                  // time; say so here, as the app does, instead of after the form.
+                  <div className="mt-4 rounded-[24px] border border-white/8 bg-black/25 px-4 py-3 text-sm text-zinc-200">
+                    This template result shares final media only. Its private recipe remains protected.
+                  </div>
+                ) : (
                 <label className="mt-4 flex items-center gap-3 cursor-pointer select-none">
                   <input
                     type="checkbox"
@@ -3018,6 +3090,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                   />
                   <span className="text-sm font-semibold text-white">Add a reusable recipe</span>
                 </label>
+                )}
 
                 {isResourceEditingLocked ? (
                   <div className="mt-5 space-y-5">

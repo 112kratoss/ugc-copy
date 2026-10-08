@@ -498,7 +498,7 @@ function ResourceCardEditorDialogContent({
 
               <label className="block">
                 <div className="mb-2 flex items-center justify-between gap-3">
-                  <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Short preview</span>
+                  <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Unlocked description</span>
                   <span aria-hidden="true" className="text-xs text-zinc-500">
                     {card!.preview.length}/{CARD_PREVIEW_MAX_LENGTH}
                   </span>
@@ -507,8 +507,8 @@ function ResourceCardEditorDialogContent({
                   value={card!.preview}
                   onChange={(event) => onChange({ preview: event.target.value.slice(0, CARD_PREVIEW_MAX_LENGTH) })}
                   maxLength={CARD_PREVIEW_MAX_LENGTH}
-                  aria-label="Short preview, optional"
-                  placeholder="What this covers"
+                  aria-label="Unlocked description, optional"
+                  placeholder="Optional note shown after unlock"
                   className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35"
                 />
               </label>
