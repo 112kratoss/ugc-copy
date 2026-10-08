@@ -36,7 +36,7 @@ import { acquireActivityLock } from '@/lib/app-activity';
 import { showConfirmDialog } from '@/lib/dialog';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
-import { countDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaUrl } from '@/lib/remix-draft-recovery';
+import { countDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaSeedanceAsset, replaceDraftMediaUrl } from '@/lib/remix-draft-recovery';
 import { recordCreatorSession } from '@/lib/creator-session-diagnostics';
 import { CREATION_DRAFT_FORMAT, clearPersistedCreationDrafts, loadOrdinaryCreationDrafts, loadPersistedCreationDrafts, ordinaryDraftScope, persistCreationDrafts, remixDraftScope } from '@/lib/creation-draft-resume';
 import {
@@ -122,8 +122,9 @@ import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { accentColor, appTheme, mediaColors, type ToolAccent } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
-import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse, PromptEnhancementLevel } from '@/lib/types';
+import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse, PromptEnhancementLevel, SeedanceAssetResponse } from '@/lib/types';
 import { SUBJECT_IMAGES_PER_NAME, subjectsPerRun, type ModelCatalogSummary } from '@/lib/model-catalog/protocol';
+import { createSeedanceAssetMetadata, isSeedance2VideoModelId, type SeedanceAssetKind, type SeedanceAssetMetadata } from '@/lib/model-catalog/seedance-assets';
 import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
 import { invalidateActiveGenerations } from '@/lib/active-generations';
 import { verticalHitSlop } from '@/lib/hit-target';
@@ -420,6 +421,56 @@ function mediaAccessibleName(media: MediaDraft) {
   return media.displayName.trim() || media.fileName.trim() || 'unnamed reference';
 }
 
+/**
+ * A Seedance 2 reference prepared with the provider: Kie registers the file once
+ * and answers with an asset id, which a run sends in place of the link, so the
+ * file is not fetched and processed again on every run and a file the provider
+ * rejects is known before a run is paid for (as on the web creator). Reading it
+ * back is polled a bounded number of times after a prepare; a press asks again.
+ */
+const SEEDANCE_ASSET_CHECK_MS = 4_000;
+const SEEDANCE_ASSET_CHECK_LIMIT = 15;
+
+function seedanceAssetKindOf(media: MediaDraft): SeedanceAssetKind {
+  return media.kind === 'video' ? 'Video' : media.kind === 'audio' ? 'Audio' : 'Image';
+}
+
+function seedanceAssetFromResponse(response: SeedanceAssetResponse, assetType: SeedanceAssetKind, sourceUrl: string): SeedanceAssetMetadata {
+  return createSeedanceAssetMetadata({
+    assetId: response.assetId,
+    assetType,
+    status: response.status,
+    sourceUrl: response.sourceUrl ?? sourceUrl,
+    error: response.error,
+    lastCheckedAt: response.lastCheckedAt,
+  });
+}
+
+/** What the Reference details sheet says about a reference's Seedance asset. */
+function seedanceAssetStatusLine(asset: SeedanceAssetMetadata | null): string {
+  if (!asset || asset.status === 'idle') return 'Not prepared. Prepared once, the file is reused by every run instead of being sent to Seedance again.';
+  if (asset.status === 'processing') return 'Seedance is processing the file. Runs send the link until it is ready.';
+  if (asset.status === 'active') return 'Ready. Runs send the prepared asset in place of the file.';
+  return asset.error ? `Failed: ${asset.error}` : 'Failed. Try again, or replace the media.';
+}
+
+function seedanceAssetActionLabel(asset: SeedanceAssetMetadata | null, busy: boolean): string {
+  if (busy) return asset?.status === 'processing' ? 'Checking…' : 'Preparing…';
+  if (!asset || asset.status === 'idle') return 'Prepare for Seedance';
+  if (asset.status === 'processing') return 'Check status';
+  if (asset.status === 'active') return 'Prepare again';
+  return 'Try again';
+}
+
+/** The word under an audio tile, which has no details sheet. */
+function seedanceAssetTileLabel(asset: SeedanceAssetMetadata | null, busy: boolean): string {
+  if (busy) return '…';
+  if (!asset || asset.status === 'idle') return 'Prepare';
+  if (asset.status === 'processing') return 'Processing';
+  if (asset.status === 'active') return 'Ready';
+  return 'Retry';
+}
+
 function renameMediaInList(items: MediaDraft[], id: string, displayName: string) {
   return items.map((media) => (media.id === id ? renameMediaDraft(media, displayName) : media));
 }
@@ -517,6 +568,12 @@ function IdentityCreationScreen({
   }));
   const [isUploading, setIsUploading] = useState(false);
   const [replacingReferenceId, setReplacingReferenceId] = useState<string | null>(null);
+  const [preparingAssetId, setPreparingAssetId] = useState<string | null>(null);
+  const seedanceAssetTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  useEffect(() => () => {
+    seedanceAssetTimers.current.forEach((timer) => clearTimeout(timer));
+    seedanceAssetTimers.current.clear();
+  }, []);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [enhanceLevel, setEnhanceLevel] = useState<'cinematic' | 'faithful'>('cinematic');
@@ -1145,6 +1202,67 @@ function IdentityCreationScreen({
   // Replaces one image reference's media in place, keeping its name and
   // @handle so prompt mentions stay valid — the alternative was remove,
   // re-pick, re-name, and re-mention.
+  const storeSeedanceAsset = (mediaId: string, asset: SeedanceAssetMetadata) => {
+    setVideoDraft((draft) => replaceDraftMediaSeedanceAsset(draft, mediaId, asset));
+  };
+  const scheduleSeedanceAssetCheck = (mediaId: string, assetId: string, assetType: SeedanceAssetKind, sourceUrl: string, attempt: number) => {
+    const timers = seedanceAssetTimers.current;
+    const pending = timers.get(mediaId);
+    if (pending) clearTimeout(pending);
+    if (attempt >= SEEDANCE_ASSET_CHECK_LIMIT) return;
+    timers.set(mediaId, setTimeout(() => {
+      timers.delete(mediaId);
+      void checkSeedanceAsset(mediaId, assetId, assetType, sourceUrl, attempt + 1);
+    }, SEEDANCE_ASSET_CHECK_MS));
+  };
+  const checkSeedanceAsset = async (mediaId: string, assetId: string, assetType: SeedanceAssetKind, sourceUrl: string, attempt = 0) => {
+    try {
+      const asset = seedanceAssetFromResponse(await api.getSeedanceAsset(assetId), assetType, sourceUrl);
+      storeSeedanceAsset(mediaId, asset);
+      if (asset.status === 'processing') scheduleSeedanceAssetCheck(mediaId, assetId, assetType, sourceUrl, attempt);
+    } catch (error) {
+      // A read that fails leaves the asset as it was; the sheet's button asks again.
+      setReferenceNotice(error instanceof Error ? error.message : 'Could not check the Seedance asset.');
+    }
+  };
+  const videoReferenceById = (mediaId: string) => [...videoDraft.references, ...videoDraft.referenceVideos, ...videoDraft.referenceAudios]
+    .find((media) => media.id === mediaId) ?? null;
+  const prepareSeedanceAsset = async (mediaId: string) => {
+    const media = videoReferenceById(mediaId);
+    if (!media) return;
+    const assetType = seedanceAssetKindOf(media);
+    setPreparingAssetId(mediaId);
+    try {
+      // The storage path when the file is the creator's own upload or creation; the
+      // server resolves it and refuses media that is not theirs, as it does on the web.
+      const asset = seedanceAssetFromResponse(await api.createSeedanceAsset({ url: media.storagePath ?? media.url, assetType }), assetType, media.url);
+      storeSeedanceAsset(mediaId, asset);
+      if (asset.status === 'processing' && asset.assetId) scheduleSeedanceAssetCheck(mediaId, asset.assetId, assetType, media.url, 0);
+    } catch (error) {
+      storeSeedanceAsset(mediaId, createSeedanceAssetMetadata({
+        ...media.seedanceAsset,
+        assetType,
+        status: 'failed',
+        sourceUrl: media.url,
+        error: error instanceof Error ? error.message : 'Seedance asset request failed',
+        lastCheckedAt: new Date().toISOString(),
+      }));
+    } finally {
+      setPreparingAssetId(null);
+    }
+  };
+  const refreshSeedanceAsset = async (mediaId: string) => {
+    const media = videoReferenceById(mediaId);
+    const assetId = media?.seedanceAsset?.assetId;
+    if (!media || !assetId) return;
+    setPreparingAssetId(mediaId);
+    try {
+      await checkSeedanceAsset(mediaId, assetId, seedanceAssetKindOf(media), media.url, SEEDANCE_ASSET_CHECK_LIMIT);
+    } finally {
+      setPreparingAssetId(null);
+    }
+  };
+
   const replaceImageReference = async (tool: 'image' | 'video', id: string) => {
     setMessage(null);
     setPromptMessage(null);
@@ -1811,6 +1929,9 @@ function IdentityCreationScreen({
                 void replaceImageReference('video', id);
               }}
               replacingReferenceId={replacingReferenceId}
+              preparingAssetId={preparingAssetId}
+              onPrepareSeedanceAsset={(id) => void prepareSeedanceAsset(id)}
+              onRefreshSeedanceAsset={(id) => void refreshSeedanceAsset(id)}
               onReferenceNotice={setReferenceNotice}
               onFocus={() => setIsPromptFocused(true)}
               onBlur={() => setIsPromptFocused(false)}
@@ -2906,6 +3027,9 @@ function VideoCreatorComposer({
   onAddSubject,
   onReplaceReference,
   replacingReferenceId,
+  preparingAssetId,
+  onPrepareSeedanceAsset,
+  onRefreshSeedanceAsset,
   onReferenceNotice,
   onFocus,
   onBlur,
@@ -2932,6 +3056,10 @@ function VideoCreatorComposer({
   onAddSubject: () => void;
   onReplaceReference: (id: string) => void;
   replacingReferenceId: string | null;
+  /** The reference whose Seedance asset is being prepared or checked. */
+  preparingAssetId: string | null;
+  onPrepareSeedanceAsset: (id: string) => void;
+  onRefreshSeedanceAsset: (id: string) => void;
   onReferenceNotice: (message: string | null) => void;
   onFocus: () => void;
   onBlur: () => void;
@@ -3054,6 +3182,13 @@ function VideoCreatorComposer({
       draft.startFrame,
       draft.endFrame,
     ].find((media): media is MediaDraft => Boolean(media && media.id === referenceId)) ?? null;
+  // Only the Seedance 2 family takes a prepared asset, and only for a reusable
+  // reference: frames and subjects travel as links.
+  const preparesSeedanceAssets = supportsReusable && model !== null && isSeedance2VideoModelId(model.id);
+  const selectedPreparableReference = preparesSeedanceAssets && selectedReference && !selectedSubject
+    && [...draft.references, ...draft.referenceVideos].some((media) => media.id === selectedReference.id)
+    ? selectedReference
+    : null;
   const detectedMention = useMemo(
     () => !draft.isMultiShot && promptFocused ? findActiveReferenceMention(draft.prompt, promptSelection) : null,
     [draft.isMultiShot, draft.prompt, promptFocused, promptSelection],
@@ -3360,12 +3495,32 @@ function VideoCreatorComposer({
                   <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${mediaAccessibleName(media)}`} onPress={() => onChange({ ...draft, referenceAudios: draft.referenceAudios.filter((item) => item.id !== media.id) })} style={({ pressed }) => ({ minHeight: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
                     <Text style={{ color: theme.colors.danger, fontSize: 11, fontWeight: '800' }}>Remove</Text>
                   </Pressable>
+                  {preparesSeedanceAssets ? (
+                    /* An audio tile opens no details sheet, so its Seedance asset is prepared from the tile. */
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`${seedanceAssetActionLabel(media.seedanceAsset ?? null, preparingAssetId === media.id)} for ${mediaAccessibleName(media)}`}
+                      accessibilityState={{ disabled: preparingAssetId === media.id }}
+                      disabled={preparingAssetId === media.id}
+                      onPress={() => (media.seedanceAsset?.status === 'processing' ? onRefreshSeedanceAsset(media.id) : onPrepareSeedanceAsset(media.id))}
+                      style={({ pressed }) => ({ minHeight: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+                    >
+                      <Text numberOfLines={1} style={{ color: media.seedanceAsset?.status === 'failed' ? theme.colors.danger : media.seedanceAsset?.status === 'active' ? theme.colors.image : theme.colors.textSecondary, fontSize: 11, fontWeight: '800' }}>
+                        {seedanceAssetTileLabel(media.seedanceAsset ?? null, preparingAssetId === media.id)}
+                      </Text>
+                    </Pressable>
+                  ) : null}
                 </View>
               ))}
               {imageLimit > 0 ? <CompactRailAddButton label={`Images ${draft.references.length}/${imageLimit}`} onPress={onUploadImages} disabled={isUploading || draft.references.length >= imageLimit} /> : null}
               {videoLimit > 0 ? <CompactRailAddButton label={`Video ${draft.referenceVideos.length}/${videoLimit}`} onPress={onUploadVideo} disabled={isUploading || draft.referenceVideos.length >= videoLimit} icon="video" /> : null}
               {audioLimit > 0 ? <CompactRailAddButton label={`Audio ${draft.referenceAudios.length}/${audioLimit}`} onPress={onUploadAudio} disabled={isUploading || draft.referenceAudios.length >= audioLimit} icon="audio" /> : null}
             </ScrollView>
+            {preparesSeedanceAssets ? (
+              <Text style={{ color: theme.colors.muted, fontSize: 11 }}>
+                Open a reference to prepare it with Seedance once. Every run then reuses the prepared asset instead of sending the file again.
+              </Text>
+            ) : null}
             {model?.inputs.combineFramesWithReferences && supportsStartFrame ? (
               <View style={{ maxWidth: 170 }}>
                 <CompactReferenceSlot testID="video-optional-first-frame-slot" title="First frame" helper="Optional with reusable refs" media={draft.startFrame} isUploading={isUploading} onAdd={onUploadStart} onOpen={() => setReferenceId(draft.startFrame?.id ?? null)} />
@@ -3433,6 +3588,10 @@ function VideoCreatorComposer({
           ? () => onReplaceReference(selectedReference.id)
           : undefined}
         isReplacing={selectedReference != null && replacingReferenceId === selectedReference.id}
+        asset={selectedPreparableReference ? selectedPreparableReference.seedanceAsset ?? null : undefined}
+        isPreparingAsset={selectedPreparableReference != null && preparingAssetId === selectedPreparableReference.id}
+        onPrepareAsset={selectedPreparableReference ? () => onPrepareSeedanceAsset(selectedPreparableReference.id) : undefined}
+        onRefreshAsset={selectedPreparableReference ? () => onRefreshSeedanceAsset(selectedPreparableReference.id) : undefined}
         onRemove={removeSelectedReference}
       />
     </View>
@@ -3769,6 +3928,9 @@ type ReferenceDetailsContent = {
   insertsHandle: boolean;
   replaces: boolean;
   isReplacing: boolean;
+  /** The Seedance asset row: absent on a reference that takes none, null before one is prepared. */
+  asset: SeedanceAssetMetadata | null | undefined;
+  isPreparingAsset: boolean;
 };
 
 function sameReferenceDetails(held: ReferenceDetailsContent | null, live: ReferenceDetailsContent) {
@@ -3778,7 +3940,9 @@ function sameReferenceDetails(held: ReferenceDetailsContent | null, live: Refere
     && held.noun === live.noun
     && held.insertsHandle === live.insertsHandle
     && held.replaces === live.replaces
-    && held.isReplacing === live.isReplacing;
+    && held.isReplacing === live.isReplacing
+    && held.asset === live.asset
+    && held.isPreparingAsset === live.isPreparingAsset;
 }
 
 /**
@@ -3811,6 +3975,10 @@ function ReferenceDetailsOverlay({
   onUseHandle,
   onReplace,
   isReplacing,
+  asset,
+  isPreparingAsset,
+  onPrepareAsset,
+  onRefreshAsset,
   onRemove,
 }: {
   media: MediaDraft | null;
@@ -3824,6 +3992,11 @@ function ReferenceDetailsOverlay({
   /** Swap the underlying media while keeping the name and @handle. */
   onReplace?: () => void;
   isReplacing?: boolean;
+  /** Given (null included) when the reference can be prepared with Seedance; the row is drawn then. */
+  asset?: SeedanceAssetMetadata | null;
+  isPreparingAsset?: boolean;
+  onPrepareAsset?: () => void;
+  onRefreshAsset?: () => void;
   onRemove: () => void;
 }) {
   const theme = useAppTheme();
@@ -3834,7 +4007,7 @@ function ReferenceDetailsOverlay({
   // or it would change height under its own exit.
   const [held, setHeld] = useState<ReferenceDetailsContent | null>(null);
   const live: ReferenceDetailsContent | null = media
-    ? { media, gallery, noun, insertsHandle: Boolean(onUseHandle), replaces: Boolean(onReplace), isReplacing: Boolean(isReplacing) }
+    ? { media, gallery, noun, insertsHandle: Boolean(onUseHandle), replaces: Boolean(onReplace), isReplacing: Boolean(isReplacing), asset, isPreparingAsset: Boolean(isPreparingAsset) }
     : null;
   if (live && !sameReferenceDetails(held, live)) setHeld(live);
   const content = live ?? held;
@@ -3966,6 +4139,25 @@ function ReferenceDetailsOverlay({
                   </Text>
                 ) : null}
               </View>
+              {content.asset !== undefined ? (
+                <View style={{ gap: 7 }} testID="seedance-asset-row">
+                  <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>Seedance asset</Text>
+                  <Text accessibilityLiveRegion="polite" style={{ color: content.asset?.status === 'failed' ? theme.colors.danger : theme.colors.textSecondary, fontSize: 12, lineHeight: 17 }}>
+                    {seedanceAssetStatusLine(content.asset)}
+                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`${seedanceAssetActionLabel(content.asset, content.isPreparingAsset)} for ${accessibleName}`}
+                    accessibilityState={{ disabled: content.isPreparingAsset }}
+                    disabled={content.isPreparingAsset}
+                    onPress={content.asset?.status === 'processing' ? onRefreshAsset : onPrepareAsset}
+                    style={({ pressed }) => ({ minHeight: 52, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: theme.colors.borderStrong, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, opacity: content.isPreparingAsset ? 0.55 : pressed ? appTheme.opacity.pressed : 1 })}
+                  >
+                    {content.isPreparingAsset ? <ActivityIndicator size="small" color={theme.colors.text} /> : <Sparkles size={16} color={theme.colors.text} />}
+                    <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '800' }}>{seedanceAssetActionLabel(content.asset, content.isPreparingAsset)}</Text>
+                  </Pressable>
+                </View>
+              ) : null}
               {shown.handle && content.insertsHandle ? <SecondaryButton label={`Insert ${shown.handle}`} onPress={() => onUseHandle?.(shown.handle!)} /> : null}
               {content.replaces ? (
                 <Pressable

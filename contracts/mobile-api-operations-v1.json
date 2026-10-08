@@ -126,6 +126,16 @@
       "path": "/api/generate-video",
       "auth": "required"
     },
+    "createSeedanceAsset": {
+      "method": "POST",
+      "path": "/api/seedance-assets",
+      "auth": "required"
+    },
+    "getSeedanceAsset": {
+      "method": "GET",
+      "path": "/api/seedance-assets",
+      "auth": "required"
+    },
     "startMotionGeneration": {
       "method": "POST",
       "path": "/api/generate",

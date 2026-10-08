@@ -6,6 +6,7 @@ import type {
   GenerationListResponse,
   GenerationStartResponse,
   GenerationStatusResponse,
+  SeedanceAssetResponse,
   GuestAccountMergeResponse,
   GuestAccountMergeTicketResponse,
   ImageGenerationRequest,
@@ -85,6 +86,7 @@ import {
   normalizeTemplateRunResponse,
 } from './media-templates';
 import type { MediaDiagnosticsReport } from './media-diagnostics';
+import type { SeedanceAssetKind } from './model-catalog/seedance-assets';
 import type { PlaybackMetricsReport } from './playback-metrics';
 
 export class ApiError extends Error {
@@ -805,6 +807,12 @@ export function createApiClient({
       request<GenerationStartResponse>('/api/generate-video', generationStartInit(body, 'video', idempotencyKey)),
     getVideoGeneration: (predictionId: string) =>
       request<GenerationStatusResponse>(`/api/generate-video${buildQuery({ id: predictionId })}`),
+    // A reference registered with Seedance once (its storage path or signed link)
+    // and read back until the provider reports it active or failed.
+    createSeedanceAsset: (body: { url: string; assetType: SeedanceAssetKind }) =>
+      request<SeedanceAssetResponse>('/api/seedance-assets', { method: 'POST', body: JSON.stringify(body) }),
+    getSeedanceAsset: (assetId: string) =>
+      request<SeedanceAssetResponse>(`/api/seedance-assets${buildQuery({ assetId })}`),
     startMotionGeneration: (body: MotionGenerationRequest, idempotencyKey?: string) =>
       request<GenerationStartResponse>('/api/generate', generationStartInit(body, 'motion', idempotencyKey)),
     getMotionGeneration: (predictionId: string) =>

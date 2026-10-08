@@ -1,4 +1,5 @@
 import { extractPromptHandles, type CreationDraft, type MediaDraft } from './media-creation-view-model';
+import type { SeedanceAssetMetadata } from './model-catalog/seedance-assets';
 import { signedStorageUrlExpiresAt } from './media-url-expiry';
 import type { RemixSourceBundle } from './types';
 
@@ -124,4 +125,9 @@ export function remixSourceMediaUrl(bundle: RemixSourceBundle, media: MediaDraft
 /** The draft with one piece of media on a renewed link, and nothing else changed. */
 export function replaceDraftMediaUrl<T extends CreationDraft>(draft: T, mediaId: string, url: string): T {
   return mapDraftMedia(draft, (media) => (media.id === mediaId && media.url !== url ? { ...media, url } : media));
+}
+
+/** The reference with that id carrying what Seedance now holds for it; the draft is untouched when it is not there. */
+export function replaceDraftMediaSeedanceAsset<T extends CreationDraft>(draft: T, mediaId: string, seedanceAsset: SeedanceAssetMetadata | null): T {
+  return mapDraftMedia(draft, (media) => (media.id === mediaId ? { ...media, seedanceAsset } : media));
 }
