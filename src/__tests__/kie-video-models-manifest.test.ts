@@ -130,7 +130,11 @@ describe('kie-video-models release', () => {
     const entry = entryFor(modelId);
     const { schemaVersion, ...publicDescriptor } = entry.publicDescriptor;
     expect(schemaVersion).toBe(2);
-    expect(publicDescriptor).toEqual(descriptor(modelId));
+    // PixVerse shipped web-only in this release; release pixverse-mobile-20261008 turned
+    // mobile on once the apps named its maker, so the code build differs there and only there.
+    expect(publicDescriptor).toEqual(modelId === 'pixverse-v6'
+      ? { ...descriptor(modelId), availability: { web: true, mobile: false } }
+      : descriptor(modelId));
     const operation = operations.get(modelId)!;
     expect(entry.kind).toBe('video');
     expect(entry.adapterKey).toBe(operation.adapterKey);
@@ -171,11 +175,11 @@ describe('kie-video-models release', () => {
     }
   });
 
-  it('keeps PixVerse V6 off mobile until an app update names its maker, and the rest on both', () => {
-    // The installed apps name each maker in the AI-data question; PixVerse is new there.
+  it('kept PixVerse V6 off mobile until an app update named its maker, and the rest on both', () => {
+    // The installed apps name each maker in the AI-data question; PixVerse was new there.
+    // pixverse-mobile-manifest.test.ts pins the release that turned mobile on.
     expect(entryFor('pixverse-v6').mobileEnabled).toBe(false);
     expect(entryFor('pixverse-v6').publicDescriptor.availability).toEqual({ web: true, mobile: false });
-    expect(mobileCatalog.models.map((model) => model.id)).not.toContain('pixverse-v6');
     for (const modelId of ADDED.filter((id) => id !== 'pixverse-v6')) {
       expect(entryFor(modelId).mobileEnabled, modelId).toBe(true);
       expect(mobileCatalog.models.map((model) => model.id), modelId).toContain(modelId);
