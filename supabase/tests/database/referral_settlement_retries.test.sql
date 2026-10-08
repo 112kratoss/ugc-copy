@@ -1,0 +1,18 @@
+BEGIN;
+CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
+SET LOCAL search_path = public, extensions;
+SELECT plan(12);
+SELECT ok((SELECT relrowsecurity FROM pg_class WHERE oid='public.referral_purchase_reconciliation_retries'::regclass), 'retry state has RLS');
+SELECT ok(NOT has_table_privilege('anon','public.referral_purchase_reconciliation_retries','SELECT,INSERT,UPDATE,DELETE'), 'anonymous retry access denied');
+SELECT ok(NOT has_table_privilege('authenticated','public.referral_purchase_reconciliation_retries','SELECT,INSERT,UPDATE,DELETE'), 'authenticated retry access denied');
+SELECT ok(NOT has_table_privilege('service_role','public.referral_purchase_reconciliation_retries','INSERT,UPDATE,DELETE'), 'service cannot invent retry state directly');
+SELECT ok(has_table_privilege('service_role','public.referral_purchase_reconciliation_retries','SELECT'), 'service can inspect operational state');
+SELECT ok(NOT has_function_privilege('anon','public.defer_referral_purchase_reconciliation(uuid)','EXECUTE'), 'anonymous deferral denied');
+SELECT ok(NOT has_function_privilege('authenticated','public.defer_referral_purchase_reconciliation(uuid)','EXECUTE'), 'authenticated deferral denied');
+SELECT ok(has_function_privilege('service_role','public.defer_referral_purchase_reconciliation(uuid)','EXECUTE'), 'service can defer using the guarded RPC');
+SELECT ok(NOT has_function_privilege('service_role','public.clear_settled_referral_purchase_retry()','EXECUTE'), 'service cannot invoke cleanup trigger directly');
+SELECT ok((SELECT prosecdef AND proconfig=ARRAY['search_path=""'] FROM pg_proc WHERE oid='public.defer_referral_purchase_reconciliation(uuid)'::regprocedure), 'retry writer uses qualified definer access');
+SELECT ok((SELECT prosecdef AND proconfig=ARRAY['search_path=""'] FROM pg_proc WHERE oid='public.clear_settled_referral_purchase_retry()'::regprocedure), 'retry cleanup uses qualified definer access');
+SELECT is(public.defer_referral_purchase_reconciliation(NULL)->>'status','transaction_not_found','missing transaction cannot create retry work');
+SELECT * FROM finish();
+ROLLBACK;

@@ -114,7 +114,20 @@ export async function reconcileReferralPurchaseRewards(
   for (let index = 0; index < transactionIds.length; index += SETTLEMENT_CONCURRENCY) {
     const batch = transactionIds.slice(index, index + SETTLEMENT_CONCURRENCY);
     const results = await Promise.allSettled(batch.map(async (transactionId) => {
-      const settlement = await settleReferralPurchaseRewards(adminSupabase, transactionId);
+      let settlement;
+      try {
+        settlement = await settleReferralPurchaseRewards(adminSupabase, transactionId);
+      } catch (error) {
+        // The database rechecks whether settlement committed before deferring.
+        // Notification-only failures already have their own durable retry queue.
+        const { error: deferError } = await adminSupabase.rpc('defer_referral_purchase_reconciliation', {
+          p_transaction_id: transactionId,
+        });
+        if (deferError) {
+          throw new Error(`${errorMessage(error)}; retry deferral failed: ${errorMessage(deferError)}`);
+        }
+        throw error;
+      }
       const rewards = getReferralRewardNotifications(settlement);
 
       await Promise.all(rewards.map((reward) => notifyReferralReward(adminSupabase, {
