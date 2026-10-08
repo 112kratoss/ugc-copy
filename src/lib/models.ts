@@ -1011,6 +1011,152 @@ export const VIDEO_MODELS = {
             '2K': 13,
         },
     },
+    'gemini-omni-1.1-flash': {
+        id: 'gemini-omni-1.1-flash' as const,
+        displayName: 'Gemini Omni 1.1 Flash',
+        description: 'Faster Gemini Omni with start and end frames, references, and 360p to 4K output',
+        provider: 'gemini-omni' as const,
+        apiModelId: 'google/gemini-omni-flash-1-1',
+        enhancerModelId: 'gemini-omni-video',
+        supportsMultiShot: false,
+        supportsSound: false,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '9:16'] as const,
+        durations: [4, 6, 8, 10] as const,
+        resolutions: ['360p', '720p', '1080p', '4k'] as const,
+        modeOptions: [] as const,
+        // docs/model-api-references/gemini-omni-1-1-flash.md (read 2026-10-08): Gemini Omni
+        // Video's table with 360p priced like 720p and 1080p; a reference clip bills one
+        // flat figure because the model then picks the length itself.
+        pricing: {
+            '360p': { 4: 63, 6: 84, 8: 105, 10: 126 },
+            '720p': { 4: 63, 6: 84, 8: 105, 10: 126 },
+            '1080p': { 4: 63, 6: 84, 8: 105, 10: 126 },
+            '4k': { 4: 147, 6: 168, 8: 189, 10: 210 },
+            withVideo: { standard: 168, '4k': 252 },
+        },
+    },
+    'wan-3.0': {
+        id: 'wan-3.0' as const,
+        displayName: 'Wan 3.0',
+        description: 'Wan 3.0 with frames, up to ten references, generated audio, and clips up to 30 seconds',
+        provider: 'wan-3' as const,
+        apiModelId: 'wan/3-0-video',
+        enhancerModelId: 'wan-3.0',
+        supportsMultiShot: false,
+        supportsSound: true,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] as const,
+        durations: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30] as const,
+        singleShotDurationRange: {
+            min: 2,
+            max: 30,
+            default: 5,
+        } as const,
+        // The provider spells these with an uppercase P; the value is sent verbatim.
+        resolutions: ['480P', '720P', '1080P'] as const,
+        modeOptions: [] as const,
+        // Credits per second of output plus reference-clip seconds
+        // (docs/model-api-references/wan-3-0.md, read 2026-10-08). Kie's "20% below official
+        // pricing" is its standing rate against Alibaba's own API, not a dated offer.
+        pricing: {
+            '480P': 8,
+            '720P': 16,
+            '1080P': 32,
+        },
+    },
+    'wan-3.0-prime': {
+        id: 'wan-3.0-prime' as const,
+        displayName: 'Wan 3.0 Prime',
+        description: 'High-speed Wan 3.0 tier with the same frames, references, audio, and 30-second clips',
+        provider: 'wan-3' as const,
+        apiModelId: 'wan/3-0-video-prime',
+        enhancerModelId: 'wan-3.0',
+        supportsMultiShot: false,
+        supportsSound: true,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] as const,
+        durations: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30] as const,
+        singleShotDurationRange: {
+            min: 2,
+            max: 30,
+            default: 5,
+        } as const,
+        resolutions: ['480P', '720P', '1080P'] as const,
+        modeOptions: [] as const,
+        // docs/model-api-references/wan-3-0.md (read 2026-10-08); "10% below official pricing"
+        // is the same standing rate.
+        pricing: {
+            '480P': 12.2,
+            '720P': 25.2,
+            '1080P': 50.4,
+        },
+    },
+    'grok-imagine-video-1.5': {
+        id: 'grok-imagine-video-1.5' as const,
+        displayName: 'Grok Imagine Video 1.5',
+        description: 'xAI preview tier with up to seven reference images and 1 to 15 second clips',
+        provider: 'grok' as const,
+        apiModelId: 'grok-imagine-video-1-5-preview',
+        enhancerModelId: 'grok-imagine-video',
+        supportsMultiShot: false,
+        supportsSound: false,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '9:16', '1:1', '3:2', '2:3'] as const,
+        durations: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
+        singleShotDurationRange: {
+            min: 1,
+            max: 15,
+            default: 8,
+        } as const,
+        // The schema also takes 1080p, which the market page does not price, so it does
+        // not ship (docs/model-api-references/grok-imagine-video-1-5.md, read 2026-10-08).
+        resolutions: ['480p', '720p'] as const,
+        modeOptions: [] as const,
+        pricing: {
+            '480p': 2.4,
+            '720p': 4.5,
+        },
+    },
+    'pixverse-v6': {
+        id: 'pixverse-v6' as const,
+        displayName: 'PixVerse V6',
+        description: 'PixVerse video from text, a start frame, a frame pair, or named references, with optional audio',
+        provider: 'pixverse' as const,
+        apiModelId: 'pixverse-v6/text-to-video',
+        enhancerModelId: 'pixverse-v6',
+        supportsMultiShot: false,
+        supportsSound: true,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3', '21:9'] as const,
+        durations: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
+        singleShotDurationRange: {
+            min: 1,
+            max: 15,
+            default: 5,
+        } as const,
+        resolutions: ['360p', '540p', '720p', '1080p'] as const,
+        modeOptions: [] as const,
+        /**
+         * Credits per second, keyed by resolution + generated audio. Text, start-frame
+         * and frame-pair runs share one table; reference-to-video bills 12.5 % more
+         * (docs/model-api-references/pixverse-v6.md, read 2026-10-08).
+         */
+        pricing: {
+            standard: {
+                '360p': { noSound: 4, withSound: 5.6 },
+                '540p': { noSound: 5.6, withSound: 7.2 },
+                '720p': { noSound: 7.2, withSound: 9.6 },
+                '1080p': { noSound: 14.4, withSound: 18.4 },
+            },
+            reference: {
+                '360p': { noSound: 4.5, withSound: 6.3 },
+                '540p': { noSound: 6.3, withSound: 8.1 },
+                '720p': { noSound: 8.1, withSound: 10.8 },
+                '1080p': { noSound: 16.2, withSound: 20.7 },
+            },
+        },
+    },
 } as const;
 
 export type VideoModelId = keyof typeof VIDEO_MODELS;
@@ -1096,6 +1242,17 @@ export function getVideoElementSupport(
             maxNamed: 1,
             reason: null,
         };
+    }
+
+    // Gemini Omni 1.1 Flash takes 7 `image_urls`, Grok 1.5 Preview 7 `image_urls`, and
+    // PixVerse V6 7 `image_references` (see docs/model-api-references for each).
+    if (modelId === 'gemini-omni-1.1-flash' || modelId === 'grok-imagine-video-1.5' || modelId === 'pixverse-v6') {
+        return { enabled: true, maxElements: 7, maxNamed: 7, reason: null };
+    }
+
+    // Wan 3.0's `reference_image_urls` takes 10 where Wan 2.7's reference mode stops at 5.
+    if (modelId === 'wan-3.0' || modelId === 'wan-3.0-prime') {
+        return { enabled: true, maxElements: 10, maxNamed: 10, reason: null };
     }
 
     if (modelId === 'kling-3.0-video') {
@@ -1268,6 +1425,8 @@ export function getVideoCost(
         resolution?: string;
         hasReferenceVideo?: boolean;
         hasReferenceImage?: boolean;
+        /** Reference pictures beyond start and end frames: PixVerse bills its reference endpoint higher. */
+        hasReusableReference?: boolean;
     }
 ): number {
     if (modelId === 'kling-3.0-video') {
@@ -1373,6 +1532,55 @@ export function getVideoCost(
         }
         const mode = options.mode === 'veo3_lite' ? 'veo3_lite' : 'veo3_fast';
         return VIDEO_MODELS['veo-3.1'].pricing[mode][resolution];
+    }
+
+    if (modelId === 'gemini-omni-1.1-flash') {
+        const pricing = VIDEO_MODELS['gemini-omni-1.1-flash'].pricing;
+        const resolution = options.resolution === '4k'
+            ? '4k'
+            : options.resolution === '1080p'
+                ? '1080p'
+                : options.resolution === '360p'
+                    ? '360p'
+                    : '720p';
+        if (options.hasReferenceVideo) {
+            return pricing.withVideo[resolution === '4k' ? '4k' : 'standard'];
+        }
+        const duration = ([4, 6, 8, 10] as const).includes(options.durationSeconds as 4 | 6 | 8 | 10)
+            ? options.durationSeconds as 4 | 6 | 8 | 10
+            : 4;
+        return pricing[resolution][duration];
+    }
+
+    if (modelId === 'wan-3.0' || modelId === 'wan-3.0-prime') {
+        // Kie bills output seconds plus reference-clip seconds; the catalog quote adds the
+        // clips through its reference-adjustment pricing, and this start-path figure
+        // covers a run that arrives without a quote.
+        const pricingTable = VIDEO_MODELS[modelId].pricing;
+        const resolution = options.resolution && options.resolution in pricingTable
+            ? options.resolution as keyof typeof pricingTable
+            : '480P';
+        const durationSeconds = options.durationSeconds ?? getDefaultVideoDuration(modelId);
+        return Math.ceil(durationSeconds * pricingTable[resolution]);
+    }
+
+    if (modelId === 'grok-imagine-video-1.5') {
+        const pricingTable = VIDEO_MODELS['grok-imagine-video-1.5'].pricing;
+        const resolution = options.resolution && options.resolution in pricingTable
+            ? options.resolution as keyof typeof pricingTable
+            : '480p';
+        const durationSeconds = options.durationSeconds ?? getDefaultVideoDuration(modelId);
+        return Math.ceil(durationSeconds * pricingTable[resolution]);
+    }
+
+    if (modelId === 'pixverse-v6') {
+        const table = VIDEO_MODELS['pixverse-v6'].pricing[options.hasReusableReference ? 'reference' : 'standard'];
+        const resolution = options.resolution && options.resolution in table
+            ? options.resolution as keyof typeof table
+            : '360p';
+        const durationSeconds = options.durationSeconds ?? getDefaultVideoDuration(modelId);
+        const rates = table[resolution];
+        return Math.ceil(durationSeconds * (options.sound ? rates.withSound : rates.noSound));
     }
 
     // Every model must be matched explicitly. This used to fall through to Veo

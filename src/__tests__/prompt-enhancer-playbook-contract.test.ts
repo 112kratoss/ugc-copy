@@ -74,7 +74,25 @@ describe('prompt enhancer playbook contract', () => {
       // docs.kie.ai/market/qwen2-1/*.md, read 2026-10-08: the Qwen-Image family's rules;
       // `aspect_ratio` where Qwen 3 says `image_size`, plus unsent background/seed/mask.
       'qwen-image-2.1': 'qwen3',
+      // docs.kie.ai/market/google/gemini-omni-flash-1-1.md, read 2026-10-08: Gemini Omni
+      // Video's body plus first_frame_url/last_frame_url and a 360p tier.
+      'gemini-omni-1.1-flash': 'gemini-omni-video',
+      // docs.kie.ai/market/wan/3-0-video-prime.md, read 2026-10-08: the identical body.
+      'wan-3.0-prime': 'wan-3.0',
+      // docs.kie.ai/market/grok-imagine/1-5-preview.md, read 2026-10-08: Grok Imagine's
+      // body without `mode`; audio is still generated with every clip.
+      'grok-imagine-video-1.5': 'grok-imagine-video',
     });
+  });
+
+  it('gives Wan 3.0 and PixVerse V6 playbooks of their own', () => {
+    // Wan 3.0's body drops Wan 2.7's prompt_extend and negative_prompt and addresses
+    // references positionally; PixVerse is a new family with @name references.
+    expect(getEnhancerPlaybookById('wan-3.0')?.modelId).toBe('wan-3.0');
+    expect(getEnhancerPlaybookById('wan-3.0')?.audioBehavior).toBe('optional');
+    expect(getEnhancerPlaybookById('pixverse-v6')?.modelId).toBe('pixverse-v6');
+    expect(buildEnhancerSystemPrompt('video', 'wan-3.0', { duration: 12 }, 'a chef plates a dish')).toContain('Image1');
+    expect(buildEnhancerSystemPrompt('video', 'pixverse-v6', { duration: 5 }, '@hero waves')).toContain('@name');
   });
 
   it('gives the formerly mis-aliased models their own grammars', () => {

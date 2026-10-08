@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getDefaultVideoDuration, getMotionCost, getImageCost, getImageResolutionOptions, getSoundEffectCost, getVideoCost, getVideoDurationRange, getVoiceoverCost, isAudioModel, isImageModel, isMotionModel, isSoundEffectModel, isVideoModel, isVoiceoverModel, isValidImageResolution, isValidVideoDuration, supportsImageResolutionControl } from '@/lib/models';
+import { VIDEO_MODELS, getDefaultVideoDuration, getMotionCost, getImageCost, getImageResolutionOptions, getSoundEffectCost, getVideoCost, getVideoDurationRange, getVoiceoverCost, isAudioModel, isImageModel, isMotionModel, isSoundEffectModel, isVideoModel, isVoiceoverModel, isValidImageResolution, isValidVideoDuration, supportsImageResolutionControl } from '@/lib/models';
 
 describe('Model Pricing', () => {
     describe('getMotionCost', () => {
@@ -273,6 +273,44 @@ describe('Model Pricing', () => {
         it('grok video scales by duration and resolution at Kie\'s 2.4 / 4.5 per-second rates', () => {
             expect(getVideoCost('grok-imagine-video', { resolution: '480p', durationSeconds: 6 })).toBe(15);
             expect(getVideoCost('grok-imagine-video', { resolution: '720p', durationSeconds: 10 })).toBe(45);
+        });
+        it('prices Gemini Omni 1.1 Flash from its table, 360p like 720p, and flat with a clip', () => {
+            // docs/model-api-references/gemini-omni-1-1-flash.md (2026-10-08).
+            expect(getVideoCost('gemini-omni-1.1-flash', { resolution: '360p', durationSeconds: 4 })).toBe(63);
+            expect(getVideoCost('gemini-omni-1.1-flash', { resolution: '1080p', durationSeconds: 10 })).toBe(126);
+            expect(getVideoCost('gemini-omni-1.1-flash', { resolution: '4k', durationSeconds: 6 })).toBe(168);
+            expect(getVideoCost('gemini-omni-1.1-flash', { resolution: '720p', durationSeconds: 8, hasReferenceVideo: true })).toBe(168);
+            expect(getVideoCost('gemini-omni-1.1-flash', { resolution: '4k', durationSeconds: 8, hasReferenceVideo: true })).toBe(252);
+        });
+        it('prices Wan 3.0 and Prime per second at 8 / 16 / 32 and 12.2 / 25.2 / 50.4', () => {
+            // docs/model-api-references/wan-3-0.md (2026-10-08).
+            expect(getVideoCost('wan-3.0', { resolution: '480P', durationSeconds: 5 })).toBe(40);
+            expect(getVideoCost('wan-3.0', { resolution: '1080P', durationSeconds: 30 })).toBe(960);
+            expect(getVideoCost('wan-3.0-prime', { resolution: '480P', durationSeconds: 5 })).toBe(61);
+            expect(getVideoCost('wan-3.0-prime', { resolution: '720P', durationSeconds: 10 })).toBe(252);
+            expect(getVideoCost('wan-3.0-prime', { resolution: '1080P', durationSeconds: 2 })).toBe(101);
+            // A model-chosen length (-1) is not a duration the registry accepts.
+            expect(isValidVideoDuration('wan-3.0', -1)).toBe(false);
+            expect(isValidVideoDuration('wan-3.0', 30)).toBe(true);
+            expect(isValidVideoDuration('wan-3.0', 31)).toBe(false);
+        });
+        it('prices Grok Imagine Video 1.5 at the 2.4 / 4.5 per-second rates and refuses 1080p', () => {
+            // docs/model-api-references/grok-imagine-video-1-5.md (2026-10-08).
+            expect(getVideoCost('grok-imagine-video-1.5', { resolution: '480p', durationSeconds: 1 })).toBe(3);
+            expect(getVideoCost('grok-imagine-video-1.5', { resolution: '720p', durationSeconds: 15 })).toBe(68);
+            expect(VIDEO_MODELS['grok-imagine-video-1.5'].resolutions).toEqual(['480p', '720p']);
+            expect(getVideoDurationRange('grok-imagine-video-1.5')).toEqual({ min: 1, max: 15, default: 8 });
+        });
+        it('prices PixVerse V6 by resolution, audio, and the reference-to-video uplift', () => {
+            // docs/model-api-references/pixverse-v6.md (2026-10-08).
+            expect(getVideoCost('pixverse-v6', { resolution: '360p', durationSeconds: 5 })).toBe(20);
+            expect(getVideoCost('pixverse-v6', { resolution: '360p', durationSeconds: 5, sound: true })).toBe(28);
+            expect(getVideoCost('pixverse-v6', { resolution: '1080p', durationSeconds: 10 })).toBe(144);
+            expect(getVideoCost('pixverse-v6', { resolution: '1080p', durationSeconds: 10, sound: true })).toBe(184);
+            expect(getVideoCost('pixverse-v6', { resolution: '720p', durationSeconds: 10, hasReusableReference: true })).toBe(81);
+            expect(getVideoCost('pixverse-v6', { resolution: '720p', durationSeconds: 10, sound: true, hasReusableReference: true })).toBe(108);
+            // Frames are not references: a start frame or a frame pair bills the base table.
+            expect(getVideoCost('pixverse-v6', { resolution: '540p', durationSeconds: 5, hasReferenceImage: true })).toBe(28);
         });
     });
 

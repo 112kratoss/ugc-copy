@@ -2737,7 +2737,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             setIsMultiShot(false);
         }
 
-        if (['grok-imagine-video', 'kling-3.0-turbo', 'hailuo-2.3', 'happyhorse-1.1', 'gemini-omni-video'].includes(modelId) && endImageUrl) {
+        if (['grok-imagine-video', 'grok-imagine-video-1.5', 'kling-3.0-turbo', 'hailuo-2.3', 'happyhorse-1.1', 'gemini-omni-video'].includes(modelId) && endImageUrl) {
             void clearImage('end');
         }
     };
