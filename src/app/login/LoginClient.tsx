@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { describeAuthError } from '@/lib/auth-error-copy';
 import { supabase } from '@/lib/supabase';
 import { ArrowLeft, Loader2, Mail, Lock, AlertCircle, Eye, EyeOff, CheckCircle2, WandSparkles } from 'lucide-react';
 import { buildAuthContinuePath } from '@/lib/auth-onboarding';
@@ -145,8 +146,7 @@ export default function LoginClient({
                 return;
             }
         } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : 'An error occurred';
-            setError(message);
+            setError(describeAuthError(err, 'Could not sign in. Try again.'));
         } finally {
             setLoading(false);
         }
@@ -166,8 +166,7 @@ export default function LoginClient({
             });
             if (error) throw error;
         } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : 'An error occurred';
-            setError(message);
+            setError(describeAuthError(err, 'Could not start Google sign-in. Try again.'));
             setLoading(false);
         }
     };
@@ -193,7 +192,7 @@ export default function LoginClient({
             if (resetError) throw resetError;
             setSuccessMessage('Password reset link sent. Check your email to continue.');
         } catch (err: unknown) {
-            setError(err instanceof Error ? err.message : 'Could not send the reset link.');
+            setError(describeAuthError(err, 'Could not send the reset link.'));
         } finally {
             setLoading(false);
         }

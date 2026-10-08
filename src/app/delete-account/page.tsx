@@ -8,9 +8,9 @@ export const metadata = createMetadata({
     path: '/delete-account',
 });
 
-const deletionEmailSubject = encodeURIComponent('Magic Booklet account deletion request');
+const deletionEmailSubject = encodeURIComponent('Magicbooklet account deletion request');
 const deletionEmailBody = encodeURIComponent(
-    'Please permanently delete my Magic Booklet account and associated personal data.\n\nAccount email: ',
+    'Please permanently delete my Magicbooklet account and associated personal data.\n\nAccount email: ',
 );
 
 export default function DeleteAccountPage() {
@@ -18,9 +18,9 @@ export default function DeleteAccountPage() {
         <main className="min-h-screen bg-black px-6 py-16 text-white">
             <div className="mx-auto max-w-4xl">
                 <p className="text-sm font-semibold uppercase tracking-[0.22em] text-rose-300">Account privacy</p>
-                <h1 className="mt-4 text-4xl font-bold tracking-tight sm:text-5xl">Delete your Magic Booklet account</h1>
+                <h1 className="mt-4 text-4xl font-bold tracking-tight sm:text-5xl">Delete your Magicbooklet account</h1>
                 <p className="mt-5 max-w-2xl text-base leading-7 text-zinc-300">
-                    You can permanently delete your account inside the Magic Booklet mobile app. If you cannot access
+                    You can permanently delete your account inside the Magicbooklet mobile app. If you cannot access
                     the app, you can send a deletion request from this page.
                 </p>
 
@@ -28,8 +28,8 @@ export default function DeleteAccountPage() {
                     <section className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
                         <h2 className="text-xl font-semibold">Delete inside the app</h2>
                         <ol className="mt-4 list-decimal space-y-3 pl-5 text-zinc-300">
-                            <li>Sign in to the Magic Booklet mobile app.</li>
-                            <li>Open Profile, then Settings.</li>
+                            <li>Sign in to the Magicbooklet mobile app.</li>
+                            <li>On Home, tap your avatar to open the menu, then choose Settings.</li>
                             <li>Select <strong className="text-white">Delete account</strong>.</li>
                             <li>Review what will be removed, type DELETE, and confirm permanent deletion.</li>
                         </ol>

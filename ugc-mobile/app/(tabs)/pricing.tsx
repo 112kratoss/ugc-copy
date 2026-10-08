@@ -315,7 +315,7 @@ export default function PricingScreen() {
     } catch {
       setNotice(
         'Your payment went through. Your credits have not landed yet — reopen this screen '
-        + 'or tap Restore purchases in a moment and they will appear. You have not been charged twice.'
+        + 'or tap Refresh credit balance in a moment and they will appear. You have not been charged twice.'
       );
       setNoticeTone('neutral');
     }
@@ -383,6 +383,13 @@ export default function PricingScreen() {
           title="Purchases are turned off on this device"
           body="A device restriction such as Screen Time or parental controls is blocking payments here. Your balance and creations are not affected."
         />
+      ) : purchaseGate.blockedReason === 'no_identity' ? (
+        // The guest bootstrap has not landed (first launch, offline, anonymous
+        // sign-ins off). Buy and Refresh are disabled, so say why on screen.
+        <StatusBlock
+          title="Your session is still starting"
+          body="Credit packs unlock once your account identity is ready. Check your connection, then reopen this screen in a moment."
+        />
       ) : purchaseGate.showRegistrationOffer ? (
         // Offered, never required. This is the shape guideline 5.1.1(v) asks
         // for in as many words: "You may explain to the user that registering
@@ -408,7 +415,7 @@ export default function PricingScreen() {
           <StatusBlock
             tone="danger"
             title="Credit packs are not available"
-            body="The App Store could not return this build's credit packs. Retry once; if this continues, the purchase setup needs an app update."
+            body={`The ${storeLabel} could not return this build's credit packs. Retry once; if this continues, the purchase setup needs an app update.`}
           />
           <SecondaryButton label="Retry credit packs" onPress={() => void packageQuery.refetch()} />
         </View>
