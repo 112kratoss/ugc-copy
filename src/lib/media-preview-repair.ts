@@ -722,6 +722,25 @@ export async function repairPostMediaRenditions(
     }
   }
 
+  if (claimed.leased && attempted < rows.length) {
+    // Claiming reserves the attempt so a killed worker spends its budget. A
+    // normal time-budget exit knows which rows it never started; refund only
+    // those reservations, and never undo a newer worker's claim or completion.
+    await Promise.all(rows.slice(attempted).map(async (row) => {
+      const reservedAttempt = row.rendition_attempt_count ?? 0;
+      const { error } = await supabase.from('post_media').update({
+        rendition_status: 'pending',
+        rendition_attempt_count: Math.max(0, reservedAttempt - 1),
+        rendition_locked_at: null,
+        rendition_locked_by: null,
+      }).eq('id', row.id)
+        .eq('rendition_status', 'processing')
+        .eq('rendition_locked_by', lockedBy)
+        .eq('rendition_attempt_count', reservedAttempt);
+      if (error) throw error;
+    }));
+  }
+
   return { attempted, completed, failed: attempted - completed };
 }
 

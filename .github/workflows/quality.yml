@@ -307,6 +307,9 @@ jobs:
       - name: Test bounded referral settlement progress with real PostgREST and SQL
         run: npx vitest run --config vitest.referral-settlement-progress-postgrest.config.ts
 
+      - name: Test unstarted rendition reservations with real Storage and SQL
+        run: npx vitest run --config vitest.media-rendition-budget-postgrest.config.ts
+
       - name: Stop isolated Supabase API stack
         if: always()
         continue-on-error: true
