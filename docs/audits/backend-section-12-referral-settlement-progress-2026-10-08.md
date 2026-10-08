@@ -22,7 +22,11 @@ doubles to a one-hour cap, and keeps failed work recoverable. Purchase timestamp
 and financial history are not changed to rotate the queue.
 
 The existing selector excludes deferred rows until they become due, preserving
-its detached-account matching and batch bound. A successful settlement clears
+its detached-account matching and batch bound. Eligible work is ordered by its
+last attempt (or original transaction update when never attempted), so failures
+move behind older waiting work even when the hourly job runs after backoff
+expires. An expanded candidate test reproduced this cadence gap in a backoff-only
+version; both immediate and overdue retry cases pass after the ordering change. A successful settlement clears
 retry metadata with an event-insert trigger in the same financial transaction,
 including foreground settlement outside the reconciliation job. Lost settlement
 acknowledgements therefore cannot recreate completed work. Notification-only
@@ -37,9 +41,9 @@ invoke the cleanup trigger. Both new functions use qualified definer access.
 
 - The before-fix service/SQL reproduction fails at healthy-purchase progress.
   After the fix, the first pass defers 100 failures and the second settles the
-  healthy purchase. Removing the local fault and making retries due recovers all
+  healthy purchase both immediately and when all failed rows are already due. Removing the local fault and making retries due recovers all
   100 purchases, with exactly 101 total purchase events and the expected inviter
-  balance. The same regression verifies increasing/capped retry delays, attempt
+  balance. Both regressions verify increasing/capped retry delays, attempt
   counter saturation, foreground cleanup and stale acknowledgement handling.
 - Nine focused cases pass, including explicit deferral-write failure and the
   distinction between settlement and notification failure.

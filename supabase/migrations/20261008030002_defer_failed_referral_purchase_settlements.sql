@@ -71,12 +71,17 @@ DECLARE
   new_join text := E'  LEFT JOIN public.referral_purchase_events AS events\n    ON events.transaction_id = transactions.id\n  LEFT JOIN public.referral_purchase_reconciliation_retries AS retries\n    ON retries.transaction_id = transactions.id';
   old_filter text := '    AND events.transaction_id IS NULL';
   new_filter text := E'    AND events.transaction_id IS NULL\n    AND (retries.next_attempt_at IS NULL OR retries.next_attempt_at <= now())';
+  old_order text := '  ORDER BY transactions.updated_at ASC, transactions.id ASC';
+  -- When the next hourly scan occurs after backoff expires, failures must still
+  -- move behind work that has waited longer. Do not rewrite financial timestamps.
+  new_order text := '  ORDER BY coalesce(retries.updated_at, transactions.updated_at) ASC, transactions.id ASC';
 BEGIN
   SELECT pg_get_functiondef('public.list_unsettled_referral_purchase_transactions(integer)'::regprocedure) INTO definition;
   IF (length(definition) - length(replace(definition, old_join, ''))) / length(old_join) <> 1
-    OR (length(definition) - length(replace(definition, old_filter, ''))) / length(old_filter) <> 1 THEN
+    OR (length(definition) - length(replace(definition, old_filter, ''))) / length(old_filter) <> 1
+    OR (length(definition) - length(replace(definition, old_order, ''))) / length(old_order) <> 1 THEN
     RAISE EXCEPTION 'Expected one settlement selection join and filter';
   END IF;
-  EXECUTE replace(replace(definition, old_join, new_join), old_filter, new_filter);
+  EXECUTE replace(replace(replace(definition, old_join, new_join), old_filter, new_filter), old_order, new_order);
 END;
 $$;

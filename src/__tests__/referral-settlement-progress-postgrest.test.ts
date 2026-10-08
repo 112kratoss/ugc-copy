@@ -4,7 +4,7 @@ import {Client} from 'pg';
 import {createClient} from '@supabase/supabase-js';
 import {it,expect,vi} from 'vitest';
 import {reconcileReferralPurchaseRewards,ReferralRewardReconciliationError} from '@/lib/referral-reward-reconciliation';
-it.skipIf(!process.env.AUDIT_STORAGE_CONFIG || !process.env.SUPABASE_TEST_DB_URL)('makes bounded progress past a full batch of persistent settlement failures',async()=>{
+it.skipIf(!process.env.AUDIT_STORAGE_CONFIG || !process.env.SUPABASE_TEST_DB_URL).each([false, true])('makes bounded progress past persistent failures with retries due=%s',async(retriesDue)=>{
  const config=JSON.parse(readFileSync(process.env.AUDIT_STORAGE_CONFIG!,'utf8'));
  const connectionString=process.env.SUPABASE_TEST_DB_URL!;
  expect(['localhost','127.0.0.1']).toContain(new URL(config.API_URL).hostname);
@@ -33,15 +33,18 @@ it.skipIf(!process.env.AUDIT_STORAGE_CONFIG || !process.env.SUPABASE_TEST_DB_URL
   await db.query("insert into public.transactions(id,user_id,razorpay_order_id,amount,credits,status,credit_purchase_succeeded_at) values($1,$2,$3,41500,500,'success',now())",[good,users[3],'audit-progress-'+good]);
   const passes=[];
   for(let pass=0;pass<2;pass++){
+   // Simulate the next hourly invocation after the minimum backoff has elapsed.
+   if(pass===1&&retriesDue)await db.query("update public.referral_purchase_reconciliation_retries set next_attempt_at=now()-interval '1 second' where transaction_id=any($1::uuid[])",[bad]);
    try{passes.push(await reconcileReferralPurchaseRewards(admin));}
    catch(error){expect(error).toBeInstanceOf(ReferralRewardReconciliationError);passes.push((error as ReferralRewardReconciliationError).summary);}
   }
   const rows=(await db.query('select transaction_id from public.referral_purchase_events where transaction_id=$1',[good])).rows;
   expect(rows).toHaveLength(1);
   expect(passes.map(p=>({processed:p.processed,failed:p.failed,settled:p.settled}))).toEqual([
-   {processed:100,failed:100,settled:0},{processed:1,failed:0,settled:1}
+   {processed:100,failed:100,settled:0},retriesDue?{processed:100,failed:99,settled:1}:{processed:1,failed:0,settled:1}
   ]);
-  expect((await db.query('select count(*)::int n from public.referral_purchase_reconciliation_retries where transaction_id=any($1::uuid[]) and attempts=1 and next_attempt_at>now()',[bad])).rows).toEqual([{n:100}]);
+  expect((await db.query('select count(*)::int n from public.referral_purchase_reconciliation_retries where transaction_id=any($1::uuid[]) ',[bad])).rows).toEqual([{n:100}]);
+  await db.query('update public.referral_purchase_reconciliation_retries set attempts=1 where transaction_id=$1',[bad[0]]);
   const deferredAgain=await admin.rpc('defer_referral_purchase_reconciliation',{p_transaction_id:bad[0]});
   expect(deferredAgain.error).toBeNull();expect(deferredAgain.data).toMatchObject({status:'deferred',attempts:2});
   expect((await db.query("select next_attempt_at>now()+interval '110 seconds' as backed_off from public.referral_purchase_reconciliation_retries where transaction_id=$1",[bad[0]])).rows).toEqual([{backed_off:true}]);
