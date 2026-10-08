@@ -717,6 +717,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   }, [mediaPreviewItems]);
   const hasGeneratedProof = Boolean(prefilledGeneration);
   const [generationLoadAttempt, setGenerationLoadAttempt] = useState(0);
+  const [linkedPostRedirectId, setLinkedPostRedirectId] = useState<string | null>(null);
   // Typed title or caption, or picked files, not yet published: a reload or a
   // closed tab dropped them silently. (The app autosaves a draft instead.)
   const hasUnsavedWork = !didPublish && !isSubmitting && (
@@ -996,7 +997,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         // caption, visibility) and dropped its recipe. The app redirects too.
         const linkedPostId = typeof generation.linked_post_id === 'string' ? generation.linked_post_id : null;
         if (!isEditMode && linkedPostId) {
-          router.replace(`/post/${encodeURIComponent(linkedPostId)}/edit`);
+          setLinkedPostRedirectId(linkedPostId);
           return;
         }
 
@@ -1043,7 +1044,14 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     return () => {
       cancelled = true;
     };
-  }, [generationId, generationLoadAttempt, isEditMode, router, session?.access_token]);
+  }, [generationId, generationLoadAttempt, isEditMode, session?.access_token]);
+
+  // Its own effect: the router object is not a stable dependency for the
+  // load above (a changing identity would refetch the generation forever).
+  useEffect(() => {
+    if (!linkedPostRedirectId) return;
+    router.replace(`/post/${encodeURIComponent(linkedPostRedirectId)}/edit`);
+  }, [linkedPostRedirectId, router]);
 
   useEffect(() => {
     let cancelled = false;

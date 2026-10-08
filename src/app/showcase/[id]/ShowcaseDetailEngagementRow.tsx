@@ -19,7 +19,7 @@ import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 export default function ShowcaseDetailEngagementRow({
   postId,
   generationId,
-  creatorId,
+  creatorId = null,
   title,
   shareDescription,
   canRemix,
@@ -32,7 +32,7 @@ export default function ShowcaseDetailEngagementRow({
   postId: string;
   generationId: string | null;
   /** The post's creator, so a share by them may claim the work. */
-  creatorId: string | null;
+  creatorId?: string | null;
   title: string;
   shareDescription: string;
   canRemix: boolean;

@@ -71,6 +71,7 @@ const DETAIL_CONTEXT = { from: 'community', returnTo: '/feed' };
 
 function renderCard(overrides: Partial<ShowcaseFeedItem> = {}, props: Record<string, unknown> = {}) {
     const handlers = {
+        cardIndex: 0,
         onToggleExpanded: vi.fn(),
         onToggleComments: vi.fn(),
         onToggleSave: vi.fn(),
